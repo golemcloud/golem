@@ -116,17 +116,17 @@ pub fn Reservation::drop(self : Reservation) -> Unit {
 /// (`SchemaType::quota-token` / `SchemaValue::quota-token`), so its schema is a
 /// single capability node rather than a structural record. Mirrors the Rust SDK
 /// `impl IntoSchema for QuotaToken`.
-pub impl @schema.IntoSchema for QuotaToken with type_id() {
+pub impl @schema.IntoSchema for QuotaToken with fn type_id() {
   "golem.core.QuotaToken"
 }
 
 ///|
-pub impl @schema.IntoSchema for QuotaToken with register_in(_b) {
+pub impl @schema.IntoSchema for QuotaToken with fn register_in(_b) {
   @model.schema_type(QuotaToken({ resource_name: None }))
 }
 
 ///|
-pub impl @schema.IntoSchema for QuotaToken with to_value(self) {
+pub impl @schema.IntoSchema for QuotaToken with fn to_value(self) {
   QuotaToken(quota_token_payload_from_record(self.to_record()))
 }
 
@@ -134,7 +134,7 @@ pub impl @schema.IntoSchema for QuotaToken with to_value(self) {
 /// Mirrors the Rust SDK `impl FromSchema for QuotaToken`: only a
 /// `SchemaValue::quota-token` payload reconstructs a token; the timestamp must
 /// be non-negative.
-pub impl @schema.FromSchema for QuotaToken with from_value(v) {
+pub impl @schema.FromSchema for QuotaToken with fn from_value(v) {
   match v {
     QuotaToken(payload) =>
       QuotaToken::from_record(quota_token_record_from_payload(payload))
@@ -149,10 +149,9 @@ pub impl @schema.FromSchema for QuotaToken with from_value(v) {
 
 ///|
 /// Pure mapping from the host `QuotaTokenRecord` to the schema value carrier.
-/// The `uuid` is the same `@types.Uuid`; only `Datetime.seconds` differs in
-/// signedness (`UInt64` → `Int64`), bridged by bit-pattern reinterpret (matches
-/// the Rust `seconds as i64`). Factored out so it can be tested without the
-/// `to_record` host import.
+/// The `uuid` and P3 system-clock instant have the same representations in the
+/// host record and schema value carrier. Factored out so it can be tested
+/// without the `to_record` host import.
 fn quota_token_payload_from_record(
   r : @raw.QuotaTokenRecord,
 ) -> @types.QuotaTokenValuePayload {
@@ -162,7 +161,7 @@ fn quota_token_payload_from_record(
     expected_use: r.expected_use,
     last_credit: r.last_credit,
     last_credit_at: {
-      seconds: r.last_credit_at.seconds.reinterpret_as_int64(),
+      seconds: r.last_credit_at.seconds,
       nanoseconds: r.last_credit_at.nanoseconds,
     },
   }
@@ -170,24 +169,18 @@ fn quota_token_payload_from_record(
 
 ///|
 /// Pure mapping from the schema value carrier back to the host
-/// `QuotaTokenRecord`. Mirrors the Rust non-negative-timestamp guard before the
-/// `Int64` → `UInt64` reinterpret. Factored out so it can be tested without the
+/// `QuotaTokenRecord`. Factored out so it can be tested without the
 /// `from_record` host import.
 fn quota_token_record_from_payload(
   payload : @types.QuotaTokenValuePayload,
 ) -> @raw.QuotaTokenRecord raise @schema.FromSchemaError {
-  guard payload.last_credit_at.seconds >= 0L else {
-    raise @schema.FromSchemaError::custom(
-      "quota token timestamp must be non-negative",
-    )
-  }
   {
     environment_id: @host.EnvironmentId::{ uuid: payload.environment_id.uuid },
     resource_name: payload.resource_name,
     expected_use: payload.expected_use,
     last_credit: payload.last_credit,
-    last_credit_at: @wallClock.Datetime::{
-      seconds: payload.last_credit_at.seconds.reinterpret_as_uint64(),
+    last_credit_at: @systemClock.Instant::{
+      seconds: payload.last_credit_at.seconds,
       nanoseconds: payload.last_credit_at.nanoseconds,
     },
   }

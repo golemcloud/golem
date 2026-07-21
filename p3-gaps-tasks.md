@@ -1644,7 +1644,7 @@ Completion evidence (2026-07-21):
   branch; updating that external tool pin is a follow-up rather than SDK
   runtime work.
 
-### T45 — MoonBit SDK: bindings regeneration + API port
+### T45 — MoonBit SDK: bindings regeneration + API port — DONE
 
 Regenerate MoonBit bindings from the P3 WIT with a single wit-bindgen version
 (eliminate the 0.42.1 remnants in `world/agentGuest` / `gen/`); remove/replace
@@ -1656,7 +1656,7 @@ and the moonbit skills.
 `rg -i "pollable|subscribe" sdks/moonbit/golem_sdk` returns no active-code
 hits; update `sdks/moonbit/AGENTS.md` to the verified state.
 
-### T46 — MoonBit SDK: example build + verification
+### T46 — MoonBit SDK: example build + verification — DONE
 
 Build `sdks/moonbit/golem_sdk_example1` to a final component and verify its
 WIT surface; deploy against a local executor and invoke an agent method
@@ -1665,6 +1665,37 @@ end-to-end.
 **Verify:** `wasm-tools component wit` on the built artifact shows
 `export golem:agent/guest@2.0.0` and P3 imports only (plus expected P2 std
 imports); one end-to-end invocation succeeds via `golem` CLI local run.
+
+Completion evidence (2026-07-21, Oracle approved):
+
+- Rebased the Golem wit-bindgen fork on Bytecode Alliance's draft MoonBit
+  component-model async PR #1659 and published
+  `golem-outline-lift-v0.58.0` at
+  `4407232ead86d9bcbd06cbebd790a52120a4087a`. A fresh pinned `cargo install`
+  reports that revision, passes the regeneration guard, and regenerates all
+  bindings with wit-bindgen 0.59.0. The fork's 20 MoonBit generator tests,
+  CLI build, and rustfmt check pass.
+- The generated guest initialize/invoke and snapshot save/load boundaries use
+  genuine component-model async exports. Promise, webhook, filesystem, HTTP,
+  and awaited RPC paths use P3 futures/streams and async functions; no active
+  SDK code imports `wasi:io/poll` or calls P2 stream `subscribe`. Awaited and
+  scoped generated clients are async, while trigger/schedule operations remain
+  synchronous.
+- `moon check --target wasm` and all 118 SDK tests pass; the code generator's
+  check and all 154 tests pass; `moon info`/`moon fmt` were run for the SDK,
+  generator, and example. The example passes its check and release build, and
+  the current-source `golem build -L --force-build` pipeline succeeds.
+- The final MoonBit component validates with component-model async enabled and
+  exports `golem:agent/guest@2.0.0`, `golem:api/save-snapshot@1.5.0`, and
+  `golem:api/load-snapshot@1.5.0`. Its WASI imports are P3 clocks/CLI; it has no
+  P2 poll or stream import.
+- A deployed `WebhookAgent.wait_for_webhook` invocation remained in flight and
+  reported `Suspended`; an external POST returned HTTP 204, completed the
+  promise, and resumed that same invocation with the exact posted payload.
+  Agent metadata then reported `Idle`. This verifies real executor parking and
+  resumption rather than synchronous lowering.
+- The SDK and example guides document the pinned fork and async API. The
+  already-published MoonBit blog post remains unchanged.
 
 ### T47 — TS SDK migration (blocked)
 

@@ -3,26 +3,26 @@
 // builds a `Tuple` schema inline and `type_id` is `core.tuple.TupleN<args...>`.
 
 ///|
-pub impl[T0 : IntoSchema, T1 : IntoSchema] IntoSchema for (T0, T1) with type_id() {
+pub impl[T0 : IntoSchema, T1 : IntoSchema] IntoSchema for (T0, T1) with fn type_id() {
   type_id_with_args("core.tuple.Tuple2", [T0::type_id(), T1::type_id()])
 }
 
 ///|
-pub impl[T0 : IntoSchema, T1 : IntoSchema] IntoSchema for (T0, T1) with register_in(
+pub impl[T0 : IntoSchema, T1 : IntoSchema] IntoSchema for (T0, T1) with fn register_in(
   b,
 ) {
   @model.schema_type(Tuple([T0::register_in(b), T1::register_in(b)]))
 }
 
 ///|
-pub impl[T0 : IntoSchema, T1 : IntoSchema] IntoSchema for (T0, T1) with to_value(
+pub impl[T0 : IntoSchema, T1 : IntoSchema] IntoSchema for (T0, T1) with fn to_value(
   self,
 ) {
   Tuple([T0::to_value(self.0), T1::to_value(self.1)])
 }
 
 ///|
-pub impl[T0 : FromSchema, T1 : FromSchema] FromSchema for (T0, T1) with from_value(
+pub impl[T0 : FromSchema, T1 : FromSchema] FromSchema for (T0, T1) with fn from_value(
   v,
 ) {
   match v {
@@ -44,7 +44,7 @@ pub impl[T0 : IntoSchema, T1 : IntoSchema, T2 : IntoSchema] IntoSchema for (
   T0,
   T1,
   T2,
-) with type_id() {
+) with fn type_id() {
   type_id_with_args("core.tuple.Tuple3", [
     T0::type_id(),
     T1::type_id(),
@@ -57,7 +57,7 @@ pub impl[T0 : IntoSchema, T1 : IntoSchema, T2 : IntoSchema] IntoSchema for (
   T0,
   T1,
   T2,
-) with register_in(b) {
+) with fn register_in(b) {
   @model.schema_type(
     Tuple([T0::register_in(b), T1::register_in(b), T2::register_in(b)]),
   )
@@ -68,7 +68,7 @@ pub impl[T0 : IntoSchema, T1 : IntoSchema, T2 : IntoSchema] IntoSchema for (
   T0,
   T1,
   T2,
-) with to_value(self) {
+) with fn to_value(self) {
   Tuple([T0::to_value(self.0), T1::to_value(self.1), T2::to_value(self.2)])
 }
 
@@ -77,7 +77,7 @@ pub impl[T0 : FromSchema, T1 : FromSchema, T2 : FromSchema] FromSchema for (
   T0,
   T1,
   T2,
-) with from_value(v) {
+) with fn from_value(v) {
   match v {
     Tuple(elems) => {
       if elems.length() != 3 {
@@ -102,7 +102,7 @@ pub impl[T0 : IntoSchema, T1 : IntoSchema, T2 : IntoSchema, T3 : IntoSchema] Int
   T1,
   T2,
   T3,
-) with type_id() {
+) with fn type_id() {
   type_id_with_args("core.tuple.Tuple4", [
     T0::type_id(),
     T1::type_id(),
@@ -117,7 +117,7 @@ pub impl[T0 : IntoSchema, T1 : IntoSchema, T2 : IntoSchema, T3 : IntoSchema] Int
   T1,
   T2,
   T3,
-) with register_in(b) {
+) with fn register_in(b) {
   @model.schema_type(
     Tuple([
       T0::register_in(b),
@@ -134,7 +134,7 @@ pub impl[T0 : IntoSchema, T1 : IntoSchema, T2 : IntoSchema, T3 : IntoSchema] Int
   T1,
   T2,
   T3,
-) with to_value(self) {
+) with fn to_value(self) {
   Tuple([
     T0::to_value(self.0),
     T1::to_value(self.1),
@@ -149,7 +149,7 @@ pub impl[T0 : FromSchema, T1 : FromSchema, T2 : FromSchema, T3 : FromSchema] Fro
   T1,
   T2,
   T3,
-) with from_value(v) {
+) with fn from_value(v) {
   match v {
     Tuple(elems) => {
       if elems.length() != 4 {
@@ -176,7 +176,7 @@ pub impl[
   T2 : IntoSchema,
   T3 : IntoSchema,
   T4 : IntoSchema,
-] IntoSchema for (T0, T1, T2, T3, T4) with type_id() {
+] IntoSchema for (T0, T1, T2, T3, T4) with fn type_id() {
   type_id_with_args("core.tuple.Tuple5", [
     T0::type_id(),
     T1::type_id(),
@@ -193,7 +193,7 @@ pub impl[
   T2 : IntoSchema,
   T3 : IntoSchema,
   T4 : IntoSchema,
-] IntoSchema for (T0, T1, T2, T3, T4) with register_in(b) {
+] IntoSchema for (T0, T1, T2, T3, T4) with fn register_in(b) {
   @model.schema_type(
     Tuple([
       T0::register_in(b),
@@ -212,7 +212,7 @@ pub impl[
   T2 : IntoSchema,
   T3 : IntoSchema,
   T4 : IntoSchema,
-] IntoSchema for (T0, T1, T2, T3, T4) with to_value(self) {
+] IntoSchema for (T0, T1, T2, T3, T4) with fn to_value(self) {
   Tuple([
     T0::to_value(self.0),
     T1::to_value(self.1),
@@ -229,7 +229,7 @@ pub impl[
   T2 : FromSchema,
   T3 : FromSchema,
   T4 : FromSchema,
-] FromSchema for (T0, T1, T2, T3, T4) with from_value(v) {
+] FromSchema for (T0, T1, T2, T3, T4) with fn from_value(v) {
   match v {
     Tuple(elems) => {
       if elems.length() != 5 {
@@ -258,7 +258,7 @@ pub impl[
   T3 : IntoSchema,
   T4 : IntoSchema,
   T5 : IntoSchema,
-] IntoSchema for (T0, T1, T2, T3, T4, T5) with type_id() {
+] IntoSchema for (T0, T1, T2, T3, T4, T5) with fn type_id() {
   type_id_with_args("core.tuple.Tuple6", [
     T0::type_id(),
     T1::type_id(),
@@ -277,7 +277,7 @@ pub impl[
   T3 : IntoSchema,
   T4 : IntoSchema,
   T5 : IntoSchema,
-] IntoSchema for (T0, T1, T2, T3, T4, T5) with register_in(b) {
+] IntoSchema for (T0, T1, T2, T3, T4, T5) with fn register_in(b) {
   @model.schema_type(
     Tuple([
       T0::register_in(b),
@@ -298,7 +298,7 @@ pub impl[
   T3 : IntoSchema,
   T4 : IntoSchema,
   T5 : IntoSchema,
-] IntoSchema for (T0, T1, T2, T3, T4, T5) with to_value(self) {
+] IntoSchema for (T0, T1, T2, T3, T4, T5) with fn to_value(self) {
   Tuple([
     T0::to_value(self.0),
     T1::to_value(self.1),
@@ -317,7 +317,7 @@ pub impl[
   T3 : FromSchema,
   T4 : FromSchema,
   T5 : FromSchema,
-] FromSchema for (T0, T1, T2, T3, T4, T5) with from_value(v) {
+] FromSchema for (T0, T1, T2, T3, T4, T5) with fn from_value(v) {
   match v {
     Tuple(elems) => {
       if elems.length() != 6 {
@@ -348,7 +348,7 @@ pub impl[
   T4 : IntoSchema,
   T5 : IntoSchema,
   T6 : IntoSchema,
-] IntoSchema for (T0, T1, T2, T3, T4, T5, T6) with type_id() {
+] IntoSchema for (T0, T1, T2, T3, T4, T5, T6) with fn type_id() {
   type_id_with_args("core.tuple.Tuple7", [
     T0::type_id(),
     T1::type_id(),
@@ -369,7 +369,7 @@ pub impl[
   T4 : IntoSchema,
   T5 : IntoSchema,
   T6 : IntoSchema,
-] IntoSchema for (T0, T1, T2, T3, T4, T5, T6) with register_in(b) {
+] IntoSchema for (T0, T1, T2, T3, T4, T5, T6) with fn register_in(b) {
   @model.schema_type(
     Tuple([
       T0::register_in(b),
@@ -392,7 +392,7 @@ pub impl[
   T4 : IntoSchema,
   T5 : IntoSchema,
   T6 : IntoSchema,
-] IntoSchema for (T0, T1, T2, T3, T4, T5, T6) with to_value(self) {
+] IntoSchema for (T0, T1, T2, T3, T4, T5, T6) with fn to_value(self) {
   Tuple([
     T0::to_value(self.0),
     T1::to_value(self.1),
@@ -413,7 +413,7 @@ pub impl[
   T4 : FromSchema,
   T5 : FromSchema,
   T6 : FromSchema,
-] FromSchema for (T0, T1, T2, T3, T4, T5, T6) with from_value(v) {
+] FromSchema for (T0, T1, T2, T3, T4, T5, T6) with fn from_value(v) {
   match v {
     Tuple(elems) => {
       if elems.length() != 7 {
@@ -446,7 +446,7 @@ pub impl[
   T5 : IntoSchema,
   T6 : IntoSchema,
   T7 : IntoSchema,
-] IntoSchema for (T0, T1, T2, T3, T4, T5, T6, T7) with type_id() {
+] IntoSchema for (T0, T1, T2, T3, T4, T5, T6, T7) with fn type_id() {
   type_id_with_args("core.tuple.Tuple8", [
     T0::type_id(),
     T1::type_id(),
@@ -469,7 +469,7 @@ pub impl[
   T5 : IntoSchema,
   T6 : IntoSchema,
   T7 : IntoSchema,
-] IntoSchema for (T0, T1, T2, T3, T4, T5, T6, T7) with register_in(b) {
+] IntoSchema for (T0, T1, T2, T3, T4, T5, T6, T7) with fn register_in(b) {
   @model.schema_type(
     Tuple([
       T0::register_in(b),
@@ -494,7 +494,7 @@ pub impl[
   T5 : IntoSchema,
   T6 : IntoSchema,
   T7 : IntoSchema,
-] IntoSchema for (T0, T1, T2, T3, T4, T5, T6, T7) with to_value(self) {
+] IntoSchema for (T0, T1, T2, T3, T4, T5, T6, T7) with fn to_value(self) {
   Tuple([
     T0::to_value(self.0),
     T1::to_value(self.1),
@@ -517,7 +517,7 @@ pub impl[
   T5 : FromSchema,
   T6 : FromSchema,
   T7 : FromSchema,
-] FromSchema for (T0, T1, T2, T3, T4, T5, T6, T7) with from_value(v) {
+] FromSchema for (T0, T1, T2, T3, T4, T5, T6, T7) with fn from_value(v) {
   match v {
     Tuple(elems) => {
       if elems.length() != 8 {

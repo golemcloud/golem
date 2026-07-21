@@ -57,7 +57,7 @@ pub(all) struct TypeTag[T] {
 
 // Traits
 pub(open) trait FromSchema {
-  from_value(@schema_model.SchemaValue) -> Self raise FromSchemaError
+  fn from_value(@schema_model.SchemaValue) -> Self raise FromSchemaError
 }
 pub impl FromSchema for Unit
 pub impl FromSchema for Bool
@@ -84,9 +84,9 @@ pub impl[T0 : FromSchema, T1 : FromSchema, T2 : FromSchema, T3 : FromSchema, T4 
 pub impl[T0 : FromSchema, T1 : FromSchema, T2 : FromSchema, T3 : FromSchema, T4 : FromSchema, T5 : FromSchema, T6 : FromSchema, T7 : FromSchema] FromSchema for (T0, T1, T2, T3, T4, T5, T6, T7)
 
 pub(open) trait IntoSchema {
-  type_id() -> String
-  register_in(@schema_model.SchemaBuilder) -> @schema_model.SchemaType
-  to_value(Self) -> @schema_model.SchemaValue
+  fn type_id() -> String
+  fn register_in(@schema_model.SchemaBuilder) -> @schema_model.SchemaType
+  fn to_value(Self) -> @schema_model.SchemaValue
 }
 pub impl IntoSchema for Unit
 pub impl IntoSchema for Bool

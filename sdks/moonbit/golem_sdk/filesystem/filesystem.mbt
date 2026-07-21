@@ -2,9 +2,6 @@
 pub using @types {type Descriptor}
 
 ///|
-pub using @types {type DirectoryEntryStream}
-
-///|
 pub using @types {type DescriptorFlags}
 
 ///|
@@ -99,7 +96,7 @@ const MAX_READ_CHUNK_SIZE : UInt64 = 65536
 /// The underlying WASI host implementation caps each `read` call at
 /// `MAX_READ_CHUNK_SIZE` bytes, so this helper performs a sequence of
 /// chunked reads at increasing offsets and concatenates the results.
-pub fn read_bytes(
+pub async fn read_bytes(
   root : Descriptor,
   path : String,
 ) -> Result[FixedArray[Byte], @types.ErrorCode] {
@@ -126,32 +123,28 @@ pub fn read_bytes(
 /// Helper that performs the chunked-read loop on an already-open
 /// descriptor and concatenates the chunks into a single
 /// `FixedArray[Byte]`.
-fn read_all_chunks(
+async fn read_all_chunks(
   fd : Descriptor,
 ) -> Result[FixedArray[Byte], @types.ErrorCode] {
   let chunks : Array[FixedArray[Byte]] = []
-  let mut offset : UInt64 = 0
-  let mut done = false
-  while not(done) {
-    match fd.read(MAX_READ_CHUNK_SIZE, offset) {
-      Err(e) => return Err(e)
-      Ok((chunk, eof)) => {
+  let (contents, completed) = fd.read_via_stream(0)
+  for ;; {
+    match contents.read(MAX_READ_CHUNK_SIZE.to_int()) {
+      Some(chunk) => {
         let chunk_len = chunk.length()
         if chunk_len > 0 {
           chunks.push(chunk)
-          offset = offset + chunk_len.to_uint64()
-        }
-        // Stop on EOF, OR on a zero-length non-EOF response. Treating a
-        // zero-byte read as EOF is intentional: it prevents an infinite
-        // loop in case a host ever returns no progress without setting
-        // the EOF flag. The trade-off (potentially truncating data on a
-        // misbehaving host) is preferable to spinning forever in a
-        // "read whole file" helper. Do NOT remove this guard.
-        if eof || chunk_len == 0 {
-          done = true
         }
       }
+      None => break
     }
+  }
+  contents.drop()
+  let result = completed.get()
+  completed.drop()
+  match result {
+    Err(e) => return Err(e)
+    Ok(_) => ()
   }
   let mut total = 0
   for c in chunks {
@@ -177,7 +170,7 @@ fn read_all_chunks(
 /// Invalid UTF-8 sequences are replaced with the Unicode replacement
 /// character (U+FFFD) — see `@utf8.decode_lossy`. If you need to detect
 /// decode errors, use `read_bytes` and decode the result yourself.
-pub fn read_string(
+pub async fn read_string(
   root : Descriptor,
   path : String,
 ) -> Result[String, @types.ErrorCode] {
@@ -196,7 +189,7 @@ pub fn read_string(
 /// `Descriptor::write` may legally write fewer bytes than requested
 /// (a partial write); this wrapper loops until all bytes are written
 /// or the host stops making progress.
-pub fn write_bytes(
+pub async fn write_bytes(
   root : Descriptor,
   path : String,
   data : FixedArray[Byte],
@@ -221,50 +214,24 @@ pub fn write_bytes(
 /// Helper that writes all of `data` to the given descriptor starting
 /// at offset 0, looping over partial writes until the entire buffer is
 /// written.
-fn write_all_bytes(
+async fn write_all_bytes(
   fd : Descriptor,
   data : FixedArray[Byte],
 ) -> Result[Unit, @types.ErrorCode] {
-  let total = data.length()
-  let mut written : Int = 0
-  while written < total {
-    let remaining = total - written
-    // Slice off the next chunk to write. We bound each write at
-    // MAX_READ_CHUNK_SIZE for parity with the read path; the wasmtime
-    // write impl does not currently use the same allocation cap, but
-    // chunking keeps memory usage and behavior predictable across
-    // hosts.
-    let chunk_len = if remaining.to_uint64() < MAX_READ_CHUNK_SIZE {
-      remaining
-    } else {
-      MAX_READ_CHUNK_SIZE.to_int()
+  let contents = @asyncCore.Stream::produce(async fn(sink) {
+    if sink.write_all(data[:]) {
+      sink.close()
     }
-    let chunk : FixedArray[Byte] = FixedArray::make(chunk_len, b'\x00')
-    let mut i = 0
-    while i < chunk_len {
-      chunk[i] = data[written + i]
-      i += 1
-    }
-    match fd.write(chunk, written.to_uint64()) {
-      Err(e) => return Err(e)
-      Ok(n) => {
-        let n_int = n.to_int()
-        if n_int <= 0 {
-          // No progress — bail out rather than spinning forever. We
-          // surface this as IoError because the host failed to write
-          // any of the remaining bytes.
-          return Err(@types.ErrorCode::IO)
-        }
-        written = written + n_int
-      }
-    }
-  }
-  Ok(())
+  })
+  let completed = fd.write_via_stream(contents, 0)
+  let result = completed.get()
+  completed.drop()
+  result
 }
 
 ///|
 /// Writes a string to a file as UTF-8, creating or truncating it.
-pub fn write_string(
+pub async fn write_string(
   root : Descriptor,
   path : String,
   content : String,
@@ -276,7 +243,7 @@ pub fn write_string(
 
 ///|
 /// Lists the names of entries in a directory.
-pub fn list_directory(
+pub async fn list_directory(
   root : Descriptor,
   path : String,
 ) -> Result[Array[String], @types.ErrorCode] {
@@ -300,30 +267,25 @@ pub fn list_directory(
 /// Helper that reads all directory entries from an open directory
 /// descriptor and returns their names. The created entry stream is
 /// explicitly dropped to release the host-side resource.
-fn read_all_dir_entries(
+async fn read_all_dir_entries(
   fd : Descriptor,
 ) -> Result[Array[String], @types.ErrorCode] {
-  match fd.read_directory() {
-    Err(e) => Err(e)
-    Ok(s) => {
-      let entries : Array[String] = []
-      let mut err : @types.ErrorCode? = None
-      let mut done = false
-      while not(done) {
-        match s.read_directory_entry() {
-          Ok(Some(entry)) => entries.push(entry.name)
-          Ok(None) => done = true
-          Err(e) => {
-            err = Some(e)
-            done = true
-          }
+  let (contents, completed) = fd.read_directory()
+  let entries : Array[String] = []
+  for ;; {
+    match contents.read(64) {
+      Some(chunk) =>
+        for entry in chunk {
+          entries.push(entry.name)
         }
-      }
-      s.drop()
-      match err {
-        Some(e) => Err(e)
-        None => Ok(entries)
-      }
+      None => break
     }
+  }
+  contents.drop()
+  let result = completed.get()
+  completed.drop()
+  match result {
+    Err(e) => Err(e)
+    Ok(_) => Ok(entries)
   }
 }

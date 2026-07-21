@@ -22,15 +22,15 @@
 /// when the graph is finalized (`into_schema_graph`), not during construction,
 /// matching the Rust `IntoSchema`.
 pub(open) trait IntoSchema {
-  type_id() -> @model.TypeId
-  register_in(@model.SchemaBuilder) -> @model.SchemaType
-  to_value(Self) -> @model.SchemaValue
+  fn type_id() -> @model.TypeId
+  fn register_in(@model.SchemaBuilder) -> @model.SchemaType
+  fn to_value(Self) -> @model.SchemaValue
 }
 
 ///|
 /// Decode a `SchemaValue` back into a value. The only fallible direction.
 pub(open) trait FromSchema {
-  from_value(@model.SchemaValue) -> Self raise FromSchemaError
+  fn from_value(@model.SchemaValue) -> Self raise FromSchemaError
 }
 
 // ============================================================

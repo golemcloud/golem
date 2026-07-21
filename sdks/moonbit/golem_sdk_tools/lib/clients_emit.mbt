@@ -4,8 +4,9 @@
 // Each agent gets a `<Name>Client` wrapping `@rpc.AgentClient`. Constructor and
 // method arguments are encoded into a `@types.SchemaValueTree` input record via
 // `@agents.encode_invocation_input`, and awaited results decoded via
-// `@agents.decode_output`. Every generated method raises `@common.AgentError`
-// (the encode helper raises), matching the SDK's uniform error contract.
+// `@agents.decode_output`. Awaited methods are async so they can suspend on the
+// P3 RPC result future; synchronous setup, trigger, and scheduling methods keep
+// the SDK's `@common.AgentError` contract.
 //
 // Built as a MoonBit-source string and parsed back via `parse_generated_impls`
 // (see `value_types_emit.mbt` / `agents_emit.mbt`).
@@ -194,7 +195,7 @@ fn emit_client_scoped(
   for e in extra {
     sig_parts.push("\{e.0} : \{e.1}")
   }
-  sig_parts.push("f : (\{client}) -> T raise @common.AgentError")
+  sig_parts.push("f : async (\{client}) -> T")
   let call_args : Array[String] = []
   for p in vis {
     call_args.push(p.0)
@@ -206,7 +207,7 @@ fn emit_client_scoped(
   let call = call_args.join(", ")
   buf.write_string("///|\n")
   buf.write_string(
-    "pub fn[T] \{client}::\{fn_name}(\n  \{sig},\n) -> T raise @common.AgentError {\n",
+    "pub async fn[T] \{client}::\{fn_name}(\n  \{sig},\n) -> T {\n",
   )
   buf.write_string("  let client = \{client}::\{ctor_name}(\{call})\n")
   buf.write_string("  defer client.drop()\n")
@@ -238,7 +239,7 @@ fn emit_client_method(
   // awaited invoke
   buf.write_string("///|\n")
   buf.write_string(
-    "pub fn \{client}::\{meth.name}(\n  \{self_args},\n) -> \{ret} raise @common.AgentError {\n",
+    "pub async fn \{client}::\{meth.name}(\n  \{self_args},\n) -> \{ret} {\n",
   )
   buf.write_string("  let input = \{input_expr}\n")
   match meth.return_type {
@@ -392,7 +393,7 @@ fn emit_client_scoped_with_config(
     sig_parts.push("\{e.0} : \{e.1}")
   }
   sig_parts.push("config : \{override_name}")
-  sig_parts.push("f : (\{client}) -> T raise @common.AgentError")
+  sig_parts.push("f : async (\{client}) -> T")
   let call_args : Array[String] = []
   for p in vis {
     call_args.push(p.0)
@@ -405,7 +406,7 @@ fn emit_client_scoped_with_config(
   let call = call_args.join(", ")
   buf.write_string("///|\n")
   buf.write_string(
-    "pub fn[T] \{client}::\{fn_name}(\n  \{sig},\n) -> T raise @common.AgentError {\n",
+    "pub async fn[T] \{client}::\{fn_name}(\n  \{sig},\n) -> T {\n",
   )
   buf.write_string("  let client = \{client}::\{ctor_name}(\{call})\n")
   buf.write_string("  defer client.drop()\n")

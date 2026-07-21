@@ -1,7 +1,9 @@
+warnings = "-44"
+
 import {
-  "golemcloud/golem_sdk/ffi" @ffi,
-  "golemcloud/golem_sdk/interface/wasi/keyvalue/types" @types,
-  "golemcloud/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError" @wasiKeyvalueError,
+  "golemcloud/golem_sdk/async-core",
+  "golemcloud/golem_sdk/interface/wasi/keyvalue/types",
+  "golemcloud/golem_sdk/interface/wasi/keyvalue/wasi-keyvalue-error",
 }
 
-warnings = "-44"
+supported_targets = "+wasm"

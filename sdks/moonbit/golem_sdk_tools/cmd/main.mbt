@@ -167,7 +167,7 @@ fn run_agents(project_root : String) -> Unit raise {
         pkg_content, "golemcloud/golem_sdk/interface/golem/agent/host", "@agentHost",
       )
       pkg_content = @lib.ensure_pkg_import(
-        pkg_content, "golemcloud/golem_sdk/interface/wasi/clocks/wallClock", "@wallClock",
+        pkg_content, "golemcloud/golem_sdk/interface/wasi/clocks/system-clock", "@systemClock",
       )
       // JSON snapshot helpers are emitted for agents deriving ToJson/FromJson.
       let needs_json = agents

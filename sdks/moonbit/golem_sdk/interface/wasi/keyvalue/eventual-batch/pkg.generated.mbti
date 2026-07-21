@@ -1,0 +1,25 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/wasi/keyvalue/eventual-batch"
+
+import {
+  "golemcloud/golem_sdk/interface/wasi/keyvalue/types",
+  "golemcloud/golem_sdk/interface/wasi/keyvalue/wasi-keyvalue-error",
+}
+
+// Values
+pub fn delete_many(@types.Bucket, Array[String]) -> Result[Unit, @wasi-keyvalue-error.Error_]
+
+pub fn get_many(@types.Bucket, Array[String]) -> Result[Array[@types.IncomingValue?], @wasi-keyvalue-error.Error_]
+
+pub fn keys(@types.Bucket) -> Result[Array[String], @wasi-keyvalue-error.Error_]
+
+pub fn set_many(@types.Bucket, Array[(String, @types.OutgoingValue)]) -> Result[Unit, @wasi-keyvalue-error.Error_]
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+

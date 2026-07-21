@@ -1,10 +1,11 @@
 ///|
 /// Initializes the agent of a given type with the given constructor parameters.
 /// If called a second time, it fails.
-pub fn initialize(
+pub async fn initialize(
   agent_type : String,
   input : @types.SchemaValueTree,
   principal : @common.Principal,
+  _background_group : @async-core.TaskGroup[Unit],
 ) -> Result[Unit, @common.AgentError] {
   if @agents.get_agent_instance() is Some(_) {
     @agents.panic_with_message(
@@ -17,10 +18,11 @@ pub fn initialize(
 
 ///|
 /// Invokes an agent. If create was not called before, it fails
-pub fn invoke(
+pub async fn invoke(
   method_name : String,
   input : @types.SchemaValueTree,
   principal : @common.Principal,
+  _background_group : @async-core.TaskGroup[Unit],
 ) -> Result[@types.SchemaValueTree?, @common.AgentError] {
   match @agents.get_agent_instance() {
     None =>

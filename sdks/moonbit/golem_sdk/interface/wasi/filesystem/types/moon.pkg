@@ -1,7 +1,8 @@
+warnings = "-44"
+
 import {
-  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock" @wallClock,
-  "golemcloud/golem_sdk/interface/wasi/io/error" @error,
-  "golemcloud/golem_sdk/interface/wasi/io/streams" @streams,
+  "golemcloud/golem_sdk/async-core",
+  "golemcloud/golem_sdk/interface/wasi/clocks/system-clock",
 }
 
-warnings = "-44"
+supported_targets = "+wasm"

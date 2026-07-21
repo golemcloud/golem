@@ -4,8 +4,7 @@ package "golemcloud/golem_sdk/interface/golem/agent/host"
 import {
   "golemcloud/golem_sdk/interface/golem/agent/common",
   "golemcloud/golem_sdk/interface/golem/core/types",
-  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
-  "golemcloud/golem_sdk/interface/wasi/io/poll",
+  "golemcloud/golem_sdk/interface/wasi/clocks/system-clock",
 }
 
 // Values
@@ -38,16 +37,15 @@ pub fn CancellationToken::drop(Self) -> Unit
 pub(all) struct FutureInvokeResult(Int) derive(Eq, Show)
 pub fn FutureInvokeResult::cancel(Self) -> Unit
 pub fn FutureInvokeResult::drop(Self) -> Unit
-pub fn FutureInvokeResult::get(Self) -> Result[@types.SchemaValueTree?, RpcError]?
-pub fn FutureInvokeResult::subscribe(Self) -> @poll.Pollable
+pub async fn FutureInvokeResult::get(Self) -> Result[@types.SchemaValueTree?, RpcError]
 
 pub(all) struct WasmRpc(Int) derive(Eq, Show)
 pub fn WasmRpc::async_invoke_and_await(Self, String, @types.SchemaValueTree) -> FutureInvokeResult
 pub fn WasmRpc::drop(Self) -> Unit
 pub fn WasmRpc::invoke(Self, String, @types.SchemaValueTree) -> Result[Unit, RpcError]
 pub fn WasmRpc::invoke_and_await(Self, String, @types.SchemaValueTree) -> Result[@types.SchemaValueTree?, RpcError]
-pub fn WasmRpc::schedule_cancelable_invocation(Self, @wallClock.Datetime, String, @types.SchemaValueTree) -> CancellationToken
-pub fn WasmRpc::schedule_invocation(Self, @wallClock.Datetime, String, @types.SchemaValueTree) -> Unit
+pub fn WasmRpc::schedule_cancelable_invocation(Self, @system-clock.Instant, String, @types.SchemaValueTree) -> CancellationToken
+pub fn WasmRpc::schedule_invocation(Self, @system-clock.Instant, String, @types.SchemaValueTree) -> Unit
 pub fn WasmRpc::wasm_rpc(String, @types.SchemaValueTree, @types.Uuid?, Array[@common.TypedAgentConfigValue]) -> Self
 
 // Type aliases

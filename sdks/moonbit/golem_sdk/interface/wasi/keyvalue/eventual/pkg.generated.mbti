@@ -3,17 +3,17 @@ package "golemcloud/golem_sdk/interface/wasi/keyvalue/eventual"
 
 import {
   "golemcloud/golem_sdk/interface/wasi/keyvalue/types",
-  "golemcloud/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError",
+  "golemcloud/golem_sdk/interface/wasi/keyvalue/wasi-keyvalue-error",
 }
 
 // Values
-pub fn delete(@types.Bucket, String) -> Result[Unit, @wasiKeyvalueError.Error_]
+pub fn delete(@types.Bucket, String) -> Result[Unit, @wasi-keyvalue-error.Error_]
 
-pub fn exists(@types.Bucket, String) -> Result[Bool, @wasiKeyvalueError.Error_]
+pub fn exists(@types.Bucket, String) -> Result[Bool, @wasi-keyvalue-error.Error_]
 
-pub fn get(@types.Bucket, String) -> Result[@types.IncomingValue?, @wasiKeyvalueError.Error_]
+pub fn get(@types.Bucket, String) -> Result[@types.IncomingValue?, @wasi-keyvalue-error.Error_]
 
-pub fn set(@types.Bucket, String, @types.OutgoingValue) -> Result[Unit, @wasiKeyvalueError.Error_]
+pub fn set(@types.Bucket, String, @types.OutgoingValue) -> Result[Unit, @wasi-keyvalue-error.Error_]
 
 // Errors
 

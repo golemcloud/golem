@@ -2,7 +2,7 @@
 package "golemcloud/golem_sdk/context"
 
 import {
-  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
+  "golemcloud/golem_sdk/interface/wasi/clocks/system-clock",
 }
 
 // Values
@@ -37,10 +37,10 @@ pub(all) struct Span {
 pub fn Span::finish(Self) -> Unit
 pub fn Span::set_attribute(Self, String, String) -> Unit
 pub fn Span::set_attributes(Self, Array[(String, String)]) -> Unit
-pub fn Span::started_at(Self) -> @wallClock.Datetime
+pub fn Span::started_at(Self) -> @system-clock.Instant
 
 // Type aliases
-pub using @wallClock {type Datetime}
+pub using @system-clock {type Instant}
 
 // Traits
 

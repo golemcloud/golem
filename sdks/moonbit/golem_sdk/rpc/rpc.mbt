@@ -109,12 +109,20 @@ pub fn AgentClient::phantom_id(self : AgentClient) -> @types.Uuid? {
 ///|
 /// Invoke a method and await its result. Returns `None` when the method's
 /// output schema is `unit`, and `Some(tree)` for a single returned value.
-pub fn AgentClient::invoke_and_await(
+pub async fn AgentClient::invoke_and_await(
   self : AgentClient,
   function_name : String,
   input : @types.SchemaValueTree,
 ) -> @types.SchemaValueTree? {
-  match self.rpc.invoke_and_await(function_name, input) {
+  let invocation = self.rpc.async_invoke_and_await(function_name, input)
+  defer invocation.drop()
+  let result = invocation.get() catch {
+    e => {
+      invocation.cancel()
+      raise e
+    }
+  }
+  match result {
     Ok(result) => result
     Err(e) => panic_on_rpc_error(e)
   }
