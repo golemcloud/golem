@@ -267,10 +267,22 @@ async fn complete_at_rate(
     // Complete these unmeasured promises before advancing so the next rate starts
     // from an empty promise registry rather than accumulating one pool per step.
     drop(ready_sender);
+    let mut cleanup_work = Vec::new();
     while let Ok(work) = ready_work.try_recv() {
-        let work = work?;
-        user.complete_promise(&work.promise, Vec::new()).await?;
+        cleanup_work.push(work?);
     }
+    stream::iter(cleanup_work)
+        .map(|work| {
+            let user = user.clone();
+            async move {
+                user.complete_promise(&work.promise, Vec::new()).await?;
+                user.wait_for_status(&work.agent, AgentStatus::Idle, WAITER_READY_TIMEOUT)
+                    .await
+            }
+        })
+        .buffer_unordered(SETUP_CONCURRENCY)
+        .try_collect::<Vec<_>>()
+        .await?;
     Ok(Period {
         completed: completion_latencies.len() as u64,
         elapsed: started.elapsed(),
