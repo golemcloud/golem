@@ -27,7 +27,8 @@ use crate::model::environment::EnvironmentResolveMode;
 use crate::model::format::Format;
 use crate::model::text::fmt::{DecoratedIndent, log_text_view};
 use crate::model::text::help::{
-    AgentNameHelp, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp, EnvironmentNameHelp,
+    AgentNameHelp, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp,
+    AvailableProfileNamesHelp, EnvironmentNameHelp,
 };
 use colored::Colorize;
 use indoc::indoc;
@@ -112,7 +113,22 @@ impl ErrorHandler {
                 Ok(())
             }
             GolemCliCommandPartialMatch::AgentHelp => {
-                // TODO: show agents
+                self.ctx.silence_app_context_init().await;
+
+                if let Ok(environment) = self
+                    .ctx
+                    .environment_handler()
+                    .resolve_environment(EnvironmentResolveMode::Any)
+                    .await
+                    && let Ok(agent_types) =
+                        self.ctx.app_handler().list_agent_types(&environment).await
+                {
+                    logln("");
+                    log_text_view(&AvailableAgentConstructorsHelp::for_deployed_agent_types(
+                        &agent_types,
+                    ));
+                }
+
                 Ok(())
             }
             GolemCliCommandPartialMatch::AgentInvokeMissingFunctionName { agent_name } => {
@@ -209,8 +225,10 @@ impl ErrorHandler {
                 Ok(())
             }
             GolemCliCommandPartialMatch::ProfileSwitchMissingProfileName => {
-                // TODO: atomic: show available profiles
-
+                logln("");
+                log_text_view(&AvailableProfileNamesHelp::from_config_dir(
+                    self.ctx.config_dir(),
+                )?);
                 Ok(())
             }
         }
@@ -352,16 +370,7 @@ impl ErrorHandler {
                     "Profile '{}' not found!",
                     profile_name.0.log_color_highlight()
                 ));
-
-                logln(
-                    "Available profile names:"
-                        .log_color_help_group()
-                        .to_string(),
-                );
-                for environment_name in available_profile_names {
-                    logln(format!("- {}", environment_name.0));
-                }
-
+                log_text_view(&AvailableProfileNamesHelp(available_profile_names.clone()));
                 Ok(())
             }
         }

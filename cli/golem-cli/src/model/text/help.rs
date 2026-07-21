@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::agent_id_display::{SourceLanguage, render_type_for_language};
+use crate::config::{Config, ProfileName};
 use crate::log::{LogColorize, LogIndent, logln};
 use crate::model::component::show_exported_agent_constructors;
 use crate::model::masking::Masked;
@@ -28,7 +29,7 @@ use golem_common::model::component::ComponentName;
 use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::schema::{SchemaGraph, SchemaType};
 use indoc::indoc;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct AgentNameHelp;
 
@@ -183,6 +184,32 @@ impl TextOutput for AvailableComponentNamesHelp {
             logln(format!("  - {component_name}"));
         }
         logln("");
+    }
+}
+
+pub struct AvailableProfileNamesHelp(pub Vec<ProfileName>);
+
+impl AvailableProfileNamesHelp {
+    pub fn from_config_dir(config_dir: &Path) -> anyhow::Result<Self> {
+        Ok(Self(
+            Config::from_dir(config_dir)?.profiles.into_keys().collect(),
+        ))
+    }
+}
+
+impl TextOutput for AvailableProfileNamesHelp {
+    fn log(&self) {
+        let mut names = self.0.iter().map(|name| name.0.as_str()).collect::<Vec<_>>();
+        names.sort();
+
+        logln(
+            "Available profile names:"
+                .log_color_help_group()
+                .to_string(),
+        );
+        for name in names {
+            logln(format!("- {name}"));
+        }
     }
 }
 

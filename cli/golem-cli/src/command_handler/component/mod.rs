@@ -667,7 +667,6 @@ impl ComponentCommandHandler {
                         "Component {} not found, and not part of the current application",
                         component_name.0.log_color_highlight()
                     ));
-                    // TODO: fuzzy match from service to list components?
 
                     let app_ctx = self.ctx.app_context_lock().await;
                     if let Some(app_ctx) = app_ctx.opt()? {
