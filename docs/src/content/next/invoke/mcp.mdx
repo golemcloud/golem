@@ -42,14 +42,31 @@ The `@prompt` and `@description` annotations on agent methods become MCP tool an
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
 <Tabs.Tab>
 ```typescript
-@agent({})
-export class CounterAgent extends BaseAgent {
-  @prompt("Increments the counter by the given value and returns the new count")
-  @description("Add a value to the current counter")
-  incrementBy(value: number): number {
-    // ...
-  }
-}
+import { z } from 'zod';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
+
+export const CounterAgent = defineAgent({
+  name: 'CounterAgent',
+  id: { name: z.string() },
+  methods: {
+    incrementBy: method({
+      input: { value: z.number() },
+      returns: z.number(),
+      description: "Add a value to the current counter",
+      promptHint: "Increments the counter by the given value and returns the new count",
+    }),
+  },
+});
+
+export const CounterAgentImpl = CounterAgent.implement({
+  init: () => ({ count: 0 }),
+  methods: {
+    incrementBy({ value }) {
+      this.count += value;
+      return this.count;
+    },
+  },
+});
 ```
 </Tabs.Tab>
 <Tabs.Tab>

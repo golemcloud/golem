@@ -60,18 +60,30 @@ Once the security scheme is registered, enable authentication using the `auth` o
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
 <Tabs.Tab>
 ```typescript
-@agent({
-  mount: '/secure/{name}',
-  auth: true, // all endpoints require authentication
-})
-export class SecureAgent extends BaseAgent {
-  constructor(readonly name: string) { super(); }
+import { z } from 'zod';
+import { defineAgent, method, http, Principal } from '@golemcloud/golem-ts-sdk';
 
-  @endpoint({ get: "/profile" })
-  async getProfile(principal: Principal): Promise<Profile> {
-    // principal.email, principal.name, etc.
-  }
-}
+const Profile = z.object({ email: z.string(), name: z.string() });
+type Profile = z.infer<typeof Profile>;
+
+export const SecureAgent = defineAgent({
+  name: 'SecureAgent',
+  id: { name: z.string() },
+  http: http.mount('/secure/{name}', { auth: true }), // all endpoints require authentication
+  methods: {
+    getProfile: method({ input: {}, returns: Profile, http: http.get('/profile') }),
+  },
+});
+
+export const SecureAgentImpl = SecureAgent.implement({
+  init: () => ({}),
+  methods: {
+    getProfile(): Profile {
+      const principal: Principal = this.getPrincipal();
+      // principal.email, principal.name, etc.
+    },
+  },
+});
 ```
 </Tabs.Tab>
 <Tabs.Tab>
