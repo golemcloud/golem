@@ -34,8 +34,6 @@ const PROMISE_AGENT_TYPE: &str = "PromiseAgent";
 const DEFAULT_RATE_RAMP: &[u32] = &[1, 2, 4, 8, 16, 32, 64, 128, 256];
 const DEFAULT_RATE_PERIOD: Duration = Duration::from_secs(60);
 const WAITER_READY_TIMEOUT: Duration = Duration::from_secs(60);
-const POOL_STARVATION_THRESHOLD: Duration = Duration::from_millis(10);
-const SLOW_RESTAGE_THRESHOLD: Duration = Duration::from_millis(100);
 // Keep the pool small enough that benchmark scaffolding does not become an
 // agent-density test; pool starvation reports lifecycle capacity separately.
 const PROMISE_POOL_SIZE: usize = 256;
@@ -68,6 +66,17 @@ struct PromiseWork {
     parsed_agent: ParsedAgentId,
     promise: PromiseId,
     wait: bool,
+}
+
+struct StageTimings {
+    get_promise: Duration,
+    await_promise: Option<Duration>,
+    suspended_wait: Option<Duration>,
+}
+
+struct RestageTimings {
+    idle_wait: Duration,
+    stage: StageTimings,
 }
 
 pub async fn run_cell(
@@ -103,9 +112,9 @@ pub async fn run_cell(
         )
         .await?;
         outcome.record(rate, period);
+        cleanup_pool(&user, &component, config).await?;
     }
 
-    cleanup_pool(&user, &component, config).await?;
     Ok(outcome.into_benchmark_result(config))
 }
 
@@ -143,7 +152,7 @@ async fn create_work_pool(
                 let agent = user
                     .start_agent(&component.id, parsed_agent.clone())
                     .await?;
-                let work = stage_work(
+                let (work, _) = stage_work(
                     &user,
                     &component,
                     agent,
@@ -187,16 +196,19 @@ async fn stage_work(
     agent: AgentId,
     parsed_agent: ParsedAgentId,
     wait: bool,
-) -> anyhow::Result<PromiseWork> {
+) -> anyhow::Result<(PromiseWork, StageTimings)> {
+    let get_promise_started = Instant::now();
     let result = user
         .invoke_and_await_agent(component, &parsed_agent, "getPromise", data_value!())
         .await?;
+    let get_promise = get_promise_started.elapsed();
     let promise_value = result
         .into_return_value_and_type()
         .ok_or_else(|| anyhow::anyhow!("getPromise returned no promise id"))?;
     let promise = PromiseId::from_value(promise_value.value.clone())
         .map_err(|error| anyhow::anyhow!("invalid promise id: {error}"))?;
-    if wait {
+    let (await_promise, suspended_wait) = if wait {
+        let await_promise_started = Instant::now();
         user.invoke_agent(
             component,
             &parsed_agent,
@@ -204,15 +216,27 @@ async fn stage_work(
             data_value!(promise_value.clone()),
         )
         .await?;
+        let await_promise = await_promise_started.elapsed();
+        let suspended_wait_started = Instant::now();
         user.wait_for_status(&agent, AgentStatus::Suspended, WAITER_READY_TIMEOUT)
             .await?;
-    }
-    Ok(PromiseWork {
-        agent,
-        parsed_agent,
-        promise,
-        wait,
-    })
+        (Some(await_promise), Some(suspended_wait_started.elapsed()))
+    } else {
+        (None, None)
+    };
+    Ok((
+        PromiseWork {
+            agent,
+            parsed_agent,
+            promise,
+            wait,
+        },
+        StageTimings {
+            get_promise,
+            await_promise,
+            suspended_wait,
+        },
+    ))
 }
 
 async fn complete_at_rate(
@@ -224,99 +248,102 @@ async fn complete_at_rate(
     rate: u32,
 ) -> anyhow::Result<Period> {
     let started = Instant::now();
+    let deadline = started + DEFAULT_RATE_PERIOD;
     let count = rate as usize * DEFAULT_RATE_PERIOD.as_secs() as usize;
     let completion_limit = Arc::new(Semaphore::new(COMPLETION_CONCURRENCY));
     let staging_limit = Arc::new(Semaphore::new(SETUP_CONCURRENCY));
-    let mut completions = JoinSet::new();
+    let (completion_sender, mut completion_receiver) =
+        mpsc::channel::<anyhow::Result<Duration>>(count);
+    let (restage_sender, mut restage_receiver) = mpsc::channel(count);
+    let mut restages = JoinSet::new();
     let mut minimum_ready_depth = PROMISE_POOL_SIZE;
     let mut starvation_count = 0;
-    let mut maximum_ready_wait = Duration::ZERO;
     for index in 0..count {
         tokio::time::sleep_until(
             (started + Duration::from_secs_f64(index as f64 / rate as f64)).into(),
         )
         .await;
         minimum_ready_depth = minimum_ready_depth.min(ready_work.len());
-        let ready_wait_started = Instant::now();
-        let work = ready_work
-            .recv()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("promise work producer stopped"))??;
-        let ready_wait = ready_wait_started.elapsed();
-        maximum_ready_wait = maximum_ready_wait.max(ready_wait);
-        if ready_wait > POOL_STARVATION_THRESHOLD {
-            starvation_count += 1;
-        }
+        let work = match ready_work.try_recv() {
+            Ok(work) => work?,
+            Err(mpsc::error::TryRecvError::Empty) => {
+                starvation_count += 1;
+                continue;
+            }
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                anyhow::bail!("promise work producer stopped")
+            }
+        };
         let user = user.clone();
         let component = component.clone();
         let payload = payload.clone();
         let ready_sender = ready_sender.clone();
+        let completion_sender = completion_sender.clone();
+        let restage_sender = restage_sender.clone();
         let completion_limit = completion_limit.clone();
         let staging_limit = staging_limit.clone();
-        completions.spawn(async move {
+        restages.spawn(async move {
             let latency = {
                 let _permit = completion_limit.acquire_owned().await?;
                 let completion_started = Instant::now();
                 user.complete_promise(&work.promise, payload).await?;
                 completion_started.elapsed()
             };
+            completion_sender
+                .send(Ok(latency))
+                .await
+                .map_err(|_| anyhow::anyhow!("completion receiver closed"))?;
             let idle_wait_started = Instant::now();
             user.wait_for_status(&work.agent, AgentStatus::Idle, WAITER_READY_TIMEOUT)
                 .await?;
             let idle_wait = idle_wait_started.elapsed();
             let _permit = staging_limit.acquire_owned().await?;
-            let restage_started = Instant::now();
-            let restaged =
+            let (restaged, stage) =
                 stage_work(&user, &component, work.agent, work.parsed_agent, work.wait).await?;
-            let restage = restage_started.elapsed();
-            if idle_wait > SLOW_RESTAGE_THRESHOLD || restage > SLOW_RESTAGE_THRESHOLD {
-                println!(
-                    "Promise-density: slow restage idle-wait-ms={} stage-ms={}",
-                    idle_wait.as_millis(),
-                    restage.as_millis()
-                );
-            }
+            restage_sender
+                .send(RestageTimings { idle_wait, stage })
+                .await
+                .map_err(|_| anyhow::anyhow!("restage receiver closed"))?;
             ready_sender
                 .send(Ok(restaged))
                 .await
                 .map_err(|_| anyhow::anyhow!("promise work receiver closed"))?;
-            Ok::<_, anyhow::Error>(latency)
+            Ok::<_, anyhow::Error>(())
         });
     }
-    let mut completion_latencies = Vec::with_capacity(count);
-    while let Some(completion) = completions.join_next().await {
-        completion_latencies.push(completion??);
+    drop(completion_sender);
+    drop(restage_sender);
+
+    let mut completion_latencies = Vec::with_capacity(count - starvation_count);
+    while let Ok(completion) = completion_receiver.try_recv() {
+        completion_latencies.push(completion?);
+    }
+    restages.abort_all();
+    while let Some(restage) = restages.join_next().await {
+        match restage {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(error),
+            Err(error) if error.is_cancelled() => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let mut restage_timings = Vec::new();
+    while let Ok(restage) = restage_receiver.try_recv() {
+        restage_timings.push(restage);
     }
     println!(
-        "Promise-density: offered={rate}/s pool-min-ready={minimum_ready_depth} \
-         pool-starvations={starvation_count} pool-max-wait-ms={}",
-        maximum_ready_wait.as_millis()
+        "Promise-density: offered={rate}/s completed={} pool-min-ready={minimum_ready_depth} \
+         pool-starvations={starvation_count} restaged={}",
+        completion_latencies.len(),
+        restage_timings.len(),
     );
 
-    // Every restaged worker has one ready promise when the measured window ends.
-    // Complete these unmeasured promises before advancing so the next rate starts
-    // from an empty promise registry rather than accumulating one pool per step.
     drop(ready_sender);
-    let mut cleanup_work = Vec::new();
-    while let Ok(work) = ready_work.try_recv() {
-        cleanup_work.push(work?);
-    }
-    stream::iter(cleanup_work)
-        .map(|work| {
-            let user = user.clone();
-            async move {
-                user.complete_promise(&work.promise, Vec::new()).await?;
-                user.wait_for_status(&work.agent, AgentStatus::Idle, WAITER_READY_TIMEOUT)
-                    .await
-            }
-        })
-        .buffer_unordered(SETUP_CONCURRENCY)
-        .try_collect::<Vec<_>>()
-        .await?;
     Ok(Period {
         completed: completion_latencies.len() as u64,
-        elapsed: started.elapsed(),
+        elapsed: deadline.duration_since(started),
         completion_latencies,
+        restage_timings,
     })
 }
 
@@ -364,6 +391,7 @@ struct Period {
     completed: u64,
     elapsed: Duration,
     completion_latencies: Vec<Duration>,
+    restage_timings: Vec<RestageTimings>,
 }
 
 impl Outcome {
@@ -409,6 +437,32 @@ impl Outcome {
                     )),
                     latency,
                 );
+            }
+            for restage in period.restage_timings {
+                recorder.duration(
+                    &ResultKey::primary(format!("promise-idle-wait-at-offered-{rate}-per-sec")),
+                    restage.idle_wait,
+                );
+                recorder.duration(
+                    &ResultKey::primary(format!("promise-get-promise-at-offered-{rate}-per-sec")),
+                    restage.stage.get_promise,
+                );
+                if let Some(await_promise) = restage.stage.await_promise {
+                    recorder.duration(
+                        &ResultKey::primary(format!(
+                            "promise-await-promise-at-offered-{rate}-per-sec"
+                        )),
+                        await_promise,
+                    );
+                }
+                if let Some(suspended_wait) = restage.stage.suspended_wait {
+                    recorder.duration(
+                        &ResultKey::primary(format!(
+                            "promise-suspended-wait-at-offered-{rate}-per-sec"
+                        )),
+                        suspended_wait,
+                    );
+                }
             }
         }
         let run_config = RunConfig {
