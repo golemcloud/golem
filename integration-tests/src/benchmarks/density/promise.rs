@@ -84,7 +84,7 @@ pub async fn run_cell(
             "Promise-density [{}]: preparing {PROMISE_POOL_SIZE} workers for {rate}/s",
             config.cell_name()
         );
-        let (ready_sender, ready_work) = create_work_pool(&user, &component, config, rate).await?;
+        let (ready_sender, ready_work) = create_work_pool(&user, &component, config).await?;
         println!(
             "Promise-density [{}]: completing at {rate}/s",
             config.cell_name()
@@ -101,6 +101,7 @@ pub async fn run_cell(
         outcome.record(rate, period);
     }
 
+    cleanup_pool(&user, &component, config).await?;
     Ok(outcome.into_benchmark_result(config))
 }
 
@@ -122,7 +123,6 @@ async fn create_work_pool(
     user: &TestUserContext<BenchmarkTestDependencies>,
     component: &ComponentDto,
     config: &CellConfig,
-    rate: u32,
 ) -> anyhow::Result<(
     mpsc::Sender<anyhow::Result<PromiseWork>>,
     mpsc::Receiver<anyhow::Result<PromiseWork>>,
@@ -134,8 +134,7 @@ async fn create_work_pool(
             let component = component.clone();
             let ready_sender = ready_sender.clone();
             async move {
-                // Namespaced per rate so incomplete final restages cannot affect next step.
-                let name = format!("{}-{rate}-{index}", config.cell_name());
+                let name = format!("{}-{index}", config.cell_name());
                 let parsed_agent = agent_id!(PROMISE_AGENT_TYPE, name);
                 let agent = user
                     .start_agent(&component.id, parsed_agent.clone())
@@ -158,6 +157,21 @@ async fn create_work_pool(
         .try_collect::<Vec<_>>()
         .await?;
     Ok((ready_sender, ready_receiver))
+}
+
+async fn cleanup_pool(
+    user: &TestUserContext<BenchmarkTestDependencies>,
+    component: &ComponentDto,
+    config: &CellConfig,
+) -> anyhow::Result<()> {
+    let workers = (0..PROMISE_POOL_SIZE)
+        .filter_map(|index| {
+            let agent = agent_id!(PROMISE_AGENT_TYPE, format!("{}-{index}", config.cell_name()));
+            AgentId::from_agent_id(component.id, &agent).ok()
+        })
+        .collect::<Vec<_>>();
+    crate::benchmarks::delete_workers(user, &workers).await;
+    Ok(())
 }
 
 async fn stage_work(
