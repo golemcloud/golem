@@ -63,7 +63,7 @@ Once the security scheme is registered, enable authentication using the `auth` o
 import { z } from 'zod';
 import { defineAgent, method, http, Principal } from '@golemcloud/golem-ts-sdk';
 
-const Profile = z.object({ email: z.string(), name: z.string() });
+const Profile = z.object({ email: z.string().optional(), name: z.string().optional() });
 type Profile = z.infer<typeof Profile>;
 
 export const SecureAgent = defineAgent({
@@ -80,7 +80,10 @@ export const SecureAgentImpl = SecureAgent.implement({
   methods: {
     getProfile(): Profile {
       const principal: Principal = this.getPrincipal();
-      // principal.email, principal.name, etc.
+      if (principal.tag !== 'oidc') {
+        throw new Error('Expected an OIDC principal');
+      }
+      return { email: principal.email, name: principal.name };
     },
   },
 });

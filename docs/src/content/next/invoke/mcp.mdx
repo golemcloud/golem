@@ -35,9 +35,9 @@ Agent methods are automatically mapped to MCP entities based on the agent type a
 
 Singleton agents (those with no constructor parameters) expose parameterless methods as **MCP resources** — static pieces of data that can be read by the client. Non-singleton agents expose parameterless methods as **MCP resource templates**, where the constructor parameters become template variables. Any method that takes parameters is exposed as an **MCP tool** that can be invoked by the AI model.
 
-## Metadata with `@prompt` and `@description`
+## Method metadata
 
-The `@prompt` and `@description` annotations on agent methods become MCP tool and resource metadata, helping AI models understand what each tool does and how to use it.
+Method descriptions and prompt hints become MCP tool and resource metadata, helping AI models understand what each tool does and how to use it. TypeScript defines them with the `description` and `promptHint` properties of `method(...)`; other SDKs use the corresponding language-specific annotations.
 
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
 <Tabs.Tab>
