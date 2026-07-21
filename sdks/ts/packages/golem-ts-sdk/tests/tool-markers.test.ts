@@ -13,11 +13,13 @@
 // limitations under the License.
 
 import { type as arkType } from 'arktype';
-import * as z3 from 'zod/v3';
+import * as z3 from 'zod3';
 import * as z4 from 'zod/v4';
 import { describe, expect, it } from 'vitest';
 import { Bytes, KeyValue, Path, Quantity, s } from '../src/fluent/schema/markers';
 import { compileSchema } from '../src/fluent/schema/adapter';
+import { getExtendedToolDefinition, toolDefinition } from '../src/fluent/tool';
+import { encodeTool } from '../src/internal/tool';
 
 describe('tool schema markers', () => {
   it('uses the Rust path defaults and preserves path restrictions', () => {
@@ -62,7 +64,7 @@ describe('tool schema markers', () => {
     expect(codec.fromValue(codec.toValue(value))).toEqual(value);
   });
 
-  it('composes KeyValue with Zod 3.24-compatible, Zod 4, and ArkType schemas', () => {
+  it('composes KeyValue with Zod 3.24, Zod 4, and ArkType schemas', () => {
     const schemas = [z3.number(), z4.number(), arkType('number')];
     for (const schema of schemas) {
       const codec = compileSchema(KeyValue(schema));
@@ -73,6 +75,27 @@ describe('tool schema markers', () => {
       ]);
       expect(codec.fromValue(codec.toValue(value))).toEqual(value);
     }
+  });
+
+  it.each([
+    ['Zod 3.24', z3.object({ message: z3.string(), count: z3.number() })],
+    ['Zod 4', z4.object({ message: z4.string(), count: z4.number() })],
+    ['ArkType 2', arkType({ message: 'string', count: 'number' })],
+  ])('compiles a complete tool definition with %s', (_vendor, schema) => {
+    const definition = toolDefinition('vendor-tool').body((body) =>
+      body.positional('payload', schema).returns(schema),
+    );
+    const model = getExtendedToolDefinition(definition);
+    const root = model.commandByPath([]);
+    if (!root) throw new Error('vendor tool root was not compiled');
+    const input = model.canonicalInputModel(root);
+    const payload = { message: 'hello', count: 2 };
+
+    expect(encodeTool(model).commands.nodes[0].body?.positionals.fixed).toHaveLength(1);
+    expect(input.decode(input.encode({ payload }))).toEqual({ payload });
+    expect(root.body?.result?.codec.fromValue(root.body.result.codec.toValue(payload))).toEqual(
+      payload,
+    );
   });
 
   it('keeps tool Bytes distinct from the list<u8> bytes marker', () => {

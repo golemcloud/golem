@@ -104,13 +104,27 @@ function optionTypeTag(tool: Tool, option: OptionSpec): string | undefined {
   }
 }
 
+function listRecordFieldTypeTag(
+  tool: Tool,
+  listTypeIndex: number,
+  fieldName: string,
+): string | undefined {
+  const list = tool.schema.typeNodes[listTypeIndex]?.body;
+  if (list?.tag !== 'list-type') return list?.tag;
+  const record = tool.schema.typeNodes[list.val]?.body;
+  if (record?.tag !== 'record-type') return record?.tag;
+  const field = record.val.find((entry) => entry.name === fieldName);
+  return field ? typeTag(tool, field.body) : undefined;
+}
+
 function grepFixture(): ExtendedToolType {
   const colorCodec = compileSchema(z.enum(['always', 'never', 'auto']));
+  const patternCodec = compileSchema(z.string().regex(/^.+$/));
   const maxCountCodec = compileSchema(s.u32({ min: 1 }));
   const hitsCodec = compileSchema(
     z.array(
       z.object({
-        file: z.string(),
+        file: Path(),
         line: z.number().int(),
         text: z.string(),
       }),
@@ -132,14 +146,14 @@ function grepFixture(): ExtendedToolType {
       exitCode: 1,
     },
   ];
-  const files = {
+  const files = (acceptsStdio: boolean) => ({
     name: 'files',
     doc: doc('Files'),
     itemCodec: pathCodec,
     min: 0,
     verbatim: false,
-    acceptsStdio: true,
-  };
+    acceptsStdio,
+  });
   const replace = command('replace', {
     body: body({
       positionals: {
@@ -147,7 +161,7 @@ function grepFixture(): ExtendedToolType {
           {
             name: 'pattern',
             doc: doc('Pattern'),
-            codec: stringCodec,
+            codec: patternCodec,
             required: true,
             acceptsStdio: false,
           },
@@ -159,7 +173,7 @@ function grepFixture(): ExtendedToolType {
             acceptsStdio: false,
           },
         ],
-        tail: files,
+        tail: files(false),
       },
       result: {
         codec: compileSchema(s.u64()),
@@ -188,12 +202,12 @@ function grepFixture(): ExtendedToolType {
             {
               name: 'pattern',
               doc: doc('Pattern'),
-              codec: stringCodec,
+              codec: patternCodec,
               required: true,
               acceptsStdio: false,
             },
           ],
-          tail: files,
+          tail: files(true),
         },
         options: [
           option('extra-patterns', stringCodec, {
@@ -228,24 +242,94 @@ function grepFixture(): ExtendedToolType {
 function gitFixture(): ExtendedToolType {
   const outputCodec = compileSchema(z.enum(['human', 'porcelain', 'json']));
   const configCodec = compileSchema(KeyValue(z.string()));
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const CommitResult: z.ZodType<any> = z.object({
-    hash: z.string(),
-    'files-changed': z.number().int(),
-    parent: z.lazy(() => CommitResult).optional(),
-  });
-  const commitResultCodec = compileSchema(CommitResult);
+  const urlCodec = compileSchema(s.url());
+  const datetimeCodec = compileSchema(s.datetime());
+  const indexCodec = compileSchema(s.u32());
+  const maxCountCodec = compileSchema(s.s64({ min: 0, max: 9223372036854775807n }));
+  const commitResultCodec = compileSchema(
+    z.object({
+      hash: z.string(),
+      'files-changed': z.number().int(),
+      insertions: z.number().int(),
+      deletions: z.number().int(),
+    }),
+  );
+  const logResultCodec = compileSchema(
+    z.array(
+      z.object({
+        hash: z.string(),
+        author: z.string(),
+        date: s.datetime(),
+        message: z.string(),
+      }),
+    ),
+  );
+  const authorCodec = compileSchema(z.string().regex(/^.+ <.+@.+>$/));
+  const remoteNameCodec = compileSchema(z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]*$/));
+  const authorErrorCodec = compileSchema(z.object({ author: z.string() }));
+  const stashErrorCodec = compileSchema(z.object({ name: z.string() }));
+  const commitErrors = [
+    {
+      name: 'nothing-staged',
+      doc: doc('Nothing staged'),
+      kind: 'runtime-error' as const,
+      exitCode: 1,
+    },
+    {
+      name: 'dirty-merge',
+      doc: doc('Dirty merge'),
+      kind: 'runtime-error' as const,
+      exitCode: 128,
+    },
+    {
+      name: 'bad-author-format',
+      doc: doc('Bad author format'),
+      kind: 'usage-error' as const,
+      exitCode: 129,
+      payloadCodec: authorErrorCodec,
+    },
+  ];
+  const logErrors = [
+    {
+      name: 'bad-revision',
+      doc: doc('Bad revision'),
+      kind: 'usage-error' as const,
+      exitCode: 128,
+    },
+    {
+      name: 'not-a-repository',
+      doc: doc('Not a repository'),
+      kind: 'usage-error' as const,
+      exitCode: 129,
+    },
+  ];
+  const stashError = {
+    name: 'no-such-stash',
+    doc: doc('No such stash'),
+    kind: 'usage-error' as const,
+    exitCode: 128,
+    payloadCodec: stashErrorCodec,
+  };
+  const setUrlError = {
+    name: 'failed',
+    doc: doc('Failed'),
+    kind: 'runtime-error' as const,
+    exitCode: 1,
+    payloadCodec: stringCodec,
+  };
   const remoteError = {
     name: 'no-such-remote',
     doc: doc('No such remote'),
     kind: 'usage-error' as const,
     exitCode: 128,
+    payloadCodec: compileSchema(z.object({ name: z.string() })),
   };
-  const remoteGlobals = {
+  const commonGlobals = () => ({
     options: [
       option('git-dir', pathCodec, {
         envVar: 'GIT_DIR',
         default: codecValue(pathCodec, '.git'),
+        required: false,
       }),
       option('config', configCodec, {
         short: 'c',
@@ -260,9 +344,22 @@ function gitFixture(): ExtendedToolType {
       }),
     ],
     flags: [
-      flag('verbose', { tag: 'count-flag', val: 3 }, { short: 'v' }),
-      flag('paginate', { tag: 'bool-flag', val: { default_: true, negatable: true } }),
+      flag('verbose', { tag: 'count-flag' as const, val: 3 }, { short: 'v' }),
+      flag('paginate', {
+        tag: 'bool-flag' as const,
+        val: { default_: true, negatable: true },
+      }),
     ],
+  });
+  const stashGlobals = {
+    options: [
+      option('git-dir', pathCodec, {
+        envVar: 'GIT_DIR',
+        default: codecValue(pathCodec, '.git'),
+        required: false,
+      }),
+    ],
+    flags: [flag('verbose', { tag: 'count-flag', val: 3 }, { short: 'v' })],
   };
   const setUrl = command('set-url', {
     body: body({
@@ -278,25 +375,38 @@ function gitFixture(): ExtendedToolType {
           {
             name: 'newurl',
             doc: doc('New URL'),
-            codec: compileSchema(s.url()),
+            codec: urlCodec,
             required: true,
+            acceptsStdio: false,
+          },
+          {
+            name: 'oldurl',
+            doc: doc('Old URL'),
+            codec: urlCodec,
+            required: false,
             acceptsStdio: false,
           },
         ],
       },
-      flags: [flag('add'), flag('delete')],
+      flags: [flag('push'), flag('add'), flag('delete')],
       constraints: [
         {
           tag: 'mutex-groups',
           groups: [[{ tag: 'present', name: 'add' }], [{ tag: 'present', name: 'delete' }]],
         },
       ],
-      errors: [remoteError],
+      errors: [setUrlError],
+      annotations: {
+        readOnly: false,
+        destructive: true,
+        idempotent: false,
+        openWorld: true,
+      },
     }),
   });
   const remote = command('remote', {
     aliases: ['rmt'],
-    globals: remoteGlobals,
+    globals: commonGlobals(),
     subcommands: [
       command('add', {
         body: body({
@@ -305,14 +415,14 @@ function gitFixture(): ExtendedToolType {
               {
                 name: 'name',
                 doc: doc('Name'),
-                codec: stringCodec,
+                codec: remoteNameCodec,
                 required: true,
                 acceptsStdio: false,
               },
               {
                 name: 'url',
                 doc: doc('URL'),
-                codec: compileSchema(s.url()),
+                codec: urlCodec,
                 required: true,
                 acceptsStdio: false,
               },
@@ -328,12 +438,19 @@ function gitFixture(): ExtendedToolType {
               },
               required: false,
             }),
+            option('master', stringCodec, { short: 'm', required: false }),
           ],
           flags: [
             flag('tags', { tag: 'bool-flag', val: { default_: true, negatable: true } }),
             flag('fetch', undefined, { short: 'f' }),
           ],
           errors: [remoteError],
+          annotations: {
+            readOnly: false,
+            destructive: false,
+            idempotent: false,
+            openWorld: true,
+          },
         }),
       }),
       command('remove', {
@@ -344,13 +461,19 @@ function gitFixture(): ExtendedToolType {
               {
                 name: 'name',
                 doc: doc('Name'),
-                codec: stringCodec,
+                codec: remoteNameCodec,
                 required: true,
                 acceptsStdio: false,
               },
             ],
           },
           errors: [remoteError],
+          annotations: {
+            readOnly: false,
+            destructive: true,
+            idempotent: true,
+            openWorld: true,
+          },
         }),
       }),
       setUrl,
@@ -358,15 +481,22 @@ function gitFixture(): ExtendedToolType {
   });
   const commit = command('commit', {
     aliases: ['ci'],
+    globals: commonGlobals(),
     body: body({
       options: [
         option('message', stringCodec, { short: 'm', aliases: ['msg'] }),
+        option('author', authorCodec, {
+          envVar: 'GIT_AUTHOR_NAME',
+          required: false,
+        }),
         option('output', outputCodec, {
           default: codecValue(outputCodec, 'human'),
+          required: false,
         }),
       ],
       flags: [
         flag('amend', { tag: 'bool-flag', val: { default_: false, negatable: true } }),
+        flag('signoff', { tag: 'bool-flag', val: { default_: false, negatable: true } }),
         flag('reset-author'),
       ],
       constraints: [
@@ -398,21 +528,42 @@ function gitFixture(): ExtendedToolType {
         ],
         defaultFormatter: 'human',
       },
-      errors: [
-        {
-          name: 'nothing-staged',
-          doc: doc('Nothing staged'),
-          kind: 'runtime-error',
-          exitCode: 1,
-        },
-      ],
+      errors: commitErrors,
       annotations: {
         readOnly: false,
         destructive: true,
         idempotent: false,
-        openWorld: false,
+        openWorld: true,
       },
     }),
+  });
+  const stashCommandBody = body({
+    options: [option('message', stringCodec, { short: 'm' })],
+    flags: [flag('keep-index', undefined, { short: 'k' })],
+    errors: [stashError],
+  });
+  const stashChild = (name: string) =>
+    command(name, {
+      body: body({
+        positionals: {
+          fixed: [
+            {
+              name: 'name',
+              doc: doc('Name'),
+              codec: stringCodec,
+              required: false,
+              acceptsStdio: false,
+            },
+          ],
+        },
+        options: [option('index', indexCodec, { short: 'i', required: false })],
+        errors: [stashError],
+      }),
+    });
+  const stash = command('stash', {
+    globals: stashGlobals,
+    body: stashCommandBody,
+    subcommands: [stashChild('pop'), stashChild('apply')],
   });
   const log = command('log', {
     body: body({
@@ -429,6 +580,9 @@ function gitFixture(): ExtendedToolType {
         },
       },
       options: [
+        option('max-count', maxCountCodec, { short: 'n', required: false }),
+        option('since', datetimeCodec, { required: false }),
+        option('until', datetimeCodec, { required: false }),
         option('author', stringCodec, {
           shape: {
             tag: 'repeatable-list',
@@ -446,7 +600,7 @@ function gitFixture(): ExtendedToolType {
           required: false,
         }),
       ],
-      flags: [flag('all-match'), flag('oneline'), flag('graph')],
+      flags: [flag('all-match'), flag('invert-grep'), flag('oneline'), flag('graph')],
       constraints: [
         {
           tag: 'all-or-none',
@@ -455,31 +609,24 @@ function gitFixture(): ExtendedToolType {
             { tag: 'present', name: 'grep' },
           ],
         },
-        {
-          tag: 'requires-any',
-          refs: [
-            { tag: 'present', name: 'author' },
-            { tag: 'present', name: 'grep' },
-          ],
-        },
-        {
-          tag: 'forbids',
-          lhsQuant: 'all',
-          lhs: [{ tag: 'present', name: 'oneline' }],
-          rhs: [{ tag: 'present', name: 'graph' }],
-        },
       ],
       result: {
-        codec: compileSchema(z.array(z.string())),
+        codec: logResultCodec,
         doc: doc('Log entries'),
-        formatters: [{ name: 'medium', doc: doc('Medium') }],
+        formatters: [
+          { name: 'oneline', doc: doc('Oneline') },
+          { name: 'short', doc: doc('Short') },
+          { name: 'medium', doc: doc('Medium') },
+          { name: 'full', doc: doc('Full') },
+        ],
         defaultFormatter: 'medium',
       },
+      errors: logErrors,
       annotations: {
         readOnly: true,
-        destructive: false,
+        destructive: true,
         idempotent: true,
-        openWorld: false,
+        openWorld: true,
       },
     }),
   });
@@ -487,7 +634,7 @@ function gitFixture(): ExtendedToolType {
   return new ExtendedToolType(
     '0.0.0',
     command('git', {
-      subcommands: [commit, remote, log],
+      subcommands: [commit, remote, stash, log],
     }),
   );
 }
@@ -712,6 +859,7 @@ describe('extended tool WIT encoding', () => {
     expect(commandBody.stdin?.mime).toEqual(['text/plain']);
     expect(commandBody.stdout?.required).toBe(true);
     expect(typeTag(encoded, commandBody.result!.type)).toBe('list-type');
+    expect(listRecordFieldTypeTag(encoded, commandBody.result!.type, 'file')).toBe('path-type');
     expect(commandBody.result?.formatters.map((formatter) => formatter.name)).toEqual([
       'human',
       'json',
@@ -723,6 +871,9 @@ describe('extended tool WIT encoding', () => {
       ['no-match', 'runtime-error', 1],
     ]);
     expect(typeTag(encoded, commandBody.errors[0].payload!)).toBe('record-type');
+    expect(
+      fixture.canonicalInputFields(fixture.commandByPath(['replace'])!).map((field) => field.name),
+    ).toEqual(['color', 'case-sensitive', 'pattern', 'replacement', 'files']);
     expect(encoded.schema.defs).toEqual([]);
     expect(encoded.schema.typeNodes[encoded.schema.root].body).toEqual({
       tag: 'record-type',
@@ -730,7 +881,7 @@ describe('extended tool WIT encoding', () => {
     });
   });
 
-  it('encodes the canonical git tree, shared graph, defaults, and constraints', () => {
+  it('encodes the complete canonical git tree, defaults, constraints, and subtrees', () => {
     const fixture = gitFixture();
     const encoded = encodeTool(fixture);
 
@@ -741,9 +892,12 @@ describe('extended tool WIT encoding', () => {
       'add',
       'remove',
       'set-url',
+      'stash',
+      'pop',
+      'apply',
       'log',
     ]);
-    expect(encoded.commands.nodes[0].subcommands).toEqual([1, 2, 6]);
+    expect(encoded.commands.nodes[0].subcommands).toEqual([1, 2, 6, 9]);
     expect(encoded.commands.nodes[2].subcommands).toEqual([3, 4, 5]);
     expect(encoded.commands.nodes[2].body).toBeUndefined();
 
@@ -764,6 +918,22 @@ describe('extended tool WIT encoding', () => {
       { tag: 'count-flag', val: 3 },
       { tag: 'bool-flag', val: { default_: true, negatable: true } },
     ]);
+    expect(
+      fixture
+        .canonicalInputFields(fixture.commandByPath(['remote', 'add'])!)
+        .map((field) => field.name),
+    ).toEqual([
+      'git-dir',
+      'config',
+      'verbose',
+      'paginate',
+      'name',
+      'url',
+      'track',
+      'master',
+      'tags',
+      'fetch',
+    ]);
 
     const commit = encoded.commands.nodes[1].body!;
     const output = commit.options.find((entry) => entry.long === 'output')!;
@@ -775,6 +945,12 @@ describe('extended tool WIT encoding', () => {
       'implies',
       'requires-all',
     ]);
+    expect(commit.annotations).toEqual({
+      readOnly: false,
+      destructive: true,
+      idempotent: false,
+      openWorld: true,
+    });
     expect(commit.constraints[1]).toMatchObject({
       tag: 'requires-all',
       val: [
@@ -787,30 +963,80 @@ describe('extended tool WIT encoding', () => {
         },
       ],
     });
-    expect(typeTag(encoded, commit.result!.type)).toBe('ref-type');
+    expect(typeTag(encoded, commit.result!.type)).toBe('record-type');
     expect(commit.result?.defaultFormatter).toBe('human');
+    expect(commit.errors.map((errorCase) => [errorCase.name, errorCase.kind])).toEqual([
+      ['nothing-staged', 'runtime-error'],
+      ['dirty-merge', 'runtime-error'],
+      ['bad-author-format', 'usage-error'],
+    ]);
 
     const setUrl = encoded.commands.nodes[5].body!;
     expect(setUrl.constraints[0].tag).toBe('mutex-groups');
-    const log = encoded.commands.nodes[6].body!;
-    expect(log.constraints.map((constraint) => constraint.tag)).toEqual([
-      'all-or-none',
-      'requires-any',
-      'forbids',
+    expect(setUrl.positionals.fixed.map((positional) => positional.required)).toEqual([
+      true,
+      true,
+      false,
     ]);
-    expect(log.options.map((entry) => entry.shape)).toMatchObject([
-      { tag: 'repeatable-list', val: { repetition: { tag: 'delimited', val: ',' } } },
-      { tag: 'repeatable-list', val: { repetition: { tag: 'either', val: ',' } } },
+    expect(setUrl.flags.map((entry) => entry.long)).toEqual(['push', 'add', 'delete']);
+
+    const stash = encoded.commands.nodes[6];
+    expect(stash.body).toBeDefined();
+    expect(stash.subcommands).toEqual([7, 8]);
+    expect(stash.body?.options.map((entry) => entry.long)).toEqual(['message']);
+    expect(stash.body?.flags.map((entry) => entry.long)).toEqual(['keep-index']);
+    expect(
+      fixture.canonicalInputFields(fixture.commandByPath(['stash'])!).map((field) => field.name),
+    ).toEqual(['git-dir', 'verbose', 'message', 'keep-index']);
+    expect(fixture.projectHelp(['stash'])).toMatchObject({
+      command: { name: 'stash' },
+      arguments: [
+        { name: 'git-dir', kind: 'global-option' },
+        { name: 'verbose', kind: 'global-flag' },
+        { name: 'message', kind: 'option' },
+        { name: 'keep-index', kind: 'flag' },
+      ],
+      subcommands: [{ name: 'pop' }, { name: 'apply' }],
+    });
+    expect(
+      fixture
+        .canonicalInputFields(fixture.commandByPath(['stash', 'pop'])!)
+        .map((field) => field.name),
+    ).toEqual(['git-dir', 'verbose', 'name', 'index']);
+
+    const log = encoded.commands.nodes[9].body!;
+    expect(log.constraints.map((constraint) => constraint.tag)).toEqual(['all-or-none']);
+    expect(log.options.map((entry) => [entry.long, entry.shape])).toMatchObject([
+      ['max-count', { tag: 'scalar' }],
+      ['since', { tag: 'scalar' }],
+      ['until', { tag: 'scalar' }],
+      ['author', { tag: 'repeatable-list', val: { repetition: { tag: 'delimited', val: ',' } } }],
+      ['grep', { tag: 'repeatable-list', val: { repetition: { tag: 'either', val: ',' } } }],
     ]);
     expect(log.positionals.tail).toMatchObject({ name: 'paths', min: 0, separator: '--' });
+    expect(log.flags.map((entry) => entry.long)).toEqual([
+      'all-match',
+      'invert-grep',
+      'oneline',
+      'graph',
+    ]);
+    expect(log.result?.formatters.map((formatter) => formatter.name)).toEqual([
+      'oneline',
+      'short',
+      'medium',
+      'full',
+    ]);
+    expect(listRecordFieldTypeTag(encoded, log.result!.type, 'date')).toBe('datetime-type');
+    expect(log.errors.map((errorCase) => errorCase.name)).toEqual([
+      'bad-revision',
+      'not-a-repository',
+    ]);
     expect(log.annotations).toEqual({
       readOnly: true,
-      destructive: false,
+      destructive: true,
       idempotent: true,
-      openWorld: false,
+      openWorld: true,
     });
-    expect(encoded.schema.defs).toHaveLength(1);
-    expect(encoded.schema.defs[0].id).toMatch(/^rec:\d+$/);
 
     const sourceConstraint = fixture.commandByPath(['commit'])?.body?.constraints[1];
     expect(sourceConstraint).toMatchObject({

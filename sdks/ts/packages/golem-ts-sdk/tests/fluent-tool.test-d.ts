@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Type-only coverage for the complete fluent git command tree. Checked via
-// `tsc --noEmit`; NOT executed by vitest (`.test-d.ts` suffix).
+// Type-only coverage for the complete canonical grep and git command trees. Checked by
+// the package typecheck script; NOT executed by vitest (`.test-d.ts` suffix).
 
 import { z } from 'zod/v4';
 import {
@@ -26,7 +26,7 @@ import {
   s,
   toolDefinition,
   type ToolImplementation,
-} from '../src/fluent';
+} from '../dist/index.mjs';
 
 const CommitResult = z.object({
   hash: z.string(),
@@ -40,11 +40,11 @@ const gitDef = toolDefinition('git')
   .command('commit', (commit) =>
     commit
       .aliases('ci')
-      .annotations({ destructive: true, idempotent: false, openWorld: false })
+      .annotations({ destructive: true })
       .body((body) =>
         body
           .option('message', z.string(), { short: 'm', aliases: ['msg'], required: true })
-          .option('author', z.string(), { env: 'GIT_AUTHOR_NAME' })
+          .option('author', z.string().regex(/^.+ <.+@.+>$/), { env: 'GIT_AUTHOR_NAME' })
           .option('output', z.enum(['human', 'porcelain', 'json']), { default: 'human' })
           .flag('amend', { negatable: true, default: false })
           .flag('signoff', { negatable: true, default: false })
@@ -56,12 +56,27 @@ const gitDef = toolDefinition('git')
             defaultFormatter: 'human',
           })
           .error('nothing-staged', { kind: 'runtime', exitCode: 1 })
+          .error('dirty-merge', { kind: 'runtime', exitCode: 128 })
           .error('bad-author-format', {
             kind: 'usage',
             exitCode: 129,
             payload: z.object({ author: z.string() }),
           }),
-      ),
+      )
+      .global('git-dir', Path({ direction: 'in-out', kind: 'directory' }), {
+        default: '.git',
+        env: 'GIT_DIR',
+      })
+      .global('config', KeyValue(z.string()), {
+        short: 'c',
+        repeatable: 'repeated',
+      })
+      .global('verbose', { kind: 'count-flag', short: 'v', max: 3 })
+      .global('paginate', z.boolean(), {
+        kind: 'flag',
+        negatable: true,
+        default: true,
+      }),
   )
   .command('remote', (remote) =>
     remote
@@ -69,7 +84,9 @@ const gitDef = toolDefinition('git')
       .command('add', (add) =>
         add.body((body) =>
           body
-            .positional('name', z.string(), { valueName: 'NAME' })
+            .positional('name', z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]*$/), {
+              valueName: 'NAME',
+            })
             .positional('url', s.url(), { valueName: 'URL' })
             .option('track', z.string(), {
               short: 't',
@@ -88,14 +105,12 @@ const gitDef = toolDefinition('git')
         ),
       )
       .command('remove', (remove) =>
-        remove
-          .aliases('rm')
-          .body((body) =>
-            body
-              .positional('name', z.string())
-              .returns(z.void())
-              .error('no-such-remote', { kind: 'usage', exitCode: 128 }),
-          ),
+        remove.aliases('rm').body((body) =>
+          body
+            .positional('name', z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]*$/))
+            .returns(z.void())
+            .error('no-such-remote', { kind: 'usage', exitCode: 128 }),
+        ),
       )
       .command('set-url', (setUrl) =>
         setUrl.body((body) =>
@@ -103,12 +118,79 @@ const gitDef = toolDefinition('git')
             .positional('name', z.string())
             .positional('newurl', s.url())
             .positional('oldurl', s.url(), { required: false })
+            .flag('push')
             .flag('add')
             .flag('delete')
             .constraint(c.mutexGroups([[c.present('add')], [c.present('delete')]]))
-            .returns(z.void()),
+            .returns(z.void())
+            .error('failed', {
+              kind: 'runtime',
+              exitCode: 1,
+              payload: z.string(),
+            }),
         ),
-      ),
+      )
+      // These globals deliberately follow the child declarations. Their inferred
+      // fields must still reach every descendant leaf in this subtree.
+      .global('git-dir', Path({ direction: 'in-out', kind: 'directory' }), {
+        default: '.git',
+        env: 'GIT_DIR',
+      })
+      .global('config', KeyValue(z.string()), {
+        short: 'c',
+        repeatable: 'repeated',
+      })
+      .global('verbose', { kind: 'count-flag', short: 'v', max: 3 })
+      .global('paginate', z.boolean(), {
+        kind: 'flag',
+        negatable: true,
+        default: true,
+      }),
+  )
+  .command('stash', (stash) =>
+    stash
+      .body((body) =>
+        body
+          .option('message', z.string(), { short: 'm', required: true })
+          .flag('keep-index', { short: 'k' })
+          .returns(z.void())
+          .error('no-such-stash', {
+            kind: 'usage',
+            exitCode: 128,
+            payload: z.object({ name: z.string() }),
+          }),
+      )
+      .command('pop', (pop) =>
+        pop.body((body) =>
+          body
+            .positional('name', z.string(), { required: false })
+            .option('index', s.u32(), { short: 'i' })
+            .returns(z.void())
+            .error('no-such-stash', {
+              kind: 'usage',
+              exitCode: 128,
+              payload: z.object({ name: z.string() }),
+            }),
+        ),
+      )
+      .command('apply', (apply) =>
+        apply.body((body) =>
+          body
+            .positional('name', z.string(), { required: false })
+            .option('index', s.u32(), { short: 'i' })
+            .returns(z.void())
+            .error('no-such-stash', {
+              kind: 'usage',
+              exitCode: 128,
+              payload: z.object({ name: z.string() }),
+            }),
+        ),
+      )
+      .global('git-dir', Path({ direction: 'in-out', kind: 'directory' }), {
+        default: '.git',
+        env: 'GIT_DIR',
+      })
+      .global('verbose', { kind: 'count-flag', short: 'v', max: 3 }),
   )
   .command('log', (log) =>
     log.annotations({ readOnly: true, idempotent: true }).body((body) =>
@@ -117,8 +199,9 @@ const gitDef = toolDefinition('git')
           separator: '--',
           min: 0,
         })
-        .option('max-count', s.u32({ min: 0 }), { short: 'n' })
+        .option('max-count', s.s64({ min: 0, max: 9223372036854775807n }), { short: 'n' })
         .option('since', s.datetime())
+        .option('until', s.datetime())
         .option('author', z.string(), { repeatable: 'delimited', delim: ',' })
         .option('grep', z.string(), { repeatable: 'either', delim: ',' })
         .flag('all-match')
@@ -126,14 +209,12 @@ const gitDef = toolDefinition('git')
         .flag('oneline')
         .flag('graph')
         .constraint(c.allOrNone([c.present('all-match'), c.present('grep')]))
-        .constraint(c.requiresAny([c.present('author'), c.present('grep')]))
-        .constraint(c.forbids({ lhs: c.present('oneline'), rhs: c.present('graph') }))
         .returns(
           z.array(
             z.object({
               hash: z.string(),
               author: z.string(),
-              date: z.string(),
+              date: s.datetime(),
               message: z.string(),
             }),
           ),
@@ -142,25 +223,10 @@ const gitDef = toolDefinition('git')
             defaultFormatter: 'medium',
           },
         )
-        .error('bad-revision', { kind: 'usage', exitCode: 128 }),
+        .error('bad-revision', { kind: 'usage', exitCode: 128 })
+        .error('not-a-repository', { kind: 'usage', exitCode: 129 }),
     ),
-  )
-  // Globals deliberately follow the command declarations. Their inferred fields
-  // must still reach every descendant leaf.
-  .global('git-dir', Path({ direction: 'in-out', kind: 'directory' }), {
-    default: '.git',
-    env: 'GIT_DIR',
-  })
-  .global('config', KeyValue(z.string()), {
-    short: 'c',
-    repeatable: 'repeated',
-  })
-  .global('verbose', { kind: 'count-flag', short: 'v', max: 3 })
-  .global('paginate', z.boolean(), {
-    kind: 'flag',
-    negatable: true,
-    default: true,
-  });
+  );
 
 const gitImplementation: ToolImplementation<typeof gitDef> = {
   commit: async (args) => {
@@ -190,10 +256,16 @@ const gitImplementation: ToolImplementation<typeof gitDef> = {
       const track: string[] = args.track;
       const master: string | undefined = args.master;
       const gitDir: string = args.gitDir;
+      const config: Map<string, string> = args.config;
+      const verbose: number = args.verbose;
+      const paginate: boolean = args.paginate;
       const tags: boolean = args.tags;
       void track;
       void master;
       void gitDir;
+      void config;
+      void verbose;
+      void paginate;
       void tags;
       if (args.name === '') return err('no-such-remote', { name: args.name });
       return ok(undefined);
@@ -205,60 +277,156 @@ const gitImplementation: ToolImplementation<typeof gitDef> = {
     },
     'set-url': async (args) => {
       const oldurl: string | undefined = args.oldurl;
+      const push: boolean = args.push;
       const add: boolean = args.add;
       void oldurl;
+      void push;
       void add;
       return ok(undefined);
     },
   }),
+  stash: command(
+    async (args) => {
+      const message: string = args.message;
+      const keepIndex: boolean = args.keepIndex;
+      const gitDir: string = args.gitDir;
+      const verbose: number = args.verbose;
+      // @ts-expect-error canonical stash does not inherit config
+      void args.config;
+      // @ts-expect-error canonical stash does not inherit paginate
+      void args.paginate;
+      void message;
+      void keepIndex;
+      void gitDir;
+      void verbose;
+      return ok(undefined);
+    },
+    {
+      pop: async (args) => {
+        const name: string | undefined = args.name;
+        const index: number | undefined = args.index;
+        const gitDir: string = args.gitDir;
+        const verbose: number = args.verbose;
+        void name;
+        void index;
+        void gitDir;
+        void verbose;
+        return ok(undefined);
+      },
+      apply: async (args) => {
+        const name: string | undefined = args.name;
+        const index: number | undefined = args.index;
+        void name;
+        void index;
+        return ok(undefined);
+      },
+    },
+  ),
   log: async (args) => {
     const paths: string[] = args.paths;
-    const maxCount: number | undefined = args.maxCount;
+    const maxCount: bigint | undefined = args.maxCount;
+    const until: { seconds: bigint; nanoseconds: number } | undefined = args.until;
     const authors: string[] = args.author;
     const greps: string[] = args.grep;
     const allMatch: boolean = args.allMatch;
+    // @ts-expect-error canonical log does not inherit git-dir
+    void args.gitDir;
     void paths;
     void maxCount;
+    void until;
     void authors;
     void greps;
     void allMatch;
-    return ok([]);
+    return ok([
+      {
+        hash: 'abc',
+        author: 'A. U. Thor',
+        date: { seconds: 0n, nanoseconds: 0 },
+        message: 'Initial commit',
+      },
+    ]);
   },
 };
 void gitDef.implement(gitImplementation);
 
+const GrepHit = z.object({
+  file: Path(),
+  line: z.number().int(),
+  text: z.string(),
+});
+
 const grepDef = toolDefinition('grep')
+  .version('2.0.0')
+  .global('case-sensitive', z.boolean(), { kind: 'flag', short: 'i' })
+  .global('color', z.enum(['always', 'never', 'auto']), { default: 'auto' })
   .body((body) =>
     body
-      .positional('pattern', z.string())
+      .positional('pattern', z.string().regex(/^.+$/))
+      .tail('files', Path({ direction: 'input' }), { acceptsStdio: true })
+      .option('extra-patterns', z.string(), {
+        short: 'e',
+        repeatable: 'either',
+        delim: ',',
+      })
+      .option('max-count', s.u32({ min: 1 }), { short: 'n' })
       .stdin({ mime: ['text/plain'], required: false })
       .stdout({ mime: ['text/plain'], required: true })
-      .returns(z.array(z.string()))
+      .returns(z.array(GrepHit), {
+        formatters: ['human', 'json'],
+        defaultFormatter: 'human',
+      })
       .error('invalid-pattern', {
         kind: 'usage',
         exitCode: 2,
         payload: z.object({ reason: z.string() }),
-      }),
+      })
+      .error('no-match', { kind: 'runtime', exitCode: 1 }),
   )
   .command('replace', (replace) =>
-    replace
-      .body((body) => body.returns(z.void()))
-      .command('dry-run', (dryRun) => dryRun.body((body) => body.returns(z.boolean()))),
+    replace.body((body) =>
+      body
+        .positional('pattern', z.string().regex(/^.+$/))
+        .positional('replacement', z.string())
+        .tail('files', Path({ direction: 'in-out' }))
+        .returns(s.u64())
+        .error('invalid-pattern', {
+          kind: 'usage',
+          exitCode: 2,
+          payload: z.object({ reason: z.string() }),
+        })
+        .error('no-match', { kind: 'runtime', exitCode: 1 }),
+    ),
   );
 
 const grepImplementation: ToolImplementation<typeof grepDef> = {
   grep: async (args, context) => {
     const pattern: string = args.pattern;
+    const files: string[] = args.files;
+    const extraPatterns: string[] = args.extraPatterns;
+    const maxCount: number | undefined = args.maxCount;
+    const caseSensitive: boolean = args.caseSensitive;
+    const color: 'always' | 'never' | 'auto' = args.color;
     const stdin: ReadableStream<Uint8Array> | undefined = context.stdin;
     const stdout: WritableStream<Uint8Array> = context.stdout;
     void pattern;
+    void files;
+    void extraPatterns;
+    void maxCount;
+    void caseSensitive;
+    void color;
     void stdin;
     void stdout;
-    return ok([]);
+    return ok([{ file: 'README.md', line: 1, text: 'Golem' }]);
   },
-  replace: command(async () => ok(undefined), {
-    'dry-run': async () => ok(true),
-  }),
+  replace: async (args) => {
+    const replacement: string = args.replacement;
+    const files: string[] = args.files;
+    const caseSensitive: boolean = args.caseSensitive;
+    void replacement;
+    void files;
+    void caseSensitive;
+    return ok(0n);
+  },
 };
 void grepDef.implement(grepImplementation);
 
@@ -403,6 +571,15 @@ const invalidSubtreeParentImplementation: ToolImplementation<typeof subtreeParen
   'subtree-remote': async () => ok('wrong owner'),
 };
 void invalidSubtreeParentImplementation;
+
+const dispatcherDef = toolDefinition('dispatcher').command('group', (group) =>
+  group.command('leaf', (leaf) => leaf.body((body) => body.returns(z.void()))),
+);
+const invalidDispatcherImplementation: ToolImplementation<typeof dispatcherDef> = {
+  // @ts-expect-error a pure dispatcher requires a nested command implementation
+  group: async () => ok(undefined),
+};
+void invalidDispatcherImplementation;
 
 // @ts-expect-error the root implicit-body key is the tool metadata name, not camelCase
 const wrongRootKey: ToolImplementation<typeof grepDef> = { grepTool: async () => ok([]) };
