@@ -34,6 +34,7 @@ const PROMISE_AGENT_TYPE: &str = "PromiseAgent";
 const DEFAULT_RATE_RAMP: &[u32] = &[1, 2, 4, 8, 16, 32, 64, 128, 256];
 const DEFAULT_RATE_PERIOD: Duration = Duration::from_secs(60);
 const WAITER_READY_TIMEOUT: Duration = Duration::from_secs(60);
+const POOL_STARVATION_THRESHOLD: Duration = Duration::from_millis(10);
 const PROMISE_POOL_SIZE: usize = 256;
 const READY_WORK_CAPACITY: usize = PROMISE_POOL_SIZE;
 // Creating agents/promises traverses cold worker activation and must not flood
@@ -224,15 +225,25 @@ async fn complete_at_rate(
     let completion_limit = Arc::new(Semaphore::new(COMPLETION_CONCURRENCY));
     let staging_limit = Arc::new(Semaphore::new(SETUP_CONCURRENCY));
     let mut completions = JoinSet::new();
+    let mut minimum_ready_depth = PROMISE_POOL_SIZE;
+    let mut starvation_count = 0;
+    let mut maximum_ready_wait = Duration::ZERO;
     for index in 0..count {
         tokio::time::sleep_until(
             (started + Duration::from_secs_f64(index as f64 / rate as f64)).into(),
         )
         .await;
+        minimum_ready_depth = minimum_ready_depth.min(ready_work.len());
+        let ready_wait_started = Instant::now();
         let work = ready_work
             .recv()
             .await
             .ok_or_else(|| anyhow::anyhow!("promise work producer stopped"))??;
+        let ready_wait = ready_wait_started.elapsed();
+        maximum_ready_wait = maximum_ready_wait.max(ready_wait);
+        if ready_wait > POOL_STARVATION_THRESHOLD {
+            starvation_count += 1;
+        }
         let user = user.clone();
         let component = component.clone();
         let payload = payload.clone();
@@ -262,6 +273,11 @@ async fn complete_at_rate(
     while let Some(completion) = completions.join_next().await {
         completion_latencies.push(completion??);
     }
+    println!(
+        "Promise-density: offered={rate}/s pool-min-ready={minimum_ready_depth} \
+         pool-starvations={starvation_count} pool-max-wait-ms={}",
+        maximum_ready_wait.as_millis()
+    );
 
     // Every restaged worker has one ready promise when the measured window ends.
     // Complete these unmeasured promises before advancing so the next rate starts
