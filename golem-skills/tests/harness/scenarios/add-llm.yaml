@@ -1,4 +1,7 @@
 name: "add-llm"
+semanticRequirements:
+  effect:
+    - The Effect implementation must call the configured provider through Effect AI LanguageModel and an Effect AI provider layer; direct fetch and stubbed responses are not substitutes.
 prerequisites:
   services:
     - openai-mock
@@ -11,23 +14,53 @@ steps:
       deploy: true
 
   - id: "add-llm-method"
-    prompt: >
-      In the test-app project, modify the existing CounterAgent to add a new method called
-      `ask_llm` (in Rust and MoonBit) or `askLlm` (in TypeScript and Scala).
-      The method takes a single string parameter called `question` and returns the LLM's
-      response as a plain string.
+    prompt:
+      rust: &non-effect-add-llm-prompt >
+        In the test-app project, modify the existing CounterAgent to add a new method called
+        `ask_llm` (in Rust and MoonBit) or `askLlm` (in TypeScript and Scala).
+        The method takes a single string parameter called `question` and returns the LLM's
+        response as a plain string.
 
-      There is an OpenAI-compatible LLM server running at `{{openai_mock_url}}`. Use model
-      `mock-model` and API key `test-mock-key`. Send the question as a user message and return
-      the assistant's reply text.
+        There is an OpenAI-compatible LLM server running at `{{openai_mock_url}}`. Use model
+        `mock-model` and API key `test-mock-key`. Send the question as a user message and return
+        the assistant's reply text.
 
-      Keep the existing increment method unchanged. Make sure the project builds and deploys
-      successfully.
+        Keep the existing increment method unchanged. Make sure the project builds and deploys
+        successfully.
+      ts: *non-effect-add-llm-prompt
+      effect: >
+        In the Effect-based test-app project, modify the existing `Counter` agent to add a new method
+        called `askLlm`. Change its `defineAgent` name from `Counter` to `CounterAgent` so it can be
+        invoked below as `CounterAgent("llm-test")`, and update the corresponding agent reference in
+        `golem.yaml` to match. Implement the method with Effect and `@golemcloud/effect-golem`,
+        preserving the existing Effect-based `increment` method. The method takes a single string
+        parameter called `question` and returns the LLM's response as a plain string.
+
+        There is an OpenAI-compatible LLM server running at `{{openai_mock_url}}`. Use model
+        `mock-model` and API key `test-mock-key`. Send the question as a user message and return the
+        assistant's reply text.
+
+        Install the exactly version-matched `@effect/ai-openai` package. Implement the request
+        through `LanguageModel.generateText` from `effect/unstable/ai`, with
+        `OpenAiLanguageModel.layer` and `OpenAiClient.layer` from `@effect/ai-openai`. Configure the
+        client with API URL `{{openai_mock_url}}/v1` and the redacted API key, configure the language
+        model layer with `mock-model`, provide `FetchHttpClient.layer`, send `question` as the prompt
+        with tool choice disabled, and return the provider-independent response text. Do not issue
+        the provider request manually through a direct Fetch API call or an HTTP request, and do not
+        use Node networking libraries, a fake/stub response, canned text, or typed agent RPC.
+
+        Make sure the project builds and deploys successfully. Verify this task only by building and
+        deploying; do not manually invoke `askLlm`, because the harness invokes it after this step.
+      scala: *non-effect-add-llm-prompt
+      moonbit: *non-effect-add-llm-prompt
     expectedSkills:
       rust:
         - "golem-add-llm-rust"
       ts:
         - "golem-add-llm-ts"
+      effect:
+        - "golem-add-llm-effect"
+        - "golem-make-http-request-effect"
       scala:
         - "golem-add-llm-scala"
       moonbit:
@@ -40,6 +73,9 @@ steps:
       ts:
         - "golem-make-http-request-ts"
         - "golem-add-secret-ts"
+        - "golem-add-npm-package"
+      effect:
+        - "golem-add-secret-effect"
         - "golem-add-npm-package"
       scala:
         - "golem-make-http-request-scala"
@@ -59,10 +95,24 @@ steps:
       method:
         rust: "ask_llm"
         ts: "askLlm"
+        effect: "askLlm"
         scala: "askLlm"
         moonbit: "ask_llm"
-      args: '"hello"'
+      args:
+        rust: &non-effect-llm-question '"hello"'
+        ts: *non-effect-llm-question
+        effect: '"hello"'
+        scala: *non-effect-llm-question
+        moonbit: *non-effect-llm-question
     expect:
-      result_json:
-        - path: "$"
-          equals: "mock-llm-ok"
+      rust: &non-effect-llm-result
+        result_json:
+          - path: "$"
+            equals: "mock-llm-ok"
+      ts: *non-effect-llm-result
+      effect:
+        result_json:
+          - path: "$"
+            equals: "mock-llm-ok"
+      scala: *non-effect-llm-result
+      moonbit: *non-effect-llm-result

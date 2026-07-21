@@ -7,24 +7,50 @@ steps:
       build: true
 
   - id: "add-worker-and-fan-out"
-    prompt: >
-      In the test-app project, add a second agent type called `Worker` with a single
-      constructor parameter (a u64 id). Give it a method `compute(value: u64) -> u64`
-      that returns `value * 2`.
+    prompt:
+      rust: &non-effect-parallel-workers-prompt >
+        In the test-app project, add a second agent type called `Worker` with a single
+        constructor parameter (a u64 id). Give it a method `compute(value: u64) -> u64`
+        that returns `value * 2`.
 
-      Then modify the existing `CounterAgent` to add a new method
-      `fan-out(items: list<u64>) -> list<u64>` that distributes work to multiple
-      `Worker` child agents concurrently. It should spawn one `Worker` per item
-      (using the item's index as the worker id), call `compute` on each worker
-      concurrently (not one-by-one sequentially), and return the collected results
-      in the same order as the input list.
+        Then modify the existing `CounterAgent` to add a new method
+        `fan-out(items: list<u64>) -> list<u64>` that distributes work to multiple
+        `Worker` child agents concurrently. It should spawn one `Worker` per item
+        (using the item's index as the worker id), call `compute` on each worker
+        concurrently (not one-by-one sequentially), and return the collected results
+        in the same order as the input list.
 
-      Make sure the project builds successfully.
+        Make sure the project builds successfully.
+      ts: *non-effect-parallel-workers-prompt
+      effect: >
+        In the Effect-based test-app project, add a second durable agent type called `Worker`.
+        Define it with `@golemcloud/effect-golem`, one `constructorParams` number named `id`, and a
+        typed Effect method `compute` with one named `Schema.Number` parameter `value` and
+        `success: Schema.Number`. Its handler must return `value * 2` as an Effect.
+
+        Modify the existing Effect counter agent rather than creating a duplicate. Rename its
+        exported TypeScript binding and its `defineAgent` runtime name to exactly `CounterAgent`,
+        and update the matching agent key in `golem.yaml`. Add a typed Effect method `fanOut` whose
+        named `items` parameter and success schema are arrays of `Schema.Number`.
+
+        Implement `fanOut` by creating one remote-call Effect per item. Use the item's index as the
+        durable worker id, obtain it through `Worker.client.get({ id })`, and invoke
+        `compute({ value })`. Run and collect those Effects with `Effect.all` and explicit
+        concurrent execution, preserving input order and returning an empty array for empty input.
+        Handle or convert the typed RPC errors so the no-error public contract type-checks. Do not
+        use `Promise.all`, plain async handlers, or one-by-one sequential calls.
+
+        Import every implementation module from `src/main.ts`. Make sure the project builds
+        successfully.
+      scala: *non-effect-parallel-workers-prompt
+      moonbit: *non-effect-parallel-workers-prompt
     expectedSkills:
       rust:
         - "golem-parallel-workers-rust"
       ts:
         - "golem-parallel-workers-ts"
+      effect:
+        - "golem-parallel-workers-effect"
       scala:
         - "golem-parallel-workers-scala"
       moonbit:
@@ -39,6 +65,7 @@ steps:
       method:
         rust: "fan_out"
         ts: "fanOut"
+        effect: "fanOut"
         scala: "fanOut"
         moonbit: "fan_out"
       args: "[1, 2, 3]"
@@ -57,6 +84,7 @@ steps:
       method:
         rust: "fan_out"
         ts: "fanOut"
+        effect: "fanOut"
         scala: "fanOut"
         moonbit: "fan_out"
       args: "[]"
@@ -71,6 +99,7 @@ steps:
       method:
         rust: "fan_out"
         ts: "fanOut"
+        effect: "fanOut"
         scala: "fanOut"
         moonbit: "fan_out"
       args: "[10]"

@@ -15,7 +15,7 @@
 pub mod sdk {
     pub const RUST: &str = "2.1.0";
     pub const TS: &str = "1.1.1";
-    pub const EFFECT_GOLEM: &str = "1.5.0";
+    pub const EFFECT_GOLEM: &str = "1.5.1";
     pub const SCALA: &str = "1.5.1";
     pub const MOONBIT: &str = "0.5.2";
     pub const MANIFEST: &str = "1.5.0";

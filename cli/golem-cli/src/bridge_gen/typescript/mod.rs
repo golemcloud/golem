@@ -211,9 +211,15 @@ impl TypeScriptBridgeGenerator {
         read_stdin.write_line("input += chunk;");
         read_stdin.unindent();
         read_stdin.write_line("}");
-        read_stdin.write_line("return JSON.parse(input);");
+        read_stdin.write_line(
+            "return base.parseJson(input, (_key, value) => (typeof value === 'object' && value !== null && Object.keys(value).length === 1 && '$bigint' in value && typeof value.$bigint === 'string') ? BigInt(value.$bigint) : value);",
+        );
         drop(read_stdin);
 
+        writer.write_line("");
+        writer.write_line(
+            "const stringifyTestValue = (value: unknown): string => JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? item.toString() : item);",
+        );
         writer.write_line("");
     }
 
@@ -257,7 +263,7 @@ impl TypeScriptBridgeGenerator {
             &method_def.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
-        encode_input.write_line("console.log(JSON.stringify(__result));");
+        encode_input.write_line("console.log(base.stringifyJson(__result));");
         Ok(())
     }
 
@@ -280,7 +286,7 @@ impl TypeScriptBridgeGenerator {
         self.write_decode_data_value(&mut decode_input, &method_def.input_schema)?;
         decode_input.unindent();
         decode_input.write_line("})();");
-        decode_input.write_line("console.log(JSON.stringify(__decoded));");
+        decode_input.write_line("console.log(stringifyTestValue(__decoded));");
         Ok(())
     }
 
@@ -311,7 +317,7 @@ impl TypeScriptBridgeGenerator {
                 &method_def.output_schema,
                 MULTIMODAL_INPUT_NAME,
             )?;
-            encode_output.write_line("console.log(JSON.stringify(__result));");
+            encode_output.write_line("console.log(base.stringifyJson(__result));");
         }
         Ok(())
     }
@@ -337,7 +343,7 @@ impl TypeScriptBridgeGenerator {
             self.write_decode_data_value(&mut decode_output, &method_def.output_schema)?;
             decode_output.unindent();
             decode_output.write_line("})();");
-            decode_output.write_line("console.log(JSON.stringify(__decoded));");
+            decode_output.write_line("console.log(stringifyTestValue(__decoded));");
         }
         Ok(())
     }
@@ -1771,19 +1777,17 @@ impl TypeScriptBridgeGenerator {
                         "((v: unknown) => {{ if (typeof v === 'string') {{ return v; }} else {{ throw new Error(`Expected string, got ${{v}}`); }} }})({value})"
                     )
                 }
+                AnalysedType::U64(_) => format!("base.decodeU64({value})"),
+                AnalysedType::S64(_) => format!("base.decodeS64({value})"),
                 AnalysedType::F64(_)
                 | AnalysedType::F32(_)
-                | AnalysedType::U64(_)
-                | AnalysedType::S64(_)
                 | AnalysedType::U32(_)
                 | AnalysedType::S32(_)
                 | AnalysedType::U16(_)
                 | AnalysedType::S16(_)
                 | AnalysedType::U8(_)
                 | AnalysedType::S8(_) => {
-                    format!(
-                        "((v: unknown) => {{ if (typeof v === 'number') {{ return v; }} else {{ throw new Error(`Expected number, got ${{v}}`); }} }})({value})"
-                    )
+                    format!("base.decodeNumber({value})")
                 }
                 AnalysedType::Bool(_) => {
                     format!(
@@ -1956,8 +1960,8 @@ impl TypeScriptBridgeGenerator {
                 AnalysedType::Chr(_) => value.to_string(),
                 AnalysedType::F64(_) => value.to_string(),
                 AnalysedType::F32(_) => value.to_string(),
-                AnalysedType::U64(_) => value.to_string(),
-                AnalysedType::S64(_) => value.to_string(),
+                AnalysedType::U64(_) => format!("base.encodeU64({value})"),
+                AnalysedType::S64(_) => format!("base.encodeS64({value})"),
                 AnalysedType::U32(_) => value.to_string(),
                 AnalysedType::S32(_) => value.to_string(),
                 AnalysedType::U16(_) => value.to_string(),
@@ -2249,8 +2253,8 @@ impl TypeScriptBridgeGenerator {
                     AnalysedType::Chr(_) => Ok("string".to_string()),
                     AnalysedType::F64(_) => Ok("number".to_string()),
                     AnalysedType::F32(_) => Ok("number".to_string()),
-                    AnalysedType::U64(_) => Ok("number".to_string()),
-                    AnalysedType::S64(_) => Ok("number".to_string()),
+                    AnalysedType::U64(_) => Ok("bigint".to_string()),
+                    AnalysedType::S64(_) => Ok("bigint".to_string()),
                     AnalysedType::U32(_) => Ok("number".to_string()),
                     AnalysedType::S32(_) => Ok("number".to_string()),
                     AnalysedType::U16(_) => Ok("number".to_string()),
@@ -2405,8 +2409,8 @@ impl TypeScriptBridgeGenerator {
             AnalysedType::Chr(_) => Ok("string".to_string()),
             AnalysedType::F64(_) => Ok("number".to_string()),
             AnalysedType::F32(_) => Ok("number".to_string()),
-            AnalysedType::U64(_) => Ok("number".to_string()),
-            AnalysedType::S64(_) => Ok("number".to_string()),
+            AnalysedType::U64(_) => Ok("bigint".to_string()),
+            AnalysedType::S64(_) => Ok("bigint".to_string()),
             AnalysedType::U32(_) => Ok("number".to_string()),
             AnalysedType::S32(_) => Ok("number".to_string()),
             AnalysedType::U16(_) => Ok("number".to_string()),

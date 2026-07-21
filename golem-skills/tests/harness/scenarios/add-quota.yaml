@@ -64,6 +64,39 @@ steps:
         - units: `requests`
 
         Make sure the project builds and deploys successfully.
+      effect: >
+        In the Effect-based test-app project, add a new durable agent type called
+        `QuotaAgent` using Effect v4 and `@golemcloud/effect-golem` (not the
+        Promise-based TypeScript SDK). Identify it by a single string constructor
+        parameter for the instance name.
+
+        In the agent's `.implement(...)` Effect body, acquire a quota token once
+        with `Quota.acquireQuotaToken` for a resource called "api-calls" and an
+        expected use of 1n. Keep the token in the constructed agent state by
+        closing over it in the returned method handlers.
+
+        Define an Effect method called `rateLimitedCall` that takes a string
+        parameter called `input` and returns an object with two fields:
+        - `input` (string) — the input that was passed in
+        - `success` (boolean) — whether the reservation succeeded
+
+        The method must use `Quota.withReservation` to reserve 1n token. Its body
+        must return an Effect succeeding with `{ used: 1n, value: input }` (or an
+        equivalent value used to construct the successful result). Recover only
+        `FailedReservationError` with `Effect.catchTag` and return the input with
+        success=false. Do not treat an unexpected `QuotaHostError` as quota
+        exhaustion.
+
+        In `golem.yaml`, define a resource default under `resourceDefaults` for
+        the `local` environment:
+        - resource name: `api-calls`
+        - limit type: `Rate` with value `100`, period `minute`, max `1000`
+        - enforcementAction: `reject`
+        - unit: `request`
+        - units: `requests`
+
+        Register the agent implementation from `src/main.ts`, and make sure the
+        project builds and deploys successfully.
       scala: >
         In the test-app project, add a new durable agent type called `QuotaAgent`
         identified by a single constructor parameter for the instance name.
@@ -125,6 +158,8 @@ steps:
         - "golem-quota-rust"
       ts:
         - "golem-quota-ts"
+      effect:
+        - "golem-quota-effect"
       scala:
         - "golem-quota-scala"
       moonbit:
@@ -146,6 +181,8 @@ steps:
       args:
         rust: ["-l", "with_reservation|QuotaToken::new", "test-app/", "-g", "*.rs"]
         ts: ["-l", "withReservation|acquireQuotaToken", "test-app/", "-g", "*.ts"]
+        effect:
+          ["-l", "Quota[.]withReservation|Quota[.]acquireQuotaToken", "test-app/", "-g", "*.ts"]
         scala: ["-l", "withReservation|QuotaToken", "test-app/", "-g", "*.scala"]
         moonbit: ["-l", "with_reservation|QuotaToken::new", "test-app/", "-g", "*.mbt"]
     expect:
@@ -157,6 +194,7 @@ steps:
       method:
         rust: "rate_limited_call"
         ts: "rateLimitedCall"
+        effect: "rateLimitedCall"
         scala: "rateLimitedCall"
         moonbit: "rate_limited_call"
       args: '"hello"'
@@ -168,6 +206,12 @@ steps:
           - path: "$.success"
             equals: true
       ts:
+        result_json:
+          - path: "$.input"
+            equals: "hello"
+          - path: "$.success"
+            equals: true
+      effect:
         result_json:
           - path: "$.input"
             equals: "hello"

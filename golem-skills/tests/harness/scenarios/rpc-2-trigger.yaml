@@ -36,6 +36,29 @@ steps:
         agent instance).
 
         Make sure the project builds successfully.
+      effect: >
+        In the Effect-based test-app project, add a second durable agent type called `Callback`
+        with the same `{ name: Schema.String }` constructor parameter as the existing counter.
+        Give it a snapshot-backed numeric `lastSeen` value. Its `run` method takes no parameters,
+        obtains the `CounterAgent` instance identified by the same `name`, awaits that counter's
+        `increment` method, stores the returned value as `lastSeen`, and completes. Its `lastSeen`
+        method takes no parameters and returns the stored number.
+
+        Modify the existing Effect `Counter` agent rather than creating a duplicate. Rename its
+        exported TypeScript binding and its `defineAgent` runtime name to exactly `CounterAgent`,
+        and update the matching `httpApi` agent key in `golem.yaml`. Preserve its constructor
+        parameter, snapshot-backed count, and original `increment` behavior. Add a `runTest` method
+        that obtains the `Callback` instance with the counter's name, executes the Effect returned
+        by `callback.run.trigger({})`, and then increments and returns the counter exactly as
+        `increment` does. The callback must use the real typed clients attached by `defineAgent`.
+        Yield both `client.get(...)` and remote method Effects, use named input records (including
+        `{}` for no-parameter methods), and handle or convert typed RPC errors so the declared
+        method contracts type-check. Do not use Promise-based TypeScript SDK APIs or merely create
+        and discard the lazy trigger Effect; the remote call must be fire-and-forget to avoid the
+        awaited RPC deadlock.
+
+        Import every implementation module from `src/main.ts`. Make sure the project builds
+        successfully.
       scala: >
         In the test-app project, add a second agent type called `Callback` that has the same constructor parameter as
         the existing CounterAgent. Create a method in `Callback` called `run` that takes no parameters, but instead calls
@@ -69,6 +92,8 @@ steps:
         - "golem-fire-and-forget-rust"
       ts:
         - "golem-fire-and-forget-ts"
+      effect:
+        - "golem-fire-and-forget-effect"
       scala:
         - "golem-fire-and-forget-scala"
       moonbit:
@@ -92,6 +117,7 @@ steps:
       method:
         rust: "run_test"
         ts: "runTest"
+        effect: "runTest"
         scala: "runTest"
         moonbit: "run_test"
     expect:
@@ -105,6 +131,7 @@ steps:
       method:
         rust: "last_seen"
         ts: "lastSeen"
+        effect: "lastSeen"
         scala: "lastSeen"
         moonbit: "last_seen"
     expect:

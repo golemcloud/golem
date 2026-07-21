@@ -60,6 +60,36 @@ steps:
            or `getPhantom`) and returns its total.
 
         Make sure the project builds successfully.
+      effect: >
+        In the Effect-based test-app project, add a second durable agent type called `Collector`
+        with one `{ name: Schema.String }` constructor parameter. Define it with `defineAgent`,
+        `method`, and Effect Schema from the real `@golemcloud/effect-golem` API. Give it
+        snapshot-backed durable state containing an ordered array of numbers, initialized exactly
+        once with `snapshot.init(...)`. It must expose three externally invokable Effect methods:
+        `addValue(value: number)`, `getValues(): number[]`, and `getTotal(): number`. `addValue`
+        appends to the state, `getValues` returns insertion order, and `getTotal` returns the sum.
+
+        Modify the existing Effect `Counter` agent rather than creating a duplicate. Rename its
+        exported TypeScript binding and its `defineAgent` runtime name to exactly `CounterAgent`,
+        and update the matching `httpApi` agent key in `golem.yaml`. Preserve its constructor
+        parameter, snapshot-backed count, and original `increment` behavior. Add three externally
+        invokable methods:
+
+        1. `spawnAndFillPhantom` — yield `Collector.client.newPhantom({ name })` using the counter's
+           own name, await `addValue({ value: 10 })` and `addValue({ value: 20 })`, then return the
+           result of `getTotal({})`, which should be 30.
+
+        2. `spawnTwoPhantoms` — yield two separate `Collector.client.newPhantom({ name })` Effects
+           with the same name. Add 1 only to the first and 2 only to the second, then return their
+           totals as `[totalOfFirst, totalOfSecond]`.
+
+        3. `readNonPhantomCollector` — yield the regular durable handle from
+           `Collector.client.get({ name })`, not `newPhantom` or `getPhantom`, and return its total.
+
+        Yield every typed client and remote method Effect, use named input records including `{}`
+        for no-parameter methods, and handle or convert typed RPC errors so the method contracts
+        type-check. Do not use Promise-based TypeScript SDK APIs. Import every implementation module
+        from `src/main.ts`. Make sure the project builds successfully.
       scala: >
         In the test-app project, add a second agent type called `Collector` with a single
         constructor parameter for its name. It must expose three externally invokable
@@ -117,6 +147,8 @@ steps:
         - "golem-multi-instance-agent-rust"
       ts:
         - "golem-multi-instance-agent-ts"
+      effect:
+        - "golem-multi-instance-agent-effect"
       scala:
         - "golem-multi-instance-agent-scala"
       moonbit:
@@ -132,6 +164,7 @@ steps:
       method:
         rust: "spawn_and_fill_phantom"
         ts: "spawnAndFillPhantom"
+        effect: "spawnAndFillPhantom"
         scala: "spawnAndFillPhantom"
         moonbit: "spawn_and_fill_phantom"
     expect:
@@ -146,6 +179,7 @@ steps:
       method:
         rust: "spawn_two_phantoms"
         ts: "spawnTwoPhantoms"
+        effect: "spawnTwoPhantoms"
         scala: "spawnTwoPhantoms"
         moonbit: "spawn_two_phantoms"
     expect:
@@ -162,6 +196,7 @@ steps:
       method:
         rust: "get_total"
         ts: "getTotal"
+        effect: "getTotal"
         scala: "getTotal"
         moonbit: "get_total"
     expect:
@@ -176,6 +211,7 @@ steps:
       method:
         rust: "read_non_phantom_collector"
         ts: "readNonPhantomCollector"
+        effect: "readNonPhantomCollector"
         scala: "readNonPhantomCollector"
         moonbit: "read_non_phantom_collector"
     expect:

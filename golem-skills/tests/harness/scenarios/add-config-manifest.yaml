@@ -64,6 +64,33 @@ steps:
         - `server.port` set to `8080`
 
         Make sure the project builds and deploys successfully.
+      effect: >
+        In the Effect-based test-app project, add a new durable agent type called
+        `AppConfigAgent`, identified by a single `constructorParams` field for the instance name.
+
+        Declare typed configuration with `defineConfig` and Effect Schema. It must contain:
+        - `appName` (string)
+        - `maxRetries` (a signed 32-bit integer represented by `WitTypes.Int32`)
+        - `server` — a named nested `Schema.Struct` with `host` (string) and `port`
+          (`WitTypes.Int32`)
+
+        Attach the config service class to `defineAgent`. Access it by yielding the service and
+        its nested field Effects inside the method handler; do not model config as a positional
+        `Config<T>` constructor parameter.
+
+        Expose an Effect-based method called `getSettings` that returns an Effect Schema record
+        with four fields: `appName` (string), `maxRetries` (`WitTypes.Int32`), `serverHost`
+        (string), and `serverPort` (`WitTypes.Int32`). Read all values from the agent's typed
+        configuration.
+
+        In `golem.yaml`, set default configuration values under the `agents` section for
+        `AppConfigAgent`:
+        - `appName` set to `"MyApp"`
+        - `maxRetries` set to `3`
+        - `server.host` set to `"localhost"`
+        - `server.port` set to `8080`
+
+        Make sure the project builds and deploys successfully.
       scala: >
         In the test-app project, add a new durable agent type called `AppConfigAgent`
         identified by a single constructor parameter for the instance name.
@@ -125,6 +152,8 @@ steps:
         - "golem-add-config-rust"
       ts:
         - "golem-add-config-ts"
+      effect:
+        - "golem-add-config-effect"
       scala:
         - "golem-add-config-scala"
       moonbit:
@@ -155,6 +184,7 @@ steps:
       method:
         rust: "get_settings"
         ts: "getSettings"
+        effect: "getSettings"
         scala: "getSettings"
         moonbit: "get_settings"
     expect:
@@ -169,6 +199,16 @@ steps:
           - path: "$.server_port"
             equals: 8080
       ts:
+        result_json:
+          - path: "$.appName"
+            equals: "MyApp"
+          - path: "$.maxRetries"
+            equals: 3
+          - path: "$.serverHost"
+            equals: "localhost"
+          - path: "$.serverPort"
+            equals: 8080
+      effect:
         result_json:
           - path: "$.appName"
             equals: "MyApp"

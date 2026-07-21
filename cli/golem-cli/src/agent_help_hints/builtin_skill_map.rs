@@ -13,7 +13,7 @@
 // limitations under the License.
 
 //! Static mapping of CLI command paths to relevant skills shipped under
-//! `golem-skills/skills/{common,ts,rust,scala,moonbit}`.
+//! `golem-skills/skills/{common,ts,effect,rust,scala,moonbit}`.
 //!
 //! Each `SkillBinding` says: "if the user runs `--help` on this CLI command
 //! and the named skill is installed under `<app_dir>/.agents/skills/`, link
@@ -25,12 +25,13 @@
 //! `SkillKind::PerLanguage(langs)` means there is one variant per listed
 //! language, installed as `.agents/skills/<basename>-<lang>/SKILL.md`. We use
 //! the short language tag exactly as `GuestLanguage::to_string()` produces
-//! it (`rust`, `ts`, `scala`, `moonbit`).
+//! it (`rust`, `ts`, `effect`, `scala`, `moonbit`).
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
     Rust,
     Ts,
+    Effect,
     Scala,
     MoonBit,
 }
@@ -41,6 +42,7 @@ impl Lang {
         match self {
             Lang::Rust => "rust",
             Lang::Ts => "ts",
+            Lang::Effect => "effect",
             Lang::Scala => "scala",
             Lang::MoonBit => "moonbit",
         }
@@ -51,6 +53,7 @@ impl Lang {
         match self {
             Lang::Rust => "Rust",
             Lang::Ts => "TypeScript",
+            Lang::Effect => "Effect",
             Lang::Scala => "Scala",
             Lang::MoonBit => "MoonBit",
         }
@@ -58,7 +61,13 @@ impl Lang {
 }
 
 /// All currently supported guest languages.
-pub const ALL_LANGS: &[Lang] = &[Lang::Ts, Lang::Rust, Lang::Scala, Lang::MoonBit];
+pub const ALL_LANGS: &[Lang] = &[
+    Lang::Ts,
+    Lang::Effect,
+    Lang::Rust,
+    Lang::Scala,
+    Lang::MoonBit,
+];
 
 #[derive(Debug, Clone, Copy)]
 pub enum SkillKind {
@@ -148,7 +157,7 @@ pub const SKILL_BINDINGS: &[SkillBinding] = &[
     SkillBinding { cli_path: &["environment"], basename: "golem-profiles-and-environments", kind: SkillKind::Common, summary: "CLI profiles vs application environments." },
 
     // ── repl ─────────────────────────────────────────────────────────────
-    SkillBinding { cli_path: &["repl"], basename: "golem-interactive-repl", kind: SkillKind::PerLanguage(&[Lang::Ts]), summary: "Use the Golem REPL for interactive testing." },
+    SkillBinding { cli_path: &["repl"], basename: "golem-interactive-repl", kind: SkillKind::PerLanguage(&[Lang::Ts, Lang::Effect]), summary: "Use the Golem REPL for interactive testing." },
 ];
 
 #[cfg(test)]
@@ -214,8 +223,8 @@ mod test {
     }
 
     fn skill_dir_exists_anywhere(skills_root: &std::path::Path, name: &str) -> bool {
-        // golem-skills/skills/{common,ts,rust,scala,moonbit}/<name>/SKILL.md
-        for sub in &["common", "ts", "rust", "scala", "moonbit"] {
+        // golem-skills/skills/{common,ts,effect,rust,scala,moonbit}/<name>/SKILL.md
+        for sub in &["common", "ts", "effect", "rust", "scala", "moonbit"] {
             let candidate = skills_root.join(sub).join(name).join("SKILL.md");
             if candidate.is_file() {
                 return true;

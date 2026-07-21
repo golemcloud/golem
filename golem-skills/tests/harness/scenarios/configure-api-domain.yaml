@@ -10,22 +10,39 @@ steps:
       build: true
 
   - id: "add-greeting-agent-with-http"
-    prompt: >
-      In the test-app project, add a new durable agent type called `GreetingAgent` identified by
-      a single constructor parameter for the greeting target name. Give it an HTTP mount under
-      `/greetings/{name}`.
+    prompt:
+      rust: &non-effect-add-greeting-agent-with-http-prompt >
+        In the test-app project, add a new durable agent type called `GreetingAgent` identified by
+        a single constructor parameter for the greeting target name. Give it an HTTP mount under
+        `/greetings/{name}`.
 
-      GreetingAgent must expose one HTTP endpoint:
-      - `GET /hello` — returns a JSON object with a single `message` field whose value is exactly
-        `Hello, <name>!`, using the agent instance name from the path and constructor.
+        GreetingAgent must expose one HTTP endpoint:
+        - `GET /hello` — returns a JSON object with a single `message` field whose value is exactly
+          `Hello, <name>!`, using the agent instance name from the path and constructor.
 
-      Do not add or change any `httpApi` deployment configuration in `golem.yaml` yet. Only add
-      the agent code and the HTTP mount/endpoint definitions so the project builds successfully.
+        Do not add or change any `httpApi` deployment configuration in `golem.yaml` yet. Only add
+        the agent code and the HTTP mount/endpoint definitions so the project builds successfully.
+      ts: *non-effect-add-greeting-agent-with-http-prompt
+      effect: >
+        In the Effect-based test-app project, add a durable `GreetingAgent` with a single
+        `constructorParams` string named `name`. Use `Http.mount("/greetings/{name}")` from
+        `@golemcloud/effect-golem` and expose an Effect method through `GET /hello`.
+
+        The method must return an Effect Schema object with one `message` field whose value is
+        exactly `Hello, <name>!`, using the constructor value captured by the implementation.
+        Import the implementation module from `src/main.ts`.
+
+        Do not add or change any `httpApi` deployment configuration in `golem.yaml` yet. Only add
+        the Effect agent and its HTTP metadata so the project builds successfully.
+      scala: *non-effect-add-greeting-agent-with-http-prompt
+      moonbit: *non-effect-add-greeting-agent-with-http-prompt
     expectedSkills:
       rust:
         - "golem-add-http-endpoint-rust"
       ts:
         - "golem-add-http-endpoint-ts"
+      effect:
+        - "golem-add-http-endpoint-effect"
       scala:
         - "golem-add-http-endpoint-scala"
       moonbit:
@@ -41,14 +58,26 @@ steps:
       exit_code: 1
 
   - id: "configure-api-domain"
-    prompt: >
-      In the test-app project, configure the application HTTP API deployment in `golem.yaml` so
-      that `GreetingAgent` is exposed on the local domain `test-app.localhost:9006`.
+    prompt:
+      rust: &non-effect-configure-api-domain-prompt >
+        In the test-app project, configure the application HTTP API deployment in `golem.yaml` so
+        that `GreetingAgent` is exposed on the local domain `test-app.localhost:9006`.
 
-      Add a `local` deployment under `httpApi.deployments` and include `GreetingAgent` in the
-      deployed agents map. Do not change any source files or endpoint logic. After this change,
-      the existing `GET /greetings/{name}/hello` endpoint must be reachable on that domain and
-      the generated OpenAPI specification must be served at `/openapi.yaml`.
+        Add a `local` deployment under `httpApi.deployments` and include `GreetingAgent` in the
+        deployed agents map. Do not change any source files or endpoint logic. After this change,
+        the existing `GET /greetings/{name}/hello` endpoint must be reachable on that domain and
+        the generated OpenAPI specification must be served at `/openapi.yaml`.
+      ts: *non-effect-configure-api-domain-prompt
+      effect: >
+        In the Effect-based test-app project, configure the application HTTP API deployment in
+        `golem.yaml` so `GreetingAgent` is exposed on `test-app.localhost:9006`.
+
+        Add a `local` deployment under `httpApi.deployments` and include `GreetingAgent` in the
+        deployed agents map. Do not change Effect source files or existing `Http` endpoint
+        metadata. The existing `GET /greetings/{name}/hello` endpoint must become reachable and
+        the generated OpenAPI specification must be served at `/openapi.yaml`.
+      scala: *non-effect-configure-api-domain-prompt
+      moonbit: *non-effect-configure-api-domain-prompt
     expectedSkills:
       - "golem-configure-api-domain"
     verify:

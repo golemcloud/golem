@@ -8,13 +8,24 @@ steps:
       deploy: true
 
   - id: "change-to-ephemeral"
-    prompt: >
-      In the test-app project, change the CounterAgent's durability mode to ephemeral.
+    prompt:
+      rust: &change-to-ephemeral-prompt >
+        In the test-app project, change the CounterAgent's durability mode to ephemeral.
+      ts: *change-to-ephemeral-prompt
+      effect: >
+        In the Effect-based test-app project, change the existing Counter agent declared with
+        `defineAgent` from `@golemcloud/effect-golem` to ephemeral mode. Preserve its existing
+        methods, state, snapshot configuration, and registration, and make sure the project builds
+        and deploys successfully.
+      scala: *change-to-ephemeral-prompt
+      moonbit: *change-to-ephemeral-prompt
     expectedSkills:
       rust:
         - "golem-configure-durability-rust"
       ts:
         - "golem-configure-durability-ts"
+      effect:
+        - "golem-configure-durability-effect"
       scala:
         - "golem-configure-durability-scala"
       moonbit:
@@ -32,13 +43,24 @@ steps:
       stdout_contains: '"mode":"Ephemeral"'
 
   - id: "change-to-durable"
-    prompt: >
-      In the test-app project, change the CounterAgent's durability mode back to durable.
+    prompt:
+      rust: &change-to-durable-prompt >
+        In the test-app project, change the CounterAgent's durability mode back to durable.
+      ts: *change-to-durable-prompt
+      effect: >
+        In the Effect-based test-app project, change the existing Counter agent declared with
+        `defineAgent` from `@golemcloud/effect-golem` back to durable mode. Preserve its existing
+        methods, state, snapshot configuration, and registration, and make sure the project builds
+        and deploys successfully.
+      scala: *change-to-durable-prompt
+      moonbit: *change-to-durable-prompt
     expectedSkills:
       rust:
         - "golem-configure-durability-rust"
       ts:
         - "golem-configure-durability-ts"
+      effect:
+        - "golem-configure-durability-effect"
       scala:
         - "golem-configure-durability-scala"
       moonbit:
