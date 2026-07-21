@@ -14,7 +14,6 @@
 
 use crate::app::error::AppValidationError;
 use crate::error::{HintError, NonSuccessfulExit, PipedExitCode};
-use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use colored::{ColoredString, Colorize};
@@ -380,92 +379,6 @@ pub fn log_skipping_up_to_date(subject: impl AsRef<str>) {
             "UP-TO-DATE".log_color_ok_highlight()
         ),
     );
-}
-
-pub fn log_action_plan(action: &OverwriteSafeAction, plan: OverwriteSafeActionPlan) {
-    match plan {
-        OverwriteSafeActionPlan::Create => match action {
-            OverwriteSafeAction::CopyFile { source, target } => {
-                log_action(
-                    "Copying",
-                    format!(
-                        "{} to {}",
-                        source.log_color_highlight(),
-                        target.log_color_highlight()
-                    ),
-                );
-            }
-            OverwriteSafeAction::CopyFileTransformed { source, target, .. } => {
-                log_action(
-                    "Copying",
-                    format!(
-                        "{} to {} transformed",
-                        source.log_color_highlight(),
-                        target.log_color_highlight()
-                    ),
-                );
-            }
-            OverwriteSafeAction::WriteFile { target, .. } => {
-                log_action("Creating", format!("{}", target.log_color_highlight()));
-            }
-        },
-        OverwriteSafeActionPlan::Overwrite => match action {
-            OverwriteSafeAction::CopyFile { source, target } => {
-                log_warn_action(
-                    "Overwriting",
-                    format!(
-                        "{} with {}",
-                        target.log_color_highlight(),
-                        source.log_color_highlight()
-                    ),
-                );
-            }
-            OverwriteSafeAction::CopyFileTransformed { source, target, .. } => {
-                log_warn_action(
-                    "Overwriting",
-                    format!(
-                        "{} with {} transformed",
-                        target.log_color_highlight(),
-                        source.log_color_highlight()
-                    ),
-                );
-            }
-            OverwriteSafeAction::WriteFile { content: _, target } => {
-                log_warn_action("Overwriting", format!("{}", target.log_color_highlight()));
-            }
-        },
-        OverwriteSafeActionPlan::SkipSameContent => match action {
-            OverwriteSafeAction::CopyFile { source, target } => {
-                log_warn_action(
-                    "Skipping",
-                    format!(
-                        "copying {} to {}, content already up-to-date",
-                        source.log_color_highlight(),
-                        target.log_color_highlight(),
-                    ),
-                );
-            }
-            OverwriteSafeAction::CopyFileTransformed { source, target, .. } => {
-                log_warn_action(
-                    "Skipping",
-                    format!(
-                        "copying {} to {} transformed, content already up-to-date",
-                        source.log_color_highlight(),
-                        target.log_color_highlight()
-                    ),
-                );
-            }
-            OverwriteSafeAction::WriteFile { content: _, target } => {
-                log_warn_action(
-                    "Skipping",
-                    format!(
-                        "generating {}, content already up-to-date",
-                        target.log_color_highlight()
-                    ),
-                );
-            }
-        },
-    }
 }
 
 pub trait LogColorize {
