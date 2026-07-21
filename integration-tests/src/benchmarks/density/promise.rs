@@ -19,8 +19,11 @@ use golem_test_framework::benchmark::{
 use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::{FromValue, ValueAndType};
+use golem_wasm::FromValue;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::{Semaphore, mpsc};
+use tokio::task::JoinSet;
 
 pub const PROMISE_PAYLOAD_TINY: usize = 256;
 pub const PROMISE_PAYLOAD_SMALL: usize = 65_536;
@@ -31,8 +34,10 @@ const PROMISE_AGENT_TYPE: &str = "PromiseAgent";
 const DEFAULT_RATE_RAMP: &[u32] = &[1, 2, 4, 8, 16, 32, 64, 128, 256];
 const DEFAULT_RATE_PERIOD: Duration = Duration::from_secs(60);
 const WAITER_READY_TIMEOUT: Duration = Duration::from_secs(60);
+const PROMISE_POOL_SIZE: usize = 256;
+const READY_WORK_CAPACITY: usize = PROMISE_POOL_SIZE;
 // Creating agents/promises traverses cold worker activation and must not flood
-// the gateway. Completion requests are the measured load and use their own cap.
+// the gateway.
 const SETUP_CONCURRENCY: usize = 16;
 const COMPLETION_CONCURRENCY: usize = 100;
 
@@ -58,7 +63,6 @@ struct PromiseWork {
     agent: AgentId,
     parsed_agent: ParsedAgentId,
     promise: PromiseId,
-    promise_value: ValueAndType,
     wait: bool,
 }
 
@@ -76,22 +80,24 @@ pub async fn run_cell(
     let mut outcome = Outcome::default();
 
     for &rate in rates {
-        let count = rate as usize * DEFAULT_RATE_PERIOD.as_secs() as usize;
         println!(
-            "Promise-density [{}]: preparing {count} promises for {rate}/s",
+            "Promise-density [{}]: preparing {PROMISE_POOL_SIZE} workers for {rate}/s",
             config.cell_name()
         );
-        let work = create_work(&user, &component, config, count).await?;
-        println!(
-            "Promise-density [{}]: preparing waiters",
-            config.cell_name()
-        );
-        prepare_waiters(&user, &component, &work).await?;
+        let (ready_sender, ready_work) = create_work_pool(&user, &component, config, rate).await?;
         println!(
             "Promise-density [{}]: completing at {rate}/s",
             config.cell_name()
         );
-        let period = complete_at_rate(&user, work, payload.clone(), rate).await?;
+        let period = complete_at_rate(
+            &user,
+            &component,
+            ready_sender,
+            ready_work,
+            payload.clone(),
+            rate,
+        )
+        .await?;
         outcome.record(rate, period);
     }
 
@@ -112,106 +118,133 @@ async fn resolve_component(
         .await
 }
 
-async fn create_work(
+async fn create_work_pool(
     user: &TestUserContext<BenchmarkTestDependencies>,
     component: &ComponentDto,
     config: &CellConfig,
-    count: usize,
-) -> anyhow::Result<Vec<PromiseWork>> {
-    stream::iter(0..count)
+    rate: u32,
+) -> anyhow::Result<(
+    mpsc::Sender<anyhow::Result<PromiseWork>>,
+    mpsc::Receiver<anyhow::Result<PromiseWork>>,
+)> {
+    let (ready_sender, ready_receiver) = mpsc::channel(READY_WORK_CAPACITY);
+    stream::iter(0..PROMISE_POOL_SIZE)
         .map(|index| {
             let user = user.clone();
             let component = component.clone();
+            let ready_sender = ready_sender.clone();
             async move {
-                let name = format!("{}-{index}", config.cell_name());
+                // Namespaced per rate so incomplete final restages cannot affect next step.
+                let name = format!("{}-{rate}-{index}", config.cell_name());
                 let parsed_agent = agent_id!(PROMISE_AGENT_TYPE, name);
                 let agent = user
                     .start_agent(&component.id, parsed_agent.clone())
                     .await?;
-                let result = user
-                    .invoke_and_await_agent(&component, &parsed_agent, "getPromise", data_value!())
-                    .await?;
-                let promise_value = result
-                    .into_return_value_and_type()
-                    .ok_or_else(|| anyhow::anyhow!("getPromise returned no promise id"))?;
-                let promise = PromiseId::from_value(promise_value.value.clone())
-                    .map_err(|error| anyhow::anyhow!("invalid promise id: {error}"))?;
-                Ok(PromiseWork {
+                let work = stage_work(
+                    &user,
+                    &component,
                     agent,
                     parsed_agent,
-                    promise,
-                    promise_value,
-                    wait: should_wait(config.waiter_presence, index),
-                })
-            }
-        })
-        .buffer_unordered(SETUP_CONCURRENCY)
-        .try_collect()
-        .await
-}
-
-async fn prepare_waiters(
-    user: &TestUserContext<BenchmarkTestDependencies>,
-    component: &ComponentDto,
-    work: &[PromiseWork],
-) -> anyhow::Result<()> {
-    stream::iter(work.iter().filter(|item| item.wait))
-        .map(|item| {
-            let user = user.clone();
-            let component = component.clone();
-            let parsed_agent = item.parsed_agent.clone();
-            let promise_value = item.promise_value.clone();
-            async move {
-                user.invoke_agent(
-                    &component,
-                    &parsed_agent,
-                    "awaitPromise",
-                    data_value!(promise_value),
+                    should_wait(config.waiter_presence, index),
                 )
-                .await
+                .await?;
+                ready_sender
+                    .send(Ok(work))
+                    .await
+                    .map_err(|_| anyhow::anyhow!("promise work receiver closed"))
             }
         })
         .buffer_unordered(SETUP_CONCURRENCY)
         .try_collect::<Vec<_>>()
         .await?;
+    Ok((ready_sender, ready_receiver))
+}
 
-    // Completion must observe a registered PromiseHandle for warm/mixed cells.
-    // A shared fan-in agent can be suspended once while many queued awaiters exist.
-    let mut waited_agents = Vec::new();
-    for item in work.iter().filter(|item| item.wait) {
-        if !waited_agents.contains(&item.agent) {
-            user.wait_for_status(&item.agent, AgentStatus::Suspended, WAITER_READY_TIMEOUT)
-                .await?;
-            waited_agents.push(item.agent.clone());
-        }
+async fn stage_work(
+    user: &TestUserContext<BenchmarkTestDependencies>,
+    component: &ComponentDto,
+    agent: AgentId,
+    parsed_agent: ParsedAgentId,
+    wait: bool,
+) -> anyhow::Result<PromiseWork> {
+    let result = user
+        .invoke_and_await_agent(component, &parsed_agent, "getPromise", data_value!())
+        .await?;
+    let promise_value = result
+        .into_return_value_and_type()
+        .ok_or_else(|| anyhow::anyhow!("getPromise returned no promise id"))?;
+    let promise = PromiseId::from_value(promise_value.value.clone())
+        .map_err(|error| anyhow::anyhow!("invalid promise id: {error}"))?;
+    if wait {
+        user.invoke_agent(
+            component,
+            &parsed_agent,
+            "awaitPromise",
+            data_value!(promise_value.clone()),
+        )
+        .await?;
+        user.wait_for_status(&agent, AgentStatus::Suspended, WAITER_READY_TIMEOUT)
+            .await?;
     }
-    Ok(())
+    Ok(PromiseWork {
+        agent,
+        parsed_agent,
+        promise,
+        wait,
+    })
 }
 
 async fn complete_at_rate(
     user: &TestUserContext<BenchmarkTestDependencies>,
-    work: Vec<PromiseWork>,
+    component: &ComponentDto,
+    ready_sender: mpsc::Sender<anyhow::Result<PromiseWork>>,
+    mut ready_work: mpsc::Receiver<anyhow::Result<PromiseWork>>,
     payload: Vec<u8>,
     rate: u32,
 ) -> anyhow::Result<Period> {
     let started = Instant::now();
-    let completion_latencies = stream::iter(work.into_iter().enumerate())
-        .map(|(index, item)| {
-            let user = user.clone();
-            let payload = payload.clone();
-            async move {
-                tokio::time::sleep_until(
-                    (started + Duration::from_secs_f64(index as f64 / rate as f64)).into(),
-                )
-                .await;
+    let count = rate as usize * DEFAULT_RATE_PERIOD.as_secs() as usize;
+    let completion_limit = Arc::new(Semaphore::new(COMPLETION_CONCURRENCY));
+    let staging_limit = Arc::new(Semaphore::new(SETUP_CONCURRENCY));
+    let mut completions = JoinSet::new();
+    for index in 0..count {
+        tokio::time::sleep_until(
+            (started + Duration::from_secs_f64(index as f64 / rate as f64)).into(),
+        )
+        .await;
+        let work = ready_work
+            .recv()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("promise work producer stopped"))??;
+        let user = user.clone();
+        let component = component.clone();
+        let payload = payload.clone();
+        let ready_sender = ready_sender.clone();
+        let completion_limit = completion_limit.clone();
+        let staging_limit = staging_limit.clone();
+        completions.spawn(async move {
+            let latency = {
+                let _permit = completion_limit.acquire_owned().await?;
                 let completion_started = Instant::now();
-                user.complete_promise(&item.promise, payload).await?;
-                Ok::<_, anyhow::Error>(completion_started.elapsed())
-            }
-        })
-        .buffer_unordered(COMPLETION_CONCURRENCY)
-        .try_collect::<Vec<_>>()
-        .await?;
+                user.complete_promise(&work.promise, payload).await?;
+                completion_started.elapsed()
+            };
+            user.wait_for_status(&work.agent, AgentStatus::Idle, WAITER_READY_TIMEOUT)
+                .await?;
+            let _permit = staging_limit.acquire_owned().await?;
+            let restaged =
+                stage_work(&user, &component, work.agent, work.parsed_agent, work.wait).await?;
+            ready_sender
+                .send(Ok(restaged))
+                .await
+                .map_err(|_| anyhow::anyhow!("promise work receiver closed"))?;
+            Ok::<_, anyhow::Error>(latency)
+        });
+    }
+    let mut completion_latencies = Vec::with_capacity(count);
+    while let Some(completion) = completions.join_next().await {
+        completion_latencies.push(completion??);
+    }
     Ok(Period {
         completed: completion_latencies.len() as u64,
         elapsed: started.elapsed(),
