@@ -32,12 +32,12 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
     AtomicOplogIndex, OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
 };
-use golem_common::model::{AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
+use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use nonempty_collections::NEVec;
 use std::cmp::min;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Formatter};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -45,6 +45,21 @@ use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::Sender;
 use tracing::{Instrument, Level, Span, debug, error, info, span, warn};
+
+pub(crate) type TransferFiber = Arc<Mutex<TransferFiberState>>;
+type TransferFibers = Arc<Mutex<HashMap<AgentId, Weak<Mutex<TransferFiberState>>>>>;
+
+pub(crate) struct TransferFiberState {
+    transfer_fiber: Option<tokio::task::JoinHandle<()>>,
+    cancelled: bool,
+}
+
+pub(crate) fn new_transfer_fiber() -> TransferFiber {
+    Arc::new(Mutex::new(TransferFiberState {
+        transfer_fiber: None,
+        cancelled: false,
+    }))
+}
 
 #[async_trait]
 pub trait OplogArchiveService: Debug + Send + Sync {
@@ -231,6 +246,7 @@ pub struct MultiLayerOplogService {
     pub lower: NEVec<Arc<dyn OplogArchiveService>>,
 
     oplogs: OpenOplogs,
+    transfer_fibers: TransferFibers,
 
     entry_count_limit: u64,
     max_operations_before_commit_ephemeral: u64,
@@ -247,6 +263,7 @@ impl MultiLayerOplogService {
             primary,
             lower,
             oplogs: OpenOplogs::new("multi-layer oplog"),
+            transfer_fibers: Arc::new(Mutex::new(HashMap::new())),
             entry_count_limit,
             max_operations_before_commit_ephemeral,
         }
@@ -274,6 +291,79 @@ impl MultiLayerOplogService {
         }
         Ok(ids)
     }
+
+    pub(crate) fn register_transfer(&self, agent_id: AgentId, transfer_fiber: &TransferFiber) {
+        self.transfer_fibers
+            .lock()
+            .unwrap()
+            .insert(agent_id, Arc::downgrade(transfer_fiber));
+    }
+
+    async fn abort_transfer(&self, agent_id: &AgentId) {
+        let transfer_fiber = self
+            .transfer_fibers
+            .lock()
+            .unwrap()
+            .remove(agent_id)
+            .and_then(|transfer_fiber| transfer_fiber.upgrade());
+
+        let transfer_fiber = transfer_fiber.and_then(|transfer_fiber| {
+            let mut transfer_fiber = transfer_fiber.lock().unwrap();
+            transfer_fiber.cancelled = true;
+            transfer_fiber.transfer_fiber.take()
+        });
+
+        if let Some(transfer_fiber) = transfer_fiber {
+            transfer_fiber.abort();
+            let _ = transfer_fiber.await;
+        }
+    }
+
+    pub(crate) async fn start_transfer(
+        transfer_fiber: &TransferFiber,
+        start: Sender<()>,
+        transfer: tokio::task::JoinHandle<()>,
+    ) {
+        let transfer = {
+            let mut transfer_fiber = transfer_fiber.lock().unwrap();
+            if transfer_fiber.cancelled {
+                Some(transfer)
+            } else {
+                transfer_fiber.transfer_fiber = Some(transfer);
+                None
+            }
+        };
+
+        if let Some(transfer) = transfer {
+            transfer.abort();
+            let _ = transfer.await;
+        } else {
+            let _ = start.send(());
+        }
+    }
+
+    pub(crate) fn abort_transfer_in_drop(&self, transfer_fiber: &TransferFiber) {
+        let transfer = {
+            let mut transfer_fiber = transfer_fiber.lock().unwrap();
+            transfer_fiber.cancelled = true;
+            transfer_fiber.transfer_fiber.take()
+        };
+
+        if let Some(transfer) = transfer {
+            transfer.abort();
+        }
+    }
+
+    pub(crate) fn unregister_transfer(&self, agent_id: &AgentId, transfer_fiber: &TransferFiber) {
+        let transfer_fiber = Arc::downgrade(transfer_fiber);
+        let mut transfer_fibers = self.transfer_fibers.lock().unwrap();
+        if transfer_fibers
+            .get(agent_id)
+            .is_some_and(|registered| registered.ptr_eq(&transfer_fiber))
+        {
+            transfer_fibers.remove(agent_id);
+        }
+    }
 }
 
 impl Clone for MultiLayerOplogService {
@@ -282,6 +372,7 @@ impl Clone for MultiLayerOplogService {
             primary: self.primary.clone(),
             lower: self.lower.clone(),
             oplogs: self.oplogs.clone(),
+            transfer_fibers: self.transfer_fibers.clone(),
             entry_count_limit: self.entry_count_limit,
             max_operations_before_commit_ephemeral: self.max_operations_before_commit_ephemeral,
         }
@@ -402,11 +493,17 @@ impl OplogConstructor for CreateOplogConstructor {
                         .await;
                 }
 
-                let transfer_fiber = EphemeralOplog::spawn_background_transfer(
+                let transfer_fiber = new_transfer_fiber();
+                self.service
+                    .register_transfer(self.owned_agent_id.agent_id.clone(), &transfer_fiber);
+                let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+                let transfer = EphemeralOplog::spawn_background_transfer(
                     self.owned_agent_id.clone(),
                     lower.clone(),
                     rx,
+                    start_rx,
                 );
+                MultiLayerOplogService::start_transfer(&transfer_fiber, start_tx, transfer).await;
 
                 Arc::new(
                     EphemeralOplog::new(
@@ -418,6 +515,7 @@ impl OplogConstructor for CreateOplogConstructor {
                         lower,
                         tx,
                         transfer_fiber,
+                        self.service,
                         close,
                     )
                     .await,
@@ -535,6 +633,7 @@ impl OplogService for MultiLayerOplogService {
     }
 
     async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
+        self.abort_transfer(&owned_agent_id.agent_id).await;
         self.primary.delete(owned_agent_id, agent_mode).await;
         for layer in &self.lower {
             layer.delete(owned_agent_id, agent_mode).await
@@ -724,7 +823,7 @@ pub struct MultiLayerOplog {
     primary: Arc<dyn Oplog>,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
     multi_layer_oplog_service: MultiLayerOplogService,
-    transfer_fiber: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    transfer_fiber: TransferFiber,
     transfer: UnboundedSender<BackgroundTransferMessage>,
     last_oplog_index: AtomicOplogIndex,
     last_transfer_point: AtomicOplogIndex,
@@ -784,35 +883,47 @@ impl MultiLayerOplog {
             primary: primary.clone(),
             lower: lower.clone(),
             multi_layer_oplog_service: multi_layer_oplog_service.clone(),
-            transfer_fiber: Arc::new(Mutex::new(None)),
+            transfer_fiber: new_transfer_fiber(),
             transfer: tx,
             last_oplog_index,
             last_transfer_point,
             close_fn: Some(close),
         });
         let result_oplog: Arc<dyn Oplog> = result.clone();
-
-        result.set_background_transfer(tokio::spawn(
-            Self::background_transfer(
-                owned_agent_id,
-                agent_mode,
-                Arc::downgrade(&result_oplog),
-                lower,
-                multi_layer_oplog_service,
-                rx,
-            )
+        multi_layer_oplog_service.register_transfer(
+            result.owned_agent_id.agent_id.clone(),
+            &result.transfer_fiber,
+        );
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+        let transfer_fiber = tokio::spawn(
+            async move {
+                if start_rx.await.is_ok() {
+                    Self::background_transfer(
+                        owned_agent_id,
+                        agent_mode,
+                        Arc::downgrade(&result_oplog),
+                        lower,
+                        multi_layer_oplog_service.clone(),
+                        rx,
+                    )
+                    .await;
+                }
+            }
             .instrument(
                 span!(parent: None, Level::INFO, "Oplog background transfer")
                     .follows_from(Span::current())
                     .clone(),
             ),
-        ));
+        );
+        result
+            .set_background_transfer(start_tx, transfer_fiber)
+            .await;
 
         result
     }
 
-    fn set_background_transfer(&self, fiber: tokio::task::JoinHandle<()>) {
-        *self.transfer_fiber.lock().unwrap() = Some(fiber);
+    async fn set_background_transfer(&self, start: Sender<()>, fiber: tokio::task::JoinHandle<()>) {
+        MultiLayerOplogService::start_transfer(&self.transfer_fiber, start, fiber).await;
     }
 
     async fn background_transfer(
@@ -966,10 +1077,13 @@ impl MultiLayerOplog {
 
 impl Drop for MultiLayerOplog {
     fn drop(&mut self) {
+        self.multi_layer_oplog_service
+            .unregister_transfer(&self.owned_agent_id.agent_id, &self.transfer_fiber);
         if let Some(close_fn) = self.close_fn.take() {
             close_fn();
         }
-        self.transfer_fiber.lock().unwrap().take().unwrap().abort();
+        self.multi_layer_oplog_service
+            .abort_transfer_in_drop(&self.transfer_fiber);
     }
 }
 
@@ -1348,5 +1462,119 @@ impl BackgroundTransfer for BackgroundTransferBetweenLowers {
 
     async fn drop_source_prefix(&self, last_dropped_id: OplogIndex) {
         self.source_layer.drop_prefix(last_dropped_id).await;
+    }
+}
+
+#[cfg(test)]
+mod transfer_lifecycle_tests {
+    use super::*;
+    use proptest::prelude::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use test_r::test;
+
+    test_r::enable!();
+
+    #[derive(Debug, Clone)]
+    enum Operation {
+        Construct,
+        Delete,
+        Yield,
+    }
+
+    fn operations() -> impl Strategy<Value = Vec<Operation>> {
+        prop::collection::vec(
+            prop_oneof![
+                Just(Operation::Construct),
+                Just(Operation::Delete),
+                Just(Operation::Yield),
+            ],
+            1..32,
+        )
+    }
+
+    async fn cancel_transfer(transfer_fiber: &TransferFiber) {
+        let transfer = {
+            let mut transfer_fiber = transfer_fiber.lock().unwrap();
+            transfer_fiber.cancelled = true;
+            transfer_fiber.transfer_fiber.take()
+        };
+
+        if let Some(transfer) = transfer {
+            transfer.abort();
+            let _ = transfer.await;
+        }
+    }
+
+    proptest! {
+        /// A transfer registered before its task is constructed must remain inert when deletion wins
+        /// the race. This is the lifecycle fence used by both durable and ephemeral oplogs.
+        #[test]
+        fn deleted_transfer_never_starts(operations in operations()) {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+
+            runtime.block_on(async move {
+                let transfer_fiber = new_transfer_fiber();
+                let started = Arc::new(AtomicUsize::new(0));
+                let mut write_gate = None;
+                let mut constructed = false;
+                let mut deleted = false;
+
+                for operation in operations {
+                    match operation {
+                        Operation::Construct if !constructed => {
+                            let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+                            let (write_tx, write_rx) = tokio::sync::oneshot::channel();
+                            let started = started.clone();
+                            let transfer = tokio::spawn(async move {
+                                if start_rx.await.is_ok() && write_rx.await.is_ok() {
+                                    started.fetch_add(1, Ordering::SeqCst);
+                                }
+                            });
+
+                            MultiLayerOplogService::start_transfer(
+                                &transfer_fiber,
+                                start_tx,
+                                transfer,
+                            )
+                            .await;
+                            write_gate = Some(write_tx);
+                            constructed = true;
+                        }
+                        Operation::Delete if !deleted => {
+                            cancel_transfer(&transfer_fiber).await;
+                            deleted = true;
+                        }
+                        Operation::Yield => tokio::task::yield_now().await,
+                        _ => {}
+                    }
+                }
+
+                if let Some(write_gate) = write_gate {
+                    if deleted {
+                        drop(write_gate);
+                        prop_assert_eq!(started.load(Ordering::SeqCst), 0);
+                    } else {
+                        let _ = write_gate.send(());
+                        let transfer = {
+                            transfer_fiber
+                                .lock()
+                                .unwrap()
+                                .transfer_fiber
+                                .take()
+                        };
+                        if let Some(transfer) = transfer {
+                            let _ = transfer.await;
+                        }
+                        prop_assert_eq!(started.load(Ordering::SeqCst), 1);
+                    }
+                }
+
+                Ok(())
+            })
+            .unwrap();
+        }
     }
 }
