@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	common "github.com/golemcloud/golem-go/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem-go/internal/wit/golem_core_types"
 )
 
@@ -263,16 +264,90 @@ type Tree struct {
 	Children []*Tree
 }
 
-func TestRecursiveTypeProducesAFiniteGraph(t *testing.T) {
-	// Without the reserve-before-recurse guard in compile and graphBuilder.node,
-	// either of these would recurse until the stack overflows.
+// assertNoCycleWithoutRef mirrors the consumer's own validation: it walks the
+// type nodes exactly as golem-schema's decoder does, tracking the nodes on the
+// current path. Re-entering a node without passing through a ref-type is
+// DecodeError::CyclicTypeWithoutRef — a graph the platform rejects outright.
+// ref-type deliberately does not recurse into the def body, which is what makes
+// it the only valid recursion form.
+func assertNoCycleWithoutRef(t *testing.T, g types.SchemaGraph, idx int32, path map[int32]bool) {
+	t.Helper()
+	if path[idx] {
+		t.Fatalf("node %d re-entered without passing through a ref-type: "+
+			"this graph would be rejected as CyclicTypeWithoutRef", idx)
+	}
+	path[idx] = true
+	defer delete(path, idx)
+
+	body := g.TypeNodes[idx].Body
+	switch body.Tag() {
+	case types.SchemaTypeBodyRefType:
+		return // a reference terminates the walk
+	case types.SchemaTypeBodyRecordType:
+		for _, f := range body.RecordType() {
+			assertNoCycleWithoutRef(t, g, f.Body, path)
+		}
+	case types.SchemaTypeBodyVariantType:
+		for _, c := range body.VariantType() {
+			if c.Payload.IsSome() {
+				assertNoCycleWithoutRef(t, g, c.Payload.Some(), path)
+			}
+		}
+	case types.SchemaTypeBodyOptionType:
+		assertNoCycleWithoutRef(t, g, body.OptionType(), path)
+	case types.SchemaTypeBodyListType:
+		assertNoCycleWithoutRef(t, g, body.ListType(), path)
+	case types.SchemaTypeBodyFixedListType:
+		assertNoCycleWithoutRef(t, g, body.FixedListType().Element, path)
+	case types.SchemaTypeBodyMapType:
+		spec := body.MapType()
+		assertNoCycleWithoutRef(t, g, spec.Key, path)
+		assertNoCycleWithoutRef(t, g, spec.Value, path)
+	case types.SchemaTypeBodyResultType:
+		spec := body.ResultType()
+		if spec.Ok.IsSome() {
+			assertNoCycleWithoutRef(t, g, spec.Ok.Some(), path)
+		}
+		if spec.Err.IsSome() {
+			assertNoCycleWithoutRef(t, g, spec.Err.Some(), path)
+		}
+	}
+}
+
+func TestRecursiveTypeIsEmittedAsANamedDefNotARawCycle(t *testing.T) {
 	c := compile(reflect.TypeFor[Tree]())
+	if !c.recursive {
+		t.Fatal("Tree should have been detected as recursive at compile time")
+	}
 
 	var g graphBuilder
-	g.node(c)
+	root := g.node(c)
 	graph := g.build()
-	if len(graph.TypeNodes) > 8 {
-		t.Fatalf("recursive type produced %d nodes; expected a small finite graph", len(graph.TypeNodes))
+
+	// The root of a recursive type is a reference to its def.
+	if tag := graph.TypeNodes[root].Body.Tag(); tag != types.SchemaTypeBodyRefType {
+		t.Fatalf("root node tag = %d, want ref-type", tag)
+	}
+	if len(graph.Defs) != 1 {
+		t.Fatalf("expected exactly 1 def, got %d", len(graph.Defs))
+	}
+	def := graph.Defs[0]
+	if def.Id == "" {
+		t.Fatal("def must carry a stable type-id")
+	}
+	if !strings.HasSuffix(def.Id, ".Tree") {
+		t.Fatalf("type-id %q should end in .Tree", def.Id)
+	}
+	// The def body is the record itself, not another reference.
+	if tag := graph.TypeNodes[def.Body].Body.Tag(); tag != types.SchemaTypeBodyRecordType {
+		t.Fatalf("def body tag = %d, want record-type", tag)
+	}
+
+	// The whole graph must satisfy the consumer's rule, from the root and from
+	// every def body.
+	assertNoCycleWithoutRef(t, graph, root, map[int32]bool{})
+	for _, d := range graph.Defs {
+		assertNoCycleWithoutRef(t, graph, d.Body, map[int32]bool{})
 	}
 
 	assertRoundTrip(t, "recursive tree", Tree{
@@ -282,6 +357,77 @@ func TestRecursiveTypeProducesAFiniteGraph(t *testing.T) {
 			{Label: "b", Children: []*Tree{}},
 		},
 	})
+}
+
+// Mutually recursive types: marking one member of each cycle is enough, since
+// its ref-type node breaks every path through the cycle.
+type nodeA struct {
+	Name string
+	B    *nodeB
+}
+type nodeB struct {
+	Count int64
+	A     []nodeA
+}
+
+func TestMutuallyRecursiveTypesBreakTheCycle(t *testing.T) {
+	var g graphBuilder
+	root := g.node(compile(reflect.TypeFor[nodeA]()))
+	graph := g.build()
+
+	assertNoCycleWithoutRef(t, graph, root, map[int32]bool{})
+	for _, d := range graph.Defs {
+		assertNoCycleWithoutRef(t, graph, d.Body, map[int32]bool{})
+	}
+	if len(graph.Defs) == 0 {
+		t.Fatal("a mutually recursive pair must produce at least one named def")
+	}
+	assertRoundTrip(t, "mutually recursive", nodeA{
+		Name: "a", B: &nodeB{Count: 2, A: []nodeA{{Name: "inner"}}},
+	})
+}
+
+// Every schema the SDK publishes must satisfy the rule, not just the ones with
+// obvious cycles.
+func TestPublishedAgentSchemasHaveNoRawCycles(t *testing.T) {
+	for _, name := range registryOrder {
+		at := buildAgentType(registry[name])
+		for _, f := range at.Constructor.InputSchema.Parameters() {
+			assertNoCycleWithoutRef(t, at.Schema, f.Schema, map[int32]bool{})
+		}
+		for _, m := range at.Methods {
+			for _, f := range m.InputSchema.Parameters() {
+				assertNoCycleWithoutRef(t, at.Schema, f.Schema, map[int32]bool{})
+			}
+			if m.OutputSchema.Tag() == common.OutputSchemaSingle {
+				assertNoCycleWithoutRef(t, at.Schema, m.OutputSchema.Single(), map[int32]bool{})
+			}
+		}
+		for _, d := range at.Schema.Defs {
+			assertNoCycleWithoutRef(t, at.Schema, d.Body, map[int32]bool{})
+		}
+	}
+}
+
+func TestDefsAreSortedForDeterminism(t *testing.T) {
+	var g graphBuilder
+	g.node(compile(reflect.TypeFor[nodeA]()))
+	g.node(compile(reflect.TypeFor[Tree]()))
+	graph := g.build()
+
+	for i := 1; i < len(graph.Defs); i++ {
+		if graph.Defs[i-1].Id > graph.Defs[i].Id {
+			t.Fatalf("defs not sorted: %q before %q", graph.Defs[i-1].Id, graph.Defs[i].Id)
+		}
+	}
+	// and the ref nodes still resolve to the right defs after the sort
+	for _, n := range graph.TypeNodes {
+		if n.Body.Tag() == types.SchemaTypeBodyRefType {
+			if int(n.Body.RefType()) >= len(graph.Defs) {
+				t.Fatalf("ref-type index %d out of range after sorting", n.Body.RefType())
+			}
+		}
+	}
 }
 
 func TestSharedTypeIsEmittedOnce(t *testing.T) {
@@ -365,9 +511,11 @@ func TestMalformedInputIsAnErrorNotAPanic(t *testing.T) {
 	}
 }
 
-// A nil slice and an empty slice are indistinguishable on the wire — both are an
-// empty list — so decoding normalizes nil to empty. This matches encoding/json
-// and is worth pinning, since it is the one place a round trip is not identity.
+// A nil slice and an empty slice are both an empty list on the wire, so decoding
+// normalizes nil to empty. Unlike encoding/json — which emits null for a nil
+// slice and [] for an empty one — there is no ambiguity here: []T is ALWAYS
+// list-type and never option, so "absent" is simply not representable. Spell the
+// optional list *[]T if the distinction matters.
 func TestNilSliceDecodesAsEmptySlice(t *testing.T) {
 	got := roundTrip(t, Tree{Label: "leaf", Children: nil})
 	if got.Children == nil {
@@ -567,4 +715,53 @@ func TestSecretRoundTripsAndStaysOutOfLogs(t *testing.T) {
 		Name  string
 		Token Secret[string]
 	}{Name: "svc", Token: NewSecret("abc")})
+}
+
+// Containers must never be modelled as optional: absence is only expressible
+// through a pointer or Option[T], so there is no nil-vs-empty ambiguity.
+func TestNilContainersAreNeverOptional(t *testing.T) {
+	tagOf := func(rt reflect.Type) uint8 {
+		var g graphBuilder
+		root := g.node(compile(rt))
+		return g.build().TypeNodes[root].Body.Tag()
+	}
+	for _, tc := range []struct {
+		name string
+		rt   reflect.Type
+		want uint8
+	}{
+		{"[]string", reflect.TypeFor[[]string](), types.SchemaTypeBodyListType},
+		{"[]byte", reflect.TypeFor[[]byte](), types.SchemaTypeBodyListType},
+		{"map[string]int64", reflect.TypeFor[map[string]int64](), types.SchemaTypeBodyMapType},
+		{"[2]int64", reflect.TypeFor[[2]int64](), types.SchemaTypeBodyFixedListType},
+		{"*[]string", reflect.TypeFor[*[]string](), types.SchemaTypeBodyOptionType},
+	} {
+		if got := tagOf(tc.rt); got != tc.want {
+			t.Errorf("%s lowered to tag %d, want %d", tc.name, got, tc.want)
+		}
+	}
+
+	// A nil slice encodes as an EMPTY LIST, never as none.
+	var nilSlice []string
+	tree := encodeWith(compile(reflect.TypeFor[[]string]()), reflect.ValueOf(&nilSlice).Elem())
+	if n := tree.ValueNodes[tree.Root]; n.Tag() != types.SchemaValueNodeListValue || len(n.ListValue()) != 0 {
+		t.Fatalf("nil slice encoded as tag %d", n.Tag())
+	}
+	var nilMap map[string]int64
+	mt := encodeWith(compile(reflect.TypeFor[map[string]int64]()), reflect.ValueOf(&nilMap).Elem())
+	if n := mt.ValueNodes[mt.Root]; n.Tag() != types.SchemaValueNodeMapValue || len(n.MapValue()) != 0 {
+		t.Fatalf("nil map encoded as tag %d", n.Tag())
+	}
+
+	// Only *[]T distinguishes absent from empty.
+	pc := compile(reflect.TypeFor[*[]string]())
+	var absent *[]string
+	if tr := encodeWith(pc, reflect.ValueOf(&absent).Elem()); !tr.ValueNodes[tr.Root].OptionValue().IsNone() {
+		t.Fatal("a nil *[]string must encode as none")
+	}
+	empty := []string{}
+	present := &empty
+	if tr := encodeWith(pc, reflect.ValueOf(&present).Elem()); tr.ValueNodes[tr.Root].OptionValue().IsNone() {
+		t.Fatal("a pointer to an empty slice must encode as some(empty list)")
+	}
 }

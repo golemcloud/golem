@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	types "github.com/golemcloud/golem-go/internal/wit/golem_core_types"
@@ -38,8 +39,19 @@ import (
 // codec for Result[T, E], which is built from the codecs for T and E. No
 // composite needs to know how deep it sits.
 type codec struct {
-	typ    reflect.Type
-	body   func(*graphBuilder) types.SchemaTypeBody
+	typ  reflect.Type
+	id   string
+	body func(*graphBuilder) types.SchemaTypeBody
+
+	// recursive marks a type reachable from itself. WIT cannot express a raw
+	// cycle in the flat node list — a consumer decoding one rejects it with
+	// CyclicTypeWithoutRef — so such a type is emitted as a named def and
+	// referenced through ref-type, which is the only valid recursion form.
+	recursive bool
+	// building is true while this codec's children are being compiled. Re-entry
+	// while building is exactly what identifies a recursive type.
+	building bool
+
 	encode func(*valBuilder, reflect.Value) int32
 	decode func(*decoder, reflect.Value, int32) error
 }
@@ -57,12 +69,33 @@ var codecCache = map[reflect.Type]*codec{}
 // outer compile has filled them in.
 func compile(t reflect.Type) *codec {
 	if c, ok := codecCache[t]; ok {
+		if c.building {
+			// Reached t again while still compiling it: t is reachable from
+			// itself. Marking one member of each cycle is enough — its ref-type
+			// node breaks the cycle for every path through it.
+			c.recursive = true
+		}
 		return c
 	}
-	c := &codec{typ: t}
+	c := &codec{typ: t, id: typeID(t), building: true}
 	codecCache[t] = c
 	buildCodec(c)
+	c.building = false
 	return c
+}
+
+// typeID derives the stable, language-independent identifier a named def
+// carries. Cross-language interop requires both sides to agree on it; pinning it
+// explicitly is not supported yet.
+func typeID(t reflect.Type) string {
+	name := t.Name()
+	if name == "" {
+		return ""
+	}
+	if pkg := t.PkgPath(); pkg != "" {
+		return strings.ReplaceAll(pkg, "/", ".") + "." + name
+	}
+	return name
 }
 
 func buildCodec(c *codec) {
