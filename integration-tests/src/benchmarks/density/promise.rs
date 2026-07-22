@@ -6,7 +6,7 @@
 //! Promise-completion density benchmark (golemcloud/golem#3525).
 
 use super::prep::PrepManifest;
-use super::{PromiseTopology, PromiseWaiterPresence};
+use super::{PromiseRuntime, PromiseTopology, PromiseWaiterPresence};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use golem_common::base_model::agent::ParsedAgentId;
 use golem_common::base_model::{AgentId, PromiseId};
@@ -48,14 +48,16 @@ pub struct CellConfig {
     pub payload_size: usize,
     pub waiter_presence: PromiseWaiterPresence,
     pub topology: PromiseTopology,
+    pub runtime: PromiseRuntime,
 }
 
 impl CellConfig {
     pub fn cell_name(&self) -> String {
         format!(
-            "promise-{}-{}-{}",
+            "promise-{}-{}-{}-{}",
             payload_label(self.payload_size),
             self.waiter_presence,
+            self.runtime,
             self.topology
         )
     }
@@ -66,6 +68,7 @@ struct PromiseWork {
     parsed_agent: ParsedAgentId,
     promise: PromiseId,
     wait: bool,
+    runtime: PromiseRuntime,
 }
 
 struct StageTimings {
@@ -87,7 +90,7 @@ pub async fn run_cell(
 ) -> anyhow::Result<BenchmarkResult> {
     validate_payload_size(config.payload_size)?;
     let rates = validated_rates(rate_ramp.unwrap_or(DEFAULT_RATE_RAMP))?;
-    let component = resolve_component(manifest, deps).await?;
+    let component = resolve_component(manifest, deps, config.runtime).await?;
     let user = manifest.user_context(deps);
     let payload = vec![0; config.payload_size];
     let mut outcome = Outcome::default();
@@ -123,11 +126,13 @@ pub async fn run_cell(
 async fn resolve_component(
     manifest: &PrepManifest,
     deps: &BenchmarkTestDependencies,
+    runtime: PromiseRuntime,
 ) -> anyhow::Result<ComponentDto> {
-    let component_id = manifest
-        .uniform_component_id
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("manifest has no promise component id"))?;
+    let component_id = match runtime {
+        PromiseRuntime::Rust => manifest.uniform_component_id.as_ref(),
+        PromiseRuntime::Ts => manifest.promise_ts_component_id.as_ref(),
+    }
+    .ok_or_else(|| anyhow::anyhow!("manifest has no {runtime} promise component id"))?;
     manifest
         .user_context(deps)
         .get_latest_component_revision(component_id)
@@ -160,6 +165,7 @@ async fn create_work_pool(
                     agent,
                     parsed_agent,
                     should_wait(config.waiter_presence, index),
+                    config.runtime,
                 )
                 .await?;
                 ready_sender
@@ -214,15 +220,21 @@ async fn stage_work(
     agent: AgentId,
     parsed_agent: ParsedAgentId,
     wait: bool,
+    runtime: PromiseRuntime,
 ) -> anyhow::Result<(PromiseWork, StageTimings)> {
     let get_promise_started = Instant::now();
     let result = user
-        .invoke_and_await_agent(component, &parsed_agent, "get_promise", data_value!())
+        .invoke_and_await_agent(
+            component,
+            &parsed_agent,
+            get_promise_method(runtime),
+            data_value!(),
+        )
         .await?;
     let get_promise = get_promise_started.elapsed();
     let promise_value = result
         .into_return_value_and_type()
-        .ok_or_else(|| anyhow::anyhow!("get_promise returned no promise id"))?;
+        .ok_or_else(|| anyhow::anyhow!("{} returned no promise id", get_promise_method(runtime)))?;
     let promise = PromiseId::from_value(promise_value.value.clone())
         .map_err(|error| anyhow::anyhow!("invalid promise id: {error}"))?;
     let (await_promise, suspended_wait) = if wait {
@@ -230,7 +242,7 @@ async fn stage_work(
         user.invoke_agent(
             component,
             &parsed_agent,
-            "await_promise",
+            await_promise_method(runtime),
             data_value!(promise_value.clone()),
         )
         .await?;
@@ -248,6 +260,7 @@ async fn stage_work(
             parsed_agent,
             promise,
             wait,
+            runtime,
         },
         StageTimings {
             get_promise,
@@ -318,8 +331,15 @@ async fn complete_at_rate(
                 .await?;
             let idle_wait = idle_wait_started.elapsed();
             let _permit = staging_limit.acquire_owned().await?;
-            let (restaged, stage) =
-                stage_work(&user, &component, work.agent, work.parsed_agent, work.wait).await?;
+            let (restaged, stage) = stage_work(
+                &user,
+                &component,
+                work.agent,
+                work.parsed_agent,
+                work.wait,
+                work.runtime,
+            )
+            .await?;
             restage_sender
                 .send(RestageTimings { idle_wait, stage })
                 .await
@@ -374,6 +394,20 @@ fn should_wait(presence: PromiseWaiterPresence, index: usize) -> bool {
         PromiseWaiterPresence::Cold => false,
         PromiseWaiterPresence::Warm => true,
         PromiseWaiterPresence::Mixed => index.is_multiple_of(2),
+    }
+}
+
+fn get_promise_method(runtime: PromiseRuntime) -> &'static str {
+    match runtime {
+        PromiseRuntime::Rust => "get_promise",
+        PromiseRuntime::Ts => "get-promise",
+    }
+}
+
+fn await_promise_method(runtime: PromiseRuntime) -> &'static str {
+    match runtime {
+        PromiseRuntime::Rust => "await_promise",
+        PromiseRuntime::Ts => "await-promise",
     }
 }
 

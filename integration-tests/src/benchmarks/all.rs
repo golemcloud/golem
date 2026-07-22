@@ -21,10 +21,10 @@ use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkApi, BenchmarkConfig, BenchmarkResult, BenchmarkSuite, BenchmarkSuiteItem,
-    BenchmarkSuiteResult, DensityAction, DensityAgentModeArg, DensityPromiseTopologyArg,
-    DensityPromiseWaiterPresenceArg, DensityScenarioArg, DensityScheduleTargetPatternArg,
-    DensityScheduleTargetResidencyArg, DensitySectionArg, DensitySharingArg,
-    DensitySnapshottingArg, RunMetadata,
+    BenchmarkSuiteResult, DensityAction, DensityAgentModeArg, DensityPromiseRuntimeArg,
+    DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg, DensityScenarioArg,
+    DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg, DensitySectionArg,
+    DensitySharingArg, DensitySnapshottingArg, RunMetadata,
 };
 use golem_test_framework::config::benchmark::{TestMode, cloud_bench_run_id};
 use golem_test_framework::config::{
@@ -34,7 +34,8 @@ use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use integration_tests::benchmarks::density::agent::{CellConfig, ExecutorProbe, Scenario};
 use integration_tests::benchmarks::density::prep::{PrepManifest, run_prep};
 use integration_tests::benchmarks::density::{
-    AgentMode, ComponentSharing, DensitySection, PromiseTopology, PromiseWaiterPresence,
+    AgentMode, ComponentSharing, DensitySection, PromiseRuntime, PromiseTopology,
+    PromiseWaiterPresence,
 };
 use integration_tests::benchmarks::{
     cleanup_account, cleanup_user_state, delete_workers, invoke_and_await_agent,
@@ -314,6 +315,7 @@ async fn main() {
             promise_payload_size,
             promise_waiter_presence,
             promise_topology,
+            promise_runtime,
             executor_pod_name,
             executor_namespace,
             save_to_json,
@@ -340,6 +342,7 @@ async fn main() {
                 *promise_payload_size,
                 promise_waiter_presence.map(map_promise_waiter_presence),
                 promise_topology.map(map_promise_topology),
+                promise_runtime.map(map_promise_runtime),
                 executor_pod_name.clone(),
                 executor_namespace.clone(),
                 save_to_json.clone(),
@@ -619,6 +622,13 @@ fn map_promise_topology(arg: DensityPromiseTopologyArg) -> PromiseTopology {
     }
 }
 
+fn map_promise_runtime(arg: DensityPromiseRuntimeArg) -> PromiseRuntime {
+    match arg {
+        DensityPromiseRuntimeArg::Rust => PromiseRuntime::Rust,
+        DensityPromiseRuntimeArg::Ts => PromiseRuntime::Ts,
+    }
+}
+
 /// Runs one density action: either the one-time prep (writing the manifest) or
 /// a single cell (using a previously-written manifest).
 #[allow(clippy::too_many_arguments)]
@@ -645,6 +655,7 @@ async fn run_density(
     promise_payload_size: Option<usize>,
     promise_waiter_presence: Option<PromiseWaiterPresence>,
     promise_topology: Option<PromiseTopology>,
+    promise_runtime: Option<PromiseRuntime>,
     executor_pod_name: Option<String>,
     executor_namespace: String,
     save_to_json: Option<std::path::PathBuf>,
@@ -721,6 +732,8 @@ async fn run_density(
                             .expect("--promise-waiter-presence required for promise cells"),
                         topology: promise_topology
                             .expect("--promise-topology required for promise cells"),
+                        runtime: promise_runtime
+                            .expect("--promise-runtime required for promise cells"),
                     };
                     integration_tests::benchmarks::density::promise::run_cell(
                         &config,

@@ -145,6 +145,10 @@ pub enum BenchmarkConfig {
         #[arg(long, value_enum)]
         promise_topology: Option<DensityPromiseTopologyArg>,
 
+        /// Guest runtime used by a promise-density cell.
+        #[arg(long, value_enum)]
+        promise_runtime: Option<DensityPromiseRuntimeArg>,
+
         /// Optional executor pod name for `kubectl` restart-count polling
         /// (drives the catastrophic pod-restart condition).
         #[arg(long)]
@@ -235,6 +239,13 @@ pub enum DensityPromiseWaiterPresenceArg {
 pub enum DensityPromiseTopologyArg {
     OnePod,
     TwoPod,
+}
+
+/// Guest runtime used by a promise-density cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensityPromiseRuntimeArg {
+    Rust,
+    Ts,
 }
 
 impl BenchmarkConfig {

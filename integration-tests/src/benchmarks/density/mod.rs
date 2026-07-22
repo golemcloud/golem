@@ -174,6 +174,21 @@ pub enum PromiseTopology {
     TwoPod,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PromiseRuntime {
+    Rust,
+    Ts,
+}
+
+impl Display for PromiseRuntime {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Rust => "rust",
+            Self::Ts => "ts",
+        })
+    }
+}
+
 impl Display for PromiseTopology {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
