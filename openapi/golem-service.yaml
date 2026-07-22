@@ -10563,13 +10563,20 @@ components:
           type: string
         agentTypeName:
           type: string
-        parameters: {}
+        parameters:
+          $ref: '#/components/schemas/SchemaValue'
         phantomId:
           type: string
           format: uuid
+        config:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentConfigEntryDto'
         methodName:
           type: string
-        methodParameters: {}
+        methodParameters:
+          $ref: '#/components/schemas/SchemaValue'
         mode:
           $ref: '#/components/schemas/AgentInvocationMode'
         scheduleAt:
@@ -10596,6 +10603,8 @@ components:
       properties:
         agentId:
           $ref: '#/components/schemas/AgentId'
+        idempotencyKey:
+          type: string
         result:
           $ref: '#/components/schemas/TypedSchemaValue'
         componentRevision:
@@ -10603,6 +10612,7 @@ components:
           format: uint64
       required:
       - agentId
+      - idempotencyKey
     AgentMetadataDto:
       title: AgentMetadataDto
       type: object
@@ -11775,7 +11785,8 @@ components:
           type: string
         agentTypeName:
           type: string
-        parameters: {}
+        parameters:
+          $ref: '#/components/schemas/SchemaValue'
         phantomId:
           type: string
           format: uuid

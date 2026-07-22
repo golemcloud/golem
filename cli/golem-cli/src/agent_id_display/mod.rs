@@ -32,7 +32,7 @@ mod tests;
 
 use golem_common::model::agent::text_utils::write_json_escaped;
 use golem_common::schema::agent::{InputSchema, ParsedAgentId};
-use golem_common::schema::graph::{SchemaGraph, TypedSchemaValue};
+use golem_common::schema::graph::{SchemaGraph, TypedSchemaValue, reachable_defs};
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::SchemaValue;
 
@@ -314,6 +314,20 @@ pub(crate) fn resolve_named_ref<'a>(
         },
         _ => (ty, None),
     }
+}
+
+pub(crate) fn recursive_ref_display_name<'a>(
+    graph: &'a SchemaGraph,
+    ty: &'a SchemaType,
+) -> Option<&'a str> {
+    let SchemaType::Ref { id, .. } = ty else {
+        return None;
+    };
+    let def = graph.lookup(id)?;
+    reachable_defs(graph, &def.body)
+        .iter()
+        .any(|reachable| reachable.id == *id)
+        .then(|| def.name.as_deref().unwrap_or(id.as_str()))
 }
 
 /// Render a rich-scalar constructor of the form `Name("payload")` (or

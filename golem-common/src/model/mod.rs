@@ -59,7 +59,7 @@ use self::component::ComponentId;
 use self::component::{AgentFilePermissions, ComponentRevision};
 use self::environment::EnvironmentId;
 use self::oplog::QueuedCardEvent;
-use self::worker::TypedAgentConfigEntry;
+use self::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use crate::base_model::agent::AgentMode;
 use crate::base_model::agent::Principal;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -359,6 +359,18 @@ pub enum ScheduledAction {
         agent_created_by: AccountId,
         owned_agent_id: OwnedAgentId,
     },
+    /// Invokes a fresh ephemeral agent without pre-creating it. The scheduler uses the checked
+    /// creation path because delivery may be retried after an ambiguous failure.
+    InvokeEphemeral {
+        account_id: AccountId,
+        owned_agent_id: OwnedAgentId,
+        invocation: Box<AgentInvocation>,
+        component_revision: ComponentRevision,
+        env: Vec<(String, String)>,
+        config: Vec<AgentConfigEntryDto>,
+        parent: Option<AgentId>,
+        creation_principal: Box<Principal>,
+    },
 }
 
 impl ScheduledAction {
@@ -370,7 +382,8 @@ impl ScheduledAction {
                 ..
             } => OwnedAgentId::new(*environment_id, &promise_id.agent_id),
             ScheduledAction::ArchiveOplog { owned_agent_id, .. } => owned_agent_id.clone(),
-            ScheduledAction::Invoke { owned_agent_id, .. } => owned_agent_id.clone(),
+            ScheduledAction::Invoke { owned_agent_id, .. }
+            | ScheduledAction::InvokeEphemeral { owned_agent_id, .. } => owned_agent_id.clone(),
             ScheduledAction::Resume { owned_agent_id, .. } => owned_agent_id.clone(),
         }
     }
@@ -385,7 +398,10 @@ impl Display for ScheduledAction {
             ScheduledAction::ArchiveOplog { owned_agent_id, .. } => {
                 write!(f, "archive[{owned_agent_id}]")
             }
-            ScheduledAction::Invoke { owned_agent_id, .. } => write!(f, "invoke[{owned_agent_id}]"),
+            ScheduledAction::Invoke { owned_agent_id, .. }
+            | ScheduledAction::InvokeEphemeral { owned_agent_id, .. } => {
+                write!(f, "invoke[{owned_agent_id}]")
+            }
             ScheduledAction::Resume { owned_agent_id, .. } => write!(f, "resume[{owned_agent_id}]"),
         }
     }
@@ -868,6 +884,14 @@ pub struct AgentInvocationOutput {
     pub consumed_fuel: Option<u64>,
     pub invocation_status: Option<InvocationStatus>,
     pub component_revision: Option<ComponentRevision>,
+    /// Final target of this invocation. Ephemeral invocations include their
+    /// generated one-shot phantom ID. `None` when produced by a legacy executor
+    /// or within the worker runtime before transport metadata is attached.
+    pub agent_id: Option<AgentId>,
+    /// Final idempotency key for this invocation. `None` when produced by a
+    /// legacy executor or within the worker runtime before transport metadata
+    /// is attached.
+    pub idempotency_key: Option<IdempotencyKey>,
     /// Oplog index of the agent right after this invocation completed. `None`
     /// for synthetic outputs (e.g. lookup-only status responses) or for legacy
     /// executors that did not report it.
@@ -1296,6 +1320,15 @@ pub enum AgentEvent {
         plugin_name: String,
         message: String,
     },
+    SnapshotRecoverySucceeded {
+        timestamp: Timestamp,
+        snapshot_index: OplogIndex,
+    },
+    SnapshotRecoveryFailed {
+        timestamp: Timestamp,
+        snapshot_index: OplogIndex,
+        error: String,
+    },
     /// The client fell behind and the point it left of is no longer in our buffer.
     /// {number_of_skipped_messages} is the number of messages between the client left of and the point it is now at.
     ClientLagged { number_of_missed_messages: u64 },
@@ -1346,6 +1379,16 @@ impl Display for AgentEvent {
                 ..
             } => {
                 write!(f, "<plugin-error> [{plugin_name}] {message}")
+            }
+            AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. } => {
+                write!(f, "<snapshot-recovery-succeeded> {snapshot_index}")
+            }
+            AgentEvent::SnapshotRecoveryFailed {
+                snapshot_index,
+                error,
+                ..
+            } => {
+                write!(f, "<snapshot-recovery-failed> {snapshot_index}: {error}")
             }
             AgentEvent::ClientLagged {
                 number_of_missed_messages,

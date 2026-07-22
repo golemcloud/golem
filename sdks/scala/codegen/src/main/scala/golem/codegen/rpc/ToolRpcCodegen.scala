@@ -189,11 +189,7 @@ object ToolRpcCodegen {
   // ── Type expression analysis ───────────────────────────────────────────────
 
   private def parseType(expr: String): Option[Type] =
-    dialects
-      .Scala3(expr)
-      .parse[Type]
-      .toOption
-      .orElse(dialects.Scala213(expr).parse[Type].toOption)
+    dialects.Scala3(expr).parse[Type].toOption
 
   private def lastNameOf(tpe: Type): Option[String] =
     tpe match {
@@ -332,9 +328,10 @@ object ToolRpcCodegen {
     inheritedRootParams(tool, m)
       .filterNot(p => omittedMatches(tool, m, p, inheritedOmitted))
       .foreach(p => paramSurfaces(p).foreach(out.add))
-    m.params.filterNot(p => p.isPrincipal || isStreamParam(p) || omittedMatches(tool, m, p, inheritedOmitted)).foreach { p =>
-      out.add(canonicalValueName(tool, m, p))
-      canonicalAliases(tool, m, p).foreach(out.add)
+    m.params.filterNot(p => p.isPrincipal || isStreamParam(p) || omittedMatches(tool, m, p, inheritedOmitted)).foreach {
+      p =>
+        out.add(canonicalValueName(tool, m, p))
+        canonicalAliases(tool, m, p).foreach(out.add)
     }
     out.toList
   }

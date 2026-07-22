@@ -20,7 +20,6 @@ import golem.codegen.discovery.SourceDiscovery
 import golem.codegen.ir.AgentSurfaceIR._
 
 import scala.meta._
-import scala.meta.dialects.Scala213
 import scala.meta.parsers._
 
 /**
@@ -103,14 +102,9 @@ object RpcCodegen {
   private[rpc] def unwrapFutureType(returnTypeExpr: String): String = {
     val tpe =
       try {
-        dialects.Scala213(returnTypeExpr).parse[Type].get
+        dialects.Scala3(returnTypeExpr).parse[Type].get
       } catch {
-        case _: Exception =>
-          try {
-            dialects.Scala3(returnTypeExpr).parse[Type].get
-          } catch {
-            case _: Exception => return returnTypeExpr
-          }
+        case _: Exception => return returnTypeExpr
       }
 
     tpe match {
@@ -182,7 +176,7 @@ object RpcCodegen {
 
     // Per-method wrapper classes
     remoteMethods.foreach { method =>
-      generateRemoteMethodClass(sb, simpleName, method)
+      generateRemoteMethodClass(sb, simpleName, method, agent.metadata.mode == "ephemeral")
     }
 
     // XRemote trait
@@ -211,7 +205,8 @@ object RpcCodegen {
   private def generateRemoteMethodClass(
     sb: StringBuilder,
     simpleName: String,
-    method: MethodSurface
+    method: MethodSurface,
+    ephemeral: Boolean
   ): Unit = {
     val className  = s"${capitalize(method.name)}RemoteMethod"
     val rParams    = remoteParams(method)
@@ -239,29 +234,43 @@ object RpcCodegen {
       case ps       => "_root_.scala.Vector[_root_.scala.Any](" + ps.map(_.name).mkString(", ") + ")"
     }
 
-    val paramDecls = rParams.map(p => s"${p.name}: ${p.typeExpr}").mkString(", ")
-    sb.append(s"    def apply($paramDecls): _root_.scala.concurrent.Future[$outputType] =\n")
-    sb.append(s"      awaitWith($packExpr)\n\n")
+    val paramDecls      = rParams.map(p => s"${p.name}: ${p.typeExpr}").mkString(", ")
+    val awaitResultType = if (ephemeral) s"_root_.golem.runtime.rpc.InvocationResult[$outputType]" else outputType
+    sb.append(s"    def apply($paramDecls): _root_.scala.concurrent.Future[$awaitResultType] =\n")
+    sb.append(s"      ${if (ephemeral) "awaitWithMetadata" else "awaitWith"}($packExpr)\n\n")
 
-    sb.append(
-      s"    def cancelable($paramDecls): (_root_.scala.concurrent.Future[$outputType], _root_.golem.runtime.rpc.CancellationToken) =\n"
-    )
-    sb.append(s"      cancelableAwaitWith($packExpr)\n\n")
+    if (ephemeral) {
+      sb.append(
+        s"    def cancelable($paramDecls): _root_.scala.Either[_root_.scala.Predef.String, _root_.golem.runtime.rpc.CancelableAsyncInvocation[$outputType]] =\n"
+      )
+      sb.append(s"      cancelableAwaitWithMetadata($packExpr)\n\n")
+    } else {
+      sb.append(
+        s"    def cancelable($paramDecls): (_root_.scala.concurrent.Future[$outputType], _root_.golem.runtime.rpc.CancellationToken) =\n"
+      )
+      sb.append(s"      cancelableAwaitWith($packExpr)\n\n")
+    }
 
-    sb.append(s"    def trigger($paramDecls): _root_.scala.concurrent.Future[_root_.scala.Unit] =\n")
-    sb.append(s"      triggerWith($packExpr)\n\n")
+    val receiptType = if (ephemeral) "_root_.golem.runtime.rpc.InvocationReceipt" else "_root_.scala.Unit"
+    sb.append(s"    def trigger($paramDecls): _root_.scala.concurrent.Future[$receiptType] =\n")
+    sb.append(s"      ${if (ephemeral) "triggerWithMetadata" else "triggerWith"}($packExpr)\n\n")
 
     val scheduleParamDecls =
       if (paramDecls.isEmpty) "when: _root_.golem.Datetime"
       else s"$paramDecls, when: _root_.golem.Datetime"
-    sb.append(s"    def scheduleAt($scheduleParamDecls): _root_.scala.concurrent.Future[_root_.scala.Unit] =\n")
-    sb.append(s"      scheduleWith($packExpr, when)\n\n")
+    sb.append(s"    def scheduleAt($scheduleParamDecls): _root_.scala.concurrent.Future[$receiptType] =\n")
+    sb.append(s"      ${if (ephemeral) "scheduleWithMetadata" else "scheduleWith"}($packExpr, when)\n\n")
 
     val scheduleCancelableParamDecls = scheduleParamDecls
     sb.append(
-      s"    def scheduleCancelableAt($scheduleCancelableParamDecls): _root_.scala.concurrent.Future[_root_.golem.runtime.rpc.CancellationToken] =\n"
+      s"    def scheduleCancelableAt($scheduleCancelableParamDecls): _root_.scala.concurrent.Future[${
+          if (ephemeral) "_root_.golem.runtime.rpc.CancelableInvocationReceipt"
+          else "_root_.golem.runtime.rpc.CancellationToken"
+        }] =\n"
     )
-    sb.append(s"      scheduleCancelableWith($packExpr, when)\n\n")
+    sb.append(
+      s"      ${if (ephemeral) "scheduleCancelableWithMetadata" else "scheduleCancelableWith"}($packExpr, when)\n\n"
+    )
 
     sb.append(s"  }\n\n")
   }
@@ -384,7 +393,13 @@ object RpcCodegen {
       }
     }
 
-    // Both durable and ephemeral get phantom constructors
+    if (mode == "ephemeral") {
+      emitConstructor("newPhantom", "", "", phantom = None, config = None)
+      if (configFields.nonEmpty) emitWithConfigConstructor("newPhantomWithConfig", "", "", phantom = None)
+      return
+    }
+
+    // Durable phantom constructors retain their existing behavior.
     emitConstructor("getPhantom", "", "phantom: _root_.golem.Uuid", phantom = Some("phantom"), config = None)
     val ctorRefs         = if (ctorParams.isEmpty) "" else ctorParams.map(_.name).mkString(", ") + ", "
     val newPhantomParams = if (paramDecls.isEmpty) "" else paramDecls

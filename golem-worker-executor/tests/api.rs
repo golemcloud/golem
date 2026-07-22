@@ -20,7 +20,7 @@ use axum::routing::get;
 use chrono::{DateTime, Utc};
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentInvocationMode, Principal};
+use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
 use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
@@ -236,9 +236,11 @@ impl WorkerProxy for RecordingWorkerProxy {
         mode: AgentInvocationMode,
         schedule_at: Option<DateTime<Utc>>,
         idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: InvocationFreshnessDisposition,
         caller_agent_id: AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
         principal: Principal,
         environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
@@ -251,9 +253,11 @@ impl WorkerProxy for RecordingWorkerProxy {
                 mode,
                 schedule_at,
                 idempotency_key,
+                freshness_disposition,
                 caller_agent_id,
                 caller_env,
                 caller_stack,
+                config,
                 principal,
                 environment_id,
                 auth_ctx,
@@ -1875,9 +1879,6 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
         .store()
         .await?;
     let agent_id = agent_id!("EphemeralCounter", "test");
-    let _worker_id = executor
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
 
     let _ = executor
         .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())

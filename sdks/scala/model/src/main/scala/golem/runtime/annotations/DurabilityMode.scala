@@ -19,9 +19,7 @@ package golem.runtime.annotations
 /**
  * Durability mode for agents and methods.
  *
- * This is a shared Scala ADT so it works uniformly across:
- *   - Scala 2 + Scala 3
- *   - JVM + Scala.js
+ * This is a shared Scala ADT so it works uniformly across JVM and Scala.js.
  *
  * The generated metadata uses the lower-case wire values ("durable",
  * "ephemeral").

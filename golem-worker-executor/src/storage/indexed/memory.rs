@@ -21,11 +21,15 @@ use golem_common::model::AgentId;
 use regex::Regex;
 use std::collections::BTreeMap;
 use std::ops::Bound::Included;
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 #[derive(Debug)]
 pub struct InMemoryIndexedStorage {
     data: scc::HashMap<String, BTreeMap<u64, Vec<u8>>>,
+    #[cfg(test)]
+    read_count: AtomicU64,
 }
 
 impl Default for InMemoryIndexedStorage {
@@ -38,7 +42,14 @@ impl InMemoryIndexedStorage {
     pub fn new() -> Self {
         Self {
             data: scc::HashMap::new(),
+            #[cfg(test)]
+            read_count: AtomicU64::new(0),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn read_count(&self) -> u64 {
+        self.read_count.load(Ordering::Relaxed)
     }
 
     fn composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
@@ -243,6 +254,9 @@ impl IndexedStorage for InMemoryIndexedStorage {
         start_id: u64,
         end_id: u64,
     ) -> Result<Vec<(u64, Vec<u8>)>, IndexedStorageError> {
+        #[cfg(test)]
+        self.read_count.fetch_add(1, Ordering::Relaxed);
+
         let composite_key = Self::composite_key(namespace, key);
         Ok(self
             .data

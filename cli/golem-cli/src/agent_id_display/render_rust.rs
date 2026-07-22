@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{render_rich_constructor, render_rich_constructor2, resolve_named_ref};
+use super::{
+    recursive_ref_display_name, render_rich_constructor, render_rich_constructor2,
+    resolve_named_ref,
+};
 use golem_common::model::agent::text_utils::write_json_escaped;
 use golem_common::schema::canonical;
 use golem_common::schema::graph::SchemaGraph;
@@ -280,6 +283,9 @@ fn render_result(
 }
 
 pub fn render_type_rust(graph: &SchemaGraph, ty: &SchemaType, prefer_name: bool) -> String {
+    if let Some(name) = recursive_ref_display_name(graph, ty) {
+        return name.to_upper_camel_case();
+    }
     let (resolved, def_name) = resolve_named_ref(graph, ty);
     render_type_rust_inner(graph, resolved, def_name, prefer_name)
 }

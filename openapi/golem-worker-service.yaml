@@ -2405,13 +2405,20 @@ components:
           type: string
         agentTypeName:
           type: string
-        parameters: {}
+        parameters:
+          $ref: '#/components/schemas/SchemaValue'
         phantomId:
           type: string
           format: uuid
+        config:
+          type: array
+          default: []
+          items:
+            $ref: '#/components/schemas/AgentConfigEntryDto'
         methodName:
           type: string
-        methodParameters: {}
+        methodParameters:
+          $ref: '#/components/schemas/SchemaValue'
         mode:
           $ref: '#/components/schemas/AgentInvocationMode'
         scheduleAt:
@@ -2429,9 +2436,12 @@ components:
       title: AgentInvocationResult
       required:
       - agentId
+      - idempotencyKey
       properties:
         agentId:
           $ref: '#/components/schemas/AgentId'
+        idempotencyKey:
+          type: string
         result:
           $ref: '#/components/schemas/TypedSchemaValue'
         componentRevision:
@@ -3614,7 +3624,8 @@ components:
           type: string
         agentTypeName:
           type: string
-        parameters: {}
+        parameters:
+          $ref: '#/components/schemas/SchemaValue'
         phantomId:
           type: string
           format: uuid

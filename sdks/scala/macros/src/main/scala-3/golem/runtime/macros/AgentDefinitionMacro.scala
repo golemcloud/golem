@@ -49,8 +49,7 @@ object AgentDefinitionMacro {
   private val schemaHint: String =
     "\nHint: IntoSchema is derived from zio.blocks.schema.Schema.\n" +
       "Define or import an implicit Schema[T] for your type.\n" +
-      "Scala 3: `final case class T(...) derives zio.blocks.schema.Schema` (or `given Schema[T] = Schema.derived`).\n" +
-      "Scala 2: `implicit val schema: zio.blocks.schema.Schema[T] = zio.blocks.schema.Schema.derived`.\n"
+      "Use `final case class T(...) derives zio.blocks.schema.Schema` (or `given Schema[T] = Schema.derived`).\n"
   inline def generate[T]: AgentMetadata = ${ impl[T] }
 
   private def impl[T: Type](using Quotes): Expr[AgentMetadata] = {

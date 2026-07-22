@@ -35,12 +35,12 @@ impl Counter for CounterImpl {
 
     async fn increment_through_rpc_to_ephemeral(&mut self) -> u32 {
         let mut client = EphemeralCounterClient::new_phantom(format!("{}-ephemeral", self.id));
-        client.increment().await
+        client.increment().await.value
     }
 
     async fn increment_through_rpc_to_ephemeral_phantom(&mut self) -> u32 {
         let mut client = EphemeralSingletonCounterClient::new_phantom();
-        client.increment().await
+        client.increment().await.value
     }
 }
 

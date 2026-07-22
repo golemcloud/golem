@@ -8,6 +8,12 @@ use crate::app::{
 use golem_cli::fs;
 use golem_cli::model::GuestLanguage;
 use golem_cli::versions;
+use golem_common::schema::SchemaType;
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::tool::{
+    CommandBody, CommandTree, Doc, Formatter, Globals, Positional, Positionals,
+    ResultSpec as ToolResultSpec, Tool,
+};
 use indoc::{formatdoc, indoc};
 use serde_json::Value as JsonValue;
 use std::path::Path;
@@ -215,6 +221,468 @@ async fn custom_rust_component_build_waits_for_guest_bridge_sdks(_tracing: &Trac
         ctx.cwd_path_join("bridge/rust-guest/bar-agent-guest-client/Cargo.toml")
             .exists()
     );
+}
+
+#[test]
+async fn moonbit_component_build_waits_for_independently_buildable_agent_provider(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+    let producer_wasm = placeholder_component_wasm(&ctx);
+    let producer_wasm = producer_wasm.to_str().unwrap();
+    let producer_final_wasm = ctx.cwd_path_join("producer/producer-final.wasm");
+    let consumer_final_wasm = ctx.cwd_path_join("consumer/consumer-final.wasm");
+    let guest_bridge_manifest = ctx.cwd_path_join(
+        "golem-temp/bridge-sdk/moonbit/internal/bar-agent-guest-client/moon.mod.json",
+    );
+    let guest_bridge_dir = guest_bridge_manifest.parent().unwrap();
+
+    let producer_final_wasm_hash =
+        extracted_component_metadata_path_hash(&ctx, "app:producer", &producer_final_wasm);
+    let producer_extracted_component_metadata =
+        format!("app:producer-{producer_final_wasm_hash}.json");
+    fs::write_str(
+        ctx.cwd_path_join("producer-agent-types.json"),
+        fs::read_to_string(
+            crate::crate_path()
+                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let consumer_final_wasm_hash =
+        extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
+    let consumer_extracted_component_metadata =
+        format!("app:consumer-{consumer_final_wasm_hash}.json");
+    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::create_dir_all(ctx.cwd_path_join("golem-temp/extracted-component-metadata")).unwrap();
+    for component_name in ["app:producer", "app:consumer"] {
+        seed_extraction_marker(&ctx, component_name);
+    }
+
+    fs::create_dir_all(ctx.cwd_path_join("producer")).unwrap();
+    fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("moon.mod.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "name": "moonbit-guest-bridge-order",
+            "version": "0.0.1",
+            "deps": {
+                "bar-agent-guest-client": {
+                    "path": guest_bridge_dir,
+                },
+            },
+            "preferred-target": "wasm",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("producer/moon.mod.json"),
+        indoc! {r#"
+            {
+              "name": "moonbit-guest-bridge-provider",
+              "version": "0.0.1",
+              "preferred-target": "wasm"
+            }
+        "#},
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("producer/moon.pkg"),
+        "options(\"is-main\": true)\n",
+    )
+    .unwrap();
+    fs::write_str(ctx.cwd_path_join("producer/main.mbt"), "fn main {}\n").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("consumer/moon.pkg"),
+        "options(\"is-main\": true)\n",
+    )
+    .unwrap();
+    fs::write_str(ctx.cwd_path_join("consumer/main.mbt"), "fn main {}\n").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: moonbit-agent-guest-bridge-order
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:producer:
+                templates: moonbit
+                dir: producer
+                buildMergeMode: replace
+                componentWasm: producer.wasm
+                outputWasm: producer-final.wasm
+                build:
+                  - command: moon build --target wasm
+                  - command: cp -p {producer_wasm} producer.wasm
+                  - command: cp -p {producer_wasm} producer-final.wasm
+                  - command: cp ../producer-agent-types.json ../golem-temp/extracted-component-metadata/{producer_extracted_component_metadata}
+
+              app:consumer:
+                templates: moonbit
+                dir: consumer
+                dependencies:
+                  agents:
+                    - app:producer/BarAgent
+                buildMergeMode: replace
+                componentWasm: consumer.wasm
+                outputWasm: consumer-final.wasm
+                build:
+                  - command: moon build --target wasm
+                  - command: cp -p {producer_wasm} consumer.wasm
+                  - command: cp -p {producer_wasm} consumer-final.wasm
+                  - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+
+    assert!(!guest_bridge_manifest.exists());
+
+    let outputs = ctx
+        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(guest_bridge_manifest.exists());
+}
+
+#[cfg(unix)]
+#[test]
+async fn moon_dependency_preparation_is_cached_per_module_root(_tracing: &Tracing) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut ctx = TestContext::new();
+    let fake_bin = ctx.cwd_path_join("fake-bin");
+    let fake_moon = fake_bin.join("moon");
+    fs::create_dir_all(&fake_bin).unwrap();
+    fs::write_str(
+        &fake_moon,
+        indoc! {r#"
+            #!/bin/sh
+            set -eu
+            case "${1:-}" in
+              update)
+                ;;
+              install)
+                mkdir -p .mooncakes
+                : > .mooncakes/prepared
+                ;;
+              build)
+                test -f .mooncakes/prepared
+                ;;
+              *)
+                exit 2
+                ;;
+            esac
+        "#},
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake_moon, std::fs::Permissions::from_mode(0o755)).unwrap();
+    ctx.add_env_var(
+        "PATH",
+        format!(
+            "{}:{}",
+            fake_bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    );
+
+    let moon_mod_json = indoc! {r#"
+        {
+          "name": "identical-module",
+          "version": "0.0.1",
+          "preferred-target": "wasm"
+        }
+    "#};
+    for module in ["a", "b"] {
+        fs::create_dir_all(ctx.cwd_path_join(module)).unwrap();
+        fs::write_str(
+            ctx.cwd_path_join(format!("{module}/moon.mod.json")),
+            moon_mod_json,
+        )
+        .unwrap();
+    }
+    fs::create_dir_all(ctx.cwd_path_join("b/.mooncakes")).unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: moon-dependency-preparation-cache
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:a:
+                dir: a
+                componentWasm: component.wasm
+                customCommands:
+                  verify-module-preparation:
+                    - command: moon build
+
+              app:b:
+                dir: b
+                componentWasm: component.wasm
+                customCommands:
+                  verify-module-preparation:
+                    - command: moon build
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+
+    let outputs = ctx.cli(["exec", "verify-module-preparation"]).await;
+    assert!(outputs.success_or_dump());
+    assert!(ctx.cwd_path_join("a/.mooncakes/prepared").exists());
+    assert!(ctx.cwd_path_join("b/.mooncakes/prepared").exists());
+}
+
+#[cfg(unix)]
+#[test]
+async fn moon_dependency_preparation_uses_physical_ancestor_for_parent_dir(_tracing: &Tracing) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut ctx = TestContext::new();
+    let fake_bin = ctx.cwd_path_join("fake-bin");
+    let fake_moon = fake_bin.join("moon");
+    fs::create_dir_all(&fake_bin).unwrap();
+    fs::write_str(
+        &fake_moon,
+        indoc! {r#"
+            #!/bin/sh
+            set -eu
+            case "${1:-}" in
+              update)
+                ;;
+              install)
+                mkdir -p .mooncakes
+                : > .mooncakes/prepared
+                ;;
+              build)
+                test -f ../.mooncakes/prepared
+                ;;
+              *)
+                exit 2
+                ;;
+            esac
+        "#},
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake_moon, std::fs::Permissions::from_mode(0o755)).unwrap();
+    ctx.add_env_var(
+        "PATH",
+        format!(
+            "{}:{}",
+            fake_bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    );
+
+    let moon_mod_json = indoc! {r#"
+        {
+          "name": "module",
+          "version": "0.0.1",
+          "preferred-target": "wasm"
+        }
+    "#};
+    fs::write_str(ctx.cwd_path_join("moon.mod.json"), moon_mod_json).unwrap();
+    fs::create_dir_all(ctx.cwd_path_join("component/nested")).unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("component/nested/moon.mod.json"),
+        moon_mod_json,
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: moon-dependency-preparation-parent-dir
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:component:
+                dir: component
+                componentWasm: component.wasm
+                customCommands:
+                  verify-module-preparation:
+                    - command: moon build
+                      dir: nested/..
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+
+    let outputs = ctx.cli(["exec", "verify-module-preparation"]).await;
+    assert!(outputs.success_or_dump());
+    assert!(ctx.cwd_path_join(".mooncakes/prepared").exists());
+    assert!(
+        !ctx.cwd_path_join("component/nested/.mooncakes/prepared")
+            .exists()
+    );
+}
+
+#[test]
+async fn custom_scala_component_build_waits_for_agent_and_tool_guest_bridge_sdks(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+    let producer_wasm = placeholder_component_wasm(&ctx);
+    let producer_wasm = producer_wasm.to_str().unwrap();
+    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
+    let consumer_final_wasm = ctx.cwd_path_join("consumer/consumer-final.wasm");
+
+    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
+
+    let agent_types: JsonValue = serde_json::from_str(
+        &fs::read_to_string(
+            crate::crate_path()
+                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let metadata = serde_json::json!({
+        "agentTypes": agent_types,
+        "tools": [echo_tool()]
+    });
+
+    let extracted_component_metadata_dir =
+        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
+    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
+    seed_extracted_metadata(
+        &ctx,
+        "app:producer",
+        &producer_final_wasm,
+        &serde_json::to_string(&metadata).unwrap(),
+    );
+    let consumer_final_wasm_hash =
+        extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
+    let consumer_extracted_component_metadata =
+        format!("app:consumer-{consumer_final_wasm_hash}.json");
+    for component_name in ["app:producer", "app:consumer"] {
+        seed_extraction_marker(&ctx, component_name);
+    }
+
+    fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
+    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: custom-scala-guest-bridge-order
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:producer:
+                componentWasm: {producer_wasm}
+                outputWasm: producer-final.wasm
+
+              app:consumer:
+                templates: scala
+                dir: consumer
+                dependencies:
+                  agents:
+                    - app:producer/BarAgent
+                  tools:
+                    - app:producer/echo
+                buildMergeMode: replace
+                componentWasm: consumer.wasm
+                outputWasm: consumer-final.wasm
+                build:
+                  - command: test -f ../golem-temp/bridge-sdk/scala/internal/bar-agent-guest-client/build.sbt
+                  - command: test -f ../golem-temp/bridge-sdk/scala/internal/bar-agent-guest-client/project/plugins.sbt
+                  - command: test -f ../golem-temp/bridge-sdk/scala/internal/echo-tool-guest-client/build.sbt
+                  - command: test -f ../golem-temp/bridge-sdk/scala/internal/echo-tool-guest-client/project/plugins.sbt
+                  - command: cp -p {producer_wasm} consumer.wasm
+                  - command: cp -p {producer_wasm} consumer-final.wasm
+                  - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
+
+            bridge:
+              scala:
+                internal:
+                  agents: BarAgent
+                  tools: echo
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+
+    let outputs = ctx
+        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(
+        ctx.cwd_path_join("golem-temp/bridge-sdk/scala/internal/bar-agent-guest-client/build.sbt")
+            .exists()
+    );
+    assert!(
+        ctx.cwd_path_join("golem-temp/bridge-sdk/scala/internal/echo-tool-guest-client/build.sbt")
+            .exists()
+    );
+}
+
+fn echo_tool() -> Tool {
+    let doc = |summary: &str| Doc {
+        summary: summary.to_string(),
+        description: String::new(),
+        examples: vec![],
+    };
+    Tool {
+        version: "1.0.0".to_string(),
+        commands: CommandTree {
+            nodes: vec![golem_common::schema::tool::CommandNode {
+                name: "echo".to_string(),
+                aliases: vec![],
+                doc: doc("echo"),
+                globals: Globals::default(),
+                subcommands: vec![],
+                body: Some(CommandBody {
+                    positionals: Positionals {
+                        fixed: vec![Positional {
+                            name: "message".to_string(),
+                            doc: doc("message"),
+                            value_name: None,
+                            type_: SchemaType::string(),
+                            default: None,
+                            required: true,
+                            accepts_stdio: false,
+                        }],
+                        tail: None,
+                    },
+                    options: vec![],
+                    flags: vec![],
+                    constraints: vec![],
+                    stdin: None,
+                    stdout: None,
+                    result: Some(ToolResultSpec {
+                        type_: SchemaType::string(),
+                        doc: doc("result"),
+                        formatters: vec![Formatter {
+                            name: "json".to_string(),
+                            doc: doc("json"),
+                        }],
+                        default_formatter: "json".to_string(),
+                    }),
+                    errors: vec![],
+                    annotations: None,
+                }),
+            }],
+        },
+        schema: SchemaGraph::empty(),
+    }
 }
 
 #[test]
@@ -6951,8 +7419,6 @@ async fn build_check(_tracing: &Tracing) {
 
     package_json["dependencies"]["@golemcloud/golem-ts-sdk"] =
         JsonValue::String("0.0.1".to_string());
-    package_json["devDependencies"]["@golemcloud/golem-ts-typegen"] =
-        JsonValue::String("0.0.1".to_string());
     fs::write_str(
         &package_json_path,
         serde_json::to_string_pretty(&package_json).unwrap(),
@@ -6964,8 +7430,6 @@ async fn build_check(_tracing: &Tracing) {
         serde_json::from_str(fs::read_to_string(&tsconfig_path).unwrap().as_str()).unwrap();
 
     tsconfig["compilerOptions"]["moduleResolution"] = JsonValue::String("node".to_string());
-    tsconfig["compilerOptions"]["experimentalDecorators"] = JsonValue::Bool(false);
-    tsconfig["compilerOptions"]["emitDecoratorMetadata"] = JsonValue::Bool(false);
     fs::write_str(
         &tsconfig_path,
         serde_json::to_string_pretty(&tsconfig).unwrap(),
@@ -6992,7 +7456,10 @@ async fn build_check(_tracing: &Tracing) {
         &package_json_path,
         serde_json::to_string_pretty(&serde_json::json!({
             "name": "app",
-            "dependencies": {},
+            // The fluent `ts` agents import `zod`; the build check treats zod as an
+            // optional dependency (only validated when present), so keep it here —
+            // wiping it would leave the restored app unable to resolve the import.
+            "dependencies": { "zod": versions::ts_dep::ZOD },
             "devDependencies": {}
         }))
         .unwrap(),
@@ -7189,36 +7656,42 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
         ctx.cwd_path_join(Path::new("src").join("sample-agent.ts")),
         indoc! {
             r#"
-            import {
-                BaseAgent,
-                agent,
-                prompt,
-                description
-            } from '@golemcloud/golem-ts-sdk';
+            import { z } from 'zod';
+            import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
-            @agent({})
-            class SampleAgent extends BaseAgent {
-                private readonly name: string;
-                private readonly region: string;
-                private readonly mode: "fast" | "safe";
-                private readonly complex: { a: number, b: string };
-                private value: number = 0;
+            export const SampleAgent = defineAgent({
+                name: 'SampleAgent',
+                id: {
+                    name: z.string(),
+                    region: z.string(),
+                    mode: z.enum(['fast', 'safe']),
+                    complex: z.object({ a: z.number(), b: z.string() }).optional(),
+                },
+                methods: {
+                    sampleMethod: method({
+                        input: {},
+                        returns: z.number(),
+                        promptHint: 'Run sample method',
+                        description: 'Runs the sample method and returns the new value',
+                    }),
+                },
+            });
 
-                constructor(name: string, region: string, mode: "fast" | "safe", complex?: { a: number, b: string }) {
-                    super()
-                    this.name = name;
-                    this.region = region;
-                    this.mode = mode;
-                    this.complex = complex ?? { a: 0, b: "default" };
-                }
-
-                @prompt("Run sample method")
-                @description("Runs the sample method and returns the new value")
-                async sampleMethod(): Promise<number> {
-                    this.value += 1;
-                    return this.value;
-                }
-            }
+            export const SampleAgentImpl = SampleAgent.implement({
+                init: ({ id }) => ({
+                    name: id.name,
+                    region: id.region,
+                    mode: id.mode,
+                    complex: id.complex ?? { a: 0, b: 'default' },
+                    value: 0,
+                }),
+                methods: {
+                    sampleMethod() {
+                        this.value += 1;
+                        return this.value;
+                    },
+                },
+            });
             "#
         },
     )
@@ -7228,8 +7701,8 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
         ctx.cwd_path_join(Path::new("src").join("main.ts")),
         indoc! {
             r#"
-            export * from './counter-agent';
-            export * from './sample-agent';
+            import './counter-agent.js';
+            import './sample-agent.js';
             "#
         },
     )
@@ -7604,36 +8077,34 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
         ctx.cwd_path_join(Path::new("src").join("counter-agent.ts")),
         indoc! {
             r#"
-            import {
-                agent,
-                BaseAgent,
-                prompt,
-                description,
-                Config,
-                Secret,
-            } from '@golemcloud/golem-ts-sdk';
+            import { z } from 'zod';
+            import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
-            type CounterAgentConfigV1 = {
-                value: number;
-            };
+            export const CounterAgent = defineAgent({
+                name: 'CounterAgent',
+                id: { name: z.string() },
+                config: {
+                    value: z.number(),
+                },
+                methods: {
+                    increment: method({
+                        input: {},
+                        returns: z.number(),
+                        promptHint: 'Increase the count by the configured amount',
+                        description: 'Increases the count and returns the new value',
+                    }),
+                },
+            });
 
-            @agent()
-            class CounterAgent extends BaseAgent {
-                count = 0;
-
-                constructor(name: string, readonly config: Config<CounterAgentConfigV1>) {
-                    super();
-                }
-
-                @prompt("Increase the count by the configured amount")
-                @description("Increases the count and returns the new value")
-                async increment(): Promise<number> {
-                    this.count += this.config.value.value;
-                    return this.count;
-                }
-            }
-
-            export { CounterAgent };
+            export const CounterAgentImpl = CounterAgent.implement({
+                init: () => ({ count: 0 }),
+                methods: {
+                    increment() {
+                        this.count += this.config.value;
+                        return this.count;
+                    },
+                },
+            });
             "#
         },
     )
@@ -7673,36 +8144,34 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
         ctx.cwd_path_join(Path::new("src").join("counter-agent.ts")),
         indoc! {
             r#"
-            import {
-                agent,
-                BaseAgent,
-                prompt,
-                description,
-                Config,
-                Secret,
-            } from '@golemcloud/golem-ts-sdk';
+            import { z } from 'zod';
+            import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
-            type CounterAgentConfigV2 = {
-                value: boolean;
-            };
+            export const CounterAgent = defineAgent({
+                name: 'CounterAgent',
+                id: { name: z.string() },
+                config: {
+                    value: z.boolean(),
+                },
+                methods: {
+                    increment: method({
+                        input: {},
+                        returns: z.number(),
+                        promptHint: 'Increase the count based on the configured boolean',
+                        description: 'Increases the count and returns the new value',
+                    }),
+                },
+            });
 
-            @agent()
-            class CounterAgent extends BaseAgent {
-                count = 0;
-
-                constructor(name: string, readonly config: Config<CounterAgentConfigV2>) {
-                    super();
-                }
-
-                @prompt("Increase the count based on the configured boolean")
-                @description("Increases the count and returns the new value")
-                async increment(): Promise<number> {
-                    this.count += this.config.value.value ? 1 : 0;
-                    return this.count;
-                }
-            }
-
-            export { CounterAgent };
+            export const CounterAgentImpl = CounterAgent.implement({
+                init: () => ({ count: 0 }),
+                methods: {
+                    increment() {
+                        this.count += this.config.value ? 1 : 0;
+                        return this.count;
+                    },
+                },
+            });
             "#
         },
     )
@@ -7750,38 +8219,35 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
         ctx.cwd_path_join(Path::new("src").join("counter-agent.ts")),
         indoc! {
             r#"
-            import {
-                agent,
-                BaseAgent,
-                prompt,
-                description,
-                Config,
-                Secret,
-            } from '@golemcloud/golem-ts-sdk';
+            import { z } from 'zod';
+            import { defineAgent, method, s } from '@golemcloud/golem-ts-sdk';
 
-            type CounterAgentConfigV3 = {
-                value: boolean;
-                secret: Secret<string>;
-            };
+            export const CounterAgent = defineAgent({
+                name: 'CounterAgent',
+                id: { name: z.string() },
+                config: {
+                    value: z.boolean(),
+                    secret: s.secret(z.string()),
+                },
+                methods: {
+                    increment: method({
+                        input: {},
+                        returns: z.number(),
+                        promptHint: 'Increase the count using the configured secret',
+                        description: 'Increases the count and returns the new value',
+                    }),
+                },
+            });
 
-            @agent()
-            class CounterAgent extends BaseAgent {
-                count = 0;
-
-                constructor(name: string, readonly config: Config<CounterAgentConfigV3>) {
-                    super();
-                }
-
-                @prompt("Increase the count using the configured secret")
-                @description("Increases the count and returns the new value")
-                async increment(): Promise<number> {
-                    const config = this.config.value;
-                    this.count += config.value ? config.secret.get().length : 0;
-                    return this.count;
-                }
-            }
-
-            export { CounterAgent };
+            export const CounterAgentImpl = CounterAgent.implement({
+                init: () => ({ count: 0 }),
+                methods: {
+                    increment() {
+                        this.count += this.config.value ? this.config.secret.get().length : 0;
+                        return this.count;
+                    },
+                },
+            });
             "#
         },
     )
@@ -7824,38 +8290,35 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
         ctx.cwd_path_join(Path::new("src").join("counter-agent.ts")),
         indoc! {
             r#"
-            import {
-                agent,
-                BaseAgent,
-                prompt,
-                description,
-                Config,
-                Secret,
-            } from '@golemcloud/golem-ts-sdk';
+            import { z } from 'zod';
+            import { defineAgent, method, s } from '@golemcloud/golem-ts-sdk';
 
-            type CounterAgentConfigV4 = {
-                value: boolean;
-                secret: Secret<number>;
-            };
+            export const CounterAgent = defineAgent({
+                name: 'CounterAgent',
+                id: { name: z.string() },
+                config: {
+                    value: z.boolean(),
+                    secret: s.secret(z.number()),
+                },
+                methods: {
+                    increment: method({
+                        input: {},
+                        returns: z.number(),
+                        promptHint: 'Increase the count using the configured numeric secret',
+                        description: 'Increases the count and returns the new value',
+                    }),
+                },
+            });
 
-            @agent()
-            class CounterAgent extends BaseAgent {
-                count = 0;
-
-                constructor(name: string, readonly config: Config<CounterAgentConfigV4>) {
-                    super();
-                }
-
-                @prompt("Increase the count using the configured numeric secret")
-                @description("Increases the count and returns the new value")
-                async increment(): Promise<number> {
-                    const config = this.config.value;
-                    this.count += config.value ? config.secret.get() : 0;
-                    return this.count;
-                }
-            }
-
-            export { CounterAgent };
+            export const CounterAgentImpl = CounterAgent.implement({
+                init: () => ({ count: 0 }),
+                methods: {
+                    increment() {
+                        this.count += this.config.value ? this.config.secret.get() : 0;
+                        return this.count;
+                    },
+                },
+            });
             "#
         },
     )
@@ -7886,23 +8349,30 @@ async fn component_level_ifs_with_multiple_agents_deploys(_tracing: &Tracing) {
         ctx.cwd_path_join(Path::new("src").join("counter-agent.ts")),
         indoc! {
             r#"
-            import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+            import { z } from 'zod';
+            import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
             import { readFileSync } from 'node:fs';
 
-            @agent({})
-            class CounterAgent extends BaseAgent {
-                constructor(name: string) {
-                    super();
-                }
+            export const CounterAgent = defineAgent({
+                name: 'CounterAgent',
+                id: { name: z.string() },
+                methods: {
+                    increment: method({ input: {}, returns: z.number() }),
+                    readFile: method({ input: { path: z.string() }, returns: z.string() }),
+                },
+            });
 
-                async increment(): Promise<number> {
-                    return 1;
-                }
-
-                async readFile(path: string): Promise<string> {
-                    return readFileSync(path, 'utf8');
-                }
-            }
+            export const CounterAgentImpl = CounterAgent.implement({
+                init: () => ({}),
+                methods: {
+                    increment() {
+                        return 1;
+                    },
+                    readFile({ path }) {
+                        return readFileSync(path, 'utf8');
+                    },
+                },
+            });
             "#
         },
     )
@@ -7912,23 +8382,30 @@ async fn component_level_ifs_with_multiple_agents_deploys(_tracing: &Tracing) {
         ctx.cwd_path_join(Path::new("src").join("sample-agent.ts")),
         indoc! {
             r#"
-            import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+            import { z } from 'zod';
+            import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
             import { readFileSync } from 'node:fs';
 
-            @agent({})
-            class SampleAgent extends BaseAgent {
-                constructor(name: string) {
-                    super();
-                }
+            export const SampleAgent = defineAgent({
+                name: 'SampleAgent',
+                id: { name: z.string() },
+                methods: {
+                    sampleMethod: method({ input: {}, returns: z.number() }),
+                    readFile: method({ input: { path: z.string() }, returns: z.string() }),
+                },
+            });
 
-                async sampleMethod(): Promise<number> {
-                    return 1;
-                }
-
-                async readFile(path: string): Promise<string> {
-                    return readFileSync(path, 'utf8');
-                }
-            }
+            export const SampleAgentImpl = SampleAgent.implement({
+                init: () => ({}),
+                methods: {
+                    sampleMethod() {
+                        return 1;
+                    },
+                    readFile({ path }) {
+                        return readFileSync(path, 'utf8');
+                    },
+                },
+            });
             "#
         },
     )
@@ -7939,8 +8416,8 @@ async fn component_level_ifs_with_multiple_agents_deploys(_tracing: &Tracing) {
         indoc! {
             r#"
             export const SHARED_IFS_MARKER = 'ifs-multi-agent-marker';
-            export * from './counter-agent';
-            export * from './sample-agent';
+            import './counter-agent.js';
+            import './sample-agent.js';
             "#
         },
     )
@@ -8133,5 +8610,5 @@ async fn component_level_ifs_with_multiple_agents_deploys(_tracing: &Tracing) {
         ])
         .await;
     assert!(sample_read_shared.success_or_dump());
-    assert!(sample_read_shared.stdout_contains("class SampleAgent"));
+    assert!(sample_read_shared.stdout_contains("export const SampleAgent = defineAgent"));
 }

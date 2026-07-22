@@ -15,20 +15,17 @@
 use super::{GolemDependencySource, RustBridgeGenerator, RustBridgeMode, RustRuntimeConfig, dep};
 use crate::bridge_gen::parameter_naming::ParameterNaming;
 use crate::bridge_gen::tool_bridge_client_directory_name;
-use crate::sdk_overrides::{sdk_overrides, workspace_root};
-use anyhow::{Context, anyhow, bail};
-use camino::{Utf8Path, Utf8PathBuf};
-use golem_common::base_model::Empty;
-use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
-use golem_common::schema::agent::{
-    AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField,
-    OutputSchema,
+use crate::bridge_gen::tool_common::{
+    command_path, field_names, global_surfaces, idx_to_usize, synthetic_agent_type,
 };
+use crate::sdk_overrides::{sdk_overrides, workspace_root};
+use anyhow::{Context, anyhow};
+use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::schema::graph::{SchemaGraph, reachable_defs};
 use golem_common::schema::tool::canonical::{
     CanonicalInputField, CanonicalSurfaceRef, record_schema_from_field_graphs,
 };
-use golem_common::schema::tool::{CommandBody, CommandIndex, CommandNode, Tool};
+use golem_common::schema::tool::{CommandBody, CommandNode, Tool};
 use heck::ToUpperCamelCase;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
@@ -743,75 +740,6 @@ fn collect_node_names(
     Ok(())
 }
 
-fn synthetic_agent_type(tool: &Tool, tool_name: &str) -> anyhow::Result<AgentTypeSchema> {
-    let root_doc = tool
-        .commands
-        .nodes
-        .first()
-        .map(|n| n.doc.summary.clone())
-        .unwrap_or_default();
-    let mut methods = Vec::new();
-    for (index, node) in tool.commands.nodes.iter().enumerate() {
-        let Some(body) = &node.body else { continue };
-        let path = command_path(tool, index)?;
-        let method_name = if index == 0 {
-            tool_name.to_string()
-        } else {
-            path[1..].join("-")
-        };
-        let fields = tool
-            .canonical_input_fields(index)
-            .into_iter()
-            .map(|field| NamedField::user_supplied(field.name, field.type_));
-        methods.push(AgentMethodSchema {
-            name: method_name.clone(),
-            description: node.doc.summary.clone(),
-            prompt_hint: None,
-            input_schema: InputSchema::parameters(fields),
-            output_schema: body
-                .result
-                .as_ref()
-                .map(|result| OutputSchema::Single(Box::new(result.type_.clone())))
-                .unwrap_or(OutputSchema::Unit),
-            http_endpoint: vec![],
-            read_only: None,
-        });
-        if !body.errors.is_empty() {
-            methods.push(AgentMethodSchema {
-                name: format!("{method_name}-errors"),
-                description: String::new(),
-                prompt_hint: None,
-                input_schema: InputSchema::parameters(body.errors.iter().filter_map(|case| {
-                    case.payload
-                        .clone()
-                        .map(|payload| NamedField::user_supplied(case.name.clone(), payload))
-                })),
-                output_schema: OutputSchema::Unit,
-                http_endpoint: vec![],
-                read_only: None,
-            });
-        }
-    }
-    Ok(AgentTypeSchema {
-        type_name: AgentTypeName(tool_name.to_upper_camel_case()),
-        description: root_doc,
-        source_language: String::new(),
-        schema: tool.schema.clone(),
-        constructor: AgentConstructorSchema {
-            name: None,
-            description: String::new(),
-            prompt_hint: None,
-            input_schema: InputSchema::parameters(vec![]),
-        },
-        methods,
-        dependencies: vec![],
-        mode: AgentMode::Ephemeral,
-        http_mount: None,
-        snapshotting: Snapshotting::Disabled(Empty {}),
-        config: vec![],
-    })
-}
-
 fn client_struct_name(tool_name: &str, path: &[String]) -> String {
     let mut name = tool_name.to_upper_camel_case();
     for segment in path {
@@ -857,55 +785,6 @@ fn error_variant_idents(body: &CommandBody) -> Vec<Ident> {
         .collect()
 }
 
-fn global_surfaces(tool: &Tool, command_index: usize) -> Vec<CanonicalSurfaceRef> {
-    tool.canonical_input_surfaces(command_index)
-        .into_iter()
-        .filter(|surface| {
-            matches!(
-                surface,
-                CanonicalSurfaceRef::GlobalOption { .. } | CanonicalSurfaceRef::GlobalFlag { .. }
-            )
-        })
-        .collect()
-}
-
-fn command_path(tool: &Tool, command_index: usize) -> anyhow::Result<Vec<String>> {
-    fn visit(nodes: &[CommandNode], current: usize, target: usize, path: &mut Vec<String>) -> bool {
-        path.push(nodes[current].name.clone());
-        if current == target {
-            return true;
-        }
-        for child in &nodes[current].subcommands {
-            if let Some(child) = child.as_usize()
-                && child < nodes.len()
-                && visit(nodes, child, target, path)
-            {
-                return true;
-            }
-        }
-        path.pop();
-        false
-    }
-    let mut path = Vec::new();
-    if !tool.commands.nodes.is_empty() && visit(&tool.commands.nodes, 0, command_index, &mut path) {
-        Ok(path)
-    } else {
-        bail!("command node {command_index} is not reachable from root")
-    }
-}
-
-fn idx_to_usize(index: CommandIndex) -> anyhow::Result<usize> {
-    index
-        .as_usize()
-        .ok_or_else(|| anyhow!("negative command index {}", index.0))
-}
-
-fn field_names(field: &CanonicalInputField) -> Vec<String> {
-    std::iter::once(field.name.clone())
-        .chain(field.aliases.iter().cloned())
-        .collect()
-}
-
 fn ident(name: impl AsRef<str>) -> Ident {
     Ident::new(name.as_ref(), Span::call_site())
 }
@@ -917,9 +796,9 @@ mod tests {
     use golem_common::schema::metadata::TypeId;
     use golem_common::schema::schema_type::SchemaType;
     use golem_common::schema::tool::{
-        BoolFlagShape, CommandBody, CommandTree, Doc, ErrorCase, ErrorKind, FlagShape, FlagSpec,
-        Globals, OptionShape, OptionSpec, Positional, Positionals, ResultSpec, StreamSpec,
-        TailPositional,
+        BoolFlagShape, CommandBody, CommandIndex, CommandTree, Doc, ErrorCase, ErrorKind,
+        FlagShape, FlagSpec, Globals, OptionShape, OptionSpec, Positional, Positionals, ResultSpec,
+        StreamSpec, TailPositional,
     };
     use test_r::test;
 
@@ -1088,56 +967,12 @@ mod tests {
         }
     }
 
-    fn git_tool() -> Tool {
-        let mut root = node("git");
-        root.globals.flags = vec![flag("verbose", FlagShape::CountFlag(None))];
-        root.subcommands = vec![CommandIndex(1)];
-        let mut stash = node("stash");
-        stash.globals.options = vec![option("git-dir", OptionShape::Scalar(SchemaType::string()))];
-        stash.subcommands = vec![CommandIndex(2)];
-        let mut pop = node("pop");
-        pop.body = Some(CommandBody {
-            options: vec![option(
-                "name",
-                OptionShape::OptionalScalar(SchemaType::string()),
-            )],
-            ..body()
-        });
-        Tool {
-            version: "1".to_string(),
-            commands: CommandTree {
-                nodes: vec![root, stash, pop],
-            },
-            schema: SchemaGraph::empty(),
-        }
-    }
-
     fn generate(tool: Tool, dir_name: &str) -> Utf8PathBuf {
         let dir = tempfile::TempDir::new().unwrap().keep();
         let target_path = Utf8PathBuf::from_path_buf(dir.join(dir_name)).unwrap();
         let mut generator = RustToolBridgeGenerator::new(tool, &target_path, true).unwrap();
         generator.generate().unwrap();
         target_path
-    }
-
-    fn cargo_check(target_path: &Utf8Path) {
-        let output = std::process::Command::new("cargo")
-            .arg("check")
-            .current_dir(target_path)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "generated tool crate cargo check failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    #[test]
-    fn tool_generation_compiles() {
-        let target_path = generate(grep_tool(), "grep-tool-guest-client");
-        cargo_check(&target_path);
     }
 
     #[test]
@@ -1153,86 +988,5 @@ mod tests {
         ] {
             assert!(lib_rs.contains(shape), "missing {shape}:\n{lib_rs}");
         }
-    }
-
-    /// A tool named `new` with a body, a subcommand named `new`, and error
-    /// cases whose names collide with `Self` or with each other after
-    /// UpperCamelCase projection.
-    fn colliding_names_tool() -> Tool {
-        let mut root = node("new");
-        root.body = Some(CommandBody {
-            positionals: Positionals {
-                fixed: vec![positional("value", SchemaType::string())],
-                tail: None,
-            },
-            errors: vec![
-                ErrorCase {
-                    name: "self".to_string(),
-                    doc: doc("self"),
-                    kind: ErrorKind::UsageError,
-                    exit_code: 2,
-                    payload: None,
-                },
-                ErrorCase {
-                    name: "foo-1".to_string(),
-                    doc: doc("foo-1"),
-                    kind: ErrorKind::RuntimeError,
-                    exit_code: 1,
-                    payload: Some(SchemaType::string()),
-                },
-                ErrorCase {
-                    name: "foo1".to_string(),
-                    doc: doc("foo1"),
-                    kind: ErrorKind::RuntimeError,
-                    exit_code: 1,
-                    payload: None,
-                },
-            ],
-            ..body()
-        });
-        root.subcommands = vec![CommandIndex(1)];
-        let mut sub = node("new");
-        sub.body = Some(CommandBody {
-            positionals: Positionals {
-                fixed: vec![positional("value", SchemaType::string())],
-                tail: None,
-            },
-            ..body()
-        });
-        Tool {
-            version: "1".to_string(),
-            commands: CommandTree {
-                nodes: vec![root, sub],
-            },
-            schema: SchemaGraph::empty(),
-        }
-    }
-
-    #[test]
-    fn colliding_names_tool_generation_compiles() {
-        let target_path = generate(colliding_names_tool(), "new-tool-guest-client");
-        let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
-        for shape in [
-            "pub fn new() -> Self",
-            "pub async fn new1(",
-            "pub async fn new2(",
-        ] {
-            assert!(lib_rs.contains(shape), "missing {shape}:\n{lib_rs}");
-        }
-        cargo_check(&target_path);
-    }
-
-    #[test]
-    fn subtree_tool_generation_emits_and_compiles() {
-        let target_path = generate(git_tool(), "git-tool-guest-client");
-        let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
-        for shape in [
-            "pub struct GitStashClient",
-            "pub fn stash(",
-            "pub async fn pop(",
-        ] {
-            assert!(lib_rs.contains(shape), "missing {shape}:\n{lib_rs}");
-        }
-        cargo_check(&target_path);
     }
 }

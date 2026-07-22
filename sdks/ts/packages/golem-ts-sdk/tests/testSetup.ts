@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
-import { AgentClassName } from '../src';
+import { AgentClassName } from '../src/agentClassName';
 
 // The production runtime boundary now targets `golem:agent/host@2.0.0`. Mock it
 // with a schema-native, JSON-round-trippable `make-agent-id` / `parse-agent-id`
@@ -109,4 +109,7 @@ vi.mock('wasi:cli/environment@0.2.3', () => ({
   getEnvironment: () => [['GOLEM_AGENT_ID', (globalThis as any).currentAgentId]],
 }));
 
-await import('./agentsInit');
+// Load the package barrel so its side-effecting imports register the schema
+// walkers (zod / valibot / arktype / effect) for tests that import fluent
+// submodules directly rather than the top-level entry.
+await import('../src');

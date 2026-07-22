@@ -11,59 +11,54 @@ A **scheduled invocation** enqueues a method call on the target agent to be exec
 
 ## Usage
 
-Every method on the generated client has a `.schedule()` variant that takes a `Datetime` as the first argument:
+Every method on a `clientFor(...)` RPC client has a `.schedule()` variant that
+takes a `Datetime` as the first argument, followed by the method's input record
+(omit the input for methods declared with `input: {}`). It returns a
+`CancellationToken`; ignore the token when cancellation is not needed.
 
 ```typescript
-import { Datetime } from 'golem:rpc/types@0.2.2';
+import { clientFor } from '@golemcloud/golem-ts-sdk';
+import { Counter } from './counter-agent.js';
 
-const counter = CounterAgent.get("my-counter");
+const counter = clientFor(Counter)({ name: 'my-counter' });
 
-// Schedule increment to run 60 seconds from now
+// Schedule increment to run 60 seconds from now.
 const nowSecs = BigInt(Math.floor(Date.now() / 1000));
+counter.increment.schedule({ seconds: nowSecs + 60n, nanoseconds: 0 });
 
-counter.increment.schedule({
-    seconds: nowSecs + 60n,
-    nanoseconds: 0,
-});
-
-// Schedule with arguments
-const reporter = ReportAgent.get("daily");
+// Schedule with arguments.
+const reporter = clientFor(ReportAgent)({ name: 'daily' });
 reporter.generateReport.schedule(
     { seconds: BigInt(tomorrowMidnight), nanoseconds: 0 },
-    "summary",
+    { kind: 'summary' },
 );
 ```
 
 ## Datetime Type
 
-The `Datetime` object represents a point in time as seconds + nanoseconds since the Unix epoch:
+The `Datetime` argument represents a point in time as seconds + nanoseconds since the Unix epoch. It is a plain object; construct it inline:
 
 ```typescript
-import { Datetime } from 'golem:rpc/types@0.2.2';
-
-const dt: Datetime = {
-    seconds: BigInt(1700000000),  // Unix timestamp as BigInt
+const at = {
+    seconds: BigInt(1700000000),  // Unix timestamp as a BigInt
     nanoseconds: 0,               // Sub-second precision
 };
 ```
 
-Note: `seconds` is a `BigInt` in the TypeScript binding.
+Note: `seconds` is a `BigInt` in the TypeScript binding. If you want the exact
+type, import it as `import type { Datetime } from 'golem:agent/host@2.0.0'`.
 
-## Cancelable Variant
+## Cancellation
 
-Every method also has a `.scheduleCancelable()` variant that returns a `CancellationToken`. Call `.cancel()` on the token to prevent the scheduled invocation from firing:
+Keep the `CancellationToken` returned by `.schedule(at, input)` and call `.cancel()` any time before the scheduled time to cancel the invocation:
 
 ```typescript
-import { CancellationToken } from '@golemcloud/golem-ts-sdk';
-
-const token: CancellationToken = counter.increment.scheduleCancelable({
-    seconds: nowSecs + 60n,
-    nanoseconds: 0,
-});
-
-// Later, to cancel the pending invocation:
+const token = counter.increment.schedule({ seconds: nowSecs + 60n, nanoseconds: 0 });
+// …later, if the run is no longer wanted:
 token.cancel();
 ```
+
+(To cancel an in-flight — not scheduled — RPC call, pass `{ signal }` as the trailing option to the normal awaited call and abort the `AbortSignal`, for example `method(input, { signal })`. You can also gate a method on agent state, or cancel from the CLI with a known idempotency key via `golem agent invocation cancel` — see `golem-cancel-queued-invocation`.)
 
 ## Use Cases
 

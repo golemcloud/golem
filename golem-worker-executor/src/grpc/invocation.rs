@@ -24,7 +24,7 @@ pub trait CanStartWorker {
     fn environment_id(&self) -> Result<EnvironmentId, WorkerExecutorError>;
     fn agent_id(&self) -> Result<AgentId, WorkerExecutorError>;
     fn env(&self) -> Option<Vec<(String, String)>>;
-    fn config(&self) -> Vec<AgentConfigEntryDto>;
+    fn config(&self) -> Result<Vec<AgentConfigEntryDto>, WorkerExecutorError>;
     fn parent(&self) -> Option<AgentId>;
     fn maybe_invocation_context(&self) -> Option<InvocationContextStack> {
         None
@@ -42,6 +42,9 @@ trait ProtobufInvocationDetails {
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext>;
     fn proto_principal(&self) -> &Option<golem_api_grpc::proto::golem::component::Principal> {
         &None
+    }
+    fn proto_config(&self) -> &[golem_api_grpc::proto::golem::worker::AgentConfigEntryDto] {
+        &[]
     }
 }
 
@@ -74,8 +77,16 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
             .map(|ctx| ctx.env.clone().into_iter().collect::<Vec<_>>())
     }
 
-    fn config(&self) -> Vec<AgentConfigEntryDto> {
-        Vec::new()
+    fn config(&self) -> Result<Vec<AgentConfigEntryDto>, WorkerExecutorError> {
+        self.proto_config()
+            .iter()
+            .cloned()
+            .map(|entry| {
+                entry
+                    .try_into()
+                    .map_err(WorkerExecutorError::invalid_request)
+            })
+            .collect()
     }
 
     fn parent(&self) -> Option<AgentId> {
@@ -183,6 +194,10 @@ impl ProtobufInvocationDetails
     fn proto_principal(&self) -> &Option<golem_api_grpc::proto::golem::component::Principal> {
         &self.principal
     }
+
+    fn proto_config(&self) -> &[golem_api_grpc::proto::golem::worker::AgentConfigEntryDto] {
+        &self.config
+    }
 }
 
 impl ProtobufInvocationDetails
@@ -216,4 +231,39 @@ pub fn from_proto_invocation_context(
         })
     });
     provided_context.unwrap_or_else(InvocationContextStack::fresh)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CanStartWorker;
+    use test_r::test;
+
+    #[test]
+    fn invoke_agent_request_decodes_creation_config() {
+        let request = golem_api_grpc::proto::golem::workerexecutor::v1::InvokeAgentRequest {
+            config: vec![golem_api_grpc::proto::golem::worker::AgentConfigEntryDto {
+                path: vec!["database".into(), "port".into()],
+                value: "5432".into(),
+            }],
+            ..Default::default()
+        };
+
+        let config = request.config().unwrap();
+        assert_eq!(config.len(), 1);
+        assert_eq!(config[0].path, vec!["database", "port"]);
+        assert_eq!(config[0].value.to_string(), "5432");
+    }
+
+    #[test]
+    fn invoke_agent_request_rejects_invalid_creation_config_json() {
+        let request = golem_api_grpc::proto::golem::workerexecutor::v1::InvokeAgentRequest {
+            config: vec![golem_api_grpc::proto::golem::worker::AgentConfigEntryDto {
+                path: vec!["database".into(), "port".into()],
+                value: "not-json".into(),
+            }],
+            ..Default::default()
+        };
+
+        assert!(request.config().is_err());
+    }
 }

@@ -30,6 +30,9 @@ agents:                            # Agent type definitions by PascalCase name
 environments:                      # Deployment environments (local, cloud, custom)
   <env-name>: { ... }
 
+version:                           # (optional) Logical version attached to each deployment
+  git: { ... }                     #   git: | env: <VAR> | "1.2.3" (literal)
+
 httpApi:                           # HTTP API domain deployments
   deployments: { ... }
 
@@ -339,8 +342,33 @@ When `format: toon` is used, structured stdout is emitted as framed TOON documen
 | Field | Type | Description |
 |-------|------|-------------|
 | `compatibilityCheck` | bool | Check component compatibility before deploying |
-| `versionCheck` | bool | Check version constraints |
+| `versionCheck` | bool | Reject a deploy whose logical version already exists in the environment (enforce version uniqueness). Default `false` |
 | `securityOverrides` | bool | Allow security scheme overrides |
+
+## Deployment Version
+
+`version:` (top-level) and `environments.<name>.version:` (per-environment override) configure the
+logical version attached to each deployment — derived from a git tag, the git commit hash, a static
+string, or an environment variable. This is orthogonal to `versionCheck` above (which enforces
+uniqueness of that version).
+
+```yaml
+version:                           # application-wide default
+  git:
+    tagPattern: "v*"               # required for git tag mode; "*" = all tags
+    hashFallback: true             # untagged repo → short commit hash
+    staticFallback: "v0.0.0"       # no git / not a repo → this value
+
+environments:
+  local:
+    version:
+      git:
+        allowDirty: true           # partial override; inherits the rest from the root
+```
+
+Load `golem-deployment-version` for the full field reference (git tag/hash modes, `commitInfo`,
+`hashFallback`, `staticFallback`, `allowDirty`, per-environment overrides, and how the version
+interacts with `versionCheck`).
 
 ## HTTP API Deployments
 
@@ -665,6 +693,7 @@ This table shows where each property can be defined:
 ## Related Skills
 
 - Load `golem-profiles-and-environments` for detailed guidance on CLI profiles, app environments, component presets, and how they interact
+- Load `golem-deployment-version` for the `version:` source (git tag/hash, static, env var) and the `versionCheck` uniqueness policy
 
 ## Edit Guardrails
 

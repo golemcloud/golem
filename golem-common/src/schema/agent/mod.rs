@@ -42,7 +42,6 @@ use crate::schema::schema_value::SchemaValue;
 use crate::schema::validation::value::validate_value;
 use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
 /// Name of the synthetic single user-supplied field that carries the parts of
@@ -53,9 +52,9 @@ pub const MULTIMODAL_PARTS_FIELD_NAME: &str = "parts";
 /// agent output that has no declared field name of its own.
 pub const FALLBACK_OUTPUT_FIELD_NAME: &str = "value";
 
-/// Lift raw client JSON (a bare schema-native [`SchemaValue`]) plus an agent
-/// constructor/method [`InputSchema`] and its owning [`SchemaGraph`] into a
-/// validated [`TypedSchemaValue`].
+/// Lift a bare schema-native [`SchemaValue`] plus an agent constructor/method
+/// [`InputSchema`] and its owning [`SchemaGraph`] into a validated
+/// [`TypedSchemaValue`].
 ///
 /// The caller only provides the [`FieldSource::UserSupplied`] fields;
 /// auto-injected fields (e.g. the principal) are filled by the host out of
@@ -70,12 +69,10 @@ pub const FALLBACK_OUTPUT_FIELD_NAME: &str = "value";
 /// the agent's multi-root definition registry, which the value can never
 /// reference.
 pub fn json_input_schema_value_to_typed_schema_value(
-    json: JsonValue,
+    value: SchemaValue,
     graph: &SchemaGraph,
     input_schema: &InputSchema,
 ) -> Result<TypedSchemaValue, String> {
-    let value: SchemaValue =
-        serde_json::from_value(json).map_err(|e| format!("invalid schema value: {e}"))?;
     // Only user-supplied fields are part of the caller's input; auto-injected
     // fields (e.g. the principal) are filled by the host out of band and are
     // not present in the incoming value, so they are excluded from the record
@@ -115,8 +112,8 @@ pub use crate::schema::graph::reachable_defs;
 /// `root` and only a self-contained carrier needs to be produced: it projects
 /// the reachable definition subset (see [`reachable_defs`]) instead of cloning
 /// the agent's whole multi-root `defs` registry. This is the projection half of
-/// [`json_input_schema_value_to_typed_schema_value`], without the JSON decode
-/// and validation steps.
+/// [`json_input_schema_value_to_typed_schema_value`], without the validation
+/// step.
 pub fn typed_schema_value_with_projected_defs(
     graph: &SchemaGraph,
     root: SchemaType,

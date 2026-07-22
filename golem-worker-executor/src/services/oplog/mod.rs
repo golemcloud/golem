@@ -83,6 +83,21 @@ pub trait OplogService: Debug + Send + Sync {
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog>;
 
+    /// Creates an oplog whose absence has already been established by the caller.
+    ///
+    /// Implementations may use this guarantee to initialize storage cursors and counters from
+    /// the empty state without probing persistence. Callers must not use this for identities that
+    /// may already have an oplog.
+    async fn create_fresh(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        initial_entry: OplogEntry,
+        initial_worker_metadata: AgentMetadata,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+    ) -> Arc<dyn Oplog>;
+
     /// Opens an existing oplog for the given worker.
     ///
     /// `last_oplog_index` controls how the oplog's internal write cursor is initialized:
