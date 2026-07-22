@@ -71,7 +71,7 @@ pub const SCHEDULE_COMPONENT_NAME: &str = "density-schedule";
 
 /// Registry name of the component used by promise-density cells.
 pub const PROMISE_COMPONENT_NAME: &str = "density-promise";
-pub const PROMISE_COMPONENT_WASM: &str = "golem_it_agent_promise";
+pub const PROMISE_COMPONENT_WASM: &str = "golem_it_promise_agent_rust_release";
 
 /// Builds the registry name of the `index`-th (1-based) per-agent distinct
 /// component: `density-counter-distinct-0001` ..
@@ -338,7 +338,7 @@ async fn upload_components(
             info!("Density-prep: uploading promise component {PROMISE_COMPONENT_NAME}");
             let component = user
                 .component(shared_env, PROMISE_COMPONENT_WASM)
-                .name("golem-it:agent-promise")
+                .name("golem-it:promise-agent-rust")
                 .store()
                 .await
                 .context("uploading promise component")?;

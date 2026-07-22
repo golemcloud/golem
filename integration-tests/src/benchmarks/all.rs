@@ -721,7 +721,6 @@ async fn run_density(
                             .expect("--promise-waiter-presence required for promise cells"),
                         topology: promise_topology
                             .expect("--promise-topology required for promise cells"),
-                        snapshotting,
                     };
                     integration_tests::benchmarks::density::promise::run_cell(
                         &config,

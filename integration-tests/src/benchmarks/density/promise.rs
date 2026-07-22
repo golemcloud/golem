@@ -31,7 +31,6 @@ pub const PROMISE_PAYLOAD_MEDIUM: usize = 16_777_216;
 pub const PROMISE_PAYLOAD_HUGE: usize = 32_505_856;
 
 const PROMISE_AGENT_TYPE: &str = "PromiseAgent";
-const SNAPSHOTTING_PROMISE_AGENT_TYPE: &str = "SnapshottingPromiseAgent";
 const DEFAULT_RATE_RAMP: &[u32] = &[1, 2, 4, 8, 16, 32, 64, 128, 256];
 const DEFAULT_RATE_PERIOD: Duration = Duration::from_secs(60);
 const WAITER_READY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -49,30 +48,16 @@ pub struct CellConfig {
     pub payload_size: usize,
     pub waiter_presence: PromiseWaiterPresence,
     pub topology: PromiseTopology,
-    pub snapshotting: bool,
 }
 
 impl CellConfig {
     pub fn cell_name(&self) -> String {
         format!(
-            "promise-{}-{}-{}-{}",
+            "promise-{}-{}-{}",
             payload_label(self.payload_size),
             self.waiter_presence,
-            self.topology,
-            if self.snapshotting {
-                "snapshotted"
-            } else {
-                "unsnapshotted"
-            }
+            self.topology
         )
-    }
-
-    fn agent_type(&self) -> &'static str {
-        if self.snapshotting {
-            SNAPSHOTTING_PROMISE_AGENT_TYPE
-        } else {
-            PROMISE_AGENT_TYPE
-        }
     }
 }
 
@@ -165,7 +150,7 @@ async fn create_work_pool(
             let ready_sender = ready_sender.clone();
             async move {
                 let name = format!("{}-{index}", config.cell_name());
-                let parsed_agent = agent_id!(config.agent_type(), name);
+                let parsed_agent = agent_id!(PROMISE_AGENT_TYPE, name);
                 let agent = user
                     .start_agent(&component.id, parsed_agent.clone())
                     .await?;
@@ -197,7 +182,7 @@ async fn cleanup_pool(
     let workers = (0..PROMISE_POOL_SIZE)
         .filter_map(|index| {
             let agent = agent_id!(
-                config.agent_type(),
+                PROMISE_AGENT_TYPE,
                 format!("{}-{index}", config.cell_name())
             );
             AgentId::from_agent_id(component.id, &agent).ok()
@@ -232,12 +217,12 @@ async fn stage_work(
 ) -> anyhow::Result<(PromiseWork, StageTimings)> {
     let get_promise_started = Instant::now();
     let result = user
-        .invoke_and_await_agent(component, &parsed_agent, "getPromise", data_value!())
+        .invoke_and_await_agent(component, &parsed_agent, "get-promise", data_value!())
         .await?;
     let get_promise = get_promise_started.elapsed();
     let promise_value = result
         .into_return_value_and_type()
-        .ok_or_else(|| anyhow::anyhow!("getPromise returned no promise id"))?;
+        .ok_or_else(|| anyhow::anyhow!("get-promise returned no promise id"))?;
     let promise = PromiseId::from_value(promise_value.value.clone())
         .map_err(|error| anyhow::anyhow!("invalid promise id: {error}"))?;
     let (await_promise, suspended_wait) = if wait {
@@ -245,7 +230,7 @@ async fn stage_work(
         user.invoke_agent(
             component,
             &parsed_agent,
-            "awaitPromise",
+            "await-promise",
             data_value!(promise_value.clone()),
         )
         .await?;
