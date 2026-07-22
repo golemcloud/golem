@@ -44,6 +44,13 @@ class PromiseAgent extends BaseAgent {
 
 @agent({ snapshotting: { every: 10 } })
 class SnapshottingPromiseAgent extends BaseAgent {
+    private readonly name: string;
+
+    constructor(name: string) {
+        super()
+        this.name = name;
+    }
+
     async getPromise(): Promise<PromiseId> {
         return createPromise()
     }
