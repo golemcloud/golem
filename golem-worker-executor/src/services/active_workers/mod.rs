@@ -258,14 +258,12 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     pub async fn notify_revoked_cards(&self, card_ids: &[CardId]) {
         let affected_agent_cards = self.card_interest_index.interested_agents(card_ids).await;
 
-        for (owned_agent_id, affected_card_ids) in affected_agent_cards {
+        for owned_agent_id in affected_agent_cards.into_keys() {
             let Some(worker) = self.try_get(&owned_agent_id).await else {
                 continue;
             };
 
-            for card_id in affected_card_ids {
-                worker.queue_card_revocation(card_id).await;
-            }
+            worker.queue_card_revocations(card_ids).await;
         }
     }
 

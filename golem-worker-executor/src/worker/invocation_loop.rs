@@ -1426,11 +1426,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                         .data()
                                         .durable_ctx()
                                         .agent_wallet_cards_snapshot();
+                                    let wallet_generation =
+                                        self.store.data().durable_ctx().wallet_generation();
                                     self.parent
                                         .add_and_commit_oplog(OplogEntry::snapshot(
                                             payload,
                                             snapshot.mime_type,
                                             active_cards,
+                                            wallet_generation,
                                         ))
                                         .await;
                                     debug!("Periodic snapshot saved successfully");

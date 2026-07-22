@@ -16,7 +16,7 @@ use super::error::GrpcApiError;
 use crate::repo::registry_change::RegistryChangeRepo;
 use crate::services::account_usage::{AccountUsageService, ResourceUsageUpdate};
 use crate::services::auth::AuthService;
-use crate::services::card::CardService;
+use crate::services::card::{CardError, CardService};
 use crate::services::component::ComponentService;
 use crate::services::component_resolver::ComponentResolverService;
 use crate::services::deployment::{DeployedMcpService, DeployedRoutesService, DeploymentService};
@@ -34,6 +34,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
     BatchGetExistingCardsRequest, BatchGetExistingCardsResponse,
     BatchGetExistingCardsSuccessResponse, BatchUpdateResourceUsageRequest,
     BatchUpdateResourceUsageResponse, BatchUpdateResourceUsageSuccessResponse, CardData,
+    CreateRuntimeCardRequest, CreateRuntimeCardResponse, CreateRuntimeCardSuccessResponse,
     DownloadComponentRequest, DownloadComponentResponse, GetActiveMcpForDomainRequest,
     GetActiveMcpForDomainResponse, GetActiveMcpForDomainSuccessResponse,
     GetActiveRoutesForDomainRequest, GetActiveRoutesForDomainResponse,
@@ -54,18 +55,20 @@ use golem_api_grpc::proto::golem::registry::v1::{
     RegistryInvalidationEvent, RegistryServiceError, ResolveAgentTypeByNamesRequest,
     ResolveAgentTypeByNamesResponse, ResolveAgentTypeByNamesSuccessResponse,
     ResolveComponentRequest, ResolveComponentResponse, ResolveComponentSuccessResponse,
+    RevokeCardRequest, RevokeCardResponse, RevokeCardSuccessResponse, RuntimeCardData,
     SubscribeRegistryInvalidationsRequest, UpdateWorkerConnectionLimitRequest,
     UpdateWorkerConnectionLimitResponse, authenticate_token_response, batch_get_cards_response,
     batch_get_existing_cards_response, batch_update_resource_usage_response,
-    download_component_response, get_active_mcp_for_domain_response,
+    create_runtime_card_response, download_component_response, get_active_mcp_for_domain_response,
     get_active_routes_for_domain_response, get_agent_secret_revision_response,
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_component_metadata_response,
     get_current_environment_state_response, get_deployed_component_metadata_response,
     get_resource_definition_by_id_response, get_resource_definition_by_name_response,
     get_resource_limits_response, registry_service_error, resolve_agent_type_by_names_response,
-    resolve_component_response, update_worker_connection_limit_response,
+    resolve_component_response, revoke_card_response, update_worker_connection_limit_response,
 };
+use golem_common::base_model::api;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
 use golem_common::model::agent_secret::{
@@ -73,11 +76,12 @@ use golem_common::model::agent_secret::{
 };
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::card::CardId;
+use golem_common::model::card::{CardId, CardManagedByRuntimeDerived, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::model::auth::AuthCtx;
@@ -86,6 +90,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing_futures::Instrument;
+use uuid::Uuid;
+
+fn invalid_runtime_card_request(error: impl Into<String>) -> GrpcApiError {
+    GrpcApiError::BadRequest(ErrorsBody {
+        code: api::error_code::VALIDATION_ERROR.to_string(),
+        errors: vec![error.into()],
+        cause: None,
+    })
+}
 
 pub struct RegistryServiceGrpcApi {
     auth_service: Arc<AuthService>,
@@ -251,6 +264,74 @@ impl RegistryServiceGrpcApi {
                     })
                 })
                 .collect::<Result<_, String>>()?,
+        })
+    }
+
+    async fn create_runtime_card_internal(
+        &self,
+        request: CreateRuntimeCardRequest,
+    ) -> Result<CreateRuntimeCardSuccessResponse, GrpcApiError> {
+        let card_data = request
+            .card
+            .ok_or_else(|| invalid_runtime_card_request("missing card field"))?;
+        let envelope_card_id = card_data
+            .card_id
+            .ok_or_else(|| invalid_runtime_card_request("missing card.card_id field"))?;
+        let envelope_card_id = Uuid::from(envelope_card_id);
+        let card: StoredCard = serde_json::from_slice(&card_data.card_json)
+            .map_err(|error| invalid_runtime_card_request(format!("invalid card: {error}")))?;
+        let provenance: CardManagedByRuntimeDerived =
+            serde_json::from_slice(&request.provenance_json).map_err(|error| {
+                invalid_runtime_card_request(format!("invalid provenance: {error}"))
+            })?;
+
+        if card.card_id().0 != envelope_card_id {
+            return Err(invalid_runtime_card_request(
+                "card.card_id does not match the serialized card",
+            ));
+        }
+
+        let card = self
+            .card_service
+            .create_runtime_card(card, provenance, &AuthCtx::System)
+            .await?;
+        let card_id = card.card_id();
+        Ok(CreateRuntimeCardSuccessResponse {
+            card: Some(RuntimeCardData {
+                card_id: Some(card_id.0.into()),
+                card_json: serde_json::to_vec(&card).map_err(|error| error.to_string())?,
+            }),
+        })
+    }
+
+    async fn revoke_card_internal(
+        &self,
+        request: RevokeCardRequest,
+    ) -> Result<RevokeCardSuccessResponse, GrpcApiError> {
+        let card_id = request
+            .card_id
+            .ok_or_else(|| invalid_runtime_card_request("missing card_id field"))?;
+        let revoked_card_ids = match self
+            .card_service
+            .revoke_card(CardId(card_id.into()), &AuthCtx::System)
+            .await
+        {
+            Ok(card_ids) => card_ids,
+            Err(CardError::ConcurrentModification) => {
+                return Err(GrpcApiError::AlreadyExists(ErrorBody {
+                    error: CardError::ConcurrentModification.to_string(),
+                    code: api::error_code::CONCURRENT_UPDATE.to_string(),
+                    cause: None,
+                }));
+            }
+            Err(error) => return Err(error.into()),
+        };
+
+        Ok(RevokeCardSuccessResponse {
+            revoked_card_ids: revoked_card_ids
+                .into_iter()
+                .map(|card_id| card_id.0.into())
+                .collect(),
         })
     }
 
@@ -739,6 +820,62 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(BatchGetCardsResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn create_runtime_card(
+        &self,
+        request: Request<CreateRuntimeCardRequest>,
+    ) -> Result<Response<CreateRuntimeCardResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let card_id = request
+            .card
+            .as_ref()
+            .and_then(|card| card.card_id)
+            .map(Uuid::from);
+        let record = recorded_grpc_api_request!(
+            "create_runtime_card",
+            card_id = card_id.map(|id| id.to_string()).unwrap_or_default()
+        );
+
+        let response = match self
+            .create_runtime_card_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => create_runtime_card_response::Result::Success(result),
+            Err(error) => create_runtime_card_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(CreateRuntimeCardResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn revoke_card(
+        &self,
+        request: Request<RevokeCardRequest>,
+    ) -> Result<Response<RevokeCardResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let card_id = request.card_id.map(Uuid::from);
+        let record = recorded_grpc_api_request!(
+            "revoke_card",
+            card_id = card_id.map(|id| id.to_string()).unwrap_or_default()
+        );
+
+        let response = match self
+            .revoke_card_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|result| record.result(result))
+        {
+            Ok(result) => revoke_card_response::Result::Success(result),
+            Err(error) => revoke_card_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(RevokeCardResponse {
             result: Some(response),
         }))
     }

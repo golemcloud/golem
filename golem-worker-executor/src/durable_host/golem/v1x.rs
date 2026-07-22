@@ -1256,17 +1256,19 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         .map_err(|msg| anyhow!(msg))?;
 
         if chunk.next_oplog_index != entry.next_oplog_index {
+            let entries = chunk
+                .entries
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, String>>()
+                .map_err(|error| {
+                    anyhow!("cannot project oplog entry to golem:api/oplog@1.5.0: {error}")
+                })?;
             self.as_wasi_view()
                 .table()
                 .get_mut(&self_)?
                 .update(chunk.next_oplog_index, chunk.current_component_revision);
-            Ok(Some(
-                chunk
-                    .entries
-                    .into_iter()
-                    .map(|entry| entry.into())
-                    .collect(),
-            ))
+            Ok(Some(entries))
         } else {
             Ok(None)
         }
@@ -1479,21 +1481,23 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         .map_err(|msg| anyhow!(msg))?;
 
         if chunk.next_oplog_index != entry.next_oplog_index {
+            let entries = chunk
+                .entries
+                .into_iter()
+                .map(|(idx, entry)| {
+                    let idx: golem_api_1_x::oplog::OplogIndex = idx.into();
+                    let entry: golem_api_1_x::oplog::PublicOplogEntry = entry.try_into()?;
+                    Ok((idx, entry))
+                })
+                .collect::<Result<Vec<_>, String>>()
+                .map_err(|error| {
+                    anyhow!("cannot project oplog entry to golem:api/oplog@1.5.0: {error}")
+                })?;
             self.as_wasi_view()
                 .table()
                 .get_mut(&self_)?
                 .update(chunk.next_oplog_index, chunk.current_component_revision);
-            Ok(Some(
-                chunk
-                    .entries
-                    .into_iter()
-                    .map(|(idx, entry)| {
-                        let idx: golem_api_1_x::oplog::OplogIndex = idx.into();
-                        let entry: golem_api_1_x::oplog::PublicOplogEntry = entry.into();
-                        (idx, entry)
-                    })
-                    .collect(),
-            ))
+            Ok(Some(entries))
         } else {
             Ok(None)
         }
@@ -1654,7 +1658,11 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
             .await
             {
                 Ok(public_entry) => {
-                    let wit_entry: golem_api_1_x::oplog::PublicOplogEntry = public_entry.into();
+                    let wit_entry: golem_api_1_x::oplog::PublicOplogEntry =
+                        match public_entry.try_into() {
+                            Ok(entry) => entry,
+                            Err(error) => return Ok(Err(error)),
+                        };
                     result.push(wit_entry);
                 }
                 Err(e) => return Ok(Err(e)),

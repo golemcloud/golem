@@ -858,7 +858,7 @@ impl CliTestService {
                 Self { service }
             }
             _ => {
-                panic!("Test mode {:?} not supported", &mode)
+                panic!("Test mode {:?} not supported", mode)
             }
         }
     }

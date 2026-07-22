@@ -258,7 +258,9 @@ mod tests {
     };
     use crate::model::masking::MaskingConfig;
     use crate::model::text::diff::DeployPlanView;
-    use golem_common::model::card::{CardId, PolymorphicCard};
+    use golem_common::model::card::{
+        CardId, PolymorphicCard, PublicInvocationWalletPin, WalletVersionToken,
+    };
     use proptest::prelude::*;
     use quote::ToTokens;
     use serde_json::{Value, json};
@@ -1878,6 +1880,9 @@ mod tests {
         use golem_common::base_model::retry_policy::{
             ApiImmediatePolicy, ApiPredicate, ApiPredicateTrue, ApiRetryPolicy,
         };
+        use golem_common::model::card::{
+            AccountCardHolder, AgentCardHolder, ApplicationCardHolder, CardHolder, CardId,
+        };
         use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
         use golem_common::model::environment::EnvironmentId;
         use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -1903,6 +1908,10 @@ mod tests {
                 component_id: component_id(),
                 agent_id: name.to_string(),
             }
+        }
+
+        fn card_id(value: &str) -> CardId {
+            CardId(Uuid::parse_str(value).unwrap())
         }
 
         fn plugin(priority: i32) -> PluginInstallationDescription {
@@ -2056,6 +2065,13 @@ mod tests {
             PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
                 timestamp: timestamp(),
                 invocation: method_invocation(),
+                wallet_pin: Some(PublicInvocationWalletPin {
+                    wallet_token: WalletVersionToken {
+                        wallet_id_hash: [0x42; 32],
+                        generation: 7,
+                    },
+                    scope_card_id: Some(CardId::new()),
+                }),
             }),
             PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
                 timestamp: timestamp(),
@@ -2255,6 +2271,104 @@ mod tests {
             PublicOplogEntry::RemoveRetryPolicy(RemoveRetryPolicyParams {
                 timestamp: timestamp(),
                 name: "generated-retry".to_string(),
+            }),
+            PublicOplogEntry::CardEventQueued(CardEventQueuedParams {
+                timestamp: timestamp(),
+                event: PublicQueuedCardEvent::Install(PublicQueuedCardEventCard {
+                    card_id: card_id("43a5c8d4-f05e-4e23-b982-f4d413e181cb"),
+                }),
+            }),
+            PublicOplogEntry::CardEventQueued(CardEventQueuedParams {
+                timestamp: timestamp(),
+                event: PublicQueuedCardEvent::Revoke(PublicQueuedCardEventCard {
+                    card_id: card_id("43a5c8d4-f05e-4e23-b982-f4d413e181cb"),
+                }),
+            }),
+            PublicOplogEntry::CardEventQueued(CardEventQueuedParams {
+                timestamp: timestamp(),
+                event: PublicQueuedCardEvent::TransferStarted(PublicQueuedCardEventTransfer {
+                    transfer_id: Uuid::parse_str("53a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap(),
+                    card_id: card_id("43a5c8d4-f05e-4e23-b982-f4d413e181cb"),
+                    target_holder: CardHolder::Agent(AgentCardHolder {
+                        agent_id: agent_id("card-target"),
+                    }),
+                }),
+            }),
+            PublicOplogEntry::CardEventQueued(CardEventQueuedParams {
+                timestamp: timestamp(),
+                event: PublicQueuedCardEvent::TransferReceived(
+                    PublicQueuedCardEventTransferReceived {
+                        transfer_id: Uuid::parse_str("63a5c8d4-f05e-4e23-b982-f4d413e181cb")
+                            .unwrap(),
+                        card_id: card_id("43a5c8d4-f05e-4e23-b982-f4d413e181cb"),
+                    },
+                ),
+            }),
+            PublicOplogEntry::CardInstalled(CardInstalledParams {
+                timestamp: timestamp(),
+                queued_event_index: Some(OplogIndex::from_u64(22)),
+                card_id: card_id("43a5c8d4-f05e-4e23-b982-f4d413e181cb"),
+                wallet_generation: Some(1),
+            }),
+            PublicOplogEntry::CardInstallFailed(CardInstallFailedParams {
+                timestamp: timestamp(),
+                queued_event_index: OplogIndex::from_u64(23),
+                card_id: card_id("63a5c8d4-f05e-4e23-b982-f4d413e181cb"),
+                reason: CardInstallFailure::RecipientMismatch,
+            }),
+            PublicOplogEntry::CardRevoked(CardRevokedParams {
+                timestamp: timestamp(),
+                queued_event_index: OplogIndex::from_u64(24),
+                card_id: card_id("43a5c8d4-f05e-4e23-b982-f4d413e181cb"),
+                wallet_generation: Some(2),
+            }),
+            PublicOplogEntry::CardExpired(CardExpiredParams {
+                timestamp: timestamp(),
+                card_id: card_id("63a5c8d4-f05e-4e23-b982-f4d413e181cb"),
+                wallet_generation: Some(3),
+            }),
+            PublicOplogEntry::CardDerived(CardDerivedParams {
+                timestamp: timestamp(),
+                card_id: card_id("73a5c8d4-f05e-4e23-b982-f4d413e181cb"),
+                parent_ids: vec![card_id("43a5c8d4-f05e-4e23-b982-f4d413e181cb")],
+                wallet_generation: Some(4),
+            }),
+            PublicOplogEntry::CardTransferStarted(CardTransferStartedParams {
+                timestamp: timestamp(),
+                transfer_id: Uuid::parse_str("53a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap(),
+                card_id: card_id("73a5c8d4-f05e-4e23-b982-f4d413e181cb"),
+                target_holder: CardHolder::Account(AccountCardHolder {
+                    account_id: Uuid::parse_str("83a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap(),
+                }),
+                source_wallet_generation: Some(4),
+            }),
+            PublicOplogEntry::CardTransferred(CardTransferredParams {
+                timestamp: timestamp(),
+                transfer_id: Uuid::parse_str("53a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap(),
+                source_card_id: Some(card_id("63a5c8d4-f05e-4e23-b982-f4d413e181cb")),
+                installed_card_id: card_id("73a5c8d4-f05e-4e23-b982-f4d413e181cb"),
+                target_holder: CardHolder::Application(ApplicationCardHolder {
+                    application_id: Uuid::parse_str("93a5c8d4-f05e-4e23-b982-f4d413e181cb")
+                        .unwrap(),
+                }),
+                target_wallet_generation: Some(7),
+            }),
+            PublicOplogEntry::CardRevokedCascade(CardRevokedCascadeParams {
+                timestamp: timestamp(),
+                revoked_card_ids: vec![
+                    card_id("43a5c8d4-f05e-4e23-b982-f4d413e181cb"),
+                    card_id("73a5c8d4-f05e-4e23-b982-f4d413e181cb"),
+                ],
+                local_wallet_generation: Some(8),
+            }),
+            PublicOplogEntry::CardTransferConfirmed(CardTransferConfirmedParams {
+                timestamp: timestamp(),
+                transfer_id: Uuid::parse_str("53a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap(),
+                source_card_id: card_id("63a5c8d4-f05e-4e23-b982-f4d413e181cb"),
+                installed_card_id: card_id("73a5c8d4-f05e-4e23-b982-f4d413e181cb"),
+                target_holder: CardHolder::Agent(AgentCardHolder {
+                    agent_id: agent_id("card-target"),
+                }),
             }),
             PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
                 timestamp: timestamp(),
@@ -3568,6 +3682,30 @@ mod tests {
                     )
                 }
             ),
+            (
+                arb_uuid(),
+                arb_uuid(),
+                arb_small_string(),
+                arb_small_string(),
+                arb_small_u64(),
+            )
+                .prop_map(
+                    |(environment_id, component_id, agent_id, invocation_key, oplog_index)| {
+                        golem_client::model::CardManagedBy::RuntimeDerived(
+                            golem_client::model::CardManagedByRuntimeDerived {
+                                environment_id,
+                                agent_id: golem_common::model::AgentId {
+                                    component_id: golem_common::model::component::ComponentId(
+                                        component_id,
+                                    ),
+                                    agent_id,
+                                },
+                                invocation_key,
+                                oplog_index,
+                            },
+                        )
+                    },
+                ),
         ]
         .boxed()
     }

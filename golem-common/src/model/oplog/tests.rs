@@ -13,7 +13,11 @@
 // limitations under the License.
 
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-use crate::model::card::{Card, CardId};
+use crate::model::agent::Principal;
+use crate::model::card::{
+    AccountCardHolder, AgentCardHolder, ApplicationCardHolder, Card, CardHolder, CardId,
+    InvocationWalletPin, PublicInvocationWalletPin, WalletVersionToken,
+};
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::lucene::Query;
@@ -22,14 +26,17 @@ use crate::model::oplog::payload::{HostRequestSecretReveal, HostResponseSecretRe
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams, CreateParams,
-    CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams,
-    EndParams, ErrorParams, ExitedParams, FailedUpdateParams, FinishSpanParams, GrowMemoryParams,
-    InterruptedParams, JumpParams, LogParams, NoOpParams, PendingAgentInvocationParams,
-    PendingUpdateParams, PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams,
-    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
-    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
-    SuccessfulUpdateParams, SuspendParams,
+    CancelledParams, CardDerivedParams, CardExpiredParams, CardInstalledParams,
+    CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
+    CardTransferStartedParams, CardTransferredParams, ChangePersistenceLevelParams,
+    CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
+    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, FinishSpanParams, GrowMemoryParams, InterruptedParams, JumpParams,
+    LogParams, NoOpParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
+    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
+    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams,
+    SuspendParams,
 };
 use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
@@ -37,13 +44,14 @@ use crate::model::oplog::{
     MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogPayload,
     PersistenceLevel, PluginInstallationDescription, PublicAgentInvocation,
     PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
-    PublicLocalSpanData, PublicOplogEntry, PublicSnapshotData, PublicSpanData,
-    PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData,
-    SnapshotBasedUpdateParameters, StringAttributeValue,
+    PublicLocalSpanData, PublicOplogEntry, PublicQueuedCardEvent, PublicSnapshotData,
+    PublicSpanData, PublicTypedAgentConfigEntry, PublicUpdateDescription, QueuedCardEvent,
+    RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, AgentId, ComponentId, Empty, IdempotencyKey, OplogIndex, Timestamp, TransactionId,
+    AccountId, AgentId, AgentInvocationPayload, ComponentId, Empty, IdempotencyKey, OplogIndex,
+    Timestamp, TransactionId,
 };
 use crate::schema::IntoTypedSchemaValue;
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
@@ -70,6 +78,23 @@ fn test_card(card_id: CardId) -> Card {
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
         created_at: chrono::Utc::now(),
+        expires_at: None,
+        system_card: false,
+        managed_by: None,
+    }
+}
+
+fn phase_four_fixture_card() -> Card {
+    Card {
+        card_id: CardId(Uuid::parse_str("11111111-2222-3333-4444-555555555555").unwrap()),
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: chrono::DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
+            .unwrap()
+            .to_utc(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -429,6 +454,7 @@ fn agent_invocation_started_serialization_poem_serde_equivalence() {
                 inherited: true,
             })]],
         }),
+        wallet_pin: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -572,6 +598,7 @@ fn agent_invocation_started_with_initialization_serialization_poem_serde_equival
                 inherited: false,
             })]],
         }),
+        wallet_pin: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -989,17 +1016,482 @@ fn raw_snapshot_protobuf_roundtrip_preserves_active_cards() {
         data: OplogPayload::Inline(Box::new(vec![1, 2, 3, 4])),
         mime_type: "application/octet-stream".to_string(),
         active_cards,
+        wallet_generation: 73,
     };
 
     let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
         entry.clone().try_into().unwrap();
     let decoded = OplogEntry::try_from(proto).unwrap();
+    let bytes = crate::serialization::serialize(&entry).unwrap();
+    let binary_decoded = crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap();
+    match binary_decoded {
+        OplogEntry::Snapshot {
+            active_cards,
+            wallet_generation,
+            ..
+        } => {
+            assert_eq!(active_cards, vec![card.clone().into()]);
+            assert_eq!(wallet_generation, 73);
+        }
+        other => panic!("expected binary snapshot entry, got {other:?}"),
+    }
 
     match decoded {
-        OplogEntry::Snapshot { active_cards, .. } => {
+        OplogEntry::Snapshot {
+            active_cards,
+            wallet_generation,
+            ..
+        } => {
             assert_eq!(active_cards, vec![card.into()]);
+            assert_eq!(wallet_generation, 73);
         }
         other => panic!("expected snapshot entry, got {other:?}"),
+    }
+}
+
+#[test]
+fn invocation_wallet_pin_protobuf_roundtrip_and_legacy_defaults() {
+    let pinned_card_ids = vec![CardId::new(), CardId::new()];
+    let scope_card_id = CardId::new();
+    let wallet_token = WalletVersionToken {
+        wallet_id_hash: [0x42; 32],
+        generation: 73,
+    };
+    let raw_entry = OplogEntry::AgentInvocationStarted {
+        timestamp: Timestamp::now_utc().rounded(),
+        idempotency_key: IdempotencyKey::new("wallet-pin".to_string()),
+        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+            method_name: "test".to_string(),
+            input: SchemaValue::Record { fields: Vec::new() },
+            principal: Principal::anonymous(),
+        })),
+        trace_id: TraceId::generate(),
+        trace_states: Vec::new(),
+        invocation_context: Vec::new(),
+        wallet_pin: Some(InvocationWalletPin {
+            wallet_token: wallet_token.clone(),
+            pinned_card_ids: pinned_card_ids.clone(),
+            scope_card_id: Some(scope_card_id),
+        }),
+    };
+
+    let mut raw_proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+        raw_entry.clone().try_into().unwrap();
+    match OplogEntry::try_from(raw_proto.clone()).unwrap() {
+        OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
+            assert_eq!(
+                wallet_pin,
+                Some(InvocationWalletPin {
+                    wallet_token: wallet_token.clone(),
+                    pinned_card_ids: pinned_card_ids.clone(),
+                    scope_card_id: Some(scope_card_id),
+                })
+            );
+        }
+        other => panic!("expected raw invocation-started entry, got {other:?}"),
+    }
+    if let Some(
+        golem_api_grpc::proto::golem::worker::raw_oplog_entry::Entry::AgentInvocationStarted(
+            params,
+        ),
+    ) = &mut raw_proto.entry
+    {
+        params.wallet_pin = None;
+    } else {
+        panic!("expected raw invocation-started protobuf entry");
+    }
+    match OplogEntry::try_from(raw_proto).unwrap() {
+        OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
+            assert_eq!(wallet_pin, None);
+        }
+        other => panic!("expected raw invocation-started entry, got {other:?}"),
+    }
+
+    let public_entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        invocation: PublicAgentInvocation::SaveSnapshot(Empty {}),
+        wallet_pin: Some(PublicInvocationWalletPin {
+            wallet_token,
+            scope_card_id: Some(scope_card_id),
+        }),
+    });
+    let mut public_proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+        public_entry.clone().try_into().unwrap();
+    assert_eq!(
+        PublicOplogEntry::try_from(public_proto.clone()).unwrap(),
+        public_entry
+    );
+    if let Some(golem_api_grpc::proto::golem::worker::oplog_entry::Entry::AgentInvocationStarted(
+        params,
+    )) = &mut public_proto.entry
+    {
+        params.wallet_pin = None;
+    } else {
+        panic!("expected public invocation-started protobuf entry");
+    }
+    match PublicOplogEntry::try_from(public_proto).unwrap() {
+        PublicOplogEntry::AgentInvocationStarted(params) => {
+            assert_eq!(params.wallet_pin, None);
+        }
+        other => panic!("expected public invocation-started entry, got {other:?}"),
+    }
+}
+
+#[test]
+fn phase_four_queued_card_event_binary_fixtures_remain_decodable() {
+    let card = phase_four_fixture_card();
+    let card_id = card.card_id;
+    let fixtures = [
+        (
+            include_bytes!(
+                "../../../tests/fixtures/permission-cards/phase4/queued_card_event_install.bin"
+            )
+            .as_slice(),
+            QueuedCardEvent::install(card),
+        ),
+        (
+            include_bytes!(
+                "../../../tests/fixtures/permission-cards/phase4/queued_card_event_revoke.bin"
+            )
+            .as_slice(),
+            QueuedCardEvent::revoke(card_id),
+        ),
+    ];
+
+    for (bytes, expected) in fixtures {
+        assert_eq!(
+            crate::serialization::deserialize::<QueuedCardEvent>(bytes).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn phase_four_public_queued_card_event_binary_fixtures_remain_decodable() {
+    let card_id = phase_four_fixture_card().card_id;
+    let fixtures = [
+        (
+            include_bytes!(
+                "../../../tests/fixtures/permission-cards/phase4/public_queued_card_event_install.bin"
+            )
+            .as_slice(),
+            PublicQueuedCardEvent::Install(crate::model::oplog::PublicQueuedCardEventCard {
+                card_id,
+            }),
+        ),
+        (
+            include_bytes!(
+                "../../../tests/fixtures/permission-cards/phase4/public_queued_card_event_revoke.bin"
+            )
+            .as_slice(),
+            PublicQueuedCardEvent::Revoke(crate::model::oplog::PublicQueuedCardEventCard {
+                card_id,
+            }),
+        ),
+    ];
+
+    for (bytes, expected) in fixtures {
+        assert_eq!(
+            crate::serialization::deserialize::<PublicQueuedCardEvent>(bytes).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn phase_four_card_oplog_binary_fixtures_remain_decodable() {
+    let card = phase_four_fixture_card();
+    let card_id = card.card_id;
+    let timestamp = Timestamp::from(1_750_000_000_123);
+    let queued_event_index = OplogIndex::from_u64(42);
+    let fixtures = [
+        (
+            include_bytes!(
+                "../../../tests/fixtures/permission-cards/phase4/oplog_entry_card_event_queued_install.bin"
+            )
+            .as_slice(),
+            OplogEntry::CardEventQueued {
+                timestamp,
+                event: QueuedCardEvent::install(card.clone()),
+            },
+        ),
+        (
+            include_bytes!(
+                "../../../tests/fixtures/permission-cards/phase4/oplog_entry_card_event_queued_revoke.bin"
+            )
+            .as_slice(),
+            OplogEntry::CardEventQueued {
+                timestamp,
+                event: QueuedCardEvent::revoke(card_id),
+            },
+        ),
+        (
+            include_bytes!(
+                "../../../tests/fixtures/permission-cards/phase4/oplog_entry_card_installed.bin"
+            )
+            .as_slice(),
+            OplogEntry::CardInstalled {
+                timestamp,
+                queued_event_index: Some(queued_event_index),
+                card: card.into(),
+                wallet_generation: None,
+            },
+        ),
+        (
+            include_bytes!(
+                "../../../tests/fixtures/permission-cards/phase4/oplog_entry_card_install_failed.bin"
+            )
+            .as_slice(),
+            OplogEntry::CardInstallFailed {
+                timestamp,
+                queued_event_index,
+                card_id,
+                reason: crate::model::oplog::CardInstallFailure::RecipientMismatch,
+            },
+        ),
+        (
+            include_bytes!(
+                "../../../tests/fixtures/permission-cards/phase4/oplog_entry_card_revoked.bin"
+            )
+            .as_slice(),
+            OplogEntry::CardRevoked {
+                timestamp,
+                queued_event_index,
+                card_id,
+                wallet_generation: None,
+            },
+        ),
+        (
+            include_bytes!(
+                "../../../tests/fixtures/permission-cards/phase4/oplog_entry_card_expired.bin"
+            )
+            .as_slice(),
+            OplogEntry::CardExpired {
+                timestamp,
+                card_id,
+                wallet_generation: None,
+            },
+        ),
+    ];
+
+    for (bytes, expected) in fixtures {
+        assert_eq!(
+            crate::serialization::deserialize::<OplogEntry>(bytes).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn phase_four_snapshot_with_active_cards_remains_decodable() {
+    let bytes = include_bytes!(
+        "../../../tests/fixtures/permission-cards/phase4/oplog_entry_snapshot_with_active_card.bin"
+    );
+
+    let decoded = crate::serialization::deserialize::<OplogEntry>(bytes).unwrap();
+
+    match decoded {
+        OplogEntry::Snapshot {
+            active_cards,
+            wallet_generation,
+            ..
+        } => {
+            assert_eq!(active_cards, vec![phase_four_fixture_card().into()]);
+            assert_eq!(wallet_generation, 0);
+        }
+        other => panic!("expected snapshot entry, got {other:?}"),
+    }
+}
+
+#[test]
+fn phase_five_raw_card_oplog_entries_protobuf_roundtrip() {
+    let source_card_id = CardId::new();
+    let installed_card_id = CardId::new();
+    let source_card = test_card(source_card_id);
+    let installed_card = test_card(installed_card_id);
+    let transfer_id = Uuid::new_v4();
+    let source_holder = CardHolder::Account(AccountCardHolder {
+        account_id: Uuid::new_v4(),
+    });
+    let target_holder = CardHolder::Agent(AgentCardHolder {
+        agent_id: AgentId {
+            component_id: ComponentId(Uuid::new_v4()),
+            agent_id: "phase-five-target".to_string(),
+        },
+    });
+    let application_holder = CardHolder::Application(ApplicationCardHolder {
+        application_id: Uuid::new_v4(),
+    });
+    let timestamp = Timestamp::now_utc().rounded();
+    let entries = vec![
+        OplogEntry::CardInstalled {
+            timestamp,
+            queued_event_index: None,
+            card: source_card.clone().into(),
+            wallet_generation: Some(1),
+        },
+        OplogEntry::CardDerived {
+            timestamp,
+            card: source_card.clone().into(),
+            wallet_generation: Some(3),
+        },
+        OplogEntry::CardRevoked {
+            timestamp,
+            queued_event_index: OplogIndex::from_u64(1),
+            card_id: source_card_id,
+            wallet_generation: Some(4),
+        },
+        OplogEntry::CardExpired {
+            timestamp,
+            card_id: installed_card_id,
+            wallet_generation: Some(5),
+        },
+        OplogEntry::CardTransferStarted {
+            timestamp,
+            transfer_id,
+            card_id: source_card_id,
+            source_holder: Some(source_holder.clone()),
+            target_holder: target_holder.clone(),
+            source_wallet_generation: Some(4),
+        },
+        OplogEntry::CardTransferred {
+            timestamp,
+            transfer_id,
+            source_card_id: Some(source_card_id),
+            installed_card_id,
+            target_holder: target_holder.clone(),
+            card: installed_card.into(),
+            target_wallet_generation: Some(7),
+        },
+        OplogEntry::CardRevokedCascade {
+            timestamp,
+            revoked_card_ids: vec![source_card_id, installed_card_id],
+            affected_wallets: vec![source_holder.clone(), target_holder.clone()],
+            local_wallet_generation: Some(8),
+        },
+        OplogEntry::CardTransferConfirmed {
+            timestamp,
+            transfer_id,
+            source_card_id,
+            installed_card_id,
+            target_holder: target_holder.clone(),
+        },
+        OplogEntry::CardEventQueued {
+            timestamp,
+            event: QueuedCardEvent::transfer_started(transfer_id, source_card, application_holder),
+        },
+        OplogEntry::CardTransferStarted {
+            timestamp,
+            transfer_id: Uuid::new_v4(),
+            card_id: installed_card_id,
+            source_holder: None,
+            target_holder,
+            source_wallet_generation: None,
+        },
+    ];
+
+    for entry in entries {
+        let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+            entry.clone().try_into().unwrap();
+        assert_eq!(OplogEntry::try_from(proto).unwrap(), entry);
+
+        let bytes = crate::serialization::serialize(&entry).unwrap();
+        assert_eq!(
+            crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap(),
+            entry
+        );
+    }
+}
+
+#[test]
+fn phase_five_public_card_oplog_entries_protobuf_roundtrip() {
+    let card_id = CardId::new();
+    let installed_card_id = CardId::new();
+    let transfer_id = Uuid::new_v4();
+    let target_holder = CardHolder::Agent(AgentCardHolder {
+        agent_id: AgentId {
+            component_id: ComponentId(Uuid::new_v4()),
+            agent_id: "phase-five-public-target".to_string(),
+        },
+    });
+    let timestamp = Timestamp::now_utc().rounded();
+    let entries = vec![
+        PublicOplogEntry::CardInstalled(CardInstalledParams {
+            timestamp,
+            queued_event_index: None,
+            card_id,
+            wallet_generation: Some(1),
+        }),
+        PublicOplogEntry::CardDerived(CardDerivedParams {
+            timestamp,
+            card_id,
+            parent_ids: vec![CardId::new(), CardId::new()],
+            wallet_generation: Some(3),
+        }),
+        PublicOplogEntry::CardRevoked(CardRevokedParams {
+            timestamp,
+            queued_event_index: OplogIndex::from_u64(1),
+            card_id,
+            wallet_generation: Some(4),
+        }),
+        PublicOplogEntry::CardExpired(CardExpiredParams {
+            timestamp,
+            card_id: installed_card_id,
+            wallet_generation: Some(5),
+        }),
+        PublicOplogEntry::CardTransferStarted(CardTransferStartedParams {
+            timestamp,
+            transfer_id,
+            card_id,
+            target_holder: target_holder.clone(),
+            source_wallet_generation: Some(4),
+        }),
+        PublicOplogEntry::CardTransferred(CardTransferredParams {
+            timestamp,
+            transfer_id,
+            source_card_id: Some(card_id),
+            installed_card_id,
+            target_holder: target_holder.clone(),
+            target_wallet_generation: Some(7),
+        }),
+        PublicOplogEntry::CardRevokedCascade(CardRevokedCascadeParams {
+            timestamp,
+            revoked_card_ids: vec![card_id, installed_card_id],
+            local_wallet_generation: Some(8),
+        }),
+        PublicOplogEntry::CardTransferConfirmed(CardTransferConfirmedParams {
+            timestamp,
+            transfer_id,
+            source_card_id: card_id,
+            installed_card_id,
+            target_holder,
+        }),
+        PublicOplogEntry::CardEventQueued(
+            crate::model::oplog::public_oplog_entry::CardEventQueuedParams {
+                timestamp,
+                event: PublicQueuedCardEvent::TransferStarted(
+                    crate::model::oplog::PublicQueuedCardEventTransfer {
+                        transfer_id,
+                        card_id,
+                        target_holder: CardHolder::Application(ApplicationCardHolder {
+                            application_id: Uuid::new_v4(),
+                        }),
+                    },
+                ),
+            },
+        ),
+    ];
+
+    for entry in entries {
+        let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+            entry.clone().try_into().unwrap();
+        assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), entry);
+
+        let json = serde_json::to_string(&entry).unwrap();
+        assert_eq!(
+            serde_json::from_str::<PublicOplogEntry>(&json).unwrap(),
+            entry
+        );
     }
 }
 

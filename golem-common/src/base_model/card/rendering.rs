@@ -792,7 +792,7 @@ impl RenderFragment for ToolResourcePattern {
                     path.iter()
                         .map(|part| part.0.clone())
                         .collect::<Vec<_>>()
-                        .join("/")
+                        .join(".")
                 });
                 let args = invocation
                     .args

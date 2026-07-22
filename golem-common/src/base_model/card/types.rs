@@ -17,6 +17,7 @@ use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::base_model::environment::EnvironmentId;
+use crate::base_model::{AgentId, IdempotencyKey, OplogIndex};
 use crate::{declare_revision, declare_structs, declare_unions, newtype_uuid};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -33,6 +34,31 @@ impl From<CardId> for golem_schema::schema::wit::wire::CardId {
 declare_revision!(CardRevision);
 
 declare_structs! {
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
+    pub struct WalletVersionToken {
+        pub wallet_id_hash: [u8; 32],
+        pub generation: u64,
+    }
+
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
+    pub struct InvocationWalletPin {
+        pub wallet_token: WalletVersionToken,
+        pub pinned_card_ids: Vec<CardId>,
+        pub scope_card_id: Option<CardId>,
+    }
+
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
+    pub struct PublicInvocationWalletPin {
+        pub wallet_token: WalletVersionToken,
+        pub scope_card_id: Option<CardId>,
+    }
+
     #[derive(Eq)]
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     pub struct CardManagedByAccountRoot {
@@ -57,6 +83,16 @@ declare_structs! {
         pub component_id: ComponentId,
         pub component_revision: ComponentRevision,
         pub agent_type: AgentTypeName,
+    }
+
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
+    pub struct CardManagedByRuntimeDerived {
+        pub environment_id: EnvironmentId,
+        pub agent_id: AgentId,
+        pub invocation_key: IdempotencyKey,
+        pub oplog_index: OplogIndex,
     }
 
     #[derive(Eq)]
@@ -87,6 +123,27 @@ declare_structs! {
         pub expires_at: Option<DateTime<Utc>>,
         pub system_card: bool,
     }
+
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
+    pub struct AccountCardHolder {
+        pub account_id: Uuid,
+    }
+
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
+    pub struct ApplicationCardHolder {
+        pub application_id: Uuid,
+    }
+
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
+    pub struct AgentCardHolder {
+        pub agent_id: AgentId,
+    }
 }
 
 declare_unions! {
@@ -104,6 +161,53 @@ declare_unions! {
         EnvironmentDefault(CardManagedByEnvironmentDefault),
         PermissionShare(CardManagedByPermissionShare),
         AgentInitial(CardManagedByAgentInitial),
+        RuntimeDerived(CardManagedByRuntimeDerived),
+    }
+
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    pub enum CardHolder {
+        Account(AccountCardHolder),
+        Application(ApplicationCardHolder),
+        Agent(AgentCardHolder),
+    }
+}
+
+pub type PublicCardHolder = CardHolder;
+
+impl CardHolder {
+    const WALLET_ID_ENCODING_DOMAIN: &'static [u8] = b"golem:permissions:wallet-id:v1\0";
+
+    /// Encodes the wallet owner using the stable, versioned wallet identity format.
+    ///
+    /// UUIDs use RFC 4122 network byte order. Agent IDs encode the component UUID
+    /// followed by the big-endian byte length and UTF-8 bytes of the agent name.
+    pub fn canonical_wallet_id_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::from(Self::WALLET_ID_ENCODING_DOMAIN);
+        match self {
+            Self::Account(holder) => {
+                bytes.push(0);
+                bytes.extend_from_slice(holder.account_id.as_bytes());
+            }
+            Self::Application(holder) => {
+                bytes.push(1);
+                bytes.extend_from_slice(holder.application_id.as_bytes());
+            }
+            Self::Agent(holder) => {
+                bytes.push(2);
+                bytes.extend_from_slice(holder.agent_id.component_id.0.as_bytes());
+                let agent_id = holder.agent_id.agent_id.as_bytes();
+                let length = u64::try_from(agent_id.len())
+                    .expect("agent ID byte length does not fit into u64");
+                bytes.extend_from_slice(&length.to_be_bytes());
+                bytes.extend_from_slice(agent_id);
+            }
+        }
+        bytes
+    }
+
+    pub fn wallet_id_hash(&self) -> [u8; 32] {
+        *blake3::hash(&self.canonical_wallet_id_bytes()).as_bytes()
     }
 }
 
@@ -138,6 +242,13 @@ impl StoredCard {
         match self {
             Self::Concrete(card) => card.expires_at,
             Self::Polymorphic(card) => card.expires_at,
+        }
+    }
+
+    pub fn created_at(&self) -> DateTime<Utc> {
+        match self {
+            Self::Concrete(card) => card.created_at,
+            Self::Polymorphic(card) => card.created_at,
         }
     }
 

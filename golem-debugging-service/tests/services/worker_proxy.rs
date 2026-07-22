@@ -108,6 +108,21 @@ impl WorkerProxy for TestWorkerProxy {
         ))
     }
 
+    async fn deliver_card_transfer(
+        &self,
+        _target_agent_id: &AgentId,
+        _environment_id: EnvironmentId,
+        _transfer_id: uuid::Uuid,
+        _source_card_id: golem_common::model::card::CardId,
+        _card: &golem_common::model::card::StoredCard,
+    ) -> Result<(), WorkerProxyError> {
+        Err(WorkerProxyError::InternalError(
+            WorkerExecutorError::unknown(
+                "Not implemented in tests as debug service does not deliver permission cards",
+            ),
+        ))
+    }
+
     async fn cancel_invocation(
         &self,
         _agent_id: &AgentId,
@@ -160,6 +175,7 @@ impl WorkerProxy for TestWorkerProxy {
                 lower: Vec::new(),
                 upper: Vec::new(),
             },
+            delegation_surface: None,
         });
 
         let result = loop {
@@ -219,6 +235,7 @@ impl WorkerProxy for TestWorkerProxy {
                 lower: Vec::new(),
                 upper: Vec::new(),
             },
+            delegation_surface: None,
         });
 
         let result = self
@@ -271,6 +288,7 @@ impl WorkerProxy for TestWorkerProxy {
                 lower: Vec::new(),
                 upper: Vec::new(),
             },
+            delegation_surface: None,
         });
 
         let result = self

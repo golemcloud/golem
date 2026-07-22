@@ -39,6 +39,7 @@ service WorkerService {
   rpc InvokeAgent (InvokeAgentRequest) returns (InvokeAgentResponse);
   rpc CancelInvocation (CancelInvocationRequest) returns (CancelInvocationResponse);
   rpc ProcessOplogEntries (ProcessOplogEntriesRequest) returns (ProcessOplogEntriesResponse);
+  rpc DeliverCardTransfer (DeliverCardTransferRequest) returns (DeliverCardTransferResponse);
 }
 
 message LaunchNewWorkerRequest {
@@ -196,6 +197,23 @@ message ProcessOplogEntriesRequest {
 }
 
 message ProcessOplogEntriesResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.AgentError error = 2;
+  }
+}
+
+message DeliverCardTransferRequest {
+  golem.worker.AgentId target_agent_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  golem.common.UUID transfer_id = 3;
+  // desert_rust BinaryCodec encoding of golem_common::model::card::StoredCard.
+  bytes card = 4;
+  golem.auth.AuthCtx auth_ctx = 5;
+  golem.common.UUID source_card_id = 6;
+}
+
+message DeliverCardTransferResponse {
   oneof result {
     golem.common.Empty success = 1;
     golem.worker.v1.AgentError error = 2;

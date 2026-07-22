@@ -15,12 +15,16 @@
 use super::class::*;
 use super::owner::*;
 use super::recipient::RecipientPattern;
-use super::{Card, EffectiveSurface, PermissionPattern, PolymorphicPermissionPattern, StoredCard};
+use super::{
+    Card, CardId, DelegationSurface, EffectiveSurface, PermissionPattern, PolymorphicCard,
+    PolymorphicPermissionPattern, StoredCard,
+};
 use crate::model::account::AccountEmail;
 use crate::model::agent::AgentTypeName;
 use crate::model::application::ApplicationName;
 use crate::model::component::ComponentName;
 use crate::model::environment::EnvironmentName;
+use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentPermissionMonomorphizationContext {
@@ -37,15 +41,29 @@ pub fn agent_effective_surface_from_wallet<'a>(
     wallet_cards: impl IntoIterator<Item = &'a StoredCard>,
 ) -> EffectiveSurface {
     let holder = agent_recipient_pattern(context);
-    let cards = wallet_cards
+    let cards = monomorphize_wallet_cards(context, wallet_cards);
+
+    EffectiveSurface::from_cards(&cards, &holder).unwrap_or_default()
+}
+
+pub fn agent_delegation_surface_from_wallet<'a>(
+    context: &AgentPermissionMonomorphizationContext,
+    wallet_cards: impl IntoIterator<Item = &'a StoredCard>,
+) -> DelegationSurface {
+    DelegationSurface::from_cards(&monomorphize_wallet_cards(context, wallet_cards))
+}
+
+fn monomorphize_wallet_cards<'a>(
+    context: &AgentPermissionMonomorphizationContext,
+    wallet_cards: impl IntoIterator<Item = &'a StoredCard>,
+) -> Vec<Card> {
+    wallet_cards
         .into_iter()
         .map(|card| match card {
             StoredCard::Concrete(card) => card.clone(),
-            StoredCard::Polymorphic(_) => monomorphize_stored_card(card, context),
+            StoredCard::Polymorphic(_) => monomorphize_card_for_agent(card, context),
         })
-        .collect::<Vec<_>>();
-
-    EffectiveSurface::from_cards(&cards, &holder).unwrap_or_default()
+        .collect()
 }
 
 fn agent_recipient_pattern(context: &AgentPermissionMonomorphizationContext) -> RecipientPattern {
@@ -58,25 +76,57 @@ fn agent_recipient_pattern(context: &AgentPermissionMonomorphizationContext) -> 
     }
 }
 
-fn monomorphize_stored_card(
+pub fn monomorphize_card_for_agent(
     card: &StoredCard,
     context: &AgentPermissionMonomorphizationContext,
 ) -> Card {
     match card {
         StoredCard::Concrete(card) => card.clone(),
-        StoredCard::Polymorphic(card) => Card {
-            card_id: card.card_id,
-            parent_ids: card.parent_ids.clone(),
-            lower_positive: resolve_permissions_for_agent_context(&card.lower_positive, context),
-            lower_negative: resolve_permissions_for_agent_context(&card.lower_negative, context),
-            upper_positive: resolve_permissions_for_agent_context(&card.upper_positive, context),
-            upper_negative: resolve_permissions_for_agent_context(&card.upper_negative, context),
-            created_at: card.created_at,
-            expires_at: card.expires_at,
-            system_card: card.system_card,
-            managed_by: None,
-        },
+        StoredCard::Polymorphic(card) => monomorphize_polymorphic_card_for_agent(card, context),
     }
+}
+
+pub fn instantiate_polymorphic_card_for_agent(
+    card: &PolymorphicCard,
+    context: &AgentPermissionMonomorphizationContext,
+    child_card_id: CardId,
+    created_at: DateTime<Utc>,
+) -> Card {
+    Card {
+        card_id: child_card_id,
+        parent_ids: vec![card.card_id],
+        created_at,
+        ..monomorphize_polymorphic_card_for_agent(card, context)
+    }
+}
+
+fn monomorphize_polymorphic_card_for_agent(
+    card: &PolymorphicCard,
+    context: &AgentPermissionMonomorphizationContext,
+) -> Card {
+    Card {
+        card_id: card.card_id,
+        parent_ids: card.parent_ids.clone(),
+        lower_positive: resolve_permissions_for_agent_context(&card.lower_positive, context),
+        lower_negative: resolve_permissions_for_agent_context(&card.lower_negative, context),
+        upper_positive: resolve_permissions_for_agent_context(&card.upper_positive, context),
+        upper_negative: resolve_permissions_for_agent_context(&card.upper_negative, context),
+        created_at: card.created_at,
+        expires_at: card.expires_at,
+        system_card: card.system_card,
+        managed_by: None,
+    }
+}
+
+pub fn card_matches_agent_recipient(
+    card: &StoredCard,
+    context: &AgentPermissionMonomorphizationContext,
+) -> bool {
+    let holder = agent_recipient_pattern(context);
+    monomorphize_card_for_agent(card, context)
+        .lower_positive
+        .iter()
+        .any(|grant| grant.recipient().subsumes(&holder))
 }
 
 pub(crate) fn resolve_permissions_for_agent_context(
@@ -656,10 +706,19 @@ mod tests {
             expires_at: None,
             system_card: false,
         };
-        let surface =
-            agent_effective_surface_from_wallet(&context, [&StoredCard::Polymorphic(card)]);
+        let stored_card = StoredCard::Polymorphic(card);
+        let surface = agent_effective_surface_from_wallet(&context, [&stored_card]);
+        let delegation_surface = agent_delegation_surface_from_wallet(&context, [&stored_card]);
 
         assert_eq!(surface.source_card_ids, vec![card_id]);
+        assert_eq!(delegation_surface.cards.len(), 1);
+        assert_eq!(delegation_surface.cards[0].source_card_id, Some(card_id));
+        assert!(
+            delegation_surface.cards[0]
+                .lower_positive
+                .iter()
+                .all(|grant| grant.recipient() == &RecipientPattern::Any)
+        );
         assert!(
             surface
                 .authorize(&environment_view_target("owner@example.com/shop/prod"))
@@ -687,6 +746,63 @@ mod tests {
                     AgentVerb::View,
                 ))
                 .unwrap()
+        );
+    }
+
+    #[test]
+    fn installed_polymorphic_child_has_target_grants_and_source_parent() {
+        let context = context();
+        let source_card_id = CardId(uuid::Uuid::from_u128(1));
+        let source_parent_id = CardId(uuid::Uuid::from_u128(2));
+        let child_card_id = CardId(uuid::Uuid::from_u128(3));
+        let source_created_at = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let child_created_at = chrono::DateTime::from_timestamp(1_700_000_100, 0).unwrap();
+        let expires_at = chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+        let grant = PolymorphicPermissionPattern::Agent(PolymorphicClassPermissionPattern {
+            owner: PolymorphicAgentOwnerPattern::Agent,
+            recipient: RecipientPattern::Any,
+            verb: Some(AgentVerb::View),
+            resource: AgentResourcePattern::Any,
+        });
+        let source = PolymorphicCard {
+            card_id: source_card_id,
+            parent_ids: vec![source_parent_id],
+            lower_positive: vec![grant.clone()],
+            lower_negative: vec![grant.clone()],
+            upper_positive: vec![grant.clone()],
+            upper_negative: vec![grant],
+            created_at: source_created_at,
+            expires_at: Some(expires_at),
+            system_card: false,
+        };
+        let monomorphized_source =
+            monomorphize_card_for_agent(&StoredCard::Polymorphic(source.clone()), &context);
+
+        let child = instantiate_polymorphic_card_for_agent(
+            &source,
+            &context,
+            child_card_id,
+            child_created_at,
+        );
+
+        assert_eq!(child.card_id, child_card_id);
+        assert_eq!(child.parent_ids, vec![source_card_id]);
+        assert_eq!(child.lower_positive, monomorphized_source.lower_positive);
+        assert_eq!(child.lower_negative, monomorphized_source.lower_negative);
+        assert_eq!(child.upper_positive, monomorphized_source.upper_positive);
+        assert_eq!(child.upper_negative, monomorphized_source.upper_negative);
+        assert_eq!(child.created_at, child_created_at);
+        assert_eq!(child.expires_at, source.expires_at);
+        assert_eq!(child.system_card, source.system_card);
+        assert_eq!(child.managed_by, None);
+        assert_eq!(
+            child,
+            instantiate_polymorphic_card_for_agent(
+                &source,
+                &context,
+                child_card_id,
+                child_created_at,
+            )
         );
     }
 

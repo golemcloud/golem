@@ -14,6 +14,10 @@ interface wallet {
     self-version: func() -> wallet-version-token;
 
     /// Install `card` onto `target`. Returns unit on success.
+    ///
+    /// Only agent targets are currently supported. Account and application
+    /// targets return `not-permitted("install-card currently supports only
+    /// agent targets")` before any wallet or oplog mutation.
     install-card: func(card: permission-card, target: holder)
         -> result<_, permission-error>;
 }

@@ -15,10 +15,10 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::SafeDisplay;
-use golem_common::model::card::{CardId, StoredCard};
-use golem_service_base::clients::registry::RegistryService;
+use golem_common::model::card::{CardId, CardManagedByRuntimeDerived, StoredCard};
+use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -30,6 +30,31 @@ pub trait CardService: Send + Sync {
         &self,
         card_ids: Vec<CardId>,
     ) -> Result<HashMap<CardId, CardState>, WorkerExecutorError>;
+
+    async fn create_runtime_card(
+        &self,
+        _card: StoredCard,
+        _provenance: CardManagedByRuntimeDerived,
+    ) -> Result<StoredCard, WorkerExecutorError> {
+        Err(WorkerExecutorError::runtime(
+            "runtime permission-card creation is not supported by this card service",
+        ))
+    }
+
+    async fn revoke_card(&self, _card_id: CardId) -> Result<CardRevokeResult, WorkerExecutorError> {
+        Err(WorkerExecutorError::runtime(
+            "permission-card revocation is not supported by this card service",
+        ))
+    }
+
+    async fn live_ancestor_ids_including_self(
+        &self,
+        _card: &StoredCard,
+    ) -> Result<Vec<CardId>, WorkerExecutorError> {
+        Err(WorkerExecutorError::runtime(
+            "permission-card ancestor lookup is not supported by this card service",
+        ))
+    }
 
     /// Drops cached live card state so the next `check_cards` re-validates
     /// against the registry. Called during registry invalidation cursor-expiry
@@ -45,10 +70,10 @@ pub struct CardServiceDefault {
 #[derive(Default)]
 struct CardServiceState {
     cards: HashMap<CardId, CardData>,
-    /// Bumped by `invalidate_all`. A `check_cards` lookup captures this before
-    /// its registry fetch and refuses to write results back if it changed in
-    /// the meantime, so an in-flight lookup cannot repopulate a just-flushed
-    /// live cache with stale data.
+    revocation_versions: HashMap<CardId, u64>,
+    /// A `check_cards` lookup captures this before its registry fetch and
+    /// refuses to write results back if it changed in the meantime, so an
+    /// in-flight lookup cannot repopulate stale data.
     generation: u64,
 }
 
@@ -63,6 +88,13 @@ pub enum CardState {
     Unknown,
     Live(Box<StoredCard>),
     Revoked,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CardRevokeResult {
+    Revoked(Vec<CardId>),
+    AlreadyRevoked(String),
+    NotPermitted(String),
 }
 
 pub struct NoopCardService;
@@ -89,6 +121,8 @@ impl CardServiceDefault {
 
     fn record_revoked_cards_in_state(state: &mut CardServiceState, card_ids: &[CardId]) {
         for card_id in card_ids {
+            let version = state.revocation_versions.entry(*card_id).or_default();
+            *version = version.wrapping_add(1);
             state.cards.entry(*card_id).or_default().state = CardState::Revoked;
         }
     }
@@ -179,6 +213,116 @@ impl CardService for CardServiceDefault {
         Self::record_revoked_cards_in_state(&mut state, card_ids);
     }
 
+    async fn create_runtime_card(
+        &self,
+        card: StoredCard,
+        provenance: CardManagedByRuntimeDerived,
+    ) -> Result<StoredCard, WorkerExecutorError> {
+        let card_id = card.card_id();
+        let revocation_version = {
+            let state = self.state.read().await;
+            state
+                .revocation_versions
+                .get(&card_id)
+                .copied()
+                .unwrap_or_default()
+        };
+        let card = self
+            .registry_service
+            .create_runtime_card(card, provenance)
+            .await
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "Failed creating runtime permission card: {}",
+                    err.to_safe_string()
+                ))
+            })?;
+
+        let mut state = self.state.write().await;
+        let revocation_is_newer = state
+            .revocation_versions
+            .get(&card_id)
+            .copied()
+            .unwrap_or_default()
+            != revocation_version;
+        state.generation = state.generation.wrapping_add(1);
+        if !revocation_is_newer {
+            state.cards.entry(card_id).or_default().state = if Self::card_is_expired(&card) {
+                CardState::Revoked
+            } else {
+                CardState::Live(Box::new(card.clone()))
+            };
+        }
+        Ok(card)
+    }
+
+    async fn revoke_card(&self, card_id: CardId) -> Result<CardRevokeResult, WorkerExecutorError> {
+        match self.registry_service.revoke_card(card_id).await {
+            Ok(card_ids) => {
+                self.record_revoked_cards(&card_ids).await;
+                Ok(CardRevokeResult::Revoked(card_ids))
+            }
+            Err(error @ RegistryServiceError::NotFound(_)) => {
+                self.record_revoked_cards(&[card_id]).await;
+                Ok(CardRevokeResult::AlreadyRevoked(error.to_safe_string()))
+            }
+            Err(error @ RegistryServiceError::AlreadyExists(_)) => {
+                match self.registry_service.batch_get_cards(vec![card_id]).await {
+                    Ok(cards) if cards.iter().any(|card| card.card_id() == card_id) => {
+                        Err(WorkerExecutorError::runtime(format!(
+                            "Failed revoking permission card {card_id}: {}",
+                            error.to_safe_string()
+                        )))
+                    }
+                    Ok(_) => {
+                        self.record_revoked_cards(&[card_id]).await;
+                        Ok(CardRevokeResult::AlreadyRevoked(error.to_safe_string()))
+                    }
+                    Err(lookup_error) => Err(WorkerExecutorError::runtime(format!(
+                        "Failed confirming the state of permission card {card_id} after a concurrent revoke failure: {}",
+                        lookup_error.to_safe_string()
+                    ))),
+                }
+            }
+            Err(
+                error @ (RegistryServiceError::Unauthorized(_)
+                | RegistryServiceError::BadRequest(_)),
+            ) => Ok(CardRevokeResult::NotPermitted(error.to_safe_string())),
+            Err(error) => Err(WorkerExecutorError::runtime(format!(
+                "Failed revoking permission card {card_id}: {}",
+                error.to_safe_string()
+            ))),
+        }
+    }
+
+    async fn live_ancestor_ids_including_self(
+        &self,
+        card: &StoredCard,
+    ) -> Result<Vec<CardId>, WorkerExecutorError> {
+        let mut ancestors = BTreeSet::from([card.card_id()]);
+        let mut visited = HashSet::from([card.card_id()]);
+        let mut frontier = card.parent_ids().to_vec();
+
+        while !frontier.is_empty() {
+            frontier.retain(|card_id| visited.insert(*card_id));
+            if frontier.is_empty() {
+                break;
+            }
+
+            let states = self.check_cards(frontier.clone()).await?;
+            let mut next = Vec::new();
+            for card_id in &frontier {
+                if let Some(CardState::Live(parent)) = states.get(card_id) {
+                    ancestors.insert(*card_id);
+                    next.extend_from_slice(parent.parent_ids());
+                }
+            }
+            frontier = next;
+        }
+
+        Ok(ancestors.into_iter().collect())
+    }
+
     async fn check_cards(
         &self,
         card_ids: Vec<CardId>,
@@ -263,7 +407,6 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use chrono::Utc;
-    use golem_common::model::AgentId;
     use golem_common::model::agent::{AgentTypeName, RegisteredAgentType, ResolvedAgentType};
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::auth::TokenSecret;
@@ -273,6 +416,7 @@ mod tests {
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
     use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
+    use golem_common::model::{AgentId, IdempotencyKey, OplogIndex};
     use golem_service_base::clients::registry::{
         RegistryInvalidationHandler, RegistryServiceError, ResourceUsageUpdate,
     };
@@ -291,10 +435,16 @@ mod tests {
         release: Arc<tokio::sync::Notify>,
     }
 
+    struct BlockedCardCreation {
+        card_id: CardId,
+        release: Arc<tokio::sync::Notify>,
+    }
+
     struct BlockingRegistryService {
         existing_cards: Arc<RwLock<HashSet<CardId>>>,
         stored_cards: Arc<RwLock<HashMap<CardId, StoredCard>>>,
         lookup_started: tokio::sync::mpsc::UnboundedSender<BlockedCardLookup>,
+        creation_committed: Option<tokio::sync::mpsc::UnboundedSender<BlockedCardCreation>>,
     }
 
     enum ExistingCards {
@@ -313,6 +463,7 @@ mod tests {
     struct TestRegistryService {
         existing_cards: ExistingCards,
         lookup_count: Arc<AtomicUsize>,
+        revoke_result: Option<Result<Vec<CardId>, RegistryServiceError>>,
     }
 
     impl TestRegistryService {
@@ -320,6 +471,7 @@ mod tests {
             Self {
                 existing_cards: ExistingCards::All,
                 lookup_count: Arc::new(AtomicUsize::new(0)),
+                revoke_result: None,
             }
         }
 
@@ -327,6 +479,7 @@ mod tests {
             Self {
                 existing_cards: ExistingCards::Fixed(existing_cards),
                 lookup_count,
+                revoke_result: None,
             }
         }
 
@@ -339,6 +492,23 @@ mod tests {
                         .collect(),
                 ),
                 lookup_count,
+                revoke_result: None,
+            }
+        }
+
+        fn with_revoked_card_ids(revoked_card_ids: Vec<CardId>) -> Self {
+            Self {
+                existing_cards: ExistingCards::All,
+                lookup_count: Arc::new(AtomicUsize::new(0)),
+                revoke_result: Some(Ok(revoked_card_ids)),
+            }
+        }
+
+        fn with_revoke_error(error: RegistryServiceError, card: StoredCard) -> Self {
+            Self {
+                existing_cards: ExistingCards::Cards(HashMap::from([(card.card_id(), card)])),
+                lookup_count: Arc::new(AtomicUsize::new(0)),
+                revoke_result: Some(Err(error)),
             }
         }
 
@@ -349,6 +519,7 @@ mod tests {
             Self {
                 existing_cards: ExistingCards::Shared(existing_cards),
                 lookup_count,
+                revoke_result: None,
             }
         }
 
@@ -382,6 +553,7 @@ mod tests {
                     release_first_lookup,
                 },
                 lookup_count,
+                revoke_result: None,
             }
         }
 
@@ -493,6 +665,22 @@ mod tests {
                 .into_iter()
                 .map(stored_card)
                 .collect())
+        }
+
+        async fn create_runtime_card(
+            &self,
+            card: StoredCard,
+            _provenance: CardManagedByRuntimeDerived,
+        ) -> Result<StoredCard, RegistryServiceError> {
+            Ok(card)
+        }
+
+        async fn revoke_card(&self, card_id: CardId) -> Result<Vec<CardId>, RegistryServiceError> {
+            self.revoke_result.clone().unwrap_or_else(|| {
+                Err(RegistryServiceError::NotFound(format!(
+                    "permission card {card_id} not found"
+                )))
+            })
         }
 
         async fn download_component(
@@ -713,6 +901,30 @@ mod tests {
             Ok(snapshot)
         }
 
+        async fn create_runtime_card(
+            &self,
+            card: StoredCard,
+            _provenance: CardManagedByRuntimeDerived,
+        ) -> Result<StoredCard, RegistryServiceError> {
+            let card_id = card.card_id();
+            self.existing_cards.write().await.insert(card_id);
+            self.stored_cards
+                .write()
+                .await
+                .insert(card_id, card.clone());
+            if let Some(creation_committed) = &self.creation_committed {
+                let release = Arc::new(tokio::sync::Notify::new());
+                creation_committed
+                    .send(BlockedCardCreation {
+                        card_id,
+                        release: release.clone(),
+                    })
+                    .unwrap();
+                release.notified().await;
+            }
+            Ok(card)
+        }
+
         async fn download_component(
             &self,
             _component_id: ComponentId,
@@ -867,9 +1079,13 @@ mod tests {
     }
 
     fn stored_card(card_id: CardId) -> StoredCard {
+        stored_card_with_parents(card_id, Vec::new())
+    }
+
+    fn stored_card_with_parents(card_id: CardId, parent_ids: Vec<CardId>) -> StoredCard {
         StoredCard::Concrete(Card {
             card_id,
-            parent_ids: Vec::new(),
+            parent_ids,
             lower_positive: Vec::new(),
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
@@ -879,6 +1095,35 @@ mod tests {
             system_card: false,
             managed_by: None,
         })
+    }
+
+    #[test]
+    async fn ancestor_lookup_handles_diamond_graph() {
+        let root = CardId::new();
+        let left = CardId::new();
+        let right = CardId::new();
+        let leaf = CardId::new();
+        let lookup_count = Arc::new(AtomicUsize::new(0));
+        let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_cards(
+            vec![
+                stored_card(root),
+                stored_card_with_parents(left, vec![root]),
+                stored_card_with_parents(right, vec![root]),
+            ],
+            lookup_count.clone(),
+        )));
+        let leaf = stored_card_with_parents(leaf, vec![left, right]);
+        let mut expected = vec![root, left, right, leaf.card_id()];
+        expected.sort_unstable();
+
+        assert_eq!(
+            service
+                .live_ancestor_ids_including_self(&leaf)
+                .await
+                .unwrap(),
+            expected
+        );
+        assert_eq!(lookup_count.load(Ordering::SeqCst), 2);
     }
 
     fn assert_live(states: &HashMap<CardId, CardState>, card_id: CardId) {
@@ -926,6 +1171,199 @@ mod tests {
         service.record_revoked_cards(&[card_id]).await;
 
         assert_revoked(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+    }
+
+    #[test]
+    async fn registry_revoke_result_immediately_invalidates_the_full_cascade() {
+        let target_id = CardId::new();
+        let descendant_id = CardId::new();
+        let revoked_card_ids = vec![target_id, descendant_id];
+        let service = CardServiceDefault::new(Arc::new(
+            TestRegistryService::with_revoked_card_ids(revoked_card_ids.clone()),
+        ));
+
+        assert_eq!(
+            service.revoke_card(target_id).await.unwrap(),
+            CardRevokeResult::Revoked(revoked_card_ids)
+        );
+        let states = service
+            .check_cards(vec![target_id, descendant_id])
+            .await
+            .unwrap();
+        assert_revoked(&states, target_id);
+        assert_revoked(&states, descendant_id);
+    }
+
+    #[test]
+    async fn missing_registry_revoke_target_is_a_cached_typed_revocation() {
+        let target_id = CardId::new();
+        let service = CardServiceDefault::new(Arc::new(TestRegistryService::all_existing()));
+
+        assert!(matches!(
+            service.revoke_card(target_id).await.unwrap(),
+            CardRevokeResult::AlreadyRevoked(_)
+        ));
+        assert_revoked(
+            &service.check_cards(vec![target_id]).await.unwrap(),
+            target_id,
+        );
+    }
+
+    #[test]
+    async fn concurrent_revoke_failure_does_not_claim_or_cache_revocation() {
+        let target = stored_card(CardId::new());
+        let target_id = target.card_id();
+        let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_revoke_error(
+            RegistryServiceError::AlreadyExists("concurrent update".to_string()),
+            target,
+        )));
+
+        let result = service.revoke_card(target_id).await;
+        let states = service.check_cards(vec![target_id]).await.unwrap();
+        assert!(
+            result.is_err()
+                && matches!(states.get(&target_id), Some(CardState::Live(card)) if card.card_id() == target_id),
+            "a concurrent failure does not prove that the target was revoked: result={result:?}, state={:?}",
+            states.get(&target_id)
+        );
+    }
+
+    #[test]
+    async fn created_runtime_card_is_immediately_cached_as_live() {
+        let lookup_count = Arc::new(AtomicUsize::new(0));
+        let card = stored_card(CardId::new());
+        let card_id = card.card_id();
+        let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_cards(
+            Vec::new(),
+            lookup_count.clone(),
+        )));
+        let provenance = CardManagedByRuntimeDerived {
+            environment_id: EnvironmentId::new(),
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "deriving-agent".to_string(),
+            },
+            invocation_key: IdempotencyKey::new("derive-test".to_string()),
+            oplog_index: OplogIndex::from_u64(42),
+        };
+
+        assert_eq!(
+            service
+                .create_runtime_card(card.clone(), provenance)
+                .await
+                .unwrap(),
+            card
+        );
+        assert_live(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+        assert_eq!(lookup_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    async fn stale_missing_lookup_cannot_revoke_concurrently_created_runtime_card() {
+        let card = stored_card(CardId::new());
+        let card_id = card.card_id();
+        let existing_cards = Arc::new(RwLock::new(HashSet::new()));
+        let stored_cards = Arc::new(RwLock::new(HashMap::new()));
+        let (lookup_started, mut lookup_started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let service = Arc::new(CardServiceDefault::new(Arc::new(BlockingRegistryService {
+            existing_cards,
+            stored_cards,
+            lookup_started,
+            creation_committed: None,
+        })));
+
+        let lookup = tokio::spawn({
+            let service = service.clone();
+            async move { service.check_cards(vec![card_id]).await.unwrap() }
+        });
+        let release_lookup = expect_blocked_lookup(&mut lookup_started_rx, &[card_id]).await;
+
+        service
+            .create_runtime_card(
+                card,
+                CardManagedByRuntimeDerived {
+                    environment_id: EnvironmentId::new(),
+                    agent_id: AgentId {
+                        component_id: ComponentId::new(),
+                        agent_id: "deriving-agent".to_string(),
+                    },
+                    invocation_key: IdempotencyKey::new("concurrent-derive".to_string()),
+                    oplog_index: OplogIndex::from_u64(42),
+                },
+            )
+            .await
+            .unwrap();
+        release_lookup.notify_one();
+
+        let _ = lookup.await.unwrap();
+        assert_live(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+    }
+
+    #[test]
+    async fn revocation_after_runtime_creation_commit_wins_over_delayed_response() {
+        let card = stored_card(CardId::new());
+        let card_id = card.card_id();
+        let (lookup_started, _lookup_started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (creation_committed, mut creation_committed_rx) =
+            tokio::sync::mpsc::unbounded_channel();
+        let service = Arc::new(CardServiceDefault::new(Arc::new(BlockingRegistryService {
+            existing_cards: Arc::new(RwLock::new(HashSet::new())),
+            stored_cards: Arc::new(RwLock::new(HashMap::new())),
+            lookup_started,
+            creation_committed: Some(creation_committed),
+        })));
+        let provenance = CardManagedByRuntimeDerived {
+            environment_id: EnvironmentId::new(),
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "deriving-agent".to_string(),
+            },
+            invocation_key: IdempotencyKey::new("delayed-create-response".to_string()),
+            oplog_index: OplogIndex::from_u64(42),
+        };
+
+        let creation = tokio::spawn({
+            let service = service.clone();
+            async move { service.create_runtime_card(card, provenance).await.unwrap() }
+        });
+        let blocked_creation = creation_committed_rx.recv().await.unwrap();
+        assert_eq!(blocked_creation.card_id, card_id);
+
+        service.record_revoked_cards(&[card_id]).await;
+        blocked_creation.release.notify_one();
+        creation.await.unwrap();
+
+        assert_revoked(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+    }
+
+    #[test]
+    async fn successful_runtime_creation_supersedes_cached_missing_state() {
+        let lookup_count = Arc::new(AtomicUsize::new(0));
+        let card = stored_card(CardId::new());
+        let card_id = card.card_id();
+        let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_cards(
+            Vec::new(),
+            lookup_count,
+        )));
+
+        assert_revoked(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
+        service
+            .create_runtime_card(
+                card,
+                CardManagedByRuntimeDerived {
+                    environment_id: EnvironmentId::new(),
+                    agent_id: AgentId {
+                        component_id: ComponentId::new(),
+                        agent_id: "deriving-agent".to_string(),
+                    },
+                    invocation_key: IdempotencyKey::new("post-lookup-derive".to_string()),
+                    oplog_index: OplogIndex::from_u64(42),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_live(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
     }
 
     #[test]
@@ -1174,6 +1612,7 @@ mod tests {
             existing_cards: existing_cards.clone(),
             stored_cards: Arc::new(RwLock::new(HashMap::new())),
             lookup_started,
+            creation_committed: None,
         })));
 
         let precache = tokio::spawn({
@@ -1236,6 +1675,7 @@ mod tests {
             existing_cards: existing_cards.clone(),
             stored_cards: Arc::new(RwLock::new(HashMap::new())),
             lookup_started,
+            creation_committed: None,
         })));
 
         let lookup = tokio::spawn({
@@ -1277,6 +1717,7 @@ mod tests {
             existing_cards,
             stored_cards: Arc::new(RwLock::new(HashMap::from([(card_id, expired_card)]))),
             lookup_started,
+            creation_committed: None,
         })));
 
         let lookup = tokio::spawn({
@@ -1319,6 +1760,7 @@ mod tests {
             existing_cards: existing_cards.clone(),
             stored_cards: stored_cards.clone(),
             lookup_started,
+            creation_committed: None,
         })));
 
         let precache = tokio::spawn({

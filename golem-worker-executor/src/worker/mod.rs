@@ -24,7 +24,10 @@ use self::agent_config::{
     ensure_required_agent_secrets_are_configured, parse_worker_creation_agent_config,
 };
 use self::status::update_status_with_new_entries;
-use crate::durable_host::{agent_effective_surface_from_component_metadata, recover_stderr_logs};
+use crate::durable_host::{
+    agent_effective_surface_from_component_metadata, agent_monomorphization_context,
+    recover_stderr_logs,
+};
 use crate::metrics::storage::record_filesystem_pool_released;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::active_workers::{
@@ -63,7 +66,9 @@ use golem_common::model::RetryConfig;
 use golem_common::model::agent::{
     AgentMode, ParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
 };
-use golem_common::model::card::{CardId, StoredCard};
+use golem_common::model::card::{
+    AgentCardHolder, CardHolder, CardId, StoredCard, card_matches_agent_recipient,
+};
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
@@ -97,6 +102,10 @@ use tracing::{Instrument, Level, Span, debug, info, span, warn};
 use uuid::Uuid;
 use wasmtime::component::Instance;
 use wasmtime::{Store, UpdateDeadline};
+
+pub const PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT: &str =
+    "permission card transfer payload conflict";
+pub const PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH: &str = "install-recipient-mismatch";
 
 /// Resolved read-only `AgentMethod` invocation data needed to build the
 /// cache key and entry.
@@ -2058,7 +2067,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .into_iter()
             .filter_map(|pending_event| match pending_event.event {
                 QueuedCardEvent::Revoke(event) => Some(event.card_id),
-                QueuedCardEvent::Install(_) => None,
+                QueuedCardEvent::Install(_)
+                | QueuedCardEvent::TransferStarted(_)
+                | QueuedCardEvent::TransferReceived(_) => None,
             })
             .collect::<HashSet<_>>();
         wallet.retain(|card| !revoked_cards.contains(&card.card_id()));
@@ -2173,23 +2184,203 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn queue_card_revocation(&self, card_id: CardId) -> Option<OplogIndex> {
-        let status = self.get_last_known_status().await;
-        let revoke_already_pending = || {
-            status.pending_card_events.iter().any(|pending_event| {
-            matches!(&pending_event.event, QueuedCardEvent::Revoke(event) if event.card_id == card_id)
-        })
-        };
+        self.queue_card_revocations(&[card_id])
+            .await
+            .into_iter()
+            .next()
+    }
 
-        if status.revoked_cards.contains(&card_id) || revoke_already_pending() {
-            None
-        } else {
-            Some(
-                self.add_and_commit_oplog(OplogEntry::card_event_queued(QueuedCardEvent::revoke(
+    pub async fn queue_card_revocations(&self, card_ids: &[CardId]) -> Vec<OplogIndex> {
+        let status = self.get_last_known_status().await;
+        let pending_revocations = status
+            .pending_card_events
+            .iter()
+            .filter_map(|pending_event| match &pending_event.event {
+                QueuedCardEvent::Revoke(event) => Some(event.card_id),
+                QueuedCardEvent::Install(_)
+                | QueuedCardEvent::TransferStarted(_)
+                | QueuedCardEvent::TransferReceived(_) => None,
+            })
+            .collect::<HashSet<_>>();
+        let mut card_ids = card_ids
+            .iter()
+            .copied()
+            .filter(|card_id| {
+                !status.revoked_cards.contains(card_id) && !pending_revocations.contains(card_id)
+            })
+            .collect::<Vec<_>>();
+        card_ids.sort_unstable();
+        card_ids.dedup();
+
+        let mut queued_event_indices = Vec::with_capacity(card_ids.len());
+        for card_id in card_ids {
+            queued_event_indices.push(
+                self.add_to_oplog(OplogEntry::card_event_queued(QueuedCardEvent::revoke(
                     card_id,
                 )))
                 .await,
-            )
+            );
         }
+        if !queued_event_indices.is_empty() {
+            self.commit_oplog_and_update_state(CommitLevel::Always)
+                .await;
+        }
+
+        queued_event_indices
+    }
+
+    pub async fn receive_card_transfer(
+        &self,
+        transfer_id: Uuid,
+        source_card_id: CardId,
+        card: StoredCard,
+    ) -> Result<(), WorkerExecutorError> {
+        let instance_guard = self.lock_non_stopping_worker().await;
+
+        if instance_guard.is_deleting() {
+            return Err(WorkerExecutorError::invalid_request(
+                "Cannot deliver a permission card to a deleting worker",
+            ));
+        }
+
+        let status = self.get_last_known_status().await;
+        if let Some(receipt) =
+            status
+                .pending_card_events
+                .iter()
+                .find_map(|pending_event| match &pending_event.event {
+                    QueuedCardEvent::TransferReceived(receipt)
+                        if receipt.transfer_id == transfer_id =>
+                    {
+                        Some(receipt)
+                    }
+                    _ => None,
+                })
+        {
+            let received_card = receipt.card.as_ref().ok_or_else(|| {
+                WorkerExecutorError::runtime(
+                    "received permission card transfer is missing its durable payload",
+                )
+            })?;
+            return if receipt
+                .source_card_id
+                .is_none_or(|recorded_source_card_id| recorded_source_card_id == source_card_id)
+                && received_card == &card
+            {
+                Ok(())
+            } else {
+                Err(WorkerExecutorError::invalid_request(
+                    PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
+                ))
+            };
+        }
+
+        let target_holder = CardHolder::Agent(AgentCardHolder {
+            agent_id: self.owned_agent_id.agent_id.clone(),
+        });
+        let current_oplog_index = self.oplog.current_oplog_index().await;
+        let mut next_oplog_index = OplogIndex::INITIAL;
+        let mut matching_receipt_indices = HashSet::new();
+        while next_oplog_index <= current_oplog_index {
+            let remaining = current_oplog_index.as_u64() - next_oplog_index.as_u64() + 1;
+            let count = remaining.min(1024);
+            let entries = self.oplog.read_many(next_oplog_index, count).await;
+
+            for (oplog_index, entry) in entries {
+                match entry {
+                    OplogEntry::CardEventQueued {
+                        event: QueuedCardEvent::TransferReceived(receipt),
+                        ..
+                    } if receipt.transfer_id == transfer_id => {
+                        let received_card = receipt.card.as_ref().ok_or_else(|| {
+                            WorkerExecutorError::runtime(
+                                "received permission card transfer is missing its durable payload",
+                            )
+                        })?;
+                        if !receipt
+                            .source_card_id
+                            .is_none_or(|recorded_source_card_id| {
+                                recorded_source_card_id == source_card_id
+                            })
+                            || received_card != &card
+                        {
+                            return Err(WorkerExecutorError::invalid_request(
+                                PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
+                            ));
+                        }
+                        matching_receipt_indices.insert(oplog_index);
+                    }
+                    OplogEntry::CardInstallFailed {
+                        queued_event_index,
+                        card_id,
+                        ..
+                    } if matching_receipt_indices.contains(&queued_event_index) => {
+                        return if card_id == card.card_id() {
+                            Ok(())
+                        } else {
+                            Err(WorkerExecutorError::invalid_request(
+                                PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
+                            ))
+                        };
+                    }
+                    OplogEntry::CardTransferred {
+                        transfer_id: recorded_transfer_id,
+                        source_card_id: recorded_source_card_id,
+                        installed_card_id,
+                        target_holder: recorded_target_holder,
+                        card: recorded_card,
+                        ..
+                    } if recorded_transfer_id == transfer_id
+                        && recorded_target_holder == target_holder =>
+                    {
+                        return if recorded_source_card_id.is_none_or(|recorded_source_card_id| {
+                            recorded_source_card_id == source_card_id
+                        }) && installed_card_id == card.card_id()
+                            && recorded_card == card
+                        {
+                            Ok(())
+                        } else {
+                            Err(WorkerExecutorError::invalid_request(
+                                PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
+                            ))
+                        };
+                    }
+                    _ => {}
+                }
+            }
+
+            next_oplog_index = OplogIndex::from_u64(next_oplog_index.as_u64() + count);
+        }
+
+        if !matching_receipt_indices.is_empty() {
+            return Ok(());
+        }
+
+        let parsed_agent_id = self.parsed_agent_id.as_ref().ok_or_else(|| {
+            WorkerExecutorError::invalid_request("permission cards can only be delivered to agents")
+        })?;
+        let component = self.current_component.load();
+        let target_context =
+            agent_monomorphization_context(&component, &self.owned_agent_id, parsed_agent_id);
+        if !card_matches_agent_recipient(&card, &target_context) {
+            return Err(WorkerExecutorError::invalid_request(
+                PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH,
+            ));
+        }
+
+        self.add_and_commit_oplog_internal(
+            &instance_guard,
+            OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
+                transfer_id,
+                source_card_id,
+                card,
+            )),
+            None,
+        )
+        .await;
+
+        drop(instance_guard);
+        Ok(())
     }
 
     async fn add_and_commit_oplog_internal(

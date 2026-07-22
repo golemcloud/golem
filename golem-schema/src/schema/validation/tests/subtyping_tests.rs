@@ -16,8 +16,8 @@ use super::wellformed_strategy::wellformed_schema_graph_strategy;
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::{
-    BinaryRestrictions, NamedFieldType, NumericBound, NumericRestrictions, QuantitySpec,
-    QuantityValue, SchemaType, TextRestrictions, UrlRestrictions, VariantCaseType,
+    BinaryRestrictions, NamedFieldType, NumericBound, NumericRestrictions, PermissionCardSpec,
+    QuantitySpec, QuantityValue, SchemaType, TextRestrictions, UrlRestrictions, VariantCaseType,
 };
 use crate::schema::validation::subtyping::{is_assignable, is_equivalent_cross_graph};
 use proptest::prelude::*;
@@ -279,6 +279,42 @@ fn primitive_kind_mismatch_rejected() {
         &graph,
         &SchemaType::s32(),
         &SchemaType::s64()
+    ));
+}
+
+#[test]
+fn permission_card_polymorphism_is_invariant() {
+    let monomorphic = SchemaType::permission_card(PermissionCardSpec { polymorphic: false });
+    let polymorphic = SchemaType::permission_card(PermissionCardSpec { polymorphic: true });
+    let monomorphic_graph = SchemaGraph::anonymous(monomorphic.clone());
+    let polymorphic_graph = SchemaGraph::anonymous(polymorphic.clone());
+
+    assert!(is_assignable(
+        &monomorphic_graph,
+        &monomorphic,
+        &monomorphic
+    ));
+    assert!(!is_assignable(
+        &monomorphic_graph,
+        &monomorphic,
+        &polymorphic
+    ));
+    assert!(!is_assignable(
+        &monomorphic_graph,
+        &polymorphic,
+        &monomorphic
+    ));
+    assert!(is_equivalent_cross_graph(
+        &monomorphic_graph,
+        &monomorphic,
+        &monomorphic_graph,
+        &monomorphic
+    ));
+    assert!(!is_equivalent_cross_graph(
+        &monomorphic_graph,
+        &monomorphic,
+        &polymorphic_graph,
+        &polymorphic
     ));
 }
 

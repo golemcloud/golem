@@ -23,9 +23,9 @@ use crate::model::environment::EnvironmentId;
 use crate::model::oplog::CardInstallFailure;
 use crate::model::oplog::PayloadId;
 use crate::model::oplog::payload::types::{
-    FileSystemError, ObjectMetadata, SecretRevealAudit, SecretRevealError, SerializableDateTime,
-    SerializableFileTimes, SerializableSocketError, SerializableWebsocketError,
-    SerializableWebsocketMessage,
+    FileSystemError, ObjectMetadata, PermissionCardRevokeError, SecretRevealAudit,
+    SecretRevealError, SerializableDateTime, SerializableFileTimes, SerializableSocketError,
+    SerializableWebsocketError, SerializableWebsocketMessage,
 };
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
@@ -224,6 +224,20 @@ oplog_payload! {
         },
         QuotaCommitRequest {
             used: u64,
+        },
+        PermissionCardDerive {
+            card: Vec<u8>,
+            provenance: Vec<u8>,
+        },
+        PermissionCardRevoke {
+            card_id: Uuid,
+        },
+        PermissionCardTransfer {
+            transfer_id: Uuid,
+            source_card: Vec<u8>,
+            installed_card: Vec<u8>,
+            installed_card_provenance: Option<Vec<u8>>,
+            target_agent_id: AgentId,
         },
         GolemRetryPolicyByName {
             name: String
@@ -449,6 +463,13 @@ oplog_payload! {
             /// Unix timestamp in milliseconds when credit_after was recorded.
             credit_after_at_ms: i64,
         },
+        PermissionCardDerived {
+            card: Vec<u8>,
+        },
+        PermissionCardsRevoked {
+            result: Result<Vec<Uuid>, PermissionCardRevokeError>,
+        },
+        PermissionCardTransferComplete {},
         GolemRetryPolicies {
             policies: Vec<NamedRetryPolicy>
         },
@@ -587,10 +608,14 @@ pub mod host_functions {
         (GolemQuotaTokenNew => "golem::quota::quota-token", "[constructor]quota-token", QuotaTokenRequest, QuotaTokenAcquired),
         (GolemQuotaTokenReserve => "golem::quota::quota-token", "reserve", QuotaReserveRequest, QuotaReserveResult),
         (GolemQuotaReservationCommit => "golem::quota::reservation", "commit", QuotaCommitRequest, QuotaCommitResult),
+        (GolemPermissionsDerivePersist => "golem::permissions::derive", "persist-derived-card", PermissionCardDerive, PermissionCardDerived),
+        (GolemPermissionsRevokePersist => "golem::permissions::revoke", "persist-revoked-cards", PermissionCardRevoke, PermissionCardsRevoked),
         (GolemApiRetryGetRetryPolicies => "golem::api::retry", "get_retry_policies", NoInput, GolemRetryPolicies),
         (GolemApiRetryGetRetryPolicyByName => "golem::api::retry", "get_retry_policy_by_name", GolemRetryPolicyByName, GolemRetryNamedPolicy),
         (GolemApiRetryResolveRetryPolicy => "golem::api::retry", "resolve_retry_policy", GolemRetryResolvePolicy, GolemRetryResolvedPolicy),
-        (GolemRpcWasmRpcNew => "golem::rpc::wasm-rpc", "new", GolemRpcCreate, GolemRpcCreate)
+        (GolemRpcWasmRpcNew => "golem::rpc::wasm-rpc", "new", GolemRpcCreate, GolemRpcCreate),
+        (GolemPermissionsInstallChildPersist => "golem::permissions::wallet", "persist-installed-child-card", PermissionCardDerive, PermissionCardDerived),
+        (GolemPermissionsInstallTransfer => "golem::permissions::wallet", "install-card-transfer", PermissionCardTransfer, PermissionCardTransferComplete)
     }
 }
 

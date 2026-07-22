@@ -23,6 +23,7 @@ use assert2::check;
 use golem_common::config::RedisConfig;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, Principal};
+use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
 use golem_common::model::component::ComponentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{AgentError, LogLevel};
@@ -77,6 +78,17 @@ fn make_agent_metadata(
         original_phantom_id: None,
         fingerprint: AgentFingerprint::new(),
         agent_mode: AgentMode::Durable,
+    }
+}
+
+fn invocation_wallet_pin() -> InvocationWalletPin {
+    InvocationWalletPin {
+        wallet_token: WalletVersionToken {
+            wallet_id_hash: [0x42; 32],
+            generation: 7,
+        },
+        pinned_card_ids: Vec::new(),
+        scope_card_id: None,
     }
 }
 
@@ -814,15 +826,18 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     let entry_start = oplog.read(start_idx).await.rounded();
     let entry_end = oplog.read(end_idx).await.rounded();
     let entry2 = oplog
-        .add_agent_invocation_started(AgentInvocation::AgentMethod {
-            idempotency_key: IdempotencyKey::fresh(),
-            method_name: "f2".to_string(),
-            input: SchemaValue::Record {
-                fields: vec![SchemaValue::String("request".to_string())],
+        .add_agent_invocation_started(
+            AgentInvocation::AgentMethod {
+                idempotency_key: IdempotencyKey::fresh(),
+                method_name: "f2".to_string(),
+                input: SchemaValue::Record {
+                    fields: vec![SchemaValue::String("request".to_string())],
+                },
+                invocation_context: InvocationContextStack::fresh_rounded(),
+                principal: Principal::anonymous(),
             },
-            invocation_context: InvocationContextStack::fresh_rounded(),
-            principal: Principal::anonymous(),
-        })
+            invocation_wallet_pin(),
+        )
         .await
         .unwrap()
         .rounded();
@@ -1018,18 +1033,21 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     let entry_start = oplog.read(start_idx).await.rounded();
     let entry_end = oplog.read(end_idx).await.rounded();
     let entry2 = oplog
-        .add_agent_invocation_started(AgentInvocation::AgentMethod {
-            idempotency_key: IdempotencyKey::fresh(),
-            method_name: "f2".to_string(),
-            input: SchemaValue::Record {
-                fields: vec![SchemaValue::Binary(BinaryValuePayload {
-                    bytes: large_payload2.clone(),
-                    mime_type: None,
-                })],
+        .add_agent_invocation_started(
+            AgentInvocation::AgentMethod {
+                idempotency_key: IdempotencyKey::fresh(),
+                method_name: "f2".to_string(),
+                input: SchemaValue::Record {
+                    fields: vec![SchemaValue::Binary(BinaryValuePayload {
+                        bytes: large_payload2.clone(),
+                        mime_type: None,
+                    })],
+                },
+                invocation_context: InvocationContextStack::fresh_rounded(),
+                principal: Principal::anonymous(),
             },
-            invocation_context: InvocationContextStack::fresh_rounded(),
-            principal: Principal::anonymous(),
-        })
+            invocation_wallet_pin(),
+        )
         .await
         .unwrap()
         .rounded();

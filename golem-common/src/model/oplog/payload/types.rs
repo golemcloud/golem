@@ -101,6 +101,22 @@ pub enum SecretRevealError {
     golem_schema_derive::FromSchema,
 )]
 #[desert(evolution())]
+pub enum PermissionCardRevokeError {
+    AlreadyRevoked(String),
+    CardRevoked(String),
+    NotPermitted(String),
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
 pub struct ObjectMetadata {
     pub name: String,
     pub container: String,

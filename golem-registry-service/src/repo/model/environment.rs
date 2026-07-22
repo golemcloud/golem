@@ -44,7 +44,18 @@ pub enum EnvironmentRepoError {
     InternalError(#[from] anyhow::Error),
 }
 
-error_forwarding!(EnvironmentRepoError, CardRepoError, RepoError);
+error_forwarding!(EnvironmentRepoError, RepoError);
+
+impl From<CardRepoError> for EnvironmentRepoError {
+    fn from(value: CardRepoError) -> Self {
+        match value {
+            CardRepoError::CardTreeChangedDuringDelete | CardRepoError::ConcurrentModification => {
+                Self::ConcurrentModification
+            }
+            other => Self::InternalError(other.into()),
+        }
+    }
+}
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct EnvironmentExtRecord {

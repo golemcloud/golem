@@ -26,13 +26,13 @@ use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest,
-    CreateWorkerRequest, DeactivatePluginRequest, ForkWorkerRequest, InterruptWorkerRequest,
-    ProcessOplogEntriesRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse,
-    UpdateWorkerRequest,
+    CreateWorkerRequest, DeactivatePluginRequest, DeliverCardTransferRequest, ForkWorkerRequest,
+    InterruptWorkerRequest, ProcessOplogEntriesRequest, ResumeWorkerRequest, RevertWorkerRequest,
+    SearchOplogResponse, UpdateWorkerRequest,
 };
 use golem_common::model::RetryConfig;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::card::StoredCard;
+use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
@@ -244,6 +244,16 @@ pub trait WorkerClient: Send + Sync {
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
     ) -> WorkerResult<AgentInvocationOutput>;
+
+    async fn deliver_card_transfer(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        transfer_id: uuid::Uuid,
+        source_card_id: CardId,
+        card: StoredCard,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<()>;
 
     async fn process_oplog_entries(
         &self,
@@ -1440,6 +1450,63 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             .await?;
 
         Ok(result)
+    }
+
+    async fn deliver_card_transfer(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        transfer_id: uuid::Uuid,
+        source_card_id: CardId,
+        card: StoredCard,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<()> {
+        let target_agent_id = target_agent_id.clone();
+        let card = desert_rust::serialize_to_byte_vec(&card)
+            .map_err(|error| WorkerServiceError::Internal(error.to_string()))?;
+
+        self.call_worker_executor(
+            target_agent_id.clone(),
+            "deliver_card_transfer",
+            move |worker_executor_client| {
+                let target_agent_id = target_agent_id.clone();
+                let card = card.clone();
+                let auth_ctx = auth_ctx.clone();
+                Box::pin(
+                    worker_executor_client.deliver_card_transfer(DeliverCardTransferRequest {
+                        target_agent_id: Some(target_agent_id.into()),
+                        environment_id: Some(environment_id.into()),
+                        transfer_id: Some(transfer_id.into()),
+                        card,
+                        auth_ctx: Some(auth_ctx.into()),
+                        source_card_id: Some(source_card_id.0.into()),
+                    }),
+                )
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::DeliverCardTransferResponse {
+                    result:
+                        Some(
+                            workerexecutor::v1::deliver_card_transfer_response::Result::Success(_),
+                        ),
+                } => Ok(()),
+                workerexecutor::v1::DeliverCardTransferResponse {
+                    result:
+                        Some(
+                            workerexecutor::v1::deliver_card_transfer_response::Result::Failure(
+                                error,
+                            ),
+                        ),
+                } => Err(error.into()),
+                workerexecutor::v1::DeliverCardTransferResponse { .. } => {
+                    Err("Empty response".into())
+                }
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await?;
+
+        Ok(())
     }
 
     async fn process_oplog_entries(

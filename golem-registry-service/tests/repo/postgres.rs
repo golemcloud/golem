@@ -260,6 +260,67 @@ async fn postgres_tls_deps(db: &PostgresTlsDb) -> Deps {
 }
 
 #[test]
+async fn test_runtime_card_creation_is_idempotent_and_rejects_conflicts(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_runtime_card_creation_is_idempotent_and_rejects_conflicts(deps).await;
+}
+
+#[test]
+async fn test_runtime_card_creation_rejects_system_cards(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_runtime_card_creation_rejects_system_cards(deps).await;
+}
+
+#[test]
+async fn test_runtime_card_parent_integrity(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_runtime_card_parent_integrity(deps).await;
+}
+
+#[test]
+async fn test_card_dag_traversal_deduplicates_diamonds(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_card_dag_traversal_deduplicates_diamonds(deps).await;
+}
+
+#[test]
+async fn test_card_dag_revoke_transaction_rolls_back_atomically(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_card_dag_revoke_transaction_rolls_back_atomically(deps).await;
+}
+
+#[test]
+async fn test_component_deletion_racing_runtime_derivation(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_component_deletion_racing_runtime_derivation(deps).await;
+}
+
+#[test]
+async fn test_component_deletion_racing_multi_parent_runtime_derivation(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_component_deletion_racing_multi_parent_runtime_derivation(deps).await;
+}
+
+#[test]
+async fn test_component_deletion_racing_runtime_derivation_from_descendant(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_component_deletion_racing_runtime_derivation_from_descendant(deps)
+        .await;
+}
+
+#[test]
+async fn test_environment_deletion_racing_runtime_derivation_from_descendant(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_environment_deletion_racing_runtime_derivation_from_descendant(deps)
+        .await;
+}
+
+#[test]
 async fn test_create_and_get_account(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_create_and_get_account(deps).await;
 }
@@ -329,6 +390,24 @@ async fn test_deleted_environment_default_card_is_not_reported_existing(
 }
 
 #[test]
+async fn test_runtime_descendants_of_deleted_environment_default_card_are_not_live(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_runtime_descendants_of_deleted_environment_default_card_are_not_live(
+        deps,
+    )
+    .await;
+}
+
+#[test]
+async fn test_environment_deletion_revokes_component_card_runtime_descendants(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_environment_deletion_revokes_component_card_runtime_descendants(deps)
+        .await;
+}
+
+#[test]
 async fn test_environment_default_card_tracks_environment_rename(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
@@ -362,10 +441,10 @@ async fn test_initial_permission_card_ids_by_account_are_unique(
 }
 
 #[test]
-async fn test_agent_initial_card_removed_from_current_component_is_not_live(
+async fn test_agent_initial_card_from_older_component_revision_remains_live(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
-    crate::repo::common::test_agent_initial_card_removed_from_current_component_is_not_live(deps)
+    crate::repo::common::test_agent_initial_card_from_older_component_revision_remains_live(deps)
         .await;
 }
 
@@ -384,6 +463,14 @@ async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
     crate::repo::common::test_deleted_component_agent_initial_card_is_not_reported_existing(deps)
+        .await;
+}
+
+#[test]
+async fn test_component_delete_does_not_revoke_reused_agent_initial_card_id(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_component_delete_does_not_revoke_reused_agent_initial_card_id(deps)
         .await;
 }
 

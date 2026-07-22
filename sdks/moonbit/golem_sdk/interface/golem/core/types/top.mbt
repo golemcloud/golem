@@ -94,6 +94,25 @@ pub fn Secret::drop(self : Secret) -> Unit {
 }
 
 ///|
+/// An unforgeable handle to a permission card held by the runtime. The
+/// handle is opaque to guests: components can hold, pass, derive, install,
+/// and revoke cards only through the `golem:permissions` interfaces. When
+/// carried in a `schema-value-tree` (see
+/// `schema-value-node::permission-card-handle`) the handle is transferred
+/// by ownership; the host converts it to/from its internal trusted
+/// card-store representation at the boundary. The wire form is the card-id
+/// (UUID) alone — no grants, parents, or metadata cross the wire as
+/// authority.
+pub(all) struct PermissionCard(Int) derive(Show, Eq)
+
+///|
+/// Drops a resource handle.
+pub fn PermissionCard::drop(self : PermissionCard) -> Unit {
+  let PermissionCard(resource) = self
+  wasmImportResourceDropPermissionCard(resource)
+}
+
+///|
 /// A named type definition inside a `schema-graph`.
 ///
 /// The def itself does not carry metadata; metadata lives on the
@@ -346,6 +365,11 @@ pub(all) struct QuotaTokenSpec {
 } derive(Show, Eq)
 
 ///|
+pub(all) struct PermissionCardSpec {
+  polymorphic : Bool
+} derive(Show, Eq)
+
+///|
 /// The structural body of a `schema-type-node`.
 ///
 /// Closed sum types come in two shapes that differ by how the decoder
@@ -400,6 +424,7 @@ pub(all) enum SchemaTypeBody {
   UnionType(UnionSpec)
   SecretType(SecretSpec)
   QuotaTokenType(QuotaTokenSpec)
+  PermissionCardType(PermissionCardSpec)
   FutureType(Int?)
   StreamType(Int?)
 } derive(Show, Eq)
@@ -511,6 +536,7 @@ pub(all) enum SchemaValueNode {
   UnionValue(UnionValuePayload)
   SecretValue(Secret)
   QuotaTokenHandle(QuotaToken)
+  PermissionCardHandle(PermissionCard)
 } derive(Show, Eq)
 
 ///|

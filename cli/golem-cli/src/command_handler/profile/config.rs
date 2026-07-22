@@ -54,7 +54,7 @@ impl ProfileConfigCommandHandler {
                     "Updating",
                     format!(
                         "profile's default format for {} to {}",
-                        &profile_name, format
+                        profile_name, format
                     ),
                 );
                 Config::set_profile(profile.name, profile.profile, self.ctx.config_dir())?;

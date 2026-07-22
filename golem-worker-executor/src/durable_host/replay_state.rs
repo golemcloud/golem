@@ -16,8 +16,7 @@ use crate::durable_host::concurrent::{
     ConcurrentReplayResolver, ReplayCallHandle, Resolution, ResolutionOutcome,
 };
 use crate::services::oplog::{Oplog, OplogOps};
-use golem_common::model::card::CardId;
-use golem_common::model::card::StoredCard;
+use golem_common::model::card::{CardHolder, CardId, InvocationWalletPin, StoredCard};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
@@ -43,14 +42,59 @@ use uuid::Uuid;
 
 const CHUNK_SIZE: u64 = 1024;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ReplayEvent {
     ReplayFinished,
-    UpdateReplayed { new_revision: ComponentRevision },
-    ForkReplayed { new_phantom_id: Uuid },
-    CardInstalled { card: StoredCard },
-    CardRevoked { card_id: CardId },
-    CardExpired { card_id: CardId },
+    UpdateReplayed {
+        new_revision: ComponentRevision,
+    },
+    ForkReplayed {
+        new_phantom_id: Uuid,
+    },
+    InvocationWalletPinned {
+        wallet_pin: InvocationWalletPin,
+    },
+    CardInstalled {
+        card: StoredCard,
+        wallet_generation: Option<u64>,
+    },
+    CardDerived {
+        card: StoredCard,
+        wallet_generation: Option<u64>,
+    },
+    CardTransferStarted {
+        transfer_id: Uuid,
+        card_id: CardId,
+        source_holder: Option<CardHolder>,
+        target_holder: CardHolder,
+        source_wallet_generation: Option<u64>,
+    },
+    CardTransferred {
+        transfer_id: Uuid,
+        source_card_id: Option<CardId>,
+        installed_card_id: CardId,
+        target_holder: CardHolder,
+        card: StoredCard,
+        target_wallet_generation: Option<u64>,
+    },
+    CardTransferConfirmed {
+        transfer_id: Uuid,
+        source_card_id: CardId,
+        installed_card_id: CardId,
+        target_holder: CardHolder,
+    },
+    CardRevokedCascade {
+        card_ids: Vec<CardId>,
+        local_wallet_generation: Option<u64>,
+    },
+    CardRevoked {
+        card_id: CardId,
+        wallet_generation: Option<u64>,
+    },
+    CardExpired {
+        card_id: CardId,
+        wallet_generation: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +102,7 @@ pub struct AgentInvocationStartedEntry {
     pub idempotency_key: IdempotencyKey,
     pub invocation_payload: AgentInvocationPayload,
     pub invocation_context: InvocationContextStack,
+    pub wallet_pin: Option<InvocationWalletPin>,
 }
 
 /// The outcome of [`ReplayState::claim_any_concurrent_start`]: the replay handle for the claimed
@@ -81,6 +126,7 @@ pub struct ReplayState {
     last_replayed_index: AtomicOplogIndex,
     /// The oplog index of the last non-hint entry read
     last_replayed_non_hint_index: AtomicOplogIndex,
+    initial_snapshot_skip_end: Option<OplogIndex>,
     internal: Arc<RwLock<InternalReplayState>>,
     has_seen_logs: Arc<AtomicBool>,
 }
@@ -110,6 +156,7 @@ impl ReplayState {
         owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
         skipped_regions: DeletedRegions,
+        initial_snapshot_skip_end: Option<OplogIndex>,
     ) -> Result<Self, WorkerExecutorError> {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
         let last_oplog_index = oplog.current_oplog_index().await;
@@ -119,6 +166,7 @@ impl ReplayState {
             last_replayed_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
             last_replayed_non_hint_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
             replay_target: AtomicOplogIndex::from_oplog_index(last_oplog_index),
+            initial_snapshot_skip_end,
             internal: Arc::new(RwLock::new(InternalReplayState {
                 skipped_regions,
                 next_skipped_region,
@@ -146,6 +194,7 @@ impl ReplayState {
         }
         self.last_replayed_index.set(OplogIndex::NONE);
         self.last_replayed_non_hint_index.set(OplogIndex::NONE);
+        self.initial_snapshot_skip_end = None;
         self.move_to_start_of_replay().await;
         self.skip_forward().await
     }
@@ -198,6 +247,25 @@ impl ReplayState {
 
     pub async fn take_new_replay_events(&mut self) -> Vec<ReplayEvent> {
         std::mem::take(&mut self.internal.write().await.pending_replay_events)
+    }
+
+    pub async fn pending_card_derivation(
+        &self,
+        card_id: CardId,
+    ) -> Option<(StoredCard, Option<u64>)> {
+        self.internal
+            .read()
+            .await
+            .pending_replay_events
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                ReplayEvent::CardDerived {
+                    card,
+                    wallet_generation,
+                } if card.card_id() == card_id => Some((card.clone(), *wallet_generation)),
+                _ => None,
+            })
     }
 
     /// Reads the next oplog entry, and skips every hint entry following it.
@@ -282,9 +350,12 @@ impl ReplayState {
         condition: impl FnOnce(&OplogEntry) -> bool,
     ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
         let saved_replay_idx = self.last_replayed_index.get();
-        let saved_next_skipped_region = {
+        let (saved_next_skipped_region, saved_replay_event_count) = {
             let internal = self.internal.read().await;
-            internal.next_skipped_region.clone()
+            (
+                internal.next_skipped_region.clone(),
+                internal.pending_replay_events.len(),
+            )
         };
 
         let read_idx = self.last_replayed_index.get().next();
@@ -304,6 +375,9 @@ impl ReplayState {
             self.last_replayed_index.set(saved_replay_idx);
             let mut internal = self.internal.write().await;
             internal.next_skipped_region = saved_next_skipped_region;
+            internal
+                .pending_replay_events
+                .truncate(saved_replay_event_count);
 
             Ok(None)
         }
@@ -314,9 +388,12 @@ impl ReplayState {
         let mut logs = HashSet::new();
         while self.is_replay() {
             let saved_replay_idx = self.last_replayed_index.get();
-            let saved_next_skipped_region = {
+            let (saved_next_skipped_region, saved_replay_event_count) = {
                 let internal = self.internal.read().await;
-                internal.next_skipped_region.clone()
+                (
+                    internal.next_skipped_region.clone(),
+                    internal.pending_replay_events.len(),
+                )
             };
             let entry = self.internal_get_next_oplog_entry().await?;
             match self.should_skip_to(&entry).await {
@@ -344,6 +421,9 @@ impl ReplayState {
                     let mut internal = self.internal.write().await;
                     // TODO: cache the last hint entry to avoid reading it again
                     internal.next_skipped_region = saved_next_skipped_region;
+                    internal
+                        .pending_replay_events
+                        .truncate(saved_replay_event_count);
                     break;
                 }
             }
@@ -425,17 +505,129 @@ impl ReplayState {
             })
             .await
         }
-        if let OplogEntry::CardRevoked { card_id, .. } = &oplog_entry {
-            self.record_replay_event(ReplayEvent::CardRevoked { card_id: *card_id })
-                .await;
+        if let OplogEntry::AgentInvocationStarted {
+            wallet_pin: Some(wallet_pin),
+            ..
+        } = &oplog_entry
+        {
+            self.record_replay_event(ReplayEvent::InvocationWalletPinned {
+                wallet_pin: wallet_pin.clone(),
+            })
+            .await;
         }
-        if let OplogEntry::CardExpired { card_id, .. } = &oplog_entry {
-            self.record_replay_event(ReplayEvent::CardExpired { card_id: *card_id })
-                .await;
+        if let OplogEntry::CardRevoked {
+            card_id,
+            wallet_generation,
+            ..
+        } = &oplog_entry
+        {
+            self.record_replay_event(ReplayEvent::CardRevoked {
+                card_id: *card_id,
+                wallet_generation: *wallet_generation,
+            })
+            .await;
         }
-        if let OplogEntry::CardInstalled { card, .. } = &oplog_entry {
-            self.record_replay_event(ReplayEvent::CardInstalled { card: card.clone() })
-                .await;
+        if let OplogEntry::CardExpired {
+            card_id,
+            wallet_generation,
+            ..
+        } = &oplog_entry
+        {
+            self.record_replay_event(ReplayEvent::CardExpired {
+                card_id: *card_id,
+                wallet_generation: *wallet_generation,
+            })
+            .await;
+        }
+        if let OplogEntry::CardInstalled {
+            card,
+            wallet_generation,
+            ..
+        } = &oplog_entry
+        {
+            self.record_replay_event(ReplayEvent::CardInstalled {
+                card: card.clone(),
+                wallet_generation: *wallet_generation,
+            })
+            .await;
+        }
+        if let OplogEntry::CardDerived {
+            card,
+            wallet_generation,
+            ..
+        } = &oplog_entry
+        {
+            self.record_replay_event(ReplayEvent::CardDerived {
+                card: card.clone(),
+                wallet_generation: *wallet_generation,
+            })
+            .await;
+        }
+        if let OplogEntry::CardTransferStarted {
+            transfer_id,
+            card_id,
+            source_holder,
+            target_holder,
+            source_wallet_generation,
+            ..
+        } = &oplog_entry
+        {
+            self.record_replay_event(ReplayEvent::CardTransferStarted {
+                transfer_id: *transfer_id,
+                card_id: *card_id,
+                source_holder: source_holder.clone(),
+                target_holder: target_holder.clone(),
+                source_wallet_generation: *source_wallet_generation,
+            })
+            .await;
+        }
+        if let OplogEntry::CardTransferred {
+            transfer_id,
+            source_card_id,
+            installed_card_id,
+            target_holder,
+            card,
+            target_wallet_generation,
+            ..
+        } = &oplog_entry
+        {
+            self.record_replay_event(ReplayEvent::CardTransferred {
+                transfer_id: *transfer_id,
+                source_card_id: *source_card_id,
+                installed_card_id: *installed_card_id,
+                target_holder: target_holder.clone(),
+                card: card.clone(),
+                target_wallet_generation: *target_wallet_generation,
+            })
+            .await;
+        }
+        if let OplogEntry::CardTransferConfirmed {
+            transfer_id,
+            source_card_id,
+            installed_card_id,
+            target_holder,
+            ..
+        } = &oplog_entry
+        {
+            self.record_replay_event(ReplayEvent::CardTransferConfirmed {
+                transfer_id: *transfer_id,
+                source_card_id: *source_card_id,
+                installed_card_id: *installed_card_id,
+                target_holder: target_holder.clone(),
+            })
+            .await;
+        }
+        if let OplogEntry::CardRevokedCascade {
+            revoked_card_ids,
+            local_wallet_generation,
+            ..
+        } = &oplog_entry
+        {
+            self.record_replay_event(ReplayEvent::CardRevokedCascade {
+                card_ids: revoked_card_ids.clone(),
+                local_wallet_generation: *local_wallet_generation,
+            })
+            .await;
         }
         // The legacy adapter persists GolemApiFork as a matched
         // `Start { function_name: GolemApiFork, .. }` + `End { response: Some(..), .. }`
@@ -500,12 +692,13 @@ impl ReplayState {
     // Moves to the start of the region used for replay, handling initial skipped regions applied by manual updates correctly
     async fn move_to_start_of_replay(&mut self) {
         self.last_replayed_index.set(OplogIndex::INITIAL);
-        self.get_out_of_skipped_region(true).await;
+        self.get_out_of_skipped_region(self.initial_snapshot_skip_end)
+            .await;
     }
 
     async fn move_replay_idx(&mut self, new_idx: OplogIndex) {
         self.last_replayed_index.set(new_idx);
-        self.get_out_of_skipped_region(false).await;
+        self.get_out_of_skipped_region(None).await;
     }
 
     pub async fn lookup_oplog_entry(
@@ -612,6 +805,7 @@ impl ReplayState {
                         trace_id,
                         trace_states,
                         invocation_context: spans,
+                        wallet_pin,
                         ..
                     } => {
                         let invocation_payload =
@@ -628,6 +822,7 @@ impl ReplayState {
                             idempotency_key,
                             invocation_payload,
                             invocation_context,
+                            wallet_pin,
                         }));
                     }
                     entry if entry.is_hint() => {}
@@ -675,7 +870,7 @@ impl ReplayState {
         }
     }
 
-    async fn get_out_of_skipped_region(&mut self, initial_skip: bool) {
+    async fn get_out_of_skipped_region(&mut self, initial_snapshot_skip_end: Option<OplogIndex>) {
         if self.is_replay() {
             let skipped_region = {
                 let internal = self.internal.write().await;
@@ -696,16 +891,27 @@ impl ReplayState {
             };
 
             if let Some(skipped_region) = skipped_region {
-                // Initial skip is used to advance the replay cursor to the beginning of the replay / index of the loaded snapshot.
-                // All card events in that region are already part of the snapshot, so no need to consider them here.
-                if !initial_skip {
-                    self.record_card_terminal_events_in_region(&skipped_region)
+                let events_region = match initial_snapshot_skip_end {
+                    Some(snapshot_end) if skipped_region.end <= snapshot_end => None,
+                    Some(snapshot_end) => Some(OplogRegion {
+                        start: skipped_region.start.max(snapshot_end.next()),
+                        end: skipped_region.end,
+                    }),
+                    None => Some(skipped_region),
+                };
+                if let Some(events_region) = events_region {
+                    self.record_card_terminal_events_in_region(&events_region)
                         .await;
                 }
                 let mut internal = self.internal.write().await;
                 internal.next_skipped_region = internal
                     .skipped_regions
                     .find_next_deleted_region(self.last_replayed_index.get());
+                drop(internal);
+
+                if self.last_replayed_index.get() == self.replay_target.get() {
+                    self.record_replay_event(ReplayEvent::ReplayFinished).await;
+                }
             }
         }
     }
@@ -720,17 +926,111 @@ impl ReplayState {
 
             for (entry_index, entry) in self.read_oplog(next, count).await {
                 match entry {
-                    OplogEntry::CardRevoked { card_id, .. } => {
-                        self.record_replay_event(ReplayEvent::CardRevoked { card_id })
-                            .await;
+                    OplogEntry::CardRevoked {
+                        card_id,
+                        wallet_generation,
+                        ..
+                    } => {
+                        self.record_replay_event(ReplayEvent::CardRevoked {
+                            card_id,
+                            wallet_generation,
+                        })
+                        .await;
                     }
-                    OplogEntry::CardExpired { card_id, .. } => {
-                        self.record_replay_event(ReplayEvent::CardExpired { card_id })
-                            .await;
+                    OplogEntry::CardExpired {
+                        card_id,
+                        wallet_generation,
+                        ..
+                    } => {
+                        self.record_replay_event(ReplayEvent::CardExpired {
+                            card_id,
+                            wallet_generation,
+                        })
+                        .await;
                     }
-                    OplogEntry::CardInstalled { card, .. } => {
-                        self.record_replay_event(ReplayEvent::CardInstalled { card })
-                            .await;
+                    OplogEntry::CardInstalled {
+                        card,
+                        wallet_generation,
+                        ..
+                    } => {
+                        self.record_replay_event(ReplayEvent::CardInstalled {
+                            card,
+                            wallet_generation,
+                        })
+                        .await;
+                    }
+                    OplogEntry::CardDerived {
+                        card,
+                        wallet_generation,
+                        ..
+                    } => {
+                        self.record_replay_event(ReplayEvent::CardDerived {
+                            card,
+                            wallet_generation,
+                        })
+                        .await;
+                    }
+                    OplogEntry::CardTransferStarted {
+                        transfer_id,
+                        card_id,
+                        source_holder,
+                        target_holder,
+                        source_wallet_generation,
+                        ..
+                    } => {
+                        self.record_replay_event(ReplayEvent::CardTransferStarted {
+                            transfer_id,
+                            card_id,
+                            source_holder,
+                            target_holder,
+                            source_wallet_generation,
+                        })
+                        .await;
+                    }
+                    OplogEntry::CardTransferred {
+                        transfer_id,
+                        source_card_id,
+                        installed_card_id,
+                        target_holder,
+                        card,
+                        target_wallet_generation,
+                        ..
+                    } => {
+                        self.record_replay_event(ReplayEvent::CardTransferred {
+                            transfer_id,
+                            source_card_id,
+                            installed_card_id,
+                            target_holder,
+                            card,
+                            target_wallet_generation,
+                        })
+                        .await;
+                    }
+                    OplogEntry::CardTransferConfirmed {
+                        transfer_id,
+                        source_card_id,
+                        installed_card_id,
+                        target_holder,
+                        ..
+                    } => {
+                        self.record_replay_event(ReplayEvent::CardTransferConfirmed {
+                            transfer_id,
+                            source_card_id,
+                            installed_card_id,
+                            target_holder,
+                        })
+                        .await;
+                    }
+                    OplogEntry::CardRevokedCascade {
+                        revoked_card_ids,
+                        local_wallet_generation,
+                        ..
+                    } => {
+                        self.record_replay_event(ReplayEvent::CardRevokedCascade {
+                            card_ids: revoked_card_ids,
+                            local_wallet_generation,
+                        })
+                        .await;
                     }
                     _ => {}
                 }
@@ -1008,13 +1308,21 @@ mod tests {
     use super::*;
     use crate::services::oplog::CommitLevel;
     use async_trait::async_trait;
+    use golem_common::model::card::{
+        AgentCardHolder, Card, CardManagedByRuntimeDerived, InvocationWalletPin, PolymorphicCard,
+        WalletVersionToken,
+    };
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::invocation_context::TraceId;
     use golem_common::model::oplog::{
         AgentError, DurableFunctionType, HostRequest, HostRequestNoInput,
-        HostResponseMonotonicClockTimestamp, OplogPayload, PayloadId, RawOplogPayload,
+        HostRequestPermissionCardTransfer, HostResponseMonotonicClockTimestamp,
+        HostResponsePermissionCardTransferComplete, OplogPayload, PayloadId, QueuedCardEvent,
+        RawOplogPayload,
     };
-    use golem_common::model::{AgentId, Timestamp};
+    use golem_common::model::{AgentId, AgentInvocationPayload, IdempotencyKey, Timestamp};
+    use golem_common::serialization::serialize;
     use std::collections::BTreeMap;
     use std::time::Duration;
     use test_r::test;
@@ -1130,6 +1438,18 @@ mod tests {
         }
     }
 
+    fn invocation_started(wallet_pin: InvocationWalletPin) -> OplogEntry {
+        OplogEntry::AgentInvocationStarted {
+            timestamp: Timestamp::now_utc(),
+            idempotency_key: IdempotencyKey::new("wallet-pin-replay".to_string()),
+            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            trace_id: TraceId::generate(),
+            trace_states: Vec::new(),
+            invocation_context: Vec::new(),
+            wallet_pin: Some(wallet_pin),
+        }
+    }
+
     fn begin_atomic_region() -> OplogEntry {
         OplogEntry::BeginAtomicRegion {
             timestamp: Timestamp::now_utc(),
@@ -1149,15 +1469,665 @@ mod tests {
         }
     }
 
-    async fn replay_state_over(entries: Vec<OplogEntry>) -> ReplayState {
+    fn install_transfer_replay_entries(completed: bool) -> Vec<OplogEntry> {
+        let transfer_id = Uuid::new_v4();
+        let source_card_id = CardId::new();
+        let source_card = StoredCard::Polymorphic(PolymorphicCard {
+            card_id: source_card_id,
+            parent_ids: Vec::new(),
+            lower_positive: Vec::new(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            system_card: false,
+        });
+        let installed_card = StoredCard::Concrete(Card {
+            card_id: CardId::new(),
+            parent_ids: vec![source_card_id],
+            lower_positive: Vec::new(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        });
+        let target_agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "transfer-target".to_string(),
+        };
+        let source_agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "transfer-source".to_string(),
+        };
+        let source_holder = CardHolder::Agent(AgentCardHolder {
+            agent_id: source_agent_id.clone(),
+        });
+        let target_holder = CardHolder::Agent(AgentCardHolder {
+            agent_id: target_agent_id.clone(),
+        });
+        let provenance = CardManagedByRuntimeDerived {
+            environment_id: EnvironmentId::new(),
+            agent_id: source_agent_id,
+            invocation_key: IdempotencyKey::fresh(),
+            oplog_index: OplogIndex::from_u64(2),
+        };
+        let mut entries = vec![
+            noop(),
+            OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: None,
+                function_name: HostFunctionName::GolemPermissionsInstallTransfer,
+                request: Some(OplogPayload::Inline(Box::new(
+                    HostRequest::PermissionCardTransfer(HostRequestPermissionCardTransfer {
+                        transfer_id,
+                        source_card: serialize(&source_card).unwrap(),
+                        installed_card: serialize(&installed_card).unwrap(),
+                        installed_card_provenance: Some(serialize(&provenance).unwrap()),
+                        target_agent_id,
+                    }),
+                ))),
+                durable_function_type: DurableFunctionType::WriteLocal,
+            },
+            OplogEntry::CardDerived {
+                timestamp: Timestamp::now_utc(),
+                card: installed_card.clone(),
+                wallet_generation: Some(3),
+            },
+            OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
+                transfer_id,
+                source_card_id,
+                installed_card.clone(),
+                target_holder.clone(),
+            )),
+            OplogEntry::card_transfer_started(
+                transfer_id,
+                source_card_id,
+                Some(source_holder),
+                target_holder.clone(),
+                Some(3),
+            ),
+            OplogEntry::card_transfer_confirmed(
+                transfer_id,
+                source_card_id,
+                installed_card.card_id(),
+                target_holder,
+            ),
+        ];
+        if completed {
+            entries.push(OplogEntry::End {
+                timestamp: Timestamp::now_utc(),
+                start_index: OplogIndex::from_u64(2),
+                response: Some(OplogPayload::Inline(Box::new(
+                    HostResponse::PermissionCardTransferComplete(
+                        HostResponsePermissionCardTransferComplete {},
+                    ),
+                ))),
+                forced_commit: false,
+            });
+        }
+        entries
+    }
+
+    fn stored_test_card(card_id: CardId) -> StoredCard {
+        Card {
+            card_id,
+            parent_ids: Vec::new(),
+            lower_positive: Vec::new(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        }
+        .into()
+    }
+
+    fn transfer_replay_fixture() -> (Vec<OplogEntry>, Vec<ReplayEvent>) {
+        let transfer_id = Uuid::new_v4();
+        let source_card_id = CardId::new();
+        let installed_card_id = CardId::new();
+        let source_holder = Some(CardHolder::Agent(AgentCardHolder {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "transfer-source".to_string(),
+            },
+        }));
+        let target_holder = CardHolder::Agent(AgentCardHolder {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "transfer-target".to_string(),
+            },
+        });
+        let admitted_card = stored_test_card(installed_card_id);
+        let timestamp = Timestamp::now_utc();
+
+        let entries = vec![
+            OplogEntry::CardTransferStarted {
+                timestamp,
+                transfer_id,
+                card_id: source_card_id,
+                source_holder: source_holder.clone(),
+                target_holder: target_holder.clone(),
+                source_wallet_generation: Some(11),
+            },
+            OplogEntry::CardTransferred {
+                timestamp,
+                transfer_id,
+                source_card_id: Some(source_card_id),
+                installed_card_id,
+                target_holder: target_holder.clone(),
+                card: admitted_card.clone(),
+                target_wallet_generation: Some(17),
+            },
+            OplogEntry::CardTransferConfirmed {
+                timestamp,
+                transfer_id,
+                source_card_id,
+                installed_card_id,
+                target_holder: target_holder.clone(),
+            },
+        ];
+        let events = vec![
+            ReplayEvent::CardTransferStarted {
+                transfer_id,
+                card_id: source_card_id,
+                source_holder,
+                target_holder: target_holder.clone(),
+                source_wallet_generation: Some(11),
+            },
+            ReplayEvent::CardTransferred {
+                transfer_id,
+                source_card_id: Some(source_card_id),
+                installed_card_id,
+                target_holder: target_holder.clone(),
+                card: admitted_card,
+                target_wallet_generation: Some(17),
+            },
+            ReplayEvent::CardTransferConfirmed {
+                transfer_id,
+                source_card_id,
+                installed_card_id,
+                target_holder,
+            },
+        ];
+        (entries, events)
+    }
+
+    fn wallet_generation_replay_fixture() -> (Vec<OplogEntry>, Vec<ReplayEvent>) {
+        let installed_card = stored_test_card(CardId::new());
+        let derived_card = stored_test_card(CardId::new());
+        let revoked_card_id = CardId::new();
+        let expired_card_id = CardId::new();
+        let cascade_card_ids = vec![CardId::new(), CardId::new()];
+        let timestamp = Timestamp::now_utc();
+
+        let entries = vec![
+            OplogEntry::CardInstalled {
+                timestamp,
+                queued_event_index: None,
+                card: installed_card.clone(),
+                wallet_generation: Some(2),
+            },
+            OplogEntry::CardDerived {
+                timestamp,
+                card: derived_card.clone(),
+                wallet_generation: Some(4),
+            },
+            OplogEntry::CardRevoked {
+                timestamp,
+                queued_event_index: OplogIndex::NONE,
+                card_id: revoked_card_id,
+                wallet_generation: Some(5),
+            },
+            OplogEntry::CardExpired {
+                timestamp,
+                card_id: expired_card_id,
+                wallet_generation: Some(5),
+            },
+            OplogEntry::CardRevokedCascade {
+                timestamp,
+                revoked_card_ids: cascade_card_ids.clone(),
+                affected_wallets: Vec::new(),
+                local_wallet_generation: Some(7),
+            },
+        ];
+        let events = vec![
+            ReplayEvent::CardInstalled {
+                card: installed_card,
+                wallet_generation: Some(2),
+            },
+            ReplayEvent::CardDerived {
+                card: derived_card,
+                wallet_generation: Some(4),
+            },
+            ReplayEvent::CardRevoked {
+                card_id: revoked_card_id,
+                wallet_generation: Some(5),
+            },
+            ReplayEvent::CardExpired {
+                card_id: expired_card_id,
+                wallet_generation: Some(5),
+            },
+            ReplayEvent::CardRevokedCascade {
+                card_ids: cascade_card_ids,
+                local_wallet_generation: Some(7),
+            },
+        ];
+        (entries, events)
+    }
+
+    async fn replay_state_over_with_deleted_regions(
+        entries: Vec<OplogEntry>,
+        deleted_regions: DeletedRegions,
+    ) -> ReplayState {
+        replay_state_over_with_deleted_regions_and_snapshot(entries, deleted_regions, None).await
+    }
+
+    async fn replay_state_over_with_deleted_regions_and_snapshot(
+        entries: Vec<OplogEntry>,
+        deleted_regions: DeletedRegions,
+        initial_snapshot_skip_end: Option<OplogIndex>,
+    ) -> ReplayState {
         let oplog = Arc::new(InMemoryOplog::new());
         for entry in entries {
             oplog.add(entry).await;
         }
         let oplog: Arc<dyn Oplog> = oplog;
-        ReplayState::new(test_agent_id(), oplog, DeletedRegions::default())
+        ReplayState::new(
+            test_agent_id(),
+            oplog,
+            deleted_regions,
+            initial_snapshot_skip_end,
+        )
+        .await
+        .expect("failed to build replay state")
+    }
+
+    async fn replay_state_over(entries: Vec<OplogEntry>) -> ReplayState {
+        replay_state_over_with_deleted_regions(entries, DeletedRegions::default()).await
+    }
+
+    #[test]
+    async fn transfer_replay_events_preserve_complete_identity_and_admission_payload() {
+        let (transfer_entries, expected_events) = transfer_replay_fixture();
+        let mut entries = vec![noop()];
+        entries.extend(transfer_entries);
+        entries.push(start_now());
+        entries.push(start_now());
+
+        let mut replay_state = replay_state_over(entries).await;
+
+        assert_eq!(replay_state.take_new_replay_events().await, expected_events);
+    }
+
+    #[test]
+    async fn wallet_mutation_replay_events_preserve_recorded_generation_outcomes() {
+        let (generation_entries, expected_events) = wallet_generation_replay_fixture();
+        let mut entries = vec![noop()];
+        entries.extend(generation_entries);
+        entries.push(start_now());
+        entries.push(start_now());
+
+        let mut replay_state = replay_state_over(entries).await;
+
+        assert_eq!(replay_state.take_new_replay_events().await, expected_events);
+    }
+
+    #[test]
+    async fn invocation_pin_separates_prior_state_from_mid_invocation_mutations() {
+        let owned_agent_id = test_agent_id();
+        let base_card = stored_test_card(CardId::new());
+        let derived_card = stored_test_card(CardId::new());
+        let scope_card_id = CardId::new();
+        let wallet_pin = InvocationWalletPin {
+            wallet_token: WalletVersionToken {
+                wallet_id_hash: CardHolder::Agent(AgentCardHolder {
+                    agent_id: owned_agent_id.agent_id.clone(),
+                })
+                .wallet_id_hash(),
+                generation: 1,
+            },
+            pinned_card_ids: vec![base_card.card_id()],
+            scope_card_id: Some(scope_card_id),
+        };
+        let entries = vec![
+            noop(),
+            OplogEntry::CardInstalled {
+                timestamp: Timestamp::now_utc(),
+                queued_event_index: None,
+                card: base_card.clone(),
+                wallet_generation: Some(1),
+            },
+            invocation_started(wallet_pin.clone()),
+            OplogEntry::CardDerived {
+                timestamp: Timestamp::now_utc(),
+                card: derived_card.clone(),
+                wallet_generation: Some(2),
+            },
+            start_now(),
+            start_now(),
+        ];
+        let mut replay_state = replay_state_over(entries).await;
+
+        assert_eq!(
+            replay_state.take_new_replay_events().await,
+            vec![ReplayEvent::CardInstalled {
+                card: base_card,
+                wallet_generation: Some(1),
+            }]
+        );
+
+        let invocation = replay_state
+            .get_oplog_entry_agent_invocation_started()
             .await
-            .expect("failed to build replay state")
+            .expect("failed to replay invocation start")
+            .expect("expected invocation start");
+        assert_eq!(invocation.wallet_pin, Some(wallet_pin.clone()));
+        assert_eq!(
+            replay_state.take_new_replay_events().await,
+            vec![
+                ReplayEvent::InvocationWalletPinned { wallet_pin },
+                ReplayEvent::CardDerived {
+                    card: derived_card,
+                    wallet_generation: Some(2),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    async fn transfer_replay_events_are_preserved_across_deleted_regions() {
+        let (transfer_entries, expected_events) = transfer_replay_fixture();
+        let mut entries = vec![noop(), start_now()];
+        entries.extend(transfer_entries);
+        entries.push(start_now());
+        entries.push(start_now());
+        let deleted_regions = DeletedRegions::from_regions([OplogRegion::from_range(3..=5)]);
+        let mut replay_state =
+            replay_state_over_with_deleted_regions(entries, deleted_regions).await;
+
+        assert!(replay_state.take_new_replay_events().await.is_empty());
+        replay_state
+            .get_oplog_entry()
+            .await
+            .expect("failed to consume entry before deleted region");
+        assert_eq!(replay_state.take_new_replay_events().await, expected_events);
+    }
+
+    #[test]
+    async fn transfer_replay_events_are_preserved_when_first_deleted_region_follows_initial_entry()
+    {
+        let (transfer_entries, expected_events) = transfer_replay_fixture();
+        let mut entries = vec![noop()];
+        entries.extend(transfer_entries);
+        entries.push(start_now());
+        entries.push(start_now());
+        let deleted_regions = DeletedRegions::from_regions([OplogRegion::from_range(2..=4)]);
+        let mut replay_state =
+            replay_state_over_with_deleted_regions(entries, deleted_regions).await;
+
+        assert_eq!(replay_state.take_new_replay_events().await, expected_events);
+    }
+
+    #[test]
+    async fn replay_finishes_when_deleted_region_reaches_replay_target() {
+        let card = stored_test_card(CardId::new());
+        let expected_card_event = ReplayEvent::CardInstalled {
+            card: card.clone(),
+            wallet_generation: Some(1),
+        };
+        let entries = vec![
+            noop(),
+            OplogEntry::CardInstalled {
+                timestamp: Timestamp::now_utc(),
+                queued_event_index: None,
+                card,
+                wallet_generation: Some(1),
+            },
+        ];
+        let deleted_regions = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
+        let mut replay_state =
+            replay_state_over_with_deleted_regions(entries, deleted_regions).await;
+
+        assert_eq!(
+            replay_state.take_new_replay_events().await,
+            vec![expected_card_event, ReplayEvent::ReplayFinished]
+        );
+    }
+
+    #[test]
+    async fn snapshot_prefix_does_not_reapply_transfer_events() {
+        let (transfer_entries, _) = transfer_replay_fixture();
+        let mut entries = vec![noop()];
+        entries.extend(transfer_entries);
+        entries.push(start_now());
+        entries.push(start_now());
+        let mut deleted_regions = DeletedRegions::default();
+        deleted_regions.set_override(DeletedRegions::from_regions([OplogRegion::from_range(
+            2..=4,
+        )]));
+        let mut replay_state = replay_state_over_with_deleted_regions_and_snapshot(
+            entries,
+            deleted_regions,
+            Some(OplogIndex::from_u64(4)),
+        )
+        .await;
+
+        assert!(replay_state.take_new_replay_events().await.is_empty());
+    }
+
+    #[test]
+    async fn snapshot_restart_replays_non_wallet_card_derivation() {
+        let snapshot_card = stored_test_card(CardId::new());
+        let derived_card = stored_test_card(CardId::new());
+        let entries = vec![
+            noop(),
+            OplogEntry::CardInstalled {
+                timestamp: Timestamp::now_utc(),
+                queued_event_index: None,
+                card: snapshot_card.clone(),
+                wallet_generation: Some(1),
+            },
+            OplogEntry::Snapshot {
+                timestamp: Timestamp::now_utc(),
+                data: OplogPayload::Inline(Box::default()),
+                mime_type: "application/octet-stream".to_string(),
+                active_cards: vec![snapshot_card.clone()],
+                wallet_generation: 1,
+            },
+            OplogEntry::CardDerived {
+                timestamp: Timestamp::now_utc(),
+                card: derived_card.clone(),
+                wallet_generation: Some(1),
+            },
+            start_now(),
+            start_now(),
+        ];
+        let mut deleted_regions = DeletedRegions::default();
+        deleted_regions.set_override(DeletedRegions::from_regions([OplogRegion::from_range(
+            2..=3,
+        )]));
+        let mut replay_state = replay_state_over_with_deleted_regions_and_snapshot(
+            entries,
+            deleted_regions,
+            Some(OplogIndex::from_u64(3)),
+        )
+        .await;
+
+        let events = replay_state.take_new_replay_events().await;
+        assert_eq!(
+            events,
+            vec![ReplayEvent::CardDerived {
+                card: derived_card.clone(),
+                wallet_generation: Some(1),
+            }]
+        );
+
+        let wallet = BTreeMap::from([(snapshot_card.card_id(), snapshot_card)]);
+        let mut generation = 1;
+        crate::durable_host::adopt_recorded_wallet_generation(&mut generation, Some(1)).unwrap();
+
+        assert_eq!(wallet.len(), 1);
+        assert!(!wallet.contains_key(&derived_card.card_id()));
+        assert_eq!(generation, 1);
+    }
+
+    #[test]
+    async fn completed_non_wallet_derivation_replays_before_later_parent_revocation() {
+        let parent_id = CardId::new();
+        let derived_card = match stored_test_card(CardId::new()) {
+            StoredCard::Concrete(mut card) => {
+                card.parent_ids = vec![parent_id];
+                StoredCard::Concrete(card)
+            }
+            StoredCard::Polymorphic(_) => unreachable!(),
+        };
+        let entries = vec![
+            noop(),
+            OplogEntry::CardDerived {
+                timestamp: Timestamp::now_utc(),
+                card: derived_card.clone(),
+                wallet_generation: Some(0),
+            },
+            OplogEntry::CardRevokedCascade {
+                timestamp: Timestamp::now_utc(),
+                revoked_card_ids: vec![parent_id, derived_card.card_id()],
+                affected_wallets: Vec::new(),
+                local_wallet_generation: Some(0),
+            },
+            start_now(),
+            start_now(),
+        ];
+        let mut replay_state = replay_state_over(entries).await;
+
+        assert_eq!(
+            replay_state.take_new_replay_events().await,
+            vec![
+                ReplayEvent::CardDerived {
+                    card: derived_card.clone(),
+                    wallet_generation: Some(0),
+                },
+                ReplayEvent::CardRevokedCascade {
+                    card_ids: vec![parent_id, derived_card.card_id()],
+                    local_wallet_generation: Some(0),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    async fn snapshot_prefix_does_not_suppress_events_from_adjacent_deleted_region() {
+        let card = stored_test_card(CardId::new());
+        let expected_event = ReplayEvent::CardInstalled {
+            card: card.clone(),
+            wallet_generation: Some(1),
+        };
+        let entries = vec![
+            noop(),
+            start_now(),
+            OplogEntry::CardInstalled {
+                timestamp: Timestamp::now_utc(),
+                queued_event_index: None,
+                card,
+                wallet_generation: Some(1),
+            },
+            start_now(),
+            start_now(),
+        ];
+        let mut deleted_regions = DeletedRegions::from_regions([OplogRegion::from_range(3..=4)]);
+        deleted_regions.set_override(DeletedRegions::from_regions([OplogRegion::from_range(
+            2..=2,
+        )]));
+        let mut replay_state = replay_state_over_with_deleted_regions_and_snapshot(
+            entries,
+            deleted_regions,
+            Some(OplogIndex::from_u64(2)),
+        )
+        .await;
+
+        assert_eq!(
+            replay_state.take_new_replay_events().await,
+            vec![expected_event]
+        );
+    }
+
+    #[test]
+    async fn failed_snapshot_fallback_replays_from_initial_wallet_generation() {
+        let card_id = CardId::new();
+        let card = stored_test_card(card_id);
+        let timestamp = Timestamp::now_utc();
+        let entries = vec![
+            noop(),
+            OplogEntry::CardInstalled {
+                timestamp,
+                queued_event_index: None,
+                card: card.clone(),
+                wallet_generation: Some(1),
+            },
+            OplogEntry::CardRevoked {
+                timestamp,
+                queued_event_index: OplogIndex::NONE,
+                card_id,
+                wallet_generation: Some(2),
+            },
+            noop(),
+        ];
+        let mut deleted_regions = DeletedRegions::from_regions([OplogRegion::from_range(2..=3)]);
+        deleted_regions.set_override(DeletedRegions::from_regions([OplogRegion::from_range(
+            2..=4,
+        )]));
+        let mut replay_state = replay_state_over_with_deleted_regions_and_snapshot(
+            entries,
+            deleted_regions,
+            Some(OplogIndex::from_u64(4)),
+        )
+        .await;
+
+        replay_state.take_new_replay_events().await;
+        replay_state.drop_override_and_restart().await.unwrap();
+
+        let events = replay_state.take_new_replay_events().await;
+        let mut wallet = BTreeMap::new();
+        let mut generation = 0;
+        for event in events {
+            match event {
+                ReplayEvent::CardInstalled {
+                    card,
+                    wallet_generation,
+                } => {
+                    crate::durable_host::add_wallet_card(&mut wallet, &mut generation, card)
+                        .unwrap();
+                    crate::durable_host::adopt_recorded_wallet_generation(
+                        &mut generation,
+                        wallet_generation,
+                    )
+                    .unwrap();
+                }
+                ReplayEvent::CardRevoked {
+                    card_id,
+                    wallet_generation,
+                } => {
+                    crate::durable_host::remove_wallet_card(&mut wallet, &mut generation, card_id)
+                        .unwrap();
+                    crate::durable_host::adopt_recorded_wallet_generation(
+                        &mut generation,
+                        wallet_generation,
+                    )
+                    .unwrap();
+                }
+                ReplayEvent::ReplayFinished => {}
+                other => panic!("unexpected replay event: {other:?}"),
+            }
+        }
+
+        assert!(wallet.is_empty());
+        assert_eq!(generation, 2);
     }
 
     #[test]
@@ -1182,6 +2152,117 @@ mod tests {
             }
             other => panic!("expected Completed, got {other:?}"),
         }
+    }
+
+    #[test]
+    async fn install_transfer_hints_between_start_and_end_resolve_the_outer_call() {
+        let mut rs = replay_state_over(install_transfer_replay_entries(true)).await;
+        let handle = rs
+            .claim_concurrent_start(
+                &HostFunctionName::GolemPermissionsInstallTransfer,
+                &DurableFunctionType::WriteLocal,
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            rs.await_resolution(handle).await.unwrap(),
+            Resolution::Completed { .. }
+        ));
+    }
+
+    #[test]
+    async fn incomplete_install_transfer_with_committed_hints_can_resume_live() {
+        let mut rs = replay_state_over(install_transfer_replay_entries(false)).await;
+        let handle = rs
+            .claim_concurrent_start(
+                &HostFunctionName::GolemPermissionsInstallTransfer,
+                &DurableFunctionType::WriteLocal,
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            rs.await_resolution_outcome(handle).await.unwrap(),
+            ResolutionOutcome::Incomplete
+        ));
+    }
+
+    #[test]
+    async fn card_derived_audit_event_follows_completed_durable_call() {
+        let card = stored_test_card(CardId::new());
+        let event = OplogEntry::CardDerived {
+            timestamp: Timestamp::now_utc(),
+            card: card.clone(),
+            wallet_generation: Some(7),
+        };
+        let mut rs = replay_state_over(vec![noop(), start_now(), end_for(2, 42), event]).await;
+        let handle = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            rs.await_resolution(handle).await.unwrap(),
+            Resolution::Completed { .. }
+        ));
+        assert_eq!(
+            rs.pending_card_derivation(card.card_id()).await,
+            Some((card.clone(), Some(7)))
+        );
+        assert_eq!(
+            rs.take_new_replay_events().await,
+            vec![
+                ReplayEvent::CardDerived {
+                    card,
+                    wallet_generation: Some(7),
+                },
+                ReplayEvent::ReplayFinished,
+            ]
+        );
+    }
+
+    #[test]
+    async fn pending_card_derivation_matches_the_completed_call_across_deleted_region() {
+        let completed_card = stored_test_card(CardId::new());
+        let unrelated_card_a = stored_test_card(CardId::new());
+        let unrelated_card_b = stored_test_card(CardId::new());
+        let card_derived = |card| OplogEntry::CardDerived {
+            timestamp: Timestamp::now_utc(),
+            card,
+            wallet_generation: Some(7),
+        };
+        let entries = vec![
+            noop(),
+            start_now(),
+            end_for(2, 42),
+            card_derived(completed_card.clone()),
+            card_derived(unrelated_card_a),
+            card_derived(unrelated_card_b),
+            start_now(),
+        ];
+        let deleted_regions = DeletedRegions::from_regions([OplogRegion::from_range(5..=6)]);
+        let mut rs = replay_state_over_with_deleted_regions(entries, deleted_regions).await;
+        let handle = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            rs.await_resolution(handle).await.unwrap(),
+            Resolution::Completed { .. }
+        ));
+        assert_eq!(
+            rs.pending_card_derivation(completed_card.card_id()).await,
+            Some((completed_card, Some(7))),
+            "the pending audit selected for a completed derive call must not be replaced by an unrelated CardDerived event from a skipped region"
+        );
     }
 
     #[test]

@@ -25,21 +25,23 @@ use golem_api_grpc::proto::golem::registry::ResourceUsageUpdate as GrpcResourceU
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, BatchGetCardsRequest, BatchGetExistingCardsRequest,
-    BatchUpdateResourceUsageRequest, DownloadComponentRequest, GetActiveMcpForDomainRequest,
-    GetActiveRoutesForDomainRequest, GetAgentSecretRevisionRequest, GetAgentTypeRequest,
-    GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest, GetComponentMetadataRequest,
-    GetCurrentEnvironmentStateRequest, GetDeployedComponentMetadataRequest,
-    GetResourceDefinitionByIdRequest, GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
-    ResolveAgentTypeByNamesRequest, ResolveComponentRequest, UpdateWorkerConnectionLimitRequest,
-    authenticate_token_response, batch_get_cards_response, batch_get_existing_cards_response,
-    batch_update_resource_usage_response, download_component_response,
-    get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
-    get_agent_secret_revision_response, get_agent_type_response, get_all_agent_types_response,
+    BatchUpdateResourceUsageRequest, CreateRuntimeCardRequest, DownloadComponentRequest,
+    GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest, GetAgentSecretRevisionRequest,
+    GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
+    GetComponentMetadataRequest, GetCurrentEnvironmentStateRequest,
+    GetDeployedComponentMetadataRequest, GetResourceDefinitionByIdRequest,
+    GetResourceDefinitionByNameRequest, GetResourceLimitsRequest, ResolveAgentTypeByNamesRequest,
+    ResolveComponentRequest, RevokeCardRequest, RuntimeCardData,
+    UpdateWorkerConnectionLimitRequest, authenticate_token_response, batch_get_cards_response,
+    batch_get_existing_cards_response, batch_update_resource_usage_response,
+    create_runtime_card_response, download_component_response, get_active_mcp_for_domain_response,
+    get_active_routes_for_domain_response, get_agent_secret_revision_response,
+    get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_component_metadata_response,
     get_current_environment_state_response, get_deployed_component_metadata_response,
     get_resource_definition_by_id_response, get_resource_definition_by_name_response,
     get_resource_limits_response, resolve_agent_type_by_names_response, resolve_component_response,
-    update_worker_connection_limit_response,
+    revoke_card_response, update_worker_connection_limit_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::AgentId;
@@ -52,7 +54,7 @@ use golem_common::model::agent_secret::{
 };
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::card::{CardId, StoredCard};
+use golem_common::model::card::{CardId, CardManagedByRuntimeDerived, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use golem_common::model::domain_registration::Domain;
@@ -124,6 +126,22 @@ pub trait RegistryService: Send + Sync {
         _card_ids: Vec<CardId>,
     ) -> Result<Vec<StoredCard>, RegistryServiceError> {
         Ok(Vec::new())
+    }
+
+    async fn create_runtime_card(
+        &self,
+        _card: StoredCard,
+        _provenance: CardManagedByRuntimeDerived,
+    ) -> Result<StoredCard, RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "create_runtime_card is not supported by this registry service",
+        ))
+    }
+
+    async fn revoke_card(&self, _card_id: CardId) -> Result<Vec<CardId>, RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "revoke_card is not supported by this registry service",
+        ))
     }
 
     // components api
@@ -650,6 +668,101 @@ impl RegistryService for GrpcRegistryService {
                 })
                 .collect(),
             Some(batch_get_cards_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn create_runtime_card(
+        &self,
+        card: StoredCard,
+        provenance: CardManagedByRuntimeDerived,
+    ) -> Result<StoredCard, RegistryServiceError> {
+        let card_id = card.card_id();
+        let card_json = serde_json::to_vec(&card).map_err(|error| {
+            RegistryServiceError::internal_client_error(format!(
+                "failed to serialize runtime card {}: {error}",
+                card_id.0
+            ))
+        })?;
+        let provenance_json = serde_json::to_vec(&provenance).map_err(|error| {
+            RegistryServiceError::internal_client_error(format!(
+                "failed to serialize provenance for runtime card {}: {error}",
+                card_id.0
+            ))
+        })?;
+
+        let response = self
+            .client
+            .call("create_runtime_card", move |client| {
+                let request = CreateRuntimeCardRequest {
+                    card: Some(RuntimeCardData {
+                        card_id: Some(card_id.0.into()),
+                        card_json: card_json.clone(),
+                    }),
+                    provenance_json: provenance_json.clone(),
+                };
+
+                Box::pin(client.create_runtime_card(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(create_runtime_card_response::Result::Success(payload)) => {
+                let card = payload.card.ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "missing card field in create runtime card response",
+                    )
+                })?;
+                let envelope_card_id =
+                    card.card_id.map(|id| CardId(id.into())).ok_or_else(|| {
+                        RegistryServiceError::internal_client_error(
+                            "missing card ID in create runtime card response",
+                        )
+                    })?;
+                let created: StoredCard =
+                    serde_json::from_slice(&card.card_json).map_err(|error| {
+                        RegistryServiceError::internal_client_error(format!(
+                            "failed to deserialize create runtime card response: {error}"
+                        ))
+                    })?;
+                if created.card_id() != envelope_card_id {
+                    return Err(RegistryServiceError::internal_client_error(
+                        "card ID in create runtime card response does not match its serialized card",
+                    ));
+                }
+                if created.card_id() != card_id {
+                    return Err(RegistryServiceError::internal_client_error(
+                        "create runtime card response returned an unexpected card ID",
+                    ));
+                }
+                Ok(created)
+            }
+            Some(create_runtime_card_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn revoke_card(&self, card_id: CardId) -> Result<Vec<CardId>, RegistryServiceError> {
+        let response = self
+            .client
+            .call("revoke_card", move |client| {
+                let request = RevokeCardRequest {
+                    card_id: Some(card_id.0.into()),
+                };
+
+                Box::pin(client.revoke_card(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(revoke_card_response::Result::Success(payload)) => Ok(payload
+                .revoked_card_ids
+                .into_iter()
+                .map(|id| CardId(id.into()))
+                .collect()),
+            Some(revoke_card_response::Result::Error(error)) => Err(error.into()),
         }
     }
 

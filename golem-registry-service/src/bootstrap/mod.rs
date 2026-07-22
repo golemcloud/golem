@@ -301,6 +301,7 @@ impl Services {
             account_usage_service.clone(),
             environment_service.clone(),
             environment_plugin_grant_service.clone(),
+            registry_change_notifier.clone(),
         ));
 
         let login_system = LoginSystem::new(

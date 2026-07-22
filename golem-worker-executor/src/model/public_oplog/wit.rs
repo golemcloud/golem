@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::preview2::golem_api_1_x::oplog;
-use golem_common::base_model::oplog::{CardInstallFailure, PublicQueuedCardEvent, QueuedCardEvent};
+use golem_common::base_model::oplog::{
+    CardInstallFailure, PublicQueuedCardEvent, QueuedCardEvent, QueuedCardEventCard,
+};
 use golem_common::model::card::CardId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::public_oplog_entry::{
@@ -83,33 +85,66 @@ fn card_id_from_wit(card_id: oplog::CardId) -> CardId {
     CardId(card_id.uuid.into())
 }
 
-fn queued_card_event_to_wit(value: PublicQueuedCardEvent) -> oplog::QueuedCardEvent {
+fn queued_card_event_to_wit(
+    value: PublicQueuedCardEvent,
+) -> Result<oplog::QueuedCardEvent, String> {
     match value {
-        PublicQueuedCardEvent::Install(event) => {
-            oplog::QueuedCardEvent::Install(oplog::QueuedCardEventInstall {
+        PublicQueuedCardEvent::Install(event) => Ok(oplog::QueuedCardEvent::Install(
+            oplog::QueuedCardEventInstall {
                 card_id: card_id_to_wit(event.card_id),
-            })
-        }
-        PublicQueuedCardEvent::Revoke(event) => {
-            oplog::QueuedCardEvent::Revoke(oplog::QueuedCardEventRevoke {
+            },
+        )),
+        PublicQueuedCardEvent::Revoke(event) => Ok(oplog::QueuedCardEvent::Revoke(
+            oplog::QueuedCardEventRevoke {
                 card_id: card_id_to_wit(event.card_id),
-            })
+            },
+        )),
+        PublicQueuedCardEvent::TransferStarted(_) => {
+            Err("card transfer events are not representable in golem:api/oplog@1.5.0".to_string())
         }
+        PublicQueuedCardEvent::TransferReceived(_) => Err(
+            "received card transfer events are not representable in golem:api/oplog@1.5.0"
+                .to_string(),
+        ),
     }
 }
 
-fn raw_queued_card_event_to_wit(value: QueuedCardEvent) -> oplog::QueuedCardEvent {
+fn raw_queued_card_event_to_wit(value: QueuedCardEvent) -> Result<oplog::QueuedCardEvent, String> {
     match value {
-        QueuedCardEvent::Install(event) => {
-            oplog::QueuedCardEvent::Install(oplog::QueuedCardEventInstall {
+        QueuedCardEvent::Install(event) => Ok(oplog::QueuedCardEvent::Install(
+            oplog::QueuedCardEventInstall {
                 card_id: card_id_to_wit(event.card_id),
-            })
-        }
-        QueuedCardEvent::Revoke(event) => {
-            oplog::QueuedCardEvent::Revoke(oplog::QueuedCardEventRevoke {
+            },
+        )),
+        QueuedCardEvent::Revoke(event) => Ok(oplog::QueuedCardEvent::Revoke(
+            oplog::QueuedCardEventRevoke {
                 card_id: card_id_to_wit(event.card_id),
-            })
+            },
+        )),
+        QueuedCardEvent::TransferStarted(_) => {
+            Err("card transfer events are not representable in golem:api/oplog@1.5.0".to_string())
         }
+        QueuedCardEvent::TransferReceived(_) => Err(
+            "received card transfer events are not representable in golem:api/oplog@1.5.0"
+                .to_string(),
+        ),
+    }
+}
+
+fn raw_queued_card_event_from_wit(
+    value: oplog::QueuedCardEvent,
+) -> Result<QueuedCardEvent, String> {
+    match value {
+        oplog::QueuedCardEvent::Install(event) => {
+            Ok(QueuedCardEvent::Install(QueuedCardEventCard {
+                card_id: card_id_from_wit(event.card_id),
+                card: None,
+            }))
+        }
+        oplog::QueuedCardEvent::Revoke(event) => Ok(QueuedCardEvent::Revoke(QueuedCardEventCard {
+            card_id: card_id_from_wit(event.card_id),
+            card: None,
+        })),
     }
 }
 
@@ -186,9 +221,11 @@ pub(crate) fn reject_quota_handles_in_oplog_entries<
     }
 }
 
-impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
-    fn from(value: PublicOplogEntry) -> Self {
-        match value {
+impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
+    type Error = String;
+
+    fn try_from(value: PublicOplogEntry) -> Result<Self, String> {
+        Ok(match value {
             PublicOplogEntry::Create(CreateParams {
                 timestamp,
                 agent_id,
@@ -268,6 +305,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
             PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
                 timestamp,
                 invocation,
+                wallet_pin: _,
             }) => Self::AgentInvocationStarted(oplog::AgentInvocationStartedParameters {
                 timestamp: timestamp.into(),
                 invocation: invocation.into(),
@@ -575,27 +613,31 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 timestamp,
                 queued_event_index,
                 card_id,
+                wallet_generation: _,
             }) => Self::CardRevoked(oplog::CardRevokedParameters {
                 timestamp: timestamp.into(),
                 queued_event_index: queued_event_index.into(),
                 card_id: card_id_to_wit(card_id),
             }),
-            PublicOplogEntry::CardExpired(CardExpiredParams { timestamp, card_id }) => {
-                Self::CardExpired(oplog::CardExpiredParameters {
-                    timestamp: timestamp.into(),
-                    card_id: card_id_to_wit(card_id),
-                })
-            }
+            PublicOplogEntry::CardExpired(CardExpiredParams {
+                timestamp,
+                card_id,
+                wallet_generation: _,
+            }) => Self::CardExpired(oplog::CardExpiredParameters {
+                timestamp: timestamp.into(),
+                card_id: card_id_to_wit(card_id),
+            }),
             PublicOplogEntry::CardEventQueued(CardEventQueuedParams { timestamp, event }) => {
                 Self::CardEventQueued(oplog::CardEventQueuedParameters {
                     timestamp: timestamp.into(),
-                    event: queued_card_event_to_wit(event),
+                    event: queued_card_event_to_wit(event)?,
                 })
             }
             PublicOplogEntry::CardInstalled(CardInstalledParams {
                 timestamp,
                 queued_event_index,
                 card_id,
+                wallet_generation: _,
             }) => Self::CardInstalled(oplog::CardInstalledParameters {
                 timestamp: timestamp.into(),
                 queued_event_index: queued_event_index.map(Into::into),
@@ -612,7 +654,17 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 card_id: card_id_to_wit(card_id),
                 reason: card_install_failure_to_wit(reason),
             }),
-        }
+            PublicOplogEntry::CardDerived(_)
+            | PublicOplogEntry::CardTransferStarted(_)
+            | PublicOplogEntry::CardTransferred(_)
+            | PublicOplogEntry::CardRevokedCascade(_)
+            | PublicOplogEntry::CardTransferConfirmed(_) => {
+                return Err(
+                    "permission-card lifecycle entry is not representable in golem:api/oplog@1.5.0"
+                        .to_string(),
+                );
+            }
+        })
     }
 }
 
@@ -1085,6 +1137,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     trace_id,
                     trace_states: params.trace_states,
                     invocation_context,
+                    wallet_pin: None,
                 })
             }
             oplog::OplogEntry::AgentInvocationFinished(params) => {
@@ -1326,6 +1379,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 data: oplog_payload_from_wit(params.data),
                 mime_type: params.mime_type,
                 active_cards: Vec::new(),
+                wallet_generation: 0,
             }),
             oplog::OplogEntry::OplogProcessorCheckpoint(params) => {
                 Ok(Self::OplogProcessorCheckpoint {
@@ -1363,19 +1417,25 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     params.queued_event_index,
                 ),
                 card_id: card_id_from_wit(params.card_id),
+                wallet_generation: None,
             }),
             oplog::OplogEntry::CardExpired(params) => Ok(Self::CardExpired {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 card_id: card_id_from_wit(params.card_id),
+                wallet_generation: None,
             }),
-            oplog::OplogEntry::CardEventQueued(_params) => Err(
-                "Converting CardEventQueued from public WIT to raw oplog entry is not supported"
-                    .to_string(),
-            ),
-            oplog::OplogEntry::CardInstalled(_params) => Err(
-                "Converting CardInstalled from public WIT to raw oplog entry is not supported"
-                    .to_string(),
-            ),
+            oplog::OplogEntry::CardEventQueued(params) => Ok(Self::CardEventQueued {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                event: raw_queued_card_event_from_wit(params.event)?,
+            }),
+            oplog::OplogEntry::CardInstalled(params) => Ok(Self::CardInstalled {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                queued_event_index: params
+                    .queued_event_index
+                    .map(golem_common::model::OplogIndex::from_u64),
+                card: serde_json::from_slice(&params.card).map_err(|err| err.to_string())?,
+                wallet_generation: None,
+            }),
             oplog::OplogEntry::CardInstallFailed(params) => Ok(Self::CardInstallFailed {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 queued_event_index: golem_common::model::OplogIndex::from_u64(
@@ -1788,6 +1848,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 trace_id,
                 trace_states,
                 invocation_context,
+                wallet_pin: _,
             } => Ok(Self::AgentInvocationStarted(
                 oplog::RawAgentInvocationStartedParameters {
                     timestamp: timestamp.into(),
@@ -1907,27 +1968,31 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 timestamp,
                 queued_event_index,
                 card_id,
+                wallet_generation: _,
             } => Ok(Self::CardRevoked(oplog::CardRevokedParameters {
                 timestamp: timestamp.into(),
                 queued_event_index: queued_event_index.into(),
                 card_id: card_id_to_wit(card_id),
             })),
-            M::CardExpired { timestamp, card_id } => {
-                Ok(Self::CardExpired(oplog::CardExpiredParameters {
-                    timestamp: timestamp.into(),
-                    card_id: card_id_to_wit(card_id),
-                }))
-            }
+            M::CardExpired {
+                timestamp,
+                card_id,
+                wallet_generation: _,
+            } => Ok(Self::CardExpired(oplog::CardExpiredParameters {
+                timestamp: timestamp.into(),
+                card_id: card_id_to_wit(card_id),
+            })),
             M::CardEventQueued { timestamp, event } => {
                 Ok(Self::CardEventQueued(oplog::CardEventQueuedParameters {
                     timestamp: timestamp.into(),
-                    event: raw_queued_card_event_to_wit(event),
+                    event: raw_queued_card_event_to_wit(event)?,
                 }))
             }
             M::CardInstalled {
                 timestamp,
                 queued_event_index,
                 card,
+                wallet_generation: _,
             } => Ok(Self::CardInstalled(oplog::RawCardInstalledParameters {
                 timestamp: timestamp.into(),
                 queued_event_index: queued_event_index.map(Into::into),
@@ -1946,6 +2011,14 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                     reason: card_install_failure_to_wit(reason),
                 },
             )),
+            M::CardDerived { .. }
+            | M::CardTransferStarted { .. }
+            | M::CardTransferred { .. }
+            | M::CardRevokedCascade { .. }
+            | M::CardTransferConfirmed { .. } => Err(
+                "permission-card lifecycle entry is not representable in golem:api/oplog@1.5.0"
+                    .to_string(),
+            ),
             M::CreateResource {
                 timestamp,
                 id,
@@ -2150,5 +2223,227 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 },
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::oplog;
+    use golem_common::base_model::oplog::{
+        QueuedCardEvent, QueuedCardEventTransfer, QueuedCardEventTransferReceived,
+    };
+    use golem_common::model::agent::Principal;
+    use golem_common::model::card::{
+        AccountCardHolder, ApplicationCardHolder, Card, CardHolder, CardId, InvocationWalletPin,
+        PublicInvocationWalletPin, WalletVersionToken,
+    };
+    use golem_common::model::invocation_context::TraceId;
+    use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
+    use golem_common::model::oplog::{
+        OplogEntry, OplogPayload, PublicAgentInvocation, PublicOplogEntry,
+    };
+    use golem_common::model::{AgentInvocationPayload, Empty, IdempotencyKey, Timestamp};
+    use golem_common::schema::SchemaValue;
+    use test_r::test;
+    use uuid::Uuid;
+
+    fn test_card(card_id: CardId) -> Card {
+        Card {
+            card_id,
+            parent_ids: Vec::new(),
+            lower_positive: Vec::new(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        }
+    }
+
+    #[test]
+    fn legacy_wit_projection_omits_wallet_generation_outcomes() {
+        let timestamp = Timestamp::now_utc().rounded();
+        let card = test_card(CardId::new());
+        let card_id = card.card_id;
+        let entries = [
+            (
+                OplogEntry::CardInstalled {
+                    timestamp,
+                    queued_event_index: None,
+                    card: card.clone().into(),
+                    wallet_generation: Some(1),
+                },
+                OplogEntry::CardInstalled {
+                    timestamp,
+                    queued_event_index: None,
+                    card: card.clone().into(),
+                    wallet_generation: None,
+                },
+            ),
+            (
+                OplogEntry::CardRevoked {
+                    timestamp,
+                    queued_event_index: golem_common::model::OplogIndex::NONE,
+                    card_id,
+                    wallet_generation: Some(3),
+                },
+                OplogEntry::CardRevoked {
+                    timestamp,
+                    queued_event_index: golem_common::model::OplogIndex::NONE,
+                    card_id,
+                    wallet_generation: None,
+                },
+            ),
+            (
+                OplogEntry::CardExpired {
+                    timestamp,
+                    card_id,
+                    wallet_generation: Some(4),
+                },
+                OplogEntry::CardExpired {
+                    timestamp,
+                    card_id,
+                    wallet_generation: None,
+                },
+            ),
+        ];
+
+        for (entry, expected) in entries {
+            let encoded = oplog::OplogEntry::try_from(entry.clone()).unwrap();
+            assert_eq!(OplogEntry::try_from(encoded).unwrap(), expected);
+        }
+
+        assert!(
+            oplog::OplogEntry::try_from(OplogEntry::CardDerived {
+                timestamp,
+                card: card.into(),
+                wallet_generation: Some(2),
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn legacy_wit_projection_omits_invocation_wallet_pins() {
+        let wallet_token = WalletVersionToken {
+            wallet_id_hash: [0x42; 32],
+            generation: 73,
+        };
+        let scope_card_id = CardId::new();
+        let pinned_card_ids = vec![CardId::new(), CardId::new()];
+        let raw_entry = OplogEntry::AgentInvocationStarted {
+            timestamp: Timestamp::now_utc().rounded(),
+            idempotency_key: IdempotencyKey::new("wallet-pin".to_string()),
+            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+                method_name: "test".to_string(),
+                input: SchemaValue::Record { fields: Vec::new() },
+                principal: Principal::anonymous(),
+            })),
+            trace_id: TraceId::generate(),
+            trace_states: Vec::new(),
+            invocation_context: Vec::new(),
+            wallet_pin: Some(InvocationWalletPin {
+                wallet_token: wallet_token.clone(),
+                pinned_card_ids: pinned_card_ids.clone(),
+                scope_card_id: Some(scope_card_id),
+            }),
+        };
+
+        let encoded = oplog::OplogEntry::try_from(raw_entry).unwrap();
+        match OplogEntry::try_from(encoded).unwrap() {
+            OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
+                assert_eq!(wallet_pin, None);
+            }
+            other => panic!("expected raw invocation-started entry, got {other:?}"),
+        }
+
+        let public_entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+            timestamp: Timestamp::now_utc().rounded(),
+            invocation: PublicAgentInvocation::SaveSnapshot(Empty {}),
+            wallet_pin: Some(PublicInvocationWalletPin {
+                wallet_token,
+                scope_card_id: Some(scope_card_id),
+            }),
+        });
+        match oplog::PublicOplogEntry::try_from(public_entry).unwrap() {
+            oplog::PublicOplogEntry::AgentInvocationStarted(_) => {}
+            other => panic!("expected public invocation-started entry, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn raw_card_transferred_encoders_reject_mismatched_card_id() {
+        let payload_card_id = CardId::new();
+        let entry = OplogEntry::CardTransferred {
+            timestamp: Timestamp::now_utc().rounded(),
+            transfer_id: Uuid::new_v4(),
+            source_card_id: Some(payload_card_id),
+            installed_card_id: CardId::new(),
+            target_holder: CardHolder::Account(AccountCardHolder {
+                account_id: Uuid::new_v4(),
+            }),
+            card: test_card(payload_card_id).into(),
+            target_wallet_generation: None,
+        };
+
+        let protobuf_result: Result<golem_api_grpc::proto::golem::worker::RawOplogEntry, String> =
+            entry.clone().try_into();
+        assert!(protobuf_result.is_err());
+
+        let wit_result = oplog::OplogEntry::try_from(entry);
+        assert!(wit_result.is_err());
+    }
+
+    #[test]
+    fn unsupported_transfer_holders_roundtrip_through_protobuf_but_not_legacy_wit() {
+        let unsupported_targets = [
+            CardHolder::Account(AccountCardHolder {
+                account_id: Uuid::new_v4(),
+            }),
+            CardHolder::Application(ApplicationCardHolder {
+                application_id: Uuid::new_v4(),
+            }),
+        ];
+
+        for target_holder in unsupported_targets {
+            let payload_card_id = CardId::new();
+            let entry = OplogEntry::CardEventQueued {
+                timestamp: Timestamp::now_utc().rounded(),
+                event: QueuedCardEvent::TransferStarted(QueuedCardEventTransfer {
+                    transfer_id: Uuid::new_v4(),
+                    card_id: CardId::new(),
+                    card: Some(test_card(payload_card_id).into()),
+                    target_holder,
+                }),
+            };
+
+            let protobuf_result: Result<
+                golem_api_grpc::proto::golem::worker::RawOplogEntry,
+                String,
+            > = entry.clone().try_into();
+            let protobuf = protobuf_result.expect("unsupported holder transfer intent must encode");
+            assert_eq!(OplogEntry::try_from(protobuf).unwrap(), entry);
+
+            assert!(oplog::OplogEntry::try_from(entry).is_err());
+        }
+    }
+
+    #[test]
+    fn legacy_wit_rejects_received_card_transfers_without_fabricating_an_event() {
+        let card_id = CardId::new();
+        let source_card_id = CardId::new();
+        let entry = OplogEntry::CardEventQueued {
+            timestamp: Timestamp::now_utc().rounded(),
+            event: QueuedCardEvent::TransferReceived(QueuedCardEventTransferReceived {
+                transfer_id: Uuid::new_v4(),
+                source_card_id: Some(source_card_id),
+                card_id,
+                card: Some(test_card(card_id).into()),
+            }),
+        };
+
+        assert!(oplog::OplogEntry::try_from(entry).is_err());
     }
 }

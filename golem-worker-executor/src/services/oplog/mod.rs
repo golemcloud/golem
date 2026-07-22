@@ -19,6 +19,7 @@ pub use compressed::{CompressedOplogArchive, CompressedOplogArchiveService, Comp
 use desert_rust::BinaryCodec;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::agent::AgentMode;
+use golem_common::model::card::InvocationWalletPin;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
@@ -396,9 +397,9 @@ pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>>
             let raw: *const T = raw.cast();
             return Some(unsafe { Arc::from_raw(raw) });
         }
-        match current.inner() {
-            Some(inner) => current = inner,
-            None => return None,
+        {
+            let inner = current.inner()?;
+            current = inner
         }
     }
 }
@@ -493,6 +494,7 @@ pub trait OplogOps: Oplog {
     async fn add_agent_invocation_started(
         &self,
         invocation: AgentInvocation,
+        wallet_pin: InvocationWalletPin,
     ) -> Result<OplogEntry, String> {
         let (idempotency_key, invocation_payload, ctx) = invocation.into_parts();
         let payload = self.upload_payload(&invocation_payload).await?;
@@ -506,6 +508,7 @@ pub trait OplogOps: Oplog {
             trace_id,
             trace_states,
             invocation_context,
+            wallet_pin: Some(wallet_pin),
         };
         self.add(entry.clone()).await;
         Ok(entry)
