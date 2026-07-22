@@ -230,8 +230,8 @@ describe('fluent ArkType walker', () => {
   it('maps a string-literal union to an enum', () => {
     const en = compileSchema(ark("'red' | 'green' | 'blue'"));
     expect(en.graph.root.body.tag).toBe('enum');
-    const cases = (en.graph.root.body as { tag: 'enum'; cases: string[] }).cases;
-    expect(cases.sort()).toEqual(['blue', 'green', 'red']);
+    const cases = (en.graph.root.body as { tag: 'enum'; cases: readonly string[] }).cases;
+    expect([...cases].sort()).toEqual(['blue', 'green', 'red']);
     // Round-trip each case through its own index.
     for (const c of cases) {
       expect(en.fromValue(en.toValue(c))).toBe(c);
