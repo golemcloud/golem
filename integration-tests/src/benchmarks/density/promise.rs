@@ -112,9 +112,9 @@ pub async fn run_cell(
         )
         .await?;
         outcome.record(rate, period);
-        cleanup_pool(&user, &component, config).await?;
     }
 
+    cleanup_pool(&user, &component, config).await?;
     Ok(outcome.into_benchmark_result(config))
 }
 
