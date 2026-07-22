@@ -1,0 +1,381 @@
+package golem
+
+import (
+	"fmt"
+	"reflect"
+	"strings"
+	"testing"
+
+	types "github.com/golemcloud/golem-go/internal/wit/golem_core_types"
+)
+
+// ---------------------------------------------------------------------------
+// schema / value agreement
+// ---------------------------------------------------------------------------
+
+// checkAgreement walks a type graph and a value tree together and asserts every
+// value node matches the schema node describing it — same kind, same arity.
+//
+// This is the property the codec design exists to guarantee. Encoding, decoding
+// and schema derivation used to be three separate walks that had to agree by
+// convention; now they are built together per type, and this check is what
+// proves it for every case exercised below.
+func checkAgreement(g types.SchemaGraph, sIdx int32, tree types.SchemaValueTree, vIdx int32, path string) error {
+	if int(sIdx) >= len(g.TypeNodes) {
+		return fmt.Errorf("%s: type index %d out of range", path, sIdx)
+	}
+	if int(vIdx) >= len(tree.ValueNodes) {
+		return fmt.Errorf("%s: value index %d out of range", path, vIdx)
+	}
+	body := g.TypeNodes[sIdx].Body
+	val := tree.ValueNodes[vIdx]
+
+	mismatch := func() error {
+		return fmt.Errorf("%s: value tag %d does not match schema tag %d", path, val.Tag(), body.Tag())
+	}
+
+	switch body.Tag() {
+	case types.SchemaTypeBodyRecordType:
+		if val.Tag() != types.SchemaValueNodeRecordValue {
+			return mismatch()
+		}
+		fields, children := body.RecordType(), val.RecordValue()
+		if len(fields) != len(children) {
+			return fmt.Errorf("%s: record has %d value(s) but schema declares %d field(s)",
+				path, len(children), len(fields))
+		}
+		for i, f := range fields {
+			if err := checkAgreement(g, f.Body, tree, children[i], path+"."+f.Name); err != nil {
+				return err
+			}
+		}
+	case types.SchemaTypeBodyOptionType:
+		if val.Tag() != types.SchemaValueNodeOptionValue {
+			return mismatch()
+		}
+		if inner := val.OptionValue(); inner.IsSome() {
+			return checkAgreement(g, body.OptionType(), tree, inner.Some(), path+"?")
+		}
+	case types.SchemaTypeBodyResultType:
+		if val.Tag() != types.SchemaValueNodeResultValue {
+			return mismatch()
+		}
+		spec, payload := body.ResultType(), val.ResultValue()
+		if payload.Tag() == types.ResultValuePayloadErrValue {
+			if c := payload.ErrValue(); c.IsSome() {
+				return checkAgreement(g, spec.Err.Some(), tree, c.Some(), path+".err")
+			}
+		} else if c := payload.OkValue(); c.IsSome() {
+			return checkAgreement(g, spec.Ok.Some(), tree, c.Some(), path+".ok")
+		}
+	case types.SchemaTypeBodyListType:
+		if val.Tag() != types.SchemaValueNodeListValue {
+			return mismatch()
+		}
+		for i, child := range val.ListValue() {
+			if err := checkAgreement(g, body.ListType(), tree, child, fmt.Sprintf("%s[%d]", path, i)); err != nil {
+				return err
+			}
+		}
+	case types.SchemaTypeBodyFixedListType:
+		if val.Tag() != types.SchemaValueNodeFixedListValue {
+			return mismatch()
+		}
+		spec, children := body.FixedListType(), val.FixedListValue()
+		if int(spec.Length) != len(children) {
+			return fmt.Errorf("%s: fixed list has %d element(s), schema declares %d",
+				path, len(children), spec.Length)
+		}
+		for i, child := range children {
+			if err := checkAgreement(g, spec.Element, tree, child, fmt.Sprintf("%s[%d]", path, i)); err != nil {
+				return err
+			}
+		}
+	case types.SchemaTypeBodyMapType:
+		if val.Tag() != types.SchemaValueNodeMapValue {
+			return mismatch()
+		}
+		spec := body.MapType()
+		for i, e := range val.MapValue() {
+			if err := checkAgreement(g, spec.Key, tree, e.Key, fmt.Sprintf("%s.key%d", path, i)); err != nil {
+				return err
+			}
+			if err := checkAgreement(g, spec.Value, tree, e.Value, fmt.Sprintf("%s.val%d", path, i)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// roundTrip encodes in, verifies the tree agrees with the derived schema, then
+// decodes it back.
+func roundTrip[T any](t *testing.T, in T) T {
+	t.Helper()
+	c := compile(reflect.TypeFor[T]())
+
+	tree := encodeWith(c, reflect.ValueOf(in))
+
+	var g graphBuilder
+	root := g.node(c)
+	if err := checkAgreement(g.build(), root, tree, tree.Root, reflect.TypeFor[T]().String()); err != nil {
+		t.Fatalf("schema/value disagreement: %v", err)
+	}
+
+	out := reflect.New(reflect.TypeFor[T]()).Elem()
+	d := decoder{nodes: tree.ValueNodes}
+	if err := c.decode(&d, out, tree.Root); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	return out.Interface().(T)
+}
+
+func assertRoundTrip[T any](t *testing.T, name string, in T) {
+	t.Helper()
+	if got := roundTrip(t, in); !reflect.DeepEqual(got, in) {
+		t.Errorf("%s: round trip changed the value\n got: %#v\nwant: %#v", name, got, in)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// types under test
+// ---------------------------------------------------------------------------
+
+type Money struct {
+	Amount   int64
+	Currency string
+}
+
+type Line struct {
+	Sku string
+	Qty int32
+}
+
+type Order struct {
+	ID     string
+	Coupon *string
+	Lines  []Line
+	Refund Option[Result[Money, string]]
+	Tags   map[string]int64
+	Digits [3]uint8
+}
+
+func TestRoundTripPrimitivesAndRecords(t *testing.T) {
+	assertRoundTrip(t, "string", "hello")
+	assertRoundTrip(t, "bool", true)
+	assertRoundTrip(t, "int64", int64(-9000))
+	assertRoundTrip(t, "uint8", uint8(255))
+	assertRoundTrip(t, "float64", 3.5)
+	assertRoundTrip(t, "record", Money{Amount: 1050, Currency: "EUR"})
+}
+
+func TestRoundTripNestedComposites(t *testing.T) {
+	coupon := "SUMMER"
+	full := Order{
+		ID:     "ord-1",
+		Coupon: &coupon,
+		Lines:  []Line{{Sku: "a", Qty: 2}, {Sku: "b", Qty: 1}},
+		Refund: Some(Ok[Money, string](Money{Amount: 250, Currency: "EUR"})),
+		Tags:   map[string]int64{"priority": 1, "region": 7},
+		Digits: [3]uint8{1, 2, 3},
+	}
+	assertRoundTrip(t, "order (all present)", full)
+
+	// The absent/failed shapes must round-trip too.
+	empty := Order{
+		ID:     "ord-2",
+		Coupon: nil,
+		Lines:  []Line{},
+		Refund: None[Result[Money, string]](),
+		Tags:   map[string]int64{},
+		Digits: [3]uint8{},
+	}
+	assertRoundTrip(t, "order (all absent)", empty)
+
+	failed := full
+	failed.Refund = Some(Err[Money, string]("card expired"))
+	assertRoundTrip(t, "order (result is err)", failed)
+}
+
+func TestRoundTripDeeplyNestedOptionAndResult(t *testing.T) {
+	// The shapes that motivated the codec design: options of results, results of
+	// options, options of options, and lists of each.
+	assertRoundTrip(t, "option<option<string>>", Some(Some("x")))
+	assertRoundTrip(t, "option<option<string>> inner none", Some(None[string]()))
+	assertRoundTrip(t, "option<option<string>> outer none", None[Option[string]]())
+	assertRoundTrip(t, "**string via pointers", func() **string {
+		s := "deep"
+		p := &s
+		return &p
+	}())
+	assertRoundTrip(t, "result<option<Money>, string>",
+		Ok[Option[Money], string](Some(Money{Amount: 1, Currency: "GBP"})))
+	assertRoundTrip(t, "result<result<..>>",
+		Ok[Result[int64, string], string](Err[int64, string]("inner")))
+	assertRoundTrip(t, "list<option<result<..>>>", []Option[Result[Money, string]]{
+		Some(Ok[Money, string](Money{Amount: 5, Currency: "USD"})),
+		None[Result[Money, string]](),
+		Some(Err[Money, string]("nope")),
+	})
+	assertRoundTrip(t, "map<string, list<option<int64>>>", map[string][]Option[int64]{
+		"a": {Some(int64(1)), None[int64]()},
+		"b": {},
+	})
+}
+
+// *T and Option[T] are two spellings of the same thing, so they must produce
+// byte-identical schemas.
+func TestPointerAndOptionProduceTheSameSchema(t *testing.T) {
+	schemaOf := func(rt reflect.Type) types.SchemaGraph {
+		var g graphBuilder
+		g.node(compile(rt))
+		return g.build()
+	}
+	ptr := schemaOf(reflect.TypeFor[*string]())
+	opt := schemaOf(reflect.TypeFor[Option[string]]())
+
+	if len(ptr.TypeNodes) != len(opt.TypeNodes) {
+		t.Fatalf("node counts differ: *string=%d Option[string]=%d", len(ptr.TypeNodes), len(opt.TypeNodes))
+	}
+	for i := range ptr.TypeNodes {
+		if a, b := ptr.TypeNodes[i].Body.Tag(), opt.TypeNodes[i].Body.Tag(); a != b {
+			t.Fatalf("node %d differs: *string tag %d, Option[string] tag %d", i, a, b)
+		}
+	}
+	// node 0 is the option (its index is reserved before the inner type is added)
+	if ptr.TypeNodes[0].Body.Tag() != types.SchemaTypeBodyOptionType {
+		t.Fatal("expected an option-type node at the root")
+	}
+	if ptr.TypeNodes[1].Body.Tag() != types.SchemaTypeBodyStringType {
+		t.Fatal("expected the inner string type")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// recursion
+// ---------------------------------------------------------------------------
+
+type Tree struct {
+	Label    string
+	Children []*Tree
+}
+
+func TestRecursiveTypeProducesAFiniteGraph(t *testing.T) {
+	// Without the reserve-before-recurse guard in compile and graphBuilder.node,
+	// either of these would recurse until the stack overflows.
+	c := compile(reflect.TypeFor[Tree]())
+
+	var g graphBuilder
+	g.node(c)
+	graph := g.build()
+	if len(graph.TypeNodes) > 8 {
+		t.Fatalf("recursive type produced %d nodes; expected a small finite graph", len(graph.TypeNodes))
+	}
+
+	assertRoundTrip(t, "recursive tree", Tree{
+		Label: "root",
+		Children: []*Tree{
+			{Label: "a", Children: []*Tree{{Label: "a1", Children: []*Tree{}}}},
+			{Label: "b", Children: []*Tree{}},
+		},
+	})
+}
+
+func TestSharedTypeIsEmittedOnce(t *testing.T) {
+	type Pair struct {
+		Left  Money
+		Right Money
+	}
+	var g graphBuilder
+	g.node(compile(reflect.TypeFor[Pair]()))
+	graph := g.build()
+
+	records := 0
+	for _, n := range graph.TypeNodes {
+		if n.Body.Tag() == types.SchemaTypeBodyRecordType {
+			records++
+		}
+	}
+	// Pair and Money — Money must not be duplicated for each field.
+	if records != 2 {
+		t.Fatalf("expected 2 record nodes (Pair, Money), got %d", records)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// determinism and rejection
+// ---------------------------------------------------------------------------
+
+func TestMapEncodingIsDeterministic(t *testing.T) {
+	// Go randomizes map iteration; these trees land in the oplog and are
+	// compared on replay, so encoding must be stable.
+	m := map[string]int64{"z": 1, "a": 2, "m": 3, "b": 4, "q": 5}
+	c := compile(reflect.TypeFor[map[string]int64]())
+
+	first := encodeWith(c, reflect.ValueOf(m))
+	for range 50 {
+		again := encodeWith(c, reflect.ValueOf(m))
+		if !reflect.DeepEqual(first, again) {
+			t.Fatal("map encoding is not deterministic across runs")
+		}
+	}
+}
+
+func mustPanic(t *testing.T, want string, f func()) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatalf("expected a panic mentioning %q", want)
+		}
+		if msg := fmt.Sprint(r); !strings.Contains(msg, want) {
+			t.Fatalf("panic %q does not mention %q", msg, want)
+		}
+	}()
+	f()
+}
+
+func TestUnsupportedTypesAreRejectedAtRegistration(t *testing.T) {
+	// Registration-time panics, not invocation-time surprises.
+	mustPanic(t, "platform-dependent width", func() { compile(reflect.TypeFor[int]()) })
+	mustPanic(t, "platform-dependent width", func() { compile(reflect.TypeFor[uint]()) })
+	mustPanic(t, "not a primitive", func() { compile(reflect.TypeFor[map[Money]string]()) })
+	mustPanic(t, "unsupported type", func() { compile(reflect.TypeFor[chan int]()) })
+}
+
+func TestMalformedInputIsAnErrorNotAPanic(t *testing.T) {
+	// A string where a record is expected, and a truncated tree.
+	c := compile(reflect.TypeFor[Money]())
+	tree := types.SchemaValueTree{
+		ValueNodes: []types.SchemaValueNode{types.MakeSchemaValueNodeStringValue("nope")},
+		Root:       0,
+	}
+	out := reflect.New(reflect.TypeFor[Money]()).Elem()
+	d := decoder{nodes: tree.ValueNodes}
+	if err := c.decode(&d, out, tree.Root); err == nil {
+		t.Fatal("expected an error decoding a string into a record")
+	}
+
+	empty := decoder{nodes: nil}
+	if err := c.decode(&empty, out, 0); err == nil {
+		t.Fatal("expected an error for an out-of-range node index")
+	}
+}
+
+// A nil slice and an empty slice are indistinguishable on the wire — both are an
+// empty list — so decoding normalizes nil to empty. This matches encoding/json
+// and is worth pinning, since it is the one place a round trip is not identity.
+func TestNilSliceDecodesAsEmptySlice(t *testing.T) {
+	got := roundTrip(t, Tree{Label: "leaf", Children: nil})
+	if got.Children == nil {
+		t.Fatal("expected a non-nil empty slice after decoding")
+	}
+	if len(got.Children) != 0 {
+		t.Fatalf("expected an empty slice, got %d element(s)", len(got.Children))
+	}
+	// A nil map normalizes the same way.
+	type withMap struct{ M map[string]int64 }
+	if m := roundTrip(t, withMap{M: nil}); m.M == nil || len(m.M) != 0 {
+		t.Fatalf("expected a non-nil empty map, got %#v", m.M)
+	}
+}

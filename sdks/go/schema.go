@@ -15,7 +15,6 @@
 package golem
 
 import (
-	"fmt"
 	"reflect"
 
 	common "github.com/golemcloud/golem-go/internal/wit/golem_agent_common"
@@ -28,85 +27,55 @@ import (
 // from the Go types by reflection — this is what removes the need for a code
 // generation step or an explicit schema DSL.
 
-type graphBuilder struct{ nodes []types.SchemaTypeNode }
-
-func (g *graphBuilder) push(body types.SchemaTypeBody) int32 {
-	g.nodes = append(g.nodes, types.SchemaTypeNode{Body: body})
-	return int32(len(g.nodes) - 1)
+type graphBuilder struct {
+	nodes []types.SchemaTypeNode
+	// seen deduplicates by Go type, so a type used by several methods yields
+	// one node — and, more importantly, so a self-referential type terminates.
+	seen map[reflect.Type]int32
 }
 
-// add appends the nodes describing t and returns the index of its root node.
-func (g *graphBuilder) add(t reflect.Type) int32 {
-	// Records: children first, then the record node referring to them.
-	if t.Kind() == reflect.Struct && t != reflect.TypeFor[Unit]() {
-		var fields []types.NamedFieldType
-		for i := range t.NumField() {
-			f := t.Field(i)
-			if f.PkgPath != "" {
-				continue
-			}
-			fields = append(fields, types.NamedFieldType{Name: lowerFirst(f.Name), Body: g.add(f.Type)})
-		}
-		return g.push(types.MakeSchemaTypeBodyRecordType(fields))
+// node returns the index of c's type node, adding it if absent.
+//
+// The index is reserved and recorded *before* the body is built, because
+// building it may recurse back into this same type. That reservation is what
+// makes recursive types (a record reachable from its own fields) produce a
+// finite graph instead of overflowing the stack.
+func (g *graphBuilder) node(c *codec) int32 {
+	if g.seen == nil {
+		g.seen = map[reflect.Type]int32{}
 	}
-	return g.push(bodyFor(t))
+	if idx, ok := g.seen[c.typ]; ok {
+		return idx
+	}
+	idx := int32(len(g.nodes))
+	g.nodes = append(g.nodes, types.SchemaTypeNode{})
+	g.seen[c.typ] = idx
+
+	// Sequenced deliberately: c.body may append nodes and reallocate g.nodes,
+	// so the destination must be indexed only after it returns.
+	body := c.body(g)
+	g.nodes[idx].Body = body
+	return idx
 }
 
 func (g *graphBuilder) build() types.SchemaGraph {
 	// schema.root is a structurally required placeholder, not the semantic root:
 	// the meaningful roots are the per-parameter and per-output indices.
 	if len(g.nodes) == 0 {
-		g.push(types.MakeSchemaTypeBodyBoolType())
+		g.nodes = append(g.nodes, types.SchemaTypeNode{Body: types.MakeSchemaTypeBodyBoolType()})
 	}
 	return types.SchemaGraph{TypeNodes: g.nodes, Root: 0}
 }
 
-// bodyFor maps a Go scalar type onto a WIT type body. Bare int/uint are
-// rejected: their width is platform-dependent, so the wire type would be
-// ambiguous.
-func bodyFor(t reflect.Type) types.SchemaTypeBody {
-	none := witTypes.None[types.NumericRestrictions]()
-	switch t.Kind() {
-	case reflect.String:
-		return types.MakeSchemaTypeBodyStringType()
-	case reflect.Bool:
-		return types.MakeSchemaTypeBodyBoolType()
-	case reflect.Int64:
-		return types.MakeSchemaTypeBodyS64Type(none)
-	case reflect.Int32:
-		return types.MakeSchemaTypeBodyS32Type(none)
-	case reflect.Int16:
-		return types.MakeSchemaTypeBodyS16Type(none)
-	case reflect.Int8:
-		return types.MakeSchemaTypeBodyS8Type(none)
-	case reflect.Uint64:
-		return types.MakeSchemaTypeBodyU64Type(none)
-	case reflect.Uint32:
-		return types.MakeSchemaTypeBodyU32Type(none)
-	case reflect.Uint16:
-		return types.MakeSchemaTypeBodyU16Type(none)
-	case reflect.Uint8:
-		return types.MakeSchemaTypeBodyU8Type(none)
-	case reflect.Float64:
-		return types.MakeSchemaTypeBodyF64Type(none)
-	case reflect.Float32:
-		return types.MakeSchemaTypeBodyF32Type(none)
-	case reflect.Int, reflect.Uint:
-		panic(fmt.Sprintf("golem: %s has a platform-dependent width; use a sized type such as int64/uint64", t))
-	default:
-		panic(fmt.Sprintf("golem: unsupported type %s (kind %s)", t, t.Kind()))
-	}
-}
-
-// namedFields turns struct fields into WIT named-fields, adding each field's
-// type to the shared graph.
+// namedFields turns a parameter list into WIT named-fields, adding each
+// parameter's type to the shared graph.
 func namedFields(g *graphBuilder, fs []fieldInfo) []common.NamedField {
 	out := make([]common.NamedField, 0, len(fs))
 	for _, f := range fs {
 		out = append(out, common.NamedField{
 			Name:   f.name,
 			Source: common.MakeFieldSourceUserSupplied(),
-			Schema: g.add(f.typ),
+			Schema: g.node(f.codec),
 		})
 	}
 	return out
@@ -123,8 +92,8 @@ func buildAgentType(e *agentEntry) common.AgentType {
 		m := e.methods[name]
 		in := namedFields(&g, m.inFields)
 		out := common.MakeOutputSchemaUnit()
-		if m.outType != nil {
-			out = common.MakeOutputSchemaSingle(g.add(m.outType))
+		if m.outCodec != nil {
+			out = common.MakeOutputSchemaSingle(g.node(m.outCodec))
 		}
 		methods = append(methods, common.AgentMethod{
 			Name:         m.name,

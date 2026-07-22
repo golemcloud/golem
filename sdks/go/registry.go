@@ -28,13 +28,14 @@ type fieldInfo struct {
 	name  string
 	index int
 	typ   reflect.Type
+	codec *codec
 }
 
 type methodEntry struct {
 	name     string
 	desc     string
 	inFields []fieldInfo
-	outType  reflect.Type // nil => unit output
+	outCodec *codec // nil => unit output
 	// invoke is the erased dispatcher produced by Implement. Calling it is a
 	// direct func-value call: no reflection is used to reach the handler.
 	invoke func(state any, agentID string, in types.SchemaValueTree) (out *types.SchemaValueTree, err error)
@@ -82,7 +83,12 @@ func structFields(t reflect.Type) []fieldInfo {
 		if f.PkgPath != "" { // unexported
 			continue
 		}
-		out = append(out, fieldInfo{name: lowerFirst(f.Name), index: i, typ: f.Type})
+		out = append(out, fieldInfo{
+			name:  lowerFirst(f.Name),
+			index: i,
+			typ:   f.Type,
+			codec: compile(f.Type),
+		})
 	}
 	return out
 }
@@ -160,11 +166,12 @@ func Implement[Id any, S any, In any, Out any](
 		panic("golem: " + a.name + ": method already implemented: " + m.name)
 	}
 
+	// Codecs are compiled once, here at registration — not per invocation.
 	inType := reflect.TypeFor[In]()
 	outType := reflect.TypeFor[Out]()
 	me := &methodEntry{name: m.name, desc: m.desc, inFields: structFields(inType)}
 	if outType != reflect.TypeFor[Unit]() {
-		me.outType = outType
+		me.outCodec = compile(outType)
 	}
 
 	me.invoke = func(state any, agentID string, tree types.SchemaValueTree) (out *types.SchemaValueTree, err error) {
@@ -189,12 +196,12 @@ func Implement[Id any, S any, In any, Out any](
 		if herr != nil {
 			return nil, herr
 		}
-		if me.outType == nil {
+		if me.outCodec == nil {
 			return nil, nil
 		}
 
 		stage = stageEncode
-		encoded := encodeTyped(me.outType, reflect.ValueOf(result))
+		encoded := encodeWith(me.outCodec, reflect.ValueOf(result))
 		return &encoded, nil
 	}
 
