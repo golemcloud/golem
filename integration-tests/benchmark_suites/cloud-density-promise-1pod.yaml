@@ -1,6 +1,6 @@
 # Promise-completion density on one worker-executor pod. The workflow drives
 # each cell independently and passes these values to `benchmarks density`.
-# Focused warm-path run capturing executor storage at pool saturation and open files.
+# Focused warm-path run capturing executor storage, open files, and I/O counters.
 name: cloud-density-promise-1pod
 section: promise
 defaultRamp: [2, 4, 8, 16, 32, 64, 128, 256]
