@@ -18,7 +18,7 @@ function useForkedWitBindgen(cargoTomlPath) {
   const witBindgenLine =
     'wit-bindgen = { version = "0.42.1", default-features = false, features = ["macros"] }';
   const witBindgenRtLine = 'wit-bindgen-rt = { version = "0.42.1", features = ["bitflags"] }';
-  const forkedLine = `wit-bindgen = { git = "${WIT_BINDGEN_GIT}", branch = "${WIT_BINDGEN_BRANCH}", version = "=0.58.0", default-features = false, features = ["macros"] }`;
+  const forkedLine = `wit-bindgen = { git = "${WIT_BINDGEN_GIT}", branch = "${WIT_BINDGEN_BRANCH}", version = "=0.59.0", default-features = false, features = ["macros"] }`;
 
   const witBindgenCount = original.split(witBindgenLine).length - 1;
   if (witBindgenCount !== 1) {
