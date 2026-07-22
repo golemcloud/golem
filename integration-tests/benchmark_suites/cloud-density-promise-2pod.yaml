@@ -4,6 +4,6 @@ name: cloud-density-promise-2pod
 section: promise
 defaultRamp: [1, 2, 4, 8, 16, 32, 64, 128, 256]
 cells:
-  - { name: promise-medium-cold-2pod, payloadSize: 16777216, waiterPresence: cold }
-  - { name: promise-medium-warm-2pod, payloadSize: 16777216, waiterPresence: warm }
-  - { name: promise-medium-mixed-2pod, payloadSize: 16777216, waiterPresence: mixed }
+  - { name: promise-medium-cold-2pod, payloadSize: 16777216, waiterPresence: cold, snapshotting: disabled }
+  - { name: promise-medium-warm-2pod, payloadSize: 16777216, waiterPresence: warm, snapshotting: disabled }
+  - { name: promise-medium-mixed-2pod, payloadSize: 16777216, waiterPresence: mixed, snapshotting: disabled }

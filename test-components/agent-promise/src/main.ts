@@ -41,3 +41,15 @@ class PromiseAgent extends BaseAgent {
       throw new Error(`unexpected fork result: ${forkResult}`)
     }
 }
+
+@agent({ snapshotting: { every: 10 } })
+class SnapshottingPromiseAgent extends BaseAgent {
+    async getPromise(): Promise<PromiseId> {
+        return createPromise()
+    }
+
+    async awaitPromise(id: PromiseId): Promise<string> {
+      const resultBytes = await awaitPromise(id)
+      return new TextDecoder().decode(resultBytes)
+    }
+}
