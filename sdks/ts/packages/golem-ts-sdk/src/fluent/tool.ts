@@ -79,19 +79,133 @@ type SuccessOutput<Schema extends StandardSchemaV1> = [SchemaOutput<Schema>] ext
   : SchemaOutput<Schema>;
 type StreamPresence = 'none' | 'optional' | 'required';
 declare const TAIL_ARGUMENT: unique symbol;
+declare const GLOBAL_SURFACES: unique symbol;
+declare const BODY_SURFACES: unique symbol;
 
 type AddArgument<Args, Name extends string, Value, Required extends boolean> = Args &
   (Required extends true
     ? { [Key in CamelCase<Name>]: Value }
     : { [Key in CamelCase<Name>]?: Value });
+interface ArgumentSurface<Name extends string = string, Aliases extends string = string> {
+  readonly name: Name;
+  readonly aliases: Aliases;
+}
+type GlobalEntries<Globals> = Globals extends {
+  readonly [GLOBAL_SURFACES]: infer Entries;
+}
+  ? Entries
+  : never;
+type GlobalArguments<Globals> = Omit<Globals, typeof GLOBAL_SURFACES>;
+type OptionAliases<Options> = Options extends { readonly aliases: readonly (infer Alias)[] }
+  ? Extract<Alias, string>
+  : never;
+type AddGlobalArgument<
+  Globals,
+  Name extends string,
+  Value,
+  Required extends boolean,
+  Options,
+> = AddArgument<GlobalArguments<Globals>, Name, Value, Required> & {
+  readonly [GLOBAL_SURFACES]:
+    | GlobalEntries<Globals>
+    | ArgumentSurface<Name, OptionAliases<Options>>;
+};
+type SurfaceIdentifiers<Entry> =
+  Entry extends ArgumentSurface<infer Name, infer Aliases> ? Name | Aliases : never;
+type CapturedGlobalNames<ChildGlobals, InheritedGlobals> =
+  GlobalEntries<ChildGlobals> extends infer Entry
+    ? Entry extends ArgumentSurface<infer Name, string>
+      ? Extract<
+          SurfaceIdentifiers<Entry>,
+          SurfaceIdentifiers<GlobalEntries<InheritedGlobals>>
+        > extends never
+        ? never
+        : CamelCase<Name>
+      : never
+    : never;
+type UncapturedGlobalEntries<ChildGlobals, InheritedGlobals> =
+  GlobalEntries<ChildGlobals> extends infer Entry
+    ? Entry extends ArgumentSurface
+      ? Extract<
+          SurfaceIdentifiers<Entry>,
+          SurfaceIdentifiers<GlobalEntries<InheritedGlobals>>
+        > extends never
+        ? Entry
+        : never
+      : never
+    : never;
+type ReconcileGlobalArguments<ChildGlobals, InheritedGlobals> = Omit<
+  GlobalArguments<ChildGlobals>,
+  CapturedGlobalNames<ChildGlobals, InheritedGlobals>
+> & {
+  readonly [GLOBAL_SURFACES]: UncapturedGlobalEntries<ChildGlobals, InheritedGlobals>;
+};
+type MergeGlobalArguments<InheritedGlobals, LocalGlobals> = GlobalArguments<InheritedGlobals> &
+  GlobalArguments<LocalGlobals> & {
+    readonly [GLOBAL_SURFACES]: GlobalEntries<InheritedGlobals> | GlobalEntries<LocalGlobals>;
+  };
+type BodySurfaceEntries<Args> = Args extends {
+  readonly [BODY_SURFACES]: infer Entries;
+}
+  ? Entries
+  : never;
+type BodyArguments<Args> = Omit<Args, typeof BODY_SURFACES>;
+type AddBodyArgument<
+  Args,
+  Name extends string,
+  Value,
+  Required extends boolean,
+  Aliases extends string = never,
+> = AddArgument<BodyArguments<Args>, Name, Value, Required> & {
+  readonly [BODY_SURFACES]: BodySurfaceEntries<Args> | ArgumentSurface<Name, Aliases>;
+};
+type CapturedBodyNames<Args, InheritedGlobals> =
+  BodySurfaceEntries<Args> extends infer Entry
+    ? Entry extends ArgumentSurface<infer Name, string>
+      ? Extract<
+          SurfaceIdentifiers<Entry>,
+          SurfaceIdentifiers<GlobalEntries<InheritedGlobals>>
+        > extends never
+        ? never
+        : CamelCase<Name>
+      : never
+    : never;
+type UncapturedBodyEntries<Args, InheritedGlobals> =
+  BodySurfaceEntries<Args> extends infer Entry
+    ? Entry extends ArgumentSurface
+      ? Extract<
+          SurfaceIdentifiers<Entry>,
+          SurfaceIdentifiers<GlobalEntries<InheritedGlobals>>
+        > extends never
+        ? Entry
+        : never
+      : never
+    : never;
+type ReconcileBodyArguments<Args, InheritedGlobals> = Omit<
+  Args,
+  CapturedBodyNames<Args, InheritedGlobals> | typeof BODY_SURFACES
+> & {
+  readonly [BODY_SURFACES]: UncapturedBodyEntries<Args, InheritedGlobals>;
+};
 type TailArgumentKey<Args> = Args extends { readonly [TAIL_ARGUMENT]: infer Key }
   ? Extract<Key, PropertyKey>
   : never;
+type NonTailBodyEntries<Args> =
+  BodySurfaceEntries<Args> extends infer Entry
+    ? Entry extends ArgumentSurface<infer Name, string>
+      ? CamelCase<Name> extends TailArgumentKey<Args>
+        ? never
+        : Entry
+      : never
+    : never;
 type ReplaceTailArgument<Args, Name extends string, Value> = Omit<
   Args,
-  TailArgumentKey<Args> | typeof TAIL_ARGUMENT
-> & { [Key in CamelCase<Name>]: Value } & { readonly [TAIL_ARGUMENT]: CamelCase<Name> };
-type PublicArguments<Args> = Omit<Args, typeof TAIL_ARGUMENT>;
+  TailArgumentKey<Args> | typeof TAIL_ARGUMENT | typeof BODY_SURFACES
+> & { [Key in CamelCase<Name>]: Value } & {
+  readonly [TAIL_ARGUMENT]: CamelCase<Name>;
+  readonly [BODY_SURFACES]: NonTailBodyEntries<Args> | ArgumentSurface<Name, never>;
+};
+type PublicArguments<Args> = Omit<Args, typeof TAIL_ARGUMENT | typeof BODY_SURFACES>;
 
 type HasDefault<Options> = Options extends { readonly default: unknown } ? true : false;
 type IsRequired<Options, Default extends boolean> = Options extends {
@@ -184,6 +298,10 @@ type BodyStdin<Body> =
   Body extends ToolBodyModel<unknown, unknown, unknown, infer Stdin, any> ? Stdin : 'none';
 type BodyStdout<Body> =
   Body extends ToolBodyModel<unknown, unknown, unknown, any, infer Stdout> ? Stdout : 'none';
+type ReconcileBodyModel<Body, InheritedGlobals> =
+  Body extends ToolBodyModel<infer Args, infer Success, infer Errors, infer Stdin, infer Stdout>
+    ? ToolBodyModel<ReconcileBodyArguments<Args, InheritedGlobals>, Success, Errors, Stdin, Stdout>
+    : Body;
 
 type StreamContextField<
   Name extends string,
@@ -282,7 +400,7 @@ type HandlerFor<Model, Inherited> =
   Model extends ToolCommandModel<string, infer Globals, infer Body, object>
     ? Body extends AnyToolBodyModel
       ? ToolHandler<
-          Inherited & Globals & BodyArgs<Body>,
+          GlobalArguments<MergeGlobalArguments<Inherited, Globals>> & BodyArgs<Body>,
           BodySuccess<Body>,
           BodyErrors<Body>,
           ToolInvocationContext<BodyStdin<Body>, BodyStdout<Body>>
@@ -307,11 +425,11 @@ type NodeImplementation<Model, Inherited> =
       : Body extends AnyToolBodyModel
         ? NestedCommandImplementation<
             HandlerFor<Model, Inherited>,
-            ChildImplementations<Children, Inherited & Globals>
+            ChildImplementations<Children, MergeGlobalArguments<Inherited, Globals>>
           >
         : NestedCommandImplementation<
             undefined,
-            ChildImplementations<Children, Inherited & Globals>
+            ChildImplementations<Children, MergeGlobalArguments<Inherited, Globals>>
           >
     : never;
 
@@ -357,7 +475,9 @@ type ClientMethodFor<Model, Inherited> =
   Model extends ToolCommandModel<string, infer Globals, infer Body, object>
     ? Body extends AnyToolBodyModel
       ? ToolClientMethod<
-          Inherited & Globals & BodyArgs<Body> & ClientStdin<Body>,
+          GlobalArguments<MergeGlobalArguments<Inherited, Globals>> &
+            BodyArgs<Body> &
+            ClientStdin<Body>,
           ClientResult<Body>,
           BodyErrors<Body>
         >
@@ -368,14 +488,26 @@ type ChildClients<Children, Inherited> = {
   [Name in keyof Children]: NodeClient<Children[Name], Inherited>;
 };
 
-type NodeClient<Model, Inherited> =
+type NodeClient<Model, Inherited, Reconcile extends boolean = false> =
   Model extends ToolSubtreeModel<infer Command>
-    ? NodeClient<Command, Inherited>
+    ? NodeClient<Command, Inherited, true>
     : Model extends ToolCommandModel<string, infer Globals, infer Body, infer Children>
-      ? Body extends AnyToolBodyModel
-        ? ClientMethodFor<Model, Inherited> & ChildClients<Children, Inherited & Globals>
-        : ChildClients<Children, Inherited & Globals>
+      ? NodeClientWithGlobals<
+          Model,
+          Inherited,
+          Reconcile extends true ? ReconcileGlobalArguments<Globals, Inherited> : Globals,
+          Reconcile extends true ? ReconcileBodyModel<Body, Inherited> : Body,
+          Children
+        >
       : never;
+
+type NodeClientWithGlobals<Model, Inherited, Globals, Body, Children> =
+  Model extends ToolCommandModel<infer Name, unknown, AnyToolBodyModel | undefined, object>
+    ? Body extends AnyToolBodyModel
+      ? ClientMethodFor<ToolCommandModel<Name, Globals, Body, Children>, Inherited> &
+          ChildClients<Children, MergeGlobalArguments<Inherited, Globals>>
+      : ChildClients<Children, MergeGlobalArguments<Inherited, Globals>>
+    : never;
 
 type RootClient<Model> =
   Model extends ToolCommandModel<infer Name, infer Globals, infer Body, infer Children>
@@ -634,7 +766,7 @@ export class BodyBuilder<
     schema: Schema,
     options?: Options,
   ): BodyBuilder<
-    AddArgument<Args, Name, SchemaOutput<Schema>, PositionalIsRequired<Options>>,
+    AddBodyArgument<Args, Name, SchemaOutput<Schema>, PositionalIsRequired<Options>>,
     Success,
     Errors,
     Stdin,
@@ -703,7 +835,13 @@ export class BodyBuilder<
     schema: Schema,
     options?: Options,
   ): BodyBuilder<
-    AddArgument<Args, Name, OptionValue<Schema, Options>, OptionIsRequired<Options>>,
+    AddBodyArgument<
+      Args,
+      Name,
+      OptionValue<Schema, Options>,
+      OptionIsRequired<Options>,
+      OptionAliases<Options>
+    >,
     Success,
     Errors,
     Stdin,
@@ -719,7 +857,7 @@ export class BodyBuilder<
     name: Name,
     options?: Options,
   ): BodyBuilder<
-    AddArgument<Args, Name, FlagValue<Options>, true>,
+    AddBodyArgument<Args, Name, FlagValue<Options>, true, OptionAliases<Options>>,
     Success,
     Errors,
     Stdin,
@@ -885,20 +1023,42 @@ export class CommandBuilder<
     options?: Options,
   ): CommandBuilder<
     Name,
-    AddArgument<Globals, ArgumentName, OptionValue<Schema, Options>, OptionIsRequired<Options>>,
+    AddGlobalArgument<
+      Globals,
+      ArgumentName,
+      OptionValue<Schema, Options>,
+      OptionIsRequired<Options>,
+      Options
+    >,
     Body,
     Children,
     Root
   >;
-  global<const ArgumentName extends string, Schema extends StandardSchemaV1<unknown, boolean>>(
+  global<
+    const ArgumentName extends string,
+    Schema extends StandardSchemaV1<unknown, boolean>,
+    const Options extends GlobalFlagOptions,
+  >(
     name: ArgumentName,
     schema: Schema,
-    options: GlobalFlagOptions,
-  ): CommandBuilder<Name, AddArgument<Globals, ArgumentName, boolean, true>, Body, Children, Root>;
+    options: Options,
+  ): CommandBuilder<
+    Name,
+    AddGlobalArgument<Globals, ArgumentName, boolean, true, Options>,
+    Body,
+    Children,
+    Root
+  >;
   global<const ArgumentName extends string, const Options extends GlobalCountFlagOptions>(
     name: ArgumentName,
     options: Options,
-  ): CommandBuilder<Name, AddArgument<Globals, ArgumentName, number, true>, Body, Children, Root>;
+  ): CommandBuilder<
+    Name,
+    AddGlobalArgument<Globals, ArgumentName, number, true, Options>,
+    Body,
+    Children,
+    Root
+  >;
   global(
     name: string,
     schemaOrOptions: StandardSchemaV1 | GlobalCountFlagOptions,
@@ -1238,11 +1398,7 @@ function decodeToolClientResult(
       ? { result: decodedResult, stdout: invocation.stdout }
       : { result: decodedResult };
   } catch (error) {
-    try {
-      disposeWitResource(invocation.stdout);
-    } catch {
-      // Preserve the tool-call failure rather than replacing it with cleanup failure.
-    }
+    disposeWitResource(invocation.stdout);
     throw error;
   }
 }

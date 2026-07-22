@@ -148,7 +148,7 @@ function validateBody(
   let sawOptional = false;
   body.positionals.fixed.forEach((positional) => {
     checkIdentifier('positional name', positional.name);
-    insertName(names, positional.name, shorts);
+    insertName(names, positional.name);
     validateCodec(positional.codec, `positional ${positional.name}`);
     rejectVariantInput(positional.codec, positional.name);
     codecs.push(positional.codec);
@@ -172,7 +172,7 @@ function validateBody(
   const tail = body.positionals.tail;
   if (tail) {
     checkIdentifier('positional name', tail.name);
-    insertName(names, tail.name, shorts);
+    insertName(names, tail.name);
     validateCodec(tail.itemCodec, `tail ${tail.name}`);
     rejectVariantInput(tail.itemCodec, tail.name);
     codecs.push(tail.itemCodec);
@@ -467,20 +467,17 @@ function insertSurface(
   names: Set<string>,
   shorts: Set<string>,
 ): void {
-  insertName(names, name, shorts);
-  aliases.forEach((alias) => insertName(names, alias, shorts));
+  insertName(names, name);
+  aliases.forEach((alias) => insertName(names, alias));
   if (short !== undefined) {
     checkUnicodeScalar('short form', short, 'invalid-identifier');
-    if (names.has(short)) {
-      toolBuildError('duplicate-name', `duplicate tool metadata name: ${short}`);
-    }
     if (shorts.has(short)) toolBuildError('duplicate-short', `duplicate short form: '${short}'`);
     shorts.add(short);
   }
 }
 
-function insertName(names: Set<string>, name: string, shorts?: ReadonlySet<string>): void {
-  if (names.has(name) || shorts?.has(name)) {
+function insertName(names: Set<string>, name: string): void {
+  if (names.has(name)) {
     toolBuildError('duplicate-name', `duplicate tool metadata name: ${name}`);
   }
   names.add(name);
@@ -1026,14 +1023,10 @@ export function parseSourceValue(codec: FluentCodec, value: unknown): SourceValu
     }
     return { tag: 'valid', value };
   }
-  try {
-    const result = codec.sourceSchema['~standard'].validate(value);
-    return result instanceof Promise || result.issues !== undefined
-      ? { tag: 'invalid' }
-      : { tag: 'valid', value: result.value };
-  } catch {
-    return { tag: 'invalid' };
-  }
+  const result = codec.sourceSchema['~standard'].validate(value);
+  return result instanceof Promise || result.issues !== undefined
+    ? { tag: 'invalid' }
+    : { tag: 'valid', value: result.value };
 }
 
 function resolveType(

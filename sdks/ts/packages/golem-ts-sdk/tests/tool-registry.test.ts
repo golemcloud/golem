@@ -16,7 +16,15 @@ import { getStdout } from 'wasi:cli/stdout@0.2.3';
 import type { InputStream, OutputStream } from 'wasi:io/streams@0.2.3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod/v4';
-import { command, err, ok, toolDefinition, type ToolImplementation } from '../src/fluent';
+import {
+  KeyValue,
+  c,
+  command,
+  err,
+  ok,
+  toolDefinition,
+  type ToolImplementation,
+} from '../src/fluent';
 import { compileSchema } from '../src/fluent/schema/adapter';
 import { ToolRegistry } from '../src/internal/registry/toolRegistry';
 import { CanonicalInputModel } from '../src/internal/tool';
@@ -132,7 +140,261 @@ describe('fluent tool registration', () => {
     ]);
   });
 
-  it('requires exact canonical field schemas when forwarding to a registered child', async () => {
+  it('forwards an inherited canonical value to a de-projected child field', async () => {
+    let received: unknown;
+    const remote = toolDefinition('remote')
+      .global('config', z.string(), { required: true })
+      .body((body) =>
+        body.constraint(c.requiresAll([c.valueIs('config', 'prod')])).returns(z.string()),
+      )
+      .command('show', (show) => show.body((body) => body.returns(z.string())));
+    const git = toolDefinition('git')
+      .global('profile', z.string(), {
+        aliases: ['config'],
+        required: true,
+        doc: 'Parent profile',
+      })
+      .command('remote', remote);
+
+    git.implement({});
+    remote.implement({
+      remote: async (input) => {
+        received = input;
+        return ok(input.config);
+      },
+      show: async (input) => {
+        received = input;
+        return ok(input.config);
+      },
+    });
+
+    const registeredGit = ToolRegistry.get('git');
+    const registeredRemote = ToolRegistry.get('remote');
+    const remoteNode = registeredGit?.extended.commandByPath(['remote']);
+    const showNode = registeredGit?.extended.commandByPath(['remote', 'show']);
+    if (!registeredGit || !registeredRemote || !remoteNode || !showNode) {
+      throw new Error('de-projected tools were not registered');
+    }
+
+    expect(remoteNode.globals.options).toEqual([]);
+    expect(remoteNode.body?.constraints).toMatchObject([
+      {
+        refs: [
+          {
+            tag: 'value-is',
+            name: 'config',
+            value: { tag: 'resolved', schemaValue: { tag: 'string', value: 'prod' } },
+          },
+        ],
+      },
+    ]);
+    expect(
+      registeredGit.extended.canonicalInputFields(remoteNode).map((field) => field.name),
+    ).toEqual(['profile']);
+    expect(
+      registeredGit.extended.canonicalInputFields(showNode).map((field) => field.name),
+    ).toEqual(['profile']);
+    expect(
+      registeredRemote.extended
+        .canonicalInputFields(registeredRemote.extended.root)
+        .map((field) => field.name),
+    ).toEqual(['config']);
+    expect(registeredGit.encoded.commands.nodes[0].globals.options[0]).toMatchObject({
+      long: 'profile',
+      aliases: ['config'],
+      doc: { summary: 'Parent profile' },
+    });
+    expect(registeredGit.encoded.commands.nodes[1].globals.options).toEqual([]);
+
+    const rootInput = registeredGit.extended
+      .canonicalInputModel(remoteNode)
+      .encodeTyped({ profile: 'prod' });
+    await expect(registeredGit.invoker(['remote'], rootInput, {})).resolves.toEqual(ok('prod'));
+    expect(received).toEqual({ config: 'prod' });
+
+    const nestedInput = registeredGit.extended
+      .canonicalInputModel(showNode)
+      .encodeTyped({ profile: 'dev' });
+    await expect(registeredGit.invoker(['remote', 'show'], nestedInput, {})).resolves.toEqual(
+      ok('dev'),
+    );
+    expect(received).toEqual({ config: 'dev' });
+  });
+
+  it('adapts an optional ancestor carrier for a required standalone child field', async () => {
+    let received: unknown;
+    const child = toolDefinition('child')
+      .global('config', z.string(), { required: true })
+      .body((body) => body.returns(z.void()));
+    const parent = toolDefinition('parent')
+      .global('profile', z.string(), { aliases: ['config'], optionalScalar: true })
+      .command('child', child);
+
+    parent.implement({});
+    child.implement({
+      child: async (input) => {
+        received = input.config;
+        return ok(undefined);
+      },
+    });
+
+    const registered = ToolRegistry.get('parent');
+    const childNode = registered?.extended.commandByPath(['child']);
+    if (!registered || !childNode) throw new Error('child graft was not registered');
+    const model = registered.extended.canonicalInputModel(childNode);
+
+    await expect(
+      registered.invoker(['child'], model.encodeTyped({ profile: 'production' }), {}),
+    ).resolves.toEqual(ok(undefined));
+    expect(received).toBe('production');
+
+    received = undefined;
+    await expect(
+      registered.invoker(['child'], model.encodeTyped({ profile: undefined }), {}),
+    ).rejects.toMatchObject({ tag: 'invalid-input' });
+    expect(received).toBeUndefined();
+  });
+
+  it('projects inherited aliases through more than one separately registered graft', async () => {
+    let received: unknown;
+    const leaf = toolDefinition('leaf')
+      .global('config', z.string(), { required: true })
+      .body((body) => body.returns(z.string()));
+    const middle = toolDefinition('middle')
+      .global('profile', z.string(), { aliases: ['config'], required: true })
+      .command('leaf', leaf);
+    const root = toolDefinition('root')
+      .global('tenant', z.string(), {
+        aliases: ['profile', 'config'],
+        required: true,
+      })
+      .command('middle', middle);
+
+    root.implement({});
+    middle.implement({});
+    leaf.implement({
+      leaf: async (input) => {
+        received = input;
+        return ok(input.config);
+      },
+    });
+
+    const registered = ToolRegistry.get('root');
+    const leafNode = registered?.extended.commandByPath(['middle', 'leaf']);
+    if (!registered || !leafNode) throw new Error('nested graft was not registered');
+    expect(registered.extended.canonicalInputFields(leafNode).map((field) => field.name)).toEqual([
+      'tenant',
+    ]);
+    expect(registered.encoded.commands.nodes[1].globals.options).toEqual([]);
+    expect(registered.encoded.commands.nodes[2].globals.options).toEqual([]);
+
+    const input = registered.extended
+      .canonicalInputModel(leafNode)
+      .encodeTyped({ tenant: 'production' });
+    await expect(registered.invoker(['middle', 'leaf'], input, {})).resolves.toEqual(
+      ok('production'),
+    );
+    expect(received).toEqual({ config: 'production' });
+  });
+
+  it('does not propagate aliases from a de-projected declaration into nested grafts', async () => {
+    let received: unknown;
+    const leaf = toolDefinition('leaf')
+      .global('config', z.string(), { required: true })
+      .body((body) => body.returns(z.string()));
+    const middle = toolDefinition('middle')
+      .global('profile', z.string(), { aliases: ['config'], required: true })
+      .command('leaf', leaf);
+    const root = toolDefinition('root')
+      .global('tenant', z.string(), { aliases: ['profile'], required: true })
+      .command('middle', middle);
+
+    root.implement({});
+    middle.implement({});
+    leaf.implement({
+      leaf: async (input) => {
+        received = input;
+        return ok(input.config);
+      },
+    });
+
+    const registered = ToolRegistry.get('root');
+    const leafNode = registered?.extended.commandByPath(['middle', 'leaf']);
+    if (!registered || !leafNode) throw new Error('nested graft was not registered');
+    expect(registered.extended.canonicalInputFields(leafNode).map((field) => field.name)).toEqual([
+      'tenant',
+      'config',
+    ]);
+
+    const input = registered.extended
+      .canonicalInputModel(leafNode)
+      .encodeTyped({ tenant: 'production', config: 'leaf-production' });
+    await expect(registered.invoker(['middle', 'leaf'], input, {})).resolves.toEqual(
+      ok('leaf-production'),
+    );
+    expect(received).toEqual({ config: 'leaf-production' });
+  });
+
+  it('reconstructs a child-native value when equal wire graphs use different codecs', async () => {
+    let received: unknown;
+    const child = toolDefinition('child')
+      .global('labels', KeyValue(z.string()), { required: true })
+      .body((body) => body.returns(z.void()));
+    const parent = toolDefinition('parent')
+      .global('labels', z.record(z.string(), z.string()), { required: true })
+      .command('child', child);
+
+    parent.implement({});
+    child.implement({
+      child: async (input) => {
+        received = input.labels;
+        return ok(undefined);
+      },
+    });
+
+    const registered = ToolRegistry.get('parent');
+    const childNode = registered?.extended.commandByPath(['child']);
+    if (!registered || !childNode) throw new Error('child graft was not registered');
+    expect(childNode.globals.options).toEqual([]);
+    expect(registered.extended.canonicalInputFields(childNode).map((field) => field.name)).toEqual([
+      'labels',
+    ]);
+
+    const input = registered.extended
+      .canonicalInputModel(childNode)
+      .encodeTyped({ labels: { environment: 'production' } });
+    await expect(registered.invoker(['child'], input, {})).resolves.toEqual(ok(undefined));
+    expect(received).toEqual(new Map([['environment', 'production']]));
+  });
+
+  it('forwards values accepted by structurally compatible restricted graft fields', async () => {
+    let received: unknown;
+    const child = toolDefinition('child')
+      .global('config', z.number().min(1), { required: true })
+      .body((body) => body.returns(z.void()));
+    const parent = toolDefinition('parent')
+      .global('config', z.number().max(10), { required: true })
+      .command('child', child);
+
+    parent.implement({});
+    child.implement({
+      child: async (input) => {
+        received = input.config;
+        return ok(undefined);
+      },
+    });
+
+    const registered = ToolRegistry.get('parent');
+    const childNode = registered?.extended.commandByPath(['child']);
+    if (!registered || !childNode) throw new Error('child graft was not registered');
+    expect(childNode.globals.options).toEqual([]);
+
+    const input = registered.extended.canonicalInputModel(childNode).encodeTyped({ config: 5 });
+    await expect(registered.invoker(['child'], input, {})).resolves.toEqual(ok(undefined));
+    expect(received).toBe(5);
+  });
+
+  it('rejects incompatible canonical field shapes when forwarding to a registered child', async () => {
     const declaredRemote = toolDefinition('remote').body((body) =>
       body.positional('value', z.string()).returns(z.void()),
     );
@@ -780,7 +1042,9 @@ describe('tool guest exports', () => {
       [Symbol.dispose]: vi.fn(),
     }));
     const capacities = [0n, 2n, 4n, 1024n];
-    const outputDispose = vi.fn();
+    const outputDispose = vi.fn(() => {
+      throw new Error('output disposal failed');
+    });
     const output = {
       checkWrite: vi.fn(() => capacities.shift() ?? 1024n),
       write(contents: Uint8Array) {
@@ -801,7 +1065,9 @@ describe('tool guest exports', () => {
       abortablePromise: vi.fn().mockResolvedValue(undefined),
       [Symbol.dispose]: vi.fn(),
     };
-    const inputDispose = vi.fn();
+    const inputDispose = vi.fn(() => {
+      throw new Error('input disposal failed');
+    });
     const inputChunks: Array<Uint8Array | { tag: 'closed' }> = [
       new Uint8Array(),
       new TextEncoder().encode('input'),

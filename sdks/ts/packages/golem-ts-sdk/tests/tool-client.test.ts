@@ -20,6 +20,7 @@ import * as z3 from 'zod3';
 import { z } from 'zod/v4';
 import {
   client,
+  getExtendedToolDefinition,
   ToolCallError,
   toolDefinition,
   type ToolClientInvocationResult,
@@ -129,6 +130,37 @@ describe('fluent tool runtime client', () => {
     ]);
     const subtreeInput = typedSchemaValueFromWit(transport.invocations[4].input);
     expect(subtreeInput.value).toEqual(v.record([v.string('.git'), v.string('origin'), v.f64(42)]));
+  });
+
+  it('uses the ancestor field when a grafted child global is de-projected through an alias', async () => {
+    const subtree = toolDefinition('remote')
+      .global('config', z.string(), { required: true })
+      .body((body) => body.returns(z.void()))
+      .command('show', (show) => show.body((body) => body.returns(z.void())));
+    const definition = toolDefinition('git')
+      .global('profile', z.string(), { aliases: ['config'], optionalScalar: true })
+      .command('remote', subtree);
+    const transport = new FakeTransport(() => ({}));
+    const runtime = client(definition, { transport });
+
+    await runtime.remote({ profile: 'prod' });
+    await runtime.remote.show({});
+
+    expect(transport.invocations.map(({ commandPath }) => commandPath)).toEqual([
+      ['remote'],
+      ['remote', 'show'],
+    ]);
+    expect(transport.invocations.map(({ input }) => typedSchemaValueFromWit(input).value)).toEqual([
+      v.record([v.option(v.string('prod'))]),
+      v.record([v.option(undefined)]),
+    ]);
+    const tool = getExtendedToolDefinition(definition);
+    expect(
+      tool.canonicalInputFields(tool.commandByPath(['remote'])!).map((field) => field.name),
+    ).toEqual(['profile']);
+    expect(
+      tool.canonicalInputFields(tool.commandByPath(['remote', 'show'])!).map((field) => field.name),
+    ).toEqual(['profile']);
   });
 
   it('maps camel-case fields into canonical codec order, including optional and repeatable inputs', async () => {

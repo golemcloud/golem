@@ -20,6 +20,9 @@
 import { SchemaGraph, SchemaValue } from '../../internal/schema-model';
 import type { StandardSchemaV1 } from './standardSchema';
 
+/** An SDK codec rejected a value because its outer source shape does not match. */
+export class CodecShapeMismatchError extends TypeError {}
+
 /**
  * A stable schema graph paired with deterministic value conversions. Codecs are
  * immutable once compiled: conversions must not mutate the codec, its graph, or

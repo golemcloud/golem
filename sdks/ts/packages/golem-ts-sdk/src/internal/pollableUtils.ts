@@ -24,8 +24,12 @@ export function disposeWitResource(resource: unknown): void {
   )
     return;
 
-  const dispose = (resource as Record<symbol, unknown>)[disposeSymbol];
-  if (typeof dispose === 'function') dispose.call(resource);
+  try {
+    const dispose = (resource as Record<symbol, unknown>)[disposeSymbol];
+    if (typeof dispose === 'function') dispose.call(resource);
+  } catch {
+    // Generated WIT resources are always released on a best-effort basis.
+  }
 }
 
 export function throwIfAborted(signal?: AbortSignal): void {

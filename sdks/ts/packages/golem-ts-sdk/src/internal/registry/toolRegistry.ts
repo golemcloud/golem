@@ -52,6 +52,10 @@ export interface ResolvedToolInvocation {
   prepare(input: TypedSchemaValue): PreparedToolInvocation;
 }
 
+interface InternalResolvedToolInvocation extends ResolvedToolInvocation {
+  prepareValues(input: readonly CanonicalInputValue[]): PreparedToolInvocation;
+}
+
 class ToolRegistryImpl {
   private readonly registry = new Map<string, RegisteredTool>();
   private readonly registrationErrors = new Map<string, string[]>();
@@ -175,7 +179,7 @@ class ToolRegistryImpl {
     runtime: ExtendedToolRuntime,
     commandPath: readonly string[],
     invalidPath: readonly string[] = commandPath,
-  ): ResolvedToolInvocation {
+  ): InternalResolvedToolInvocation {
     const command = tool.commandByPath(commandPath);
     if (!command) throw invalidCommandPath(invalidPath);
 
@@ -186,18 +190,27 @@ class ToolRegistryImpl {
       pathsEqual(candidate.commandPath, canonicalPath),
     );
     if (binding) {
+      const prepareValues = (
+        inputValues: readonly CanonicalInputValue[],
+      ): PreparedToolInvocation => {
+        let projectedValues: CanonicalInputValue[];
+        try {
+          projectedValues = tool.canonicalInputModel(command).projectValues(inputValues);
+        } catch (error) {
+          throw invalidInput(error);
+        }
+        const handlerInput = Object.fromEntries(
+          projectedValues.map((field) => [camelCase(field.name), field.value]),
+        );
+        return {
+          invoke: async (context) =>
+            await binding.handler.call(binding.receiver, handlerInput, context),
+        };
+      };
       return {
         command,
-        prepare: (input) => {
-          const inputValues = decodeCanonicalInput(tool, command, input);
-          const handlerInput = Object.fromEntries(
-            inputValues.map((field) => [camelCase(field.name), field.value]),
-          );
-          return {
-            invoke: async (context) =>
-              await binding.handler.call(binding.receiver, handlerInput, context),
-          };
-        },
+        prepare: (input) => prepareValues(decodeCanonicalInput(tool, command, input)),
+        prepareValues,
       };
     }
 
@@ -223,18 +236,8 @@ class ToolRegistryImpl {
     );
     return {
       command,
-      prepare: (input) => {
-        const inputValues = decodeCanonicalInput(tool, command, input);
-        let childInput: TypedSchemaValue;
-        try {
-          childInput = child.extended
-            .canonicalInputModel(childResolved.command)
-            .forwardValues(inputValues);
-        } catch (error) {
-          throw invalidInput(error);
-        }
-        return childResolved.prepare(childInput);
-      },
+      prepare: (input) => childResolved.prepareValues(decodeCanonicalInput(tool, command, input)),
+      prepareValues: (inputValues) => childResolved.prepareValues(inputValues),
     };
   }
 }

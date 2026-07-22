@@ -21,6 +21,8 @@ export type ToolBuildErrorCode =
   | 'subtree-root-name-mismatch'
   | 'duplicate-name'
   | 'duplicate-short'
+  | 'inherited-global-incompatible'
+  | 'inherited-global-ambiguous'
   | 'unresolved-type-ref'
   | 'ill-formed-schema'
   | 'schema-conflict'

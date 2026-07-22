@@ -1147,6 +1147,56 @@ describe('extended tool WIT encoding', () => {
     });
   });
 
+  it('encodes a value-is literal accepted by a later peeled collection codec', () => {
+    const codec = compileSchema(z.array(z.string()));
+    const fixture = new ExtendedToolType(
+      '1.0.0',
+      command('constraints', {
+        body: body({
+          positionals: {
+            fixed: [
+              {
+                name: 'items',
+                doc: emptyDoc(),
+                codec,
+                required: true,
+                acceptsStdio: false,
+              },
+            ],
+          },
+          constraints: [
+            {
+              tag: 'requires-all',
+              refs: [
+                {
+                  tag: 'value-is',
+                  name: 'items',
+                  value: { tag: 'deferred', value: 'needle' },
+                },
+              ],
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(encodeTool(fixture).commands.nodes[0].body?.constraints[0]).toMatchObject({
+      tag: 'requires-all',
+      val: [
+        {
+          tag: 'value-is',
+          val: {
+            name: 'items',
+            value: {
+              valueNodes: [{ tag: 'string-value', val: 'needle' }],
+              root: 0,
+            },
+          },
+        },
+      ],
+    });
+  });
+
   it.each([
     ['secret', compileSchema(s.secret(z.string()))],
     ['quota-token', compileSchema(s.quotaToken())],
@@ -1186,30 +1236,92 @@ describe('extended tool WIT encoding', () => {
     expect(() => definitions.set('other', { body: codec.graph.root })).toThrow(TypeError);
   });
 
-  it('rejects a short form colliding with another argument long name', () => {
+  it('allows short forms to overlap long names and aliases', () => {
     const fixture = new ExtendedToolType(
       '1.0.0',
       command('collision', {
         body: body({
-          options: [option('x')],
-          flags: [flag('verbose', undefined, { short: 'x' })],
+          options: [option('x'), option('other', stringCodec, { aliases: ['y'] })],
+          flags: [
+            flag('verbose', undefined, { short: 'x' }),
+            flag('quiet', undefined, { short: 'y' }),
+          ],
         }),
       }),
     );
 
-    expect(() => encodeTool(fixture)).toThrow();
+    const encoded = encodeTool(fixture);
+    expect(encoded.commands.nodes[0].body).toMatchObject({
+      options: [{ long: 'x' }, { long: 'other', aliases: ['y'] }],
+      flags: [
+        { long: 'verbose', short: 'x' },
+        { long: 'quiet', short: 'y' },
+      ],
+    });
+    expect(fixture.canonicalInputModel(fixture.root).fields.map((field) => field.name)).toEqual([
+      'x',
+      'other',
+      'verbose',
+      'quiet',
+    ]);
   });
 
-  it('rejects a long name colliding with another argument short form', () => {
+  it('allows inherited and local surfaces to overlap across namespaces in either direction', () => {
     const fixture = new ExtendedToolType(
       '1.0.0',
-      command('collision', {
+      command('root', {
+        globals: {
+          options: [option('x'), option('other', stringCodec, { aliases: ['y'], short: 'z' })],
+          flags: [],
+        },
+        subcommands: [
+          command('leaf', {
+            body: body({
+              options: [option('z')],
+              flags: [
+                flag('verbose', undefined, { short: 'x' }),
+                flag('quiet', undefined, { short: 'y' }),
+              ],
+            }),
+          }),
+        ],
+      }),
+    );
+
+    const encoded = encodeTool(fixture);
+    expect(encoded.commands.nodes[1].body).toMatchObject({
+      options: [{ long: 'z' }],
+      flags: [
+        { long: 'verbose', short: 'x' },
+        { long: 'quiet', short: 'y' },
+      ],
+    });
+  });
+
+  it('still rejects duplicate long surfaces and duplicate short forms within their namespaces', () => {
+    const duplicateName = new ExtendedToolType(
+      '1.0.0',
+      command('duplicate-name', {
         body: body({
-          options: [option('verbose', stringCodec, { short: 'x' }), option('x')],
+          options: [option('profile'), option('other', stringCodec, { aliases: ['profile'] })],
+        }),
+      }),
+    );
+    const duplicateShort = new ExtendedToolType(
+      '1.0.0',
+      command('duplicate-short', {
+        body: body({
+          options: [option('profile', stringCodec, { short: 'p' })],
+          flags: [flag('print', undefined, { short: 'p' })],
         }),
       }),
     );
 
-    expect(() => encodeTool(fixture)).toThrow();
+    expect(() => encodeTool(duplicateName)).toThrowError(
+      expect.objectContaining({ code: 'duplicate-name' }),
+    );
+    expect(() => encodeTool(duplicateShort)).toThrowError(
+      expect.objectContaining({ code: 'duplicate-short' }),
+    );
   });
 });

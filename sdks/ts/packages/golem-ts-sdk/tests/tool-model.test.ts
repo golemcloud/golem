@@ -24,7 +24,14 @@ import {
   renderHelp,
   toolDefinition,
 } from '../src/fluent/tool';
-import { field, schemaType, t, v, validateSchemaGraph } from '../src/internal/schema-model';
+import {
+  field,
+  schemaShapesMatch,
+  schemaType,
+  t,
+  v,
+  validateSchemaGraph,
+} from '../src/internal/schema-model';
 import {
   CanonicalInputModel,
   type ExtendedCommandBody,
@@ -36,6 +43,7 @@ import {
   emptyDoc,
   emptyGlobals,
   graftSubtree,
+  listCodec,
   normalizeExtendedTool,
   schemaValueConforms,
   validateExtendedTool,
@@ -85,6 +93,74 @@ function command(name: string, overrides: Partial<ExtendedCommandNode> = {}): Ex
 }
 
 describe('internal extended tool model', () => {
+  it('compares canonical schema shape across restrictions and recursive definition names', () => {
+    expect(
+      schemaShapesMatch(
+        {
+          defs: new Map(),
+          root: t.s32({ min: { tag: 'signed', val: 0n } }),
+        },
+        {
+          defs: new Map(),
+          root: t.s32({ max: { tag: 'signed', val: 10n } }),
+        },
+      ),
+    ).toBe(true);
+    expect(
+      schemaShapesMatch({ defs: new Map(), root: t.s32() }, { defs: new Map(), root: t.u32() }),
+    ).toBe(false);
+    expect(
+      schemaShapesMatch(
+        { defs: new Map(), root: t.record([field('left', t.string())]) },
+        { defs: new Map(), root: t.record([field('right', t.string())]) },
+      ),
+    ).toBe(false);
+
+    const recursive = (id: string) => ({
+      defs: new Map([
+        [
+          id,
+          {
+            body: t.record([field('next', t.option(t.ref(id)))]),
+          },
+        ],
+      ]),
+      root: t.ref(id),
+    });
+    expect(schemaShapesMatch(recursive('left-node'), recursive('right-node'))).toBe(true);
+  });
+
+  it('does not conflate recursive ref pairs containing the pair delimiter', () => {
+    const left = {
+      defs: new Map([
+        [
+          'a\u0000b',
+          {
+            body: t.record([field('next', t.option(t.ref('a\u0000b')))]),
+          },
+        ],
+        ['a', { body: t.string() }],
+      ]),
+      root: t.record([field('recursive', t.ref('a\u0000b')), field('mismatch', t.ref('a'))]),
+    };
+    const right = {
+      defs: new Map([
+        [
+          'c',
+          {
+            body: t.record([field('next', t.option(t.ref('c')))]),
+          },
+        ],
+        ['b\u0000c', { body: t.u32() }],
+      ]),
+      root: t.record([field('recursive', t.ref('c')), field('mismatch', t.ref('b\u0000c'))]),
+    };
+
+    expect(validateSchemaGraph(left)).toEqual([]);
+    expect(validateSchemaGraph(right)).toEqual([]);
+    expect(schemaShapesMatch(left, right)).toBe(false);
+  });
+
   it('resolves aliases and builds canonical input in observable field order', () => {
     const leaf = command('search', {
       aliases: ['s'],
@@ -570,8 +646,349 @@ describe('internal extended tool model', () => {
       appendGraftedSubtree(parent, graftSubtree(child, { expectedName: 'remote' })),
     );
 
+    const normalized = normalizeExtendedTool(composed);
+    const remote = normalized.commandByPath(['remote']);
+    expect(remote?.globals.options).toEqual([]);
+    expect(normalized.effectiveGlobals(remote!).map((entry) => entry.option?.long)).toEqual([
+      'profile',
+    ]);
+    expect(normalized.canonicalInputFields(remote!).map((field) => field.name)).toEqual([
+      'profile',
+    ]);
+    expect(child.root.globals.options.map((entry) => entry.long)).toEqual(['profile']);
+    const standalone = normalizeExtendedTool(child);
+    expect(standalone.canonicalInputFields(standalone.root).map((field) => field.name)).toEqual([
+      'profile',
+    ]);
+  });
+
+  it('de-projects compatible graft-root body fields by long names and aliases', () => {
+    const child = new ExtendedToolType(
+      '1.0.0',
+      command('remote', {
+        body: body({
+          options: [{ ...option('config'), aliases: ['profile'], doc: emptyDoc('child config') }],
+        }),
+      }),
+    );
+    const parentOption = {
+      ...option('profile'),
+      aliases: ['config'],
+      doc: emptyDoc('parent profile'),
+    };
+    const composed = new ExtendedToolType(
+      '1.0.0',
+      command('root', {
+        globals: { options: [parentOption], flags: [] },
+        subcommands: [graftSubtree(child, { expectedName: 'remote' })],
+      }),
+    );
+
+    const normalized = normalizeExtendedTool(composed);
+    const remote = normalized.commandByPath(['remote'])!;
+    expect(remote.body?.options).toEqual([]);
+    expect(normalized.canonicalInputFields(remote).map((field) => field.name)).toEqual(['profile']);
+    expect(normalized.projectHelp(['remote'])?.arguments).toEqual([
+      expect.objectContaining({ name: 'profile', aliases: ['config'], doc: parentOption.doc }),
+    ]);
+    expect(child.root.body?.options.map((entry) => entry.long)).toEqual(['config']);
+  });
+
+  it('de-projects a graft-root alias matched to an inherited alias', () => {
+    const child = new ExtendedToolType(
+      '1.0.0',
+      command('remote', {
+        body: body({ options: [{ ...option('child-profile'), aliases: ['shared'] }] }),
+      }),
+    );
+    const composed = new ExtendedToolType(
+      '1.0.0',
+      command('root', {
+        globals: {
+          options: [{ ...option('parent-profile'), aliases: ['shared'] }],
+          flags: [],
+        },
+        subcommands: [graftSubtree(child, { expectedName: 'remote' })],
+      }),
+    );
+
+    const remote = normalizeExtendedTool(composed).commandByPath(['remote'])!;
+    expect(remote.body?.options).toEqual([]);
+  });
+
+  it('rejects child-only constraint aliases removed by inherited-global reconciliation', () => {
+    const child = new ExtendedToolType(
+      '1.0.0',
+      command('remote', {
+        body: body({
+          options: [{ ...option('config'), aliases: ['settings', 'shared'] }],
+          constraints: [
+            { tag: 'requires-all', refs: [{ tag: 'present', name: 'settings' }] },
+            {
+              tag: 'requires-all',
+              refs: [
+                {
+                  tag: 'value-is',
+                  name: 'settings',
+                  value: { tag: 'deferred', value: 'prod' },
+                },
+              ],
+            },
+          ],
+        }),
+      }),
+    );
+    const composed = new ExtendedToolType(
+      '1.0.0',
+      command('root', {
+        globals: {
+          options: [{ ...option('profile'), aliases: ['shared'] }],
+          flags: [],
+        },
+        subcommands: [graftSubtree(child, { expectedName: 'remote' })],
+      }),
+    );
+
     expect(() => normalizeExtendedTool(composed)).toThrowError(
-      expect.objectContaining({ code: 'duplicate-name' }),
+      expect.objectContaining({ code: 'unresolved-constraint-ref' }),
+    );
+  });
+
+  it('resolves a shared constraint surface using the surviving ancestor restrictions', () => {
+    const parentCodec = compileSchema(z.string().regex(/^prod$/));
+    const childCodec = compileSchema(z.string().regex(/^dev$/));
+    const child = new ExtendedToolType(
+      '1.0.0',
+      command('remote', {
+        body: body({
+          options: [option('config', childCodec)],
+          constraints: [
+            {
+              tag: 'requires-all',
+              refs: [
+                {
+                  tag: 'value-is',
+                  name: 'config',
+                  value: { tag: 'deferred', value: 'prod' },
+                },
+              ],
+            },
+          ],
+        }),
+      }),
+    );
+    expect(() => normalizeExtendedTool(child)).toThrowError(
+      expect.objectContaining({ code: 'value-is-type-mismatch' }),
+    );
+
+    const composed = new ExtendedToolType(
+      '1.0.0',
+      command('root', {
+        globals: {
+          options: [{ ...option('profile', parentCodec), aliases: ['config'] }],
+          flags: [],
+        },
+        subcommands: [graftSubtree(child, { expectedName: 'remote' })],
+      }),
+    );
+    const remote = normalizeExtendedTool(composed).commandByPath(['remote'])!;
+
+    expect(remote.body?.options).toEqual([]);
+    expect(remote.body?.constraints).toMatchObject([
+      {
+        refs: [
+          {
+            tag: 'value-is',
+            name: 'config',
+            value: { tag: 'resolved', schemaValue: v.string('prod') },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('de-projects compatible collected values and matching flag families', () => {
+    const optionalOption: ExtendedOptionSpec = {
+      ...option('optional'),
+      shape: { tag: 'optional-scalar', codec: stringCodec },
+    };
+    const listOption: ExtendedOptionSpec = {
+      ...option('items'),
+      shape: {
+        tag: 'repeatable-list',
+        repetition: { tag: 'repeated' },
+        itemCodec: stringCodec,
+      },
+    };
+    const mapCodec = compileSchema(KeyValue(z.string()));
+    const mapOption: ExtendedOptionSpec = {
+      ...option('labels'),
+      shape: {
+        tag: 'repeatable-map',
+        repetition: { tag: 'repeated' },
+        mapCodec,
+        valueCodec: mapCodec.mapValue!,
+        duplicateKeyPolicy: 'reject',
+      },
+    };
+    const boolFlag = flag('force');
+    const countFlag: FlagSpec = {
+      ...flag('verbose'),
+      shape: { tag: 'count-flag', val: 3 },
+    };
+    const child = new ExtendedToolType(
+      '1.0.0',
+      command('remote', {
+        body: body({
+          options: [optionalOption, listOption, mapOption],
+          flags: [boolFlag, countFlag],
+        }),
+      }),
+    );
+    const composed = new ExtendedToolType(
+      '1.0.0',
+      command('root', {
+        globals: {
+          options: [optionalOption, listOption, mapOption],
+          flags: [boolFlag, countFlag],
+        },
+        subcommands: [graftSubtree(child, { expectedName: 'remote' })],
+      }),
+    );
+
+    const remote = normalizeExtendedTool(composed).commandByPath(['remote'])!;
+    expect(remote.body?.options).toEqual([]);
+    expect(remote.body?.flags).toEqual([]);
+  });
+
+  it('de-projects compatible fixed and tail positionals at a graft root', () => {
+    const items: ExtendedOptionSpec = {
+      ...option('items'),
+      shape: {
+        tag: 'repeatable-list',
+        repetition: { tag: 'repeated' },
+        itemCodec: stringCodec,
+      },
+    };
+    const child = new ExtendedToolType(
+      '1.0.0',
+      command('remote', {
+        body: body({
+          positionals: {
+            fixed: [
+              {
+                name: 'profile',
+                doc: emptyDoc(),
+                codec: stringCodec,
+                required: true,
+                acceptsStdio: false,
+              },
+            ],
+            tail: {
+              name: 'items',
+              doc: emptyDoc(),
+              itemCodec: stringCodec,
+              min: 0,
+              verbatim: false,
+              acceptsStdio: false,
+            },
+          },
+        }),
+      }),
+    );
+    const composed = new ExtendedToolType(
+      '1.0.0',
+      command('root', {
+        globals: { options: [option('profile'), items], flags: [] },
+        subcommands: [graftSubtree(child, { expectedName: 'remote' })],
+      }),
+    );
+
+    const remote = normalizeExtendedTool(composed).commandByPath(['remote'])!;
+    expect(remote.body?.positionals.fixed).toEqual([]);
+    expect(remote.body?.positionals.tail).toBeUndefined();
+  });
+
+  it('rejects incompatible and ambiguous inherited-global matches precisely', () => {
+    const incompatibleChild = new ExtendedToolType(
+      '1.0.0',
+      command('remote', { body: body({ options: [option('force')] }) }),
+    );
+    const incompatible = new ExtendedToolType(
+      '1.0.0',
+      command('root', {
+        globals: { options: [], flags: [flag('force')] },
+        subcommands: [graftSubtree(incompatibleChild, { expectedName: 'remote' })],
+      }),
+    );
+    const ambiguousChild = new ExtendedToolType(
+      '1.0.0',
+      command('remote', {
+        body: body({ options: [{ ...option('shared'), aliases: ['second'] }] }),
+      }),
+    );
+    const ambiguous = new ExtendedToolType(
+      '1.0.0',
+      command('root', {
+        globals: {
+          options: [
+            { ...option('first'), aliases: ['shared'] },
+            { ...option('other'), aliases: ['second'] },
+          ],
+          flags: [],
+        },
+        subcommands: [graftSubtree(ambiguousChild, { expectedName: 'remote' })],
+      }),
+    );
+
+    expect(() => normalizeExtendedTool(incompatible)).toThrowError(
+      expect.objectContaining({ code: 'inherited-global-incompatible' }),
+    );
+    expect(() => normalizeExtendedTool(ambiguous)).toThrowError(
+      expect.objectContaining({ code: 'inherited-global-ambiguous' }),
+    );
+  });
+
+  it('classifies multiple inherited matches as ambiguous even when one is incompatible', () => {
+    const child = new ExtendedToolType(
+      '1.0.0',
+      command('remote', {
+        body: body({ options: [{ ...option('shared'), aliases: ['force'] }] }),
+      }),
+    );
+    const composed = new ExtendedToolType(
+      '1.0.0',
+      command('root', {
+        globals: {
+          options: [{ ...option('profile'), aliases: ['shared'] }],
+          flags: [{ ...flag('enabled'), aliases: ['force'] }],
+        },
+        subcommands: [graftSubtree(child, { expectedName: 'remote' })],
+      }),
+    );
+
+    expect(() => normalizeExtendedTool(composed)).toThrowError(
+      expect.objectContaining({ code: 'inherited-global-ambiguous' }),
+    );
+  });
+
+  it('does not use a short-only overlap as inherited-global identity', () => {
+    const child = new ExtendedToolType(
+      '1.0.0',
+      command('remote', {
+        body: body({ options: [{ ...option('local'), short: 'p' }] }),
+      }),
+    );
+    const composed = new ExtendedToolType(
+      '1.0.0',
+      command('root', {
+        globals: { options: [{ ...option('profile'), short: 'p' }], flags: [] },
+        subcommands: [graftSubtree(child, { expectedName: 'remote' })],
+      }),
+    );
+
+    expect(() => normalizeExtendedTool(composed)).toThrowError(
+      expect.objectContaining({ code: 'duplicate-short' }),
     );
   });
 
@@ -662,7 +1079,7 @@ describe('internal extended tool model', () => {
     });
   });
 
-  it('requires exact schema graphs when forwarding canonical values', () => {
+  it('requires compatible schema shapes when forwarding canonical values', () => {
     const source = new CanonicalInputModel([
       { name: 'profile', aliases: ['p'], codec: stringCodec },
     ]);
@@ -888,6 +1305,118 @@ describe('internal extended tool model', () => {
     );
   });
 
+  it.each(['source validation', 'value encoding'] as const)(
+    'does not swallow an unexpected exception from %s while probing value-is codecs',
+    (stage) => {
+      const failure = new Error(`${stage} failed unexpectedly`);
+      const base = compileSchema(z.string());
+      const codec: FluentCodec =
+        stage === 'source validation'
+          ? {
+              ...base,
+              sourceSchema: {
+                '~standard': {
+                  version: 1,
+                  vendor: 'throwing-test-schema',
+                  validate: () => {
+                    throw failure;
+                  },
+                },
+              },
+            }
+          : {
+              ...base,
+              toValue: () => {
+                throw failure;
+              },
+            };
+      const tool = new ExtendedToolType(
+        '1.0.0',
+        command('unexpected', {
+          body: body({
+            positionals: {
+              fixed: [
+                {
+                  name: 'value',
+                  doc: emptyDoc(),
+                  codec,
+                  required: true,
+                  acceptsStdio: false,
+                },
+              ],
+            },
+            constraints: [
+              {
+                tag: 'requires-all',
+                refs: [
+                  {
+                    tag: 'value-is',
+                    name: 'value',
+                    value: { tag: 'deferred', value: 'literal' },
+                  },
+                ],
+              },
+            ],
+          }),
+        }),
+      );
+
+      let thrown: unknown;
+      try {
+        normalizeExtendedTool(tool);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBe(failure);
+    },
+  );
+
+  it('tries a peeled value-is codec after the whole list codec rejects a scalar', () => {
+    const codec = listCodec(stringCodec);
+    const tool = new ExtendedToolType(
+      '1.0.0',
+      command('list-value', {
+        body: body({
+          positionals: {
+            fixed: [
+              {
+                name: 'values',
+                doc: emptyDoc(),
+                codec,
+                required: true,
+                acceptsStdio: false,
+              },
+            ],
+          },
+          constraints: [
+            {
+              tag: 'requires-all',
+              refs: [
+                {
+                  tag: 'value-is',
+                  name: 'values',
+                  value: { tag: 'deferred', value: 'needle' },
+                },
+              ],
+            },
+          ],
+        }),
+      }),
+    );
+
+    const normalized = normalizeExtendedTool(tool);
+    const constraint = normalized.root.body?.constraints[0];
+    if (constraint?.tag !== 'requires-all') throw new Error('unexpected constraint');
+    expect(constraint.refs[0]).toMatchObject({
+      tag: 'value-is',
+      value: {
+        tag: 'resolved',
+        value: 'needle',
+        schemaValue: { tag: 'string', value: 'needle' },
+      },
+    });
+  });
+
   it('resolves value-is literals from transformed KeyValue outputs', () => {
     const codec = compileSchema(KeyValue(z.coerce.number()));
     const tool = new ExtendedToolType(
@@ -1091,6 +1620,136 @@ describe('internal extended tool model', () => {
     );
 
     expect(() => normalizeExtendedTool(tool)).not.toThrow();
+  });
+
+  it('prefers a whole collected value before trying its element codec', () => {
+    const codec = compileSchema(z.array(z.string()));
+    const tool = new ExtendedToolType(
+      '1.0.0',
+      command('search', {
+        body: body({
+          positionals: {
+            fixed: [
+              {
+                name: 'items',
+                doc: emptyDoc(),
+                codec,
+                required: true,
+                acceptsStdio: false,
+              },
+            ],
+          },
+          constraints: [
+            {
+              tag: 'requires-all',
+              refs: [
+                {
+                  tag: 'value-is',
+                  name: 'items',
+                  value: { tag: 'deferred', value: ['whole'] },
+                },
+              ],
+            },
+          ],
+        }),
+      }),
+    );
+
+    const constraint = normalizeExtendedTool(tool).root.body?.constraints[0];
+    if (constraint?.tag !== 'requires-all') throw new Error('unexpected constraint');
+    const ref = constraint.refs[0];
+    expect(ref).toMatchObject({
+      tag: 'value-is',
+      value: { tag: 'resolved', schemaValue: v.list([v.string('whole')]) },
+    });
+  });
+
+  it('allows value-is to compare a map value and a tail element', () => {
+    const mapCodec = compileSchema(KeyValue(z.number()));
+    const tool = new ExtendedToolType(
+      '1.0.0',
+      command('compare', {
+        body: body({
+          positionals: {
+            fixed: [
+              {
+                name: 'entries',
+                doc: emptyDoc(),
+                codec: mapCodec,
+                required: true,
+                acceptsStdio: false,
+              },
+            ],
+            tail: {
+              name: 'items',
+              doc: emptyDoc(),
+              itemCodec: stringCodec,
+              min: 0,
+              verbatim: false,
+              acceptsStdio: false,
+            },
+          },
+          constraints: [
+            {
+              tag: 'requires-all',
+              refs: [
+                { tag: 'value-is', name: 'entries', value: { tag: 'deferred', value: 42 } },
+                {
+                  tag: 'value-is',
+                  name: 'items',
+                  value: { tag: 'deferred', value: 'needle' },
+                },
+              ],
+            },
+          ],
+        }),
+      }),
+    );
+
+    const constraint = normalizeExtendedTool(tool).root.body?.constraints[0];
+    if (constraint?.tag !== 'requires-all') throw new Error('unexpected constraint');
+    expect(constraint.refs).toMatchObject([
+      { value: { tag: 'resolved', schemaValue: v.f64(42) } },
+      { value: { tag: 'resolved', schemaValue: v.string('needle') } },
+    ]);
+  });
+
+  it('does not peel more than one supported collection layer', () => {
+    const codec = compileSchema(z.array(z.array(z.string())));
+    const tool = new ExtendedToolType(
+      '1.0.0',
+      command('nested', {
+        body: body({
+          positionals: {
+            fixed: [
+              {
+                name: 'items',
+                doc: emptyDoc(),
+                codec,
+                required: true,
+                acceptsStdio: false,
+              },
+            ],
+          },
+          constraints: [
+            {
+              tag: 'requires-all',
+              refs: [
+                {
+                  tag: 'value-is',
+                  name: 'items',
+                  value: { tag: 'deferred', value: 'too-deep' },
+                },
+              ],
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(() => normalizeExtendedTool(tool)).toThrowError(
+      expect.objectContaining({ code: 'value-is-type-mismatch' }),
+    );
   });
 
   it('rejects non-primitive map keys during producer validation', () => {

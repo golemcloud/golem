@@ -241,11 +241,7 @@ async function invokeTool(
     return result;
   } catch (error) {
     await Promise.allSettled([outputAdapter?.abort(error), disposeInput()]);
-    try {
-      disposeWitResource(output);
-    } catch {
-      // Preserve the invocation failure rather than replacing it with cleanup failure.
-    }
+    disposeWitResource(output);
     throw error;
   }
 }

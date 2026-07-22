@@ -12,20 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { FluentCodec } from '../../fluent/schema/codec';
-import { cloneSchemaValue } from '../schema-model';
+import { CodecShapeMismatchError, type FluentCodec } from '../../fluent/schema/codec';
+import { cloneSchemaValue, schemaShapesMatch } from '../schema-model';
 import { toolBuildError } from './errors';
 import {
   type Doc,
+  type EffectiveCommandField,
   type ExtendedCommandBody,
   type ExtendedCommandNode,
   type ExtendedConstraint,
   type ExtendedGlobals,
   type ExtendedOptionSpec,
   type ExtendedRef,
+  type ExtendedTailPositional,
   type ValueIsMode,
   ExtendedToolType,
   emptyGlobals,
+  listCodec,
+  optionCollectedCodec,
   optionValueCodec,
   valueIsCodecs,
 } from './model';
@@ -46,9 +50,9 @@ export interface GraftSubtreeOptions {
 
 /**
  * Clone a child tree for attachment below a parent command. The child root can
- * be renamed/documented and receives the subtree command's globals. Explicit
- * collisions are retained and rejected by producer validation; TypeScript does
- * not perform the macro-only inherited-global de-projection used by Rust/Scala.
+ * be renamed/documented and receives the subtree command's globals. The clone
+ * is marked for inherited-global reconciliation when the composed tree is
+ * normalized; the independently reusable child remains unchanged.
  */
 export function graftSubtree(
   child: ExtendedToolType,
@@ -60,17 +64,22 @@ export function graftSubtree(
       `subtree root name "${child.root.name}" does not match the parent command name "${options.expectedName}"`,
     );
   }
-  const root = cloneCommandTree(child.root);
+  let root = cloneCommandTree(child.root);
   const parentGlobals = options.parentGlobals ?? emptyGlobals();
-  return {
+  root = {
     ...root,
     name: options.name ?? root.name,
     aliases: options.aliases ? [...options.aliases] : root.aliases,
     doc: options.doc ?? root.doc,
+  };
+  root = reconcileCommand(root, effectiveGlobals(parentGlobals));
+  return {
+    ...root,
     globals: {
       options: [...parentGlobals.options, ...root.globals.options],
       flags: [...parentGlobals.flags, ...root.globals.flags],
     },
+    reconcileInheritedGlobals: true,
   };
 }
 
@@ -91,7 +100,7 @@ export function appendGraftedSubtree(
  */
 export function normalizeExtendedTool(tool: ExtendedToolType): ExtendedToolType {
   const root = cloneCommandTree(tool.root);
-  normalizeCommand(root, new Map(), new Set(), new Set());
+  normalizeCommand(root, new Map(), [], new Set(), new Set());
   const normalized = new ExtendedToolType(tool.version, root);
   validateExtendedTool(normalized);
   return normalized;
@@ -100,6 +109,7 @@ export function normalizeExtendedTool(tool: ExtendedToolType): ExtendedToolType 
 function normalizeCommand(
   node: MutableCommandNode,
   ancestorScope: ReadonlyMap<string, ValueIsScopeEntry>,
+  ancestorGlobals: readonly EffectiveCommandField[],
   visited: Set<MutableCommandNode>,
   onStack: Set<MutableCommandNode>,
 ): void {
@@ -111,6 +121,11 @@ function normalizeCommand(
   }
   visited.add(node);
   onStack.add(node);
+  if (node.reconcileInheritedGlobals) {
+    const reconciled = reconcileCommand(node, ancestorGlobals);
+    node.globals = reconciled.globals;
+    node.body = reconciled.body;
+  }
   const scope = new Map(ancestorScope);
   node.globals.options.forEach((option) => registerOption(scope, option));
   node.globals.flags.forEach((flag) => {
@@ -124,8 +139,146 @@ function normalizeCommand(
       constraints: node.body.constraints.map((constraint) => resolveConstraint(constraint, scope)),
     };
   }
-  node.subcommands.forEach((child) => normalizeCommand(child, scope, visited, onStack));
+  const childGlobals = [...ancestorGlobals, ...effectiveGlobals(node.globals)];
+  node.subcommands.forEach((child) =>
+    normalizeCommand(child, scope, childGlobals, visited, onStack),
+  );
   onStack.delete(node);
+}
+
+type ReconciledFieldShape =
+  | { readonly tag: 'value'; readonly codec: FluentCodec }
+  | { readonly tag: 'bool-flag' }
+  | { readonly tag: 'count-flag' };
+
+function reconcileCommand(
+  node: MutableCommandNode,
+  ancestors: readonly EffectiveCommandField[],
+): MutableCommandNode {
+  if (ancestors.length === 0) return node;
+  const globals = {
+    options: node.globals.options.filter(
+      (option) =>
+        !reconcileLocal(
+          [option.long, ...option.aliases],
+          { tag: 'value', codec: optionCollectedCodec(option.shape) },
+          ancestors,
+          node.name,
+        ),
+    ),
+    flags: node.globals.flags.filter(
+      (flag) =>
+        !reconcileLocal([flag.long, ...flag.aliases], flagShape(flag), ancestors, node.name),
+    ),
+  };
+  const body = node.body
+    ? {
+        ...node.body,
+        positionals: {
+          fixed: node.body.positionals.fixed.filter(
+            (positional) =>
+              !reconcileLocal(
+                [positional.name],
+                { tag: 'value', codec: positional.codec },
+                ancestors,
+                node.name,
+              ),
+          ),
+          tail:
+            node.body.positionals.tail &&
+            !reconcileLocal(
+              [node.body.positionals.tail.name],
+              tailShape(node.body.positionals.tail),
+              ancestors,
+              node.name,
+            )
+              ? node.body.positionals.tail
+              : undefined,
+        },
+        options: node.body.options.filter(
+          (option) =>
+            !reconcileLocal(
+              [option.long, ...option.aliases],
+              { tag: 'value', codec: optionCollectedCodec(option.shape) },
+              ancestors,
+              node.name,
+            ),
+        ),
+        flags: node.body.flags.filter(
+          (flag) =>
+            !reconcileLocal([flag.long, ...flag.aliases], flagShape(flag), ancestors, node.name),
+        ),
+      }
+    : undefined;
+  return { ...node, globals, body };
+}
+
+function effectiveGlobals(globals: ExtendedGlobals): EffectiveCommandField[] {
+  return [
+    ...globals.options.map((option) => ({ tag: 'option' as const, option })),
+    ...globals.flags.map((flag) => ({ tag: 'flag' as const, flag })),
+  ];
+}
+
+function reconcileLocal(
+  localNames: readonly string[],
+  localShape: ReconciledFieldShape,
+  ancestors: readonly EffectiveCommandField[],
+  commandName: string,
+): boolean {
+  const matches = ancestors.filter((ancestor) =>
+    localNames.some((name) => inheritedSurfaceNames(ancestor).includes(name)),
+  );
+  if (matches.length === 0) return false;
+  if (matches.length > 1) {
+    toolBuildError(
+      'inherited-global-ambiguous',
+      `parameter surface name "${localNames[0]}" on command "${commandName}" matches multiple inherited globals: ${matches
+        .map((match) => `"${inheritedPrimaryName(match)}"`)
+        .join(', ')}`,
+    );
+  }
+  const inherited = matches[0];
+  if (!fieldShapesCompatible(inheritedShape(inherited), localShape)) {
+    const inheritedName = inheritedPrimaryName(inherited);
+    const collidingName =
+      localNames.find((name) => inheritedSurfaceNames(inherited).includes(name)) ?? localNames[0];
+    toolBuildError(
+      'inherited-global-incompatible',
+      `parameter surface name "${collidingName}" on command "${commandName}" is incompatible with inherited global "${inheritedName}"`,
+    );
+  }
+  return true;
+}
+
+function inheritedSurfaceNames(field: EffectiveCommandField): readonly string[] {
+  return field.tag === 'option'
+    ? [field.option.long, ...field.option.aliases]
+    : [field.flag.long, ...field.flag.aliases];
+}
+
+function inheritedPrimaryName(field: EffectiveCommandField): string {
+  return field.tag === 'option' ? field.option.long : field.flag.long;
+}
+
+function inheritedShape(field: EffectiveCommandField): ReconciledFieldShape {
+  return field.tag === 'option'
+    ? { tag: 'value', codec: optionCollectedCodec(field.option.shape) }
+    : flagShape(field.flag);
+}
+
+function flagShape(flag: ExtendedGlobals['flags'][number]): ReconciledFieldShape {
+  return { tag: flag.shape.tag === 'bool-flag' ? 'bool-flag' : 'count-flag' };
+}
+
+function tailShape(tail: ExtendedTailPositional): ReconciledFieldShape {
+  return { tag: 'value', codec: listCodec(tail.itemCodec) };
+}
+
+function fieldShapesCompatible(left: ReconciledFieldShape, right: ReconciledFieldShape): boolean {
+  return left.tag === 'value' && right.tag === 'value'
+    ? schemaShapesMatch(left.codec.graph, right.codec.graph)
+    : left.tag === right.tag;
 }
 
 function registerBody(scope: Map<string, ValueIsScopeEntry>, body: ExtendedCommandBody): void {
@@ -200,30 +353,26 @@ function resolveRef(ref: ExtendedRef, scope: ReadonlyMap<string, ValueIsScopeEnt
       `value-is literal does not match the argument type: ${ref.name}`,
     );
   }
-  let codecs: FluentCodec[];
-  try {
-    codecs = valueIsCodecs(entry.codec, entry.mode);
-  } catch {
-    return ref;
-  }
-  for (const codec of codecs) {
+  for (const codec of valueIsCodecs(entry.codec, entry.mode)) {
+    const sourceValue = parseSourceValue(codec, ref.value.value);
+    if (sourceValue.tag === 'invalid') continue;
+    let schemaValue;
     try {
-      const sourceValue = parseSourceValue(codec, ref.value.value);
-      if (sourceValue.tag === 'invalid') continue;
-      const schemaValue = cloneSchemaValue(codec.toValue(sourceValue.value));
-      if (schemaValueConforms(codec.graph, codec.graph.root, schemaValue)) {
-        return {
-          ...ref,
-          value: {
-            tag: 'resolved',
-            codec,
-            value: sourceValue.value,
-            schemaValue,
-          },
-        };
-      }
-    } catch {
-      // Try the next compatible whole/peeled codec.
+      schemaValue = cloneSchemaValue(codec.toValue(sourceValue.value));
+    } catch (error) {
+      if (error instanceof CodecShapeMismatchError) continue;
+      throw error;
+    }
+    if (schemaValueConforms(codec.graph, codec.graph.root, schemaValue)) {
+      return {
+        ...ref,
+        value: {
+          tag: 'resolved',
+          codec,
+          value: sourceValue.value,
+          schemaValue,
+        },
+      };
     }
   }
   toolBuildError(
@@ -239,6 +388,7 @@ interface MutableCommandNode {
   globals: ExtendedGlobals;
   subcommands: MutableCommandNode[];
   body?: ExtendedCommandBody;
+  reconcileInheritedGlobals?: true;
 }
 
 function cloneCommandTree(root: ExtendedCommandNode): MutableCommandNode {
@@ -255,6 +405,7 @@ function cloneCommandTree(root: ExtendedCommandNode): MutableCommandNode {
         flags: [...node.globals.flags],
       },
       subcommands: [],
+      reconcileInheritedGlobals: node.reconcileInheritedGlobals,
       body: node.body
         ? {
             ...node.body,

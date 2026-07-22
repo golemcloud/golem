@@ -788,3 +788,62 @@ standaloneSubtreeClient['client-subtree']({
   childGlobal: 'child',
   value: 1,
 });
+
+const deprojectedSubtreeDef = toolDefinition('deprojected-subtree')
+  .global('config', z.string(), { aliases: ['settings'], required: true })
+  .body((body) =>
+    body.option('region', z.string(), { aliases: ['location'], required: true }).returns(z.void()),
+  )
+  .command('nested', (nested) => nested.body((body) => body.returns(z.void())));
+const deprojectedParentDef = toolDefinition('deprojected-parent')
+  .global('profile', z.string(), { aliases: ['config'], optionalScalar: true })
+  .global('deployment-region', z.string(), { aliases: ['region'], optionalScalar: true })
+  .command('deprojected-subtree', deprojectedSubtreeDef);
+declare const deprojectedParentClient: ToolClient<typeof deprojectedParentDef>;
+deprojectedParentClient['deprojected-subtree']({});
+deprojectedParentClient['deprojected-subtree']({
+  profile: 'prod',
+  deploymentRegion: 'eu-west',
+});
+deprojectedParentClient['deprojected-subtree'].nested({});
+deprojectedParentClient['deprojected-subtree'].nested({
+  profile: 'prod',
+  deploymentRegion: 'eu-west',
+});
+deprojectedParentClient['deprojected-subtree']({
+  // @ts-expect-error a grafted client exposes the ancestor canonical field, not the captured child field
+  config: 'prod',
+});
+deprojectedParentClient['deprojected-subtree']({
+  // @ts-expect-error graft-root body parameters captured by an ancestor are also omitted
+  region: 'eu-west',
+});
+deprojectedParentClient['deprojected-subtree'].nested({
+  // @ts-expect-error nested graft paths preserve the ancestor canonical field
+  config: 'prod',
+});
+
+declare const standaloneDeprojectedClient: ToolClient<typeof deprojectedSubtreeDef>;
+standaloneDeprojectedClient['deprojected-subtree']({ config: 'prod', region: 'eu-west' });
+standaloneDeprojectedClient.nested({ config: 'prod' });
+// @ts-expect-error the standalone child still requires its own global
+standaloneDeprojectedClient['deprojected-subtree']({});
+// @ts-expect-error the standalone nested path still requires the child global
+standaloneDeprojectedClient.nested({});
+
+const nonTransitiveLeafDef = toolDefinition('non-transitive-leaf')
+  .global('config', z.string(), { required: true })
+  .body((body) => body.returns(z.void()));
+const nonTransitiveMiddleDef = toolDefinition('non-transitive-middle')
+  .global('profile', z.string(), { aliases: ['config'], required: true })
+  .command('non-transitive-leaf', nonTransitiveLeafDef);
+const nonTransitiveRootDef = toolDefinition('non-transitive-root')
+  .global('tenant', z.string(), { aliases: ['profile'], required: true })
+  .command('non-transitive-middle', nonTransitiveMiddleDef);
+declare const nonTransitiveClient: ToolClient<typeof nonTransitiveRootDef>;
+nonTransitiveClient['non-transitive-middle']['non-transitive-leaf']({
+  tenant: 'root',
+  config: 'leaf',
+});
+// @ts-expect-error a removed middle declaration does not propagate its child-only alias
+nonTransitiveClient['non-transitive-middle']['non-transitive-leaf']({ tenant: 'root' });

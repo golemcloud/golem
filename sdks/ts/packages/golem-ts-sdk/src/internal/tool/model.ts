@@ -24,9 +24,9 @@ import type {
   StreamSpec,
 } from 'golem:tool/common@0.1.0';
 import {
-  deepEqual,
   field,
   mergeGraphDefs,
+  schemaShapesMatch,
   type SchemaGraph,
   type SchemaValue,
   t,
@@ -34,7 +34,7 @@ import {
   v,
   validateSchemaGraph,
 } from '../schema-model';
-import type { FluentCodec } from '../../fluent/schema/codec';
+import { CodecShapeMismatchError, type FluentCodec } from '../../fluent/schema/codec';
 import { toolBuildError } from './errors';
 
 export type {
@@ -82,6 +82,8 @@ export interface ExtendedCommandNode {
   readonly globals: ExtendedGlobals;
   readonly subcommands: readonly ExtendedCommandNode[];
   readonly body?: ExtendedCommandBody;
+  /** Reconcile this independently built subtree root against strict ancestor globals. */
+  readonly reconcileInheritedGlobals?: true;
 }
 
 export interface ExtendedGlobals {
@@ -218,6 +220,7 @@ export interface CanonicalInputValue {
   readonly name: string;
   readonly aliases: readonly string[];
   readonly codec: FluentCodec;
+  readonly optionalCarrier?: true;
   readonly value: unknown;
   readonly schemaValue: SchemaValue;
 }
@@ -302,23 +305,42 @@ export class CanonicalInputModel {
   }
 
   /**
-   * Rebuild this model's positional record from fields decoded by another
-   * canonical model. Forwarding matches canonical names and aliases, but only
-   * reuses a value when the complete per-field schema graph is identical.
+   * Project fields decoded by another canonical model into this model's field
+   * identities. Schema values cross ownership boundaries and are decoded with
+   * the target codec so each independently registered tool receives its native
+   * value representation.
    */
-  forwardValues(input: readonly CanonicalInputValue[]): TypedSchemaValue {
-    const values = this.fields.map((field) => {
+  projectValues(input: readonly CanonicalInputValue[]): CanonicalInputValue[] {
+    return this.fields.map((field) => {
       const value = input.find((candidate) => canonicalSurfacesOverlap(field, candidate));
       if (!value) {
         throw new Error(`missing canonical tool input field \`${field.name}\``);
       }
-      if (!deepEqual(value.codec.graph, field.codec.graph)) {
+      if (!schemaShapesMatch(value.codec.graph, field.codec.graph)) {
         throw new Error(
           `canonical tool input field \`${value.name}\` has incompatible schema for forwarded field \`${field.name}\``,
         );
       }
-      return value.schemaValue;
+      let schemaValue = value.schemaValue;
+      if (value.optionalCarrier && !field.optionalCarrier) {
+        if (schemaValue.tag !== 'option' || schemaValue.value === undefined) {
+          throw new Error(`missing required inherited tool input field \`${field.name}\``);
+        }
+        schemaValue = schemaValue.value;
+      } else if (!value.optionalCarrier && field.optionalCarrier) {
+        schemaValue = v.option(schemaValue);
+      }
+      return {
+        ...field,
+        value: field.codec.fromValue(schemaValue),
+        schemaValue,
+      };
     });
+  }
+
+  /** Rebuild this model's positional record from fields decoded by another canonical model. */
+  forwardValues(input: readonly CanonicalInputValue[]): TypedSchemaValue {
+    const values = this.projectValues(input).map((value) => value.schemaValue);
     return { graph: this.codec.graph, value: v.record(values) };
   }
 }
@@ -725,7 +747,12 @@ export function listCodec(itemCodec: FluentCodec): FluentCodec {
   return {
     graph: { defs: itemCodec.graph.defs, root: t.list(itemCodec.graph.root) },
     listItem: itemCodec,
-    toValue: (input) => v.list((input as unknown[]).map((item) => itemCodec.toValue(item))),
+    toValue: (input) => {
+      if (!Array.isArray(input)) {
+        throw new CodecShapeMismatchError('expected a list source value');
+      }
+      return v.list(input.map((item) => itemCodec.toValue(item)));
+    },
     fromValue: (input) => {
       if (input.tag !== 'list') throw new Error('expected a list schema value');
       return input.elements.map((item) => itemCodec.fromValue(item));
