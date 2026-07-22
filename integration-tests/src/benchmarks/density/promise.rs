@@ -38,8 +38,9 @@ const WAITER_READY_TIMEOUT: Duration = Duration::from_secs(60);
 // agent-density test; pool starvation reports lifecycle capacity separately.
 const PROMISE_POOL_SIZE: usize = 256;
 const READY_WORK_CAPACITY: usize = PROMISE_POOL_SIZE;
-// Probe whether ready-pool refill is limited by driver-side stage concurrency.
-const SETUP_CONCURRENCY: usize = 64;
+// Creating agents/promises traverses cold worker activation and must not flood
+// the gateway.
+const SETUP_CONCURRENCY: usize = 16;
 const COMPLETION_CONCURRENCY: usize = 100;
 
 #[derive(Debug, Clone, Copy)]
