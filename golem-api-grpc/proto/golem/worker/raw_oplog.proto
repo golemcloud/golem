@@ -64,6 +64,11 @@ message RawOplogEntry {
     RawCardInstalledParameters card_installed = 48;
     RawCardInstallFailedParameters card_install_failed = 49;
     RawCardExpiredParameters card_expired = 50;
+    RawCardDerivedParameters card_derived = 51;
+    RawCardTransferStartedParameters card_transfer_started = 52;
+    RawCardTransferredParameters card_transferred = 53;
+    RawCardRevokedCascadeParameters card_revoked_cascade = 54;
+    RawCardTransferConfirmedParameters card_transfer_confirmed = 55;
   }
 }
 
@@ -173,6 +178,13 @@ message RawAgentInvocationStartedParameters {
   string trace_id = 3;
   repeated string trace_states = 4;
   repeated RawSpanData invocation_context = 5;
+  optional RawInvocationWalletPin wallet_pin = 6;
+}
+
+message RawInvocationWalletPin {
+  WalletVersionToken wallet_token = 1;
+  repeated golem.common.UUID pinned_card_ids = 2;
+  optional golem.common.UUID scope_card_id = 3;
 }
 
 message RawAgentInvocationFinishedParameters {
@@ -299,6 +311,7 @@ message RawSnapshotParameters {
   RawOplogPayload data = 1;
   string mime_type = 2;
   repeated bytes active_cards = 3;
+  uint64 wallet_generation = 4;
 }
 
 message RawOplogProcessorCheckpointParameters {
@@ -321,11 +334,13 @@ message RawCardRevokedParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 queued_event_index = 2;
   golem.common.UUID card_id = 3;
+  optional uint64 wallet_generation = 4;
 }
 
 message RawCardExpiredParameters {
   google.protobuf.Timestamp timestamp = 1;
   golem.common.UUID card_id = 2;
+  optional uint64 wallet_generation = 3;
 }
 
 message RawQueuedCardEvent {
@@ -338,9 +353,25 @@ message RawQueuedCardEvent {
     golem.common.UUID card_id = 1;
   }
 
+  message TransferStarted {
+    golem.common.UUID transfer_id = 1;
+    golem.common.UUID card_id = 2;
+    bytes card = 3;
+    CardHolder target_holder = 4;
+  }
+
+  message TransferReceived {
+    golem.common.UUID transfer_id = 1;
+    golem.common.UUID card_id = 2;
+    bytes card = 3;
+    golem.common.UUID source_card_id = 4;
+  }
+
   oneof event {
     Install install = 1;
     Revoke revoke = 2;
+    TransferStarted transfer_started = 3;
+    TransferReceived transfer_received = 4;
   }
 }
 
@@ -361,6 +392,7 @@ message RawCardInstalledParameters {
   google.protobuf.Timestamp timestamp = 1;
   optional uint64 queued_event_index = 2;
   bytes card = 3;
+  optional uint64 wallet_generation = 4;
 }
 
 message RawCardInstallFailedParameters {
@@ -368,6 +400,59 @@ message RawCardInstallFailedParameters {
   uint64 queued_event_index = 2;
   golem.common.UUID card_id = 3;
   RawCardInstallFailure reason = 4;
+}
+
+message RawCardDerivedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  bytes card = 2;
+  optional uint64 wallet_generation = 3;
+}
+
+// Source-agent durable transfer intent. source_wallet_generation belongs only to
+// the wallet owning this oplog.
+message RawCardTransferStartedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID transfer_id = 2;
+  golem.common.UUID card_id = 3;
+  CardHolder source_holder = 4;
+  CardHolder target_holder = 5;
+  optional uint64 source_wallet_generation = 6;
+}
+
+// Target-agent durable card admission. target_wallet_generation belongs only to
+// the wallet owning this oplog.
+message RawCardTransferredParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID transfer_id = 2;
+  golem.common.UUID installed_card_id = 3;
+  CardHolder target_holder = 4;
+  bytes card = 5;
+  golem.common.UUID source_card_id = 6;
+  optional uint64 target_wallet_generation = 7;
+}
+
+message CardHolderGenerationBump {
+  CardHolder holder = 1;
+  uint64 generation = 2;
+}
+
+// Cascade impact plus the generation of the wallet owning this oplog. Other
+// affected wallets record their own local entries.
+message RawCardRevokedCascadeParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  repeated golem.common.UUID revoked_card_ids = 2;
+  repeated CardHolder affected_wallets = 3;
+  repeated CardHolderGenerationBump generation_bumps = 4 [deprecated = true];
+  optional uint64 local_wallet_generation = 5;
+}
+
+// Source-agent terminal receipt, written after target admission is durable.
+message RawCardTransferConfirmedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID transfer_id = 2;
+  golem.common.UUID source_card_id = 3;
+  golem.common.UUID installed_card_id = 4;
+  CardHolder target_holder = 5;
 }
 
 message RawOplogEntryWithIndex {

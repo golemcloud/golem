@@ -33,8 +33,8 @@ use golem_common::model::agent::{
 };
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
-    AgentMethodName, AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
-    StoredCard,
+    AgentMethodName, AgentResourcePattern, AgentVerb, CardId, ClassPermissionTarget,
+    PermissionTarget, StoredCard,
 };
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, PluginPriority,
@@ -49,6 +49,7 @@ use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
 use golem_common::schema::json_input_schema_value_to_typed_schema_value;
 use golem_common::schema::{SchemaType, TypedSchemaValue};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
@@ -909,6 +910,43 @@ impl WorkerService {
             .await
     }
 
+    pub async fn deliver_card_transfer(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        transfer_id: uuid::Uuid,
+        source_card_id: CardId,
+        card: StoredCard,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<()> {
+        auth_ctx
+            .authorize_system_only("deliver permission card transfer")
+            .map_err(AuthServiceError::Unauthorized)?;
+
+        let component = self
+            .component_service
+            .get_current_by_id(target_agent_id.component_id)
+            .await?;
+        if component.environment_id != environment_id {
+            return Err(WorkerExecutorError::invalid_request(format!(
+                "target agent environment mismatch: expected {}, got {}",
+                component.environment_id, environment_id
+            ))
+            .into());
+        }
+
+        self.worker_client
+            .deliver_card_transfer(
+                target_agent_id,
+                environment_id,
+                transfer_id,
+                source_card_id,
+                card,
+                auth_ctx,
+            )
+            .await
+    }
+
     pub async fn invoke_agent(
         &self,
         agent_id: &AgentId,
@@ -1300,7 +1338,10 @@ mod tests {
         ResolvedAgentType, Snapshotting, ephemeral_invocation_phantom_id,
     };
     use golem_common::model::application::{ApplicationId, ApplicationName};
-    use golem_common::model::card::{AgentVerb, StoredCard};
+    use golem_common::model::card::{
+        AgentPluginName, AgentResourcePattern, AgentVerb, Card, CardId, EffectiveSurface,
+        PermissionPattern, StoredCard,
+    };
     use golem_common::model::component::{
         CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, PluginPriority,
     };
@@ -1714,8 +1755,11 @@ mod tests {
         }
     }
 
+    type RecordedCardTransfer = (AgentId, EnvironmentId, Uuid, CardId, StoredCard, AuthCtx);
+
     struct RecordingWorkerClient {
         created_agent_ids: Mutex<Vec<AgentId>>,
+        delivered_card_transfers: Mutex<Vec<RecordedCardTransfer>>,
         invocations: Mutex<Vec<(AgentId, IdempotencyKey, InvocationFreshnessDisposition)>>,
         invocation_output: AgentInvocationOutput,
     }
@@ -1724,6 +1768,7 @@ mod tests {
         fn new(invocation_output: AgentInvocationOutput) -> Self {
             Self {
                 created_agent_ids: Mutex::new(Vec::new()),
+                delivered_card_transfers: Mutex::new(Vec::new()),
                 invocations: Mutex::new(Vec::new()),
                 invocation_output,
             }
@@ -1739,6 +1784,10 @@ mod tests {
 
         fn invocations(&self) -> Vec<(AgentId, IdempotencyKey, InvocationFreshnessDisposition)> {
             self.invocations.lock().unwrap().clone()
+        }
+
+        fn delivered_card_transfers(&self) -> Vec<RecordedCardTransfer> {
+            self.delivered_card_transfers.lock().unwrap().clone()
         }
     }
 
@@ -1976,6 +2025,26 @@ mod tests {
             Ok(self.invocation_output.clone())
         }
 
+        async fn deliver_card_transfer(
+            &self,
+            target_agent_id: &AgentId,
+            environment_id: EnvironmentId,
+            transfer_id: uuid::Uuid,
+            source_card_id: CardId,
+            card: StoredCard,
+            auth_ctx: AuthCtx,
+        ) -> WorkerResult<()> {
+            self.delivered_card_transfers.lock().unwrap().push((
+                target_agent_id.clone(),
+                environment_id,
+                transfer_id,
+                source_card_id,
+                card,
+                auth_ctx,
+            ));
+            Ok(())
+        }
+
         async fn process_oplog_entries(
             &self,
             _: &AgentId,
@@ -1999,6 +2068,7 @@ mod tests {
         agent_type_name: AgentTypeName,
         component_id: ComponentId,
         component_revision: ComponentRevision,
+        environment_id: EnvironmentId,
     }
 
     impl RestHarness {
@@ -2062,6 +2132,7 @@ mod tests {
                 agent_type_name,
                 component_id,
                 component_revision,
+                environment_id,
             }
         }
 
@@ -2170,6 +2241,21 @@ mod tests {
         SchemaValue::Record { fields: vec![] }
     }
 
+    fn test_card() -> StoredCard {
+        StoredCard::Concrete(Card {
+            card_id: CardId::new(),
+            parent_ids: vec![],
+            lower_positive: vec![],
+            lower_negative: vec![],
+            upper_positive: vec![],
+            upper_negative: vec![],
+            created_at: Utc::now(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        })
+    }
+
     fn phantom_id(agent_id: &AgentId) -> Option<Uuid> {
         agent_id
             .agent_id
@@ -2196,6 +2282,113 @@ mod tests {
             ),
             AgentVerb::Invoke,
         );
+    }
+
+    #[test]
+    async fn card_transfer_delivery_is_system_only_and_preserves_retry_identity() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let target_agent_id = AgentId {
+            component_id: harness.component_id,
+            agent_id: "permission-transfer-target".to_string(),
+        };
+        let transfer_id = Uuid::new_v4();
+        let source_card_id = CardId::new();
+        let card = test_card();
+
+        for _ in 0..2 {
+            harness
+                .worker_service
+                .deliver_card_transfer(
+                    &target_agent_id,
+                    harness.environment_id,
+                    transfer_id,
+                    source_card_id,
+                    card.clone(),
+                    AuthCtx::System,
+                )
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            harness.worker_client.delivered_card_transfers(),
+            vec![
+                (
+                    target_agent_id.clone(),
+                    harness.environment_id,
+                    transfer_id,
+                    source_card_id,
+                    card.clone(),
+                    AuthCtx::System,
+                ),
+                (
+                    target_agent_id.clone(),
+                    harness.environment_id,
+                    transfer_id,
+                    source_card_id,
+                    card.clone(),
+                    AuthCtx::System,
+                ),
+            ]
+        );
+
+        let non_system_auth = AuthCtx::agent_with_effective_surface(
+            AccountId::new(),
+            AccountEmail::new("caller@golem"),
+            EffectiveSurface::default(),
+        );
+        assert!(
+            harness
+                .worker_service
+                .deliver_card_transfer(
+                    &target_agent_id,
+                    harness.environment_id,
+                    transfer_id,
+                    source_card_id,
+                    card,
+                    non_system_auth,
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            harness.worker_client.delivered_card_transfers().len(),
+            2,
+            "a non-system request must not reach the executor client"
+        );
+    }
+
+    #[test]
+    fn card_transfer_wire_payload_preserves_authority_resource_kind() {
+        let mut permission: PermissionPattern =
+            "agent(acme/shop/prod/cart/agent) @ acme/shop/prod/cart/agent : activate-plugin : plugin-a"
+                .parse()
+                .unwrap();
+        match &mut permission {
+            PermissionPattern::Agent(permission) => {
+                permission.resource =
+                    AgentResourcePattern::PluginName(AgentPluginName("plugin-a".to_string()));
+            }
+            _ => unreachable!(),
+        }
+
+        let card = StoredCard::Concrete(Card {
+            card_id: CardId::new(),
+            parent_ids: vec![],
+            lower_positive: vec![permission],
+            lower_negative: vec![],
+            upper_positive: vec![],
+            upper_negative: vec![],
+            created_at: Utc::now(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        });
+
+        let wire_payload = desert_rust::serialize_to_byte_vec(&card).unwrap();
+        let decoded: StoredCard = desert_rust::deserialize(&wire_payload).unwrap();
+
+        assert_eq!(decoded, card, "the transfer payload must preserve the card");
     }
 
     #[test]

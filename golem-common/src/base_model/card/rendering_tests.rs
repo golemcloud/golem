@@ -932,6 +932,7 @@ fn golden_grants() -> Vec<&'static str> {
         "secret(acme/shop/prod) @ acme/shop/prod/cart/CartAgent : reveal : api-key",
         "agent(acme/shop/prod/cart/CartAgent(*)) @ acme/shop/prod/cart/CartAgent : invoke : charge",
         "tool(acme/shop/prod/tools/*) @ acme/shop/prod/cart/CartAgent : invoke : *",
+        "tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart/CartAgent : invoke : search.files --pattern=* --path=src/** -in README.md",
         "kv(acme/shop/prod) @ acme/shop/prod/cart/CartAgent : read : store.user-*",
         "blob(acme/shop/prod) @ acme/shop/prod/cart/CartAgent : read : bucket.path/**",
         "rdbms(acme/shop/prod) @ acme/shop/prod/cart/CartAgent : query : orders.public.orders",

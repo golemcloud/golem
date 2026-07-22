@@ -10225,6 +10225,15 @@ paths:
       - Token: []
 components:
   schemas:
+    AccountCardHolder:
+      title: AccountCardHolder
+      type: object
+      properties:
+        accountId:
+          type: string
+          format: uuid
+      required:
+      - accountId
     ActivatePluginResponse:
       title: ActivatePluginResponse
       type: object
@@ -10238,6 +10247,14 @@ components:
             $ref: '#/components/schemas/AgentFilter'
       required:
       - filters
+    AgentCardHolder:
+      title: AgentCardHolder
+      type: object
+      properties:
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+      required:
+      - agentId
     AgentConfigEntryDto:
       title: AgentConfigEntryDto
       type: object
@@ -11457,6 +11474,15 @@ components:
       required:
       - limitMs
       - inner
+    ApplicationCardHolder:
+      title: ApplicationCardHolder
+      type: object
+      properties:
+        applicationId:
+          type: string
+          format: uuid
+      required:
+      - applicationId
     BinaryRestrictions:
       type: object
       properties:
@@ -11541,6 +11567,54 @@ components:
       - upperNegative
       - createdAt
       - systemCard
+    CardHolder:
+      discriminator:
+        propertyName: type
+        mapping:
+          Account: '#/components/schemas/CardHolder_AccountCardHolder'
+          Application: '#/components/schemas/CardHolder_ApplicationCardHolder'
+          Agent: '#/components/schemas/CardHolder_AgentCardHolder'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/CardHolder_AccountCardHolder'
+      - $ref: '#/components/schemas/CardHolder_ApplicationCardHolder'
+      - $ref: '#/components/schemas/CardHolder_AgentCardHolder'
+    CardHolder_AccountCardHolder:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Account
+            type: string
+            enum:
+            - Account
+        required:
+        - type
+      - $ref: '#/components/schemas/AccountCardHolder'
+    CardHolder_AgentCardHolder:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Agent
+            type: string
+            enum:
+            - Agent
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentCardHolder'
+    CardHolder_ApplicationCardHolder:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Application
+            type: string
+            enum:
+            - Application
+        required:
+        - type
+      - $ref: '#/components/schemas/ApplicationCardHolder'
     CardInstallFailure:
       type: string
       enum:
@@ -11556,12 +11630,14 @@ components:
           EnvironmentDefault: '#/components/schemas/CardManagedBy_CardManagedByEnvironmentDefault'
           PermissionShare: '#/components/schemas/CardManagedBy_CardManagedByPermissionShare'
           AgentInitial: '#/components/schemas/CardManagedBy_CardManagedByAgentInitial'
+          RuntimeDerived: '#/components/schemas/CardManagedBy_CardManagedByRuntimeDerived'
       type: object
       oneOf:
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByAccountRoot'
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByEnvironmentDefault'
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByPermissionShare'
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByAgentInitial'
+      - $ref: '#/components/schemas/CardManagedBy_CardManagedByRuntimeDerived'
     CardManagedByAccountRoot:
       title: CardManagedByAccountRoot
       type: object
@@ -11605,6 +11681,25 @@ components:
           format: uuid
       required:
       - permissionShareId
+    CardManagedByRuntimeDerived:
+      title: CardManagedByRuntimeDerived
+      type: object
+      properties:
+        environmentId:
+          type: string
+          format: uuid
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        invocationKey:
+          type: string
+        oplogIndex:
+          type: integer
+          format: uint64
+      required:
+      - environmentId
+      - agentId
+      - invocationKey
+      - oplogIndex
     CardManagedBy_CardManagedByAccountRoot:
       allOf:
       - type: object
@@ -11653,6 +11748,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/CardManagedByPermissionShare'
+    CardManagedBy_CardManagedByRuntimeDerived:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: RuntimeDerived
+            type: string
+            enum:
+            - RuntimeDerived
+        required:
+        - type
+      - $ref: '#/components/schemas/CardManagedByRuntimeDerived'
     CompleteParameters:
       title: CompleteParameters
       type: object
@@ -12220,6 +12327,33 @@ components:
       required:
       - timestamp
       - targetRevision
+    PermissionCardSpec:
+      type: object
+      properties:
+        polymorphic:
+          type: boolean
+      required:
+      - polymorphic
+    PermissionCardValuePayload:
+      type: object
+      properties:
+        cardId:
+          type: string
+          format: uuid
+        parentIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        expiresAt:
+          nullable: true
+          type: string
+          format: date-time
+        polymorphic:
+          type: boolean
+      required:
+      - cardId
+      - polymorphic
     PersistenceLevel:
       type: string
       enum:
@@ -12573,6 +12707,17 @@ components:
           type: string
       required:
       - spanId
+    PublicInvocationWalletPin:
+      title: PublicInvocationWalletPin
+      type: object
+      properties:
+        walletToken:
+          $ref: '#/components/schemas/WalletVersionToken'
+        scopeCardId:
+          type: string
+          format: uuid
+      required:
+      - walletToken
     PublicLocalSpanData:
       title: PublicLocalSpanData
       type: object
@@ -12675,6 +12820,11 @@ components:
           CardInstallFailed: '#/components/schemas/PublicOplogEntry_r#CardInstallFailedParams'
           CardRevoked: '#/components/schemas/PublicOplogEntry_r#CardRevokedParams'
           CardExpired: '#/components/schemas/PublicOplogEntry_r#CardExpiredParams'
+          CardDerived: '#/components/schemas/PublicOplogEntry_r#CardDerivedParams'
+          CardTransferStarted: '#/components/schemas/PublicOplogEntry_r#CardTransferStartedParams'
+          CardTransferred: '#/components/schemas/PublicOplogEntry_r#CardTransferredParams'
+          CardRevokedCascade: '#/components/schemas/PublicOplogEntry_r#CardRevokedCascadeParams'
+          CardTransferConfirmed: '#/components/schemas/PublicOplogEntry_r#CardTransferConfirmedParams'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
@@ -12723,6 +12873,11 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardInstallFailedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardRevokedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardExpiredParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CardDerivedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CardTransferStartedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CardTransferredParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CardRevokedCascadeParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CardTransferConfirmedParams'
     PublicOplogEntryWithIndex:
       title: PublicOplogEntryWithIndex
       type: object
@@ -12819,6 +12974,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#CancelledParams'
+    PublicOplogEntry_r#CardDerivedParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CardDerived
+            type: string
+            enum:
+            - CardDerived
+        required:
+        - type
+      - $ref: '#/components/schemas/r#CardDerivedParams'
     PublicOplogEntry_r#CardEventQueuedParams:
       allOf:
       - type: object
@@ -12867,6 +13034,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#CardInstalledParams'
+    PublicOplogEntry_r#CardRevokedCascadeParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CardRevokedCascade
+            type: string
+            enum:
+            - CardRevokedCascade
+        required:
+        - type
+      - $ref: '#/components/schemas/r#CardRevokedCascadeParams'
     PublicOplogEntry_r#CardRevokedParams:
       allOf:
       - type: object
@@ -12879,6 +13058,42 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#CardRevokedParams'
+    PublicOplogEntry_r#CardTransferConfirmedParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CardTransferConfirmed
+            type: string
+            enum:
+            - CardTransferConfirmed
+        required:
+        - type
+      - $ref: '#/components/schemas/r#CardTransferConfirmedParams'
+    PublicOplogEntry_r#CardTransferStartedParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CardTransferStarted
+            type: string
+            enum:
+            - CardTransferStarted
+        required:
+        - type
+      - $ref: '#/components/schemas/r#CardTransferStartedParams'
+    PublicOplogEntry_r#CardTransferredParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CardTransferred
+            type: string
+            enum:
+            - CardTransferred
+        required:
+        - type
+      - $ref: '#/components/schemas/r#CardTransferredParams'
     PublicOplogEntry_r#ChangePersistenceLevelParams:
       allOf:
       - type: object
@@ -13293,10 +13508,14 @@ components:
         mapping:
           Install: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
           Revoke: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
+          TransferStarted: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventTransfer'
+          TransferReceived: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventTransferReceived'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
       - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventCard'
+      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventTransfer'
+      - $ref: '#/components/schemas/PublicQueuedCardEvent_PublicQueuedCardEventTransferReceived'
     PublicQueuedCardEventCard:
       title: PublicQueuedCardEventCard
       type: object
@@ -13305,6 +13524,35 @@ components:
           type: string
           format: uuid
       required:
+      - cardId
+    PublicQueuedCardEventTransfer:
+      title: PublicQueuedCardEventTransfer
+      type: object
+      properties:
+        transferId:
+          type: string
+          format: uuid
+        cardId:
+          type: string
+          format: uuid
+        targetHolder:
+          $ref: '#/components/schemas/CardHolder'
+      required:
+      - transferId
+      - cardId
+      - targetHolder
+    PublicQueuedCardEventTransferReceived:
+      title: PublicQueuedCardEventTransferReceived
+      type: object
+      properties:
+        transferId:
+          type: string
+          format: uuid
+        cardId:
+          type: string
+          format: uuid
+      required:
+      - transferId
       - cardId
     PublicQueuedCardEvent_PublicQueuedCardEventCard:
       allOf:
@@ -13318,6 +13566,30 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/PublicQueuedCardEventCard'
+    PublicQueuedCardEvent_PublicQueuedCardEventTransfer:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: TransferStarted
+            type: string
+            enum:
+            - TransferStarted
+        required:
+        - type
+      - $ref: '#/components/schemas/PublicQueuedCardEventTransfer'
+    PublicQueuedCardEvent_PublicQueuedCardEventTransferReceived:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: TransferReceived
+            type: string
+            enum:
+            - TransferReceived
+        required:
+        - type
+      - $ref: '#/components/schemas/PublicQueuedCardEventTransferReceived'
     PublicRetryPolicyState:
       description: |-
         API-facing representation of a [`RetryPolicyState`](crate::model::retry_policy::RetryPolicyState),
@@ -14517,6 +14789,24 @@ components:
           kind:
             type: string
             enum:
+            - permission-card
+          value:
+            type: object
+            properties:
+              spec:
+                $ref: '#/components/schemas/PermissionCardSpec'
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+            required:
+            - spec
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
             - future
           value:
             type: object
@@ -15013,6 +15303,17 @@ components:
         required:
         - kind
         - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - permission-card
+          value:
+            $ref: '#/components/schemas/PermissionCardValuePayload'
+        required:
+        - kind
+        - value
     SecretSpec:
       type: object
       properties:
@@ -15322,6 +15623,23 @@ components:
           type: string
       required:
       - version
+    WalletVersionToken:
+      title: WalletVersionToken
+      type: object
+      properties:
+        walletIdHash:
+          type: array
+          items:
+            type: integer
+            format: uint8
+          minLength: 32
+          maxLength: 32
+        generation:
+          type: integer
+          format: uint64
+      required:
+      - walletIdHash
+      - generation
     WorkerCreationResponse:
       title: WorkerCreationResponse
       type: object
@@ -15430,6 +15748,8 @@ components:
           format: date-time
         invocation:
           $ref: '#/components/schemas/PublicAgentInvocation'
+        walletPin:
+          $ref: '#/components/schemas/PublicInvocationWalletPin'
       required:
       - timestamp
       - invocation
@@ -15481,6 +15801,28 @@ components:
       required:
       - timestamp
       - startIndex
+    r#CardDerivedParams:
+      title: r#CardDerivedParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        cardId:
+          type: string
+          format: uuid
+        parentIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        walletGeneration:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - cardId
+      - parentIds
     r#CardEventQueuedParams:
       title: r#CardEventQueuedParams
       type: object
@@ -15503,6 +15845,9 @@ components:
         cardId:
           type: string
           format: uuid
+        walletGeneration:
+          type: integer
+          format: uint64
       required:
       - timestamp
       - cardId
@@ -15539,9 +15884,31 @@ components:
         cardId:
           type: string
           format: uuid
+        walletGeneration:
+          type: integer
+          format: uint64
       required:
       - timestamp
       - cardId
+    r#CardRevokedCascadeParams:
+      title: r#CardRevokedCascadeParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        revokedCardIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        localWalletGeneration:
+          description: New generation of the wallet that owns this oplog entry.
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - revokedCardIds
     r#CardRevokedParams:
       title: r#CardRevokedParams
       type: object
@@ -15555,10 +15922,92 @@ components:
         cardId:
           type: string
           format: uuid
+        walletGeneration:
+          type: integer
+          format: uint64
       required:
       - timestamp
       - queuedEventIndex
       - cardId
+    r#CardTransferConfirmedParams:
+      title: r#CardTransferConfirmedParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        transferId:
+          description: Identifies a target-admission receipt recorded by the source agent.
+          type: string
+          format: uuid
+        sourceCardId:
+          type: string
+          format: uuid
+        installedCardId:
+          type: string
+          format: uuid
+        targetHolder:
+          $ref: '#/components/schemas/CardHolder'
+      required:
+      - timestamp
+      - transferId
+      - sourceCardId
+      - installedCardId
+      - targetHolder
+    r#CardTransferStartedParams:
+      title: r#CardTransferStartedParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        transferId:
+          description: Identifies a transfer intent recorded by its source agent.
+          type: string
+          format: uuid
+        cardId:
+          type: string
+          format: uuid
+        targetHolder:
+          $ref: '#/components/schemas/CardHolder'
+        sourceWalletGeneration:
+          description: New generation of the source wallet that owns this oplog entry.
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - transferId
+      - cardId
+      - targetHolder
+    r#CardTransferredParams:
+      title: r#CardTransferredParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        transferId:
+          description: Identifies a target admission recorded by the target agent.
+          type: string
+          format: uuid
+        sourceCardId:
+          description: Source card identity, absent only on legacy entries.
+          type: string
+          format: uuid
+        installedCardId:
+          type: string
+          format: uuid
+        targetHolder:
+          $ref: '#/components/schemas/CardHolder'
+        targetWalletGeneration:
+          description: New generation of the target wallet that owns this oplog entry.
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - transferId
+      - installedCardId
+      - targetHolder
     r#ChangePersistenceLevelParams:
       title: r#ChangePersistenceLevelParams
       type: object

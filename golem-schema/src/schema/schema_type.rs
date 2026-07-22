@@ -274,6 +274,11 @@ pub enum SchemaType {
         #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
         metadata: MetadataEnvelope,
     },
+    PermissionCard {
+        spec: PermissionCardSpec,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
 
     // WASI P3 stubs (parseable only; no semantics yet).
     Future {
@@ -327,6 +332,7 @@ impl SchemaType {
             | SchemaType::Union { metadata, .. }
             | SchemaType::Secret { metadata, .. }
             | SchemaType::QuotaToken { metadata, .. }
+            | SchemaType::PermissionCard { metadata, .. }
             | SchemaType::Future { metadata, .. }
             | SchemaType::Stream { metadata, .. } => metadata,
         }
@@ -369,6 +375,7 @@ impl SchemaType {
             | SchemaType::Union { metadata, .. }
             | SchemaType::Secret { metadata, .. }
             | SchemaType::QuotaToken { metadata, .. }
+            | SchemaType::PermissionCard { metadata, .. }
             | SchemaType::Future { metadata, .. }
             | SchemaType::Stream { metadata, .. } => metadata,
         }
@@ -617,6 +624,12 @@ impl SchemaType {
     }
     pub fn quota_token(spec: QuotaTokenSpec) -> Self {
         Self::QuotaToken {
+            spec,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn permission_card(spec: PermissionCardSpec) -> Self {
+        Self::PermissionCard {
             spec,
             metadata: MetadataEnvelope::default(),
         }
@@ -1255,6 +1268,22 @@ pub struct QuotaTokenSpec {
     /// `None` = any resource permitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_name: Option<String>,
+}
+
+/// Spec for a [`SchemaType::PermissionCard`] capability node.
+///
+/// Mirrors the WIT `permission-card-spec { polymorphic: bool }` record: a
+/// permission-card is an opaque, unforgeable handle whose only static trait
+/// visible to schema consumers is whether it is polymorphic (can spawn scoped
+/// child cards at runtime).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
+pub struct PermissionCardSpec {
+    /// Whether cards of this type may spawn scoped child cards at runtime.
+    pub polymorphic: bool,
 }
 
 #[cfg(test)]

@@ -115,6 +115,7 @@ pub fn value_kind(v : @model.SchemaValue) -> String {
     Union(_, _) => "union"
     Secret(_) => "secret"
     QuotaToken(_) => "quota-token"
+    PermissionCard(_) => "permission-card"
   }
 }
 

@@ -93,6 +93,7 @@ wasmtime-wasi = { workspace = true, optional = true }
 [dev-dependencies]
 assert2.workspace = true
 pretty_assertions = { workspace = true }
+prost.workspace = true
 tempfile = { workspace = true }
 test-r = { workspace = true }
 testcontainers = { workspace = true }

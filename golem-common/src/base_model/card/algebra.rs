@@ -21,7 +21,12 @@ use serde::{Deserialize, Serialize};
 pub enum CardAlgebraError {
     InvalidOwnerPath(String),
     InvalidRecipientPath(String),
-    DerivationNotSubsumed { grant: Box<PermissionPattern> },
+    LowerBoundTooBroad {
+        grant: Box<PermissionPattern>,
+    },
+    UpperBoundTooBroad {
+        grant: Option<Box<PermissionPattern>>,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
@@ -32,10 +37,6 @@ pub struct GrantSurface {
 }
 
 impl GrantSurface {
-    fn is_empty(&self) -> bool {
-        self.positive.is_empty() && self.negative.is_empty()
-    }
-
     pub fn allows(&self, request: &PermissionTarget) -> Result<bool, CardAlgebraError> {
         let granted = self.positive.iter().any(|grant| grant.subsumes(request));
         if !granted {
@@ -64,6 +65,29 @@ pub struct EffectiveSurface {
     pub source_card_ids: Vec<CardId>,
     pub lower: Vec<GrantSurface>,
     pub upper: Vec<GrantSurface>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct DelegationCard {
+    pub source_card_id: Option<CardId>,
+    pub lower_positive: Vec<PermissionPattern>,
+    pub lower_negative: Vec<PermissionPattern>,
+    pub upper_positive: Vec<PermissionPattern>,
+    pub upper_negative: Vec<PermissionPattern>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct DelegationSurface {
+    pub cards: Vec<DelegationCard>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalletDerivationParent {
+    Single(CardId),
+    MultipleRequired,
+    NotPermitted,
 }
 
 impl EffectiveSurface {
@@ -137,47 +161,6 @@ impl EffectiveSurface {
         self.allows_upper(request)
     }
 
-    pub fn validates_derivation(
-        &self,
-        child_lower_positive: &[PermissionPattern],
-        child_upper_positive: &[PermissionPattern],
-    ) -> Result<Vec<CardId>, CardAlgebraError> {
-        let mut witness = Vec::new();
-
-        for grant in child_lower_positive {
-            let target = grant.to_target();
-            let mut parent_index = None;
-            for (index, surface) in self.lower.iter().enumerate() {
-                if surface.allows(&target)? {
-                    parent_index = Some(index);
-                    break;
-                }
-            }
-            let Some(parent_index) = parent_index else {
-                return Err(CardAlgebraError::DerivationNotSubsumed {
-                    grant: Box::new(grant.clone()),
-                });
-            };
-            push_source_if_available(&mut witness, &self.source_card_ids, parent_index);
-        }
-
-        for grant in child_upper_positive {
-            let target = grant.to_target();
-            for (parent_index, surface) in self.upper.iter().enumerate() {
-                if !surface.allows_ceiling(&target)? {
-                    return Err(CardAlgebraError::DerivationNotSubsumed {
-                        grant: Box::new(grant.clone()),
-                    });
-                }
-                if !surface.is_empty() {
-                    push_source_if_available(&mut witness, &self.source_card_ids, parent_index);
-                }
-            }
-        }
-
-        Ok(witness)
-    }
-
     fn allows_lower(&self, request: &PermissionTarget) -> Result<bool, CardAlgebraError> {
         for surface in &self.lower {
             if surface.allows(request)? {
@@ -199,9 +182,197 @@ impl EffectiveSurface {
     }
 }
 
-fn push_source_if_available(values: &mut Vec<CardId>, source_card_ids: &[CardId], index: usize) {
-    if let Some(card_id) = source_card_ids.get(index) {
-        push_unique(values, *card_id);
+impl DelegationSurface {
+    pub fn from_cards(cards: &[Card]) -> Self {
+        Self {
+            cards: cards
+                .iter()
+                .map(|card| DelegationCard {
+                    source_card_id: Some(card.card_id),
+                    lower_positive: card.lower_positive.clone(),
+                    lower_negative: card.lower_negative.clone(),
+                    upper_positive: card.upper_positive.clone(),
+                    upper_negative: card.upper_negative.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Validates resulting child bounds. Child negatives must include inherited denials plus additions.
+    pub fn validate_attenuation(
+        &self,
+        child_lower_positive: &[PermissionPattern],
+        child_lower_negative: &[PermissionPattern],
+        child_upper_positive: &[PermissionPattern],
+        child_upper_negative: &[PermissionPattern],
+    ) -> Result<Vec<CardId>, CardAlgebraError> {
+        validate_attenuation_for_cards(
+            &self.cards,
+            child_lower_positive,
+            child_lower_negative,
+            child_upper_positive,
+            child_upper_negative,
+        )
+    }
+
+    pub fn select_wallet_derivation_parent(
+        &self,
+        child_lower_positive: &[PermissionPattern],
+        child_lower_negative: &[PermissionPattern],
+        child_upper_positive: &[PermissionPattern],
+        child_upper_negative: &[PermissionPattern],
+    ) -> Result<WalletDerivationParent, CardAlgebraError> {
+        if self.cards.is_empty() {
+            return Ok(WalletDerivationParent::NotPermitted);
+        }
+
+        let selected = self
+            .cards
+            .iter()
+            .filter_map(|card| {
+                validate_attenuation_for_cards(
+                    std::slice::from_ref(card),
+                    child_lower_positive,
+                    child_lower_negative,
+                    child_upper_positive,
+                    child_upper_negative,
+                )
+                .ok()
+                .and(card.source_card_id)
+            })
+            .max();
+
+        if let Some(card_id) = selected {
+            return Ok(WalletDerivationParent::Single(card_id));
+        }
+
+        self.validate_attenuation(
+            child_lower_positive,
+            child_lower_negative,
+            child_upper_positive,
+            child_upper_negative,
+        )?;
+        Ok(WalletDerivationParent::MultipleRequired)
+    }
+}
+
+fn validate_attenuation_for_cards(
+    cards: &[DelegationCard],
+    child_lower_positive: &[PermissionPattern],
+    child_lower_negative: &[PermissionPattern],
+    child_upper_positive: &[PermissionPattern],
+    child_upper_negative: &[PermissionPattern],
+) -> Result<Vec<CardId>, CardAlgebraError> {
+    let mut witness = Vec::new();
+
+    for grant in child_lower_positive {
+        let mut parent = None;
+        for card in cards {
+            if positive_subsumes(&card.lower_positive, grant)
+                && negatives_are_preserved(&card.lower_negative, child_lower_negative)
+            {
+                parent = Some(card);
+                break;
+            }
+        }
+        let Some(parent) = parent else {
+            return Err(CardAlgebraError::LowerBoundTooBroad {
+                grant: Box::new(grant.clone()),
+            });
+        };
+        push_source_if_available(&mut witness, parent.source_card_id);
+    }
+
+    for card in cards {
+        if !negatives_are_preserved(&card.upper_negative, child_upper_negative) {
+            return Err(CardAlgebraError::UpperBoundTooBroad {
+                grant: child_upper_positive
+                    .first()
+                    .or(child_lower_positive.first())
+                    .cloned()
+                    .map(Box::new),
+            });
+        }
+
+        // Empty upper positives denote an implicit top ceiling. Recipient coverage
+        // keeps a finite parent ceiling from becoming top for excluded holders.
+        if (!card.upper_positive.is_empty() && child_upper_positive.is_empty())
+            || !parent_upper_recipients_are_covered(&card.upper_positive, child_upper_positive)
+        {
+            return Err(CardAlgebraError::UpperBoundTooBroad { grant: None });
+        }
+
+        for grant in child_upper_positive {
+            if !ceiling_positive_subsumes(&card.upper_positive, grant) {
+                return Err(CardAlgebraError::UpperBoundTooBroad {
+                    grant: Some(Box::new(grant.clone())),
+                });
+            }
+        }
+
+        if !upper_is_empty(card) {
+            push_source_if_available(&mut witness, card.source_card_id);
+        }
+    }
+
+    Ok(witness)
+}
+
+fn positive_subsumes(positive: &[PermissionPattern], request: &PermissionPattern) -> bool {
+    positive.iter().any(|grant| grant.subsumes(request))
+}
+
+fn ceiling_positive_subsumes(positive: &[PermissionPattern], request: &PermissionPattern) -> bool {
+    let request_recipient = request.recipient();
+    let request_target = request.to_target();
+
+    positive
+        .iter()
+        .filter(|grant| recipients_overlap(grant.recipient(), request_recipient))
+        .all(|overlapping_grant| {
+            let overlap_recipient = if request_recipient.subsumes(overlapping_grant.recipient()) {
+                overlapping_grant.recipient()
+            } else {
+                request_recipient
+            };
+            positive.iter().any(|grant| {
+                grant.recipient().subsumes(overlap_recipient)
+                    && grant.subsumes_target(&request_target)
+            })
+        })
+}
+
+fn parent_upper_recipients_are_covered(
+    parent: &[PermissionPattern],
+    child: &[PermissionPattern],
+) -> bool {
+    parent.iter().all(|parent_grant| {
+        child
+            .iter()
+            .any(|child_grant| child_grant.recipient().subsumes(parent_grant.recipient()))
+    })
+}
+
+fn recipients_overlap(left: &RecipientPattern, right: &RecipientPattern) -> bool {
+    left.subsumes(right) || right.subsumes(left)
+}
+
+fn negatives_are_preserved(
+    parent_negative: &[PermissionPattern],
+    child_negative: &[PermissionPattern],
+) -> bool {
+    parent_negative
+        .iter()
+        .all(|parent| child_negative.iter().any(|child| child.subsumes(parent)))
+}
+
+fn upper_is_empty(card: &DelegationCard) -> bool {
+    card.upper_positive.is_empty() && card.upper_negative.is_empty()
+}
+
+fn push_source_if_available(values: &mut Vec<CardId>, source_card_id: Option<CardId>) {
+    if let Some(card_id) = source_card_id {
+        push_unique(values, card_id);
     }
 }
 

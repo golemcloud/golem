@@ -2398,6 +2398,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => {
                 bail!(
@@ -2549,6 +2550,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => {
                 bail!(
@@ -2719,6 +2721,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => bail!(
                 "Cannot emit MoonBit type reference for unsupported schema variant: {resolved:?}"

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::card::{CardId, StoredCard};
+use crate::base_model::card::{CardHolder, CardId, PublicCardHolder, StoredCard};
 use crate::base_model::component::{ComponentRevision, PluginPriority};
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::invocation_context::{SpanId, TraceId};
@@ -591,15 +591,65 @@ pub struct PublicQueuedCardEventCard {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+pub struct QueuedCardEventTransfer {
+    pub transfer_id: uuid::Uuid,
+    pub card_id: CardId,
+    pub card: Option<StoredCard>,
+    pub target_holder: CardHolder,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct PublicQueuedCardEventTransfer {
+    pub transfer_id: uuid::Uuid,
+    pub card_id: CardId,
+    pub target_holder: PublicCardHolder,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(
+    feature = "full",
+    desert(evolution(FieldAdded("source_card_id", None::<CardId>)))
+)]
+pub struct QueuedCardEventTransferReceived {
+    pub transfer_id: uuid::Uuid,
+    pub source_card_id: Option<CardId>,
+    pub card_id: CardId,
+    pub card: Option<StoredCard>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct PublicQueuedCardEventTransferReceived {
+    pub transfer_id: uuid::Uuid,
+    pub card_id: CardId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub enum QueuedCardEvent {
     Install(QueuedCardEventCard),
     Revoke(QueuedCardEventCard),
+    TransferStarted(QueuedCardEventTransfer),
+    TransferReceived(QueuedCardEventTransferReceived),
 }
 
 impl QueuedCardEvent {
     pub fn card_id(&self) -> CardId {
         match self {
             Self::Install(event) | Self::Revoke(event) => event.card_id,
+            Self::TransferStarted(event) => event.card_id,
+            Self::TransferReceived(event) => event.card_id,
         }
     }
 
@@ -617,6 +667,44 @@ impl QueuedCardEvent {
             card: None,
         })
     }
+
+    pub fn transfer_started(
+        transfer_id: uuid::Uuid,
+        card: impl Into<StoredCard>,
+        target_holder: CardHolder,
+    ) -> Self {
+        let card = card.into();
+        Self::transfer_started_with_source(transfer_id, card.card_id(), card, target_holder)
+    }
+
+    pub fn transfer_started_with_source(
+        transfer_id: uuid::Uuid,
+        source_card_id: CardId,
+        installed_card: impl Into<StoredCard>,
+        target_holder: CardHolder,
+    ) -> Self {
+        let installed_card = installed_card.into();
+        Self::TransferStarted(QueuedCardEventTransfer {
+            transfer_id,
+            card_id: source_card_id,
+            card: Some(installed_card),
+            target_holder,
+        })
+    }
+
+    pub fn transfer_received(
+        transfer_id: uuid::Uuid,
+        source_card_id: CardId,
+        card: impl Into<StoredCard>,
+    ) -> Self {
+        let card = card.into();
+        Self::TransferReceived(QueuedCardEventTransferReceived {
+            transfer_id,
+            source_card_id: Some(source_card_id),
+            card_id: card.card_id(),
+            card: Some(card),
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -628,12 +716,16 @@ impl QueuedCardEvent {
 pub enum PublicQueuedCardEvent {
     Install(PublicQueuedCardEventCard),
     Revoke(PublicQueuedCardEventCard),
+    TransferStarted(PublicQueuedCardEventTransfer),
+    TransferReceived(PublicQueuedCardEventTransferReceived),
 }
 
 impl PublicQueuedCardEvent {
     pub fn card_id(&self) -> CardId {
         match self {
             Self::Install(event) | Self::Revoke(event) => event.card_id,
+            Self::TransferStarted(event) => event.card_id,
+            Self::TransferReceived(event) => event.card_id,
         }
     }
 }
@@ -647,6 +739,19 @@ impl From<QueuedCardEvent> for PublicQueuedCardEvent {
             QueuedCardEvent::Revoke(event) => Self::Revoke(PublicQueuedCardEventCard {
                 card_id: event.card_id,
             }),
+            QueuedCardEvent::TransferStarted(event) => {
+                Self::TransferStarted(PublicQueuedCardEventTransfer {
+                    transfer_id: event.transfer_id,
+                    card_id: event.card_id,
+                    target_holder: event.target_holder,
+                })
+            }
+            QueuedCardEvent::TransferReceived(event) => {
+                Self::TransferReceived(PublicQueuedCardEventTransferReceived {
+                    transfer_id: event.transfer_id,
+                    card_id: event.card_id,
+                })
+            }
         }
     }
 }

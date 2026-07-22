@@ -19,16 +19,18 @@ use golem_api_grpc::proto::golem::common::Empty;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
     AgentError as GrpcAgentError, CancelInvocationRequest, CancelInvocationResponse,
-    CompletePromiseRequest, CompletePromiseResponse, ForkWorkerRequest, ForkWorkerResponse,
-    InvokeAgentRequest, InvokeAgentResponse, InvokeAgentSuccess, LaunchNewWorkerRequest,
-    LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, ProcessOplogEntriesRequest,
-    ProcessOplogEntriesResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
-    RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse, cancel_invocation_response,
-    complete_promise_response, fork_worker_response, invoke_agent_response,
-    launch_new_worker_response, process_oplog_entries_response, resume_worker_response,
-    revert_worker_response, update_worker_response,
+    CompletePromiseRequest, CompletePromiseResponse, DeliverCardTransferRequest,
+    DeliverCardTransferResponse, ForkWorkerRequest, ForkWorkerResponse, InvokeAgentRequest,
+    InvokeAgentResponse, InvokeAgentSuccess, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, ProcessOplogEntriesRequest, ProcessOplogEntriesResponse,
+    ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse, cancel_invocation_response,
+    complete_promise_response, deliver_card_transfer_response, fork_worker_response,
+    invoke_agent_response, launch_new_worker_response, process_oplog_entries_response,
+    resume_worker_response, revert_worker_response, update_worker_response,
 };
 use golem_common::model::agent::InvocationFreshnessDisposition;
+use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentConfigEntryDto;
@@ -317,6 +319,33 @@ impl GrpcWorkerService for WorkerGrpcApi {
         };
 
         Ok(Response::new(ProcessOplogEntriesResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn deliver_card_transfer(
+        &self,
+        request: Request<DeliverCardTransferRequest>,
+    ) -> Result<Response<DeliverCardTransferResponse>, Status> {
+        let (_, _, request) = request.into_parts();
+        let record = recorded_grpc_api_request!(
+            "deliver_card_transfer",
+            agent_id = proto_agent_id_string(&request.target_agent_id),
+        );
+
+        let response = match self
+            .deliver_card_transfer_inner(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(()) => record.succeed(deliver_card_transfer_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                deliver_card_transfer_response::Result::Error(error.clone()),
+                &mut WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(DeliverCardTransferResponse {
             result: Some(response),
         }))
     }
@@ -615,6 +644,50 @@ impl WorkerGrpcApi {
                 metadata,
                 OplogIndex::from_u64(request.first_entry_index),
                 request.entries,
+                auth,
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn deliver_card_transfer_inner(
+        &self,
+        request: DeliverCardTransferRequest,
+    ) -> Result<(), GrpcAgentError> {
+        let auth: AuthCtx = request
+            .auth_ctx
+            .ok_or(bad_request_error("auth_ctx not found"))?
+            .try_into()
+            .map_err(|error| bad_request_error(format!("failed converting auth_ctx: {error}")))?;
+        auth.authorize_system_only("deliver permission card transfer")?;
+
+        let target_agent_id = validate_protobuf_agent_id(request.target_agent_id)?;
+        let environment_id = request
+            .environment_id
+            .ok_or_else(|| bad_request_error("Missing environment_id"))?
+            .try_into()
+            .map_err(|error| bad_request_error(format!("invalid environment_id: {error}")))?;
+        let transfer_id = request
+            .transfer_id
+            .ok_or_else(|| bad_request_error("Missing transfer_id"))?
+            .into();
+        let source_card_id = CardId(
+            request
+                .source_card_id
+                .ok_or_else(|| bad_request_error("Missing source_card_id"))?
+                .into(),
+        );
+        let card: StoredCard = desert_rust::deserialize(&request.card)
+            .map_err(|error| bad_request_error(format!("invalid card: {error}")))?;
+
+        self.worker_service
+            .deliver_card_transfer(
+                &target_agent_id,
+                environment_id,
+                transfer_id,
+                source_card_id,
+                card,
                 auth,
             )
             .await?;

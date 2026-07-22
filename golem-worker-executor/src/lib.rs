@@ -512,6 +512,30 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
         )?;
+        crate::preview2::golem::permissions::types::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
+        crate::preview2::golem::permissions::inspect::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
+        crate::preview2::golem::permissions::derive::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
+        crate::preview2::golem::permissions::revoke::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
+        crate::preview2::golem::permissions::wallet::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
+        crate::preview2::golem::permissions::kernel_introspection::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
         golem_schema::schema::wit::wire::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,

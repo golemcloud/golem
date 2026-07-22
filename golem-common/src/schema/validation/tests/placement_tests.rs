@@ -14,7 +14,9 @@
 
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
-use crate::schema::schema_type::{NamedFieldType, SchemaType, SecretSpec, VariantCaseType};
+use crate::schema::schema_type::{
+    NamedFieldType, PermissionCardSpec, SchemaType, SecretSpec, VariantCaseType,
+};
 use crate::schema::validation::placement::{PlacementError, SchemaScope, validate_placement};
 use test_r::test;
 
@@ -40,6 +42,33 @@ fn quota_token_in_constructor_is_rejected() {
     assert!(errors.contains(&PlacementError::QuotaTokenNotAllowed {
         scope: SchemaScope::Constructor,
     }));
+}
+
+#[test]
+fn permission_card_in_constructor_is_rejected() {
+    let graph = SchemaGraph::anonymous(SchemaType::permission_card(PermissionCardSpec {
+        polymorphic: true,
+    }));
+    let errors = validate_placement(&graph, SchemaScope::Constructor).expect_err("should fail");
+    assert!(errors.contains(&PlacementError::PermissionCardNotAllowed {
+        scope: SchemaScope::Constructor,
+    }));
+}
+
+#[test]
+fn permission_card_is_allowed_outside_constructor_scope() {
+    let graph = SchemaGraph::anonymous(SchemaType::permission_card(PermissionCardSpec {
+        polymorphic: false,
+    }));
+    for scope in [
+        SchemaScope::Persisted,
+        SchemaScope::Boundary,
+        SchemaScope::Docs,
+        SchemaScope::Custom,
+    ] {
+        validate_placement(&graph, scope)
+            .unwrap_or_else(|errors| panic!("permission-card in {scope:?}: {errors:?}"));
+    }
 }
 
 #[test]

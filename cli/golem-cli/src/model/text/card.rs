@@ -165,6 +165,13 @@ fn card_managed_by(card: &StoredCard) -> String {
                 "agent initial {} rev {} {}",
                 managed_by.component_id, managed_by.component_revision, managed_by.agent_type
             ),
+            Some(CardManagedBy::RuntimeDerived(managed_by)) => format!(
+                "runtime derived {} {} invocation {} oplog {}",
+                managed_by.environment_id,
+                managed_by.agent_id,
+                managed_by.invocation_key,
+                managed_by.oplog_index
+            ),
             None => "(none)".to_string(),
         },
         StoredCard::Polymorphic(_) => "(not stored on polymorphic cards)".to_string(),

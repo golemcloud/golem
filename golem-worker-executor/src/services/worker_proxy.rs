@@ -19,17 +19,19 @@ use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
     AgentError, CancelInvocationRequest, CancelInvocationResponse, CompletePromiseRequest,
-    CompletePromiseResponse, ForkWorkerRequest, InvokeAgentRequest, InvokeAgentResponse,
-    LaunchNewWorkerRequest, LaunchNewWorkerResponse, ProcessOplogEntriesRequest,
-    ProcessOplogEntriesResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
-    RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse, agent_error,
-    cancel_invocation_response, complete_promise_response, fork_worker_response,
+    CompletePromiseResponse, DeliverCardTransferRequest, DeliverCardTransferResponse,
+    ForkWorkerRequest, InvokeAgentRequest, InvokeAgentResponse, LaunchNewWorkerRequest,
+    LaunchNewWorkerResponse, ProcessOplogEntriesRequest, ProcessOplogEntriesResponse,
+    ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse, agent_error, cancel_invocation_response,
+    complete_promise_response, deliver_card_transfer_response, fork_worker_response,
     invoke_agent_response, launch_new_worker_response, process_oplog_entries_response,
     resume_worker_response, revert_worker_response, update_worker_response,
 };
 use golem_api_grpc::proto::golem::worker::{CompleteParameters, UpdateMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
+use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -82,6 +84,15 @@ pub trait WorkerProxy: Send + Sync {
         environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
     ) -> Result<AgentInvocationOutput, WorkerProxyError>;
+
+    async fn deliver_card_transfer(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        transfer_id: uuid::Uuid,
+        source_card_id: CardId,
+        card: &StoredCard,
+    ) -> Result<(), WorkerProxyError>;
 
     async fn update(
         &self,
@@ -458,6 +469,46 @@ impl WorkerProxy for RemoteWorkerProxy {
         }
     }
 
+    async fn deliver_card_transfer(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        transfer_id: uuid::Uuid,
+        source_card_id: CardId,
+        card: &StoredCard,
+    ) -> Result<(), WorkerProxyError> {
+        debug!(%target_agent_id, %transfer_id, "Delivering permission card to remote agent");
+
+        let card = desert_rust::serialize_to_byte_vec(card).map_err(|error| {
+            WorkerProxyError::InternalError(WorkerExecutorError::unknown(format!(
+                "Failed to serialize permission card transfer: {error}"
+            )))
+        })?;
+
+        let response: DeliverCardTransferResponse = self
+            .worker_service_client
+            .call("deliver_card_transfer", move |client| {
+                Box::pin(client.deliver_card_transfer(DeliverCardTransferRequest {
+                    target_agent_id: Some(target_agent_id.clone().into()),
+                    environment_id: Some(environment_id.into()),
+                    transfer_id: Some(transfer_id.into()),
+                    card: card.clone(),
+                    auth_ctx: Some(AuthCtx::System.into()),
+                    source_card_id: Some(source_card_id.0.into()),
+                }))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(deliver_card_transfer_response::Result::Success(_)) => Ok(()),
+            Some(deliver_card_transfer_response::Result::Error(error)) => Err(error.into()),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown("Empty response through the worker API"),
+            )),
+        }
+    }
+
     async fn update(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -797,6 +848,11 @@ mod tests {
             process_oplog_entries,
             ProcessOplogEntriesRequest,
             ProcessOplogEntriesResponse
+        );
+        unimplemented_rpc!(
+            deliver_card_transfer,
+            DeliverCardTransferRequest,
+            DeliverCardTransferResponse
         );
 
         async fn invoke_agent(

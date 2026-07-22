@@ -14,6 +14,7 @@
 
 mod invocation;
 
+use crate::durable_host::agent_monomorphization_context;
 use crate::grpc::invocation::{CanStartWorker, from_proto_invocation_context};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
@@ -32,6 +33,9 @@ use crate::services::{
     UsesAllDeps,
 };
 use crate::worker::Worker;
+pub use crate::worker::{
+    PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
+};
 use crate::workerctx::WorkerCtx;
 use chrono::{DateTime, Utc};
 use futures::Stream;
@@ -42,20 +46,22 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::Wo
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, ActivatePluginResponse, CancelInvocationRequest,
     CancelInvocationResponse, ConnectWorkerRequest, DeactivatePluginRequest,
-    DeactivatePluginResponse, DeleteWorkerRequest, ForkWorkerRequest, ForkWorkerResponse,
-    GetAgentWalletRequest, GetAgentWalletResponse, GetAgentWalletSuccess, GetFileContentsRequest,
-    GetFileContentsResponse, GetFileSystemNodeRequest, GetFileSystemNodeResponse, GetOplogRequest,
-    GetOplogResponse, GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse,
-    GetWorkersMetadataRequest, GetWorkersMetadataResponse, InvokeAgentRequest, InvokeAgentResponse,
+    DeactivatePluginResponse, DeleteWorkerRequest, DeliverCardTransferRequest,
+    DeliverCardTransferResponse, ForkWorkerRequest, ForkWorkerResponse, GetAgentWalletRequest,
+    GetAgentWalletResponse, GetAgentWalletSuccess, GetFileContentsRequest, GetFileContentsResponse,
+    GetFileSystemNodeRequest, GetFileSystemNodeResponse, GetOplogRequest, GetOplogResponse,
+    GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
+    GetWorkersMetadataResponse, InvokeAgentRequest, InvokeAgentResponse,
     ProcessOplogEntriesRequest, ProcessOplogEntriesResponse, RevertWorkerRequest,
     RevertWorkerResponse, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest,
-    UpdateWorkerResponse, process_oplog_entries_response,
+    UpdateWorkerResponse, deliver_card_transfer_response, process_oplog_entries_response,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentMode, InvocationFreshnessDisposition, ParsedAgentId, Principal,
 };
+use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient};
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -2238,6 +2244,82 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(())
     }
 
+    async fn deliver_card_transfer_internal(
+        &self,
+        request: DeliverCardTransferRequest,
+    ) -> Result<(), WorkerExecutorError> {
+        let owned_agent_id = extract_owned_agent_id(
+            &request,
+            |request| &request.target_agent_id,
+            |request| &request.environment_id,
+        )?;
+
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|error| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {error}"))
+            })?;
+        auth_ctx
+            .authorize_system_only("deliver permission card transfer")
+            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+
+        let transfer_id: uuid::Uuid = request
+            .transfer_id
+            .ok_or(WorkerExecutorError::invalid_request(
+                "transfer_id not found",
+            ))?
+            .into();
+        let source_card_id = CardId(
+            request
+                .source_card_id
+                .ok_or(WorkerExecutorError::invalid_request(
+                    "source_card_id not found",
+                ))?
+                .into(),
+        );
+        let card: StoredCard = std::panic::catch_unwind(|| desert_rust::deserialize(&request.card))
+            .map_err(|_| WorkerExecutorError::invalid_request("invalid card: malformed payload"))?
+            .map_err(|error| {
+                WorkerExecutorError::invalid_request(format!("invalid card: {error}"))
+            })?;
+
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+        if Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
+            .await
+            .is_none()
+        {
+            let component = self
+                .component_service()
+                .get_metadata(owned_agent_id.agent_id.component_id, None)
+                .await?;
+            let parsed_agent_id =
+                ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
+                    .map_err(|error| {
+                        WorkerExecutorError::invalid_request(format!("Invalid agent id: {error}"))
+                    })?;
+            let target_context =
+                agent_monomorphization_context(&component, &owned_agent_id, &parsed_agent_id);
+            if !card_matches_agent_recipient(&card, &target_context) {
+                return Err(WorkerExecutorError::invalid_request(
+                    PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH,
+                ));
+            }
+        }
+
+        let worker = self
+            .get_or_create_pending_with_freshness(
+                &request,
+                InvocationFreshnessDisposition::MayExist,
+            )
+            .await?;
+        worker
+            .receive_card_transfer(transfer_id, source_card_id, card)
+            .await
+    }
+
     fn create_proto_metadata(
         metadata: AgentMetadata,
         last_error_and_retry_count: Option<LastError>,
@@ -3293,6 +3375,38 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     )),
                 })),
                 &mut err,
+            ),
+        }
+    }
+
+    async fn deliver_card_transfer(
+        &self,
+        request: Request<DeliverCardTransferRequest>,
+    ) -> ResponseResult<DeliverCardTransferResponse> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "deliver_card_transfer",
+            agent_id = proto_agent_id_string(&request.target_agent_id),
+        );
+
+        let result = self
+            .deliver_card_transfer_internal(request)
+            .instrument(record.span.clone())
+            .await;
+
+        match result {
+            Ok(()) => record.succeed(Ok(Response::new(DeliverCardTransferResponse {
+                result: Some(deliver_card_transfer_response::Result::Success(
+                    golem::common::Empty {},
+                )),
+            }))),
+            Err(mut error) => record.fail(
+                Ok(Response::new(DeliverCardTransferResponse {
+                    result: Some(deliver_card_transfer_response::Result::Failure(
+                        error.clone().into(),
+                    )),
+                })),
+                &mut error,
             ),
         }
     }

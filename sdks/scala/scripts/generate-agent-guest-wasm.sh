@@ -38,7 +38,6 @@ wit_dir="$sdk_root/wit"
 gen_dir="$sdk_root/.generated"
 agent_wit_root="$gen_dir/agent-wit-root"
 wrapper_dir="$gen_dir/agent-guest-wrapper"
-out_wasm="$wrapper_dir/target/wasm32-wasip2/release/agent_guest.wasm"
 
 echo "[agent-guest] sdk_root=$sdk_root" >&2
 
@@ -91,32 +90,44 @@ wasm-rquickjs generate-wrapper-crate \
 # generated manifest before building.
 echo "[agent-guest] Rewriting wit-bindgen dependency to Golem's outline-lift fork..." >&2
 cargo_toml="$wrapper_dir/Cargo.toml"
-wit_bindgen_line='wit-bindgen = { version = "0.42.1", default-features = false, features = ["macros"] }'
-wit_bindgen_rt_line='wit-bindgen-rt = { version = "0.42.1", features = ["bitflags"] }'
-forked_line='wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.58.0", default-features = false, features = ["macros"] }'
+legacy_wit_bindgen_line='wit-bindgen = { version = "0.42.1", default-features = false, features = ["macros"] }'
+legacy_wit_bindgen_rt_line='wit-bindgen-rt = { version = "0.42.1", features = ["bitflags"] }'
+optional_wit_bindgen_line='wit-bindgen = { version = "0.42.1", default-features = false, features = ["macros"], optional = true }'
+optional_wit_bindgen_rt_line='wit-bindgen-rt = { version = "0.42.1", features = ["bitflags"], optional = true }'
+runtime_feature='"dep:wit-bindgen-rt"'
 
-if [[ "$(grep -cF -- "$wit_bindgen_line" "$cargo_toml")" != "1" ]]; then
-  echo "[agent-guest] ERROR: expected exactly one wit-bindgen dependency line in $cargo_toml" >&2
-  echo "[agent-guest]   The wasm-rquickjs skeleton may have changed; update this script." >&2
-  exit 1
-fi
-if [[ "$(grep -cF -- "$wit_bindgen_rt_line" "$cargo_toml")" != "1" ]]; then
-  echo "[agent-guest] ERROR: expected exactly one wit-bindgen-rt dependency line in $cargo_toml" >&2
+if [[ "$(grep -cF -- "$legacy_wit_bindgen_line" "$cargo_toml")" == "1" ]] &&
+  [[ "$(grep -cF -- "$legacy_wit_bindgen_rt_line" "$cargo_toml")" == "1" ]]; then
+  wit_bindgen_line="$legacy_wit_bindgen_line"
+  wit_bindgen_rt_line="$legacy_wit_bindgen_rt_line"
+  forked_line='wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.58.0", default-features = false, features = ["macros"] }'
+  runtime_feature=''
+elif [[ "$(grep -cF -- "$optional_wit_bindgen_line" "$cargo_toml")" == "1" ]] &&
+  [[ "$(grep -cF -- "$optional_wit_bindgen_rt_line" "$cargo_toml")" == "1" ]] &&
+  [[ "$(grep -cF -- "$runtime_feature" "$cargo_toml")" == "1" ]]; then
+  wit_bindgen_line="$optional_wit_bindgen_line"
+  wit_bindgen_rt_line="$optional_wit_bindgen_rt_line"
+  forked_line='wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.58.0", default-features = false, features = ["macros"], optional = true }'
+else
+  echo "[agent-guest] ERROR: expected exactly one supported wit-bindgen dependency layout in $cargo_toml" >&2
   echo "[agent-guest]   The wasm-rquickjs skeleton may have changed; update this script." >&2
   exit 1
 fi
 
 # Drop the separate wit-bindgen-rt crate (the fork embeds its runtime) and point
 # wit-bindgen at Golem's outline-lift fork.
-WB_LINE="$wit_bindgen_line" WB_RT_LINE="$wit_bindgen_rt_line" FORK_LINE="$forked_line" \
+WB_LINE="$wit_bindgen_line" WB_RT_LINE="$wit_bindgen_rt_line" FORK_LINE="$forked_line" RUNTIME_FEATURE="$runtime_feature" \
   perl -ni -e '
     chomp(my $chomped = $_);
     next if $chomped eq $ENV{WB_RT_LINE};
     if ($chomped eq $ENV{WB_LINE}) { print "$ENV{FORK_LINE}\n"; next; }
+    if ($ENV{RUNTIME_FEATURE}) { s/, \Q$ENV{RUNTIME_FEATURE}\E//; }
     print;
   ' "$cargo_toml"
 
-if ! grep -qF -- "golemcloud/wit-bindgen" "$cargo_toml" || grep -qF -- "$wit_bindgen_rt_line" "$cargo_toml"; then
+if ! grep -qF -- "golemcloud/wit-bindgen" "$cargo_toml" ||
+  grep -qF -- "$wit_bindgen_rt_line" "$cargo_toml" ||
+  { [[ -n "$runtime_feature" ]] && grep -qF -- "$runtime_feature" "$cargo_toml"; }; then
   echo "[agent-guest] ERROR: failed to rewrite wit-bindgen dependency in $cargo_toml" >&2
   exit 1
 fi
@@ -127,13 +138,18 @@ fi
 # resolve a fresh lock during the build.
 rm -f "$wrapper_dir/Cargo.lock"
 
-echo "[agent-guest] Building guest runtime (cargo build --target wasm32-wasip2 --release)..." >&2
-if [[ -f "$HOME/.cargo/env" ]]; then
-  # shellcheck disable=SC1090
-  . "$HOME/.cargo/env"
+target_dir="$(
+  cd "$wrapper_dir"
+  cargo +stable metadata --no-deps --format-version 1 | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p'
+)"
+if [[ -z "$target_dir" ]]; then
+  echo "[agent-guest] ERROR: failed to resolve the cargo target directory" >&2
+  exit 1
 fi
+out_wasm="$target_dir/wasm32-wasip2/release/agent_guest.wasm"
 
-( cd "$wrapper_dir" && env -u ARGV0 rustup run stable cargo build --target wasm32-wasip2 --release --features full,golem )
+echo "[agent-guest] Building guest runtime (cargo build --target wasm32-wasip2 --release)..." >&2
+( cd "$wrapper_dir" && env -u ARGV0 cargo +stable build --target wasm32-wasip2 --release --features full,golem )
 
 if [[ ! -f "$out_wasm" ]]; then
   echo "[agent-guest] ERROR: build did not produce $out_wasm" >&2

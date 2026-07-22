@@ -17,13 +17,14 @@ use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, NamedFieldType, NumericBound, NumericRestrictions,
-    PathDirection, PathKind, PathSpec, QuantitySpec, QuantityValue, QuotaTokenSpec, ResultSpec,
-    SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
-    VariantCaseType,
+    PathDirection, PathKind, PathSpec, PermissionCardSpec, QuantitySpec, QuantityValue,
+    QuotaTokenSpec, ResultSpec, SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec,
+    UrlRestrictions, VariantCaseType,
 };
 use crate::schema::schema_value::{
-    BinaryValuePayload, DurationValuePayload, QuotaTokenValuePayload, ResultValuePayload,
-    SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
+    BinaryValuePayload, DurationValuePayload, PermissionCardValuePayload, QuotaTokenValuePayload,
+    ResultValuePayload, SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload,
+    VariantValuePayload,
 };
 use crate::schema::validation::subtyping::is_assignable;
 use crate::schema::validation::value::{
@@ -1248,4 +1249,32 @@ fn numeric_inverted_min_max_is_rejected() {
             .any(|e| matches!(e, ValueError::NumericOutOfRange { .. })),
         "expected NumericOutOfRange, got {errors:?}"
     );
+}
+
+#[test]
+fn permission_card_polymorphism_is_validated() {
+    let ty = SchemaType::permission_card(PermissionCardSpec { polymorphic: true });
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let matching = SchemaValue::PermissionCard(PermissionCardValuePayload {
+        card_id: uuid::Uuid::from_u128(1),
+        parent_ids: vec![uuid::Uuid::from_u128(2)],
+        expires_at: None,
+        polymorphic: true,
+    });
+    validate_value(&graph, &ty, &matching).expect("matching permission-card must pass");
+
+    let SchemaValue::PermissionCard(mut payload) = matching else {
+        unreachable!()
+    };
+    payload.polymorphic = false;
+    let errors = validate_value(&graph, &ty, &SchemaValue::PermissionCard(payload))
+        .expect_err("mismatched permission-card must fail");
+    assert!(errors.iter().any(|error| matches!(
+        error,
+        ValueError::PermissionCardPolymorphicMismatch {
+            expected: true,
+            found: false,
+            ..
+        }
+    )));
 }

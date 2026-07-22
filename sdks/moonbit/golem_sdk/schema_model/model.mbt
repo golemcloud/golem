@@ -72,6 +72,7 @@ pub(all) enum SchemaTypeBody {
   // Capability nodes
   Secret(SecretSpec)
   QuotaToken(@types.QuotaTokenSpec)
+  PermissionCard(@types.PermissionCardSpec)
   // WASI P3 stubs (parseable only; no semantics yet)
   Future(SchemaType?)
   Stream(SchemaType?)
@@ -185,6 +186,8 @@ pub(all) enum SchemaValue {
   Secret(GuestSecretHandle)
   // owned `quota-token` resource carried as an opaque, affine handle
   QuotaToken(GuestQuotaTokenHandle)
+  // owned `permission-card` resource carried as an opaque, affine handle
+  PermissionCard(GuestPermissionCardHandle)
 } derive(Show, Eq)
 
 ///|

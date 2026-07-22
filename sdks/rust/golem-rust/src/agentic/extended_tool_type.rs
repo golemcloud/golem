@@ -3540,6 +3540,10 @@ fn schema_types_match(
             sa.resource_name == sb.resource_name
         }
         (
+            SchemaType::PermissionCard { spec: sa, .. },
+            SchemaType::PermissionCard { spec: sb, .. },
+        ) => sa.polymorphic == sb.polymorphic,
+        (
             SchemaType::Text {
                 restrictions: ra, ..
             },
@@ -3671,8 +3675,8 @@ mod tests {
     use crate::agentic::tool_refinement::{refine_numeric, refine_path, refine_text, refine_url};
     use crate::schema::schema_type::{NumericBound, NumericRestrictions};
     use crate::schema::{
-        BinaryRestrictions, PathDirection, PathKind, PathSpec, QuantitySpec, QuotaTokenSpec,
-        SecretSpec, TextRestrictions,
+        BinaryRestrictions, PathDirection, PathKind, PathSpec, PermissionCardSpec, QuantitySpec,
+        QuotaTokenSpec, SecretSpec, TextRestrictions,
     };
     use test_r::test;
 
@@ -5293,7 +5297,7 @@ mod tests {
     }
 
     #[test]
-    fn rich_leaf_secret_and_quota_identity_is_compared() {
+    fn rich_leaf_capability_identity_is_compared() {
         assert!(shapes_match(
             SchemaType::secret(SecretSpec {
                 inner: Box::new(SchemaType::string()),
@@ -5321,6 +5325,14 @@ mod tests {
             SchemaType::quota_token(QuotaTokenSpec {
                 resource_name: Some("requests".into())
             }),
+        ));
+        assert!(shapes_match(
+            SchemaType::permission_card(PermissionCardSpec { polymorphic: true }),
+            SchemaType::permission_card(PermissionCardSpec { polymorphic: true }),
+        ));
+        assert!(!shapes_match(
+            SchemaType::permission_card(PermissionCardSpec { polymorphic: true }),
+            SchemaType::permission_card(PermissionCardSpec { polymorphic: false }),
         ));
     }
 

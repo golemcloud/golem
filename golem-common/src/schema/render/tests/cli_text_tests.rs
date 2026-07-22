@@ -18,10 +18,11 @@ use crate::schema::render::cli_text::{
     type_to_cli_text, value_to_cli_text, value_to_cli_text_unredacted,
 };
 use crate::schema::schema_type::{
-    NamedFieldType, QuotaTokenSpec, SchemaType, SecretSpec, TextRestrictions,
+    NamedFieldType, PermissionCardSpec, QuotaTokenSpec, SchemaType, SecretSpec, TextRestrictions,
 };
 use crate::schema::schema_value::{
-    QuotaTokenValuePayload, SchemaValue, SecretValuePayload, TextValuePayload,
+    PermissionCardValuePayload, QuotaTokenValuePayload, SchemaValue, SecretValuePayload,
+    TextValuePayload,
 };
 use chrono::{TimeZone, Utc};
 use proptest::prelude::*;
@@ -136,6 +137,34 @@ fn quota_token_value_is_redacted_by_default() {
     });
     let text = value_to_cli_text(&graph, &ty, &value).expect("value_to_cli_text");
     assert_eq!(text, "<redacted: quota-token>");
+}
+
+#[test]
+fn permission_card_type_and_value_render_safely() {
+    let ty = SchemaType::permission_card(PermissionCardSpec { polymorphic: true });
+    let graph = SchemaGraph::anonymous(ty.clone());
+    assert_eq!(
+        type_to_cli_text(&graph, &ty),
+        "permission-card<polymorphic>"
+    );
+
+    let payload = PermissionCardValuePayload {
+        card_id: uuid::Uuid::from_u128(1),
+        parent_ids: vec![uuid::Uuid::from_u128(2)],
+        expires_at: Some(Utc.timestamp_opt(1_700_000_000, 0).unwrap()),
+        polymorphic: true,
+    };
+    let value = SchemaValue::PermissionCard(payload.clone());
+    let redacted = value_to_cli_text(&graph, &ty, &value).expect("redacted permission-card");
+    assert_eq!(redacted, "<redacted: permission-card>");
+
+    let unredacted =
+        value_to_cli_text_unredacted(&graph, &ty, &value).expect("unredacted permission-card");
+    assert!(unredacted.starts_with("permission-card:"));
+    assert_eq!(
+        canonical::permission_card::from_text(&unredacted).expect("parse permission-card text"),
+        payload
+    );
 }
 
 #[test]

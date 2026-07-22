@@ -530,7 +530,8 @@ pub fn decode_agent_error(
 #[cfg(feature = "full")]
 pub fn decode_agent_error_rejecting_quota_with<
     D: golem_schema::schema::wit::QuotaTokenHandleDropper
-        + golem_schema::schema::wit::SecretHandleDropper,
+        + golem_schema::schema::wit::SecretHandleDropper
+        + golem_schema::schema::wit::PermissionCardHandleDropper,
 >(
     w: wire::AgentError,
     dropper: &mut D,

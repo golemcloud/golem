@@ -15,32 +15,57 @@ const WIT_BINDGEN_BRANCH = 'golem-outline-lift-v0.58.0';
 function useForkedWitBindgen(cargoTomlPath) {
   const original = readFileSync(cargoTomlPath, 'utf8');
 
-  const witBindgenLine =
-    'wit-bindgen = { version = "0.42.1", default-features = false, features = ["macros"] }';
-  const witBindgenRtLine = 'wit-bindgen-rt = { version = "0.42.1", features = ["bitflags"] }';
-  const forkedLine = `wit-bindgen = { git = "${WIT_BINDGEN_GIT}", branch = "${WIT_BINDGEN_BRANCH}", version = "=0.58.0", default-features = false, features = ["macros"] }`;
+  const layouts = [
+    {
+      witBindgenLine:
+        'wit-bindgen = { version = "0.42.1", default-features = false, features = ["macros"] }',
+      witBindgenRtLine: 'wit-bindgen-rt = { version = "0.42.1", features = ["bitflags"] }',
+      forkedLine: `wit-bindgen = { git = "${WIT_BINDGEN_GIT}", branch = "${WIT_BINDGEN_BRANCH}", version = "=0.58.0", default-features = false, features = ["macros"] }`,
+      runtimeFeature: undefined,
+    },
+    {
+      witBindgenLine:
+        'wit-bindgen = { version = "0.42.1", default-features = false, features = ["macros"], optional = true }',
+      witBindgenRtLine:
+        'wit-bindgen-rt = { version = "0.42.1", features = ["bitflags"], optional = true }',
+      forkedLine: `wit-bindgen = { git = "${WIT_BINDGEN_GIT}", branch = "${WIT_BINDGEN_BRANCH}", version = "=0.58.0", default-features = false, features = ["macros"], optional = true }`,
+      runtimeFeature: '"dep:wit-bindgen-rt"',
+    },
+  ];
 
-  const witBindgenCount = original.split(witBindgenLine).length - 1;
-  if (witBindgenCount !== 1) {
+  const matchingLayouts = layouts.filter(
+    ({ witBindgenLine, witBindgenRtLine }) =>
+      original.split(witBindgenLine).length === 2 && original.split(witBindgenRtLine).length === 2,
+  );
+  if (matchingLayouts.length !== 1) {
     throw new Error(
-      `Expected exactly one occurrence of the wit-bindgen dependency line in ${cargoTomlPath}, found ${witBindgenCount}. ` +
+      `Expected exactly one supported wit-bindgen dependency layout in ${cargoTomlPath}, found ${matchingLayouts.length}. ` +
         `The wasm-rquickjs skeleton may have changed; update generate-agent-template.mjs.`,
     );
   }
+
+  const { witBindgenLine, witBindgenRtLine, forkedLine, runtimeFeature } = matchingLayouts[0];
 
   // The forked wit-bindgen embeds its runtime, so the separate wit-bindgen-rt
   // crate is dropped.
-  const rtCount = original.split(witBindgenRtLine).length - 1;
-  if (rtCount !== 1) {
+  const runtimeFeatureCount = runtimeFeature ? original.split(runtimeFeature).length - 1 : 0;
+  if (runtimeFeatureCount !== (runtimeFeature ? 1 : 0)) {
     throw new Error(
-      `Expected exactly one occurrence of the wit-bindgen-rt dependency line in ${cargoTomlPath}, found ${rtCount}. ` +
+      `Expected exactly one wit-bindgen-rt feature reference in ${cargoTomlPath}, found ${runtimeFeatureCount}. ` +
         `The wasm-rquickjs skeleton may have changed; update generate-agent-template.mjs.`,
     );
   }
 
-  const updated = original.replace(`${witBindgenRtLine}\n`, '').replace(witBindgenLine, forkedLine);
+  let updated = original.replace(`${witBindgenRtLine}\n`, '').replace(witBindgenLine, forkedLine);
+  if (runtimeFeature) {
+    updated = updated.replace(`, ${runtimeFeature}`, '');
+  }
 
-  if (!updated.includes(WIT_BINDGEN_GIT) || updated.includes(witBindgenRtLine)) {
+  if (
+    !updated.includes(WIT_BINDGEN_GIT) ||
+    updated.includes(witBindgenRtLine) ||
+    (runtimeFeature && updated.includes(runtimeFeature))
+  ) {
     throw new Error(`Failed to rewrite the wit-bindgen dependency in ${cargoTomlPath}.`);
   }
 

@@ -2361,6 +2361,7 @@ impl RustBridgeGenerator {
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => {
                 bail!("SchemaType variant has no Rust bridge encoding yet; type = {typ:?}")
@@ -2612,6 +2613,7 @@ impl RustBridgeGenerator {
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => {
                 bail!("SchemaType variant has no Rust bridge decoding yet; type = {typ:?}")
@@ -2727,6 +2729,7 @@ impl RustBridgeGenerator {
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => Err(anyhow!(
                 "Cannot emit Rust type reference for unsupported schema variant: {typ:?}"

@@ -1,0 +1,32 @@
+package golem:permissions@0.1.0;
+
+/// Derivation of new permission cards from an existing card or from the
+/// caller's wallet.
+///
+/// Derivation narrows authority: a child card's lattice is bounded by its
+/// parent's lattice. The caller specifies which lower-positive and
+/// upper-positive grants to retain and which lower-negative and
+/// upper-negative grants to add, plus an optional lifespan.
+interface derive {
+    use golem:core/types@2.0.0.{permission-card};
+    use types.{pattern-grant, permission-error, duration};
+
+    /// Derive a child card from `parent`, narrowing the grant lattice.
+    derive: func(
+        parent: borrow<permission-card>,
+        lower-positive-to-retain: list<pattern-grant>,
+        lower-negative-to-add:    list<pattern-grant>,
+        upper-positive-to-retain: list<pattern-grant>,
+        upper-negative-to-add:    list<pattern-grant>,
+        lifespan: option<duration>,
+    ) -> result<permission-card, permission-error>;
+
+    /// Derive a card directly from the caller's wallet.
+    derive-from-wallet: func(
+        lower-positive:  list<pattern-grant>,
+        lower-negative:  list<pattern-grant>,
+        upper-positive:  list<pattern-grant>,
+        upper-negative:  list<pattern-grant>,
+        lifespan:        option<duration>,
+    ) -> result<permission-card, permission-error>;
+}

@@ -5,7 +5,15 @@
 pub fn wasmExportSave() -> Int {
   let result : @host.Snapshot = save()
   let return_area = mbt_ffi_malloc(16)
-  __wit_bindgen_lower_t153(return_area + 0, result)
+
+  let ptr = mbt_ffi_bytes2ptr(result.payload)
+
+  mbt_ffi_store32(return_area + 4, result.payload.length())
+  mbt_ffi_store32(return_area + 0, ptr)
+
+  let ptr0 = mbt_ffi_str2ptr(result.mime_type)
+  mbt_ffi_store32(return_area + 12, result.mime_type.length())
+  mbt_ffi_store32(return_area + 8, ptr0)
   let ret = return_area
   return ret
 }
@@ -18,19 +26,6 @@ pub fn wasmExportSavePostReturn(p0 : Int) -> Unit {
 }
 
 ///|
-#doc(hidden)
-fn __wit_bindgen_lower_t153(ptr : Int, value : @host.Snapshot) -> Unit {
-  let ptr0 = mbt_ffi_bytes2ptr(value.payload)
-
-  mbt_ffi_store32(ptr + 4, value.payload.length())
-  mbt_ffi_store32(ptr + 0, ptr0)
-
-  let ptr1 = mbt_ffi_str2ptr(value.mime_type)
-  mbt_ffi_store32(ptr + 12, value.mime_type.length())
-  mbt_ffi_store32(ptr + 8, ptr1)
-}
-
-///|
 extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
   #|(func (param i32) (result i32) (local i32)
   #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
@@ -38,17 +33,8 @@ extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
   #| local.get 1)
 
 ///|
-extern "wasm" fn mbt_ffi_free(position : Int) =
-  #|(func (param i32) local.get 0 call $moonbit.decref)
-
-///|
 extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
   #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
-
-///|
-#owned(bytes)
-extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
-  #|(func (param i32) (result i32) local.get 0)
 
 ///|
 #owned(str)
@@ -58,3 +44,12 @@ extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
 ///|
 extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
   #|(func (param i32) (result i32) local.get 0 i32.load)
+
+///|
+#owned(bytes)
+extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
+  #|(func (param i32) (result i32) local.get 0)
+
+///|
+extern "wasm" fn mbt_ffi_free(position : Int) =
+  #|(func (param i32) local.get 0 call $moonbit.decref)

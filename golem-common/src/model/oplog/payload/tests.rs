@@ -16,6 +16,11 @@ use test_r::test;
 
 use crate::model::Timestamp;
 use crate::model::invocation_context::{AttributeValue, SpanId};
+use crate::model::oplog::HostPayloadPair;
+use crate::model::oplog::host_functions::{
+    GolemPermissionsDerivePersist, GolemPermissionsInstallChildPersist,
+    GolemPermissionsInstallTransfer, HostFunctionName,
+};
 use crate::model::oplog::raw_types::SpanData;
 use crate::model::oplog::types::{
     SerializableDateTime, SerializableHttpErrorCode, SerializableHttpVersion,
@@ -35,6 +40,46 @@ use wasmtime_wasi::p2::bindings::sockets::network::IpAddress;
 use wasmtime_wasi_http::p2::bindings::http::types::{
     DnsErrorPayload, ErrorCode, FieldSizePayload, TlsAlertReceivedPayload,
 };
+
+#[test]
+fn installed_child_persistence_has_a_distinct_host_function_name() {
+    let function_name = HostFunctionName::GolemPermissionsInstallChildPersist;
+    assert_eq!(
+        GolemPermissionsInstallChildPersist::FQFN,
+        "golem::permissions::wallet::persist-installed-child-card"
+    );
+    assert_ne!(
+        GolemPermissionsInstallChildPersist::FQFN,
+        GolemPermissionsDerivePersist::FQFN
+    );
+    assert_eq!(
+        HostFunctionName::from(GolemPermissionsInstallChildPersist::FQFN),
+        function_name
+    );
+    let bytes = desert_rust::serialize_to_byte_vec(&function_name).unwrap();
+    let decoded: HostFunctionName = desert_rust::deserialize(&bytes).unwrap();
+    assert_eq!(decoded, function_name);
+}
+
+#[test]
+fn card_transfer_has_a_distinct_host_function_name() {
+    let function_name = HostFunctionName::GolemPermissionsInstallTransfer;
+    assert_eq!(
+        GolemPermissionsInstallTransfer::FQFN,
+        "golem::permissions::wallet::install-card-transfer"
+    );
+    assert_ne!(
+        GolemPermissionsInstallTransfer::FQFN,
+        GolemPermissionsInstallChildPersist::FQFN
+    );
+    assert_eq!(
+        HostFunctionName::from(GolemPermissionsInstallTransfer::FQFN),
+        function_name
+    );
+    let bytes = desert_rust::serialize_to_byte_vec(&function_name).unwrap();
+    let decoded: HostFunctionName = desert_rust::deserialize(&bytes).unwrap();
+    assert_eq!(decoded, function_name);
+}
 
 fn datetime_strat()
 -> impl Strategy<Value = wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> {

@@ -517,6 +517,18 @@ impl WorkerClient for RecordingWorkerClient {
         Ok(self.invocation_output.clone())
     }
 
+    async fn deliver_card_transfer(
+        &self,
+        _: &AgentId,
+        _: EnvironmentId,
+        _: uuid::Uuid,
+        _: golem_common::model::card::CardId,
+        _: golem_common::model::card::StoredCard,
+        _: AuthCtx,
+    ) -> WorkerResult<()> {
+        unimplemented!()
+    }
+
     async fn process_oplog_entries(
         &self,
         _: &AgentId,

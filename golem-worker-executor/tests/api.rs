@@ -14,31 +14,45 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
+use async_trait::async_trait;
 use axum::Router;
 use axum::routing::get;
+use chrono::{DateTime, Utc};
+use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
+use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::worker::AgentMetadataDto;
+use golem_common::model::worker::{
+    AgentConfigEntryDto, AgentMetadataDto, RevertToOplogIndex, RevertWorkerTarget,
+};
 use golem_common::model::{
-    AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, PromiseId, RetryConfig,
-    ScanCursor, StringFilterComparator,
+    AgentFilter, AgentFingerprint, AgentId, AgentInvocationOutput, AgentStatus, FilterComparator,
+    IdempotencyKey, OwnedAgentId, PromiseId, RetryConfig, ScanCursor, StringFilterComparator,
 };
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::{ResultValuePayload, VariantValuePayload};
 use golem_common::{agent_id, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::dsl::{drain_connection, stdout_event_matching, stdout_events};
+use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start, start_customized, start_with_redis_storage,
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, registry_test_card, start, start_customized,
+    start_with_overrides, start_with_redis_storage,
 };
 use pretty_assertions::assert_eq;
 use redis::Commands;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
 
 use std::io::Write;
+use std::pin::Pin;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -107,6 +121,1379 @@ async fn dropping_executor_releases_services(
         leak_detector.upgrade().is_none(),
         "Service graph leaked! The All struct was not deallocated after dropping the executor. \
          This indicates a circular Arc reference in the service dependency graph."
+    );
+
+    Ok(())
+}
+
+async fn deliver_card_transfer(
+    executor: &TestWorkerExecutor,
+    request: golem_api_grpc::proto::golem::workerexecutor::v1::DeliverCardTransferRequest,
+) -> anyhow::Result<Result<(), WorkerExecutorError>> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::deliver_card_transfer_response;
+
+    let response = executor
+        .client
+        .clone()
+        .deliver_card_transfer(request)
+        .await?
+        .into_inner();
+    match response.result {
+        Some(deliver_card_transfer_response::Result::Success(_)) => Ok(Ok(())),
+        Some(deliver_card_transfer_response::Result::Failure(error)) => Ok(Err(
+            WorkerExecutorError::try_from(error).map_err(|error| anyhow!(error))?,
+        )),
+        None => Err(anyhow!("permission card delivery returned no result")),
+    }
+}
+
+async fn get_agent_wallet_cards(
+    executor: &TestWorkerExecutor,
+    agent_id: &AgentId,
+) -> anyhow::Result<Vec<Vec<u8>>> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        GetAgentWalletRequest, get_agent_wallet_response,
+    };
+
+    let response = executor
+        .client
+        .clone()
+        .get_agent_wallet(GetAgentWalletRequest {
+            agent_id: Some(agent_id.clone().into()),
+            component_owner_account_id: Some(executor.context.account_id.into()),
+            environment_id: Some(executor.context.default_environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            principal: None,
+        })
+        .await?
+        .into_inner();
+    match response.result {
+        Some(get_agent_wallet_response::Result::Success(success)) => Ok(success.wallet_cards),
+        Some(get_agent_wallet_response::Result::Failure(error)) => {
+            Err(anyhow!("failed to read agent wallet: {error:?}"))
+        }
+        None => Err(anyhow!("get agent wallet returned no result")),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RecordedCardTransfer {
+    target_agent_id: AgentId,
+    environment_id: EnvironmentId,
+    transfer_id: uuid::Uuid,
+    source_card_id: CardId,
+    card: StoredCard,
+}
+
+type LocalCardTransferDelivery = dyn Fn(
+        AgentId,
+        EnvironmentId,
+        uuid::Uuid,
+        CardId,
+        StoredCard,
+    ) -> Pin<Box<dyn Future<Output = Result<(), WorkerProxyError>> + Send>>
+    + Send
+    + Sync;
+
+struct RecordingWorkerProxy {
+    inner: Arc<dyn WorkerProxy>,
+    transfers: Arc<Mutex<Vec<RecordedCardTransfer>>>,
+    forward_transfers: bool,
+    lost_response_transfer_ids: Arc<Mutex<HashSet<uuid::Uuid>>>,
+    local_delivery: Option<Arc<Mutex<Option<Arc<LocalCardTransferDelivery>>>>>,
+}
+
+#[async_trait]
+impl WorkerProxy for RecordingWorkerProxy {
+    async fn start(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        caller_agent_id: &AgentId,
+        caller_env: HashMap<String, String>,
+        caller_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        principal: Principal,
+        auth_ctx: &AuthCtx,
+    ) -> Result<AgentFingerprint, WorkerProxyError> {
+        self.inner
+            .start(
+                owned_agent_id,
+                caller_agent_id,
+                caller_env,
+                caller_stack,
+                config,
+                principal,
+                auth_ctx,
+            )
+            .await
+    }
+
+    async fn invoke_agent(
+        &self,
+        agent_id: &AgentId,
+        method_name: String,
+        method_parameters: SchemaValue,
+        mode: AgentInvocationMode,
+        schedule_at: Option<DateTime<Utc>>,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: InvocationFreshnessDisposition,
+        caller_agent_id: AgentId,
+        caller_env: HashMap<String, String>,
+        caller_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        principal: Principal,
+        environment_id: EnvironmentId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<AgentInvocationOutput, WorkerProxyError> {
+        self.inner
+            .invoke_agent(
+                agent_id,
+                method_name,
+                method_parameters,
+                mode,
+                schedule_at,
+                idempotency_key,
+                freshness_disposition,
+                caller_agent_id,
+                caller_env,
+                caller_stack,
+                config,
+                principal,
+                environment_id,
+                auth_ctx,
+            )
+            .await
+    }
+
+    async fn deliver_card_transfer(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        transfer_id: uuid::Uuid,
+        source_card_id: CardId,
+        card: &StoredCard,
+    ) -> Result<(), WorkerProxyError> {
+        self.transfers.lock().unwrap().push(RecordedCardTransfer {
+            target_agent_id: target_agent_id.clone(),
+            environment_id,
+            transfer_id,
+            source_card_id,
+            card: card.clone(),
+        });
+        if !self.forward_transfers {
+            return Ok(());
+        }
+
+        let result = if let Some(local_delivery) = &self.local_delivery {
+            let local_delivery = local_delivery.lock().unwrap().clone().ok_or_else(|| {
+                WorkerProxyError::InternalError(WorkerExecutorError::runtime(
+                    "local card-transfer delivery is not connected",
+                ))
+            })?;
+            local_delivery(
+                target_agent_id.clone(),
+                environment_id,
+                transfer_id,
+                source_card_id,
+                card.clone(),
+            )
+            .await
+        } else {
+            self.inner
+                .deliver_card_transfer(
+                    target_agent_id,
+                    environment_id,
+                    transfer_id,
+                    source_card_id,
+                    card,
+                )
+                .await
+        };
+        if result.is_ok()
+            && self
+                .lost_response_transfer_ids
+                .lock()
+                .unwrap()
+                .remove(&transfer_id)
+        {
+            Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::runtime("simulated lost card-transfer response"),
+            ))
+        } else {
+            result
+        }
+    }
+
+    async fn update(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        target_revision: ComponentRevision,
+        mode: UpdateMode,
+        disable_wakeup: bool,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), WorkerProxyError> {
+        self.inner
+            .update(
+                owned_agent_id,
+                target_revision,
+                mode,
+                disable_wakeup,
+                auth_ctx,
+            )
+            .await
+    }
+
+    async fn resume(
+        &self,
+        owned_agent_id: &AgentId,
+        force: bool,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), WorkerProxyError> {
+        self.inner.resume(owned_agent_id, force, auth_ctx).await
+    }
+
+    async fn fork_worker(
+        &self,
+        source_agent_id: &AgentId,
+        target_agent_id: &AgentId,
+        oplog_index_cutoff: &OplogIndex,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), WorkerProxyError> {
+        self.inner
+            .fork_worker(
+                source_agent_id,
+                target_agent_id,
+                oplog_index_cutoff,
+                auth_ctx,
+            )
+            .await
+    }
+
+    async fn revert(
+        &self,
+        agent_id: &AgentId,
+        target: RevertWorkerTarget,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), WorkerProxyError> {
+        self.inner.revert(agent_id, target, auth_ctx).await
+    }
+
+    async fn complete_promise(
+        &self,
+        promise_id: PromiseId,
+        data: Vec<u8>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<bool, WorkerProxyError> {
+        self.inner
+            .complete_promise(promise_id, data, auth_ctx)
+            .await
+    }
+
+    async fn cancel_invocation(
+        &self,
+        agent_id: &AgentId,
+        idempotency_key: IdempotencyKey,
+        auth_ctx: &AuthCtx,
+    ) -> Result<bool, WorkerProxyError> {
+        self.inner
+            .cancel_invocation(agent_id, idempotency_key, auth_ctx)
+            .await
+    }
+
+    async fn lookup_invocation_status(
+        &self,
+        agent_id: &AgentId,
+        idempotency_key: IdempotencyKey,
+        environment_id: Option<EnvironmentId>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::InvocationStatus, WorkerProxyError> {
+        self.inner
+            .lookup_invocation_status(agent_id, idempotency_key, environment_id, auth_ctx)
+            .await
+    }
+
+    async fn process_oplog_entries(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        component_revision: ComponentRevision,
+        idempotency_key: IdempotencyKey,
+        account_id: AccountId,
+        config: Vec<(String, String)>,
+        metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
+        first_entry_index: OplogIndex,
+        entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), WorkerProxyError> {
+        self.inner
+            .process_oplog_entries(
+                target_agent_id,
+                environment_id,
+                component_revision,
+                idempotency_key,
+                account_id,
+                config,
+                metadata,
+                first_entry_index,
+                entries,
+                auth_ctx,
+            )
+            .await
+    }
+}
+
+fn connect_local_card_transfer_delivery(
+    local_delivery: &Arc<Mutex<Option<Arc<LocalCardTransferDelivery>>>>,
+    executor: &TestWorkerExecutor,
+) {
+    let client = executor.client.clone();
+    *local_delivery.lock().unwrap() = Some(Arc::new(
+        move |target_agent_id, environment_id, transfer_id, source_card_id, card| {
+            let mut client = client.clone();
+            Box::pin(async move {
+                use golem_api_grpc::proto::golem::workerexecutor::v1::{
+                    DeliverCardTransferRequest, deliver_card_transfer_response,
+                };
+
+                let response = client
+                    .deliver_card_transfer(DeliverCardTransferRequest {
+                        target_agent_id: Some(target_agent_id.into()),
+                        environment_id: Some(environment_id.into()),
+                        transfer_id: Some(transfer_id.into()),
+                        card: desert_rust::serialize_to_byte_vec(&card).map_err(|error| {
+                            WorkerProxyError::InternalError(WorkerExecutorError::unknown(format!(
+                                "failed to serialize local card transfer: {error}"
+                            )))
+                        })?,
+                        auth_ctx: Some(AuthCtx::System.into()),
+                        source_card_id: Some(source_card_id.0.into()),
+                    })
+                    .await?
+                    .into_inner();
+                match response.result {
+                    Some(deliver_card_transfer_response::Result::Success(_)) => Ok(()),
+                    Some(deliver_card_transfer_response::Result::Failure(error)) => {
+                        Err(WorkerProxyError::InternalError(
+                            WorkerExecutorError::try_from(error).map_err(|error| {
+                                WorkerProxyError::InternalError(WorkerExecutorError::unknown(error))
+                            })?,
+                        ))
+                    }
+                    None => Err(WorkerProxyError::InternalError(
+                        WorkerExecutorError::unknown(
+                            "local permission-card delivery returned no result",
+                        ),
+                    )),
+                }
+            })
+        },
+    ));
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("8m")]
+async fn card_transfer_recipient_mismatch_does_not_create_target(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::DeliverCardTransferRequest;
+    use golem_common::model::card::{Card, CardId, StoredCard, parse_permission_fields};
+    use golem_service_base::model::auth::AuthCtx;
+    use golem_worker_executor::grpc::PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let target_agent_id = AgentId {
+        component_id: component.id,
+        agent_id: agent_id!("Counter", "recipient-mismatch-new-target").to_string(),
+    };
+    assert_eq!(
+        executor.get_worker_metadata_opt(&target_agent_id).await?,
+        None
+    );
+
+    let card = StoredCard::Concrete(Card {
+        card_id: CardId::new(),
+        parent_ids: vec![],
+        lower_positive: vec![parse_permission_fields(
+            "card",
+            "*",
+            "nobody@example.com/*/*/*/*",
+            "inspect",
+            "*",
+        )?],
+        lower_negative: vec![],
+        upper_positive: vec![],
+        upper_negative: vec![],
+        created_at: chrono::Utc::now(),
+        expires_at: None,
+        system_card: false,
+        managed_by: None,
+    });
+
+    assert_eq!(
+        deliver_card_transfer(
+            &executor,
+            DeliverCardTransferRequest {
+                target_agent_id: Some(target_agent_id.clone().into()),
+                environment_id: Some(context.default_environment_id.into()),
+                transfer_id: Some(uuid::Uuid::new_v4().into()),
+                card: desert_rust::serialize_to_byte_vec(&card)?,
+                auth_ctx: Some(AuthCtx::System.into()),
+                source_card_id: Some(CardId::new().0.into()),
+            },
+        )
+        .await?,
+        Err(WorkerExecutorError::invalid_request(
+            PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH
+        ))
+    );
+    assert_eq!(
+        executor.get_worker_metadata_opt(&target_agent_id).await?,
+        None,
+        "recipient validation must happen before creating or mutating the target"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("8m")]
+async fn card_transfer_delivery_is_durable_idempotent_and_rejects_payload_conflicts(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use futures::future::join_all;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::DeliverCardTransferRequest;
+    use golem_common::base_model::oplog::{PublicQueuedCardEvent, QueuedCardEvent};
+    use golem_common::model::card::{
+        CardId, EffectiveSurface, StoredCard, parse_permission_fields,
+    };
+    use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
+    use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
+    use golem_worker_executor::grpc::{
+        PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let target_agent_id = executor
+        .start_agent(
+            &component.id,
+            agent_id!("Counter", "permission-transfer-target"),
+        )
+        .await?;
+    let mut wallet_before = get_agent_wallet_cards(&executor, &target_agent_id).await?;
+    wallet_before.sort();
+    let oplog_before = executor.oplog_max_index(&target_agent_id).await?;
+
+    let transfer_id = uuid::Uuid::new_v4();
+    let source_card_id = CardId::new();
+    let card = registry_test_card();
+    let request = DeliverCardTransferRequest {
+        target_agent_id: Some(target_agent_id.clone().into()),
+        environment_id: Some(context.default_environment_id.into()),
+        transfer_id: Some(transfer_id.into()),
+        card: desert_rust::serialize_to_byte_vec(&card)?,
+        auth_ctx: Some(AuthCtx::System.into()),
+        source_card_id: Some(source_card_id.0.into()),
+    };
+
+    assert_eq!(
+        deliver_card_transfer(&executor, request.clone()).await?,
+        Ok(())
+    );
+    assert_eq!(
+        deliver_card_transfer(&executor, request.clone()).await?,
+        Ok(())
+    );
+
+    let count_receipts = |entries: &[PublicOplogEntryWithIndex],
+                          expected_transfer_id: uuid::Uuid| {
+        entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::CardEventQueued(params)
+                        if matches!(
+                            &params.event,
+                            PublicQueuedCardEvent::TransferReceived(receipt)
+                                if receipt.transfer_id == expected_transfer_id
+                        )
+                )
+            })
+            .count()
+    };
+    let entries = executor
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(count_receipts(&entries, transfer_id), 1);
+
+    let detached_status_transfer_id = uuid::Uuid::new_v4();
+    executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &target_agent_id,
+            golem_common::model::oplog::OplogEntry::card_event_queued(
+                QueuedCardEvent::transfer_received(
+                    detached_status_transfer_id,
+                    source_card_id,
+                    card.clone(),
+                ),
+            ),
+        )
+        .await?;
+    assert_eq!(
+        deliver_card_transfer(
+            &executor,
+            DeliverCardTransferRequest {
+                transfer_id: Some(detached_status_transfer_id.into()),
+                ..request.clone()
+            },
+        )
+        .await?,
+        Ok(()),
+        "the durable receipt must deduplicate a retry when cached status does not contain it"
+    );
+    let entries = executor
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(count_receipts(&entries, detached_status_transfer_id), 1);
+
+    let mismatching_transfer_id = uuid::Uuid::new_v4();
+    let mut mismatching_card = card.clone();
+    match &mut mismatching_card {
+        StoredCard::Concrete(card) => {
+            card.lower_positive = vec![parse_permission_fields(
+                "card",
+                "*",
+                "nobody@example.com/*/*/*/*",
+                "inspect",
+                "*",
+            )?];
+        }
+        StoredCard::Polymorphic(_) => unreachable!(),
+    }
+    assert_eq!(
+        deliver_card_transfer(
+            &executor,
+            DeliverCardTransferRequest {
+                transfer_id: Some(mismatching_transfer_id.into()),
+                card: desert_rust::serialize_to_byte_vec(&mismatching_card)?,
+                ..request.clone()
+            },
+        )
+        .await?,
+        Err(WorkerExecutorError::invalid_request(
+            PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH
+        ))
+    );
+
+    let mut conflicting_card = card.clone();
+    match &mut conflicting_card {
+        StoredCard::Concrete(card) => card.system_card = true,
+        StoredCard::Polymorphic(_) => unreachable!(),
+    }
+    let conflicting_request = DeliverCardTransferRequest {
+        card: desert_rust::serialize_to_byte_vec(&conflicting_card)?,
+        ..request.clone()
+    };
+    assert_eq!(
+        deliver_card_transfer(&executor, conflicting_request.clone()).await?,
+        Err(WorkerExecutorError::invalid_request(
+            PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT
+        ))
+    );
+
+    let non_system_auth = AuthCtx::User(UserAuthCtx {
+        account_id: context.account_id,
+        account_email: golem_common::model::account::AccountEmail::new("caller@golem"),
+        account_plan_id: context.account_plan_id,
+        account_roles: context.account_roles.clone(),
+        effective_surface: EffectiveSurface::default(),
+        delegation_surface: None,
+    });
+    let non_system_transfer_id = uuid::Uuid::new_v4();
+    assert!(matches!(
+        deliver_card_transfer(
+            &executor,
+            DeliverCardTransferRequest {
+                transfer_id: Some(non_system_transfer_id.into()),
+                auth_ctx: Some(non_system_auth.into()),
+                ..request.clone()
+            },
+        )
+        .await?,
+        Err(WorkerExecutorError::InvalidRequest { .. })
+    ));
+    let malformed_transfer_id = uuid::Uuid::new_v4();
+    assert!(matches!(
+        deliver_card_transfer(
+            &executor,
+            DeliverCardTransferRequest {
+                transfer_id: Some(malformed_transfer_id.into()),
+                card: b"not-a-card".to_vec(),
+                ..request.clone()
+            },
+        )
+        .await?,
+        Err(WorkerExecutorError::InvalidRequest { .. })
+    ));
+    let panicking_payload_transfer_id = uuid::Uuid::new_v4();
+    let mut panicking_payload = vec![0, 0, 0];
+    panicking_payload.extend_from_slice(&[0; 16]);
+    panicking_payload.push(0x03);
+    assert!(matches!(
+        deliver_card_transfer(
+            &executor,
+            DeliverCardTransferRequest {
+                transfer_id: Some(panicking_payload_transfer_id.into()),
+                card: panicking_payload,
+                ..request.clone()
+            },
+        )
+        .await?,
+        Err(WorkerExecutorError::InvalidRequest { .. })
+    ));
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    assert_eq!(
+        deliver_card_transfer(&executor, request.clone()).await?,
+        Ok(())
+    );
+    assert_eq!(
+        deliver_card_transfer(&executor, conflicting_request.clone()).await?,
+        Err(WorkerExecutorError::invalid_request(
+            PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT
+        ))
+    );
+
+    let concurrent_transfer_id = uuid::Uuid::new_v4();
+    let concurrent_request = DeliverCardTransferRequest {
+        transfer_id: Some(concurrent_transfer_id.into()),
+        ..request.clone()
+    };
+    let identical_results = join_all((0..8).map(|_| {
+        let executor = executor.clone();
+        let request = concurrent_request.clone();
+        async move { deliver_card_transfer(&executor, request).await }
+    }))
+    .await;
+    for result in identical_results {
+        assert_eq!(result?, Ok(()));
+    }
+
+    let conflicting_transfer_id = uuid::Uuid::new_v4();
+    let conflicting_source_card_id = CardId::new();
+    let concurrent_conflict_requests = [
+        DeliverCardTransferRequest {
+            transfer_id: Some(conflicting_transfer_id.into()),
+            ..request.clone()
+        },
+        DeliverCardTransferRequest {
+            transfer_id: Some(conflicting_transfer_id.into()),
+            source_card_id: Some(conflicting_source_card_id.0.into()),
+            ..request.clone()
+        },
+    ];
+    let conflict_results = join_all(concurrent_conflict_requests.map(|request| {
+        let executor = executor.clone();
+        async move { deliver_card_transfer(&executor, request).await }
+    }))
+    .await;
+    let mut accepted = 0;
+    let mut conflicted = 0;
+    for result in conflict_results {
+        match result? {
+            Ok(()) => accepted += 1,
+            Err(error)
+                if error
+                    == WorkerExecutorError::invalid_request(
+                        PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
+                    ) =>
+            {
+                conflicted += 1
+            }
+            Err(error) => return Err(anyhow!("unexpected concurrent delivery error: {error}")),
+        }
+    }
+    assert_eq!((accepted, conflicted), (1, 1));
+
+    let entries = executor
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(count_receipts(&entries, transfer_id), 1);
+    assert_eq!(count_receipts(&entries, detached_status_transfer_id), 1);
+    assert_eq!(count_receipts(&entries, concurrent_transfer_id), 1);
+    assert_eq!(count_receipts(&entries, conflicting_transfer_id), 1);
+    assert_eq!(count_receipts(&entries, mismatching_transfer_id), 0);
+    assert_eq!(count_receipts(&entries, non_system_transfer_id), 0);
+    assert_eq!(count_receipts(&entries, malformed_transfer_id), 0);
+    assert_eq!(count_receipts(&entries, panicking_payload_transfer_id), 0);
+    assert!(
+        entries
+            .iter()
+            .filter(|entry| entry.oplog_index > oplog_before)
+            .all(|entry| !matches!(
+                entry.entry,
+                PublicOplogEntry::CardInstalled(_)
+                    | PublicOplogEntry::CardDerived(_)
+                    | PublicOplogEntry::CardTransferred(_)
+            ))
+    );
+
+    let mut wallet_after = get_agent_wallet_cards(&executor, &target_agent_id).await?;
+    wallet_after.sort();
+    wallet_before
+        .push(golem_common::serialization::serialize(&card).map_err(|error| anyhow!(error))?);
+    wallet_before.sort();
+    assert_eq!(wallet_after, wallet_before);
+
+    let entries = executor
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+        .await?;
+    let transferred = |expected_transfer_id| {
+        entries
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::CardTransferred(params)
+                    if params.transfer_id == expected_transfer_id =>
+                {
+                    Some(params)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let original_transfer = transferred(transfer_id);
+    let detached_status_transfer = transferred(detached_status_transfer_id);
+    let concurrent_transfer = transferred(concurrent_transfer_id);
+    let conflict_winner = transferred(conflicting_transfer_id);
+    assert_eq!(original_transfer.len(), 1);
+    assert_eq!(detached_status_transfer.len(), 1);
+    assert_eq!(concurrent_transfer.len(), 1);
+    assert_eq!(conflict_winner.len(), 1);
+    assert_eq!(original_transfer[0].source_card_id, Some(source_card_id));
+    assert_eq!(original_transfer[0].installed_card_id, card.card_id());
+    assert_eq!(concurrent_transfer[0].installed_card_id, card.card_id());
+    assert_eq!(conflict_winner[0].installed_card_id, card.card_id());
+    let target_generation = original_transfer[0]
+        .target_wallet_generation
+        .expect("target transfer admission must record its wallet generation");
+    assert!(
+        [
+            detached_status_transfer[0],
+            concurrent_transfer[0],
+            conflict_winner[0],
+        ]
+        .into_iter()
+        .all(|transfer| transfer.target_wallet_generation == Some(target_generation)),
+        "reinstalling the same card through another transfer must not bump the target generation"
+    );
+
+    assert_eq!(
+        deliver_card_transfer(&executor, request.clone()).await?,
+        Ok(()),
+        "an exact retry after target admission must reuse the terminal receipt"
+    );
+    assert_eq!(
+        deliver_card_transfer(&executor, conflicting_request).await?,
+        Err(WorkerExecutorError::invalid_request(
+            PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT
+        ))
+    );
+    let entries_after_terminal_retry = executor
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        count_receipts(&entries_after_terminal_retry, transfer_id),
+        1
+    );
+    assert_eq!(
+        entries_after_terminal_retry
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardTransferred(params) if params.transfer_id == transfer_id
+            ))
+            .count(),
+        1
+    );
+
+    let failed_transfer_id = uuid::Uuid::new_v4();
+    let mut unregistered_card = card.clone();
+    match &mut unregistered_card {
+        StoredCard::Concrete(card) => card.card_id = CardId::new(),
+        StoredCard::Polymorphic(_) => unreachable!(),
+    }
+    let failed_request = DeliverCardTransferRequest {
+        transfer_id: Some(failed_transfer_id.into()),
+        card: desert_rust::serialize_to_byte_vec(&unregistered_card)?,
+        ..request.clone()
+    };
+    assert_eq!(
+        deliver_card_transfer(&executor, failed_request.clone()).await?,
+        Ok(())
+    );
+    let _ = get_agent_wallet_cards(&executor, &target_agent_id).await?;
+    assert_eq!(
+        deliver_card_transfer(&executor, failed_request.clone()).await?,
+        Ok(()),
+        "an exact retry after terminal admission failure must reuse the failed receipt"
+    );
+    let mut conflicting_failed_card = unregistered_card;
+    match &mut conflicting_failed_card {
+        StoredCard::Concrete(card) => card.system_card = !card.system_card,
+        StoredCard::Polymorphic(_) => unreachable!(),
+    }
+    assert_eq!(
+        deliver_card_transfer(
+            &executor,
+            DeliverCardTransferRequest {
+                card: desert_rust::serialize_to_byte_vec(&conflicting_failed_card)?,
+                ..failed_request
+            },
+        )
+        .await?,
+        Err(WorkerExecutorError::invalid_request(
+            PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT
+        ))
+    );
+    let entries_after_failed_retry = executor
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        count_receipts(&entries_after_failed_retry, failed_transfer_id),
+        1
+    );
+    let failed_receipt_index = entries_after_failed_retry
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::CardEventQueued(params)
+                if matches!(
+                    &params.event,
+                    PublicQueuedCardEvent::TransferReceived(receipt)
+                        if receipt.transfer_id == failed_transfer_id
+                ) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("failed transfer must retain its durable receipt in the oplog");
+    assert_eq!(
+        entries_after_failed_retry
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardInstallFailed(params)
+                    if params.queued_event_index == failed_receipt_index
+            ))
+            .count(),
+        1,
+        "retrying a terminally failed transfer must not repeat target admission"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("8m")]
+async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mode(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::base_model::oplog::{PublicQueuedCardEvent, QueuedCardEvent};
+    use golem_common::model::card::{AgentCardHolder, CardHolder};
+    use golem_common::model::oplog::{OplogEntry, PublicOplogEntry};
+
+    let recorded_transfers = Arc::new(Mutex::new(Vec::new()));
+    let lost_response_transfer_ids = Arc::new(Mutex::new(HashSet::new()));
+    let overrides = TestExecutorOverrides {
+        wrap_worker_proxy: Some(Arc::new({
+            let recorded_transfers = recorded_transfers.clone();
+            let lost_response_transfer_ids = lost_response_transfer_ids.clone();
+            move |inner| {
+                Arc::new(RecordingWorkerProxy {
+                    inner,
+                    transfers: recorded_transfers.clone(),
+                    forward_transfers: false,
+                    lost_response_transfer_ids: lost_response_transfer_ids.clone(),
+                    local_delivery: None,
+                })
+            }
+        })),
+        ..Default::default()
+    };
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let run_id = uuid::Uuid::new_v4();
+    let source_agent_id = executor
+        .start_agent(
+            &component.id,
+            agent_id!("Counter", format!("pending-transfer-source-{run_id}")),
+        )
+        .await?;
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+    let target_agent_id = AgentId {
+        component_id: component.id,
+        agent_id: agent_id!("Counter", format!("pending-transfer-target-{run_id}")).to_string(),
+    };
+    let source_holder = CardHolder::Agent(AgentCardHolder {
+        agent_id: source_agent_id.clone(),
+    });
+    let target_holder = CardHolder::Agent(AgentCardHolder {
+        agent_id: target_agent_id.clone(),
+    });
+    let card = registry_test_card();
+    let pending_transfer_id = uuid::Uuid::new_v4();
+    let started_transfer_id = uuid::Uuid::new_v4();
+    let completed_transfer_id = uuid::Uuid::new_v4();
+
+    executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &source_agent_id,
+            OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
+                pending_transfer_id,
+                card.card_id(),
+                card.clone(),
+                target_holder.clone(),
+            )),
+        )
+        .await?;
+    executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &source_agent_id,
+            OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
+                completed_transfer_id,
+                card.card_id(),
+                card.clone(),
+                target_holder.clone(),
+            )),
+        )
+        .await?;
+    executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &source_agent_id,
+            OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
+                started_transfer_id,
+                card.card_id(),
+                card.clone(),
+                target_holder.clone(),
+            )),
+        )
+        .await?;
+    executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &source_agent_id,
+            OplogEntry::card_transfer_started(
+                started_transfer_id,
+                card.card_id(),
+                Some(source_holder.clone()),
+                target_holder.clone(),
+                Some(0),
+            ),
+        )
+        .await?;
+    executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &source_agent_id,
+            OplogEntry::card_transfer_started(
+                completed_transfer_id,
+                card.card_id(),
+                Some(source_holder),
+                target_holder.clone(),
+                Some(0),
+            ),
+        )
+        .await?;
+    let pre_recovery_index = executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &source_agent_id,
+            OplogEntry::card_transfer_confirmed(
+                completed_transfer_id,
+                card.card_id(),
+                card.card_id(),
+                target_holder,
+            ),
+        )
+        .await?;
+    assert!(recorded_transfers.lock().unwrap().is_empty());
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+
+    assert_eq!(
+        *recorded_transfers.lock().unwrap(),
+        [pending_transfer_id, started_transfer_id].map(|transfer_id| RecordedCardTransfer {
+            target_agent_id: target_agent_id.clone(),
+            environment_id: context.default_environment_id,
+            transfer_id,
+            source_card_id: card.card_id(),
+            card: card.clone(),
+        }),
+        "only unconfirmed source transfers should be delivered after replay"
+    );
+
+    let entries = executor
+        .get_oplog(&source_agent_id, OplogIndex::INITIAL)
+        .await?;
+    for transfer_id in [
+        pending_transfer_id,
+        started_transfer_id,
+        completed_transfer_id,
+    ] {
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| matches!(
+                    &entry.entry,
+                    PublicOplogEntry::CardEventQueued(params)
+                        if matches!(
+                            &params.event,
+                            PublicQueuedCardEvent::TransferStarted(transfer)
+                                if transfer.transfer_id == transfer_id
+                        )
+                ))
+                .count(),
+            1,
+            "recovery must not duplicate the queued source retry payload"
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| matches!(
+                    &entry.entry,
+                    PublicOplogEntry::CardTransferStarted(transfer)
+                        if transfer.transfer_id == transfer_id
+                ))
+                .count(),
+            1,
+            "recovery must append at most one source intent"
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| matches!(
+                    &entry.entry,
+                    PublicOplogEntry::CardTransferConfirmed(transfer)
+                        if transfer.transfer_id == transfer_id
+                ))
+                .count(),
+            1,
+            "recovery must append at most one source confirmation"
+        );
+    }
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+    assert_eq!(
+        recorded_transfers.lock().unwrap().len(),
+        2,
+        "a confirmed source transfer must not be delivered on a later replay"
+    );
+
+    executor
+        .revert(
+            &source_agent_id,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: pre_recovery_index,
+            }),
+        )
+        .await?;
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+    assert_eq!(
+        recorded_transfers.lock().unwrap().len(),
+        2,
+        "reverting source terminal entries must preserve the externally completed transfer"
+    );
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+    assert_eq!(
+        recorded_transfers.lock().unwrap().len(),
+        2,
+        "a source revert followed by replay must not redeliver completed transfers"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("8m")]
+async fn lost_card_transfer_response_converges_after_source_and_target_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::base_model::oplog::{PublicQueuedCardEvent, QueuedCardEvent};
+    use golem_common::model::card::{AgentCardHolder, CardHolder};
+    use golem_common::model::oplog::{OplogEntry, PublicOplogEntry};
+
+    let recorded_transfers = Arc::new(Mutex::new(Vec::new()));
+    let transfer_id = uuid::Uuid::new_v4();
+    let lost_response_transfer_ids = Arc::new(Mutex::new(HashSet::from([transfer_id])));
+    let local_delivery = Arc::new(Mutex::new(None));
+    let overrides = TestExecutorOverrides {
+        wrap_worker_proxy: Some(Arc::new({
+            let recorded_transfers = recorded_transfers.clone();
+            let lost_response_transfer_ids = lost_response_transfer_ids.clone();
+            let local_delivery = local_delivery.clone();
+            move |inner| {
+                Arc::new(RecordingWorkerProxy {
+                    inner,
+                    transfers: recorded_transfers.clone(),
+                    forward_transfers: true,
+                    lost_response_transfer_ids: lost_response_transfer_ids.clone(),
+                    local_delivery: Some(local_delivery.clone()),
+                })
+            }
+        })),
+        ..Default::default()
+    };
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    connect_local_card_transfer_delivery(&local_delivery, &executor);
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let run_id = uuid::Uuid::new_v4();
+    let source_agent_id = executor
+        .start_agent(
+            &component.id,
+            agent_id!("Counter", format!("lost-response-source-{run_id}")),
+        )
+        .await?;
+    let target_agent_id = executor
+        .start_agent(
+            &component.id,
+            agent_id!("Counter", format!("lost-response-target-{run_id}")),
+        )
+        .await?;
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+    let _ = get_agent_wallet_cards(&executor, &target_agent_id).await?;
+
+    let card = registry_test_card();
+    let target_holder = CardHolder::Agent(AgentCardHolder {
+        agent_id: target_agent_id.clone(),
+    });
+    let source_holder = CardHolder::Agent(AgentCardHolder {
+        agent_id: source_agent_id.clone(),
+    });
+    executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &source_agent_id,
+            OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
+                transfer_id,
+                card.card_id(),
+                card.clone(),
+                target_holder.clone(),
+            )),
+        )
+        .await?;
+    executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &source_agent_id,
+            OplogEntry::card_transfer_started(
+                transfer_id,
+                card.card_id(),
+                Some(source_holder),
+                target_holder,
+                Some(0),
+            ),
+        )
+        .await?;
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    connect_local_card_transfer_delivery(&local_delivery, &executor);
+    let first_recovery_error = get_agent_wallet_cards(&executor, &source_agent_id)
+        .await
+        .expect_err("losing the target response must leave source recovery pending");
+    assert!(
+        format!("{first_recovery_error:#}").contains("simulated lost card-transfer response"),
+        "unexpected source recovery failure: {first_recovery_error:#}"
+    );
+    let _ = get_agent_wallet_cards(&executor, &target_agent_id).await?;
+
+    let expected_transfer = RecordedCardTransfer {
+        target_agent_id: target_agent_id.clone(),
+        environment_id: context.default_environment_id,
+        transfer_id,
+        source_card_id: card.card_id(),
+        card: card.clone(),
+    };
+    assert_eq!(
+        *recorded_transfers.lock().unwrap(),
+        vec![expected_transfer.clone()],
+        "the first replay retry must reach the target before its response is lost"
+    );
+    let source_entries = executor
+        .get_oplog(&source_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        source_entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardTransferConfirmed(transfer)
+                    if transfer.transfer_id == transfer_id
+            ))
+            .count(),
+        0,
+        "the source must not confirm a transfer whose success response was lost"
+    );
+    let target_entries = executor
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        target_entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardEventQueued(params)
+                    if matches!(
+                        &params.event,
+                        PublicQueuedCardEvent::TransferReceived(receipt)
+                            if receipt.transfer_id == transfer_id
+                    )
+            ))
+            .count(),
+        1,
+        "the target must durably retain the delivery whose response was lost"
+    );
+    assert_eq!(
+        target_entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardTransferred(transfer)
+                    if transfer.transfer_id == transfer_id
+            ))
+            .count(),
+        1,
+        "target admission must complete exactly once before both sides restart"
+    );
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    connect_local_card_transfer_delivery(&local_delivery, &executor);
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+    let _ = get_agent_wallet_cards(&executor, &target_agent_id).await?;
+    assert_eq!(
+        *recorded_transfers.lock().unwrap(),
+        vec![expected_transfer.clone(), expected_transfer],
+        "source recovery must retry the exact durable transfer payload"
+    );
+
+    let source_entries = executor
+        .get_oplog(&source_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        source_entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardEventQueued(params)
+                    if matches!(
+                        &params.event,
+                        PublicQueuedCardEvent::TransferStarted(transfer)
+                            if transfer.transfer_id == transfer_id
+                    )
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        source_entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardTransferStarted(transfer)
+                    if transfer.transfer_id == transfer_id
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        source_entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardTransferConfirmed(transfer)
+                    if transfer.transfer_id == transfer_id
+            ))
+            .count(),
+        1
+    );
+    let target_entries = executor
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        target_entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardEventQueued(params)
+                    if matches!(
+                        &params.event,
+                        PublicQueuedCardEvent::TransferReceived(receipt)
+                            if receipt.transfer_id == transfer_id
+                    )
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        target_entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardTransferred(transfer)
+                    if transfer.transfer_id == transfer_id
+            ))
+            .count(),
+        1
+    );
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    connect_local_card_transfer_delivery(&local_delivery, &executor);
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+    let _ = get_agent_wallet_cards(&executor, &target_agent_id).await?;
+    assert_eq!(
+        recorded_transfers.lock().unwrap().len(),
+        2,
+        "the confirmed source transfer must remain terminal on later replay"
     );
 
     Ok(())
@@ -3576,6 +4963,7 @@ async fn worker_created_by_reflects_component_owner_not_caller(
             lower: Vec::new(),
             upper: Vec::new(),
         },
+        delegation_surface: None,
     })
     .into();
 
@@ -3670,6 +5058,7 @@ async fn worker_environment_reflects_component_not_caller(
             lower: Vec::new(),
             upper: Vec::new(),
         },
+        delegation_surface: None,
     })
     .into();
 
@@ -3815,6 +5204,7 @@ async fn resource_limits_initialized_for_component_owner_not_caller(
             lower: Vec::new(),
             upper: Vec::new(),
         },
+        delegation_surface: None,
     })
     .into();
 

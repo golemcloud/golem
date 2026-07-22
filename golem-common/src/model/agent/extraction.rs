@@ -21,7 +21,8 @@ use crate::schema::tool::validation::validate_tool;
 use crate::schema::tool::wit::{decode_tool, wire as tool_wire};
 use anyhow::anyhow;
 use golem_schema::schema::wit::{
-    QuotaTokenHandleDropper, QuotaTokenHandleRep, SecretHandleDropper, SecretHandleRep,
+    PermissionCardHandleDropper, PermissionCardHandleRep, QuotaTokenHandleDropper,
+    QuotaTokenHandleRep, SecretHandleDropper, SecretHandleRep,
 };
 use serde::{Deserialize, Serialize};
 use std::future::Future;
@@ -455,6 +456,15 @@ impl SecretHandleDropper for Host {
     }
 }
 
+impl PermissionCardHandleDropper for Host {
+    fn drop_permission_card_handle(
+        &mut self,
+        handle: wasmtime::component::Resource<PermissionCardHandleRep>,
+    ) {
+        let _ = self.table().delete(handle);
+    }
+}
+
 /// Whether the resource `resource_name` imported from interface
 /// `interface_name` is the opaque `golem:core/types.quota-token`. It is matched
 /// both at its defining interface and at the `golem:quota/types` interface that
@@ -477,6 +487,23 @@ fn is_secret_resource(interface_name: &str, resource_name: &str) -> bool {
         && matches!(
             interface_name,
             "golem:core/types@2.0.0" | "golem:secrets/types@0.1.0" | "golem:secrets/reveal@0.1.0"
+        )
+}
+
+/// Whether the resource `resource_name` imported from interface
+/// `interface_name` is the opaque `golem:core/types.permission-card`. Like
+/// `secret`, it can appear transitively inside schema value trees and must use
+/// the same host resource representation as the generated wire bindings.
+fn is_permission_card_resource(interface_name: &str, resource_name: &str) -> bool {
+    resource_name == "permission-card"
+        && matches!(
+            interface_name,
+            "golem:core/types@2.0.0"
+                | "golem:permissions/types@0.1.0"
+                | "golem:permissions/inspect@0.1.0"
+                | "golem:permissions/derive@0.1.0"
+                | "golem:permissions/revoke@0.1.0"
+                | "golem:permissions/wallet@0.1.0"
         )
 }
 
@@ -546,6 +573,12 @@ fn dynamic_import(
                         instance.resource(
                             &inner_name,
                             ResourceType::host::<SecretHandleRep>(),
+                            |_store, _rep| Ok(()),
+                        )?;
+                    } else if is_permission_card_resource(&name, &inner_name) {
+                        instance.resource(
+                            &inner_name,
+                            ResourceType::host::<PermissionCardHandleRep>(),
                             |_store, _rep| Ok(()),
                         )?;
                     } else if &inner_name != "pollable"

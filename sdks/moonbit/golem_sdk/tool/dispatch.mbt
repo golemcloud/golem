@@ -202,6 +202,8 @@ fn value_matches_type(
     @model.SchemaTypeBody::Secret(_) => value is @model.SchemaValue::Secret(_)
     @model.SchemaTypeBody::QuotaToken(_) =>
       value is @model.SchemaValue::QuotaToken(_)
+    @model.SchemaTypeBody::PermissionCard(_) =>
+      value is @model.SchemaValue::PermissionCard(_)
     @model.SchemaTypeBody::Future(_) => false
     @model.SchemaTypeBody::Stream(_) => false
   }

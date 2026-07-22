@@ -26,8 +26,8 @@ use golem_common::model::agent_secret::{
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::card::owner::{ComponentOwnerPattern, EnvironmentOwnerPattern};
 use golem_common::model::card::{
-    CardId, CardManagedBy, CardManagedByAccountRoot, CardManagedByAgentInitial, PermissionPattern,
-    PolymorphicCard, StoredCard,
+    Card, CardId, CardManagedBy, CardManagedByAccountRoot, CardManagedByAgentInitial,
+    CardManagedByRuntimeDerived, PermissionPattern, PolymorphicCard, StoredCard,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::{AgentTypeProvisionConfig, ComponentMetadata};
@@ -35,12 +35,13 @@ use golem_common::model::environment::{
     EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentUpdate,
 };
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
+use golem_common::model::{AgentId, IdempotencyKey, OplogIndex};
 use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
-use golem_registry_service::repo::card::DbCardRepo;
-use golem_registry_service::repo::component::DbComponentRepo;
+use golem_registry_service::repo::card::{CardRepo, DbCardRepo};
+use golem_registry_service::repo::component::{ComponentRepo, DbComponentRepo};
 use golem_registry_service::repo::deployment::DbDeploymentRepo;
 use golem_registry_service::repo::environment::{
     DbEnvironmentRepo, EnvironmentExtRevisionRecord, EnvironmentRevisionRecord,
@@ -92,11 +93,13 @@ use golem_registry_service::services::{
     card::{AccountCardFilter, CardError, CardService},
     component::ComponentService,
     deployment::DeploymentService,
-    environment::EnvironmentService,
+    environment::{EnvironmentError, EnvironmentService},
     permission_share::PermissionShareService,
     plan::PlanService,
 };
-use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
+use golem_service_base::db::{postgres::PostgresPool, sqlite::SqlitePool};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::Blob;
 use golem_service_base::repo::SqlDateTime;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -107,6 +110,1097 @@ use std::sync::Arc;
 use strum::IntoEnumIterator;
 use uuid::Uuid;
 // Common test cases -------------------------------------------------------------------------------
+
+fn runtime_card(card_id: CardId, parent_ids: Vec<CardId>) -> StoredCard {
+    StoredCard::Concrete(Card {
+        card_id,
+        parent_ids,
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: chrono::DateTime::from_timestamp(1_700_000_000, 123_456_789).unwrap(),
+        expires_at: Some(chrono::DateTime::from_timestamp(1_800_000_000, 987_654_321).unwrap()),
+        system_card: false,
+        managed_by: None,
+    })
+}
+
+fn runtime_card_provenance() -> CardManagedByRuntimeDerived {
+    CardManagedByRuntimeDerived {
+        environment_id: EnvironmentId::new(),
+        agent_id: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "runtime-card-source".to_string(),
+        },
+        invocation_key: IdempotencyKey::new("runtime-card-invocation".to_string()),
+        oplog_index: OplogIndex::from_u64(42),
+    }
+}
+
+pub async fn test_runtime_card_creation_is_idempotent_and_rejects_conflicts(deps: &Deps) {
+    let services = environment_service_deps(deps);
+    let parent_ids = vec![CardId::new(), CardId::new()];
+    let provenance = runtime_card_provenance();
+    for parent_id in &parent_ids {
+        services
+            .card_service
+            .create_runtime_card(
+                runtime_card(*parent_id, Vec::new()),
+                provenance.clone(),
+                &AuthCtx::System,
+            )
+            .await
+            .unwrap();
+    }
+
+    let card_id = CardId::new();
+    let card = runtime_card(card_id, parent_ids.clone());
+
+    let created = services
+        .card_service
+        .create_runtime_card(card.clone(), provenance.clone(), &AuthCtx::System)
+        .await
+        .unwrap();
+    let retried_from_original_request = services
+        .card_service
+        .create_runtime_card(card.clone(), provenance.clone(), &AuthCtx::System)
+        .await
+        .unwrap();
+    let retried = services
+        .card_service
+        .create_runtime_card(created.clone(), provenance.clone(), &AuthCtx::System)
+        .await
+        .unwrap();
+    let mut reordered = card.clone().into_concrete().unwrap();
+    reordered.parent_ids.reverse();
+    let retried_with_reordered_parents = services
+        .card_service
+        .create_runtime_card(reordered.into(), provenance.clone(), &AuthCtx::System)
+        .await
+        .unwrap();
+
+    assert_eq!(created, retried_from_original_request);
+    assert_eq!(created, retried);
+    assert_eq!(created, retried_with_reordered_parents);
+    let mut conflicting = card.clone().into_concrete().unwrap();
+    conflicting.expires_at = None;
+    assert!(matches!(
+        services
+            .card_service
+            .create_runtime_card(conflicting.into(), provenance.clone(), &AuthCtx::System)
+            .await,
+        Err(CardError::RuntimeCardConflict(id)) if id == card_id
+    ));
+
+    assert_eq!(
+        services
+            .card_service
+            .revoke_card(card_id, &AuthCtx::System)
+            .await
+            .unwrap(),
+        vec![card_id]
+    );
+    assert!(matches!(
+        services
+            .card_service
+            .create_runtime_card(card, provenance, &AuthCtx::System)
+            .await,
+        Err(CardError::RuntimeCardRevoked(id)) if id == card_id
+    ));
+}
+
+pub async fn test_runtime_card_creation_rejects_system_cards(deps: &Deps) {
+    let services = environment_service_deps(deps);
+    let card_id = CardId::new();
+    let mut card = runtime_card(card_id, Vec::new()).into_concrete().unwrap();
+    card.system_card = true;
+
+    assert!(matches!(
+        services
+            .card_service
+            .create_runtime_card(card.into(), runtime_card_provenance(), &AuthCtx::System)
+            .await
+            .unwrap_err(),
+        CardError::RuntimeCardCannotBeSystemCard
+    ));
+}
+
+pub async fn test_runtime_card_creation_requires_system_auth(deps: &Deps) {
+    let services = environment_service_deps(deps);
+    let auth = AuthCtx::agent_with_effective_surface(
+        AccountId::new(),
+        golem_common::model::account::AccountEmail::new("runtime-card-test@example.com"),
+        Default::default(),
+    );
+
+    assert!(matches!(
+        services
+            .card_service
+            .create_runtime_card(
+                runtime_card(CardId::new(), Vec::new()),
+                runtime_card_provenance(),
+                &auth,
+            )
+            .await
+            .unwrap_err(),
+        CardError::Unauthorized(AuthorizationError::SystemOnlyActionNotAllowed(_))
+    ));
+}
+
+pub async fn test_runtime_card_parent_integrity(deps: &Deps) {
+    let services = environment_service_deps(deps);
+    let card_repo: Arc<dyn CardRepo> = match &deps.test_db {
+        TestDb::Postgres(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+        TestDb::Sqlite(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+    };
+    let provenance = runtime_card_provenance();
+    let parent_ids = (0..4).map(|_| CardId::new()).collect::<Vec<_>>();
+
+    for parent_id in &parent_ids {
+        services
+            .card_service
+            .create_runtime_card(
+                runtime_card(*parent_id, Vec::new()),
+                provenance.clone(),
+                &AuthCtx::System,
+            )
+            .await
+            .unwrap();
+    }
+
+    let first_child_id = CardId::new();
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(first_child_id, vec![parent_ids[0], parent_ids[1]]),
+            provenance.clone(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    let second_child_id = CardId::new();
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(second_child_id, vec![parent_ids[2], parent_ids[3]]),
+            provenance.clone(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let notifier = deps.test_registry_change_notifier();
+    let first_deleted = card_repo
+        .delete(parent_ids[0])
+        .await
+        .unwrap()
+        .signal_new_events_available(notifier.as_ref());
+    let second_deleted = card_repo
+        .delete(parent_ids[3])
+        .await
+        .unwrap()
+        .signal_new_events_available(notifier.as_ref());
+    assert!(first_deleted.contains(&first_child_id));
+    assert!(second_deleted.contains(&second_child_id));
+
+    let rejected_card_id = CardId::new();
+    let error = services
+        .card_service
+        .create_runtime_card(
+            runtime_card(rejected_card_id, vec![parent_ids[1], parent_ids[3]]),
+            provenance,
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CardError::CardNotFound(id) if id == parent_ids[3]));
+    assert!(card_repo.get(rejected_card_id).await.unwrap().is_none());
+    assert!(card_repo.get(parent_ids[1]).await.unwrap().is_some());
+
+    let self_parented_card_id = CardId::new();
+    let error = services
+        .card_service
+        .create_runtime_card(
+            runtime_card(self_parented_card_id, vec![self_parented_card_id]),
+            runtime_card_provenance(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CardError::CardNotFound(id) if id == self_parented_card_id));
+    assert!(
+        card_repo
+            .get(self_parented_card_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let expired_parent_id = CardId::new();
+    let mut expired_parent = runtime_card(expired_parent_id, Vec::new())
+        .into_concrete()
+        .unwrap();
+    expired_parent.expires_at = Some(chrono::DateTime::from_timestamp(1_600_000_000, 0).unwrap());
+    services
+        .card_service
+        .create_runtime_card(
+            expired_parent.into(),
+            runtime_card_provenance(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    let child_of_expired_parent = CardId::new();
+    assert!(matches!(
+        services
+            .card_service
+            .create_runtime_card(
+                runtime_card(child_of_expired_parent, vec![expired_parent_id]),
+                runtime_card_provenance(),
+                &AuthCtx::System,
+            )
+            .await,
+        Err(CardError::CardNotFound(id)) if id == expired_parent_id
+    ));
+    assert!(
+        card_repo
+            .get(child_of_expired_parent)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+pub async fn test_card_dag_traversal_deduplicates_diamonds(deps: &Deps) {
+    let services = environment_service_deps(deps);
+    let card_repo: Arc<dyn CardRepo> = match &deps.test_db {
+        TestDb::Postgres(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+        TestDb::Sqlite(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+    };
+    let provenance = runtime_card_provenance();
+    let root = CardId::new();
+    let left = CardId::new();
+    let right = CardId::new();
+    let leaf = CardId::new();
+
+    for (card_id, parent_ids) in [
+        (root, Vec::new()),
+        (left, vec![root]),
+        (right, vec![root]),
+        (leaf, vec![left, right]),
+    ] {
+        services
+            .card_service
+            .create_runtime_card(
+                runtime_card(card_id, parent_ids),
+                provenance.clone(),
+                &AuthCtx::System,
+            )
+            .await
+            .unwrap();
+    }
+
+    let sorted = |mut card_ids: Vec<CardId>| {
+        card_ids.sort_unstable();
+        card_ids
+    };
+    let all = sorted(vec![root, left, right, leaf]);
+
+    assert_eq!(
+        card_repo.ancestor_ids_including_self(leaf).await.unwrap(),
+        all
+    );
+    assert_eq!(
+        card_repo.descendant_ids_including_self(root).await.unwrap(),
+        all
+    );
+    assert_eq!(
+        card_repo.descendant_ids_including_self(left).await.unwrap(),
+        sorted(vec![left, leaf])
+    );
+    assert_eq!(
+        card_repo.ancestor_ids_including_self(root).await.unwrap(),
+        vec![root]
+    );
+
+    let missing = CardId::new();
+    assert!(
+        card_repo
+            .ancestor_ids_including_self(missing)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        card_repo
+            .descendant_ids_including_self(missing)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+pub async fn test_card_dag_revoke_transaction_rolls_back_atomically(deps: &Deps) {
+    let services = environment_service_deps(deps);
+    let card_repo: Arc<dyn CardRepo> = match &deps.test_db {
+        TestDb::Postgres(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+        TestDb::Sqlite(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+    };
+    let provenance = runtime_card_provenance();
+    let root = CardId::new();
+    let left = CardId::new();
+    let right = CardId::new();
+    let leaf = CardId::new();
+    let cards = [
+        runtime_card(root, Vec::new()),
+        runtime_card(left, vec![root]),
+        runtime_card(right, vec![root]),
+        runtime_card(leaf, vec![left, right]),
+    ];
+
+    for card in &cards {
+        services
+            .card_service
+            .create_runtime_card(card.clone(), provenance.clone(), &AuthCtx::System)
+            .await
+            .unwrap();
+    }
+
+    let baseline = deps
+        .registry_change_repo
+        .get_latest_event_id()
+        .await
+        .unwrap()
+        .unwrap_or(ChangeEventId(0));
+    let deleted = match &deps.test_db {
+        TestDb::Postgres(pool) => {
+            let mut tx = pool
+                .with_rw("test", "rollback_card_dag_revoke")
+                .begin()
+                .await
+                .unwrap();
+            let deleted = DbCardRepo::<PostgresPool>::delete_tree_in_tx(&mut tx, root)
+                .await
+                .unwrap();
+            tx.rollback().await.unwrap();
+            deleted
+        }
+        TestDb::Sqlite(pool) => {
+            let mut tx = pool
+                .with_rw("test", "rollback_card_dag_revoke")
+                .begin()
+                .await
+                .unwrap();
+            let deleted = DbCardRepo::<SqlitePool>::delete_tree_in_tx(&mut tx, root)
+                .await
+                .unwrap();
+            tx.rollback().await.unwrap();
+            deleted
+        }
+    };
+    let mut expected = vec![root, left, right, leaf];
+    expected.sort_unstable();
+
+    assert_eq!(deleted, expected);
+    assert_eq!(
+        card_repo.existing(expected.clone()).await.unwrap(),
+        expected
+    );
+    let events = deps
+        .registry_change_repo
+        .get_events_since(baseline)
+        .await
+        .unwrap();
+    assert!(events.iter().all(|event| {
+        !matches!(
+            event,
+            RegistryChangeEvent::CardRevoked { card_ids, .. }
+                if card_ids.iter().any(|card_id| expected.contains(&CardId(*card_id)))
+        )
+    }));
+
+    for card in cards {
+        assert_eq!(
+            services
+                .card_service
+                .create_runtime_card(card.clone(), provenance.clone(), &AuthCtx::System)
+                .await
+                .unwrap()
+                .card_id(),
+            card.card_id()
+        );
+    }
+}
+
+pub async fn test_component_deletion_racing_runtime_derivation(deps: &Deps) {
+    let TestDb::Postgres(pool) = &deps.test_db else {
+        panic!("this race depends on PostgreSQL row-lock and statement-snapshot semantics");
+    };
+    let pool = pool.clone();
+    let services = environment_service_deps(deps);
+    let card_service = Arc::new(services.card_service);
+    let component_repo = Arc::new(DbComponentRepo::new(pool.clone()));
+
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let component_id = ComponentId(new_repo_uuid());
+    let agent_type = AgentTypeName("agent".to_string());
+    let initial_card = PolymorphicCard {
+        card_id: CardId(new_repo_uuid()),
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at: None,
+        system_card: false,
+    };
+    let initial_card_id = initial_card.card_id;
+    let metadata = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        None,
+        None,
+        vec![],
+        BTreeMap::from([(
+            agent_type.clone(),
+            AgentTypeProvisionConfig {
+                initial_permissions: initial_card.clone(),
+                env: BTreeMap::new(),
+                config: Vec::new(),
+                plugins: Vec::new(),
+                files: Vec::new(),
+            },
+        )]),
+    );
+    component_repo
+        .create(
+            env.revision.environment_id,
+            "component-delete-runtime-race",
+            ComponentRevisionRecord {
+                component_id: component_id.0,
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(metadata),
+                object_store_key: "component-delete-runtime-race".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            vec![CardRecord::polymorphic_creation(
+                initial_card.clone(),
+                Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
+                    component_id,
+                    component_revision: ComponentRevision::INITIAL,
+                    agent_type,
+                })),
+            )],
+        )
+        .await
+        .unwrap();
+
+    let mut second_parent_id = CardId::new();
+    while second_parent_id <= initial_card_id {
+        second_parent_id = CardId::new();
+    }
+    let mut provenance = runtime_card_provenance();
+    provenance.environment_id = EnvironmentId(env.revision.environment_id);
+    card_service
+        .create_runtime_card(
+            runtime_card(second_parent_id, Vec::new()),
+            provenance.clone(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let mut blocker = pool
+        .with_rw("test", "block_second_runtime_parent")
+        .begin()
+        .await
+        .unwrap();
+    blocker
+        .execute(
+            sqlx::query("SELECT card_id FROM cards WHERE card_id = $1 FOR UPDATE")
+                .bind(second_parent_id.0),
+        )
+        .await
+        .unwrap();
+
+    let child_id = CardId::new();
+    let create_task = tokio::spawn({
+        let card_service = card_service.clone();
+        async move {
+            card_service
+                .create_runtime_card(
+                    runtime_card(child_id, vec![initial_card_id, second_parent_id]),
+                    provenance,
+                    &AuthCtx::System,
+                )
+                .await
+        }
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let delete_task = tokio::spawn({
+        let component_repo = component_repo.clone();
+        async move {
+            component_repo
+                .delete(owner.revision.account_id, component_id.0, 1)
+                .await
+        }
+    });
+
+    let mut deletion_is_blocked = false;
+    for _ in 0..100 {
+        let mut api = pool.with_ro("test", "observe_blocked_component_delete");
+        if api
+            .fetch_optional(sqlx::query(
+                "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%SELECT card_id, data, created_at, expires_at, system_card, managed_by%' AND query LIKE '%FOR UPDATE%'",
+            ))
+            .await
+            .unwrap()
+            .is_some()
+        {
+            deletion_is_blocked = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        deletion_is_blocked,
+        "failed to block component deletion on the AgentInitial root held by runtime derivation"
+    );
+
+    blocker.commit().await.unwrap();
+    create_task.await.unwrap().unwrap();
+    match delete_task.await.unwrap() {
+        Ok(_) => assert!(
+            card_service
+                .existing(vec![initial_card_id, child_id])
+                .await
+                .unwrap()
+                .is_empty(),
+            "a successful deletion must remove the AgentInitial root and concurrently committed runtime descendant"
+        ),
+        Err(ComponentRepoError::ConcurrentModification) => {}
+        Err(error) => panic!(
+            "a create/delete race must either complete atomically or use the component concurrency error category, but returned {error:?}"
+        ),
+    }
+}
+
+pub async fn test_component_deletion_racing_multi_parent_runtime_derivation(deps: &Deps) {
+    let TestDb::Postgres(pool) = &deps.test_db else {
+        panic!("this race depends on PostgreSQL row-lock semantics");
+    };
+    let pool = pool.clone();
+    let services = environment_service_deps(deps);
+    let card_service = Arc::new(services.card_service);
+    let component_repo = Arc::new(DbComponentRepo::new(pool.clone()));
+
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let component_id = ComponentId(new_repo_uuid());
+    let low_card_id = CardId(Uuid::from_u128(1));
+    let high_card_id = CardId(Uuid::from_u128(u128::MAX));
+    let high_agent_type = AgentTypeName("a-high-card".to_string());
+    let low_agent_type = AgentTypeName("b-low-card".to_string());
+    let initial_card = |card_id| PolymorphicCard {
+        card_id,
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at: None,
+        system_card: false,
+    };
+    let high_card = initial_card(high_card_id);
+    let low_card = initial_card(low_card_id);
+    let provision_config = |card: PolymorphicCard| AgentTypeProvisionConfig {
+        initial_permissions: card,
+        env: BTreeMap::new(),
+        config: Vec::new(),
+        plugins: Vec::new(),
+        files: Vec::new(),
+    };
+    let metadata = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        None,
+        None,
+        vec![],
+        BTreeMap::from([
+            (high_agent_type.clone(), provision_config(high_card.clone())),
+            (low_agent_type.clone(), provision_config(low_card.clone())),
+        ]),
+    );
+    let card_record = |card: &PolymorphicCard, agent_type| {
+        CardRecord::polymorphic_creation(
+            card.clone(),
+            Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
+                component_id,
+                component_revision: ComponentRevision::INITIAL,
+                agent_type,
+            })),
+        )
+    };
+    component_repo
+        .create(
+            env.revision.environment_id,
+            "component-delete-multi-parent-runtime-race",
+            ComponentRevisionRecord {
+                component_id: component_id.0,
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(metadata),
+                object_store_key: "component-delete-multi-parent-runtime-race".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            vec![
+                card_record(&high_card, high_agent_type),
+                card_record(&low_card, low_agent_type),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let mut blocker = pool
+        .with_rw("test", "block_high_runtime_parent")
+        .begin()
+        .await
+        .unwrap();
+    blocker
+        .execute(
+            sqlx::query("SELECT card_id FROM cards WHERE card_id = $1 FOR UPDATE")
+                .bind(high_card_id.0),
+        )
+        .await
+        .unwrap();
+
+    let delete_task = tokio::spawn({
+        let component_repo = component_repo.clone();
+        async move {
+            component_repo
+                .delete(owner.revision.account_id, component_id.0, 1)
+                .await
+        }
+    });
+    let mut deletion_is_blocked = false;
+    for _ in 0..100 {
+        let mut api = pool.with_ro("test", "observe_multi_parent_component_delete");
+        if api
+            .fetch_optional(sqlx::query(
+                "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%FROM cards%' AND query LIKE '%FOR UPDATE%'",
+            ))
+            .await
+            .unwrap()
+            .is_some()
+        {
+            deletion_is_blocked = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        deletion_is_blocked,
+        "failed to block deletion on its first AgentInitial root"
+    );
+
+    let child_id = CardId::new();
+    let mut provenance = runtime_card_provenance();
+    provenance.environment_id = EnvironmentId(env.revision.environment_id);
+    let create_task = tokio::spawn({
+        let card_service = card_service.clone();
+        async move {
+            card_service
+                .create_runtime_card(
+                    runtime_card(child_id, vec![high_card_id, low_card_id]),
+                    provenance,
+                    &AuthCtx::System,
+                )
+                .await
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    blocker.commit().await.unwrap();
+
+    let create_result = tokio::time::timeout(std::time::Duration::from_secs(5), create_task)
+        .await
+        .expect("runtime creation did not finish after PostgreSQL deadlock detection")
+        .unwrap();
+    let delete_result = tokio::time::timeout(std::time::Duration::from_secs(5), delete_task)
+        .await
+        .expect("component deletion did not finish after PostgreSQL deadlock detection")
+        .unwrap();
+
+    if let Err(error) = &create_result {
+        assert!(
+            !matches!(error, CardError::InternalError(_)),
+            "runtime derivation versus component deletion must never surface an internal error, but returned {error:?}"
+        );
+    }
+    match delete_result {
+        Ok(_) => {
+            assert!(
+                card_service
+                    .existing(vec![low_card_id, high_card_id, child_id])
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "a successful deletion must remove both roots and their runtime descendant"
+            );
+        }
+        Err(ComponentRepoError::ConcurrentModification) => {}
+        Err(error) => panic!(
+            "runtime derivation versus component deletion must use the component concurrency category, but returned {error:?}"
+        ),
+    }
+}
+
+pub async fn test_component_deletion_racing_runtime_derivation_from_descendant(deps: &Deps) {
+    let TestDb::Postgres(pool) = &deps.test_db else {
+        panic!("this race depends on PostgreSQL row-lock semantics");
+    };
+    let pool = pool.clone();
+    let services = environment_service_deps(deps);
+    let card_service = Arc::new(services.card_service);
+    let component_repo = Arc::new(DbComponentRepo::new(pool.clone()));
+
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let component_id = ComponentId(new_repo_uuid());
+    let root_id = CardId(Uuid::from_u128(u128::MAX));
+    let descendant_id = CardId(Uuid::from_u128(2));
+    let agent_type = AgentTypeName("agent".to_string());
+    let initial_card = PolymorphicCard {
+        card_id: root_id,
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at: None,
+        system_card: false,
+    };
+    let metadata = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        None,
+        None,
+        vec![],
+        BTreeMap::from([(
+            agent_type.clone(),
+            AgentTypeProvisionConfig {
+                initial_permissions: initial_card.clone(),
+                env: BTreeMap::new(),
+                config: Vec::new(),
+                plugins: Vec::new(),
+                files: Vec::new(),
+            },
+        )]),
+    );
+    component_repo
+        .create(
+            env.revision.environment_id,
+            "component-delete-descendant-parent-race",
+            ComponentRevisionRecord {
+                component_id: component_id.0,
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(metadata),
+                object_store_key: "component-delete-descendant-parent-race".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            vec![CardRecord::polymorphic_creation(
+                initial_card,
+                Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
+                    component_id,
+                    component_revision: ComponentRevision::INITIAL,
+                    agent_type,
+                })),
+            )],
+        )
+        .await
+        .unwrap();
+
+    let mut provenance = runtime_card_provenance();
+    provenance.environment_id = EnvironmentId(env.revision.environment_id);
+    card_service
+        .create_runtime_card(
+            runtime_card(descendant_id, vec![root_id]),
+            provenance.clone(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let mut blocker = pool
+        .with_rw("test", "block_runtime_descendant_parent")
+        .begin()
+        .await
+        .unwrap();
+    blocker
+        .execute(
+            sqlx::query("SELECT card_id FROM cards WHERE card_id = $1 FOR UPDATE")
+                .bind(descendant_id.0),
+        )
+        .await
+        .unwrap();
+
+    let child_id = CardId::new();
+    let create_task = tokio::spawn({
+        let card_service = card_service.clone();
+        async move {
+            card_service
+                .create_runtime_card(
+                    runtime_card(child_id, vec![descendant_id, root_id]),
+                    provenance,
+                    &AuthCtx::System,
+                )
+                .await
+        }
+    });
+    let mut creation_is_blocked = false;
+    for _ in 0..100 {
+        let mut api = pool.with_ro("test", "observe_blocked_descendant_parent_create");
+        if api
+            .fetch_optional(sqlx::query(
+                "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%FROM cards%' AND query LIKE '%FOR UPDATE%'",
+            ))
+            .await
+            .unwrap()
+            .is_some()
+        {
+            creation_is_blocked = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        creation_is_blocked,
+        "failed to block creation on the descendant"
+    );
+
+    let delete_task = tokio::spawn({
+        let component_repo = component_repo.clone();
+        async move {
+            component_repo
+                .delete(owner.revision.account_id, component_id.0, 1)
+                .await
+        }
+    });
+    let mut deletion_is_blocked = false;
+    for _ in 0..100 {
+        let mut api = pool.with_ro("test", "observe_descendant_component_delete");
+        if api
+            .fetch_optional(sqlx::query(
+                "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%WITH RECURSIVE to_delete%'",
+            ))
+            .await
+            .unwrap()
+            .is_some()
+        {
+            deletion_is_blocked = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        deletion_is_blocked,
+        "failed to block deletion on the runtime descendant"
+    );
+
+    blocker.commit().await.unwrap();
+    let create_result = tokio::time::timeout(std::time::Duration::from_secs(5), create_task)
+        .await
+        .expect("runtime creation did not finish after PostgreSQL deadlock detection")
+        .unwrap();
+    let delete_result = tokio::time::timeout(std::time::Duration::from_secs(5), delete_task)
+        .await
+        .expect("component deletion did not finish after PostgreSQL deadlock detection")
+        .unwrap();
+
+    if let Err(error) = &create_result {
+        assert!(
+            !matches!(error, CardError::InternalError(_)),
+            "runtime derivation versus component deletion must never surface an internal error, but returned {error:?}"
+        );
+    }
+    match delete_result {
+        Ok(_) => assert!(
+            card_service
+                .existing(vec![root_id, descendant_id, child_id])
+                .await
+                .unwrap()
+                .is_empty(),
+            "a successful deletion must remove the root and all runtime descendants"
+        ),
+        Err(ComponentRepoError::ConcurrentModification) => {}
+        Err(error) => panic!(
+            "runtime derivation versus component deletion must use the component concurrency category, but returned {error:?}"
+        ),
+    }
+}
+
+pub async fn test_environment_deletion_racing_runtime_derivation_from_descendant(deps: &Deps) {
+    let TestDb::Postgres(pool) = &deps.test_db else {
+        panic!("this race depends on PostgreSQL row-lock and statement-snapshot semantics");
+    };
+    let pool = pool.clone();
+    let services = environment_service_deps(deps);
+    let environment_service = services.environment_service.clone();
+    let card_service = Arc::new(services.card_service);
+
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = environment_service
+        .create(
+            ApplicationId(app.revision.application_id),
+            EnvironmentCreation {
+                name: EnvironmentName("environment-runtime-delete-race".to_string()),
+                compatibility_check: false,
+                version_check: false,
+                security_overrides: false,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    let default_card_id = deps
+        .environment_repo
+        .get_default_card_ref_by_environment(env.id.0)
+        .await
+        .unwrap()
+        .unwrap()
+        .card_id;
+
+    let descendant_id = CardId::new();
+    let mut provenance = runtime_card_provenance();
+    provenance.environment_id = env.id;
+    card_service
+        .create_runtime_card(
+            runtime_card(descendant_id, vec![default_card_id]),
+            provenance.clone(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let mut blocker = pool
+        .with_rw("test", "block_environment_runtime_descendant_parent")
+        .begin()
+        .await
+        .unwrap();
+    blocker
+        .execute(
+            sqlx::query("SELECT card_id FROM cards WHERE card_id = $1 FOR UPDATE")
+                .bind(descendant_id.0),
+        )
+        .await
+        .unwrap();
+
+    let child_id = CardId::new();
+    let create_task = tokio::spawn({
+        let card_service = card_service.clone();
+        async move {
+            card_service
+                .create_runtime_card(
+                    runtime_card(child_id, vec![descendant_id]),
+                    provenance,
+                    &AuthCtx::System,
+                )
+                .await
+        }
+    });
+    let mut creation_is_blocked = false;
+    for _ in 0..100 {
+        let mut api = pool.with_ro("test", "observe_blocked_environment_child_create");
+        if api
+            .fetch_optional(sqlx::query(
+                "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%FROM cards%' AND query LIKE '%FOR UPDATE%'",
+            ))
+            .await
+            .unwrap()
+            .is_some()
+        {
+            creation_is_blocked = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        creation_is_blocked,
+        "failed to block runtime creation on the existing descendant"
+    );
+
+    let delete_task = tokio::spawn({
+        let environment_service = environment_service.clone();
+        async move {
+            environment_service
+                .delete(env.id, env.revision, &AuthCtx::System)
+                .await
+        }
+    });
+    let mut deletion_is_blocked = false;
+    for _ in 0..100 {
+        let mut api = pool.with_ro("test", "observe_blocked_environment_delete");
+        if api
+            .fetch_optional(sqlx::query(
+                "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%WITH RECURSIVE to_delete%'",
+            ))
+            .await
+            .unwrap()
+            .is_some()
+        {
+            deletion_is_blocked = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        deletion_is_blocked,
+        "failed to block environment deletion on the runtime descendant"
+    );
+
+    blocker.commit().await.unwrap();
+    create_task.await.unwrap().unwrap();
+    let delete_result = delete_task.await.unwrap();
+
+    match delete_result {
+        Ok(()) => assert!(
+            card_service
+                .existing(vec![default_card_id, descendant_id, child_id])
+                .await
+                .unwrap()
+                .is_empty(),
+            "a successful environment deletion must remove the default-card DAG"
+        ),
+        Err(EnvironmentError::ConcurrentModification) => assert_eq!(
+            card_service
+                .existing(vec![default_card_id, descendant_id, child_id])
+                .await
+                .unwrap(),
+            vec![default_card_id, descendant_id, child_id],
+            "a rejected environment deletion must roll back the revocation boundary"
+        ),
+        Err(error) => panic!(
+            "runtime derivation versus environment deletion must complete atomically or use the environment concurrency category, but returned {error:?}"
+        ),
+    }
+}
 
 pub async fn test_create_and_get_account(deps: &Deps) {
     let account = AccountRevisionRecord {
@@ -954,6 +2048,194 @@ pub async fn test_deleted_environment_default_card_is_not_reported_existing(deps
     );
 }
 
+pub async fn test_runtime_descendants_of_deleted_environment_default_card_are_not_live(
+    deps: &Deps,
+) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let services = environment_service_deps(deps);
+
+    let env = services
+        .environment_service
+        .create(
+            ApplicationId(app.revision.application_id),
+            EnvironmentCreation {
+                name: EnvironmentName("env".to_string()),
+                compatibility_check: false,
+                version_check: false,
+                security_overrides: false,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let refs = deps
+        .environment_repo
+        .list_default_card_refs_by_account(owner.revision.account_id)
+        .await
+        .unwrap();
+    assert_eq!(refs.len(), 1);
+    let default_card_id = refs[0].card_id;
+
+    let child_id = CardId::new();
+    let mut provenance = runtime_card_provenance();
+    provenance.environment_id = env.id;
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(child_id, vec![default_card_id]),
+            provenance.clone(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    services
+        .environment_service
+        .delete(env.id, env.revision, &AuthCtx::System)
+        .await
+        .unwrap();
+
+    assert!(
+        services
+            .card_service
+            .existing(vec![default_card_id, child_id])
+            .await
+            .unwrap()
+            .is_empty(),
+        "revoking a parent must also make its runtime descendants non-live"
+    );
+
+    let grandchild_id = CardId::new();
+    let error = services
+        .card_service
+        .create_runtime_card(
+            runtime_card(grandchild_id, vec![child_id]),
+            provenance,
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CardError::CardNotFound(card_id) if card_id == child_id));
+}
+
+pub async fn test_environment_deletion_revokes_component_card_runtime_descendants(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let services = environment_service_deps(deps);
+    let env = services
+        .environment_service
+        .create(
+            ApplicationId(app.revision.application_id),
+            EnvironmentCreation {
+                name: EnvironmentName("env-with-component-card".to_string()),
+                compatibility_check: false,
+                version_check: false,
+                security_overrides: false,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let component_id = ComponentId(new_repo_uuid());
+    let agent_type = AgentTypeName("agent".to_string());
+    let initial_card = PolymorphicCard {
+        card_id: CardId(new_repo_uuid()),
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at: None,
+        system_card: false,
+    };
+    let metadata = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        None,
+        None,
+        vec![],
+        BTreeMap::from([(
+            agent_type.clone(),
+            AgentTypeProvisionConfig {
+                initial_permissions: initial_card.clone(),
+                env: BTreeMap::new(),
+                config: Vec::new(),
+                plugins: Vec::new(),
+                files: Vec::new(),
+            },
+        )]),
+    );
+    deps.component_repo
+        .create(
+            env.id.0,
+            "component",
+            ComponentRevisionRecord {
+                component_id: component_id.0,
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(metadata),
+                object_store_key: "component".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            vec![CardRecord::polymorphic_creation(
+                initial_card.clone(),
+                Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
+                    component_id,
+                    component_revision: ComponentRevision::INITIAL,
+                    agent_type,
+                })),
+            )],
+        )
+        .await
+        .unwrap();
+
+    let child_id = CardId::new();
+    let mut provenance = runtime_card_provenance();
+    provenance.environment_id = env.id;
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(child_id, vec![initial_card.card_id]),
+            provenance.clone(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    services
+        .environment_service
+        .delete(env.id, env.revision, &AuthCtx::System)
+        .await
+        .unwrap();
+
+    let grandchild_id = CardId::new();
+    let creation = services
+        .card_service
+        .create_runtime_card(
+            runtime_card(grandchild_id, vec![child_id]),
+            provenance,
+            &AuthCtx::System,
+        )
+        .await;
+    let existing = services
+        .card_service
+        .existing(vec![initial_card.card_id, child_id, grandchild_id])
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(creation, Err(CardError::CardNotFound(card_id)) if card_id == child_id)
+            && existing.is_empty(),
+        "environment deletion must revoke component cards and their runtime descendants; creation result: {creation:?}, existing cards: {existing:?}"
+    );
+}
+
 pub async fn test_environment_default_card_tracks_environment_rename(deps: &Deps) {
     let owner = deps.create_account().await;
     let app = deps.create_application(owner.revision.account_id).await;
@@ -1471,7 +2753,8 @@ pub async fn test_component_stage(deps: &Deps) {
     deps.component_repo
         .delete(user.revision.account_id, component_id, 2)
         .await
-        .unwrap();
+        .unwrap()
+        .signal_new_events_available(deps.test_registry_change_notifier().as_ref());
 
     let components = deps
         .component_repo
@@ -1558,14 +2841,7 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
                 binary_hash: SqlBlake3Hash::empty(),
             },
             vec![CardRecord::polymorphic_creation(
-                initial_card.card_id,
-                initial_card.parent_ids.clone(),
-                initial_card.lower_positive.clone(),
-                initial_card.lower_negative.clone(),
-                initial_card.upper_positive.clone(),
-                initial_card.upper_negative.clone(),
-                initial_card.expires_at,
-                initial_card.system_card,
+                initial_card.clone(),
                 Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
                     component_id,
                     component_revision: ComponentRevision::INITIAL,
@@ -1601,7 +2877,7 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
     assert_eq!(ids, vec![initial_card.card_id]);
 }
 
-pub async fn test_agent_initial_card_removed_from_current_component_is_not_live(deps: &Deps) {
+pub async fn test_agent_initial_card_from_older_component_revision_remains_live(deps: &Deps) {
     let owner = deps.create_account().await;
     let app = deps.create_application(owner.revision.account_id).await;
     let env = deps.create_env(app.revision.application_id).await;
@@ -1653,20 +2929,26 @@ pub async fn test_agent_initial_card_removed_from_current_component_is_not_live(
                 binary_hash: SqlBlake3Hash::empty(),
             },
             vec![CardRecord::polymorphic_creation(
-                initial_card.card_id,
-                initial_card.parent_ids.clone(),
-                initial_card.lower_positive.clone(),
-                initial_card.lower_negative.clone(),
-                initial_card.upper_positive.clone(),
-                initial_card.upper_negative.clone(),
-                initial_card.expires_at,
-                initial_card.system_card,
+                initial_card.clone(),
                 Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
                     component_id,
                     component_revision: ComponentRevision::INITIAL,
                     agent_type: agent_type.clone(),
                 })),
             )],
+        )
+        .await
+        .unwrap();
+
+    let derived_parent_id = CardId::new();
+    let mut provenance = runtime_card_provenance();
+    provenance.environment_id = EnvironmentId(env.revision.environment_id);
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(derived_parent_id, vec![initial_card.card_id]),
+            provenance.clone(),
+            &AuthCtx::System,
         )
         .await
         .unwrap();
@@ -1710,26 +2992,67 @@ pub async fn test_agent_initial_card_removed_from_current_component_is_not_live(
     assert_eq!(
         ids,
         Vec::<CardId>::new(),
-        "agent-initial cards removed from the current live component revision must not remain account cards"
+        "the staged-card listing follows the current component revision"
     );
 
-    assert!(
+    assert_eq!(
         services
             .card_service
             .get_cards(vec![initial_card.card_id])
             .await
             .unwrap()
-            .is_empty(),
-        "agent-initial cards removed from the current live component revision must not remain live through batch_get_cards"
+            .into_iter()
+            .map(|card| card.card_id())
+            .collect::<Vec<_>>(),
+        vec![initial_card.card_id],
+        "agents can keep using cards from their component revision after a newer revision is staged"
     );
-    assert!(
+    assert_eq!(
         services
             .card_service
             .existing(vec![initial_card.card_id])
             .await
-            .unwrap()
-            .is_empty(),
-        "agent-initial cards removed from the current live component revision must not be reported as existing"
+            .unwrap(),
+        vec![initial_card.card_id],
+        "older-revision agent-initial cards remain authoritative"
+    );
+
+    let card_repo: Arc<dyn CardRepo> = match &deps.test_db {
+        TestDb::Postgres(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+        TestDb::Sqlite(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+    };
+    assert!(
+        card_repo.get(initial_card.card_id).await.unwrap().is_some(),
+        "the older revision's agent-initial card remains physically stored"
+    );
+    let child_id = CardId::new();
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(child_id, vec![initial_card.card_id]),
+            runtime_card_provenance(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    assert!(
+        card_repo.get(child_id).await.unwrap().is_some(),
+        "runtime derivation from an older-revision agent-initial card remains valid"
+    );
+
+    let transitive_child_id = CardId::new();
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(transitive_child_id, vec![derived_parent_id]),
+            provenance,
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    assert!(
+        card_repo.get(transitive_child_id).await.unwrap().is_some(),
+        "runtime descendants of an older-revision card remain live"
     );
 
     let account_cards = services
@@ -1748,7 +3071,7 @@ pub async fn test_agent_initial_card_removed_from_current_component_is_not_live(
         .unwrap();
     assert!(
         account_cards.is_empty(),
-        "account card listing filtered to agent-initial cards must follow the current live component revision"
+        "account card listing is a view of the currently staged component revision"
     );
 }
 
@@ -1803,14 +3126,7 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_deleted_compon
                 binary_hash: SqlBlake3Hash::empty(),
             },
             vec![CardRecord::polymorphic_creation(
-                initial_card.card_id,
-                initial_card.parent_ids.clone(),
-                initial_card.lower_positive.clone(),
-                initial_card.lower_negative.clone(),
-                initial_card.upper_positive.clone(),
-                initial_card.upper_negative.clone(),
-                initial_card.expires_at,
-                initial_card.system_card,
+                initial_card.clone(),
                 Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
                     component_id,
                     component_revision: ComponentRevision::INITIAL,
@@ -1831,7 +3147,8 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_deleted_compon
     deps.component_repo
         .delete(owner.revision.account_id, component_id.0, 1)
         .await
-        .unwrap();
+        .unwrap()
+        .signal_new_events_available(deps.test_registry_change_notifier().as_ref());
 
     let ids = deps
         .component_repo
@@ -1893,14 +3210,7 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
                 binary_hash: SqlBlake3Hash::empty(),
             },
             vec![CardRecord::polymorphic_creation(
-                initial_card.card_id,
-                initial_card.parent_ids.clone(),
-                initial_card.lower_positive.clone(),
-                initial_card.lower_negative.clone(),
-                initial_card.upper_positive.clone(),
-                initial_card.upper_negative.clone(),
-                initial_card.expires_at,
-                initial_card.system_card,
+                initial_card.clone(),
                 Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
                     component_id,
                     component_revision: ComponentRevision::INITIAL,
@@ -1922,7 +3232,8 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
     deps.component_repo
         .delete(owner.revision.account_id, component_id.0, 1)
         .await
-        .unwrap();
+        .unwrap()
+        .signal_new_events_available(deps.test_registry_change_notifier().as_ref());
 
     assert!(
         deps.component_repo
@@ -1948,6 +3259,120 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
             .unwrap()
             .is_empty(),
         "deleted component agent-initial cards are no longer account cards and must not remain live through existing"
+    );
+}
+
+pub async fn test_component_delete_does_not_revoke_reused_agent_initial_card_id(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let services = environment_service_deps(deps);
+
+    let component_id = ComponentId(new_repo_uuid());
+    let agent_type = AgentTypeName("agent".to_string());
+    let reused_card_id = CardId(new_repo_uuid());
+    let initial_card = PolymorphicCard {
+        card_id: reused_card_id,
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at: None,
+        system_card: false,
+    };
+    let metadata = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        None,
+        None,
+        vec![],
+        BTreeMap::from([(
+            agent_type.clone(),
+            AgentTypeProvisionConfig {
+                initial_permissions: initial_card.clone(),
+                env: BTreeMap::new(),
+                config: Vec::new(),
+                plugins: Vec::new(),
+                files: Vec::new(),
+            },
+        )]),
+    );
+
+    deps.component_repo
+        .create(
+            env.revision.environment_id,
+            "component-with-reused-card-id",
+            ComponentRevisionRecord {
+                component_id: component_id.0,
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(metadata),
+                object_store_key: "component-with-reused-card-id".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            vec![CardRecord::polymorphic_creation(
+                initial_card.clone(),
+                Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
+                    component_id,
+                    component_revision: ComponentRevision::INITIAL,
+                    agent_type,
+                })),
+            )],
+        )
+        .await
+        .unwrap();
+
+    services
+        .card_service
+        .revoke_card(reused_card_id, &AuthCtx::System)
+        .await
+        .unwrap();
+
+    let mut provenance = runtime_card_provenance();
+    provenance.environment_id = EnvironmentId(env.revision.environment_id);
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(reused_card_id, Vec::new()),
+            provenance.clone(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    let child_id = CardId::new();
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(child_id, vec![reused_card_id]),
+            provenance,
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let deleted = deps
+        .component_repo
+        .delete(owner.revision.account_id, component_id.0, 1)
+        .await
+        .unwrap()
+        .signal_new_events_available(deps.test_registry_change_notifier().as_ref());
+
+    assert!(
+        !deleted.contains(&reused_card_id) && !deleted.contains(&child_id),
+        "component deletion must only revoke roots still managed as AgentInitial cards and their descendants"
+    );
+    assert_eq!(
+        services
+            .card_service
+            .existing(vec![reused_card_id, child_id])
+            .await
+            .unwrap(),
+        vec![reused_card_id, child_id],
+        "reusing a revoked card ID for an unrelated runtime card must not make it part of the component's revocation tree"
     );
 }
 
@@ -2005,14 +3430,7 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
                 binary_hash: SqlBlake3Hash::empty(),
             },
             vec![CardRecord::polymorphic_creation(
-                initial_card.card_id,
-                initial_card.parent_ids.clone(),
-                initial_card.lower_positive.clone(),
-                initial_card.lower_negative.clone(),
-                initial_card.upper_positive.clone(),
-                initial_card.upper_negative.clone(),
-                initial_card.expires_at,
-                initial_card.system_card,
+                initial_card.clone(),
                 Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
                     component_id,
                     component_revision: ComponentRevision::INITIAL,
@@ -2023,10 +3441,24 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
         .await
         .unwrap();
 
+    let descendant_id = CardId::new();
+    let mut provenance = runtime_card_provenance();
+    provenance.environment_id = EnvironmentId(env.revision.environment_id);
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(descendant_id, vec![initial_card.card_id]),
+            provenance.clone(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
     deps.component_repo
         .delete(owner.revision.account_id, component_id.0, 1)
         .await
-        .unwrap();
+        .unwrap()
+        .signal_new_events_available(deps.test_registry_change_notifier().as_ref());
 
     deps.component_repo
         .create(
@@ -2075,6 +3507,38 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
             .is_empty(),
         "agent-initial cards from a deleted component incarnation must not be reported as existing after same-name recreation"
     );
+
+    assert!(
+        services
+            .card_service
+            .existing(vec![descendant_id])
+            .await
+            .unwrap()
+            .is_empty(),
+        "runtime descendants from a deleted component incarnation must not remain authoritative after same-name recreation"
+    );
+
+    let rejected_card_id = CardId::new();
+    let error = services
+        .card_service
+        .create_runtime_card(
+            runtime_card(rejected_card_id, vec![descendant_id]),
+            provenance,
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CardError::CardNotFound(id) if id == descendant_id));
+
+    let card_repo: Arc<dyn CardRepo> = match &deps.test_db {
+        TestDb::Postgres(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+        TestDb::Sqlite(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+    };
+    assert!(
+        card_repo.get(descendant_id).await.unwrap().is_none(),
+        "component deletion must physically remove runtime descendants"
+    );
+    assert!(card_repo.get(rejected_card_id).await.unwrap().is_none());
 }
 
 pub async fn test_http_api_deployment_stage(deps: &Deps) {
