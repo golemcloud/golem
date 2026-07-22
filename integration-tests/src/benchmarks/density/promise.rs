@@ -274,6 +274,7 @@ async fn complete_at_rate(
     let mut restages = JoinSet::new();
     let mut minimum_ready_depth = PROMISE_POOL_SIZE;
     let mut starvation_count = 0;
+    let mut scheduled_completions = 0;
     for index in 0..count {
         tokio::time::sleep_until(
             (started + Duration::from_secs_f64(index as f64 / rate as f64)).into(),
@@ -298,6 +299,7 @@ async fn complete_at_rate(
         let restage_sender = restage_sender.clone();
         let completion_limit = completion_limit.clone();
         let staging_limit = staging_limit.clone();
+        scheduled_completions += 1;
         restages.spawn(async move {
             let latency = {
                 let _permit = completion_limit.acquire_owned().await?;
@@ -330,8 +332,12 @@ async fn complete_at_rate(
     drop(completion_sender);
     drop(restage_sender);
 
-    let mut completion_latencies = Vec::with_capacity(count - starvation_count);
-    while let Ok(completion) = completion_receiver.try_recv() {
+    let mut completion_latencies = Vec::with_capacity(scheduled_completions);
+    while completion_latencies.len() < scheduled_completions {
+        let completion = completion_receiver
+            .recv()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("completion producer stopped"))?;
         completion_latencies.push(completion?);
     }
     restages.abort_all();
