@@ -217,12 +217,12 @@ async fn stage_work(
 ) -> anyhow::Result<(PromiseWork, StageTimings)> {
     let get_promise_started = Instant::now();
     let result = user
-        .invoke_and_await_agent(component, &parsed_agent, "get-promise", data_value!())
+        .invoke_and_await_agent(component, &parsed_agent, "get_promise", data_value!())
         .await?;
     let get_promise = get_promise_started.elapsed();
     let promise_value = result
         .into_return_value_and_type()
-        .ok_or_else(|| anyhow::anyhow!("get-promise returned no promise id"))?;
+        .ok_or_else(|| anyhow::anyhow!("get_promise returned no promise id"))?;
     let promise = PromiseId::from_value(promise_value.value.clone())
         .map_err(|error| anyhow::anyhow!("invalid promise id: {error}"))?;
     let (await_promise, suspended_wait) = if wait {
@@ -230,7 +230,7 @@ async fn stage_work(
         user.invoke_agent(
             component,
             &parsed_agent,
-            "await-promise",
+            "await_promise",
             data_value!(promise_value.clone()),
         )
         .await?;
