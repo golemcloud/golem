@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path';
 // rewrite the generated manifest after generation.
 // ---------------------------------------------------------------------------
 const WIT_BINDGEN_GIT = 'https://github.com/golemcloud/wit-bindgen';
-const WIT_BINDGEN_REV = 'af9743984748cc5d9ec0b3498bb6f70b623d0405';
+const WIT_BINDGEN_REV = '4407232ead86d9bcbd06cbebd790a52120a4087a';
 
 function useForkedWitBindgen(cargoTomlPath) {
   const original = readFileSync(cargoTomlPath, 'utf8');
@@ -18,7 +18,7 @@ function useForkedWitBindgen(cargoTomlPath) {
   const witBindgenLine =
     'wit-bindgen = { version = "0.42.1", default-features = false, features = ["macros"] }';
   const witBindgenRtLine = 'wit-bindgen-rt = { version = "0.42.1", features = ["bitflags"] }';
-  const forkedLine = `wit-bindgen = { git = "${WIT_BINDGEN_GIT}", rev = "${WIT_BINDGEN_REV}", version = "=0.58.0", default-features = false, features = ["macros"] }`;
+  const forkedLine = `wit-bindgen = { git = "${WIT_BINDGEN_GIT}", rev = "${WIT_BINDGEN_REV}", version = "=0.59.0", default-features = false, features = ["macros"] }`;
 
   const witBindgenCount = original.split(witBindgenLine).length - 1;
   if (witBindgenCount !== 1) {

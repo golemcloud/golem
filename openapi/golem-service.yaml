@@ -10546,7 +10546,8 @@ components:
           type: string
         agentTypeName:
           type: string
-        parameters: {}
+        parameters:
+          $ref: '#/components/schemas/SchemaValue'
         phantomId:
           type: string
           format: uuid
@@ -10557,7 +10558,8 @@ components:
             $ref: '#/components/schemas/AgentConfigEntryDto'
         methodName:
           type: string
-        methodParameters: {}
+        methodParameters:
+          $ref: '#/components/schemas/SchemaValue'
         mode:
           $ref: '#/components/schemas/AgentInvocationMode'
         scheduleAt:
@@ -11676,7 +11678,8 @@ components:
           type: string
         agentTypeName:
           type: string
-        parameters: {}
+        parameters:
+          $ref: '#/components/schemas/SchemaValue'
         phantomId:
           type: string
           format: uuid
