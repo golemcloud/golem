@@ -1,6 +1,6 @@
 # Promise-completion density on one worker-executor pod. The workflow drives
 # each cell independently and passes these values to `benchmarks density`.
-# Focused warm-path rerun capturing executor storage and network peer attribution.
+# Focused warm-path rerun after worker system-EBS baseline increase.
 name: cloud-density-promise-1pod
 section: promise
 defaultRamp: [2, 4, 8, 16, 32, 64, 128, 256]
