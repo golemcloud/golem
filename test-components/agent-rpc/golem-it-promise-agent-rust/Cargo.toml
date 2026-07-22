@@ -3,6 +3,8 @@ name = "golem_it_promise_agent_rust"
 version = "0.0.1"
 edition = "2024"
 
+[workspace]
+
 [profile.release]
 opt-level = "s"
 lto = true
