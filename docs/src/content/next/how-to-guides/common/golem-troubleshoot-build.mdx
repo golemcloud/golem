@@ -62,14 +62,11 @@ If dependencies are outdated or missing required features, the CLI shows a diff 
 ### TypeScript Dependency Checks
 The CLI inspects the root `package.json` for:
 - **`@golemcloud/golem-ts-sdk`** — must be present with a compatible version
-- **`@golemcloud/golem-ts-typegen`** (devDependency) — must be present
-- **Rollup plugins** (`@rollup/plugin-alias`, `@rollup/plugin-node-resolve`, `@rollup/plugin-typescript`, `@rollup/plugin-commonjs`, `@rollup/plugin-json`) — version compatibility checked
+- **Rollup plugins** (`@rollup/plugin-node-resolve`, `@rollup/plugin-typescript`, `@rollup/plugin-commonjs`, `@rollup/plugin-json`) — version compatibility checked
 - **`typescript`**, **`rollup`**, **`tslib`**, **`@types/node`** — version compatibility checked
 
 The CLI also validates `tsconfig.json` settings:
 - `compilerOptions.moduleResolution` must be `"bundler"`
-- `compilerOptions.experimentalDecorators` must be `true`
-- `compilerOptions.emitDecoratorMetadata` must be `true`
 
 ### AGENTS.md and Skill Files
 The CLI checks that the project's `AGENTS.md` and `.agents/skills/` directory contain up-to-date content matching the current CLI version's templates. If they are stale, the CLI updates them automatically during the build.
@@ -104,7 +101,7 @@ Fix: `rustup target add wasm32-wasip2`
 The CLI shows a diff of the changes it wants to make. Review the diff — it will update version numbers or add missing features. Pass `--yes` to auto-accept.
 
 ### TypeScript `tsconfig.json` Issues
-If `moduleResolution` is not set to `"bundler"` or decorator settings are missing, the build will fail during type checking. The CLI auto-fixes these during the check step.
+If `moduleResolution` is not set to `"bundler"`, the build will fail during type checking. The CLI auto-fixes this during the check step.
 
 ### Up-to-Date Check Confusion
 `golem build` tracks file hashes to skip unchanged steps. If files were modified outside the build (e.g., by `cargo build`), the check may be stale. Force a full rebuild:

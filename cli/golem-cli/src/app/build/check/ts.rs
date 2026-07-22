@@ -224,11 +224,6 @@ fn typescript_sdk_requirements(
             Required,
         ),
         Req::dev_dependency(
-            "@rollup/plugin-alias",
-            pinned(ts_dep::ROLLUP_PLUGIN_ALIAS),
-            Required,
-        ),
-        Req::dev_dependency(
             "@rollup/plugin-node-resolve",
             pinned(ts_dep::ROLLUP_PLUGIN_NODE_RESOLVE),
             Required,
