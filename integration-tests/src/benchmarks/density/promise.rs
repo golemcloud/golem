@@ -91,13 +91,13 @@ pub async fn run_cell(
     let user = manifest.user_context(deps);
     let payload = vec![0; config.payload_size];
     let mut outcome = Outcome::default();
+    println!(
+        "Promise-density [{}]: preparing {PROMISE_POOL_SIZE} workers",
+        config.cell_name()
+    );
+    let (ready_sender, mut ready_work) = create_work_pool(&user, &component, config).await?;
 
     for &rate in rates {
-        println!(
-            "Promise-density [{}]: preparing {PROMISE_POOL_SIZE} workers for {rate}/s",
-            config.cell_name()
-        );
-        let (ready_sender, ready_work) = create_work_pool(&user, &component, config).await?;
         println!(
             "Promise-density [{}]: completing at {rate}/s",
             config.cell_name()
@@ -105,8 +105,8 @@ pub async fn run_cell(
         let period = complete_at_rate(
             &user,
             &component,
-            ready_sender,
-            ready_work,
+            &ready_sender,
+            &mut ready_work,
             payload.clone(),
             rate,
         )
@@ -114,6 +114,8 @@ pub async fn run_cell(
         outcome.record(rate, period);
     }
 
+    drop(ready_sender);
+    drop(ready_work);
     cleanup_pool(&user, &component, config).await?;
     Ok(outcome.into_benchmark_result(config))
 }
@@ -258,8 +260,8 @@ async fn stage_work(
 async fn complete_at_rate(
     user: &TestUserContext<BenchmarkTestDependencies>,
     component: &ComponentDto,
-    ready_sender: mpsc::Sender<anyhow::Result<PromiseWork>>,
-    mut ready_work: mpsc::Receiver<anyhow::Result<PromiseWork>>,
+    ready_sender: &mpsc::Sender<anyhow::Result<PromiseWork>>,
+    ready_work: &mut mpsc::Receiver<anyhow::Result<PromiseWork>>,
     payload: Vec<u8>,
     rate: u32,
 ) -> anyhow::Result<Period> {
@@ -294,7 +296,7 @@ async fn complete_at_rate(
         let user = user.clone();
         let component = component.clone();
         let payload = payload.clone();
-        let ready_sender = ready_sender.clone();
+        let ready_sender = (*ready_sender).clone();
         let completion_sender = completion_sender.clone();
         let restage_sender = restage_sender.clone();
         let completion_limit = completion_limit.clone();
@@ -340,7 +342,6 @@ async fn complete_at_rate(
             .ok_or_else(|| anyhow::anyhow!("completion producer stopped"))?;
         completion_latencies.push(completion?);
     }
-    restages.abort_all();
     while let Some(restage) = restages.join_next().await {
         match restage {
             Ok(Ok(())) => {}
@@ -360,7 +361,6 @@ async fn complete_at_rate(
         restage_timings.len(),
     );
 
-    drop(ready_sender);
     Ok(Period {
         completed: completion_latencies.len() as u64,
         elapsed: deadline.duration_since(started),
