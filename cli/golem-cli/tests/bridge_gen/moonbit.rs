@@ -33,8 +33,9 @@ use golem_common::model::agent::{AgentConfigSource, AgentMode};
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NumericBound, NumericRestrictions,
-    PathDirection, PathKind, PathSpec, QuantitySpec, QuantityValue, QuotaTokenSpec, SecretSpec,
-    TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
+    PathDirection, PathKind, PathSpec, PermissionCardSpec, QuantitySpec, QuantityValue,
+    QuotaTokenSpec, SecretSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
+    VariantCaseType,
 };
 use golem_common::schema::tool::{
     CommandBody, CommandIndex, CommandNode, CommandTree, Doc, ErrorCase, ErrorKind, Formatter,
@@ -1009,6 +1010,10 @@ fn schema_graph_literal_moon_checks_as_sdk_model() {
                 SchemaType::quota_token(QuotaTokenSpec {
                     resource_name: Some("cpu".into()),
                 }),
+            ),
+            named_field(
+                "permission-card",
+                SchemaType::permission_card(PermissionCardSpec { polymorphic: true }),
             ),
             named_field("future", SchemaType::future(Some(SchemaType::u32()))),
             named_field("stream", SchemaType::stream(None)),

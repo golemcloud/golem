@@ -911,7 +911,8 @@ fn generate_method_code(
 
             let rpc_result_future = self.wasm_rpc.async_invoke_and_await(
                 #remote_token,
-                input
+                input,
+                None
             ).future;
 
             let rpc_result: Result<Option<golem_rust::SchemaValue>, golem_rust::golem_agentic::golem::agent::host::RpcError> =
@@ -927,7 +928,7 @@ fn generate_method_code(
             #encode_input
 
             let rpc_result: Result<(), golem_rust::golem_agentic::golem::agent::host::RpcError> =
-                self.wasm_rpc.invoke(#remote_token, input).map(|_| ());
+                self.wasm_rpc.invoke(#remote_token, input, None).map(|_| ());
 
             rpc_result.unwrap_or_else(|e| panic!("rpc call to trigger {} failed: {:?}", #remote_token, e));
         }
@@ -938,7 +939,8 @@ fn generate_method_code(
             self.wasm_rpc.schedule_invocation(
                 #scheduled_time_param,
                 #remote_token,
-                input
+                input,
+                None
             );
         }
 
@@ -948,7 +950,8 @@ fn generate_method_code(
             self.wasm_rpc.schedule_cancelable_invocation(
                 #scheduled_time_param,
                 #remote_token,
-                input
+                input,
+                None
             ).cancellation_token
         }
         };
@@ -957,7 +960,7 @@ fn generate_method_code(
     quote! {
         pub async fn #method_name(#(#input_defs),*) -> golem_rust::agentic::EphemeralInvocationResult<#return_type> {
             #encode_input
-            let invocation = self.wasm_rpc.async_invoke_and_await(#remote_token, input);
+            let invocation = self.wasm_rpc.async_invoke_and_await(#remote_token, input, None);
             let metadata = invocation.metadata;
             let rpc_result: Result<Option<golem_rust::SchemaValue>, golem_rust::golem_agentic::golem::agent::host::RpcError> =
                 golem_rust::agentic::await_invoke_schema_value_result(invocation.future).await;
@@ -968,18 +971,18 @@ fn generate_method_code(
 
         pub fn #trigger_name(#(#input_defs),*) -> golem_rust::golem_agentic::golem::agent::host::InvocationMetadata {
             #encode_input
-            self.wasm_rpc.invoke(#remote_token, input)
+            self.wasm_rpc.invoke(#remote_token, input, None)
                 .unwrap_or_else(|e| panic!("rpc call to trigger {} failed: {:?}", #remote_token, e))
         }
 
         pub fn #schedule_name(#(#input_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) -> golem_rust::golem_agentic::golem::agent::host::InvocationMetadata {
             #encode_input
-            self.wasm_rpc.schedule_invocation(#scheduled_time_param, #remote_token, input).metadata
+            self.wasm_rpc.schedule_invocation(#scheduled_time_param, #remote_token, input, None).metadata
         }
 
         pub fn #schedule_cancelable_name(#(#input_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) -> golem_rust::golem_agentic::golem::agent::host::CancelableScheduledInvocationReceipt {
             #encode_input
-            let receipt = self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #remote_token, input);
+            let receipt = self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #remote_token, input, None);
             receipt
         }
     }

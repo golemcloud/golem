@@ -309,7 +309,7 @@ export function clientFor<
       const invoke = async (input: Record<string, unknown> = {}, signal?: AbortSignal) => {
         throwIfAborted(signal);
         const inputTree = encodeRecord(mc.inputCodecs, input);
-        const invocation = wasmRpc.asyncInvokeAndAwait(mc.name, inputTree);
+        const invocation = wasmRpc.asyncInvokeAndAwait(mc.name, inputTree, undefined);
         const future = invocation.future;
         let onAbort: (() => void) | undefined;
         if (signal) {
@@ -348,7 +348,7 @@ export function clientFor<
               invoke(input, options?.signal);
       client[mc.name] = Object.assign(methodFn, {
         trigger: (input: Record<string, unknown> = {}) => {
-          const metadata = wasmRpc.invoke(mc.name, encodeRecord(mc.inputCodecs, input));
+          const metadata = wasmRpc.invoke(mc.name, encodeRecord(mc.inputCodecs, input), undefined);
           return def.mode === 'ephemeral' ? metadata : undefined;
         },
         schedule: (at: Datetime, input: Record<string, unknown> = {}) => {
@@ -356,6 +356,7 @@ export function clientFor<
             at,
             mc.name,
             encodeRecord(mc.inputCodecs, input),
+            undefined,
           );
           return def.mode === 'ephemeral' ? receipt : receipt.cancellationToken;
         },

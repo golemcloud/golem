@@ -157,7 +157,7 @@ pub fn AgentClient::invoke_and_await(
   function_name : String,
   input : @types.SchemaValueTree,
 ) -> InvocationResult[@types.SchemaValueTree?] {
-  match self.rpc.invoke_and_await(function_name, input) {
+  match self.rpc.invoke_and_await(function_name, input, None) {
     Ok(value) => {
       let metadata : InvocationMetadata = {
         agent_id: value.metadata.agent_id,
@@ -175,7 +175,7 @@ pub fn AgentClient::invoke(
   function_name : String,
   input : @types.SchemaValueTree,
 ) -> InvocationMetadata {
-  match self.rpc.invoke(function_name, input) {
+  match self.rpc.invoke(function_name, input, None) {
     Ok(value) =>
       { agent_id: value.agent_id, idempotency_key: value.idempotency_key }
     Err(e) => panic_on_rpc_error(e)
@@ -189,7 +189,12 @@ pub fn AgentClient::schedule_invocation(
   function_name : String,
   input : @types.SchemaValueTree,
 ) -> ScheduledInvocationReceipt {
-  let value = self.rpc.schedule_invocation(scheduled_at, function_name, input)
+  let value = self.rpc.schedule_invocation(
+    scheduled_at,
+    function_name,
+    input,
+    None,
+  )
   {
     metadata: {
       agent_id: value.metadata.agent_id,
@@ -206,7 +211,10 @@ pub fn AgentClient::schedule_cancelable_invocation(
   input : @types.SchemaValueTree,
 ) -> CancelableScheduledInvocationReceipt {
   let value = self.rpc.schedule_cancelable_invocation(
-    scheduled_at, function_name, input,
+    scheduled_at,
+    function_name,
+    input,
+    None,
   )
   {
     metadata: {

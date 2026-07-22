@@ -556,7 +556,7 @@ impl RpcAuthTester for RpcAuthTesterImpl {
 
         let arg = encode_single_parameter(1u64);
 
-        match rpc.invoke_and_await("inc_by", arg) {
+        match rpc.invoke_and_await("inc_by", arg, None) {
             Ok(_) => RpcCallOutcome::Ok,
             Err(e) => RpcCallOutcome::from(e),
         }
@@ -574,7 +574,9 @@ impl CancelTester for CancelTesterImpl {
         let wasm_rpc = WasmRpc::new("RpcCounter", constructor_data, None, Vec::new());
 
         let input = encode_single_parameter(1u64);
-        let future = wasm_rpc.async_invoke_and_await("inc_by", input).future;
+        let future = wasm_rpc
+            .async_invoke_and_await("inc_by", input, None)
+            .future;
 
         // Cancel immediately before polling/awaiting
         future.cancel();
@@ -588,7 +590,9 @@ impl CancelTester for CancelTesterImpl {
 
         // First, call inc_by to increment the counter
         let input = encode_single_parameter(5u64);
-        let future = wasm_rpc.async_invoke_and_await("inc_by", input).future;
+        let future = wasm_rpc
+            .async_invoke_and_await("inc_by", input, None)
+            .future;
 
         // Wait for completion
         loop {

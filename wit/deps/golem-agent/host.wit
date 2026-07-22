@@ -1,7 +1,7 @@
 package golem:agent@2.0.0;
 
 interface host {
-    use golem:core/types@2.0.0.{component-id, uuid, promise-id, schema-graph, schema-value-tree, typed-schema-value};
+    use golem:core/types@2.0.0.{component-id, uuid, promise-id, schema-graph, schema-value-tree, typed-schema-value, permission-card};
     use wasi:clocks/wall-clock@0.2.3.{datetime};
     use wasi:io/poll@0.2.3.{pollable};
     use common.{agent-error, agent-type, registered-agent-type, typed-agent-config-value};
@@ -91,25 +91,25 @@ interface host {
       ///
       /// `input` encodes the method's parameter list. The returned result is
       /// `none` for a `unit` output and `some(value)` for a `single` output.
-      invoke-and-await: func(method-name: string, input: schema-value-tree) -> result<invocation-result-with-metadata, rpc-error>;
+      invoke-and-await: func(method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> result<invocation-result-with-metadata, rpc-error>;
 
       /// Triggers the invocation of a remote method with the given parameters,
       /// and returns its final identity immediately.
-      invoke: func(method-name: string, input: schema-value-tree) -> result<invocation-metadata, rpc-error>;
+      invoke: func(method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> result<invocation-metadata, rpc-error>;
 
       /// Invokes a remote method with the given parameters, and returns a `future-invoke-result` value which can
       /// be polled for the result together with the final invocation identity.
       ///
       /// With this function it is possible to call multiple (different) agents simultaneously.
-      async-invoke-and-await: func(method-name: string, input: schema-value-tree) -> async-invocation-with-metadata;
+      async-invoke-and-await: func(method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> async-invocation-with-metadata;
 
       /// Schedules an invocation for later and returns its final identity.
-      schedule-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree) -> scheduled-invocation-receipt;
+      schedule-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> scheduled-invocation-receipt;
 
       /// Schedules an invocation for later and returns its final identity and
       /// cancellation capability. Call cancel on the returned resource to
       /// cancel the invocation before the scheduled time.
-      schedule-cancelable-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree) -> cancelable-scheduled-invocation-receipt;
+      schedule-cancelable-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> cancelable-scheduled-invocation-receipt;
     }
 
     /// Represents a pollable invocation result

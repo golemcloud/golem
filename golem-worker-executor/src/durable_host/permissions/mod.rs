@@ -51,11 +51,12 @@ use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
     AgentCardHolder, AgentPermissionMonomorphizationContext, Card, CardAlgebraError, CardClass,
     CardHolder, CardId, CardManagedBy, CardManagedByRuntimeDerived, CardParseError,
-    CardResourcePattern, CardVerb, ClassPermissionTarget, DelegationSurface, EffectiveSurface,
-    PermissionPattern, PermissionTarget, PolymorphicCard, PolymorphicPermissionPattern,
-    RenderedPermissionFields, ScopeCard, StoredCard, WalletDerivationParent,
-    agent_delegation_surface_from_wallet, instantiate_polymorphic_card_for_agent,
-    monomorphize_card_for_agent, parse_permission_fields, permission_class_metadata,
+    CardResourcePattern, CardVerb, ClassPermissionTarget, DelegationCard, DelegationSurface,
+    EffectiveSurface, PermissionPattern, PermissionTarget, PolymorphicCard,
+    PolymorphicPermissionPattern, RenderedPermissionFields, ScopeCard, StoredCard,
+    WalletDerivationParent, agent_delegation_surface_from_wallet,
+    instantiate_polymorphic_card_for_agent, monomorphize_card_for_agent, parse_permission_fields,
+    permission_class_metadata,
 };
 use golem_common::model::oplog::host_functions::{
     GolemPermissionsDerivePersist, GolemPermissionsInstallChildPersist,
@@ -74,6 +75,7 @@ use golem_schema::schema::schema_value::PermissionCardValuePayload;
 use golem_schema::schema::wit::wire::HostPermissionCard;
 use golem_schema::schema::wit::{PermissionCardHandleRep, PermissionCardResolver};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::collections::BTreeSet;
 use uuid::Uuid;
 use wasmtime::component::Resource;
 
@@ -83,7 +85,10 @@ enum PermissionCardEntry {
         snapshot: PermissionCardValuePayload,
         card: Option<StoredCard>,
     },
-    Scope(ScopeCard),
+    Scope {
+        card: ScopeCard,
+        invocation_key: IdempotencyKey,
+    },
 }
 
 impl PermissionCardEntry {
@@ -101,38 +106,42 @@ impl PermissionCardEntry {
         }
     }
 
+    fn from_scope(card: ScopeCard, invocation_key: IdempotencyKey) -> Self {
+        Self::Scope {
+            card,
+            invocation_key,
+        }
+    }
+
     fn snapshot(&self) -> Result<PermissionCardValuePayload, WorkerExecutorError> {
         match self {
             Self::Persistent { snapshot, .. } => Ok(snapshot.clone()),
-            Self::Scope(_) => Err(scope_card_snapshot_error()),
+            Self::Scope { .. } => Err(scope_card_snapshot_error()),
         }
     }
 
     fn into_snapshot(self) -> Result<PermissionCardValuePayload, WorkerExecutorError> {
         match self {
             Self::Persistent { snapshot, .. } => Ok(snapshot),
-            Self::Scope(_) => Err(scope_card_snapshot_error()),
+            Self::Scope { .. } => Err(scope_card_snapshot_error()),
         }
     }
 
     fn cached_card(&self) -> Option<StoredCard> {
         match self {
             Self::Persistent { card, .. } => card.clone(),
-            Self::Scope(_) => None,
+            Self::Scope { .. } => None,
         }
     }
 
-    fn scope_card(&self) -> Option<&ScopeCard> {
+    fn scope_card(&self) -> Option<(&ScopeCard, &IdempotencyKey)> {
         match self {
             Self::Persistent { .. } => None,
-            Self::Scope(card) => Some(card),
+            Self::Scope {
+                card,
+                invocation_key,
+            } => Some((card, invocation_key)),
         }
-    }
-}
-
-impl From<ScopeCard> for PermissionCardEntry {
-    fn from(card: ScopeCard) -> Self {
-        Self::Scope(card)
     }
 }
 
@@ -280,12 +289,39 @@ fn permission_card_cached_card<Ctx: WorkerCtx>(
 fn permission_card_scope_card<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     handle: &Resource<PermissionCardHandleRep>,
-) -> Result<Option<ScopeCard>, WorkerExecutorError> {
+) -> Result<Option<(ScopeCard, IdempotencyKey)>, WorkerExecutorError> {
     let rep = ctx.table().get(handle).map_err(invalid_handle_error)?;
     Ok(rep
         .downcast_ref::<PermissionCardEntry>()
         .and_then(PermissionCardEntry::scope_card)
-        .cloned())
+        .map(|(card, invocation_key)| (card.clone(), invocation_key.clone())))
+}
+
+pub(crate) fn resolve_invocation_scope_card<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: &Resource<PermissionCardHandleRep>,
+) -> Result<ScopeCard, String> {
+    let invocation_key = ctx
+        .state
+        .get_current_idempotency_key()
+        .ok_or_else(|| "scope cards require an active invocation".to_string())?;
+    let scope_card = permission_card_scope_card(ctx, handle)
+        .map_err(|error| format!("invalid permission-card handle: {error}"))?;
+    resolve_owned_scope_card(scope_card, &invocation_key)
+}
+
+fn resolve_owned_scope_card(
+    scope_card: Option<(ScopeCard, IdempotencyKey)>,
+    invocation_key: &IdempotencyKey,
+) -> Result<ScopeCard, String> {
+    let Some((card, owner_invocation_key)) = scope_card else {
+        return Err("the scope-card argument must be a scope card".to_string());
+    };
+    if &owner_invocation_key == invocation_key {
+        Ok(card)
+    } else {
+        Err("the scope-card handle belongs to a different invocation".to_string())
+    }
 }
 
 async fn resolve_permission_card<Ctx: WorkerCtx>(
@@ -354,7 +390,7 @@ async fn resolve_permission_card_handle<Ctx: WorkerCtx>(
         ))
     })?;
     match scope_card {
-        Some(card) => Ok(ResolvedPermissionCard::Scope(card)),
+        Some((card, _)) => Ok(ResolvedPermissionCard::Scope(card)),
         None => resolve_permission_card(ctx, handle)
             .await
             .map(ResolvedPermissionCard::Persistent),
@@ -571,6 +607,40 @@ struct DerivedGrantSets {
     upper_negative: Vec<PermissionPattern>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ScopeDerivationParent {
+    root_card_ids: Vec<CardId>,
+    delegation: DelegationCard,
+}
+
+impl ScopeDerivationParent {
+    fn persistent(card: &Card) -> Self {
+        Self {
+            root_card_ids: vec![card.card_id],
+            delegation: DelegationCard {
+                source_card_id: Some(card.card_id),
+                lower_positive: card.lower_positive.clone(),
+                lower_negative: card.lower_negative.clone(),
+                upper_positive: card.upper_positive.clone(),
+                upper_negative: card.upper_negative.clone(),
+            },
+        }
+    }
+
+    fn scope(card: &ScopeCard) -> Self {
+        Self {
+            root_card_ids: card.root_card_ids.clone(),
+            delegation: DelegationCard {
+                source_card_id: Some(card.scope_card_id),
+                lower_positive: card.lower_positive.clone(),
+                lower_negative: card.lower_negative.clone(),
+                upper_positive: card.upper_positive.clone(),
+                upper_negative: card.upper_negative.clone(),
+            },
+        }
+    }
+}
+
 fn parse_grants(
     grants: &[permissions_types::PatternGrant],
 ) -> Result<Vec<PermissionPattern>, permissions_types::PermissionError> {
@@ -620,6 +690,115 @@ fn parse_derived_grant_sets(
         upper_positive: parse_grants(upper_positive)?,
         upper_negative: parse_grants(upper_negative)?,
     })
+}
+
+fn build_scope_card(
+    scope_card_id: CardId,
+    parents: &[ScopeDerivationParent],
+    grants: DerivedGrantSets,
+) -> Result<ScopeCard, permissions_types::PermissionError> {
+    if parents.is_empty() {
+        return Err(permissions_types::PermissionError::NotPermitted(
+            "derive-scope requires at least one parent card".to_string(),
+        ));
+    }
+
+    DelegationSurface {
+        cards: parents
+            .iter()
+            .map(|parent| parent.delegation.clone())
+            .collect(),
+    }
+    .validate_attenuation(
+        &grants.lower_positive,
+        &grants.lower_negative,
+        &grants.upper_positive,
+        &grants.upper_negative,
+    )
+    .map_err(permission_error_from_algebra)?;
+
+    let root_card_ids = parents
+        .iter()
+        .flat_map(|parent| parent.root_card_ids.iter().copied())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    Ok(ScopeCard {
+        scope_card_id,
+        root_card_ids,
+        lower_positive: grants.lower_positive,
+        lower_negative: grants.lower_negative,
+        upper_positive: grants.upper_positive,
+        upper_negative: grants.upper_negative,
+    })
+}
+
+fn persistent_scope_parent_from_wallet(
+    wallet: &[StoredCard],
+    resolved: &StoredCard,
+    context: &AgentPermissionMonomorphizationContext,
+) -> Result<ScopeDerivationParent, permissions_types::PermissionError> {
+    let Some(wallet_card) = wallet
+        .iter()
+        .find(|wallet_card| wallet_card.card_id() == resolved.card_id())
+    else {
+        return Err(permissions_types::PermissionError::NotPermitted(format!(
+            "parent card {} is not in the active invocation wallet",
+            resolved.card_id()
+        )));
+    };
+    if wallet_card != resolved {
+        return Err(permissions_types::PermissionError::NotPermitted(format!(
+            "parent card {} does not match the active invocation wallet",
+            resolved.card_id()
+        )));
+    }
+    let card = monomorphize_card_for_agent(wallet_card, context);
+    Ok(ScopeDerivationParent::persistent(&card))
+}
+
+async fn resolve_scope_derivation_parents<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handles: &[Resource<PermissionCardHandleRep>],
+    invocation_key: &IdempotencyKey,
+) -> Result<Vec<ScopeDerivationParent>, permissions_types::PermissionError> {
+    let wallet = ctx
+        .active_agent_wallet_cards_snapshot()
+        .await
+        .map_err(worker_error_to_permission_error)?;
+    let Some(agent_id) = ctx.state.agent_id.as_ref() else {
+        return Err(permissions_types::PermissionError::NotPermitted(
+            "derive-scope is only available to an agent".to_string(),
+        ));
+    };
+    let context = super::agent_monomorphization_context(
+        &ctx.state.component_metadata,
+        &ctx.owned_agent_id,
+        agent_id,
+    );
+
+    let mut parents = Vec::with_capacity(handles.len());
+    for handle in handles {
+        if let Some((card, owner_invocation_key)) =
+            permission_card_scope_card(ctx, handle).map_err(worker_error_to_permission_error)?
+        {
+            if &owner_invocation_key != invocation_key {
+                return Err(permissions_types::PermissionError::NotPermitted(
+                    "scope-card parent belongs to a different invocation".to_string(),
+                ));
+            }
+            parents.push(ScopeDerivationParent::scope(&card));
+            continue;
+        }
+
+        let resolved = resolve_permission_card(ctx, handle).await?;
+        parents.push(persistent_scope_parent_from_wallet(
+            &wallet, &resolved, &context,
+        )?);
+    }
+
+    Ok(parents)
 }
 
 fn select_wallet_derivation_parent(
@@ -2117,6 +2296,53 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         }
         .await
     }
+
+    async fn derive_scope(
+        &mut self,
+        parents: Vec<Resource<PermissionCardHandleRep>>,
+        lower_positive: Vec<permissions_types::PatternGrant>,
+        lower_negative: Vec<permissions_types::PatternGrant>,
+        upper_positive: Vec<permissions_types::PatternGrant>,
+        upper_negative: Vec<permissions_types::PatternGrant>,
+    ) -> anyhow::Result<Result<Resource<PermissionCardHandleRep>, permissions_types::PermissionError>>
+    {
+        DurabilityHost::observe_function_call(self, "golem::permissions::derive", "derive-scope");
+
+        let result = async {
+            ensure_card_permission(self, CardVerb::Derive, CardResourcePattern::Any)?;
+            let invocation_key = self.state.get_current_idempotency_key().ok_or_else(|| {
+                permissions_types::PermissionError::NotPermitted(
+                    "derive-scope requires an active invocation".to_string(),
+                )
+            })?;
+            let parents = resolve_scope_derivation_parents(self, &parents, &invocation_key).await?;
+            let grants = parse_derived_grant_sets(
+                &lower_positive,
+                &lower_negative,
+                &upper_positive,
+                &upper_negative,
+            )?;
+            let ordinal = self.state.scope_card_mint_ordinal;
+            let next_ordinal = ordinal.checked_add(1).ok_or_else(|| {
+                permissions_types::PermissionError::NotPermitted(
+                    "scope-card mint ordinal exhausted".to_string(),
+                )
+            })?;
+            let scope_card_id = self.derive_scope_card_id(&invocation_key, ordinal);
+            let card = build_scope_card(scope_card_id, &parents, grants)?;
+            Ok((card, invocation_key, next_ordinal))
+        }
+        .await;
+        let (card, invocation_key, next_ordinal) = match result {
+            Ok(result) => result,
+            Err(error) => return Ok(Err(error)),
+        };
+        let handle = self.table().push(PermissionCardHandleRep::new(
+            PermissionCardEntry::from_scope(card, invocation_key),
+        ))?;
+        self.state.scope_card_mint_ordinal = next_ordinal;
+        Ok(Ok(handle))
+    }
 }
 
 impl<Ctx: WorkerCtx> permissions_revoke::Host for DurableWorkerCtx<Ctx> {
@@ -2423,15 +2649,47 @@ mod tests {
 
     #[test]
     fn scope_cards_cannot_use_persistent_snapshot_transport() {
-        let entry = PermissionCardEntry::Scope(scope_card(
-            CardId(Uuid::from_u128(10)),
-            vec![CardId(Uuid::from_u128(1))],
-        ));
+        let entry = PermissionCardEntry::from_scope(
+            scope_card(
+                CardId(Uuid::from_u128(10)),
+                vec![CardId(Uuid::from_u128(1))],
+            ),
+            IdempotencyKey::fresh(),
+        );
 
         let error = entry.into_snapshot().unwrap_err();
         assert!(error.to_string().contains(
             "scope-card handles cannot be serialized as persistent permission-card snapshots"
         ));
+    }
+
+    #[test]
+    fn scope_card_handles_are_owned_by_the_minting_invocation() {
+        let owner = IdempotencyKey::new("owner".to_string());
+        let card = scope_card(
+            CardId(Uuid::from_u128(10)),
+            vec![CardId(Uuid::from_u128(1))],
+        );
+
+        assert_eq!(
+            resolve_owned_scope_card(Some((card.clone(), owner.clone())), &owner).unwrap(),
+            card
+        );
+        assert!(
+            resolve_owned_scope_card(
+                Some((card, owner)),
+                &IdempotencyKey::new("different-invocation".to_string()),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn persistent_cards_are_not_accepted_as_scope_card_arguments() {
+        assert!(
+            resolve_owned_scope_card(None, &IdempotencyKey::new("current-invocation".to_string()),)
+                .is_err()
+        );
     }
 
     fn derive_authorization_surface() -> EffectiveSurface {
@@ -2817,6 +3075,248 @@ mod tests {
             system_card: false,
             managed_by: None,
         })
+    }
+
+    fn scope_derivation_parent(
+        card_id: u128,
+        lower_positive: &[permissions_types::PatternGrant],
+        upper_positive: &[permissions_types::PatternGrant],
+    ) -> ScopeDerivationParent {
+        ScopeDerivationParent::persistent(&Card {
+            card_id: CardId(Uuid::from_u128(card_id)),
+            parent_ids: Vec::new(),
+            lower_positive: parse_grants(lower_positive).unwrap(),
+            lower_negative: Vec::new(),
+            upper_positive: parse_grants(upper_positive).unwrap(),
+            upper_negative: Vec::new(),
+            created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        })
+    }
+
+    fn grant_for_resource(resource_id: &str) -> permissions_types::PatternGrant {
+        permissions_types::PatternGrant {
+            resource_id: resource_id.to_string(),
+            ..valid_filesystem_grant()
+        }
+    }
+
+    #[test]
+    fn scope_derivation_validates_both_attenuation_bounds() {
+        let parent_grant = valid_filesystem_grant();
+        let child_grant = grant_for_resource("/data/public/**");
+        let broader_grant = grant_for_resource("/**");
+        let parent = scope_derivation_parent(
+            1,
+            std::slice::from_ref(&parent_grant),
+            std::slice::from_ref(&parent_grant),
+        );
+
+        let accepted = parse_derived_grant_sets(
+            std::slice::from_ref(&child_grant),
+            &[],
+            std::slice::from_ref(&child_grant),
+            &[],
+        )
+        .unwrap();
+        assert!(build_scope_card(CardId::new(), std::slice::from_ref(&parent), accepted).is_ok());
+
+        let broad_lower = parse_derived_grant_sets(
+            std::slice::from_ref(&broader_grant),
+            &[],
+            std::slice::from_ref(&child_grant),
+            &[],
+        )
+        .unwrap();
+        assert!(matches!(
+            build_scope_card(CardId::new(), std::slice::from_ref(&parent), broad_lower,),
+            Err(permissions_types::PermissionError::LowerBoundTooBroad(_))
+        ));
+
+        let broad_upper = parse_derived_grant_sets(
+            std::slice::from_ref(&child_grant),
+            &[],
+            std::slice::from_ref(&broader_grant),
+            &[],
+        )
+        .unwrap();
+        assert!(matches!(
+            build_scope_card(CardId::new(), &[parent], broad_upper),
+            Err(permissions_types::PermissionError::UpperBoundTooBroad(_))
+        ));
+    }
+
+    #[test]
+    fn scope_derivation_preserves_inherited_negatives_on_both_bounds() {
+        let parent_positive = valid_filesystem_grant();
+        let child_positive = grant_for_resource("/data/public/**");
+        let inherited_negative = grant_for_resource("/data/private/**");
+        let additional_negative = grant_for_resource("/data/public/restricted/**");
+        let mut parent = scope_derivation_parent(
+            1,
+            std::slice::from_ref(&parent_positive),
+            std::slice::from_ref(&parent_positive),
+        );
+        parent.delegation.lower_negative =
+            parse_grants(std::slice::from_ref(&inherited_negative)).unwrap();
+        parent.delegation.upper_negative =
+            parse_grants(std::slice::from_ref(&inherited_negative)).unwrap();
+
+        let missing_lower_negative = parse_derived_grant_sets(
+            std::slice::from_ref(&child_positive),
+            &[],
+            std::slice::from_ref(&child_positive),
+            std::slice::from_ref(&inherited_negative),
+        )
+        .unwrap();
+        assert!(matches!(
+            build_scope_card(
+                CardId::new(),
+                std::slice::from_ref(&parent),
+                missing_lower_negative,
+            ),
+            Err(permissions_types::PermissionError::LowerBoundTooBroad(_))
+        ));
+
+        let missing_upper_negative = parse_derived_grant_sets(
+            std::slice::from_ref(&child_positive),
+            std::slice::from_ref(&inherited_negative),
+            std::slice::from_ref(&child_positive),
+            &[],
+        )
+        .unwrap();
+        assert!(matches!(
+            build_scope_card(
+                CardId::new(),
+                std::slice::from_ref(&parent),
+                missing_upper_negative,
+            ),
+            Err(permissions_types::PermissionError::UpperBoundTooBroad(_))
+        ));
+
+        let retained_and_added = [inherited_negative, additional_negative];
+        let attenuated = parse_derived_grant_sets(
+            std::slice::from_ref(&child_positive),
+            &retained_and_added,
+            std::slice::from_ref(&child_positive),
+            &retained_and_added,
+        )
+        .unwrap();
+        assert!(build_scope_card(CardId::new(), std::slice::from_ref(&parent), attenuated).is_ok());
+    }
+
+    #[test]
+    fn scope_derivation_combines_positive_authority_from_multiple_parents() {
+        let first_grant = grant_for_resource("/data/first/**");
+        let second_grant = grant_for_resource("/data/second/**");
+        let first = scope_derivation_parent(1, std::slice::from_ref(&first_grant), &[]);
+        let second = scope_derivation_parent(2, std::slice::from_ref(&second_grant), &[]);
+        let grants = parse_derived_grant_sets(&[first_grant, second_grant], &[], &[], &[]).unwrap();
+
+        let card = build_scope_card(CardId::new(), &[first, second], grants).unwrap();
+
+        assert_eq!(
+            card.root_card_ids,
+            vec![CardId(Uuid::from_u128(1)), CardId(Uuid::from_u128(2))]
+        );
+        assert_eq!(card.lower_positive.len(), 2);
+    }
+
+    #[test]
+    fn scope_derivation_unions_and_deduplicates_roots_across_diamond_parents() {
+        let grant = valid_filesystem_grant();
+        let first = ScopeCard {
+            scope_card_id: CardId(Uuid::from_u128(10)),
+            root_card_ids: vec![CardId(Uuid::from_u128(1)), CardId(Uuid::from_u128(2))],
+            lower_positive: parse_grants(std::slice::from_ref(&grant)).unwrap(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+        };
+        let second = ScopeCard {
+            scope_card_id: CardId(Uuid::from_u128(11)),
+            root_card_ids: vec![CardId(Uuid::from_u128(2)), CardId(Uuid::from_u128(3))],
+            ..first.clone()
+        };
+        let grants = parse_derived_grant_sets(&[grant], &[], &[], &[]).unwrap();
+
+        let card = build_scope_card(
+            CardId(Uuid::from_u128(12)),
+            &[
+                ScopeDerivationParent::scope(&first),
+                ScopeDerivationParent::scope(&second),
+            ],
+            grants,
+        )
+        .unwrap();
+
+        assert_eq!(
+            card.root_card_ids,
+            vec![
+                CardId(Uuid::from_u128(1)),
+                CardId(Uuid::from_u128(2)),
+                CardId(Uuid::from_u128(3)),
+            ]
+        );
+    }
+
+    #[test]
+    fn scope_card_parent_propagates_roots_and_allows_a_pure_ceiling() {
+        let grant = valid_filesystem_grant();
+        let parent = scope_derivation_parent(1, std::slice::from_ref(&grant), &[]);
+        let first = build_scope_card(
+            CardId(Uuid::from_u128(10)),
+            &[parent],
+            parse_derived_grant_sets(std::slice::from_ref(&grant), &[], &[], &[]).unwrap(),
+        )
+        .unwrap();
+        let ceiling = grant_for_resource("/data/public/**");
+
+        let second = build_scope_card(
+            CardId(Uuid::from_u128(11)),
+            &[ScopeDerivationParent::scope(&first)],
+            parse_derived_grant_sets(&[], &[], &[ceiling], &[]).unwrap(),
+        )
+        .unwrap();
+
+        assert!(second.lower_positive.is_empty());
+        assert_eq!(second.root_card_ids, first.root_card_ids);
+    }
+
+    #[test]
+    fn scope_derivation_rejects_a_persistent_parent_outside_the_wallet() {
+        let grant = valid_filesystem_grant();
+        let wallet = [wallet_parent(1, &grant)];
+        let resolved = wallet_parent(2, &grant);
+
+        assert!(matches!(
+            persistent_scope_parent_from_wallet(&wallet, &resolved, &wallet_derivation_context(),),
+            Err(permissions_types::PermissionError::NotPermitted(_))
+        ));
+    }
+
+    #[test]
+    fn scope_derivation_requires_the_exact_pinned_parent_snapshot() {
+        let grant = valid_filesystem_grant();
+        let wallet = [wallet_parent(1, &grant)];
+        let mut changed_grant = grant;
+        changed_grant.resource_id = "/data/changed/**".to_string();
+        let changed_snapshot = wallet_parent(1, &changed_grant);
+
+        assert!(matches!(
+            persistent_scope_parent_from_wallet(
+                &wallet,
+                &changed_snapshot,
+                &wallet_derivation_context(),
+            ),
+            Err(permissions_types::PermissionError::NotPermitted(_))
+        ));
+        assert!(
+            persistent_scope_parent_from_wallet(&wallet, &wallet[0], &wallet_derivation_context(),)
+                .is_ok()
+        );
     }
 
     #[test]

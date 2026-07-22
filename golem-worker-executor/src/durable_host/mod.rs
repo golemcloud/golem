@@ -358,13 +358,6 @@ impl Drop for StoreAliveGuard {
 const DERIVED_CARD_ID_CONTEXT: &str = "golem:permissions:derived-card-id:v1";
 const TRANSFER_ID_CONTEXT: &str = "golem:permissions:transfer-id:v1";
 const INSTALLED_CHILD_CARD_ID_CONTEXT: &str = "golem:permissions:installed-child-card-id:v1";
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "scope-card construction requires a validated invocation-local ordinal"
-    )
-)]
 const SCOPE_CARD_ID_CONTEXT: &str = "golem:permissions:scope-card-id:v1";
 const UUID_V7_MAX_TIMESTAMP: u64 = (1_u64 << 48) - 1;
 
@@ -448,10 +441,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         ))
     }
 
-    #[expect(
-        dead_code,
-        reason = "scope-card construction requires a validated invocation-local ordinal"
-    )]
     pub(crate) fn derive_scope_card_id(
         &self,
         invocation_key: &IdempotencyKey,
@@ -6761,6 +6750,9 @@ struct PrivateDurableWorkerState {
     /// Per-invocation RPC call limit from the account's Plan.
     per_invocation_rpc_call_limit: u64,
 
+    /// Zero-based ordinal of the next successfully derived invocation-local scope card.
+    scope_card_mint_ordinal: u64,
+
     /// Shared per-account resource limit entry. Used to record monthly HTTP/RPC call consumption
     /// and to check remaining budgets from the epoch callback.
     resource_limit_entry: Arc<AtomicResourceEntry>,
@@ -6886,6 +6878,7 @@ impl PrivateDurableWorkerState {
             per_invocation_http_call_limit,
             rpc_call_count: 0,
             per_invocation_rpc_call_limit,
+            scope_card_mint_ordinal: 0,
             promise_service,
             scheduler_service,
             worker_service,
@@ -7257,6 +7250,7 @@ impl PrivateDurableWorkerState {
     pub fn reset_invocation_call_counts(&mut self) {
         self.http_call_count = 0;
         self.rpc_call_count = 0;
+        self.scope_card_mint_ordinal = 0;
         // The `get_oplog_index` marker watermark is per-invocation: a marker captured in a previous
         // invocation only costs a graceful checkpoint fallback if jumped to, never correctness.
         self.min_exposed_marker = None;

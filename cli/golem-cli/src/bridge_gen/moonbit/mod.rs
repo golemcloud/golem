@@ -3070,6 +3070,10 @@ fn emit_schema_type(ty: &SchemaType) -> String {
             "@model.QuotaToken(@types.QuotaTokenSpec::{{ resource_name: {} }})",
             mb_opt_str(spec.resource_name.as_deref())
         ),
+        PermissionCard { spec, .. } => format!(
+            "@model.PermissionCard(@types.PermissionCardSpec::{{ polymorphic: {} }})",
+            spec.polymorphic
+        ),
         Future { inner, .. } => format!("@model.Future({})", mb_opt_type(inner.as_deref())),
         Stream { inner, .. } => format!("@model.Stream({})", mb_opt_type(inner.as_deref())),
     };

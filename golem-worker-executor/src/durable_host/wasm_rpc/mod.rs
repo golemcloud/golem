@@ -14,6 +14,7 @@
 
 use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable, Resolution};
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
+use crate::durable_host::permissions::resolve_invocation_scope_card;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::preview2::golem::agent::host::{
     AsyncInvocationWithMetadata, CancelableScheduledInvocationReceipt, CancellationToken,
@@ -31,6 +32,7 @@ use futures::future::Either;
 use golem_common::base_model::agent::{AgentMode, Principal};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{InvocationFreshnessDisposition, ParsedAgentId};
+use golem_common::model::card::ScopeCard;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -58,7 +60,9 @@ use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::serialization::{deserialize, serialize};
 use golem_schema::schema::wit::{
-    EncodeError, decode_typed_rejecting_quota_with, decode_value_with, encode_value_with,
+    EncodeError, PermissionCardHandleDropper, PermissionCardHandleRep, QuotaTokenHandleDropper,
+    SecretHandleDropper, decode_typed_rejecting_quota_with, decode_value_with, encode_value_with,
+    reject_quota_handles_in_value_tree,
 };
 
 use crate::durable_host::golem::agent::schema_value_tree_to_typed_constructor_parameters;
@@ -136,6 +140,30 @@ fn invocation_metadata(
     InvocationMetadata {
         agent_id: remote_agent_id.agent_id.agent_id.clone(),
         idempotency_key: idempotency_key.value.clone(),
+    }
+}
+
+fn discard_owned_rpc_input<D>(input: core_wire::SchemaValueTree, dropper: &mut D)
+where
+    D: QuotaTokenHandleDropper + SecretHandleDropper + PermissionCardHandleDropper,
+{
+    let _ = reject_quota_handles_in_value_tree(input, dropper);
+}
+
+fn reject_non_await_scope_card<D>(
+    scope_card: &Option<Resource<PermissionCardHandleRep>>,
+    input: core_wire::SchemaValueTree,
+    operation: &'static str,
+    dropper: &mut D,
+) -> Result<core_wire::SchemaValueTree, String>
+where
+    D: QuotaTokenHandleDropper + SecretHandleDropper + PermissionCardHandleDropper,
+{
+    if scope_card.is_some() {
+        discard_owned_rpc_input(input, dropper);
+        Err(format!("{operation} does not accept scope cards"))
+    } else {
+        Ok(input)
     }
 }
 
@@ -363,7 +391,18 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         self_: Resource<WasmRpcEntry>,
         method_name: String,
         input: core_wire::SchemaValueTree,
+        scope_card: Option<Resource<PermissionCardHandleRep>>,
     ) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
+        let scope_card = match scope_card {
+            Some(handle) => match resolve_invocation_scope_card(self, &handle) {
+                Ok(card) => Some(card),
+                Err(details) => {
+                    discard_owned_rpc_input(input, self);
+                    return Ok(Err(RpcError::Denied(details)));
+                }
+            },
+            None => None,
+        };
         let prepared = match prepare_rpc_invocation(
             self,
             &self_,
@@ -415,6 +454,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             idempotency_key,
             span,
             handle,
+            scope_card,
         )
         .await?
         {
@@ -431,7 +471,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         self_: Resource<WasmRpcEntry>,
         method_name: String,
         input: core_wire::SchemaValueTree,
+        scope_card: Option<Resource<PermissionCardHandleRep>>,
     ) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
+        let input = match reject_non_await_scope_card(&scope_card, input, "invoke", self) {
+            Ok(input) => input,
+            Err(details) => return Ok(Err(RpcError::Denied(details))),
+        };
         let prepared = match prepare_rpc_invocation(
             self,
             &self_,
@@ -496,9 +541,20 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         this: Resource<WasmRpcEntry>,
         method_name: String,
         input: core_wire::SchemaValueTree,
+        scope_card: Option<Resource<PermissionCardHandleRep>>,
     ) -> anyhow::Result<AsyncInvocationWithMetadata> {
+        let scope_card = match scope_card {
+            Some(handle) => match resolve_invocation_scope_card(self, &handle) {
+                Ok(card) => Some(card),
+                Err(details) => {
+                    discard_owned_rpc_input(input, self);
+                    return Err(anyhow::anyhow!("not permitted: {details}"));
+                }
+            },
+            None => None,
+        };
         let future = self
-            .async_invoke_and_await_impl(this, method_name, input)
+            .async_invoke_and_await_impl(this, method_name, input, scope_card)
             .await?;
         let metadata = {
             let entry = self.table().get(&future)?;
@@ -518,7 +574,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
         input: core_wire::SchemaValueTree,
+        scope_card: Option<Resource<PermissionCardHandleRep>>,
     ) -> anyhow::Result<ScheduledInvocationReceipt> {
+        let input = reject_non_await_scope_card(&scope_card, input, "schedule-invocation", self)
+            .map_err(|details| anyhow::anyhow!("not permitted: {details}"))?;
         let cancellation_token = self
             .schedule_cancelable_invocation_impl(this, scheduled_time, method_name, input)
             .await?;
@@ -534,7 +593,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
         input: core_wire::SchemaValueTree,
+        scope_card: Option<Resource<PermissionCardHandleRep>>,
     ) -> anyhow::Result<CancelableScheduledInvocationReceipt> {
+        let input =
+            reject_non_await_scope_card(&scope_card, input, "schedule-cancelable-invocation", self)
+                .map_err(|details| anyhow::anyhow!("not permitted: {details}"))?;
         let cancellation_token = self
             .schedule_cancelable_invocation_impl(this, scheduled_time, method_name, input)
             .await?;
@@ -564,6 +627,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         this: Resource<WasmRpcEntry>,
         method_name: String,
         input: core_wire::SchemaValueTree,
+        scope_card: Option<ScopeCard>,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
         // Trap immediately if the invocation is restricted to read-only side effects.
         self.check_read_only_allows("golem::rpc::wasm-rpc::async-invoke-and-await")
@@ -736,6 +800,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 self.agent_auth_ctx(),
                 None,
                 initial_freshness_disposition,
+                scope_card.clone(),
             );
 
             let fut = self.table().push(FutureInvokeResultEntry {
@@ -765,6 +830,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     begin_index,
                     auth_ctx,
                     target_activation: deferred_target_activation,
+                    scope_card,
                 }),
                 child_pollables: Vec::new(),
                 drop_pending: false,
@@ -1082,6 +1148,7 @@ async fn run_invoke_and_await<Ctx: WorkerCtx>(
     idempotency_key: IdempotencyKey,
     span: Arc<InvocationContextSpan>,
     mut handle: CallHandle<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>,
+    scope_card: Option<ScopeCard>,
 ) -> anyhow::Result<Result<SchemaValue, RpcError>> {
     let mut freshness_disposition = if known_fresh_dispatch_allowed(
         handle.is_live(),
@@ -1148,6 +1215,7 @@ async fn run_invoke_and_await<Ctx: WorkerCtx>(
                     stack,
                     prepared.config.clone(),
                     &auth_ctx,
+                    scope_card.clone(),
                 ),
                 interrupt_signal,
             )
@@ -2197,6 +2265,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     auth_ctx: AuthCtx,
     target_activation: Option<RpcTargetActivation>,
     initial_freshness_disposition: InvocationFreshnessDisposition,
+    scope_card: Option<ScopeCard>,
 ) -> AbortOnDropJoinHandle<Result<Result<SchemaValue, InternalRpcError>, Error>> {
     let first_dispatch = Arc::new(std::sync::atomic::AtomicBool::new(
         initial_freshness_disposition == InvocationFreshnessDisposition::KnownFresh,
@@ -2214,6 +2283,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         let auth_ctx = auth_ctx.clone();
         let target_activation = target_activation.clone();
         let config = config.clone();
+        let scope_card = scope_card.clone();
         let freshness_disposition = take_dispatch_freshness(&first_dispatch);
         async move {
             let _demand = if let Some(target_activation) = target_activation {
@@ -2248,6 +2318,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                     stack,
                     config,
                     &auth_ctx,
+                    scope_card,
                 )
                 .await
                 .map_err(RpcTaskError::Rpc)?;
@@ -2410,6 +2481,7 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         idempotency_key,
         span_id,
         auth_ctx,
+        scope_card,
         ..
     } = &*entry
     else {
@@ -2465,6 +2537,7 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         auth_ctx.clone(),
         target_activation,
         InvocationFreshnessDisposition::MayExist,
+        scope_card.clone(),
     );
 
     let span_id = span_id.clone();
@@ -2724,6 +2797,7 @@ enum FutureInvokeResultState {
         begin_index: OplogIndex,
         auth_ctx: AuthCtx,
         target_activation: Option<RpcTargetActivation>,
+        scope_card: Option<ScopeCard>,
     },
     Cancelled {
         request: HostRequestGolemRpcInvoke,
@@ -2826,12 +2900,15 @@ mod tests {
     use crate::services::rpc::RpcError as ServiceRpcError;
     use async_trait::async_trait;
     use golem_common::data_value;
+    use golem_common::model::card::CardId;
     use golem_common::model::component::ComponentId;
+    use golem_schema::schema::wit::{QuotaTokenHandleRep, SecretHandleRep};
     use golem_service_base::model::auth::AuthCtx;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
     use test_r::test;
     use uuid::Uuid;
+    use wasmtime::component::ResourceTable;
 
     struct FixedDemand {
         fingerprint: AgentFingerprint,
@@ -2855,6 +2932,29 @@ mod tests {
     struct RecordingEnvRpc {
         fingerprint: AgentFingerprint,
         activation_env: Mutex<Option<Vec<(String, String)>>>,
+        dispatched_scope_card: Mutex<Option<ScopeCard>>,
+    }
+
+    struct TableCapabilityDropper {
+        table: ResourceTable,
+    }
+
+    impl QuotaTokenHandleDropper for TableCapabilityDropper {
+        fn drop_quota_token_handle(&mut self, handle: Resource<QuotaTokenHandleRep>) {
+            let _ = self.table.delete(handle);
+        }
+    }
+
+    impl SecretHandleDropper for TableCapabilityDropper {
+        fn drop_secret_handle(&mut self, handle: Resource<SecretHandleRep>) {
+            let _ = self.table.delete(handle);
+        }
+    }
+
+    impl PermissionCardHandleDropper for TableCapabilityDropper {
+        fn drop_permission_card_handle(&mut self, handle: Resource<PermissionCardHandleRep>) {
+            let _ = self.table.delete(handle);
+        }
     }
 
     #[async_trait]
@@ -2887,6 +2987,7 @@ mod tests {
             _self_stack: InvocationContextStack,
             _config: Vec<AgentConfigEntryDto>,
             _auth_ctx: &AuthCtx,
+            _scope_card: Option<ScopeCard>,
         ) -> Result<SchemaValue, ServiceRpcError> {
             self.invoke_called.store(true, Ordering::SeqCst);
             Ok(SchemaValue::Tuple { elements: vec![] })
@@ -2940,6 +3041,7 @@ mod tests {
             _self_stack: InvocationContextStack,
             _config: Vec<AgentConfigEntryDto>,
             _auth_ctx: &AuthCtx,
+            _scope_card: Option<ScopeCard>,
         ) -> Result<SchemaValue, ServiceRpcError> {
             self.invoke_called.store(true, Ordering::SeqCst);
             Ok(SchemaValue::Tuple { elements: vec![] })
@@ -2994,7 +3096,9 @@ mod tests {
             _self_stack: InvocationContextStack,
             _config: Vec<AgentConfigEntryDto>,
             _auth_ctx: &AuthCtx,
+            scope_card: Option<ScopeCard>,
         ) -> Result<SchemaValue, ServiceRpcError> {
+            *self.dispatched_scope_card.lock().unwrap() = scope_card;
             Ok(SchemaValue::Tuple { elements: vec![] })
         }
 
@@ -3051,6 +3155,7 @@ mod tests {
                 config: vec![],
             }),
             InvocationFreshnessDisposition::MayExist,
+            None,
         )
         .await;
 
@@ -3089,6 +3194,7 @@ mod tests {
                 config: vec![],
             }),
             InvocationFreshnessDisposition::MayExist,
+            None,
         )
         .await;
 
@@ -3130,6 +3236,7 @@ mod tests {
                 config: vec![],
             }),
             InvocationFreshnessDisposition::MayExist,
+            None,
         )
         .await;
 
@@ -3152,6 +3259,7 @@ mod tests {
         let rpc = Arc::new(RecordingEnvRpc {
             fingerprint: persisted_fingerprint,
             activation_env: Mutex::new(None),
+            dispatched_scope_card: Mutex::new(None),
         });
         let replay_pending = WasmRpcTargetActivation::ReplayPending {
             target_fingerprint: persisted_fingerprint,
@@ -3174,6 +3282,7 @@ mod tests {
             AuthCtx::system(),
             replay_pending.deferred_activation(),
             InvocationFreshnessDisposition::MayExist,
+            None,
         )
         .await;
 
@@ -3184,6 +3293,130 @@ mod tests {
             *rpc.activation_env.lock().unwrap(),
             Some(env_from_wasm_rpc_new),
             "deferred replay activation must use the environment captured by wasm-rpc::new, not the later async invocation environment"
+        );
+    }
+
+    #[test]
+    async fn await_dispatch_forwards_the_resolved_scope_card_to_the_rpc_layer() {
+        let scope_card = ScopeCard {
+            scope_card_id: CardId(Uuid::from_u128(20)),
+            root_card_ids: vec![CardId(Uuid::from_u128(10))],
+            lower_positive: vec![],
+            lower_negative: vec![],
+            upper_positive: vec![],
+            upper_negative: vec![],
+        };
+        let rpc = Arc::new(RecordingEnvRpc {
+            fingerprint: AgentFingerprint(Uuid::from_u128(30)),
+            activation_env: Mutex::new(None),
+            dispatched_scope_card: Mutex::new(None),
+        });
+
+        let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
+            rpc.clone(),
+            OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
+            IdempotencyKey::new("scope-card-dispatch".to_string()),
+            "run".to_string(),
+            SchemaValue::Tuple { elements: vec![] },
+            AccountId::new(),
+            agent_id("caller"),
+            vec![],
+            vec![],
+            InvocationContextStack::fresh(),
+            None,
+            AuthCtx::system(),
+            None,
+            InvocationFreshnessDisposition::MayExist,
+            Some(scope_card.clone()),
+        )
+        .await;
+
+        result
+            .expect("dispatch should not fail at the host layer")
+            .expect("RPC invocation should succeed");
+        assert_eq!(*rpc.dispatched_scope_card.lock().unwrap(), Some(scope_card));
+    }
+
+    #[test]
+    fn non_await_variants_reject_any_scope_card_argument() {
+        let scope_card = Some(Resource::<PermissionCardHandleRep>::new_borrow(1));
+
+        for operation in [
+            "invoke",
+            "schedule-invocation",
+            "schedule-cancelable-invocation",
+        ] {
+            let mut dropper = TableCapabilityDropper {
+                table: ResourceTable::new(),
+            };
+            let input = || core_wire::SchemaValueTree {
+                value_nodes: vec![core_wire::SchemaValueNode::BoolValue(false)],
+                root: 0,
+            };
+            assert!(
+                reject_non_await_scope_card(&scope_card, input(), operation, &mut dropper).is_err()
+            );
+            assert!(reject_non_await_scope_card(&None, input(), operation, &mut dropper).is_ok());
+        }
+    }
+
+    #[test]
+    fn rejected_scope_card_call_consumes_owned_capabilities_from_rpc_input() {
+        let mut dropper = TableCapabilityDropper {
+            table: ResourceTable::new(),
+        };
+        let input_quota = dropper
+            .table
+            .push(QuotaTokenHandleRep::new(()))
+            .expect("input quota token should be inserted");
+        let input_secret = dropper
+            .table
+            .push(SecretHandleRep::new(()))
+            .expect("input secret should be inserted");
+        let input_card = dropper
+            .table
+            .push(PermissionCardHandleRep::new(()))
+            .expect("input card should be inserted");
+        let input_quota_rep = input_quota.rep();
+        let input_secret_rep = input_secret.rep();
+        let input_card_rep = input_card.rep();
+        let input = core_wire::SchemaValueTree {
+            value_nodes: vec![
+                core_wire::SchemaValueNode::QuotaTokenHandle(input_quota),
+                core_wire::SchemaValueNode::SecretValue(input_secret),
+                core_wire::SchemaValueNode::PermissionCardHandle(input_card),
+                core_wire::SchemaValueNode::TupleValue(vec![0, 1, 2]),
+            ],
+            root: 3,
+        };
+        let scope_card = Some(Resource::<PermissionCardHandleRep>::new_borrow(1));
+
+        assert!(reject_non_await_scope_card(&scope_card, input, "invoke", &mut dropper).is_err());
+
+        assert!(
+            dropper
+                .table
+                .get(&Resource::<QuotaTokenHandleRep>::new_borrow(
+                    input_quota_rep
+                ))
+                .is_err(),
+            "rejecting the call must release owned quota-token handles transferred in its input"
+        );
+        assert!(
+            dropper
+                .table
+                .get(&Resource::<SecretHandleRep>::new_borrow(input_secret_rep))
+                .is_err(),
+            "rejecting the call must release owned secret handles transferred in its input"
+        );
+        assert!(
+            dropper
+                .table
+                .get(&Resource::<PermissionCardHandleRep>::new_borrow(
+                    input_card_rep,
+                ))
+                .is_err(),
+            "rejecting the call must release owned capability handles transferred in its input"
         );
     }
 

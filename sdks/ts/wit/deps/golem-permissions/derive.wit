@@ -29,4 +29,14 @@ interface derive {
         upper-negative:  list<pattern-grant>,
         lifespan:        option<duration>,
     ) -> result<permission-card, permission-error>;
+
+    /// Derive an invocation-local card from one or more persistent or scope
+    /// parents. Scope cards are attenuated in-memory and are never persisted.
+    derive-scope: func(
+        parents:        list<borrow<permission-card>>,
+        lower-positive: list<pattern-grant>,
+        lower-negative: list<pattern-grant>,
+        upper-positive: list<pattern-grant>,
+        upper-negative: list<pattern-grant>,
+    ) -> result<permission-card, permission-error>;
 }
