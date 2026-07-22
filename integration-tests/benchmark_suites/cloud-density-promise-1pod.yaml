@@ -3,7 +3,7 @@
 # Focused warm-path run while diagnosing promise-pool restaging latency.
 name: cloud-density-promise-1pod
 section: promise
-defaultRamp: [1, 2, 4, 8, 16, 32, 64, 128, 256]
+defaultRamp: [2]
 cells:
   - { name: promise-tiny-cold-1pod, enabled: false, payloadSize: 256, waiterPresence: cold }
   - { name: promise-tiny-warm-1pod, enabled: true, payloadSize: 256, waiterPresence: warm }
