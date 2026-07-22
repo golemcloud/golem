@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	types "github.com/golemcloud/golem-go/internal/wit/golem_core_types"
 )
@@ -504,4 +505,66 @@ func TestDecodedVariantSatisfiesItsInterface(t *testing.T) {
 	if tr.IBAN != "NL01" {
 		t.Fatalf("IBAN = %q", tr.IBAN)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// markers, time and secrets
+// ---------------------------------------------------------------------------
+
+func TestRoundTripMarkersAndTimeTypes(t *testing.T) {
+	assertRoundTrip(t, "char", Char('é'))
+	assertRoundTrip(t, "url", URL("https://golem.cloud/agents"))
+	assertRoundTrip(t, "duration", 90*time.Second)
+	assertRoundTrip(t, "datetime", time.Unix(1_700_000_000, 123_456_789).UTC())
+
+	// and they compose like everything else
+	assertRoundTrip(t, "option<datetime>", Some(time.Unix(42, 0).UTC()))
+	assertRoundTrip(t, "list<url>", []URL{"https://a.example", "https://b.example"})
+}
+
+func TestMarkersLowerToTheirOwnWitTypes(t *testing.T) {
+	// Char is an int32 and URL is a string underneath, so without recognition by
+	// named type they would silently lower to s32 and string.
+	for _, tc := range []struct {
+		name string
+		rt   reflect.Type
+		want uint8
+	}{
+		{"Char", reflect.TypeFor[Char](), types.SchemaTypeBodyCharType},
+		{"URL", reflect.TypeFor[URL](), types.SchemaTypeBodyUrlType},
+		{"time.Time", reflect.TypeFor[time.Time](), types.SchemaTypeBodyDatetimeType},
+		{"time.Duration", reflect.TypeFor[time.Duration](), types.SchemaTypeBodyDurationType},
+	} {
+		var g graphBuilder
+		root := g.node(compile(tc.rt))
+		if got := g.build().TypeNodes[root].Body.Tag(); got != tc.want {
+			t.Errorf("%s lowered to tag %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestSecretRoundTripsAndStaysOutOfLogs(t *testing.T) {
+	got := roundTrip(t, NewSecret("hunter2"))
+	if got.Reveal() != "hunter2" {
+		t.Fatalf("revealed %q", got.Reveal())
+	}
+	// The whole point: formatting must not leak the payload.
+	for _, s := range []string{
+		fmt.Sprintf("%v", got), fmt.Sprintf("%s", got), fmt.Sprintf("%#v", got),
+	} {
+		if strings.Contains(s, "hunter2") {
+			t.Fatalf("secret leaked through formatting: %s", s)
+		}
+	}
+
+	// The schema marks it secret, while the value stays the revealed type.
+	var g graphBuilder
+	root := g.node(compile(reflect.TypeFor[Secret[string]]()))
+	if tag := g.build().TypeNodes[root].Body.Tag(); tag != types.SchemaTypeBodySecretType {
+		t.Fatalf("Secret lowered to tag %d, want secret-type", tag)
+	}
+	assertRoundTrip(t, "secret in a record", struct {
+		Name  string
+		Token Secret[string]
+	}{Name: "svc", Token: NewSecret("abc")})
 }

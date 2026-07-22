@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"time"
 
 	types "github.com/golemcloud/golem-go/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
@@ -80,6 +81,13 @@ func buildCodec(c *codec) {
 	// generic struct-as-record case. The check is an interface assertion on the
 	// zero value, done once here rather than per value.
 	if sdkComposite(c) {
+		return
+	}
+
+	// Concrete named types are matched exactly, before the kind switch would
+	// treat them as their underlying primitive.
+	if fill, ok := namedTypeCodecs[c.typ]; ok {
+		fill(c)
 		return
 	}
 
@@ -209,6 +217,9 @@ func sdkComposite(c *codec) bool {
 	zero := reflect.New(c.typ).Elem().Interface()
 
 	switch z := zero.(type) {
+	case secretish:
+		compileSecret(c, compile(z.secretElem()))
+		return true
 	case optionish:
 		compileOption(c, compile(z.optionElem()), optionValueOps())
 		return true
@@ -662,5 +673,74 @@ func compileEnum(c *codec, d *enumDef) {
 			dst.SetUint(uint64(i))
 		}
 		return nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// named types and markers
+// ---------------------------------------------------------------------------
+
+// namedTypeCodecs holds the types recognised by identity rather than by kind:
+// each has a Go representation indistinguishable from a primitive, so only the
+// named type reveals the intent.
+var namedTypeCodecs = map[reflect.Type]func(*codec){
+	reflect.TypeFor[Char](): func(c *codec) {
+		scalar(c, types.MakeSchemaTypeBodyCharType(), types.SchemaValueNodeCharValue,
+			func(b *valBuilder, v reflect.Value) int32 {
+				return b.push(types.MakeSchemaValueNodeCharValue(rune(v.Int())))
+			},
+			func(dst reflect.Value, n types.SchemaValueNode) { dst.SetInt(int64(n.CharValue())) })
+	},
+	reflect.TypeFor[URL](): func(c *codec) {
+		scalar(c, types.MakeSchemaTypeBodyUrlType(types.UrlRestrictions{
+			AllowedSchemes: witTypes.None[[]string](),
+			AllowedHosts:   witTypes.None[[]string](),
+		}), types.SchemaValueNodeUrlValue,
+			func(b *valBuilder, v reflect.Value) int32 {
+				return b.push(types.MakeSchemaValueNodeUrlValue(v.String()))
+			},
+			func(dst reflect.Value, n types.SchemaValueNode) { dst.SetString(n.UrlValue()) })
+	},
+	reflect.TypeFor[time.Time](): func(c *codec) {
+		scalar(c, types.MakeSchemaTypeBodyDatetimeType(), types.SchemaValueNodeDatetimeValue,
+			func(b *valBuilder, v reflect.Value) int32 {
+				t := v.Interface().(time.Time)
+				return b.push(types.MakeSchemaValueNodeDatetimeValue(types.Datetime{
+					Seconds:     t.Unix(),
+					Nanoseconds: uint32(t.Nanosecond()),
+				}))
+			},
+			func(dst reflect.Value, n types.SchemaValueNode) {
+				d := n.DatetimeValue()
+				// UTC, so a round trip is stable: the wire carries no zone.
+				dst.Set(reflect.ValueOf(time.Unix(d.Seconds, int64(d.Nanoseconds)).UTC()))
+			})
+	},
+	reflect.TypeFor[time.Duration](): func(c *codec) {
+		scalar(c, types.MakeSchemaTypeBodyDurationType(), types.SchemaValueNodeDurationValue,
+			func(b *valBuilder, v reflect.Value) int32 {
+				return b.push(types.MakeSchemaValueNodeDurationValue(
+					types.DurationValuePayload{Nanoseconds: v.Int()}))
+			},
+			func(dst reflect.Value, n types.SchemaValueNode) {
+				dst.SetInt(n.DurationValue().Nanoseconds)
+			})
+	},
+}
+
+func compileSecret(c *codec, inner *codec) {
+	c.body = func(g *graphBuilder) types.SchemaTypeBody {
+		return types.MakeSchemaTypeBodySecretType(types.SecretSpec{
+			Inner:    g.node(inner),
+			Category: witTypes.None[string](),
+		})
+	}
+	// A secret is a transparent wrapper on the value side: the payload is
+	// encoded as its revealed type, and the schema marks it as sensitive.
+	c.encode = func(b *valBuilder, v reflect.Value) int32 {
+		return inner.encode(b, v.Interface().(secretish).secretGet())
+	}
+	c.decode = func(d *decoder, dst reflect.Value, idx int32) error {
+		return inner.decode(d, dst.Addr().Interface().(secretSetter).secretSet(), idx)
 	}
 }

@@ -191,3 +191,47 @@ func (r *Result[Ok, Err]) resultSetErr() reflect.Value {
 	r.isErr = true
 	return reflect.ValueOf(&r.err).Elem()
 }
+
+// ---------------------------------------------------------------------------
+// Markers
+// ---------------------------------------------------------------------------
+
+// Char is a single Unicode code point, lowering to the WIT char type. Go's rune
+// is an alias for int32 and so is indistinguishable from a plain integer; this
+// named type is what makes the intent visible to the deriver.
+type Char rune
+
+// URL is a string constrained to a URL, lowering to the WIT url type.
+type URL string
+
+// Secret wraps a value whose payload must not be logged or persisted in the
+// clear. It lowers to the WIT secret type, which carries the revealed payload
+// type alongside the handle.
+type Secret[T any] struct {
+	value T
+}
+
+// NewSecret wraps v as a Secret.
+func NewSecret[T any](v T) Secret[T] { return Secret[T]{value: v} }
+
+// Reveal returns the wrapped value.
+func (s Secret[T]) Reveal() T { return s.value }
+
+// String keeps secrets out of logs and error messages formatted with %v or %s.
+func (s Secret[T]) String() string { return "golem.Secret(redacted)" }
+
+// GoString does the same for %#v.
+func (s Secret[T]) GoString() string { return "golem.Secret(redacted)" }
+
+type secretish interface {
+	secretElem() reflect.Type
+	secretGet() reflect.Value
+}
+
+type secretSetter interface{ secretSet() reflect.Value }
+
+func (s Secret[T]) secretElem() reflect.Type { return reflect.TypeFor[T]() }
+
+func (s Secret[T]) secretGet() reflect.Value { return reflect.ValueOf(&s.value).Elem() }
+
+func (s *Secret[T]) secretSet() reflect.Value { return reflect.ValueOf(&s.value).Elem() }
