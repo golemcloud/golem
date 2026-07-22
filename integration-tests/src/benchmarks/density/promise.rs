@@ -25,6 +25,9 @@ use std::time::{Duration, Instant};
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
 
+pub const PROMISE_PAYLOAD_BOOLEAN: usize = 1;
+pub const PROMISE_PAYLOAD_ONE_INTEGER: usize = std::mem::size_of::<u64>();
+pub const PROMISE_PAYLOAD_TWO_INTEGERS: usize = 2 * std::mem::size_of::<u64>();
 pub const PROMISE_PAYLOAD_TINY: usize = 256;
 pub const PROMISE_PAYLOAD_SMALL: usize = 65_536;
 pub const PROMISE_PAYLOAD_MEDIUM: usize = 16_777_216;
@@ -429,6 +432,9 @@ fn validated_rates(rates: &[u32]) -> anyhow::Result<&[u32]> {
 fn payload_label(size: usize) -> &'static str {
     match size {
         PROMISE_PAYLOAD_TINY => "tiny",
+        PROMISE_PAYLOAD_BOOLEAN => "boolean",
+        PROMISE_PAYLOAD_ONE_INTEGER => "one-integer",
+        PROMISE_PAYLOAD_TWO_INTEGERS => "two-integers",
         PROMISE_PAYLOAD_SMALL => "small",
         PROMISE_PAYLOAD_MEDIUM => "medium",
         PROMISE_PAYLOAD_HUGE => "huge",
@@ -550,6 +556,9 @@ mod tests {
     #[test]
     fn accepts_documented_payload_sizes() {
         for size in [
+            PROMISE_PAYLOAD_BOOLEAN,
+            PROMISE_PAYLOAD_ONE_INTEGER,
+            PROMISE_PAYLOAD_TWO_INTEGERS,
             PROMISE_PAYLOAD_TINY,
             PROMISE_PAYLOAD_SMALL,
             PROMISE_PAYLOAD_MEDIUM,
