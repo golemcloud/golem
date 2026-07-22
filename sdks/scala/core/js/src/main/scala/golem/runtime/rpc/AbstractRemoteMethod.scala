@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -51,4 +51,22 @@ abstract class AbstractRemoteMethod[Trait, In, Out] protected (
 
   protected final def scheduleCancelableWith(input: In, when: Datetime): Future[CancellationToken] =
     resolved.scheduleCancelable(method, when, input)
+
+  protected final def awaitWithMetadata(input: In): Future[InvocationResult[Out]] =
+    resolved.awaitWithMetadata(method, input)
+
+  protected final def cancelableAwaitWithMetadata(input: In): Either[String, CancelableAsyncInvocation[Out]] =
+    resolved.cancelableAwaitWithMetadata(method, input)
+
+  protected final def triggerWithMetadata(input: In): Future[InvocationReceipt] =
+    resolved.triggerWithMetadata(method, input)
+
+  protected final def scheduleWithMetadata(input: In, when: Datetime): Future[InvocationReceipt] =
+    resolved.scheduleWithMetadata(method, when, input)
+
+  protected final def scheduleCancelableWithMetadata(
+    input: In,
+    when: Datetime
+  ): Future[CancelableInvocationReceipt] =
+    resolved.scheduleCancelableWithMetadata(method, when, input)
 }

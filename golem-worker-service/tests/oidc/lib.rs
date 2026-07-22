@@ -27,7 +27,7 @@ use golem_worker_service::custom_api::oidc::session_store::{
     RedisSessionStore, SqliteSessionStore,
 };
 use rustls::RootCertStore;
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 use std::time::Duration;
 use tempfile::NamedTempFile;
 use test_r::test_dep;
@@ -35,19 +35,23 @@ use tracing::Level;
 
 test_r::enable!();
 
+static TRACING_INIT: Once = Once::new();
+
 #[derive(Debug)]
 pub struct Tracing;
 
 impl Tracing {
     pub fn init() -> Self {
-        // The AWS SDK crates transitively pull in both aws-lc-rs and ring as rustls backends.
-        // When both are compiled in, rustls requires an explicit process-level default.
-        // We use ring consistently with the rest of the workspace.
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        init_tracing_with_default_debug_env_filter(
-            &TracingConfig::test_pretty_without_time("worker-service-session-store-tests")
-                .with_env_overrides(),
-        );
+        TRACING_INIT.call_once(|| {
+            // The AWS SDK crates transitively pull in both aws-lc-rs and ring as rustls backends.
+            // When both are compiled in, rustls requires an explicit process-level default.
+            // We use ring consistently with the rest of the workspace.
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            init_tracing_with_default_debug_env_filter(
+                &TracingConfig::test_pretty_without_time("worker-service-session-store-tests")
+                    .with_env_overrides(),
+            );
+        });
         Self
     }
 }
@@ -177,8 +181,17 @@ async fn redis_tls_pool(#[tagged_as("tls")] redis_tls: &Arc<dyn Redis>) -> Redis
         ..Default::default()
     };
 
-    let mut fred_config = fred::prelude::Config::from_url(redis_config.url().as_str()).unwrap();
-    fred_config.tls = Some(tls_connector);
+    let fred_config = fred::prelude::Config {
+        username: redis_config.username.clone(),
+        password: redis_config.password.clone(),
+        server: fred::prelude::ServerConfig::new_centralized(
+            redis_config.host.clone(),
+            redis_config.port,
+        ),
+        database: Some(redis_config.database as u8),
+        tls: Some(tls_connector),
+        ..Default::default()
+    };
 
     let policy = fred::prelude::ReconnectPolicy::new_exponential(
         redis_config.retries.max_attempts,

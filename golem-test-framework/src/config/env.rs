@@ -110,10 +110,6 @@ impl EnvBasedTestDependenciesConfig {
     }
 
     pub fn with_env_overrides(mut self) -> Self {
-        if opt_env_var("GOLEM_TEST_DB").as_deref() == Some("sqlite") {
-            self.db_type = DbType::Sqlite;
-        }
-
         if let Some(quiet) = opt_env_var_bool("QUIET") {
             self.quiet = quiet;
         }

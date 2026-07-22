@@ -12,34 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{FromSchema, FromSchemaError, IntoSchema, SchemaBuilder, value_kind};
+use super::{FromSchema, FromSchemaError, IntoSchema, SchemaBuilder, url_from_value, url_to_value};
 use crate::schema::metadata::TypeId;
-use crate::schema::schema_type::SchemaType;
+use crate::schema::schema_type::{SchemaType, UrlRestrictions};
 use crate::schema::schema_value::SchemaValue;
 
-// A `url::Url` is modelled as its string form.
+// A `url::Url` is modelled as the rich `Url` schema type.
 impl IntoSchema for ::url::Url {
     fn type_id() -> TypeId {
         TypeId::new("url.Url")
     }
     fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::string()
+        SchemaType::url(UrlRestrictions::default())
     }
     fn to_value(&self) -> SchemaValue {
-        SchemaValue::String(self.to_string())
+        url_to_value(self.to_string())
     }
 }
 
 impl FromSchema for ::url::Url {
     fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
-        match v {
-            SchemaValue::String(s) => ::url::Url::parse(s)
-                .map_err(|e| FromSchemaError::custom(format!("invalid Url: {e}"))),
-            other => Err(FromSchemaError::shape_mismatch(
-                "string",
-                value_kind(other),
-                "Url",
-            )),
-        }
+        let url = url_from_value(v, "Url")?;
+        ::url::Url::parse(&url).map_err(|e| FromSchemaError::custom(format!("invalid Url: {e}")))
     }
 }

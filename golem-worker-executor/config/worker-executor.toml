@@ -42,6 +42,7 @@ type = "Enabled"
 
 [component_cache]
 max_capacity = 32
+max_concurrent_compilations = 16
 max_metadata_capacity = 16384
 max_resolved_component_capacity = 1024
 time_to_idle = "12h"
@@ -90,6 +91,13 @@ type = "KVStoreRedis"
 
 [indexed_storage.config]
 
+[indexed_storage_retry]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
+
 [key_value_storage]
 type = "NamespaceRouted"
 
@@ -119,6 +127,13 @@ type = "Sqlite"
 database = "../data/worker-executor-key-value-storage.db"
 foreign_keys = false
 max_connections = 10
+
+[key_value_storage_retry]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
 
 [limits]
 ephemeral_fuel_overdraft_multiplier = 100
@@ -160,13 +175,6 @@ plugin_max_elapsed_time = "5s"
 
 [oplog.default_snapshotting]
 type = "Disabled"
-
-[oplog.indexed_storage_retry]
-max_attempts = 3
-max_delay = "1s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 3.0
 
 [oplog.oplog_processor_snapshotting]
 type = "EveryNInvocation"
@@ -261,6 +269,13 @@ type = "Sqlite"
 database = "../data/worker-executor-scheduler-storage.db"
 foreign_keys = false
 max_connections = 10
+
+[scheduler_storage_retry]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
 
 [shard_manager]
 connect_timeout = "10s"
@@ -403,6 +418,7 @@ without_time = false
 # 
 # [component_cache]
 # max_capacity = 32
+# max_concurrent_compilations = 16
 # max_metadata_capacity = 16384
 # max_resolved_component_capacity = 1024
 # time_to_idle = "12h"
@@ -465,11 +481,25 @@ without_time = false
 # min_delay = "100ms"
 # multiplier = 2.0
 # 
+# [indexed_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+#
 # [key_value_storage]
 # type = "InMemory"
 # 
 # [key_value_storage.config]
 # 
+# [key_value_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+#
 # [limits]
 # ephemeral_fuel_overdraft_multiplier = 100
 # epoch_interval = "10ms"
@@ -510,13 +540,6 @@ without_time = false
 # 
 # [oplog.default_snapshotting]
 # type = "Disabled"
-# 
-# [oplog.indexed_storage_retry]
-# max_attempts = 3
-# max_delay = "1s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
 # 
 # [oplog.oplog_processor_snapshotting]
 # type = "EveryNInvocation"
@@ -612,6 +635,13 @@ without_time = false
 # foreign_keys = false
 # max_connections = 10
 # 
+# [scheduler_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+#
 # [shard_manager]
 # connect_timeout = "10s"
 # host = "localhost"
@@ -737,6 +767,7 @@ without_time = false
 # 
 # [component_cache]
 # max_capacity = 32
+# max_concurrent_compilations = 16
 # max_metadata_capacity = 16384
 # max_resolved_component_capacity = 1024
 # time_to_idle = "12h"
@@ -785,11 +816,25 @@ without_time = false
 # 
 # [indexed_storage.config]
 # 
+# [indexed_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+#
 # [key_value_storage]
 # type = "InMemory"
 # 
 # [key_value_storage.config]
 # 
+# [key_value_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+#
 # [limits]
 # ephemeral_fuel_overdraft_multiplier = 100
 # epoch_interval = "10ms"
@@ -830,13 +875,6 @@ without_time = false
 # 
 # [oplog.default_snapshotting]
 # type = "Disabled"
-# 
-# [oplog.indexed_storage_retry]
-# max_attempts = 3
-# max_delay = "1s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
 # 
 # [oplog.oplog_processor_snapshotting]
 # type = "EveryNInvocation"
@@ -932,6 +970,13 @@ without_time = false
 # foreign_keys = false
 # max_connections = 10
 # 
+# [scheduler_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+#
 # [shard_manager]
 # connect_timeout = "10s"
 # host = "localhost"

@@ -98,7 +98,7 @@ fn structured_output_schema(graph: &SchemaGraph, output: &OutputSchema) -> Optio
     let OutputSchema::Single(ty) = output else {
         return None;
     };
-    if is_unstructured_output(graph, ty) {
+    if is_unstructured_output(graph, ty) || renders_as_resource_link(graph, ty) {
         return None;
     }
     let mut inner =
@@ -153,6 +153,17 @@ fn is_unstructured_output(graph: &SchemaGraph, ty: &SchemaType) -> bool {
 
 fn resolves_to_option(graph: &SchemaGraph, ty: &SchemaType) -> bool {
     matches!(graph.resolve_ref(ty), Ok(SchemaType::Option { .. }))
+}
+
+/// Whether a root output renders as an MCP `resource_link` content block rather
+/// than structured content — a bare rich `Url` or `Path` scalar (see
+/// `schema_value_to_tool_result`). MCP omits the output schema for these so
+/// clients render the content array instead of validating structured content.
+fn renders_as_resource_link(graph: &SchemaGraph, ty: &SchemaType) -> bool {
+    matches!(
+        graph.resolve_ref(ty),
+        Ok(SchemaType::Url { .. } | SchemaType::Path { .. })
+    )
 }
 
 #[cfg(test)]
@@ -254,6 +265,37 @@ mod tests {
         let meth = method(
             vec![NamedField::user_supplied("city", SchemaType::string())],
             OutputSchema::Single(Box::new(SchemaType::text(TextRestrictions::default()))),
+        );
+        let schema = get_mcp_tool_schema(&graph, &ctor, &meth);
+        assert!(schema.output_schema.is_none());
+    }
+
+    #[test]
+    fn url_output_has_no_schema() {
+        use golem_common::schema::schema_type::UrlRestrictions;
+        let graph = SchemaGraph::empty();
+        let ctor = constructor(vec![]);
+        let meth = method(
+            vec![NamedField::user_supplied("city", SchemaType::string())],
+            OutputSchema::Single(Box::new(SchemaType::url(UrlRestrictions::default()))),
+        );
+        let schema = get_mcp_tool_schema(&graph, &ctor, &meth);
+        assert!(schema.output_schema.is_none());
+    }
+
+    #[test]
+    fn path_output_has_no_schema() {
+        use golem_common::schema::schema_type::{PathDirection, PathKind, PathSpec};
+        let graph = SchemaGraph::empty();
+        let ctor = constructor(vec![]);
+        let meth = method(
+            vec![NamedField::user_supplied("city", SchemaType::string())],
+            OutputSchema::Single(Box::new(SchemaType::path(PathSpec {
+                direction: PathDirection::Output,
+                kind: PathKind::File,
+                allowed_mime_types: None,
+                allowed_extensions: None,
+            }))),
         );
         let schema = get_mcp_tool_schema(&graph, &ctor, &meth);
         assert!(schema.output_schema.is_none());

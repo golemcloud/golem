@@ -16,7 +16,7 @@ use golem_worker_executor_test_utils::{LastUniqueId, TestContext, TestWorkerExec
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -389,6 +389,7 @@ async fn test_playback_and_rewind(
 }
 
 #[test]
+#[timeout("30s")]
 #[tracing::instrument]
 async fn test_playback_and_fork(
     last_unique_id: &LastUniqueId,

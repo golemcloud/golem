@@ -504,6 +504,7 @@ struct CreateOplogConstructor {
     initial_entry: Option<OplogEntry>,
     inner: Arc<dyn OplogService>,
     last_oplog_index: Option<OplogIndex>,
+    fresh: bool,
     oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     components: Arc<dyn ComponentService>,
     initial_worker_metadata: AgentMetadata,
@@ -521,6 +522,7 @@ impl CreateOplogConstructor {
         initial_entry: Option<OplogEntry>,
         inner: Arc<dyn OplogService>,
         last_oplog_index: Option<OplogIndex>,
+        fresh: bool,
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService>,
         initial_worker_metadata: AgentMetadata,
@@ -535,6 +537,7 @@ impl CreateOplogConstructor {
             initial_entry,
             inner,
             last_oplog_index,
+            fresh,
             oplog_plugins,
             components,
             initial_worker_metadata,
@@ -558,16 +561,29 @@ impl OplogConstructor for CreateOplogConstructor {
             }
         };
         let inner = if let Some(initial_entry) = self.initial_entry {
-            self.inner
-                .create(
-                    &self.owned_agent_id,
-                    self.agent_mode,
-                    initial_entry,
-                    self.initial_worker_metadata.clone(),
-                    self.last_known_status.clone(),
-                    self.execution_status.clone(),
-                )
-                .await
+            if self.fresh {
+                self.inner
+                    .create_fresh(
+                        &self.owned_agent_id,
+                        self.agent_mode,
+                        initial_entry,
+                        self.initial_worker_metadata.clone(),
+                        self.last_known_status.clone(),
+                        self.execution_status.clone(),
+                    )
+                    .await
+            } else {
+                self.inner
+                    .create(
+                        &self.owned_agent_id,
+                        self.agent_mode,
+                        initial_entry,
+                        self.initial_worker_metadata.clone(),
+                        self.last_known_status.clone(),
+                        self.execution_status.clone(),
+                    )
+                    .await
+            }
         } else {
             self.inner
                 .open(
@@ -653,6 +669,38 @@ impl OplogService for ForwardingOplogService {
                     Some(initial_entry),
                     self.inner.clone(),
                     Some(OplogIndex::INITIAL),
+                    false,
+                    self.oplog_plugins.clone(),
+                    self.components.clone(),
+                    initial_worker_metadata,
+                    last_known_status,
+                    execution_status,
+                    self.plugin_max_commit_count,
+                    self.plugin_max_elapsed_time,
+                ),
+            )
+            .await
+    }
+
+    async fn create_fresh(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        initial_entry: OplogEntry,
+        initial_worker_metadata: AgentMetadata,
+        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
+        execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+    ) -> Arc<dyn Oplog + 'static> {
+        self.oplogs
+            .get_or_open(
+                &owned_agent_id.agent_id,
+                CreateOplogConstructor::new(
+                    owned_agent_id.clone(),
+                    agent_mode,
+                    Some(initial_entry),
+                    self.inner.clone(),
+                    Some(OplogIndex::INITIAL),
+                    true,
                     self.oplog_plugins.clone(),
                     self.components.clone(),
                     initial_worker_metadata,
@@ -683,6 +731,7 @@ impl OplogService for ForwardingOplogService {
                     None,
                     self.inner.clone(),
                     last_oplog_index,
+                    false,
                     self.oplog_plugins.clone(),
                     self.components.clone(),
                     initial_worker_metadata,
@@ -2084,6 +2133,8 @@ mod tests {
         ) -> Result<Component, WorkerExecutorError> {
             use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
             use golem_common::model::agent::AgentTypeName;
+            use golem_common::model::card::recipient::RecipientPattern;
+            use golem_common::model::component::AgentTypeInitialPermissions;
             use std::collections::BTreeMap;
 
             let provision_configs = if self.installed_plugins.is_empty() {
@@ -2092,8 +2143,18 @@ mod tests {
                 BTreeMap::from([(
                     AgentTypeName("TestPlugin".to_string()),
                     AgentTypeProvisionConfig {
+                        initial_permissions: AgentTypeInitialPermissions::default_for_recipient(
+                            RecipientPattern::Account {
+                                account: golem_common::model::account::AccountEmail::new(
+                                    "test@golem",
+                                ),
+                            },
+                        )
+                        .to_polymorphic_card(),
                         plugins: self.installed_plugins.clone(),
-                        ..Default::default()
+                        env: BTreeMap::new(),
+                        config: Vec::new(),
+                        files: Vec::new(),
                     },
                 )])
             };

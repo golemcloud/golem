@@ -9,7 +9,6 @@ import scalajscrossproject.ScalaJSCrossPlugin.autoImport.*
 // ---------------------------------------------------------------------------
 
 val Scala3Golem = "3.8.2"
-val Scala213    = "2.13.18"
 val Scala212    = "2.12.21"
 
 // ---------------------------------------------------------------------------
@@ -19,7 +18,7 @@ val Scala212    = "2.12.21"
 ThisBuild / organization     := "cloud.golem"
 ThisBuild / scalaVersion     := Scala3Golem
 ThisBuild / dynverTagPrefix  := "golem-scala-v"
-ThisBuild / licenses     := List("Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0"))
+ThisBuild / licenses     := List("Golem Source License v1.1" -> url("http://license.golem.cloud/LICENSE"))
 ThisBuild / homepage     := Some(url("https://github.com/golemcloud/golem"))
 ThisBuild / scmInfo := Some(
   ScmInfo(
@@ -73,16 +72,13 @@ lazy val commonSettings = Seq(
       case Some((3, minor)) if minor >= 5 => Seq("-experimental")
       case _                              => Nil
     }
-  }
-)
-
-def versionSpecificSourceDirs(conf: Configuration) = Seq(
-  conf / unmanagedSourceDirectories ++= {
-    val base = (conf / sourceDirectory).value
+  },
+  // Make Scaladoc comments of already-compiled sources visible to the agent/tool
+  // macros (Symbol.docstring) by reading docs back from TASTy.
+  scalacOptions ++= {
     CrossVersion.partialVersion(scalaVersion.value) match {
-      case Some((2, _)) => Seq(base / "scala-2")
-      case Some((3, _)) => Seq(base / "scala-3")
-      case _            => Nil
+      case Some((3, minor)) => Seq(if (minor >= 8) "-Xread-docs" else "-Yread-docs")
+      case _                => Nil
     }
   }
 )
@@ -118,16 +114,14 @@ lazy val model = crossProject(JVMPlatform, JSPlatform)
   .in(file("model"))
   .settings(commonSettings)
   .settings(
-    name               := "golem-scala-model",
-    crossScalaVersions := Seq(Scala3Golem, Scala213),
+    name := "golem-scala-model",
     libraryDependencies ++= Seq(
       zioBlocksDep("schema").value,
+      "io.github.cquiroz" %%% "scala-java-time" % scalaJavaTimeVersion,
       "dev.zio" %%% "zio-test"     % zioTestVersion % Test,
       "dev.zio" %%% "zio-test-sbt" % zioTestVersion % Test
     )
   )
-  .settings(versionSpecificSourceDirs(Compile))
-  .settings(versionSpecificSourceDirs(Test))
   .jvmSettings(
     Compile / unmanagedSourceDirectories ++= Seq(
       (ThisBuild / baseDirectory).value / "model" / ".jvm" / "src" / "main" / "scala"
@@ -151,8 +145,7 @@ lazy val core = project
   .settings(commonSettings)
   .settings(jsSettings)
   .settings(
-    name               := "golem-scala-core",
-    crossScalaVersions := Seq(Scala3Golem, Scala213),
+    name := "golem-scala-core",
     libraryDependencies ++= Seq(
       "dev.zio"           %%% "zio-test"                   % zioTestVersion       % Test,
       "dev.zio"           %%% "zio-test-sbt"               % zioTestVersion       % Test,
@@ -162,8 +155,6 @@ lazy val core = project
       "io.github.cquiroz" %%% "locales-full-currencies-db" % "1.5.4"             % Test
     )
   )
-  .settings(versionSpecificSourceDirs(Compile))
-  .settings(versionSpecificSourceDirs(Test))
 
 // --- macros (JVM only) -----------------------------------------------------
 
@@ -172,19 +163,7 @@ lazy val macros = project
   .dependsOn(model.jvm)
   .settings(commonSettings)
   .settings(
-    name               := "golem-scala-macros",
-    crossScalaVersions := Seq(Scala3Golem, Scala213),
-    scalacOptions += "-language:experimental.macros",
-    libraryDependencies ++= {
-      CrossVersion.partialVersion(scalaVersion.value) match {
-        case Some((2, _)) =>
-          Seq(
-            "org.scala-lang" % "scala-reflect"  % scalaVersion.value,
-            "org.scala-lang" % "scala-compiler" % scalaVersion.value % Test
-          )
-        case _ => Nil
-      }
-    },
+    name := "golem-scala-macros",
     libraryDependencies ++= Seq(
       "dev.zio"     %% "zio-test"              % zioTestVersion             % Test,
       "dev.zio"     %% "zio-test-sbt"          % zioTestVersion             % Test,
@@ -192,10 +171,8 @@ lazy val macros = project
       "dev.zio"     %% "zio-schema-derivation" % zioSchemaDerivationVersion % Test
     )
   )
-  .settings(versionSpecificSourceDirs(Compile))
-  .settings(versionSpecificSourceDirs(Test))
 
-// --- codegen (JVM only, cross 2.12 + 3.8) ----------------------------------
+// --- codegen (JVM only) ----------------------------------------------------
 
 lazy val codegen = project
   .in(file("codegen"))
@@ -203,6 +180,9 @@ lazy val codegen = project
   .settings(
     name               := "golem-scala-codegen",
     scalaVersion       := Scala3Golem,
+    // sbt 1.x loads plugins with Scala 2.12; Mill loads these same sources with
+    // Scala 3. This is a build-tool implementation constraint, not SDK support
+    // for Scala 2 applications.
     crossScalaVersions := Seq(Scala212, Scala3Golem),
     libraryDependencies ++= Seq(
       "org.scalameta" %% "scalameta" % scalametaVersion,
@@ -235,9 +215,8 @@ lazy val testAgents = project
   .settings(commonSettings)
   .settings(jsSettings)
   .settings(
-    name               := "golem-scala-test-agents",
+    name := "golem-scala-test-agents",
     golem.sbt.GolemPlugin.autoImport.golemBasePackage := Some("example"),
-    crossScalaVersions := Seq(Scala3Golem, Scala213),
     publish / skip     := true,
     scalaJSUseMainModuleInitializer := false,
     scalaJSLinkerConfig ~= {
@@ -253,15 +232,8 @@ lazy val testAgents = project
       "io.github.cquiroz" %%% "scala-java-time-tzdb"  % scalaJavaTimeVersion,
       "dev.zio"           %%% "zio-http"              % zioHttpVersion
     ),
-    scalacOptions ++= {
-      CrossVersion.partialVersion(scalaVersion.value) match {
-        case Some((3, _)) => Seq("-Wconf:cat=unused:s")
-        case _            => Seq("-Wconf:cat=unused:s")
-      }
-    }
+    scalacOptions += "-Wconf:cat=unused:s"
   )
-  .settings(versionSpecificSourceDirs(Compile))
-  .settings(versionSpecificSourceDirs(Test))
 
 // --- integration-tests (JVM, not published) --------------------------------
 
@@ -270,7 +242,6 @@ lazy val integrationTests = project
   .settings(commonSettings)
   .settings(
     name               := "golem-scala-integration-tests",
-    crossScalaVersions := Seq(Scala3Golem),
     publish / skip     := true,
     fork               := true,
     Test / parallelExecution := false,
@@ -290,7 +261,7 @@ lazy val integrationTests = project
 // ---------------------------------------------------------------------------
 
 addCommandAlias(
-  "golemTest3",
+  "golemTestAll",
   s"""; ++$Scala3Golem
      ; modelJVM/test
      ; modelJS/test
@@ -299,19 +270,6 @@ addCommandAlias(
      ; testAgents/fastLinkJS
      """.stripMargin
 )
-
-addCommandAlias(
-  "golemTest2",
-  s"""; ++$Scala213
-     ; modelJVM/test
-     ; modelJS/test
-     ; core/test
-     ; macros/test
-     ; testAgents/fastLinkJS
-     """.stripMargin
-)
-
-addCommandAlias("golemTestAll", "; golemTest3; golemTest2")
 
 addCommandAlias(
   "golemPublishLocal",

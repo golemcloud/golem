@@ -66,7 +66,7 @@ fn account_owner(account: &str) -> AccountOwnerPattern {
 
 fn account_recipient(account: &str) -> AccountRecipientPattern {
     AccountRecipientPattern::Account {
-        account: account.to_string(),
+        account: account_email(account),
     }
 }
 
@@ -95,9 +95,9 @@ fn environment_recipient(
     environment: &str,
 ) -> EnvironmentRecipientPattern {
     EnvironmentRecipientPattern::Environment {
-        account: account.to_string(),
-        application: application.to_string(),
-        environment: environment.to_string(),
+        account: account_email(account),
+        application: application_name(application),
+        environment: environment_name(environment),
     }
 }
 
@@ -125,11 +125,11 @@ fn agent_recipient(
     agent: &str,
 ) -> AgentRecipientPattern {
     AgentRecipientPattern::Agent {
-        account: account.to_string(),
-        application: application.to_string(),
-        environment: environment.to_string(),
-        component: component.to_string(),
-        agent: agent.to_string(),
+        account: account_email(account),
+        application: application_name(application),
+        environment: environment_name(environment),
+        component: component_name(component),
+        agent_type: agent_type_name(agent),
     }
 }
 
@@ -422,11 +422,11 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         ),
         (
             "secret_reveal_agent_type",
-            "secret(acme/shop/prod) @ acme/shop/prod/cart-svc/ShoppingCart(*) : reveal : cart.api-key",
+            "secret(acme/shop/prod) @ acme/shop/prod/cart-svc/ShoppingCart : reveal : cart.api-key",
             PermissionPattern::Secret(ClassPermissionPattern::<SecretClass> {
                 verb: Some(SecretVerb::Reveal),
                 owner: environment_owner("acme", "shop", "prod"),
-                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
+                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart"),
                 resource: secret_key(vec![
                     SecretKeySegmentPattern::Literal("cart".to_string()),
                     SecretKeySegmentPattern::Literal("api-key".to_string()),
@@ -435,7 +435,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         ),
         (
             "agent_invoke",
-            "agent(acme/shop/prod/cart-svc/ShoppingCart(*)) @ acme/shop/prod/cart-svc/ShoppingCart(*) : invoke : add-item",
+            "agent(acme/shop/prod/cart-svc/ShoppingCart(*)) @ acme/shop/prod/cart-svc/ShoppingCart : invoke : add-item",
             PermissionPattern::Agent(ClassPermissionPattern::<AgentClass> {
                 verb: Some(AgentVerb::Invoke),
                 owner: agent_owner(
@@ -445,7 +445,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                     "cart-svc",
                     AgentOwnerLeafPattern::AgentTypeWildcard(agent_type_name("ShoppingCart")),
                 ),
-                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
+                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart"),
                 resource: AgentResourcePattern::Method(AgentMethodName("add-item".to_string())),
             }),
         ),
@@ -460,19 +460,18 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                     environment: environment_name("prod"),
                     component: component_name("cart-svc"),
                 },
-                recipient: AgentRecipientPattern::Agent {
-                    account: "acme".to_string(),
-                    application: "shop".to_string(),
-                    environment: "prod".to_string(),
-                    component: "cart-svc".to_string(),
-                    agent: "*".to_string(),
+                recipient: AgentRecipientPattern::ComponentAgents {
+                    account: account_email("acme"),
+                    application: application_name("shop"),
+                    environment: environment_name("prod"),
+                    component: component_name("cart-svc"),
                 },
                 resource: AgentResourcePattern::Any,
             }),
         ),
         (
             "agent_cancel_invocation_uuid",
-            "agent(acme/shop/prod/cart-svc/ShoppingCart(*)) @ acme/shop/prod/cart-svc/ShoppingCart(*) : cancel-invocation : 550e8400-e29b-41d4-a716-446655440000",
+            "agent(acme/shop/prod/cart-svc/ShoppingCart(*)) @ acme/shop/prod/cart-svc/ShoppingCart : cancel-invocation : 550e8400-e29b-41d4-a716-446655440000",
             PermissionPattern::Agent(ClassPermissionPattern::<AgentClass> {
                 verb: Some(AgentVerb::CancelInvocation),
                 owner: agent_owner(
@@ -482,7 +481,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                     "cart-svc",
                     AgentOwnerLeafPattern::AgentTypeWildcard(agent_type_name("ShoppingCart")),
                 ),
-                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
+                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart"),
                 resource: AgentResourcePattern::InvocationId(AgentInvocationIdPattern::Uuid(
                     fixed_uuid(),
                 )),
@@ -490,7 +489,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         ),
         (
             "agent_revert_oplog_index",
-            "agent(acme/shop/prod/cart-svc/ShoppingCart(*)) @ acme/shop/prod/cart-svc/ShoppingCart(*) : revert : 42",
+            "agent(acme/shop/prod/cart-svc/ShoppingCart(*)) @ acme/shop/prod/cart-svc/ShoppingCart : revert : 42",
             PermissionPattern::Agent(ClassPermissionPattern::<AgentClass> {
                 verb: Some(AgentVerb::Revert),
                 owner: agent_owner(
@@ -500,13 +499,13 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                     "cart-svc",
                     AgentOwnerLeafPattern::AgentTypeWildcard(agent_type_name("ShoppingCart")),
                 ),
-                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
+                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart"),
                 resource: AgentResourcePattern::OplogIndex(42),
             }),
         ),
         (
             "tool",
-            "tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart-svc/ShoppingCart(*) : invoke : search",
+            "tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart-svc/ShoppingCart : invoke : search",
             PermissionPattern::Tool(ClassPermissionPattern::<ToolClass> {
                 verb: Some(ToolVerb::Invoke),
                 owner: ToolOwnerPattern::Tool {
@@ -516,7 +515,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                     component: component_name("cli-tools"),
                     tool: "grep".to_string(),
                 },
-                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
+                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart"),
                 resource: ToolResourcePattern::Invocation(ToolInvocationPattern {
                     command_path: Some(vec![ToolIdentifier("search".to_string())]),
                     args: Vec::new(),
@@ -525,7 +524,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         ),
         (
             "tool_with_flags_and_args",
-            "tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart-svc/ShoppingCart(*) : invoke : search.files --pattern=* --path=src/** -in README.md",
+            "tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart-svc/ShoppingCart : invoke : search.files --pattern=* --path=src/** -in README.md",
             PermissionPattern::Tool(ClassPermissionPattern::<ToolClass> {
                 verb: Some(ToolVerb::Invoke),
                 owner: ToolOwnerPattern::Tool {
@@ -535,7 +534,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                     component: component_name("cli-tools"),
                     tool: "grep".to_string(),
                 },
-                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
+                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart"),
                 resource: ToolResourcePattern::Invocation(ToolInvocationPattern {
                     command_path: Some(vec![
                         ToolIdentifier("search".to_string()),
@@ -565,11 +564,11 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         ),
         (
             "kv",
-            "kv(acme/shop/prod) @ acme/shop/prod/cart-svc/ShoppingCart(*) : read : my-store.user-*",
+            "kv(acme/shop/prod) @ acme/shop/prod/cart-svc/ShoppingCart : read : my-store.user-*",
             PermissionPattern::Kv(ClassPermissionPattern::<KvClass> {
                 verb: Some(KvVerb::Read),
                 owner: environment_owner("acme", "shop", "prod"),
-                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
+                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart"),
                 resource: KvResourcePattern::StoreKey {
                     store: "my-store".to_string(),
                     key_pattern: "user-*".to_string(),
@@ -605,27 +604,27 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         ),
         (
             "card_derive",
-            "card(acme) @ acme/shop/prod/cart-svc/ShoppingCart(*) : derive : *",
+            "card(acme) @ acme/shop/prod/cart-svc/ShoppingCart : derive : *",
             PermissionPattern::Card(ClassPermissionPattern::<CardClass> {
                 verb: Some(CardVerb::Derive),
                 owner: account_owner("acme"),
-                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
+                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart"),
                 resource: CardResourcePattern::Any,
             }),
         ),
         (
             "card_install",
-            "card(acme) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : install : acme/shop/prod/cart-svc/ShoppingCart(*)",
+            "card(acme) @ acme/shop/prod/cart-svc/CartAgent : install : acme/shop/prod/cart-svc/ShoppingCart",
             PermissionPattern::Card(ClassPermissionPattern::<CardClass> {
                 verb: Some(CardVerb::Install),
                 owner: account_owner("acme"),
-                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "CartAgent(\"42\")"),
+                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "CartAgent"),
                 resource: CardResourcePattern::InstallTarget(agent_recipient(
                     "acme",
                     "shop",
                     "prod",
                     "cart-svc",
-                    "ShoppingCart(*)",
+                    "ShoppingCart",
                 )),
             }),
         ),
@@ -1233,11 +1232,11 @@ fn rejects_empty_resource_ids_when_any_resource_is_available() {
             AgentClass::NAME,
         ),
         (
-            "card(acme) @ acme/shop/prod/cart-svc/ShoppingCart(*) : derive :",
+            "card(acme) @ acme/shop/prod/cart-svc/ShoppingCart : derive :",
             CardClass::NAME,
         ),
         (
-            "tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart-svc/ShoppingCart(*) : invoke :",
+            "tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart-svc/ShoppingCart : invoke :",
             ToolClass::NAME,
         ),
     ];
@@ -1284,28 +1283,22 @@ fn parses_polymorphic_pattern_grant_examples_from_spec(r: &mut DynamicTestRegist
         ),
         (
             "env_agent_owner_concrete_agent_recipient",
-            "env(?agent) @ acme/shop/prod/cart-svc/ShoppingCart(*) : read : HOME",
+            "env(?agent) @ acme/shop/prod/cart-svc/ShoppingCart : read : HOME",
             PolymorphicPermissionPattern::Env(PolymorphicClassPermissionPattern::<EnvClass> {
                 verb: Some(EnvVerb::Read),
                 owner: PolymorphicAgentOwnerPattern::Agent,
-                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
+                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart"),
                 resource: EnvResourcePattern::VarName(EnvVarName("HOME".to_string())),
             }),
         ),
         (
             "secret_polymorphic_owner_concrete_agent_recipient",
-            "secret(?env) @ acme/shop/prod/cart-svc/ShoppingCart(*) : reveal : billing.account",
+            "secret(?env) @ acme/shop/prod/cart-svc/ShoppingCart : reveal : billing.account",
             PolymorphicPermissionPattern::Secret(
                 PolymorphicClassPermissionPattern::<SecretClass> {
                     verb: Some(SecretVerb::Reveal),
                     owner: PolymorphicEnvironmentOwnerPattern::Env,
-                    recipient: agent_recipient(
-                        "acme",
-                        "shop",
-                        "prod",
-                        "cart-svc",
-                        "ShoppingCart(*)",
-                    ),
+                    recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart"),
                     resource: secret_key(vec![
                         SecretKeySegmentPattern::Literal("billing".to_string()),
                         SecretKeySegmentPattern::Literal("account".to_string()),
@@ -1315,7 +1308,7 @@ fn parses_polymorphic_pattern_grant_examples_from_spec(r: &mut DynamicTestRegist
         ),
         (
             "agent_env_owner_template_concrete_agent_recipient",
-            "agent(?env/payment-svc/PaymentAgent(*)) @ acme/shop/prod/payment-svc/PaymentAgent(*) : invoke : charge",
+            "agent(?env/payment-svc/PaymentAgent(*)) @ acme/shop/prod/payment-svc/PaymentAgent : invoke : charge",
             PolymorphicPermissionPattern::Agent(PolymorphicClassPermissionPattern::<AgentClass> {
                 verb: Some(AgentVerb::Invoke),
                 owner: PolymorphicAgentOwnerPattern::EnvAgent {
@@ -1324,13 +1317,7 @@ fn parses_polymorphic_pattern_grant_examples_from_spec(r: &mut DynamicTestRegist
                         "PaymentAgent",
                     )),
                 },
-                recipient: agent_recipient(
-                    "acme",
-                    "shop",
-                    "prod",
-                    "payment-svc",
-                    "PaymentAgent(*)",
-                ),
+                recipient: agent_recipient("acme", "shop", "prod", "payment-svc", "PaymentAgent"),
                 resource: AgentResourcePattern::Method(AgentMethodName("charge".to_string())),
             }),
         ),
@@ -1486,15 +1473,15 @@ fn parses_polymorphic_manifest_pattern_grant_examples_from_spec(r: &mut DynamicT
         ),
         (
             "secret_environment_agent_recipient_slot",
-            "secret(?env) @ ?env/cart-svc/ShoppingCart(*) : hold : cart.api-key",
+            "secret(?env) @ ?env/cart-svc/ShoppingCart : hold : cart.api-key",
             PolymorphicManifestPermissionPattern::Secret(
                 PolymorphicManifestClassPermissionPattern::<SecretClass> {
                     verb: Some(SecretVerb::Hold),
                     owner: PolymorphicEnvironmentOwnerPattern::Env,
                     recipient: PolymorphicRecipientPattern::Agent(
                         PolymorphicAgentRecipientPattern::EnvironmentAgent {
-                            component: "cart-svc".to_string(),
-                            agent: "ShoppingCart(*)".to_string(),
+                            component: component_name("cart-svc"),
+                            agent_type: agent_type_name("ShoppingCart"),
                         },
                     ),
                     resource: secret_key(vec![
@@ -1506,7 +1493,7 @@ fn parses_polymorphic_manifest_pattern_grant_examples_from_spec(r: &mut DynamicT
         ),
         (
             "secret_concrete_recipient",
-            "secret(?env) @ acme/shop/prod/cart-svc/ShoppingCart(*) : hold : cart.api-key",
+            "secret(?env) @ acme/shop/prod/cart-svc/ShoppingCart : hold : cart.api-key",
             PolymorphicManifestPermissionPattern::Secret(
                 PolymorphicManifestClassPermissionPattern::<SecretClass> {
                     verb: Some(SecretVerb::Hold),
@@ -1516,7 +1503,7 @@ fn parses_polymorphic_manifest_pattern_grant_examples_from_spec(r: &mut DynamicT
                         "shop",
                         "prod",
                         "cart-svc",
-                        "ShoppingCart(*)",
+                        "ShoppingCart",
                     )),
                     resource: secret_key(vec![
                         SecretKeySegmentPattern::Literal("cart".to_string()),
@@ -1562,7 +1549,7 @@ fn parses_polymorphic_manifest_pattern_grant_examples_from_spec(r: &mut DynamicT
         ),
         (
             "agent_component_agent_recipient_slot",
-            "agent(?env/payment-svc/PaymentAgent(*)) @ ?component/PaymentAgent(*) : invoke : charge",
+            "agent(?env/payment-svc/PaymentAgent(*)) @ ?component/PaymentAgent : invoke : charge",
             PolymorphicManifestPermissionPattern::Agent(
                 PolymorphicManifestClassPermissionPattern::<AgentClass> {
                     verb: Some(AgentVerb::Invoke),
@@ -1574,7 +1561,7 @@ fn parses_polymorphic_manifest_pattern_grant_examples_from_spec(r: &mut DynamicT
                     },
                     recipient: PolymorphicRecipientPattern::Agent(
                         PolymorphicAgentRecipientPattern::ComponentAgent {
-                            agent: "PaymentAgent(*)".to_string(),
+                            agent_type: agent_type_name("PaymentAgent"),
                         },
                     ),
                     resource: AgentResourcePattern::Method(AgentMethodName("charge".to_string())),

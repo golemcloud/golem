@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::public_oplog_entry::CardExpiredParams;
 use super::{
     AgentError, AgentInitializationParameters, AgentInvocationOutputParameters,
     AgentMethodInvocationParameters, AgentResourceId, FallibleResultParameters, JsonSnapshotData,
@@ -27,8 +28,12 @@ use super::{
 };
 use crate::base_model::OplogIndex;
 use crate::base_model::agent::AgentMode;
+use crate::base_model::oplog::{
+    CardInstallFailure, PublicQueuedCardEvent, QueuedCardEvent, QueuedCardEventCard,
+};
 use crate::model::AgentInvocationResult;
 use crate::model::Empty;
+use crate::model::card::CardId;
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::payload::OplogPayload;
@@ -38,29 +43,30 @@ use crate::model::oplog::payload::host_functions::{
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardRevokedParams, ChangePersistenceLevelParams,
-    CommittedRemoteTransactionParams, CompletionDiscardedParams, CreateParams,
-    CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams,
-    EndParams, ErrorParams, ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams,
-    FinishSpanParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
-    LogParams, NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams,
-    PendingUpdateParams, PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams,
-    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
-    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
-    SuccessfulUpdateParams, SuspendParams,
+    CancelledParams, CardEventQueuedParams, CardInstallFailedParams, CardInstalledParams,
+    CardRevokedParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams,
+    CompletionDiscardedParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
+    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
+    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
+    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
+    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams,
+    SuspendParams,
 };
 use crate::model::oplog::{
     AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
     EphemeralFuelExhaustedError, EphemeralSleepTooLongError, HostStreamKind, OplogEntry,
-    PersistenceLevel, ReadOnlyViolationError,
+    PersistenceLevel, PublicQueuedCardEventCard, ReadOnlyViolationError,
 };
 use crate::model::quota::ResourceName;
 use crate::model::regions::OplogRegion;
 use crate::resource_runtime::ResourceTypeId;
 use golem_api_grpc::proto::golem::worker::oplog_entry::Entry;
 use golem_api_grpc::proto::golem::worker::{
-    AttributeValue, ExternalParentSpan, InvocationSpan, LocalInvocationSpan, invocation_span,
-    oplog_entry, wrapped_function_type,
+    AttributeValue, ExternalParentSpan, InvocationSpan, LocalInvocationSpan,
+    RawCardExpiredParameters, invocation_span, oplog_entry, wrapped_function_type,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
@@ -91,6 +97,175 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicTypedAgentConfigEntry>
                 .ok_or("Missing value field in PublicTypedAgentConfigEntry")?
                 .try_into()?,
         })
+    }
+}
+
+fn public_queued_card_event_from_proto(
+    value: golem_api_grpc::proto::golem::worker::QueuedCardEvent,
+) -> Result<PublicQueuedCardEvent, String> {
+    use golem_api_grpc::proto::golem::worker::queued_card_event::Event;
+
+    match value.event.ok_or("Missing queued card event")? {
+        Event::Install(event) => Ok(PublicQueuedCardEvent::Install(PublicQueuedCardEventCard {
+            card_id: CardId(event.card_id.ok_or("Missing card_id")?.into()),
+        })),
+        Event::Revoke(event) => Ok(PublicQueuedCardEvent::Revoke(PublicQueuedCardEventCard {
+            card_id: CardId(event.card_id.ok_or("Missing card_id")?.into()),
+        })),
+    }
+}
+
+fn public_queued_card_event_to_proto(
+    value: PublicQueuedCardEvent,
+) -> golem_api_grpc::proto::golem::worker::QueuedCardEvent {
+    use golem_api_grpc::proto::golem::worker::queued_card_event as proto;
+
+    let event = match value {
+        PublicQueuedCardEvent::Install(event) => proto::Event::Install(proto::Install {
+            card_id: Some(event.card_id.0.into()),
+        }),
+        PublicQueuedCardEvent::Revoke(event) => proto::Event::Revoke(proto::Revoke {
+            card_id: Some(event.card_id.0.into()),
+        }),
+    };
+
+    golem_api_grpc::proto::golem::worker::QueuedCardEvent { event: Some(event) }
+}
+
+fn raw_queued_card_event_from_proto(
+    value: golem_api_grpc::proto::golem::worker::RawQueuedCardEvent,
+) -> Result<QueuedCardEvent, String> {
+    use golem_api_grpc::proto::golem::worker::raw_queued_card_event::Event;
+
+    match value.event.ok_or("Missing queued card event")? {
+        Event::Install(event) => {
+            let card_id = CardId(event.card_id.ok_or("Missing card_id")?.into());
+            if event.card.is_empty() {
+                return Err("Queued card install is missing card payload".to_string());
+            }
+            let card: crate::model::card::StoredCard =
+                crate::serialization::deserialize(&event.card)
+                    .map_err(|err| format!("Failed to deserialize queued card install: {err}"))?;
+            if card.card_id() != card_id {
+                return Err("Queued card install card payload does not match card_id".to_string());
+            }
+            Ok(QueuedCardEvent::Install(QueuedCardEventCard {
+                card_id,
+                card: Some(card),
+            }))
+        }
+        Event::Revoke(event) => Ok(QueuedCardEvent::Revoke(QueuedCardEventCard {
+            card_id: CardId(event.card_id.ok_or("Missing card_id")?.into()),
+            card: None,
+        })),
+    }
+}
+
+fn raw_queued_card_event_to_proto(
+    value: QueuedCardEvent,
+) -> Result<golem_api_grpc::proto::golem::worker::RawQueuedCardEvent, String> {
+    use golem_api_grpc::proto::golem::worker::raw_queued_card_event as proto;
+
+    let event = match value {
+        QueuedCardEvent::Install(event) => {
+            let card = event
+                .card
+                .ok_or("Queued card install is missing card payload")?;
+            if card.card_id() != event.card_id {
+                return Err("Queued card install card payload does not match card_id".to_string());
+            }
+            proto::Event::Install(proto::Install {
+                card_id: Some(event.card_id.0.into()),
+                card: crate::serialization::serialize(&card)?,
+            })
+        }
+        QueuedCardEvent::Revoke(event) => proto::Event::Revoke(proto::Revoke {
+            card_id: Some(event.card_id.0.into()),
+        }),
+    };
+
+    Ok(golem_api_grpc::proto::golem::worker::RawQueuedCardEvent { event: Some(event) })
+}
+
+fn card_install_failure_from_proto(
+    value: golem_api_grpc::proto::golem::worker::CardInstallFailure,
+) -> Result<CardInstallFailure, String> {
+    match value {
+        golem_api_grpc::proto::golem::worker::CardInstallFailure::Unspecified => {
+            Err("Unspecified card install failure".to_string())
+        }
+        golem_api_grpc::proto::golem::worker::CardInstallFailure::CardRevoked => {
+            Ok(CardInstallFailure::CardRevoked)
+        }
+        golem_api_grpc::proto::golem::worker::CardInstallFailure::NotFound => {
+            Ok(CardInstallFailure::NotFound)
+        }
+        golem_api_grpc::proto::golem::worker::CardInstallFailure::RecipientMismatch => {
+            Ok(CardInstallFailure::RecipientMismatch)
+        }
+        golem_api_grpc::proto::golem::worker::CardInstallFailure::NotPermitted => {
+            Ok(CardInstallFailure::NotPermitted)
+        }
+    }
+}
+
+fn card_install_failure_to_proto(
+    value: CardInstallFailure,
+) -> golem_api_grpc::proto::golem::worker::CardInstallFailure {
+    match value {
+        CardInstallFailure::CardRevoked => {
+            golem_api_grpc::proto::golem::worker::CardInstallFailure::CardRevoked
+        }
+        CardInstallFailure::NotFound => {
+            golem_api_grpc::proto::golem::worker::CardInstallFailure::NotFound
+        }
+        CardInstallFailure::RecipientMismatch => {
+            golem_api_grpc::proto::golem::worker::CardInstallFailure::RecipientMismatch
+        }
+        CardInstallFailure::NotPermitted => {
+            golem_api_grpc::proto::golem::worker::CardInstallFailure::NotPermitted
+        }
+    }
+}
+
+fn raw_card_install_failure_from_proto(
+    value: golem_api_grpc::proto::golem::worker::RawCardInstallFailure,
+) -> Result<CardInstallFailure, String> {
+    match value {
+        golem_api_grpc::proto::golem::worker::RawCardInstallFailure::Unspecified => {
+            Err("Unspecified raw card install failure".to_string())
+        }
+        golem_api_grpc::proto::golem::worker::RawCardInstallFailure::CardRevoked => {
+            Ok(CardInstallFailure::CardRevoked)
+        }
+        golem_api_grpc::proto::golem::worker::RawCardInstallFailure::NotFound => {
+            Ok(CardInstallFailure::NotFound)
+        }
+        golem_api_grpc::proto::golem::worker::RawCardInstallFailure::RecipientMismatch => {
+            Ok(CardInstallFailure::RecipientMismatch)
+        }
+        golem_api_grpc::proto::golem::worker::RawCardInstallFailure::NotPermitted => {
+            Ok(CardInstallFailure::NotPermitted)
+        }
+    }
+}
+
+fn raw_card_install_failure_to_proto(
+    value: CardInstallFailure,
+) -> golem_api_grpc::proto::golem::worker::RawCardInstallFailure {
+    match value {
+        CardInstallFailure::CardRevoked => {
+            golem_api_grpc::proto::golem::worker::RawCardInstallFailure::CardRevoked
+        }
+        CardInstallFailure::NotFound => {
+            golem_api_grpc::proto::golem::worker::RawCardInstallFailure::NotFound
+        }
+        CardInstallFailure::RecipientMismatch => {
+            golem_api_grpc::proto::golem::worker::RawCardInstallFailure::RecipientMismatch
+        }
+        CardInstallFailure::NotPermitted => {
+            golem_api_grpc::proto::golem::worker::RawCardInstallFailure::NotPermitted
+        }
     }
 }
 
@@ -817,7 +992,42 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
             oplog_entry::Entry::CardRevoked(params) => {
                 Ok(PublicOplogEntry::CardRevoked(CardRevokedParams {
                     timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
-                    card_id: params.card_id.ok_or("Missing card_id field")?.into(),
+                    queued_event_index: OplogIndex::from_u64(params.queued_event_index),
+                    card_id: CardId(params.card_id.ok_or("Missing card_id field")?.into()),
+                }))
+            }
+            oplog_entry::Entry::CardEventQueued(params) => {
+                Ok(PublicOplogEntry::CardEventQueued(CardEventQueuedParams {
+                    timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                    event: public_queued_card_event_from_proto(
+                        params.event.ok_or("Missing event field")?,
+                    )?,
+                }))
+            }
+            oplog_entry::Entry::CardInstalled(params) => {
+                Ok(PublicOplogEntry::CardInstalled(CardInstalledParams {
+                    timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                    queued_event_index: params.queued_event_index.map(OplogIndex::from_u64),
+                    card_id: CardId(params.card_id.ok_or("Missing card_id field")?.into()),
+                }))
+            }
+            oplog_entry::Entry::CardInstallFailed(params) => Ok(
+                PublicOplogEntry::CardInstallFailed(CardInstallFailedParams {
+                    timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                    queued_event_index: OplogIndex::from_u64(params.queued_event_index),
+                    card_id: CardId(params.card_id.ok_or("Missing card_id field")?.into()),
+                    reason: card_install_failure_from_proto(
+                        golem_api_grpc::proto::golem::worker::CardInstallFailure::try_from(
+                            params.reason,
+                        )
+                        .map_err(|e| format!("Invalid card install failure: {e}"))?,
+                    )?,
+                }),
+            ),
+            oplog_entry::Entry::CardExpired(params) => {
+                Ok(PublicOplogEntry::CardExpired(CardExpiredParams {
+                    timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                    card_id: CardId(params.card_id.ok_or("Missing card_id field")?.into()),
                 }))
             }
             oplog_entry::Entry::HostStreamFrame(params) => {
@@ -1366,7 +1576,51 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::CardRevoked(
                         golem_api_grpc::proto::golem::worker::CardRevokedParameters {
                             timestamp: Some(params.timestamp.into()),
-                            card_id: Some(params.card_id.into()),
+                            queued_event_index: params.queued_event_index.into(),
+                            card_id: Some(params.card_id.0.into()),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::CardEventQueued(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::CardEventQueued(
+                        golem_api_grpc::proto::golem::worker::CardEventQueuedParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            event: Some(public_queued_card_event_to_proto(params.event)),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::CardInstalled(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::CardInstalled(
+                        golem_api_grpc::proto::golem::worker::CardInstalledParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            queued_event_index: params.queued_event_index.map(Into::into),
+                            card_id: Some(params.card_id.0.into()),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::CardInstallFailed(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::CardInstallFailed(
+                        golem_api_grpc::proto::golem::worker::CardInstallFailedParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            queued_event_index: params.queued_event_index.into(),
+                            card_id: Some(params.card_id.0.into()),
+                            reason: card_install_failure_to_proto(params.reason) as i32,
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::CardExpired(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::CardExpired(
+                        golem_api_grpc::proto::golem::worker::CardExpiredParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            card_id: Some(params.card_id.0.into()),
                         },
                     )),
                 }
@@ -2537,6 +2791,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     timestamp: p.timestamp,
                     data: OplogPayload::Inline(Box::new(data)),
                     mime_type,
+                    active_cards: Vec::new(),
                 })
             }
             PublicOplogEntry::OplogProcessorCheckpoint(p) => {
@@ -2558,6 +2813,23 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 name: p.name,
             }),
             PublicOplogEntry::CardRevoked(p) => Ok(OplogEntry::CardRevoked {
+                timestamp: p.timestamp,
+                queued_event_index: p.queued_event_index,
+                card_id: p.card_id,
+            }),
+            PublicOplogEntry::CardEventQueued(_) => {
+                Err("Converting CardEventQueued from public to raw oplog entry is not supported".to_string())
+            }
+            PublicOplogEntry::CardInstalled(_) => {
+                Err("Converting CardInstalled from public to raw oplog entry is not supported".to_string())
+            }
+            PublicOplogEntry::CardInstallFailed(p) => Ok(OplogEntry::CardInstallFailed {
+                timestamp: p.timestamp,
+                queued_event_index: p.queued_event_index,
+                card_id: p.card_id,
+                reason: p.reason,
+            }),
+            PublicOplogEntry::CardExpired(p) => Ok(OplogEntry::CardExpired {
                 timestamp: p.timestamp,
                 card_id: p.card_id,
             }),
@@ -2932,7 +3204,9 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
         use golem_api_grpc::proto::golem::worker::{
             RawActivatePluginParameters, RawAgentInvocationFinishedParameters,
             RawAgentInvocationStartedParameters, RawBeginRemoteTransactionParameters,
-            RawCancelPendingInvocationParameters, RawCancelledParameters, RawCardRevokedParameters,
+            RawCancelPendingInvocationParameters, RawCancelledParameters,
+            RawCardEventQueuedParameters, RawCardInstallFailedParameters,
+            RawCardInstalledParameters, RawCardRevokedParameters,
             RawChangePersistenceLevelParameters, RawCompletionDiscardedParameters,
             RawCreateParameters, RawCreateResourceParameters, RawDeactivatePluginParameters,
             RawDropResourceParameters, RawEndAtomicRegionParameters, RawEndParameters, RawEnvVar,
@@ -3264,10 +3538,17 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 })
             }
             OplogEntry::Snapshot {
-                data, mime_type, ..
+                data,
+                mime_type,
+                active_cards,
+                ..
             } => Entry::Snapshot(RawSnapshotParameters {
                 data: Some(oplog_payload_to_proto(data)?),
                 mime_type,
+                active_cards: active_cards
+                    .into_iter()
+                    .map(|card| crate::serialization::serialize(&card))
+                    .collect::<Result<Vec<_>, _>>()?,
             }),
             OplogEntry::OplogProcessorCheckpoint {
                 plugin_grant_id,
@@ -3291,9 +3572,45 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             OplogEntry::RemoveRetryPolicy { name, .. } => {
                 Entry::RemoveRetryPolicy(RawRemoveRetryPolicyParameters { name })
             }
-            OplogEntry::CardRevoked { card_id, .. } => {
-                Entry::CardRevoked(RawCardRevokedParameters {
-                    card_id: Some(card_id.into()),
+            OplogEntry::CardRevoked {
+                timestamp,
+                queued_event_index,
+                card_id,
+            } => Entry::CardRevoked(RawCardRevokedParameters {
+                timestamp: Some(timestamp.into()),
+                queued_event_index: queued_event_index.into(),
+                card_id: Some(card_id.0.into()),
+            }),
+            OplogEntry::CardEventQueued { timestamp, event } => {
+                Entry::CardEventQueued(RawCardEventQueuedParameters {
+                    timestamp: Some(timestamp.into()),
+                    event: Some(raw_queued_card_event_to_proto(event)?),
+                })
+            }
+            OplogEntry::CardInstalled {
+                timestamp,
+                queued_event_index,
+                card,
+            } => Entry::CardInstalled(RawCardInstalledParameters {
+                timestamp: Some(timestamp.into()),
+                queued_event_index: queued_event_index.map(Into::into),
+                card: crate::serialization::serialize(&card)?,
+            }),
+            OplogEntry::CardInstallFailed {
+                timestamp,
+                queued_event_index,
+                card_id,
+                reason,
+            } => Entry::CardInstallFailed(RawCardInstallFailedParameters {
+                timestamp: Some(timestamp.into()),
+                queued_event_index: queued_event_index.into(),
+                card_id: Some(card_id.0.into()),
+                reason: raw_card_install_failure_to_proto(reason) as i32,
+            }),
+            OplogEntry::CardExpired { timestamp, card_id } => {
+                Entry::CardExpired(RawCardExpiredParameters {
+                    timestamp: Some(timestamp.into()),
+                    card_id: Some(card_id.0.into()),
                 })
             }
             OplogEntry::HostStreamFrame {
@@ -3697,6 +4014,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     timestamp,
                     data,
                     mime_type: p.mime_type,
+                    active_cards: p
+                        .active_cards
+                        .into_iter()
+                        .map(|card| crate::serialization::deserialize(&card))
+                        .collect::<Result<Vec<_>, _>>()?,
                 })
             }
             Entry::OplogProcessorCheckpoint(p) => {
@@ -3727,8 +4049,32 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 name: p.name,
             }),
             Entry::CardRevoked(p) => Ok(OplogEntry::CardRevoked {
-                timestamp,
-                card_id: p.card_id.ok_or("Missing card_id")?.into(),
+                timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
+                queued_event_index: OplogIndex::from_u64(p.queued_event_index),
+                card_id: CardId(p.card_id.ok_or("Missing card_id")?.into()),
+            }),
+            Entry::CardEventQueued(p) => Ok(OplogEntry::CardEventQueued {
+                timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
+                event: raw_queued_card_event_from_proto(p.event.ok_or("Missing event")?)?,
+            }),
+            Entry::CardInstalled(p) => Ok(OplogEntry::CardInstalled {
+                timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
+                queued_event_index: p.queued_event_index.map(OplogIndex::from_u64),
+                card: crate::serialization::deserialize(&p.card)
+                    .map_err(|err| format!("Failed to deserialize installed card: {err}"))?,
+            }),
+            Entry::CardInstallFailed(p) => Ok(OplogEntry::CardInstallFailed {
+                timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
+                queued_event_index: OplogIndex::from_u64(p.queued_event_index),
+                card_id: CardId(p.card_id.ok_or("Missing card_id")?.into()),
+                reason: raw_card_install_failure_from_proto(
+                    golem_api_grpc::proto::golem::worker::RawCardInstallFailure::try_from(p.reason)
+                        .map_err(|e| format!("Invalid raw card install failure: {e}"))?,
+                )?,
+            }),
+            Entry::CardExpired(p) => Ok(OplogEntry::CardExpired {
+                timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
+                card_id: CardId(p.card_id.ok_or("Missing card_id")?.into()),
             }),
             Entry::HostStreamFrame(p) => Ok(OplogEntry::HostStreamFrame {
                 timestamp,
@@ -3784,5 +4130,74 @@ mod read_only_violation_roundtrip {
             let roundtrip: AgentError = proto.try_into().unwrap();
             prop_assert_eq!(roundtrip, original);
         }
+    }
+}
+
+#[cfg(test)]
+mod queued_card_event_proto_tests {
+    use crate::base_model::oplog::{QueuedCardEvent, QueuedCardEventCard};
+    use crate::model::card::{Card, CardId, StoredCard};
+    use golem_api_grpc::proto::golem::worker::raw_queued_card_event::Event;
+    use golem_api_grpc::proto::golem::worker::{RawQueuedCardEvent, raw_queued_card_event};
+    use test_r::test;
+
+    fn stored_card(card_id: CardId) -> StoredCard {
+        StoredCard::Concrete(Card {
+            card_id,
+            parent_ids: Vec::new(),
+            lower_positive: Vec::new(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        })
+    }
+
+    #[test]
+    fn raw_queued_card_install_without_payload_is_rejected() {
+        let card_id = CardId::new();
+        let proto = RawQueuedCardEvent {
+            event: Some(Event::Install(raw_queued_card_event::Install {
+                card_id: Some(card_id.0.into()),
+                card: Vec::new(),
+            })),
+        };
+
+        assert!(
+            super::raw_queued_card_event_from_proto(proto).is_err(),
+            "raw queued card installs without a persisted card payload poison durable draining"
+        );
+    }
+
+    #[test]
+    fn raw_queued_card_install_without_payload_is_rejected_on_encode() {
+        let card_id = CardId::new();
+        let event = QueuedCardEvent::Install(QueuedCardEventCard {
+            card_id,
+            card: None,
+        });
+
+        assert!(
+            super::raw_queued_card_event_to_proto(event).is_err(),
+            "raw queued card installs without a persisted card payload must not encode to an undecodable protobuf"
+        );
+    }
+
+    #[test]
+    fn raw_queued_card_install_with_mismatched_payload_is_rejected_on_encode() {
+        let outer_card_id = CardId::new();
+        let payload_card_id = CardId::new();
+        let event = QueuedCardEvent::Install(QueuedCardEventCard {
+            card_id: outer_card_id,
+            card: Some(stored_card(payload_card_id)),
+        });
+
+        assert!(
+            super::raw_queued_card_event_to_proto(event).is_err(),
+            "raw queued card installs with mismatched outer card_id and payload must not encode to an undecodable protobuf"
+        );
     }
 }

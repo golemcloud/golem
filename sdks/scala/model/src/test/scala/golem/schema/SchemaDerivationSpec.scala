@@ -28,7 +28,7 @@ import scala.util.Try
 object SchemaDerivationSpec extends ZIOSpecDefault {
   import SchemaTypeBody._
 
-  // ---- test types (defined at object scope for Scala 2.13 + 3 derivation) ----
+  // ---- test types ----------------------------------------------------------
 
   final case class Prims(
     b: Boolean,
@@ -91,10 +91,6 @@ object SchemaDerivationSpec extends ZIOSpecDefault {
     implicit val schema: Schema[Pong] = Schema.derived
   }
 
-  // zio-blocks ships built-in `Schema[Option]`/`List`/`Set`/`Map` but cannot
-  // derive stdlib `Either`/tuple schemas on Scala 2.13, so those derivation
-  // cases are covered in the Scala-3-only `SchemaDerivationScala3Spec`.
-
   // ---- helpers ----
 
   private def rootBody[A](implicit s: IntoSchema[A]): SchemaTypeBody = s.graph.root.body
@@ -128,12 +124,12 @@ object SchemaDerivationSpec extends ZIOSpecDefault {
 
         assertTrue(
           fields("b") == BoolType,
-          fields("i8") == S8Type,
-          fields("i16") == S16Type,
-          fields("i32") == S32Type,
-          fields("i64") == S64Type,
-          fields("f") == F32Type,
-          fields("d") == F64Type,
+          fields("i8") == S8Type(),
+          fields("i16") == S16Type(),
+          fields("i32") == S32Type(),
+          fields("i64") == S64Type(),
+          fields("f") == F32Type(),
+          fields("d") == F64Type(),
           fields("c") == CharType,
           fields("s") == StringType,
           fields("bd") == StringType,
@@ -286,10 +282,10 @@ object SchemaDerivationSpec extends ZIOSpecDefault {
       },
       test("unsigned wrappers derive u8/u16/u32/u64 and round-trip (incl. boundary)") {
         assertTrue(
-          rootBody[UByte] == U8Type,
-          rootBody[UShort] == U16Type,
-          rootBody[UInt] == U32Type,
-          rootBody[ULong] == U64Type
+          rootBody[UByte] == U8Type(),
+          rootBody[UShort] == U16Type(),
+          rootBody[UInt] == U32Type(),
+          rootBody[ULong] == U64Type()
         ) &&
         assert(roundTrip(UByte(255)))(isRight(equalTo(UByte(255)))) &&
         assert(roundTrip(UShort(65535)))(isRight(equalTo(UShort(65535)))) &&

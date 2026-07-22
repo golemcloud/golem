@@ -12,44 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type * as bindings from 'agent-guest';
 import { ResolvedAgent } from './internal/resolvedAgent';
 import { AgentType, Principal } from 'golem:agent/common@2.0.0';
 import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0';
-import { schemaValueFromWit, schemaValueToWit } from './internal/schema-model';
+import type { Snapshot } from 'golem:api/host@1.5.0';
+import { schemaValueFromWit } from './internal/schema-model';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
 import { setAgentId } from './internal/registry/agentId';
 import { encodeMultipart, decodeMultipart } from './internal/multipart';
-import { getAgentValidationError } from './decorators/agent';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 
-export { BaseAgent } from './baseAgent';
 export { Uuid } from './uuid';
 export { ComponentId, AccountId, EnvironmentId } from './ids';
 export { ParsedAgentId } from './agentId';
-export { description } from './decorators/description';
-export {
-  agent,
-  AgentDecoratorOptions,
-  SnapshottingOption,
-  clearAgentValidationError,
-} from './decorators/agent';
-export { prompt } from './decorators/prompt';
-export { endpoint, EndpointDecoratorOptions } from './decorators/httpEndpoint';
-export { readonly, ReadOnlyOptions, CachePolicyOption } from './decorators/readOnly';
 export * from './agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
 export * from './newTypes/multimodalAdvanced';
 export { Principal } from './principal';
-export { Client } from './baseAgent';
 export { AgentClassName } from './agentClassName';
 export { CancellationToken } from 'golem:agent/host@2.0.0';
 export { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
-export { TypescriptTypeRegistry } from './typescriptTypeRegistry';
 export * from './webhook';
 export * from './host/hostapi';
 export * as oplog from './host/oplog';
@@ -57,12 +43,38 @@ export * from './host/guard';
 export * from './host/quota';
 export * from './host/retry';
 export * from './host/result';
-export * from './host/transaction';
+export * from './host/saga';
 export * from './host/checkpoint';
-export { Config, Secret } from './agentConfig';
+export * from './host/durable';
+
+// The TypeScript agent authoring surface: `defineAgent` / `method`, the schema
+// markers `s`, `clientFor`, the typed host surfaces (keyvalue / blobstore /
+// websocket / rdbms), and the `http` helpers. Built on Standard Schema and
+// exported from the main entry so it is baked into the bundle injected into
+// `agent_guest.wasm` (sharing the runtime registries).
+export * from './fluent';
 
 let resolvedAgent: ResolvedAgent | undefined = undefined;
 let initializationPrincipal: Principal | undefined = undefined;
+
+interface GolemAgentGuest {
+  initialize(agentTypeName: string, input: SchemaValueTree, principal: Principal): Promise<void>;
+  discoverAgentTypes(): AgentType[];
+  invoke(
+    methodName: string,
+    input: SchemaValueTree,
+    principal: Principal,
+  ): Promise<SchemaValueTree | undefined>;
+  getDefinition(): AgentType;
+}
+
+interface SaveSnapshotGuest {
+  save(): Promise<Snapshot>;
+}
+
+interface LoadSnapshotGuest {
+  load(snapshot: Snapshot): Promise<void>;
+}
 
 async function initialize(
   agentTypeName: string,
@@ -76,6 +88,11 @@ async function initialize(
     throw createCustomError(`Agent is already initialized in this container`);
   }
 
+  const registrationError = AgentTypeRegistry.getRegistrationError(agentTypeName);
+  if (registrationError) {
+    throw createCustomError(formatAgentRegistrationError(agentTypeName, registrationError));
+  }
+
   const initiator: AgentInitiator | undefined = AgentInitiatorRegistry.lookup(agentTypeName);
 
   if (!initiator) {
@@ -86,7 +103,9 @@ async function initialize(
 
   setAgentId(getRawSelfAgentId());
 
-  const initiateResult = initiator.initiate(schemaValueFromWit(input), principal);
+  const initiateResult = await (initiator.initiateFromWit
+    ? initiator.initiateFromWit(input, principal)
+    : initiator.initiate(schemaValueFromWit(input), principal));
 
   if (initiateResult.tag === 'ok') {
     resolvedAgent = initiateResult.val;
@@ -96,7 +115,7 @@ async function initialize(
   }
 }
 
-async function invoke(
+async function invokeAgent(
   methodName: string,
   input: SchemaValueTree,
   principal: Principal,
@@ -105,24 +124,30 @@ async function invoke(
     throw createCustomError(`Failed to invoke method ${methodName}: agent is not initialized`);
   }
 
-  const result = await resolvedAgent.invoke(methodName, schemaValueFromWit(input), principal);
+  const result = await resolvedAgent.invoke(methodName, input, principal);
 
   if (result.tag === 'ok') {
-    return result.val === undefined ? undefined : schemaValueToWit(result.val);
+    return result.val;
   } else {
     throw result.val;
   }
 }
 
-function discoverAgentTypes(): bindings.guest.AgentType[] {
+function discoverAgentTypes(): AgentType[] {
   try {
-    // Check if there were any validation errors during agent registration
-    const validationError = getAgentValidationError();
-    if (validationError) {
-      // Don't return any agent types if there was a validation error
-      throw createCustomError(validationError.message);
+    const registrationErrors = AgentTypeRegistry.getRegistrationErrors();
+    if (registrationErrors.length > 0) {
+      // Discovery's WIT result cannot carry valid definitions and diagnostics
+      // together, so report all invalid agents in one structured error. Valid
+      // agents remain registered and can still be initialized independently.
+      throw createCustomError(
+        `Agent registration failed:\n${registrationErrors
+          .map(({ agentTypeName, messages }) =>
+            formatAgentRegistrationError(agentTypeName, messages),
+          )
+          .join('\n')}`,
+      );
     }
-
     return AgentTypeRegistry.getRegisteredAgents();
   } catch (e) {
     // Have to throw RuntimeError, as the discover-agent-types WIT function returns result<list<agent-type>, RuntimeError>
@@ -132,6 +157,10 @@ function discoverAgentTypes(): bindings.guest.AgentType[] {
       throw createCustomError(String(e));
     }
   }
+}
+
+function formatAgentRegistrationError(agentTypeName: string, messages: readonly string[]): string {
+  return `- Agent "${agentTypeName}": ${messages.join('; ')}`;
 }
 
 function getDefinition(): AgentType {
@@ -295,6 +324,13 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     throw `Agent is already initialized in this container`;
   }
 
+  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsed();
+  const registrationError = AgentTypeRegistry.getRegistrationError(agentTypeName);
+  if (registrationError) {
+    // The snapshot WIT interface returns `result<_, string>`, not AgentError.
+    throw formatAgentRegistrationError(agentTypeName, registrationError);
+  }
+
   let agentSnapshot: Uint8Array;
   let agentSnapshotMimeType: string | undefined;
   let principal: Principal;
@@ -363,15 +399,13 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
 
   initializationPrincipal = principal;
 
-  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsed();
-
   const initiator = AgentInitiatorRegistry.lookup(agentTypeName);
 
   if (!initiator) {
     throw `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`;
   }
 
-  const initiateResult = initiator.initiate(agentParameters, principal);
+  const initiateResult = await initiator.initiate(agentParameters, principal);
 
   if (initiateResult.tag === 'ok') {
     const agent = initiateResult.val;
@@ -390,17 +424,22 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   }
 }
 
-export const guest: typeof bindings.guest = {
+export const golemAgent200Guest: GolemAgentGuest = {
   initialize,
   discoverAgentTypes,
-  invoke,
+  invoke: invokeAgent,
   getDefinition,
 };
 
-export const saveSnapshot: typeof bindings.saveSnapshot = {
+// The current wasm-rquickjs wrapper looks up the guest export by the WIT interface
+// short name (`guest.discoverAgentTypes` of golem:agent/guest@2.0.0). Export `guest`
+// as an alias of golemAgent200Guest so the generated wrapper finds it.
+export const guest: GolemAgentGuest = golemAgent200Guest;
+
+export const saveSnapshot: SaveSnapshotGuest = {
   save,
 };
 
-export const loadSnapshot: typeof bindings.loadSnapshot = {
+export const loadSnapshot: LoadSnapshotGuest = {
   load,
 };

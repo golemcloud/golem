@@ -40,6 +40,19 @@ fn[T : @schema.IntoSchema] schema_graph_of(
 }
 
 ///|
+/// Build the config lookup graph for `Secret[T]`: the host returns an opaque
+/// secret handle whose declared inner payload is `T`'s schema graph.
+fn[T : @schema.IntoSchema] secret_schema_graph_of(
+  tag : @schema.TypeTag[T],
+) -> @model.SchemaGraph raise @common.AgentError {
+  let inner = schema_graph_of(tag)
+  {
+    defs: inner.defs,
+    root: @model.schema_type(Secret({ inner: inner.root, category: None })),
+  }
+}
+
+///|
 /// Load and decode a configuration value of type `T` from the given key path.
 ///
 /// Pipeline (mirrors Rust `Secret::get` / `ConfigSchema::load` leaf):
@@ -68,7 +81,49 @@ pub fn[T : @schema.IntoSchema + @schema.FromSchema] load_config_value(
 pub fn[T : @schema.IntoSchema + @schema.FromSchema] Secret::get(
   self : Secret[T],
 ) -> T raise @common.AgentError {
-  load_config_value(self.key)
+  let tag = (@schema.TypeTag::{  } : @schema.TypeTag[T])
+  let inner_graph = schema_graph_of(tag)
+  let secret_graph = secret_schema_graph_of(tag)
+  let secret_wire_graph = @model.schema_graph_to_wit(secret_graph) catch {
+    e => raise @common.AgentError::InvalidInput(e.to_string())
+  }
+  let secret_wire_value = @host.get_config_value(self.key, secret_wire_graph)
+  let secret_model_value = @model.schema_value_from_wit(secret_wire_value) catch {
+    e => raise @common.AgentError::InvalidInput(e.to_string())
+  }
+  let handle = match secret_model_value {
+    Secret(handle) => handle
+    other =>
+      raise @common.AgentError::InvalidInput(
+        "expected secret handle from config, got \{@schema.value_kind(other)}",
+      )
+  }
+  let inner_wire_graph = @model.schema_graph_to_wit(inner_graph) catch {
+    e => raise @common.AgentError::InvalidInput(e.to_string())
+  }
+  let raw_handle = match handle.take() {
+    Some(h) => h
+    None =>
+      raise @common.AgentError::InvalidInput(
+        "secret handle has already been transferred and can no longer be revealed",
+      )
+  }
+  let reveal_result = @reveal.reveal(raw_handle, inner_wire_graph)
+  raw_handle.drop()
+  let revealed_wire_value = match reveal_result {
+    Ok(v) => v
+    Err(e) => {
+      let msg = e.to_string()
+      raise @common.AgentError::InvalidInput("secret reveal failed: \{msg}")
+    }
+  }
+  let revealed_model_value = @model.schema_value_from_wit(revealed_wire_value) catch {
+    e => raise @common.AgentError::InvalidInput(e.to_string())
+  }
+  let decoded : T = @schema.from_value_as(revealed_model_value) catch {
+    e => raise @common.AgentError::InvalidInput(e.to_string())
+  }
+  decoded
 }
 
 ///|
@@ -122,7 +177,8 @@ fn[T : @schema.IntoSchema] local_entry(
 }
 
 ///|
-/// Single `SECRET` config declaration whose value type is `T`'s schema graph.
+/// Single `SECRET` config declaration whose value type is `Secret[T]` with
+/// inner payload `T`'s schema graph.
 fn[T : @schema.IntoSchema] shared_entry(
   tag : @schema.TypeTag[T],
   path : Array[String],
@@ -131,7 +187,7 @@ fn[T : @schema.IntoSchema] shared_entry(
     {
       source: @common.AgentConfigSource::SECRET,
       path,
-      value_type: schema_graph_of(tag),
+      value_type: secret_schema_graph_of(tag),
     },
   ]
 }

@@ -18,6 +18,40 @@ use chrono::{DateTime, Utc};
 use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
 
+/// The payload carried by [`SchemaValue::Secret`].
+///
+/// Like quota tokens, secrets are opaque capabilities. On the host (and in
+/// feature-neutral builds) the value is a trusted snapshot that contains only
+/// stable identity and metadata; plaintext is never stored here. On a guest it
+/// is an opaque, affine, take-once owned handle.
+#[cfg(not(all(feature = "guest", not(feature = "host"))))]
+pub type SecretVariantValue = SecretValuePayload;
+
+/// The payload carried by [`SchemaValue::Secret`] on a guest: an opaque,
+/// affine owned handle. See [`SecretVariantValue`] (host build) for details.
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub type SecretVariantValue = crate::schema::wit::GuestSecretHandle;
+
+/// The payload carried by [`SchemaValue::QuotaToken`].
+///
+/// A quota-token is an opaque, unforgeable capability. The representation
+/// differs by build target so that the value can never be inspected or
+/// fabricated by a guest:
+///
+/// - On the host (and in feature-neutral builds) it is the trusted internal
+///   snapshot [`QuotaTokenValuePayload`], converted to/from an owned
+///   `quota-token` handle by a `QuotaTokenResolver` at the WIT boundary.
+/// - On a guest it is an opaque, affine, take-once owned handle
+///   ([`crate::schema::wit::GuestQuotaTokenHandle`]) that the guest can only
+///   hold and transfer, never read.
+#[cfg(not(all(feature = "guest", not(feature = "host"))))]
+pub type QuotaTokenVariantValue = QuotaTokenValuePayload;
+
+/// The payload carried by [`SchemaValue::QuotaToken`] on a guest: an opaque,
+/// affine owned handle. See [`QuotaTokenVariantValue`] (host build) for details.
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub type QuotaTokenVariantValue = crate::schema::wit::GuestQuotaTokenHandle;
+
 /// One node in the recursive in-memory schema-value tree.
 ///
 /// Always travels paired with a [`super::SchemaGraph`] (see
@@ -32,6 +66,7 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
 #[schema(named = "schema-value")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub enum SchemaValue {
     // Primitives
     Bool(bool),
@@ -95,13 +130,15 @@ pub enum SchemaValue {
     Union(UnionValuePayload),
 
     // Capability nodes
-    Secret(SecretValuePayload),
-    QuotaToken(QuotaTokenValuePayload),
+    Secret(SecretVariantValue),
+    QuotaToken(QuotaTokenVariantValue),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct VariantValuePayload {
     pub case: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -114,6 +151,7 @@ pub struct VariantValuePayload {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "tag", rename_all = "kebab-case")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub enum ResultValuePayload {
     Ok { value: Option<Box<SchemaValue>> },
     Err { value: Option<Box<SchemaValue>> },
@@ -122,6 +160,8 @@ pub enum ResultValuePayload {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct TextValuePayload {
     pub text: String,
     /// BCP-47 language tag, when known.
@@ -132,6 +172,8 @@ pub struct TextValuePayload {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct BinaryValuePayload {
     pub bytes: Vec<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -142,6 +184,8 @@ pub struct BinaryValuePayload {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct DurationValuePayload {
     pub nanoseconds: i64,
 }
@@ -149,6 +193,8 @@ pub struct DurationValuePayload {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct UnionValuePayload {
     /// Tag of the branch the decoder resolved, matching one of the
     /// [`super::UnionBranch::tag`] values. Carried so receivers do not have
@@ -160,23 +206,38 @@ pub struct UnionValuePayload {
     pub body: Box<SchemaValue>,
 }
 
-/// Capability value: secret transport is **by reference**. The schema side
-/// declares the secret; the value side carries an opaque reference that the
-/// authority resolves on read. The literal secret material never crosses
-/// this carrier.
+/// Capability value: the trusted host snapshot of a secret handle.
+///
+/// This contains only identity and metadata needed to deterministically
+/// resurrect a handle. Plaintext secret material lives in the host resource
+/// representation / registry store and is never carried by `SchemaValue`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct SecretValuePayload {
-    pub secret_ref: String,
+    pub secret_id: uuid::Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_key: Option<Vec<String>>,
+    pub version: u64,
+    pub resolved_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
 }
 
-/// Capability value: quota-token transport is **by snapshot**. The receiver
-/// re-acquires a live lease against `(environment_id, resource_name)` on
-/// demand.
+/// Capability value: the trusted internal/persistent representation of a
+/// quota-token, held only inside `SchemaValue::QuotaToken`. Across a WIT
+/// boundary the token travels as an opaque, unforgeable owned handle
+/// (`quota-token-handle(own<quota-token>)`); the host converts between this
+/// snapshot and a handle through a resolver and the receiver re-acquires a live
+/// lease against `(environment_id, resource_name)` on demand. This snapshot is
+/// never exposed to or constructible by a guest.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
 pub struct QuotaTokenValuePayload {
     pub environment_id: EnvironmentId,
     pub resource_name: String,

@@ -1,5 +1,0 @@
-error: PoemSchema does not support internally-tagged enums (`#[serde(tag = ...)]` without `content`); add `content = "..."` for an adjacently-tagged enum
-  --> tests/compile_fail/poem_internally_tagged_enum.rs:19:6
-   |
-19 | enum Bad {
-   |      ^^^

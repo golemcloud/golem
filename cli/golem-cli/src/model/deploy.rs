@@ -19,13 +19,16 @@ use crate::model::GuestLanguage;
 use crate::model::component::{
     render_agent_constructor, render_input_schema, render_output_schema,
 };
-use crate::model::text::component::is_sensitive_env_var_name;
+use crate::model::masking::{
+    MaskingConfig, is_sensitive_key, mask_json_secret_for_deploy_diff, mask_secret_with_fingerprint,
+};
 use crate::model::worker::RawAgentId;
 use golem_client::model::{AgentSecretDto, RetryPolicyDto};
 use golem_common::model::agent::{
     AgentConfigSource, HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment,
 };
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
+use golem_common::model::card::PolymorphicPermissionPattern;
 use golem_common::model::component::{AgentFilePermissions, ComponentName, ComponentRevision};
 use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
 use golem_common::model::diff::{self, Hashable};
@@ -49,7 +52,7 @@ pub struct DeploymentDisplay {
 }
 
 pub struct DeploymentDisplayContext<'a> {
-    pub show_sensitive: bool,
+    pub masking: MaskingConfig,
     pub mode: DeploymentDisplayMode,
     pub deployment: &'a diff::Deployment,
     pub diff: &'a diff::DeploymentDiff,
@@ -62,45 +65,53 @@ pub enum DeploymentDisplayMode {
     Full,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentSetupDisplay {
     #[serde(skip_serializing_if = "EnvironmentSetupDetailedSection::is_empty")]
+    #[serde(default)]
     pub to_be_applied: EnvironmentSetupDetailedSection,
     #[serde(skip_serializing_if = "EnvironmentSetupKeysOnlySection::is_empty")]
+    #[serde(default)]
     pub skipped_already_exists: EnvironmentSetupKeysOnlySection,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentSetupDetailedSection {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub secret_values: BTreeMap<String, EnvironmentSetupSecretValueDisplay>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub retry_policies: BTreeMap<String, EnvironmentSetupRetryPolicyDisplay>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub resources: BTreeMap<String, EnvironmentSetupResourceDisplay>,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentSetupKeysOnlySection {
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    #[serde(default)]
     pub secret_values: BTreeSet<String>,
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    #[serde(default)]
     pub retry_policies: BTreeSet<String>,
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    #[serde(default)]
     pub resources: BTreeSet<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentSetupSecretValueDisplay {
     pub secret_type: String,
     pub value: serde_json::Value,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentSetupRetryPolicyDisplay {
     pub priority: u32,
@@ -108,7 +119,7 @@ pub struct EnvironmentSetupRetryPolicyDisplay {
     pub policy: serde_json::Value,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentSetupResourceDisplay {
     pub limit: serde_json::Value,
@@ -117,7 +128,8 @@ pub struct EnvironmentSetupResourceDisplay {
     pub units: String,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EnvironmentSetupPlan {
     pub display: EnvironmentSetupDisplay,
     pub agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
@@ -208,6 +220,7 @@ mod tests {
         secret_types.insert("superSecret".to_string(), schema_str());
 
         let plan = build_environment_setup_plan(
+            MaskingConfig::hide_secrets(),
             vec![DeploymentAgentSecretDefault {
                 path: AgentSecretPath(vec!["superSecret".to_string()]),
                 secret_value: serde_json::json!("same-value"),
@@ -241,6 +254,7 @@ mod tests {
         secret_types.insert("existingSecret".to_string(), schema_str());
 
         let plan = build_environment_setup_plan(
+            MaskingConfig::hide_secrets(),
             vec![
                 DeploymentAgentSecretDefault {
                     path: AgentSecretPath(vec!["createSecret".to_string()]),
@@ -282,6 +296,7 @@ mod tests {
     #[::test_r::test]
     fn environment_setup_classifies_retry_policies_and_resources() {
         let plan = build_environment_setup_plan(
+            MaskingConfig::hide_secrets(),
             Vec::new(),
             vec![
                 DeploymentRetryPolicyDefault {
@@ -395,6 +410,7 @@ pub fn preferred_source_language_for_setup(
 }
 
 pub fn build_environment_setup_plan(
+    masking: MaskingConfig,
     resolved_agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
     retry_policy_defaults: Vec<DeploymentRetryPolicyDefault>,
     resource_defaults: Vec<ResourceDefinitionCreation>,
@@ -418,7 +434,7 @@ pub fn build_environment_setup_plan(
                         .get(&canonical_path_str)
                         .map(|typ| render_schema_type_for_language(source_language, typ))
                         .unwrap_or_else(|| "unknown".to_string()),
-                    value: masked_json_value(&default.secret_value)?,
+                    value: mask_json_secret_for_deploy_diff(masking, &default.secret_value)?,
                 },
             ))
         })
@@ -428,7 +444,7 @@ pub fn build_environment_setup_plan(
         .into_iter()
         .map(|secret| {
             let value = match secret.secret_value {
-                Some(value) => masked_json_value(&value)?,
+                Some(value) => mask_json_secret_for_deploy_diff(masking, &value)?,
                 None => serde_json::Value::Null,
             };
             Ok((
@@ -612,6 +628,8 @@ pub struct DeploymentDisplayAgentType {
     pub files: BTreeMap<String, DeploymentDisplayAgentFile>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub plugins: BTreeMap<String, DeploymentDisplayPlugin>,
+    #[serde(skip_serializing_if = "DeploymentDisplayInitialPermissions::is_empty")]
+    pub initial_permissions: DeploymentDisplayInitialPermissions,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub http_mount: Option<DeploymentDisplayHttpMount>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -640,6 +658,36 @@ pub struct DeploymentDisplayPlugin {
     pub priority: i32,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub parameters: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentDisplayInitialPermissions {
+    #[serde(skip_serializing_if = "DeploymentDisplayInitialPermissionsBound::is_empty")]
+    pub lower_bound: DeploymentDisplayInitialPermissionsBound,
+    #[serde(skip_serializing_if = "DeploymentDisplayInitialPermissionsBound::is_empty")]
+    pub upper_bound: DeploymentDisplayInitialPermissionsBound,
+}
+
+impl DeploymentDisplayInitialPermissions {
+    fn is_empty(&self) -> bool {
+        self.lower_bound.is_empty() && self.upper_bound.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentDisplayInitialPermissionsBound {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub positive: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub negative: Vec<String>,
+}
+
+impl DeploymentDisplayInitialPermissionsBound {
+    fn is_empty(&self) -> bool {
+        self.positive.is_empty() && self.negative.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -787,7 +835,7 @@ fn display_components(
                 .map(|agent| {
                     Ok((
                         agent.type_name.0.clone(),
-                        display_agent_type(ctx.show_sensitive, agent, component)?,
+                        display_agent_type(ctx.masking, agent, component)?,
                     ))
                 })
                 .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
@@ -804,7 +852,7 @@ fn display_components(
 }
 
 fn display_agent_type(
-    show_sensitive: bool,
+    masking: MaskingConfig,
     agent: &AgentTypeSchema,
     component: Option<&diff::Component>,
 ) -> anyhow::Result<DeploymentDisplayAgentType> {
@@ -824,16 +872,20 @@ fn display_agent_type(
         mode: agent.mode.to_string(),
         snapshotting: serde_json::to_value(&agent.snapshotting)?,
         config_declarations: display_config_declarations(agent)?,
-        config_defaults: display_config_defaults(show_sensitive, agent, provision_config)?,
+        config_defaults: display_config_defaults(masking, agent, provision_config)?,
         env: provision_config
-            .map(|config| display_env(show_sensitive, &config.env))
+            .map(|config| display_env(masking, &config.env))
             .unwrap_or_default(),
         files: provision_config
             .map(display_files)
             .transpose()?
             .unwrap_or_default(),
         plugins: provision_config
-            .map(|config| display_plugins(show_sensitive, config))
+            .map(|config| display_plugins(masking, config))
+            .unwrap_or_default(),
+        initial_permissions: provision_config
+            .map(display_initial_permission)
+            .transpose()?
             .unwrap_or_default(),
         http_mount: agent.http_mount.as_ref().map(display_http_mount),
         methods: agent
@@ -877,7 +929,7 @@ fn display_config_declarations(
 }
 
 fn display_config_defaults(
-    show_sensitive: bool,
+    masking: MaskingConfig,
     agent: &AgentTypeSchema,
     provision_config: Option<&diff::AgentTypeProvisionConfig>,
 ) -> anyhow::Result<BTreeMap<String, serde_json::Value>> {
@@ -897,8 +949,8 @@ fn display_config_defaults(
         let is_secret =
             declaration.is_some_and(|config| config.source == AgentConfigSource::Secret);
 
-        let rendered_value = if is_secret && !show_sensitive {
-            masked_json_value(value)?
+        let rendered_value = if is_secret && !masking.show_secrets {
+            mask_json_secret_for_deploy_diff(MaskingConfig::hide_secrets(), value)?
         } else {
             serde_json::to_value(value)?
         };
@@ -909,12 +961,12 @@ fn display_config_defaults(
     Ok(result)
 }
 
-fn display_env(show_sensitive: bool, env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+fn display_env(masking: MaskingConfig, env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     env.iter()
         .map(|(key, value)| {
             (
                 key.clone(),
-                mask_sensitive_value(show_sensitive, key, value),
+                mask_sensitive_key_value_for_deploy_diff(masking, key, value),
             )
         })
         .collect()
@@ -940,7 +992,7 @@ fn display_files(
 }
 
 fn display_plugins(
-    show_sensitive: bool,
+    masking: MaskingConfig,
     provision_config: &diff::AgentTypeProvisionConfig,
 ) -> BTreeMap<String, DeploymentDisplayPlugin> {
     provision_config
@@ -954,7 +1006,7 @@ fn display_plugins(
                 .map(|(key, value)| {
                     (
                         key.clone(),
-                        mask_sensitive_value(show_sensitive, key, value),
+                        mask_sensitive_key_value_for_deploy_diff(masking, key, value),
                     )
                 })
                 .collect();
@@ -968,6 +1020,29 @@ fn display_plugins(
             )
         })
         .collect()
+}
+
+fn display_initial_permission(
+    provision_config: &diff::AgentTypeProvisionConfig,
+) -> anyhow::Result<DeploymentDisplayInitialPermissions> {
+    Ok(DeploymentDisplayInitialPermissions {
+        lower_bound: DeploymentDisplayInitialPermissionsBound {
+            positive: render_permissions(&provision_config.initial_permissions.lower_positive)?,
+            negative: render_permissions(&provision_config.initial_permissions.lower_negative)?,
+        },
+        upper_bound: DeploymentDisplayInitialPermissionsBound {
+            positive: render_permissions(&provision_config.initial_permissions.upper_positive)?,
+            negative: render_permissions(&provision_config.initial_permissions.upper_negative)?,
+        },
+    })
+}
+
+fn render_permissions(permissions: &[PolymorphicPermissionPattern]) -> anyhow::Result<Vec<String>> {
+    permissions
+        .iter()
+        .map(|p| p.render())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(anyhow::Error::msg)
 }
 
 fn display_method(
@@ -1198,25 +1273,16 @@ fn render_agent_config_source(source: AgentConfigSource) -> &'static str {
     }
 }
 
-fn mask_sensitive_value(show_sensitive: bool, key: &str, value: &str) -> String {
-    if !show_sensitive && is_sensitive_env_var_name(show_sensitive, key) {
-        masked_secret(value)
+fn mask_sensitive_key_value_for_deploy_diff(
+    masking: MaskingConfig,
+    key: &str,
+    value: &str,
+) -> String {
+    if !masking.show_secrets && is_sensitive_key(key) {
+        mask_secret_with_fingerprint(value)
     } else {
         value.to_string()
     }
-}
-
-fn masked_json_value(value: &impl Serialize) -> anyhow::Result<serde_json::Value> {
-    Ok(serde_json::Value::String(masked_secret(
-        &serde_json::to_string(value)?,
-    )))
-}
-
-fn masked_secret(value: &str) -> String {
-    format!(
-        "<masked-secret:{}>",
-        blake3::hash(value.as_bytes()).to_hex()
-    )
 }
 
 #[derive(Clone, Default, PartialEq, Debug, Serialize, Deserialize)]

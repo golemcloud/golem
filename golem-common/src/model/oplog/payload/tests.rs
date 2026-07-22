@@ -860,6 +860,25 @@ fn p3_http_payload_additions_keep_preexisting_blobstore_create_container_tag_sta
 }
 
 #[test]
+fn main_payload_additions_keep_existing_p3_binary_tags_stable() {
+    let old_p3_monotonic_clock_unit_response = [0, 47, 0, 0];
+    let response = HostResponse::P3MonotonicClockUnit(
+        crate::model::oplog::HostResponseP3MonotonicClockUnit {},
+    );
+    assert_eq!(
+        desert_rust::serialize_to_byte_vec(&response).unwrap(),
+        old_p3_monotonic_clock_unit_response
+    );
+
+    let old_p3_http_request_body_transmission_name = [0, 142, 1, 0];
+    let function_name = host_functions::HostFunctionName::P3HttpClientRequestBodyTransmission;
+    assert_eq!(
+        desert_rust::serialize_to_byte_vec(&function_name).unwrap(),
+        old_p3_http_request_body_transmission_name
+    );
+}
+
+#[test]
 fn p3_http_payload_additions_p3_filesystem_stat_function_name_roundtrips_from_string() {
     let function_name = host_functions::HostFunctionName::P3FilesystemTypesDescriptorStat;
     let serialized = function_name.to_string();

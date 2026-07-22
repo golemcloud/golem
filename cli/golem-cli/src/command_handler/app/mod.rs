@@ -29,6 +29,7 @@ use crate::command_handler::app::deploy_diff::{
     RollbackEntityDetails, RollbackQuickDiff,
 };
 use crate::command_handler::app::template::TemplateHandler;
+use crate::command_handler::app::version_strategy::{ResolvedAppVersionSource, compute_version};
 use crate::context::Context;
 use crate::error::service::{MapServiceError, ServiceError};
 use crate::error::{HintError, NonSuccessfulExit};
@@ -51,11 +52,13 @@ use crate::model::deploy::{
     preferred_source_language_for_setup,
 };
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
-use crate::model::text::deployment::DeploymentNewView;
+use crate::model::text::agent::AgentTypeListView;
+use crate::model::text::deployment::{DeploymentListView, DeploymentNewView};
 use crate::model::text::diff::{DeployPlanView, log_unified_diff, log_unified_diff_for_path};
 use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
+use crate::model::text::template::TemplateListView;
 use crate::model::worker::AgentUpdateMode;
 use crate::model::{GuestLanguage, TemplateDescription};
 use anyhow::{anyhow, bail};
@@ -90,6 +93,7 @@ use tracing::debug;
 
 mod deploy_diff;
 mod template;
+mod version_strategy;
 
 pub struct AppCommandHandler {
     ctx: Arc<Context>,
@@ -158,7 +162,7 @@ impl AppCommandHandler {
         if outcome.is_ok() {
             self.ctx
                 .log_handler()
-                .log_view(&crate::model::text::action_result::BuildResult { built: true })?;
+                .log_output(crate::model::text::action_result::BuildResult { built: true })?;
         }
         outcome
     }
@@ -176,7 +180,7 @@ impl AppCommandHandler {
         if outcome.is_ok() {
             self.ctx
                 .log_handler()
-                .log_view(&crate::model::text::action_result::CleanResult { cleaned: true })?;
+                .log_output(crate::model::text::action_result::CleanResult { cleaned: true })?;
         }
         outcome
     }
@@ -360,8 +364,8 @@ impl AppCommandHandler {
             },
         };
         if outcome.is_ok() {
-            self.ctx.log_handler().log_view(
-                &crate::model::text::action_result::DeployResultView { deployed: true },
+            self.ctx.log_handler().log_output(
+                crate::model::text::action_result::DeployResultView { deployed: true },
             )?;
         }
         outcome
@@ -478,7 +482,9 @@ impl AppCommandHandler {
             .map(|template| TemplateDescription::from_template(&template.0))
             .collect();
 
-        self.ctx.log_handler().log_view(&templates)?;
+        self.ctx
+            .log_handler()
+            .log_output(TemplateListView { templates })?;
 
         Ok(())
     }
@@ -492,7 +498,9 @@ impl AppCommandHandler {
 
         let agent_types = self.list_agent_types(&environment).await?;
 
-        self.ctx.log_handler().log_view(&agent_types)?;
+        self.ctx
+            .log_handler()
+            .log_output(AgentTypeListView { agent_types })?;
 
         Ok(())
     }
@@ -517,7 +525,7 @@ impl AppCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&AgentTypeView::new(&agent_type, true))?;
+            .log_output(AgentTypeView::new(&agent_type, true))?;
 
         Ok(())
     }
@@ -615,10 +623,7 @@ impl AppCommandHandler {
                 "Multiple deployment found with version {}, use deployment revision instead!",
                 version.log_color_error_highlight()
             ));
-            self.ctx
-                .log_handler()
-                .log_view(&deployments)
-                .map_err(DeployError::PrepareError)?;
+            log_text_view(&DeploymentListView { deployments });
             return Err(DeployError::PrepareError(anyhow!(NonSuccessfulExit)));
         }
 
@@ -753,7 +758,7 @@ impl AppCommandHandler {
                 .map_err(DeployError::BuildError)?;
         }
 
-        let Some(deploy_diff) = self
+        let Some((deploy_diff, deployment_version)) = self
             .prepare_deployment(environment.clone(), config.full_diff)
             .await
             .map_err(DeployError::PrepareError)?
@@ -862,7 +867,11 @@ impl AppCommandHandler {
         }
 
         let current_deployment = self
-            .apply_staged_changes_to_environment(&deploy_diff, allow_incompatible_changes_fallback)
+            .apply_staged_changes_to_environment(
+                &deploy_diff,
+                deployment_version,
+                allow_incompatible_changes_fallback,
+            )
             .await
             .map_err(DeployError::DeployError)?;
 
@@ -880,7 +889,7 @@ impl AppCommandHandler {
         &self,
         environment: ResolvedEnvironmentIdentity,
         full_diff: bool,
-    ) -> anyhow::Result<Option<DeployDiff>> {
+    ) -> anyhow::Result<Option<(DeployDiff, DeploymentVersion)>> {
         log_action("Preparing", "deployment");
         let _indent = LogIndent::new();
 
@@ -914,11 +923,13 @@ impl AppCommandHandler {
             return Ok(None);
         }
 
+        let deployment_version = self.compute_deploy_version().await?;
+
         let (stage_is_same_as_current, deploy_diff) = {
             log_action("Diffing", "");
             let _indent = self.ctx.log_handler().decorated_indent_primary();
 
-            let unified_diffs = deploy_diff.unified_diffs(self.ctx.show_sensitive(), full_diff)?;
+            let unified_diffs = deploy_diff.unified_diffs(self.ctx.masking_config(), full_diff)?;
             let stage_is_same_as_current = deploy_diff.is_stage_same_as_current();
 
             log_action(
@@ -978,7 +989,7 @@ impl AppCommandHandler {
                     Some(diff_stage) => {
                         log_action("Planned", "changes to be applied to the staging area:");
                         let _indent = self.ctx.log_handler().decorated_indent_secondary();
-                        self.ctx.log_handler().log_view(diff_stage)?
+                        self.ctx.log_handler().log_output(diff_stage.clone())?
                     }
                     None => log_skipping_up_to_date("planning changes for staging area"),
                 }
@@ -1003,10 +1014,16 @@ impl AppCommandHandler {
                 }
                 if deploy_diff.has_deployment_changes() || deploy_diff.environment_setup.is_some() {
                     let _indent = self.ctx.log_handler().decorated_indent_secondary();
-                    self.ctx.log_handler().log_view(&DeployPlanView {
+                    self.ctx.log_handler().log_output(DeployPlanView {
                         deployment_diff: &deploy_diff.diff,
                         environment_setup: deploy_diff.environment_setup.as_ref(),
                     })?;
+                }
+                if deploy_diff.has_deployment_changes() && !deployment_version.0.is_empty() {
+                    log_action(
+                        "Deployment version",
+                        deployment_version.0.log_color_highlight().to_string(),
+                    );
                 }
             }
         }
@@ -1028,7 +1045,7 @@ impl AppCommandHandler {
             }
         }
 
-        Ok(Some(deploy_diff))
+        Ok(Some((deploy_diff, deployment_version)))
     }
 
     async fn deploy_quick_diff(
@@ -1314,6 +1331,7 @@ impl AppCommandHandler {
         );
 
         build_environment_setup_plan(
+            self.ctx.masking_config(),
             resolved_agent_secret_defaults,
             retry_policy_defaults,
             resource_defaults,
@@ -1547,7 +1565,7 @@ impl AppCommandHandler {
             .await?;
         debug!("detailed rollback_diff: {:#?}", rollback_diff);
 
-        let unified_diffs = rollback_diff.unified_diffs(self.ctx.show_sensitive(), full_diff)?;
+        let unified_diffs = rollback_diff.unified_diffs(self.ctx.masking_config(), full_diff)?;
 
         {
             let _indent = self.ctx.log_handler().decorated_indent_secondary();
@@ -1557,7 +1575,9 @@ impl AppCommandHandler {
         {
             log_action("Planned", "changes to be applied to the environment:");
             let _indent = self.ctx.log_handler().decorated_indent_secondary();
-            self.ctx.log_handler().log_view(&rollback_diff.diff)?
+            self.ctx
+                .log_handler()
+                .log_output(rollback_diff.diff.clone())?
         }
 
         Ok(Some(rollback_diff))
@@ -2088,9 +2108,26 @@ impl AppCommandHandler {
         Ok(())
     }
 
+    async fn compute_deploy_version(&self) -> anyhow::Result<DeploymentVersion> {
+        let Some(source) = self.ctx.manifest_version_source().cloned() else {
+            return Ok(DeploymentVersion(String::new()));
+        };
+        let resolved = ResolvedAppVersionSource::from_source(source);
+
+        let app_root = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            let app_ctx = app_ctx.some_or_err()?;
+            app_ctx.application().app_root_dir().to_path_buf()
+        };
+
+        let version = compute_version(&resolved, &app_root).await?;
+        Ok(DeploymentVersion(version))
+    }
+
     async fn apply_staged_changes_to_environment(
         &self,
         deploy_diff: &DeployDiff,
+        deployment_version: DeploymentVersion,
         allow_incompatible_changes_fallback: bool,
     ) -> anyhow::Result<CurrentDeployment> {
         let environment_setup = deploy_diff
@@ -2112,7 +2149,7 @@ impl AppCommandHandler {
                     &DeploymentCreation {
                         current_revision: deploy_diff.current_deployment_revision(),
                         expected_deployment_hash: deploy_diff.local_deployment_hash,
-                        version: DeploymentVersion("".to_string()), // TODO: atomic
+                        version: deployment_version.clone(),
                         agent_secret_defaults: if replace_incompatible_agent_secrets {
                             let mut defaults = environment_setup.agent_secret_defaults.clone();
                             defaults.extend(
@@ -2171,7 +2208,7 @@ impl AppCommandHandler {
             log_warn(warning.to_string());
         }
 
-        self.ctx.log_handler().log_view(&DeploymentNewView {
+        self.ctx.log_handler().log_output(DeploymentNewView {
             application_name: deploy_diff.environment.application_name.clone(),
             environment_name: deploy_diff.environment.environment_name.clone(),
             deployment: result.clone(),
@@ -2217,7 +2254,7 @@ impl AppCommandHandler {
             log_warn(warning.to_string());
         }
 
-        self.ctx.log_handler().log_view(&DeploymentNewView {
+        self.ctx.log_handler().log_output(DeploymentNewView {
             application_name: rollback_diff.environment.application_name.clone(),
             environment_name: rollback_diff.environment.environment_name.clone(),
             deployment: result.clone(),
@@ -2698,7 +2735,7 @@ impl AppCommandHandler {
             .await
             .map_service_error()?
             .values;
-        self.ctx.log_handler().log_view(&deployments)?;
+        log_text_view(&DeploymentListView { deployments });
 
         Ok(())
     }

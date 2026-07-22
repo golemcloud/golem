@@ -15,5 +15,6 @@ pub mod quota_api;
 pub mod raw_http;
 pub mod raw_wasi_http;
 pub mod relational_databases;
+pub mod snapshot_card_recovery;
 pub mod wasi_config;
 pub mod websocket;

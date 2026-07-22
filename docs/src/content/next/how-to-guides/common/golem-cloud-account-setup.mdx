@@ -76,6 +76,8 @@ golem -C api-token new --expires-at 2025-12-31T00:00:00Z            # Create wit
 golem -C api-token delete <TOKEN_ID>                                # Delete a token
 ```
 
+`golem api-token new` prints the token secret once, including when using structured output such as `--format json`. Store that value securely; it cannot be retrieved later.
+
 Use a static token in a profile for non-interactive environments:
 
 ```shell

@@ -68,8 +68,12 @@ message OplogEntry {
     EndParameters End = 45;
     CancelledParameters Cancelled = 46;
     CardRevokedParameters CardRevoked = 47;
-    HostStreamFrameParameters HostStreamFrame = 48;
-    CompletionDiscardedParameters CompletionDiscarded = 49;
+    CardEventQueuedParameters CardEventQueued = 48;
+    CardInstalledParameters CardInstalled = 49;
+    CardInstallFailedParameters CardInstallFailed = 50;
+    CardExpiredParameters CardExpired = 51;
+    HostStreamFrameParameters HostStreamFrame = 52;
+    CompletionDiscardedParameters CompletionDiscarded = 53;
   }
 }
 
@@ -291,7 +295,54 @@ message RemoveRetryPolicyParameters {
 
 message CardRevokedParameters {
   google.protobuf.Timestamp timestamp = 1;
+  uint64 queued_event_index = 2;
+  golem.common.UUID card_id = 3;
+}
+
+message CardExpiredParameters {
+  google.protobuf.Timestamp timestamp = 1;
   golem.common.UUID card_id = 2;
+}
+
+message QueuedCardEvent {
+  message Install {
+    golem.common.UUID card_id = 1;
+  }
+
+  message Revoke {
+    golem.common.UUID card_id = 1;
+  }
+
+  oneof event {
+    Install install = 1;
+    Revoke revoke = 2;
+  }
+}
+
+enum CardInstallFailure {
+  CARD_INSTALL_FAILURE_UNSPECIFIED = 0;
+  CARD_INSTALL_FAILURE_CARD_REVOKED = 1;
+  CARD_INSTALL_FAILURE_NOT_FOUND = 2;
+  CARD_INSTALL_FAILURE_RECIPIENT_MISMATCH = 3;
+  CARD_INSTALL_FAILURE_NOT_PERMITTED = 4;
+}
+
+message CardEventQueuedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  QueuedCardEvent event = 2;
+}
+
+message CardInstalledParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  optional uint64 queued_event_index = 2;
+  golem.common.UUID card_id = 3;
+}
+
+message CardInstallFailedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 queued_event_index = 2;
+  golem.common.UUID card_id = 3;
+  CardInstallFailure reason = 4;
 }
 
 // A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),

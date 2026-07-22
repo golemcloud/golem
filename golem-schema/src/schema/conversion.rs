@@ -30,8 +30,7 @@ use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, TypeId};
 use crate::schema::schema_type::{NamedFieldType, SchemaType, VariantCaseType};
 use crate::schema::schema_value::{
-    BinaryValuePayload, DurationValuePayload, SchemaValue, SecretValuePayload, TextValuePayload,
-    VariantValuePayload,
+    BinaryValuePayload, DurationValuePayload, SchemaValue, TextValuePayload, VariantValuePayload,
 };
 use crate::schema::validation::{SchemaError, validate_graph};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -59,6 +58,10 @@ mod rust_decimal;
 mod serde_json_types;
 #[cfg(feature = "url")]
 mod url;
+
+mod quantity;
+
+pub use quantity::{Quantity, QuantityUnit};
 
 // =====================================================================
 // Trait surface
@@ -525,24 +528,6 @@ pub fn url_from_value(v: &SchemaValue, context: &'static str) -> Result<String, 
         SchemaValue::Url { url } => Ok(url.clone()),
         other => Err(FromSchemaError::shape_mismatch(
             "url",
-            value_kind(other),
-            context,
-        )),
-    }
-}
-
-pub fn secret_to_value(secret_ref: String) -> SchemaValue {
-    SchemaValue::Secret(SecretValuePayload { secret_ref })
-}
-
-pub fn secret_from_value(
-    v: &SchemaValue,
-    context: &'static str,
-) -> Result<String, FromSchemaError> {
-    match v {
-        SchemaValue::Secret(p) => Ok(p.secret_ref.clone()),
-        other => Err(FromSchemaError::shape_mismatch(
-            "secret",
             value_kind(other),
             context,
         )),
@@ -1053,6 +1038,35 @@ impl FromSchema for std::time::Duration {
     }
 }
 
+// A `std::path::PathBuf` is modelled as the rich `Path` schema type. Only
+// UTF-8 paths are supported because `SchemaValue::Path` is string-backed.
+impl IntoSchema for std::path::PathBuf {
+    fn type_id() -> TypeId {
+        TypeId::new("std.path.PathBuf")
+    }
+    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
+        use crate::schema::schema_type::{PathDirection, PathKind, PathSpec};
+        SchemaType::path(PathSpec {
+            direction: PathDirection::InOut,
+            kind: PathKind::Any,
+            allowed_mime_types: None,
+            allowed_extensions: None,
+        })
+    }
+    fn to_value(&self) -> SchemaValue {
+        match self.to_str() {
+            Some(s) => path_to_value(s.to_string()),
+            None => path_to_value(self.to_string_lossy().into_owned()),
+        }
+    }
+}
+
+impl FromSchema for std::path::PathBuf {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        Ok(std::path::PathBuf::from(path_from_value(v, "PathBuf")?))
+    }
+}
+
 // A `uuid::Uuid` is modelled as a nominal record of two `u64`s (the high and
 // low 64-bit halves).
 impl IntoSchema for uuid::Uuid {
@@ -1228,7 +1242,7 @@ impl<T: FromSchema> FromSchema for std::ops::Bound<T> {
 }
 
 // =====================================================================
-// Tests for merge_agent_graphs
+// Tests
 // =====================================================================
 
 #[cfg(test)]

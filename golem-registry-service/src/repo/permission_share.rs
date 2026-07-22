@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::registry_change::{RequiresNotificationSignal, RequiresSignalExt};
 use crate::repo::card::DbCardRepo;
 use crate::repo::model::BindFields;
 use crate::repo::model::card::CardRecord;
@@ -45,12 +46,18 @@ pub trait PermissionShareRepo: Send + Sync {
         &self,
         revision: PermissionShareRevisionRecord,
         replacement_card: CardRecord,
-    ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError>;
+    ) -> Result<
+        RequiresNotificationSignal<PermissionShareExtRevisionRecord>,
+        PermissionShareRepoError,
+    >;
 
     async fn delete(
         &self,
         revision: PermissionShareRevisionRecord,
-    ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError>;
+    ) -> Result<
+        RequiresNotificationSignal<PermissionShareExtRevisionRecord>,
+        PermissionShareRepoError,
+    >;
 
     async fn get_by_id(
         &self,
@@ -118,7 +125,10 @@ impl<Repo: PermissionShareRepo> PermissionShareRepo for LoggedPermissionShareRep
         &self,
         revision: PermissionShareRevisionRecord,
         replacement_card: CardRecord,
-    ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError> {
+    ) -> Result<
+        RequiresNotificationSignal<PermissionShareExtRevisionRecord>,
+        PermissionShareRepoError,
+    > {
         let span = Self::span_permission_share_id(revision.permission_share_id);
         self.repo
             .update(revision, replacement_card)
@@ -129,7 +139,10 @@ impl<Repo: PermissionShareRepo> PermissionShareRepo for LoggedPermissionShareRep
     async fn delete(
         &self,
         revision: PermissionShareRevisionRecord,
-    ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError> {
+    ) -> Result<
+        RequiresNotificationSignal<PermissionShareExtRevisionRecord>,
+        PermissionShareRepoError,
+    > {
         let span = Self::span_permission_share_id(revision.permission_share_id);
         self.repo.delete(revision).instrument(span).await
     }
@@ -292,7 +305,10 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
         &self,
         revision: PermissionShareRevisionRecord,
         replacement_card: CardRecord,
-    ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError> {
+    ) -> Result<
+        RequiresNotificationSignal<PermissionShareExtRevisionRecord>,
+        PermissionShareRepoError,
+    > {
         let result = self
             .db_pool
             .with_tx_err(METRICS_SVC_NAME, "update", |tx| {
@@ -341,13 +357,16 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
             })
             .await?;
 
-        Ok(result)
+        Ok(result.requires_notification_signal())
     }
 
     async fn delete(
         &self,
         revision: PermissionShareRevisionRecord,
-    ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError> {
+    ) -> Result<
+        RequiresNotificationSignal<PermissionShareExtRevisionRecord>,
+        PermissionShareRepoError,
+    > {
         let result = self
             .db_pool
                 .with_tx_err(METRICS_SVC_NAME, "delete", |tx| {
@@ -387,7 +406,7 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
             })
             .await?;
 
-        Ok(result)
+        Ok(result.requires_notification_signal())
     }
 
     async fn get_by_id(

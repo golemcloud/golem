@@ -484,17 +484,17 @@ The example's `golem.yaml` drives the same pipeline (codegen → `moon build` �
 
 ## Release Script
 
-`sdks/moonbit/release.sh` toggles `golem_sdk_example1` between **development mode** (local path deps,
-relative tool paths) and **release/template mode** (versioned mooncakes deps; tools run from
+`sdks/moonbit/release.sh` toggles `golem_sdk_example1` between **development mode** (the local SDK
+selected through `moon.work`, relative tool paths) and **release/template mode** (versioned mooncakes deps; tools run from
 `.mooncakes/`).
 
 ```sh
 ./release.sh 0.1.0              # same version for SDK and tools
 ./release.sh 0.1.0 0.2.0        # different versions for SDK and tools
-./release.sh --dev             # revert to local path deps for in-repo development
+./release.sh --dev             # revert to the local workspace SDK for in-repo development
 ```
 
-Release mode rewrites the example's `moon.mod.json` (`deps` path → versioned; adds `bin-deps` with
+Release mode rewrites the example's `moon.mod.json` (workspace SDK version → release version; adds `bin-deps` with
 `golemcloud/golem_sdk_tools`) and the tool/SDK paths in `golem.yaml`, producing a standalone template
 that depends only on mooncakes. Both `golemcloud/golem_sdk` and `golemcloud/golem_sdk_tools` must be
 published to mooncakes.io for the release template to work.

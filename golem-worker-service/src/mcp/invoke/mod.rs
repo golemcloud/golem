@@ -87,7 +87,7 @@ pub(crate) fn schema_text_value_from_json(
 }
 
 /// Parse an unstructured-binary element from its canonical JSON envelope
-/// `{ "bytes": "<base64url-no-pad>", "mime_type"?: "..." }` directly into a
+/// `{ "bytes": "<base64url-no-pad>", "mimeType"?: "..." }` directly into a
 /// [`SchemaValue::Binary`] and apply the schema's MIME restrictions.
 ///
 /// The envelope shape is parsed by the shared `golem-common` canonical Binary

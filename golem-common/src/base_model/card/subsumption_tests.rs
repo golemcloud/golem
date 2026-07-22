@@ -187,10 +187,9 @@ fn recipient_patterns_subsume_only_matching_holder_subtrees() {
     let account_agents = AgentRecipientPattern::parse("acme/*/*/*/*").unwrap();
     let application_agents = AgentRecipientPattern::parse("acme/shop/*/*/*").unwrap();
     let agent_type = AgentRecipientPattern::parse("acme/shop/prod/cart-svc/*").unwrap();
-    let agent =
-        AgentRecipientPattern::parse("acme/shop/prod/cart-svc/ShoppingCart(\"42\")").unwrap();
+    let agent = AgentRecipientPattern::parse("acme/shop/prod/cart-svc/ShoppingCart").unwrap();
     let other_agent =
-        AgentRecipientPattern::parse("other/shop/prod/cart-svc/ShoppingCart(\"42\")").unwrap();
+        AgentRecipientPattern::parse("other/shop/prod/cart-svc/ShoppingCart").unwrap();
 
     assert!(account.subsumes(&agent));
     assert!(account.subsumes(&environment));
@@ -672,7 +671,7 @@ fn generate_domain_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
             "card_any_subsumes_install_target",
             CardResourcePattern::Any,
             CardResourcePattern::InstallTarget(
-                AgentRecipientPattern::parse("acme/shop/prod/cart-svc/ShoppingCart(*)").unwrap(),
+                AgentRecipientPattern::parse("acme/shop/prod/cart-svc/ShoppingCart").unwrap(),
             ),
             true,
         ),
@@ -682,7 +681,7 @@ fn generate_domain_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
                 AgentRecipientPattern::parse("acme/shop/prod/cart-svc/*").unwrap(),
             ),
             CardResourcePattern::InstallTarget(
-                AgentRecipientPattern::parse("acme/shop/prod/cart-svc/ShoppingCart(*)").unwrap(),
+                AgentRecipientPattern::parse("acme/shop/prod/cart-svc/ShoppingCart").unwrap(),
             ),
             true,
         ),

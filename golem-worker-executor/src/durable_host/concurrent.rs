@@ -25,7 +25,7 @@
 //! p3 `Accessor` entry points ([`CallHandle::start_access_with`] and friends) run concurrently;
 //! host methods still taking `&mut self` remain serialized by the store borrow.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::path::PathBuf;
@@ -64,7 +64,6 @@ use crate::durable_host::{
     AtomicRegionLease, DurableScopeKind, DurableWorkerCtx, IFSWorkerFile, PublicDurableWorkerState,
 };
 use crate::services::HasWorker;
-use crate::services::card::CardService;
 use crate::services::component::ComponentService;
 use crate::services::file_loader::FileLoader;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, PendingUpload};
@@ -4445,6 +4444,25 @@ where
                 );
                 update_state_to_new_component_revision_access(store, get_ctx, new_revision).await?;
             }
+            crate::durable_host::replay_state::ReplayEvent::CardInstalled { card } => {
+                store.with(|mut access| {
+                    let ctx = get_ctx(access.data_mut());
+                    let card_id = card.card_id();
+                    tracing::debug!(card_id = %card_id, "Applying replayed card installation");
+                    ctx.state.agent_wallet_cards.insert(card_id, card);
+                    ctx.rederive_agent_effective_surface_from_wallet();
+                });
+            }
+            crate::durable_host::replay_state::ReplayEvent::CardRevoked { card_id }
+            | crate::durable_host::replay_state::ReplayEvent::CardExpired { card_id } => {
+                store.with(|mut access| {
+                    let ctx = get_ctx(access.data_mut());
+                    tracing::debug!(card_id = %card_id, "Applying replayed card removal");
+                    if ctx.state.agent_wallet_cards.remove(&card_id).is_some() {
+                        ctx.rederive_agent_effective_surface_from_wallet();
+                    }
+                });
+            }
             crate::durable_host::replay_state::ReplayEvent::ReplayFinished => {
                 tracing::debug!("Replaying oplog finished");
                 finalize_pending_automatic_update_access(store, get_ctx).await?;
@@ -4454,10 +4472,8 @@ where
     Ok(())
 }
 
-struct AccessRevisionUpdateInputs<Ctx: WorkerCtx> {
-    public_state: PublicDurableWorkerState<Ctx>,
+struct AccessRevisionUpdateInputs {
     component_service: Arc<dyn ComponentService>,
-    card_service: Arc<dyn CardService>,
     file_loader: Arc<FileLoader>,
     owned_agent_id: golem_common::model::OwnedAgentId,
     agent_id: Option<ParsedAgentId>,
@@ -4471,6 +4487,7 @@ struct AccessRevisionUpdate {
     agent_state: Option<(
         HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
         golem_common::model::card::EffectiveSurface,
+        BTreeMap<golem_common::model::card::CardId, golem_common::model::card::StoredCard>,
     )>,
     files: HashMap<PathBuf, IFSWorkerFile>,
 }
@@ -4565,9 +4582,7 @@ where
     let inputs = store.with(|mut access| {
         let ctx = get_ctx(access.data_mut());
         AccessRevisionUpdateInputs {
-            public_state: ctx.public_state.clone(),
             component_service: ctx.state.component_service.clone(),
-            card_service: ctx.state.card_service.clone(),
             file_loader: ctx.state.file_loader.clone(),
             owned_agent_id: ctx.owned_agent_id.clone(),
             agent_id: ctx.state.agent_id.clone(),
@@ -4593,7 +4608,7 @@ where
 async fn prepare_revision_update_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    inputs: &AccessRevisionUpdateInputs<Ctx>,
+    inputs: &AccessRevisionUpdateInputs,
     new_revision: ComponentRevision,
 ) -> Result<AccessRevisionUpdate, WorkerExecutorError>
 where
@@ -4634,44 +4649,20 @@ where
         )?;
         validate_agent_config(&updated_agent_config, agent_type)?;
 
-        let liveness = match metadata
-            .metadata
-            .agent_type_initial_permission_template(&agent_id.agent_type)
-            .map(|template| template.card_id)
-        {
-            Some(card_id) => {
-                let liveness = inputs
-                    .card_service
-                    .check_cards(vec![card_id])
-                    .await?
-                    .get(&card_id)
-                    .copied()
-                    .unwrap_or(crate::services::card::CardLiveness::Revoked {
-                        newly_detected: true,
-                    });
-                if liveness.newly_detected_revocation() {
-                    inputs
-                        .public_state
-                        .worker()
-                        .add_and_commit_oplog(OplogEntry::card_revoked(card_id.0))
-                        .await;
-                }
-                liveness
-            }
-            None => crate::services::card::CardLiveness::Live,
-        };
+        let initial_card = super::agent_initial_card_from_component_metadata(&metadata, agent_id)?;
+        let initial_wallet_cards = BTreeMap::from([(initial_card.card_id(), initial_card)]);
+        let context =
+            super::agent_monomorphization_context(&metadata, &inputs.owned_agent_id, agent_id);
+        let effective_surface = golem_common::model::card::agent_effective_surface_from_wallet(
+            &context,
+            initial_wallet_cards.values(),
+        );
 
-        let effective_surface = if liveness.is_live() {
-            crate::durable_host::agent_effective_surface_from_component_metadata(
-                &metadata,
-                &inputs.owned_agent_id,
-                agent_id,
-            )
-        } else {
-            golem_common::model::card::EffectiveSurface::default()
-        };
-
-        Some((updated_agent_config, effective_surface))
+        Some((
+            updated_agent_config,
+            effective_surface,
+            initial_wallet_cards,
+        ))
     } else {
         None
     };
@@ -4761,10 +4752,11 @@ fn apply_revision_update_access<Ctx: WorkerCtx>(
         *read_only = read_only_paths;
     }
 
-    if let Some((agent_config, effective_surface)) = update.agent_state {
+    if let Some((agent_config, effective_surface, initial_wallet_cards)) = update.agent_state {
         ctx.state.agent_config = agent_config;
         ctx.state.cached_agent_config_retry_policies = None;
         ctx.state.agent_effective_surface = effective_surface;
+        ctx.state.agent_wallet_cards = initial_wallet_cards;
     }
     ctx.state.component_metadata = update.metadata;
 }

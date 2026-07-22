@@ -35,6 +35,7 @@ use crate::schema::agent::{
     OutputSchema,
 };
 use crate::schema::graph::SchemaGraph;
+use crate::schema::host_managed::HostManagedKind;
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use crate::schema::schema_type::SchemaType;
 use std::error::Error;
@@ -153,14 +154,22 @@ fn walk_type<'a>(
         errors.push(PlacementError::MultimodalListNotAllowedInConstructor);
     }
 
-    match ty {
-        SchemaType::Secret { .. } if scope == SchemaScope::Constructor => {
-            errors.push(PlacementError::SecretNotAllowed { scope });
+    // Host-managed capability types are rejected in constructor scope. The
+    // case set is classified through `HostManagedKind` rather than matched
+    // inline so new capability kinds are policed automatically.
+    if scope == SchemaScope::Constructor {
+        match HostManagedKind::from_type(ty) {
+            Some(HostManagedKind::Secret) => {
+                errors.push(PlacementError::SecretNotAllowed { scope });
+            }
+            Some(HostManagedKind::QuotaToken) => {
+                errors.push(PlacementError::QuotaTokenNotAllowed { scope });
+            }
+            None => {}
         }
-        SchemaType::QuotaToken { .. } if scope == SchemaScope::Constructor => {
-            errors.push(PlacementError::QuotaTokenNotAllowed { scope });
-        }
+    }
 
+    match ty {
         SchemaType::Ref { id, .. } => {
             if visited.contains(&id) {
                 return;

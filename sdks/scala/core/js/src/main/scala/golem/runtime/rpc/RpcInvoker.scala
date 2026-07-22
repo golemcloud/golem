@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -30,7 +30,17 @@ import scala.concurrent.Future
 private[rpc] trait RpcInvoker {
   def invokeAndAwait(functionName: String, input: JsSchemaValueTree): Either[String, Option[JsSchemaValueTree]]
 
+  def invokeAndAwaitWithMetadata(
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, InvocationResult[Option[JsSchemaValueTree]]] = Left("invocation metadata is not supported")
+
   def asyncInvokeAndAwait(functionName: String, input: JsSchemaValueTree): Future[Option[JsSchemaValueTree]]
+
+  def asyncInvokeAndAwaitWithMetadata(
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, AsyncInvocation[Option[JsSchemaValueTree]]] = Left("invocation metadata is not supported")
 
   def cancelableAsyncInvokeAndAwait(
     functionName: String,
@@ -39,11 +49,26 @@ private[rpc] trait RpcInvoker {
 
   def invoke(functionName: String, input: JsSchemaValueTree): Either[String, Unit]
 
+  def invokeWithMetadata(functionName: String, input: JsSchemaValueTree): Either[String, InvocationMetadata] =
+    Left("invocation metadata is not supported")
+
   def scheduleInvocation(datetime: Datetime, functionName: String, input: JsSchemaValueTree): Either[String, Unit]
+
+  def scheduleInvocationWithMetadata(
+    datetime: Datetime,
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, InvocationReceipt] = Left("invocation metadata is not supported")
 
   def scheduleCancelableInvocation(
     datetime: Datetime,
     functionName: String,
     input: JsSchemaValueTree
   ): Either[String, CancellationToken]
+
+  def scheduleCancelableInvocationWithMetadata(
+    datetime: Datetime,
+    functionName: String,
+    input: JsSchemaValueTree
+  ): Either[String, CancelableInvocationReceipt] = Left("invocation metadata is not supported")
 }

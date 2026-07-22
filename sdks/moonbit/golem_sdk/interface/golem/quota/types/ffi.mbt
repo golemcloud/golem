@@ -4,42 +4,19 @@
 fn wasmImportResourceDropReservation(resource : Int) = "golem:quota/types@1.5.0" "[resource-drop]reservation"
 
 ///|
-fn wasmImportResourceDropQuotaToken(resource : Int) = "golem:quota/types@1.5.0" "[resource-drop]quota-token"
-
-///|
 fn wasmImportStaticReservationCommit(p0 : Int, p1 : Int64) = "golem:quota/types@1.5.0" "[static]reservation.commit"
 
 ///|
-fn wasmImportConstructorQuotaToken(p0 : Int, p1 : Int, p2 : Int64) -> Int = "golem:quota/types@1.5.0" "[constructor]quota-token"
+fn wasmImportNewToken(p0 : Int, p1 : Int, p2 : Int64) -> Int = "golem:quota/types@1.5.0" "new-token"
 
 ///|
-fn wasmImportMethodQuotaTokenReserve(p0 : Int, p1 : Int64, p2 : Int) = "golem:quota/types@1.5.0" "[method]quota-token.reserve"
+fn wasmImportReserve(p0 : Int, p1 : Int64, p2 : Int) = "golem:quota/types@1.5.0" "reserve"
 
 ///|
-fn wasmImportMethodQuotaTokenSplit(p0 : Int, p1 : Int64) -> Int = "golem:quota/types@1.5.0" "[method]quota-token.split"
+fn wasmImportSplit(p0 : Int, p1 : Int64) -> Int = "golem:quota/types@1.5.0" "split"
 
 ///|
-fn wasmImportMethodQuotaTokenMerge(p0 : Int, p1 : Int) = "golem:quota/types@1.5.0" "[method]quota-token.merge"
-
-///|
-fn wasmImportMethodQuotaTokenToRecord(p0 : Int, p1 : Int) = "golem:quota/types@1.5.0" "[method]quota-token.to-record"
-
-///|
-fn wasmImportStaticQuotaTokenFromRecord(
-  p0 : Int64,
-  p1 : Int64,
-  p2 : Int,
-  p3 : Int,
-  p4 : Int64,
-  p5 : Int64,
-  p6 : Int64,
-  p7 : Int,
-) -> Int = "golem:quota/types@1.5.0" "[static]quota-token.from-record"
-
-///|
-#owned(str)
-extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
-  #|(func (param i32) (result i32) local.get 0)
+fn wasmImportMerge(p0 : Int, p1 : Int) = "golem:quota/types@1.5.0" "merge"
 
 ///|
 extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
@@ -49,24 +26,22 @@ extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
   #| local.get 1)
 
 ///|
-extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load)
+extern "wasm" fn mbt_ffi_load64(offset : Int) -> Int64 =
+  #|(func (param i32) (result i64) local.get 0 i64.load)
+
+///|
+#owned(str)
+extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
+  #|(func (param i32) (result i32) local.get 0)
 
 ///|
 extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
   #|(func (param i32) (result i32) local.get 0 i32.load8_u)
 
 ///|
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load)
+
+///|
 extern "wasm" fn mbt_ffi_free(position : Int) =
   #|(func (param i32) local.get 0 call $moonbit.decref)
-
-///|
-extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
-  #|(func (param i32) (param i32) (result i32)
-  #| local.get 0
-  #| local.get 1 call $moonbit.init_array16
-  #| local.get 0)
-
-///|
-extern "wasm" fn mbt_ffi_load64(offset : Int) -> Int64 =
-  #|(func (param i32) (result i64) local.get 0 i64.load)

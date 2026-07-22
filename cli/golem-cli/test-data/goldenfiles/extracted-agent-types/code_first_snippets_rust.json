@@ -1372,7 +1372,7 @@
                         "kind": "binary",
                         "value": {
                           "restrictions": {
-                            "mime_types": [
+                            "mimeTypes": [
                               "text/plain",
                               "image/png"
                             ]
@@ -1416,7 +1416,7 @@
                     "kind": "binary",
                     "value": {
                       "restrictions": {
-                        "mime_types": [
+                        "mimeTypes": [
                           "text/plain",
                           "image/png"
                         ]
@@ -4019,7 +4019,7 @@
                         "kind": "binary",
                         "value": {
                           "restrictions": {
-                            "mime_types": [
+                            "mimeTypes": [
                               "text/plain",
                               "image/png"
                             ]
@@ -4063,7 +4063,7 @@
                     "kind": "binary",
                     "value": {
                       "restrictions": {
-                        "mime_types": [
+                        "mimeTypes": [
                           "text/plain",
                           "image/png"
                         ]

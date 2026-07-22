@@ -4,6 +4,7 @@ world moonbit-examples {
   import golem:api/host@1.5.0;
   import golem:core/types@2.0.0;
   import golem:agent/host@2.0.0;
+  import golem:tool/host@0.1.0;
 
   import golem:rdbms/postgres@1.5.0;
   import golem:rdbms/mysql@1.5.0;
@@ -34,6 +35,7 @@ world moonbit-examples {
   import wasi:config/store@0.2.0-draft;
 
   import wasi:cli/environment@0.3.0;
+  import wasi:cli/stdout@0.2.6;
 
   import wasi:filesystem/types@0.3.0;
   import wasi:filesystem/preopens@0.3.0;
@@ -42,6 +44,7 @@ world moonbit-examples {
   import wasi:http/client@0.3.0;
 
   include golem:agent/agent-guest@2.0.0;
+  export golem:tool/guest@0.1.0;
 
   export golem:api/save-snapshot@1.5.0;
   export golem:api/load-snapshot@1.5.0;

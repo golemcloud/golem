@@ -13,9 +13,12 @@
 // limitations under the License.
 
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use crate::model::card::{Card, CardId};
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::lucene::Query;
+use crate::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTime};
+use crate::model::oplog::payload::{HostRequestSecretReveal, HostResponseSecretRevealed};
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
@@ -31,11 +34,12 @@ use crate::model::oplog::public_oplog_entry::{
 use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
     AgentMethodInvocationParameters, AgentResourceId, JsonSnapshotData, LogLevel,
-    MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, PersistenceLevel,
-    PluginInstallationDescription, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicLocalSpanData,
-    PublicOplogEntry, PublicSnapshotData, PublicSpanData, PublicTypedAgentConfigEntry,
-    PublicUpdateDescription, RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue,
+    MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogPayload,
+    PersistenceLevel, PluginInstallationDescription, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
+    PublicLocalSpanData, PublicOplogEntry, PublicSnapshotData, PublicSpanData,
+    PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData,
+    SnapshotBasedUpdateParameters, StringAttributeValue,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
@@ -55,6 +59,21 @@ use uuid::Uuid;
 /// root and a value tree.
 fn typed(root: SchemaType, value: SchemaValue) -> TypedSchemaValue {
     TypedSchemaValue::new(SchemaGraph::anonymous(root), value)
+}
+
+fn test_card(card_id: CardId) -> Card {
+    Card {
+        card_id,
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: chrono::Utc::now(),
+        expires_at: None,
+        system_card: false,
+        managed_by: None,
+    }
 }
 
 fn nf(name: &str, body: SchemaType) -> NamedFieldType {
@@ -296,6 +315,66 @@ fn matcher_matches_variant_payload_under_case_path() {
 
     assert!(entry.matches(&Query::parse("some").unwrap()));
     assert!(entry.matches(&Query::parse("request.some:42").unwrap()));
+}
+
+#[test]
+fn matcher_matches_secret_reveal_request_payload() {
+    let secret_id = Uuid::parse_str("00000000-0000-0000-0000-000000000123").unwrap();
+    let request = HostRequestSecretReveal {
+        secret_id,
+        expected_type: SchemaGraph::anonymous(SchemaType::string()),
+    }
+    .into_typed_schema_value()
+    .expect("secret reveal request must be schema-encodable");
+
+    let entry = PublicOplogEntry::Start(StartParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: None,
+        function_name: "golem::secrets::reveal".to_string(),
+        request: Some(request),
+        durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+    });
+
+    assert!(entry.matches(&Query::parse("reveal").unwrap()));
+    assert!(entry.matches(&Query::parse("request.secret_id.low-bits:291").unwrap()));
+}
+
+#[test]
+fn matcher_matches_secret_revealed_response_payload() {
+    let secret_id = Uuid::parse_str("00000000-0000-0000-0000-000000000123").unwrap();
+    let response = HostResponseSecretRevealed {
+        secret_id,
+        pinned_revision: 7,
+        resolved_at: SerializableDateTime {
+            seconds: 1_700_000_000,
+            nanoseconds: 0,
+        },
+        result: Ok(()),
+        audit: SecretRevealAudit {
+            calling_agent: AgentId {
+                component_id: ComponentId(Uuid::nil()),
+                agent_id: "agent-1".to_string(),
+            },
+            config_key: Some(vec!["db".to_string(), "password".to_string()]),
+            timestamp: SerializableDateTime {
+                seconds: 1_700_000_001,
+                nanoseconds: 0,
+            },
+        },
+    }
+    .into_typed_schema_value()
+    .expect("secret revealed response must be schema-encodable");
+
+    let entry = PublicOplogEntry::End(EndParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        start_index: OplogIndex::from_u64(2),
+        response: Some(response),
+        forced_commit: false,
+    });
+
+    assert!(entry.matches(&Query::parse("response.secret_id.low-bits:291").unwrap()));
+    assert!(entry.matches(&Query::parse("response.pinned_revision:7").unwrap()));
+    assert!(entry.matches(&Query::parse("response.audit.config_key:password").unwrap()));
 }
 
 #[test]
@@ -899,6 +978,29 @@ fn snapshot_raw_serialization_poem_serde_equivalence() {
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn raw_snapshot_protobuf_roundtrip_preserves_active_cards() {
+    let card = test_card(CardId::new());
+    let active_cards = vec![card.clone().into()];
+    let entry = OplogEntry::Snapshot {
+        timestamp: Timestamp::now_utc().rounded(),
+        data: OplogPayload::Inline(Box::new(vec![1, 2, 3, 4])),
+        mime_type: "application/octet-stream".to_string(),
+        active_cards,
+    };
+
+    let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+        entry.clone().try_into().unwrap();
+    let decoded = OplogEntry::try_from(proto).unwrap();
+
+    match decoded {
+        OplogEntry::Snapshot { active_cards, .. } => {
+            assert_eq!(active_cards, vec![card.into()]);
+        }
+        other => panic!("expected snapshot entry, got {other:?}"),
+    }
 }
 
 #[test]

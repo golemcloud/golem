@@ -73,24 +73,31 @@ const files = fs.readdirSync('/data');
 ## Complete Agent Example
 
 ```typescript
-import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 import * as fs from 'node:fs';
 
-@agent()
-class FileReaderAgent extends BaseAgent {
-  constructor(readonly name: string) {
-    super();
-  }
+export const FileReaderAgent = defineAgent({
+  name: 'FileReaderAgent',
+  id: { name: z.string() },
+  methods: {
+    readGreeting: method({ input: {}, returns: z.string() }),
+    writeLog: method({ input: { message: z.string() }, returns: z.void() }),
+  },
+});
 
-  async readGreeting(): Promise<string> {
-    const content = fs.readFileSync('/data/greeting.txt', 'utf-8');
-    return content.trim();
-  }
-
-  async writeLog(message: string): Promise<void> {
-    fs.appendFileSync('/tmp/agent.log', message + '\n');
-  }
-}
+export const FileReaderAgentImpl = FileReaderAgent.implement({
+  init: () => ({}),
+  methods: {
+    readGreeting() {
+      const content = fs.readFileSync('/data/greeting.txt', 'utf-8');
+      return content.trim();
+    },
+    writeLog({ message }) {
+      fs.appendFileSync('/tmp/agent.log', message + '\n');
+    },
+  },
+});
 ```
 
 ## Key Constraints

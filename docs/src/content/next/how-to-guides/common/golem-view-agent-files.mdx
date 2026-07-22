@@ -35,3 +35,38 @@ Get output as JSON:
 ```shell
 golem agent files 'CounterAgent("c1")' --format json
 ```
+
+## `agent file-contents` — Download a File from an Agent
+
+```shell
+golem agent file-contents <AGENT_ID> <PATH> [--output <LOCAL_FILE>]
+```
+
+Downloads one file from the agent's virtual filesystem and saves it to the host filesystem.
+
+### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `<AGENT_ID>` | The agent to inspect, e.g. `CounterAgent("c1")` |
+| `<PATH>` | Absolute file path inside the agent filesystem, e.g. `/data/log.txt` |
+| `--output <LOCAL_FILE>` | Local host path to write. If omitted, the file is saved in the current directory using the guest file basename, or `output.bin` if no basename is available. |
+
+### Examples
+
+Save `/data/log.txt` as `./log.txt` in the current directory:
+```shell
+golem agent file-contents 'CounterAgent("c1")' /data/log.txt
+```
+
+Save to an explicit local path:
+```shell
+golem agent file-contents 'CounterAgent("c1")' /data/log.txt --output ./downloads/counter.log
+```
+
+Get machine-readable metadata about the saved file:
+```shell
+golem --format json agent file-contents 'CounterAgent("c1")' /data/log.txt --output ./downloads/counter.log
+```
+
+Structured output uses `$type: "agent.file-contents"` and reports fields such as `saved`, `outputPath`, and `bytes`. The file bytes are written to the host file, not embedded in the structured output document.

@@ -13,7 +13,10 @@
 // limitations under the License.
 
 use super::lexer::{Lexer, Token};
-use super::parse_common::{Dialect, ParseError, parse_cm_value, perr};
+use super::parse_common::{
+    Dialect, ParseError, datetime_value_from_secs_nanos, datetime_value_from_text, parse_cm_value,
+    parse_rich_constructor_body, parse_uint, perr,
+};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::{NamedFieldType, ResultSpec, SchemaType, VariantCaseType};
 use golem_common::schema::schema_value::{ResultValuePayload, SchemaValue, VariantValuePayload};
@@ -261,5 +264,87 @@ impl Dialect for MoonBitDialect {
         }
         lexer.expect(&Token::RBrace)?;
         Ok(SchemaValue::Flags { bits })
+    }
+
+    /// MoonBit datetimes accept the native wall-clock struct literal
+    /// `@wallClock.Datetime::{ seconds: U, nanoseconds: U }` (the form the
+    /// `context` package re-exports) and the unqualified `Datetime::{ ... }`
+    /// form, in addition to the `Datetime("...")` constructor. `seconds` is an
+    /// unsigned `UInt64`, `nanoseconds` is an unsigned `UInt` in `[0, 1e9)` that
+    /// defaults to `0` when omitted.
+    fn parse_datetime(lexer: &mut Lexer) -> Result<SchemaValue, ParseError> {
+        if *lexer.peek()? == Token::At {
+            lexer.next_token()?;
+            let (pkg, ppos, _) = lexer.expect_ident()?;
+            if pkg != "wallClock" {
+                return Err(perr(
+                    ppos,
+                    &format!("expected 'wallClock' package qualifier, got '{pkg}'"),
+                ));
+            }
+            lexer.expect(&Token::Dot)?;
+        }
+        let (name, pos, _) = lexer.expect_ident()?;
+        if name != "Datetime" {
+            return Err(perr(
+                pos,
+                &format!("expected 'Datetime' constructor or literal, got '{name}'"),
+            ));
+        }
+        match lexer.peek()? {
+            Token::DoubleColon => {
+                lexer.next_token()?;
+                lexer.expect(&Token::LBrace)?;
+                let mut seconds: Option<i64> = None;
+                let mut nanoseconds: Option<u32> = None;
+                while *lexer.peek()? != Token::RBrace {
+                    let (field, fpos, _) = lexer.expect_ident()?;
+                    lexer.expect(&Token::Colon)?;
+                    match field.as_str() {
+                        "seconds" => {
+                            let s = parse_uint(lexer)?;
+                            seconds = Some(
+                                i64::try_from(s)
+                                    .map_err(|_| perr(fpos, "seconds does not fit in i64"))?,
+                            );
+                        }
+                        "nanoseconds" => {
+                            let n = parse_uint(lexer)?;
+                            if n >= 1_000_000_000 {
+                                return Err(perr(
+                                    fpos,
+                                    "nanoseconds must be in [0, 1_000_000_000)",
+                                ));
+                            }
+                            nanoseconds = Some(n as u32);
+                        }
+                        other => {
+                            return Err(perr(fpos, &format!("unknown Datetime field '{other}'")));
+                        }
+                    }
+                    if *lexer.peek()? == Token::Comma {
+                        lexer.next_token()?;
+                    } else {
+                        break;
+                    }
+                }
+                lexer.expect(&Token::RBrace)?;
+                let secs =
+                    seconds.ok_or_else(|| perr(pos, "missing 'seconds' field in Datetime"))?;
+                datetime_value_from_secs_nanos(pos, secs, nanoseconds.unwrap_or(0))
+            }
+            Token::LParen => {
+                let bpos = lexer.position();
+                let body = parse_rich_constructor_body(lexer)?;
+                datetime_value_from_text(bpos, &body)
+            }
+            other => {
+                let other = other.clone();
+                Err(perr(
+                    lexer.position(),
+                    &format!("expected '::' or '(' after 'Datetime', got {other:?}"),
+                ))
+            }
+        }
     }
 }

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::card::CardRepoError;
 use super::deployment::DeployRepoError;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
@@ -45,6 +46,8 @@ pub enum ComponentRepoError {
     ConcurrentModification,
     #[error("Version already exists: {version}")]
     VersionAlreadyExists { version: String },
+    #[error(transparent)]
+    CardRepoError(#[from] CardRepoError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -211,6 +214,22 @@ impl ComponentRevisionRecord {
                                     )
                                 })
                                 .collect(),
+                            initial_permissions: self
+                                .metadata
+                                .value()
+                                .agent_type_initial_permission_card(name)
+                                .map(|card| diff::AgentTypeInitialPermission {
+                                    lower_positive: card.lower_positive.clone(),
+                                    lower_negative: card.lower_negative.clone(),
+                                    upper_positive: card.upper_positive.clone(),
+                                    upper_negative: card.upper_negative.clone(),
+                                })
+                                .unwrap_or_else(|| diff::AgentTypeInitialPermission {
+                                    lower_positive: Vec::new(),
+                                    lower_negative: Vec::new(),
+                                    upper_positive: Vec::new(),
+                                    upper_negative: Vec::new(),
+                                }),
                         };
                     Ok((name.0.clone(), state.into()))
                 })

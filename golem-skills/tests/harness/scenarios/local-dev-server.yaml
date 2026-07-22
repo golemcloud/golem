@@ -50,3 +50,62 @@ steps:
       path: "start-server.sh"
     expect:
       stdout_contains: "--clean"
+
+  - id: "write-manifest-free-port-start-script"
+    prompt: >
+      Update the test-app project for isolated manual local testing. Add a `localServer` section
+      to `golem.yaml` that asks the OS for free ports by setting `routerPort`,
+      `customRequestPort`, and `mcpPort` to 0. Also set `portsFile` to `.golem/ports.json` and
+      `dataDir` to `.golem/data`.
+
+      Then write a shell script called start-free-port-server.sh in the test-app directory that
+      starts the local Golem development server using the manifest configuration. The script
+      should run `golem server run` and may pass `--clean`, but it must not repeat the port,
+      ports-file, or data-dir settings as CLI flags. Make the script executable. Do not run the
+      script.
+    expectedSkills:
+      - "golem-local-dev-server"
+
+  - id: "check-free-port-script-exists"
+    shell:
+      command: "test"
+      args: ["-x", "test-app/start-free-port-server.sh"]
+    expect:
+      exit_code: 0
+
+  - id: "check-local-server-manifest"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_matches: "[\\s\\S]*localServer:[\\s\\S]*routerPort: 0[\\s\\S]*customRequestPort: 0[\\s\\S]*mcpPort: 0[\\s\\S]*portsFile: .golem/ports.json[\\s\\S]*dataDir: .golem/data[\\s\\S]*"
+
+  - id: "check-free-port-script-run"
+    check_file:
+      path: "start-free-port-server.sh"
+    expect:
+      stdout_contains: "golem server run"
+      stdout_not_contains: "--router-port"
+
+  - id: "check-free-port-script-no-custom-request-flag"
+    check_file:
+      path: "start-free-port-server.sh"
+    expect:
+      stdout_not_contains: "--custom-request-port"
+
+  - id: "check-free-port-script-no-mcp-flag"
+    check_file:
+      path: "start-free-port-server.sh"
+    expect:
+      stdout_not_contains: "--mcp-port"
+
+  - id: "check-free-port-script-no-ports-file-flag"
+    check_file:
+      path: "start-free-port-server.sh"
+    expect:
+      stdout_not_contains: "--ports-file"
+
+  - id: "check-free-port-script-no-data-dir-flag"
+    check_file:
+      path: "start-free-port-server.sh"
+    expect:
+      stdout_not_contains: "--data-dir"

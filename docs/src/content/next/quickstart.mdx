@@ -488,7 +488,7 @@ Then, add a deployment section to the component's `golem.yaml` to expose the API
 httpApi:
   deployments:
     local:
-    - domain: localhost:9006
+    - subdomain: quickstart  # resolves to quickstart.localhost:9006 by default
       agents:
         CounterAgent: {}
 ```
@@ -499,10 +499,10 @@ Now rebuild and deploy:
 golem deploy
 ```
 
-After this command, the API is deployed to our locally running Golem instance and can be tried out by sending POST requests to `http://localhost:9006/counters/{name}/increment`:
+After this command, the API is deployed to our locally running Golem instance and can be tried out by sending POST requests to `http://quickstart.localhost:9006/counters/{name}/increment`:
 
 ```shell copy
-curl -X POST http://localhost:9006/counters/agent-1/increment
+curl -X POST http://quickstart.localhost:9006/counters/agent-1/increment
 ```
 
 ### Next Steps

@@ -20,7 +20,8 @@ use crate::error::service::MapServiceError;
 use crate::log::log_error;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::text::retry_policy::{
-    RetryPolicyCreateView, RetryPolicyDeleteView, RetryPolicyGetView, RetryPolicyUpdateView,
+    RetryPolicyCreateView, RetryPolicyDeleteView, RetryPolicyGetView, RetryPolicyListView,
+    RetryPolicyUpdateView,
 };
 use anyhow::bail;
 use golem_client::api::RetryPoliciesClient;
@@ -94,7 +95,7 @@ impl RetryPolicyCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&RetryPolicyCreateView(result))?;
+            .log_output(RetryPolicyCreateView(result))?;
 
         Ok(())
     }
@@ -115,7 +116,9 @@ impl RetryPolicyCommandHandler {
             .map_service_error()?
             .values;
 
-        self.ctx.log_handler().log_view(&results)?;
+        self.ctx.log_handler().log_output(RetryPolicyListView {
+            retry_policies: results,
+        })?;
 
         Ok(())
     }
@@ -168,7 +171,7 @@ impl RetryPolicyCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&RetryPolicyGetView(result))?;
+            .log_output(RetryPolicyGetView(result))?;
 
         Ok(())
     }
@@ -207,7 +210,7 @@ impl RetryPolicyCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&RetryPolicyUpdateView(result))?;
+            .log_output(RetryPolicyUpdateView(result))?;
 
         Ok(())
     }
@@ -229,7 +232,7 @@ impl RetryPolicyCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&RetryPolicyDeleteView(result))?;
+            .log_output(RetryPolicyDeleteView(result))?;
 
         Ok(())
     }

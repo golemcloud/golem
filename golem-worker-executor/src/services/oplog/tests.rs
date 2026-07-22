@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::services::oplog::compressed::CompressedOplogArchiveService;
-use crate::services::oplog::multilayer::OplogArchiveService;
+use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveService};
 use crate::storage::indexed::IndexedStorage;
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
@@ -34,12 +34,16 @@ use golem_common::model::{AgentInvocationPayload, RetryConfig};
 use golem_common::redis::RedisPool;
 use golem_common::schema::{BinaryValuePayload, FromSchema, IntoTypedSchemaValue, SchemaValue};
 use golem_common::tracing::{TracingConfig, init_tracing};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use nonempty_collections::nev;
 use std::collections::HashSet;
+use std::fmt::{Debug, Formatter};
 use std::sync::RwLock;
-use std::time::Instant;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 use test_r::{test, test_dep};
+use tokio::sync::{Mutex, Notify, oneshot};
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -57,6 +61,124 @@ impl Tracing {
 #[test_dep(scope = PerWorker)]
 fn tracing() -> Tracing {
     Tracing::init()
+}
+
+#[derive(Debug, Default)]
+struct ArchiveCallCounts {
+    open: AtomicUsize,
+    open_fresh: AtomicUsize,
+    read: AtomicUsize,
+    exists: AtomicUsize,
+    get_last_index: AtomicUsize,
+    archive_read: AtomicUsize,
+    append: AtomicUsize,
+    current_index: AtomicUsize,
+    length: AtomicUsize,
+    archive_last_index: AtomicUsize,
+}
+
+#[derive(Debug)]
+struct RecordingArchiveService {
+    inner: Arc<dyn OplogArchiveService>,
+    calls: Arc<ArchiveCallCounts>,
+}
+
+#[derive(Debug)]
+struct RecordingArchive {
+    inner: Arc<dyn OplogArchive + Send + Sync>,
+    calls: Arc<ArchiveCallCounts>,
+}
+
+#[async_trait::async_trait]
+impl OplogArchiveService for RecordingArchiveService {
+    async fn open(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+    ) -> Arc<dyn OplogArchive + Send + Sync> {
+        self.calls.open.fetch_add(1, Ordering::Relaxed);
+        Arc::new(RecordingArchive {
+            inner: self.inner.open(id, mode).await,
+            calls: self.calls.clone(),
+        })
+    }
+    async fn open_fresh(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+    ) -> Arc<dyn OplogArchive + Send + Sync> {
+        self.calls.open_fresh.fetch_add(1, Ordering::Relaxed);
+        Arc::new(RecordingArchive {
+            inner: self.inner.open_fresh(id, mode).await,
+            calls: self.calls.clone(),
+        })
+    }
+    async fn delete(&self, id: &OwnedAgentId, mode: AgentMode) {
+        self.inner.delete(id, mode).await
+    }
+    async fn read(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> std::collections::BTreeMap<OplogIndex, OplogEntry> {
+        self.calls.read.fetch_add(1, Ordering::Relaxed);
+        self.inner.read(id, mode, idx, n).await
+    }
+    async fn exists(&self, id: &OwnedAgentId, mode: AgentMode) -> bool {
+        self.calls.exists.fetch_add(1, Ordering::Relaxed);
+        self.inner.exists(id, mode).await
+    }
+    async fn scan_for_component(
+        &self,
+        environment_id: &EnvironmentId,
+        component_id: &ComponentId,
+        modes: Option<AgentMode>,
+        cursor: ScanCursor,
+        count: u64,
+    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+        self.inner
+            .scan_for_component(environment_id, component_id, modes, cursor, count)
+            .await
+    }
+    async fn get_last_index(&self, id: &OwnedAgentId, mode: AgentMode) -> OplogIndex {
+        self.calls.get_last_index.fetch_add(1, Ordering::Relaxed);
+        self.inner.get_last_index(id, mode).await
+    }
+}
+
+#[async_trait::async_trait]
+impl OplogArchive for RecordingArchive {
+    async fn read(
+        &self,
+        idx: OplogIndex,
+        n: u64,
+    ) -> std::collections::BTreeMap<OplogIndex, OplogEntry> {
+        self.calls.archive_read.fetch_add(1, Ordering::Relaxed);
+        self.inner.read(idx, n).await
+    }
+    async fn append(&self, chunk: Vec<(OplogIndex, OplogEntry)>) -> u64 {
+        self.calls.append.fetch_add(1, Ordering::Relaxed);
+        self.inner.append(chunk).await
+    }
+    async fn current_oplog_index(&self) -> OplogIndex {
+        self.calls.current_index.fetch_add(1, Ordering::Relaxed);
+        self.inner.current_oplog_index().await
+    }
+    async fn drop_prefix(&self, idx: OplogIndex) -> u64 {
+        self.inner.drop_prefix(idx).await
+    }
+    async fn length(&self) -> u64 {
+        self.calls.length.fetch_add(1, Ordering::Relaxed);
+        self.inner.length().await
+    }
+    async fn get_last_index(&self) -> OplogIndex {
+        self.calls
+            .archive_last_index
+            .fetch_add(1, Ordering::Relaxed);
+        self.inner.get_last_index().await
+    }
 }
 
 fn make_agent_metadata(
@@ -93,6 +215,325 @@ fn default_execution_status(
         agent_mode,
         timestamp: Timestamp::now_utc(),
     })))
+}
+
+struct BlockingArchiveService {
+    inner: Arc<dyn OplogArchiveService>,
+    append_started: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    release_append: Arc<Notify>,
+    append_finished: Arc<Notify>,
+}
+
+impl Debug for BlockingArchiveService {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BlockingArchiveService").finish()
+    }
+}
+
+#[async_trait]
+impl OplogArchiveService for BlockingArchiveService {
+    async fn open(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Arc<dyn OplogArchive + Send + Sync> {
+        Arc::new(BlockingArchive {
+            inner: self.inner.open(owned_agent_id, agent_mode).await,
+            append_started: self.append_started.clone(),
+            release_append: self.release_append.clone(),
+            append_finished: self.append_finished.clone(),
+        })
+    }
+
+    async fn open_fresh(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Arc<dyn OplogArchive + Send + Sync> {
+        Arc::new(BlockingArchive {
+            inner: self.inner.open_fresh(owned_agent_id, agent_mode).await,
+            append_started: self.append_started.clone(),
+            release_append: self.release_append.clone(),
+            append_finished: self.append_finished.clone(),
+        })
+    }
+
+    async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
+        self.inner.delete(owned_agent_id, agent_mode).await
+    }
+
+    async fn read(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.inner.read(owned_agent_id, agent_mode, idx, n).await
+    }
+
+    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
+        self.inner.exists(owned_agent_id, agent_mode).await
+    }
+
+    async fn scan_for_component(
+        &self,
+        environment_id: &EnvironmentId,
+        component_id: &ComponentId,
+        modes: Option<AgentMode>,
+        cursor: ScanCursor,
+        count: u64,
+    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+        self.inner
+            .scan_for_component(environment_id, component_id, modes, cursor, count)
+            .await
+    }
+
+    async fn get_last_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> OplogIndex {
+        self.inner.get_last_index(owned_agent_id, agent_mode).await
+    }
+}
+
+struct BlockingArchive {
+    inner: Arc<dyn OplogArchive + Send + Sync>,
+    append_started: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    release_append: Arc<Notify>,
+    append_finished: Arc<Notify>,
+}
+
+impl Debug for BlockingArchive {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BlockingArchive").finish()
+    }
+}
+
+#[async_trait]
+impl OplogArchive for BlockingArchive {
+    async fn read(&self, idx: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.inner.read(idx, n).await
+    }
+
+    async fn append(&self, chunk: Vec<(OplogIndex, OplogEntry)>) -> u64 {
+        if let Some(sender) = self.append_started.lock().await.take() {
+            let _ = sender.send(());
+        }
+        self.release_append.notified().await;
+        let result = self.inner.append(chunk).await;
+        self.append_finished.notify_one();
+        result
+    }
+
+    async fn current_oplog_index(&self) -> OplogIndex {
+        self.inner.current_oplog_index().await
+    }
+
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
+        self.inner.drop_prefix(last_dropped_id).await
+    }
+
+    async fn length(&self) -> u64 {
+        self.inner.length().await
+    }
+
+    async fn get_last_index(&self) -> OplogIndex {
+        self.inner.get_last_index().await
+    }
+}
+
+#[test]
+async fn ephemeral_create_baseline_uses_lower_storage_and_checked_reads_find_it(
+    _tracing: &Tracing,
+) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage,
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let calls = Arc::new(ArchiveCallCounts::default());
+    let lower1: Arc<dyn OplogArchiveService> = Arc::new(RecordingArchiveService {
+        inner: Arc::new(CompressedOplogArchiveService::new(
+            indexed_storage.clone(),
+            1,
+            RetryConfig::default(),
+        )),
+        calls: calls.clone(),
+    });
+    let lower2: Arc<dyn OplogArchiveService> = Arc::new(RecordingArchiveService {
+        inner: Arc::new(CompressedOplogArchiveService::new(
+            indexed_storage,
+            2,
+            RetryConfig::default(),
+        )),
+        calls: calls.clone(),
+    });
+    let service = MultiLayerOplogService::new(primary.clone(), nev![lower1, lower2], 10, 10);
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "ephemeral-baseline".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let create_entry = OplogEntry::create(
+        agent_id.clone(),
+        AgentMode::Ephemeral,
+        ComponentRevision::new(1).unwrap(),
+        Vec::new(),
+        environment_id,
+        account_id,
+        None,
+        100,
+        100,
+        HashSet::new(),
+        Vec::new(),
+        None,
+        Uuid::new_v4(),
+    )
+    .rounded();
+
+    let mut metadata = make_agent_metadata(agent_id, account_id, environment_id);
+    metadata.agent_mode = AgentMode::Ephemeral;
+    let oplog = service
+        .create(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            create_entry.clone(),
+            metadata,
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+
+    assert!(!primary.exists(&owned_agent_id, AgentMode::Ephemeral).await);
+    assert_eq!(calls.exists.load(Ordering::Relaxed), 0);
+    assert_eq!(calls.get_last_index.load(Ordering::Relaxed), 0);
+    assert_eq!(calls.read.load(Ordering::Relaxed), 0);
+    assert_eq!(calls.archive_read.load(Ordering::Relaxed), 0);
+    assert!(calls.open.load(Ordering::Relaxed) >= 1);
+    assert!(calls.append.load(Ordering::Relaxed) >= 1);
+    assert!(calls.length.load(Ordering::Relaxed) >= 1);
+
+    assert!(service.exists(&owned_agent_id, AgentMode::Ephemeral).await);
+    assert!(calls.exists.load(Ordering::Relaxed) >= 1);
+    let entries = service
+        .read(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            OplogIndex::INITIAL,
+            1,
+        )
+        .await;
+    assert_eq!(entries.get(&OplogIndex::INITIAL), Some(&create_entry));
+    assert!(calls.read.load(Ordering::Relaxed) >= 1);
+
+    drop(oplog);
+}
+
+#[test]
+async fn fresh_ephemeral_create_does_not_probe_lower_storage(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage,
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let calls = Arc::new(ArchiveCallCounts::default());
+    let lower1: Arc<dyn OplogArchiveService> = Arc::new(RecordingArchiveService {
+        inner: Arc::new(CompressedOplogArchiveService::new(
+            indexed_storage.clone(),
+            1,
+            RetryConfig::default(),
+        )),
+        calls: calls.clone(),
+    });
+    let lower2: Arc<dyn OplogArchiveService> = Arc::new(RecordingArchiveService {
+        inner: Arc::new(CompressedOplogArchiveService::new(
+            indexed_storage,
+            2,
+            RetryConfig::default(),
+        )),
+        calls: calls.clone(),
+    });
+    let service = MultiLayerOplogService::new(primary.clone(), nev![lower1, lower2], 10, 10);
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "fresh-ephemeral".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let create_entry = OplogEntry::create(
+        agent_id.clone(),
+        AgentMode::Ephemeral,
+        ComponentRevision::new(1).unwrap(),
+        Vec::new(),
+        environment_id,
+        account_id,
+        None,
+        100,
+        100,
+        HashSet::new(),
+        Vec::new(),
+        None,
+        Uuid::new_v4(),
+    )
+    .rounded();
+
+    let mut metadata = make_agent_metadata(agent_id, account_id, environment_id);
+    metadata.agent_mode = AgentMode::Ephemeral;
+    let oplog = service
+        .create_fresh(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            create_entry.clone(),
+            metadata,
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+
+    assert!(!primary.exists(&owned_agent_id, AgentMode::Ephemeral).await);
+    assert_eq!(calls.open.load(Ordering::Relaxed), 0);
+    assert_eq!(calls.open_fresh.load(Ordering::Relaxed), 2);
+    assert_eq!(calls.exists.load(Ordering::Relaxed), 0);
+    assert_eq!(calls.get_last_index.load(Ordering::Relaxed), 0);
+    assert_eq!(calls.read.load(Ordering::Relaxed), 0);
+    assert_eq!(calls.archive_read.load(Ordering::Relaxed), 0);
+    assert_eq!(calls.length.load(Ordering::Relaxed), 0);
+    assert_eq!(calls.archive_last_index.load(Ordering::Relaxed), 0);
+    assert_eq!(calls.append.load(Ordering::Relaxed), 1);
+
+    assert!(service.exists(&owned_agent_id, AgentMode::Ephemeral).await);
+    let entries = service
+        .read(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            OplogIndex::INITIAL,
+            1,
+        )
+        .await;
+    assert_eq!(entries.get(&OplogIndex::INITIAL), Some(&create_entry));
+
+    drop(oplog);
 }
 
 #[test]
@@ -167,9 +608,9 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = PrimaryOplogService::new(
-        indexed_storage,
+        indexed_storage.clone(),
         blob_storage,
-        1,
+        100,
         1,
         100,
         RetryConfig::default(),
@@ -201,20 +642,49 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
     let entry2 = OplogEntry::suspend().rounded();
     let entry3 = OplogEntry::exited().rounded();
     let entry4 = OplogEntry::interrupted().rounded();
+    let entry5 = OplogEntry::no_op().rounded();
 
     oplog.add(entry1.clone()).await;
     oplog.add(entry2.clone()).await;
     oplog.add(entry3.clone()).await;
     oplog.commit(CommitLevel::Always).await;
-    oplog.add(entry4.clone()).await; // uncommitted entry
+    oplog.add(entry4.clone()).await;
+    oplog.add(entry5.clone()).await; // uncommitted entries
 
-    let entries = oplog
-        .read_many(OplogIndex::INITIAL, 4)
+    let read_count = indexed_storage.read_count();
+    let buffered_entries = oplog
+        .read_many(OplogIndex::from_u64(4), 2)
         .await
         .into_values()
         .collect::<Vec<_>>();
 
-    assert_eq!(entries, vec![entry1, entry2, entry3, entry4]);
+    assert_eq!(buffered_entries, vec![entry4.clone(), entry5.clone()]);
+    assert_eq!(indexed_storage.read_count(), read_count);
+
+    let entries = oplog
+        .read_many(OplogIndex::INITIAL, 5)
+        .await
+        .into_values()
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        entries,
+        vec![entry1, entry2, entry3, entry4, entry5.clone()]
+    );
+    assert_eq!(indexed_storage.read_count(), read_count + 1);
+
+    let entry = oplog
+        .read_many(OplogIndex::from_u64(5), 1)
+        .await
+        .into_values()
+        .collect::<Vec<_>>();
+
+    assert_eq!(entry, vec![entry5]);
+    assert_eq!(indexed_storage.read_count(), read_count + 1);
+
+    let read_count = indexed_storage.read_count();
+    assert!(oplog.read_many(OplogIndex::from_u64(5), 0).await.is_empty());
+    assert_eq!(indexed_storage.read_count(), read_count);
 }
 
 #[test]
@@ -1681,6 +2151,16 @@ async fn blob_read_initial_from_archive(_tracing: &Tracing) {
     crate::services::oplog::tests::read_initial_from_archive_impl(true).await;
 }
 
+#[test]
+async fn ephemeral_read_initial_from_archive(_tracing: &Tracing) {
+    crate::services::oplog::tests::ephemeral_read_initial_from_archive_impl(false).await;
+}
+
+#[test]
+async fn blob_ephemeral_read_initial_from_archive(_tracing: &Tracing) {
+    crate::services::oplog::tests::ephemeral_read_initial_from_archive_impl(true).await;
+}
+
 async fn read_initial_from_archive_impl(use_blob: bool) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
@@ -1806,6 +2286,122 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
     assert_eq!(last_index_3, OplogIndex::INITIAL);
 }
 
+async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService> = if use_blob {
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 1))
+    } else {
+        Arc::new(CompressedOplogArchiveService::new(
+            indexed_storage.clone(),
+            1,
+            RetryConfig::default(),
+        ))
+    };
+    let tertiary_layer: Arc<dyn OplogArchiveService> = if use_blob {
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2))
+    } else {
+        Arc::new(CompressedOplogArchiveService::new(
+            indexed_storage.clone(),
+            2,
+            RetryConfig::default(),
+        ))
+    };
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        10,
+        10,
+    ));
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "test".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+
+    let timestamp = Timestamp::now_utc();
+    let create_entry = OplogEntry::Create {
+        timestamp,
+        agent_id: AgentId {
+            component_id: ComponentId(Uuid::new_v4()),
+            agent_id: "test".to_string(),
+        },
+        agent_mode: AgentMode::Ephemeral,
+        component_revision: ComponentRevision::new(1).unwrap(),
+        env: vec![],
+        local_agent_config: Vec::new(),
+        environment_id,
+        created_by: account_id,
+        parent: None,
+        component_size: 0,
+        initial_total_linear_memory_size: 0,
+        initial_active_plugins: HashSet::new(),
+        original_phantom_id: None,
+        instance_id: Uuid::new_v4(),
+    }
+    .rounded();
+
+    let oplog = oplog_service
+        .create(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            create_entry.clone(),
+            AgentMetadata {
+                agent_mode: AgentMode::Ephemeral,
+                ..make_agent_metadata(agent_id.clone(), account_id, environment_id)
+            },
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+    oplog.commit(CommitLevel::Always).await;
+
+    let read_before_archive = oplog_service
+        .read(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            OplogIndex::INITIAL,
+            1,
+        )
+        .await
+        .into_iter()
+        .next();
+    let more = EphemeralOplog::try_archive_blocking(&oplog).await;
+    let read_after_archive = oplog_service
+        .read(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            OplogIndex::INITIAL,
+            1,
+        )
+        .await
+        .into_iter()
+        .next();
+
+    assert_eq!(more, Some(false));
+    assert_eq!(
+        read_before_archive,
+        Some((OplogIndex::INITIAL, create_entry.clone()))
+    );
+    assert_eq!(
+        read_after_archive,
+        Some((OplogIndex::INITIAL, create_entry))
+    );
+}
+
 #[test]
 async fn write_after_archive(_tracing: &Tracing) {
     write_after_archive_impl(false, Reopen::No).await;
@@ -1834,6 +2430,121 @@ async fn write_after_archive_reopen_full(_tracing: &Tracing) {
 #[test]
 async fn blob_write_after_archive_reopen_full(_tracing: &Tracing) {
     write_after_archive_impl(true, Reopen::Full).await;
+}
+
+#[test]
+async fn deleting_worker_fences_in_flight_archive_transfers(_tracing: &Tracing) {
+    deleting_worker_fences_in_flight_archive_transfers_impl(AgentMode::Durable).await;
+}
+
+#[test]
+async fn deleting_ephemeral_worker_fences_in_flight_archive_transfers(_tracing: &Tracing) {
+    deleting_worker_fences_in_flight_archive_transfers_impl(AgentMode::Ephemeral).await;
+}
+
+async fn deleting_worker_fences_in_flight_archive_transfers_impl(agent_mode: AgentMode) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let (append_started_tx, append_started_rx) = oneshot::channel();
+    let release_append = Arc::new(Notify::new());
+    let append_finished = Arc::new(Notify::new());
+    let (secondary, tertiary, entry_count_limit) = match agent_mode {
+        AgentMode::Durable => (
+            Arc::new(BlockingArchiveService {
+                inner: Arc::new(CompressedOplogArchiveService::new(
+                    indexed_storage.clone(),
+                    1,
+                    RetryConfig::default(),
+                )),
+                append_started: Arc::new(Mutex::new(Some(append_started_tx))),
+                release_append: release_append.clone(),
+                append_finished: append_finished.clone(),
+            }) as Arc<dyn OplogArchiveService>,
+            Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2))
+                as Arc<dyn OplogArchiveService>,
+            1,
+        ),
+        AgentMode::Ephemeral => (
+            Arc::new(CompressedOplogArchiveService::new(
+                indexed_storage.clone(),
+                1,
+                RetryConfig::default(),
+            )) as Arc<dyn OplogArchiveService>,
+            Arc::new(BlockingArchiveService {
+                inner: Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2)),
+                append_started: Arc::new(Mutex::new(Some(append_started_tx))),
+                release_append: release_append.clone(),
+                append_finished: append_finished.clone(),
+            }) as Arc<dyn OplogArchiveService>,
+            2,
+        ),
+    };
+    let service = Arc::new(MultiLayerOplogService::new(
+        primary,
+        nev![secondary, tertiary],
+        entry_count_limit,
+        1,
+    ));
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "delete-during-transfer".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = service
+        .open(
+            &owned_agent_id,
+            agent_mode,
+            None,
+            AgentMetadata {
+                agent_mode,
+                ..make_agent_metadata(agent_id, account_id, environment_id)
+            },
+            default_last_known_status(),
+            default_execution_status(agent_mode),
+        )
+        .await;
+
+    oplog.add(OplogEntry::no_op()).await;
+    oplog.commit(CommitLevel::Always).await;
+    if agent_mode == AgentMode::Ephemeral {
+        EphemeralOplog::try_archive(&oplog)
+            .await
+            .expect("ephemeral oplog must be archivable");
+    }
+    tokio::time::timeout(Duration::from_secs(1), append_started_rx)
+        .await
+        .expect("archive transfer did not start")
+        .expect("archive transfer start signal dropped");
+
+    service.delete(&owned_agent_id, agent_mode).await;
+
+    let append_completed = append_finished.notified();
+    release_append.notify_one();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), append_completed)
+            .await
+            .is_err(),
+        "delete did not stop the in-flight archive transfer"
+    );
+
+    assert!(
+        !service.exists(&owned_agent_id, agent_mode).await,
+        "an in-flight archive transfer recreated a deleted oplog"
+    );
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2670,6 +3381,125 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
     }
 
     assert_eq!(result.len(), 100);
+}
+
+/// Ephemeral workers in a multi-layer oplog service live only in the lower
+/// (archive) layers - the multi-layer service writes their create entry straight
+/// to the first lower layer rather than to the primary. This test verifies that
+/// `scan_for_component` discovers such ephemeral workers through the archive-only
+/// lower-layer scan path and that mode filtering is honored across layers.
+#[test]
+async fn multilayer_scan_for_component_ephemeral(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default()),
+    );
+    let tertiary_layer: Arc<dyn OplogArchiveService> =
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
+
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        // High entry-count limit so no background transfer between lower layers
+        // happens during the test - the ephemeral workers stay in the first
+        // lower (archive) layer.
+        1000,
+        10,
+    ));
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let component_id = ComponentId::new();
+
+    let create_worker = async |mode: AgentMode, name: String| -> OwnedAgentId {
+        let agent_id = AgentId {
+            component_id,
+            agent_id: name,
+        };
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+        let create_entry = OplogEntry::create(
+            agent_id.clone(),
+            mode,
+            ComponentRevision::new(1).unwrap(),
+            Vec::new(),
+            environment_id,
+            account_id,
+            None,
+            100,
+            100,
+            HashSet::new(),
+            Vec::new(),
+            None,
+            Uuid::now_v7(),
+        );
+        let oplog = oplog_service
+            .create(
+                &owned_agent_id,
+                mode,
+                create_entry,
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
+                default_last_known_status(),
+                default_execution_status(mode),
+            )
+            .await;
+        oplog.commit(CommitLevel::Always).await;
+        owned_agent_id
+    };
+
+    let mut durable = Vec::new();
+    for i in 0..20 {
+        durable.push(create_worker(AgentMode::Durable, format!("dur-{i}")).await);
+    }
+    let mut ephemeral = Vec::new();
+    for i in 0..20 {
+        ephemeral.push(create_worker(AgentMode::Ephemeral, format!("eph-{i}")).await);
+    }
+
+    // Give any background processes a chance to settle.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let drain = async |modes: Option<AgentMode>| {
+        let mut cursor = ScanCursor::default();
+        let mut acc: Vec<OwnedAgentId> = Vec::new();
+        // Use a small page size so pagination crosses layers and mode boundaries.
+        let page_size = 7;
+        loop {
+            let (next_cursor, ids) = oplog_service
+                .scan_for_component(&environment_id, &component_id, modes, cursor, page_size)
+                .await
+                .unwrap();
+            acc.extend(ids);
+            if next_cursor.is_finished() {
+                break;
+            }
+            cursor = next_cursor;
+        }
+        acc.sort_by(|a, b| a.agent_id.agent_id.cmp(&b.agent_id.agent_id));
+        acc
+    };
+
+    let mut expected_durable = durable.clone();
+    expected_durable.sort_by(|a, b| a.agent_id.agent_id.cmp(&b.agent_id.agent_id));
+    let mut expected_ephemeral = ephemeral.clone();
+    expected_ephemeral.sort_by(|a, b| a.agent_id.agent_id.cmp(&b.agent_id.agent_id));
+    let mut expected_both: Vec<OwnedAgentId> = durable.into_iter().chain(ephemeral).collect();
+    expected_both.sort_by(|a, b| a.agent_id.agent_id.cmp(&b.agent_id.agent_id));
+
+    assert_eq!(drain(Some(AgentMode::Ephemeral)).await, expected_ephemeral);
+    assert_eq!(drain(Some(AgentMode::Durable)).await, expected_durable);
+    assert_eq!(drain(None).await, expected_both);
 }
 
 /// Reproducer for the oplog unique key violation panic during recovery.

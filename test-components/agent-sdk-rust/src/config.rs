@@ -1,5 +1,6 @@
 use golem_rust::agentic::{Config, Secret};
 use golem_rust::{ConfigSchema, FromSchema, IntoSchema, agent_definition, agent_implementation};
+use golem_rust::{PromiseId, blocking_await_promise, create_promise};
 use serde::Serialize;
 use serde_json::json;
 
@@ -129,6 +130,10 @@ pub trait SharedConfigAgent {
     fn new(name: String, #[agent_config] config: Config<SharedConfigAgentConfig>) -> Self;
 
     fn echo_local_config(&self) -> String;
+
+    fn create_replay_gate(&self) -> PromiseId;
+
+    fn reveal_secret_then_await_replay_gate(&self, promise_id: PromiseId) -> String;
 }
 
 struct SharedConfigAgentImpl {
@@ -149,6 +154,17 @@ impl SharedConfigAgent for SharedConfigAgentImpl {
         });
 
         serde_json::to_string(&result_json).unwrap()
+    }
+
+    fn create_replay_gate(&self) -> PromiseId {
+        create_promise()
+    }
+
+    fn reveal_secret_then_await_replay_gate(&self, promise_id: PromiseId) -> String {
+        let config = self.config.get();
+        let secret = config.secret.get();
+        blocking_await_promise(&promise_id);
+        secret
     }
 }
 

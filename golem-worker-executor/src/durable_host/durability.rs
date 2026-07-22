@@ -1019,10 +1019,19 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
         response: golem_common::schema::wit::wire::TypedSchemaValue,
         function_type: durability::DurableFunctionType,
     ) -> anyhow::Result<()> {
-        let request_typed = golem_common::schema::wit::decode_typed(&request).map_err(|e| {
+        // The request/response values are guest-owned and never legally carry a
+        // quota token. Decode both through the rejecting path so any owned
+        // `quota-token` handle is deleted from the resource table rather than
+        // leaked. Both are drained before the first error is surfaced, so a
+        // handle in `response` cannot leak when `request` is rejected.
+        let request_typed =
+            golem_common::schema::wit::decode_typed_rejecting_quota_with(request, self);
+        let response_typed =
+            golem_common::schema::wit::decode_typed_rejecting_quota_with(response, self);
+        let request_typed = request_typed.map_err(|e| {
             anyhow::anyhow!("Failed to decode durable function request schema value: {e}")
         })?;
-        let response_typed = golem_common::schema::wit::decode_typed(&response).map_err(|e| {
+        let response_typed = response_typed.map_err(|e| {
             anyhow::anyhow!("Failed to decode durable function response schema value: {e}")
         })?;
         DurabilityHost::persist_durable_function_invocation(
@@ -1069,7 +1078,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
 
     fn durable_execution_state(&self) -> DurableExecutionState {
         DurableExecutionState {
-            is_live: self.state.is_live(),
+            is_live: self.state.is_live() || self.state.snapshotting_mode.is_some(),
             persistence_level: self.state.persistence_level,
             snapshotting_mode: self.state.snapshotting_mode,
             assume_idempotence: self.state.assume_idempotence,
@@ -1093,6 +1102,10 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
     ) {
+        if self.state.snapshotting_mode.is_some() {
+            return;
+        }
+
         use golem_common::model::oplog::AgentError;
         let entry = OplogEntry::error(
             AgentError::TransientError("in-function retry".to_string()),
@@ -1138,6 +1151,8 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         }
 
         self.process_pending_replay_events().await?;
+        self.drain_card_events_at_boundary().await?;
+
         let oplog_index = self.begin_function(function_type).await?;
         Ok(oplog_index)
     }
@@ -1149,13 +1164,14 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         forced_commit: bool,
     ) -> Result<(), WorkerExecutorError> {
         self.end_function(function_type, begin_index).await?;
-        if function_type == &DurableFunctionType::WriteRemote
-            || matches!(function_type, DurableFunctionType::WriteRemoteBatched(_))
-            || matches!(
-                function_type,
-                DurableFunctionType::WriteRemoteTransaction(_)
-            )
-            || forced_commit
+        if self.state.snapshotting_mode.is_none()
+            && (function_type == &DurableFunctionType::WriteRemote
+                || matches!(function_type, DurableFunctionType::WriteRemoteBatched(_))
+                || matches!(
+                    function_type,
+                    DurableFunctionType::WriteRemoteTransaction(_)
+                )
+                || forced_commit)
         {
             self.public_state
                 .worker()

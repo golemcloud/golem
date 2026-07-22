@@ -17,15 +17,18 @@ use golem_client::api::{
     RegistryServiceGetEnvironmentComponentError, RegistryServiceUpdateComponentError,
 };
 use golem_common::model::Empty;
+use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::{
     AgentMode, AgentTypeName, DeployedRegisteredAgentType, RegisteredAgentTypeImplementer,
     Snapshotting,
 };
 use golem_common::model::base64::Base64;
+use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::component::{
-    AgentFilePermissions, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
-    ComponentCreation, ComponentName, ComponentUpdate, PluginInstallation,
-    PluginInstallationAction, PluginInstallationUpdate, PluginPriority, PluginUninstallation,
+    AgentFilePermissions, AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation,
+    AgentTypeProvisionConfigUpdate, ComponentCreation, ComponentName, ComponentUpdate,
+    PluginInstallation, PluginInstallationAction, PluginInstallationUpdate, PluginPriority,
+    PluginUninstallation,
 };
 use golem_common::model::environment::EnvironmentUpdate;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
@@ -46,6 +49,22 @@ use test_r::{inherit_test_dep, test};
 use tokio::fs::File;
 
 inherit_test_dep!(EnvBasedTestDependencies);
+
+fn default_agent_type_provision_config_creation(
+    account_email: AccountEmail,
+) -> AgentTypeProvisionConfigCreation {
+    AgentTypeProvisionConfigCreation {
+        initial_permissions: AgentTypeInitialPermissions::default_for_recipient(
+            RecipientPattern::Account {
+                account: account_email,
+            },
+        ),
+        env: BTreeMap::new(),
+        config: Vec::new(),
+        plugin_installations: Vec::new(),
+        files: BTreeMap::new(),
+    }
+}
 
 #[test]
 #[tracing::instrument]
@@ -245,7 +264,16 @@ async fn component_update_removes_provision_configs_for_removed_agent_types(
                 agent_types: Some(vec![other_agent]),
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
                     AgentTypeName("OtherAgent".to_string()),
-                    AgentTypeProvisionConfigUpdate::default(),
+                    AgentTypeProvisionConfigUpdate {
+                        initial_permissions: Some(
+                            AgentTypeInitialPermissions::default_for_recipient(
+                                RecipientPattern::Account {
+                                    account: user.account_email.clone(),
+                                },
+                            ),
+                        ),
+                        ..Default::default()
+                    },
                 )])),
                 allow_incompatible_config: false,
             },
@@ -274,6 +302,120 @@ async fn component_update_removes_provision_configs_for_removed_agent_types(
             .metadata
             .agent_type_provision_configs()
             .contains_key(&AgentTypeName("CounterAgent".to_string()))
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn component_update_rejects_new_agent_type_without_initial_permissions(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .store()
+        .await?;
+
+    let mut new_agent = component.metadata.agent_types()[0].clone();
+    new_agent.type_name = AgentTypeName("OtherAgent".to_string());
+    new_agent.description = "Constructs the agent OtherAgent".to_string();
+
+    let result = client
+        .update_component(
+            &component.id.0,
+            &ComponentUpdate {
+                current_revision: component.revision,
+                agent_types: Some(vec![component.metadata.agent_types()[0].clone(), new_agent]),
+                agent_type_provision_config_updates: Some(BTreeMap::from([(
+                    AgentTypeName("OtherAgent".to_string()),
+                    AgentTypeProvisionConfigUpdate::default(),
+                )])),
+                allow_incompatible_config: false,
+            },
+            None::<File>,
+            None::<File>,
+        )
+        .await;
+
+    let Err(golem_client::Error::Item(RegistryServiceUpdateComponentError::Error400(error))) =
+        result
+    else {
+        panic!("expected NEW_AGENT_TYPE_MISSING_INITIAL_PERMISSIONS error")
+    };
+    assert_eq!(error.code, "NEW_AGENT_TYPE_MISSING_INITIAL_PERMISSIONS");
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn component_update_preserves_existing_provision_config_when_omitted(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .with_agent_config(
+            "CounterAgent",
+            vec![AgentConfigEntryDto {
+                path: vec!["var1".to_string()],
+                value: serde_json::Value::String("value1".to_string()).into(),
+            }],
+        )
+        .store()
+        .await?;
+
+    let updated_component = client
+        .update_component(
+            &component.id.0,
+            &ComponentUpdate {
+                current_revision: component.revision,
+                agent_types: None,
+                agent_type_provision_config_updates: Some(BTreeMap::from([(
+                    AgentTypeName("CounterAgent".to_string()),
+                    AgentTypeProvisionConfigUpdate {
+                        env: Some(BTreeMap::from([(
+                            "updated-env".to_string(),
+                            "updated-value".to_string(),
+                        )])),
+                        ..Default::default()
+                    },
+                )])),
+                allow_incompatible_config: false,
+            },
+            None::<File>,
+            None::<File>,
+        )
+        .await?;
+
+    assert_eq!(
+        updated_component
+            .metadata
+            .agent_type_config(&AgentTypeName("CounterAgent".to_string()))
+            .unwrap_or_default()
+            .iter()
+            .map(|e| (e.path.clone(), e.value.value().clone()))
+            .collect::<Vec<_>>(),
+        vec![(
+            vec!["var1".to_string()],
+            SchemaValue::String("value1".to_string())
+        )]
+    );
+    assert_eq!(
+        updated_component
+            .metadata
+            .agent_type_env(&AgentTypeName("CounterAgent".to_string()))
+            .cloned()
+            .unwrap_or_default(),
+        BTreeMap::from([("updated-env".to_string(), "updated-value".to_string())])
     );
 
     Ok(())
@@ -793,7 +935,10 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             &ComponentCreation {
                 component_name: ComponentName("it:agent-counters".to_string()),
                 agent_types: vec![agent_type_schema.clone()],
-                agent_type_provision_configs: std::collections::BTreeMap::new(),
+                agent_type_provision_configs: std::collections::BTreeMap::from([(
+                    agent_type_schema.type_name.clone(),
+                    default_agent_type_provision_config_creation(user.account_email.clone()),
+                )]),
             },
             tokio::fs::File::open(
                 deps.component_directory()
@@ -908,6 +1053,9 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
                 agent_type_provision_configs: std::collections::BTreeMap::from([(
                     "Repository".to_string(),
                     AgentTypeProvisionConfigCreation {
+                        initial_permissions: AgentTypeInitialPermissions::default_for_recipient(
+                            RecipientPattern::Any,
+                        ),
                         plugin_installations: vec![
                             PluginInstallation {
                                 environment_plugin_grant_id: grant_1.id,
@@ -920,7 +1068,9 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
                                 parameters: BTreeMap::new(),
                             },
                         ],
-                        ..Default::default()
+                        env: BTreeMap::new(),
+                        config: Vec::new(),
+                        files: BTreeMap::new(),
                     },
                 )])
                 .into_iter()
@@ -995,6 +1145,9 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
                 agent_type_provision_configs: std::collections::BTreeMap::from([(
                     "Repository".to_string(),
                     AgentTypeProvisionConfigCreation {
+                        initial_permissions: AgentTypeInitialPermissions::default_for_recipient(
+                            RecipientPattern::Any,
+                        ),
                         plugin_installations: vec![
                             PluginInstallation {
                                 environment_plugin_grant_id: grant.id,
@@ -1007,7 +1160,9 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
                                 parameters: BTreeMap::new(),
                             },
                         ],
-                        ..Default::default()
+                        env: BTreeMap::new(),
+                        config: Vec::new(),
+                        files: BTreeMap::new(),
                     },
                 )])
                 .into_iter()

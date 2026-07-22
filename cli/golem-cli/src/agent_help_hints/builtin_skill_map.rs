@@ -89,6 +89,7 @@ pub const SKILL_BINDINGS: &[SkillBinding] = &[
     SkillBinding { cli_path: &["build"],   basename: "golem-build",              kind: SkillKind::Common,                  summary: "Build a Golem application." },
     SkillBinding { cli_path: &["build"],   basename: "golem-troubleshoot-build", kind: SkillKind::Common,                  summary: "Diagnose Golem build failures." },
     SkillBinding { cli_path: &["deploy"],  basename: "golem-deploy",             kind: SkillKind::Common,                  summary: "Deploy a Golem application." },
+    SkillBinding { cli_path: &["deploy"],  basename: "golem-deployment-version", kind: SkillKind::Common,                  summary: "Configure the version attached to a deployment (git/static/env) and versionCheck." },
     SkillBinding { cli_path: &["deploy"],  basename: "golem-redeploy-agents",    kind: SkillKind::Common,                  summary: "Recreate existing agents during deploy." },
     SkillBinding { cli_path: &["deploy"],  basename: "golem-rollback",           kind: SkillKind::Common,                  summary: "Roll back a deployment to a previous revision/version." },
 

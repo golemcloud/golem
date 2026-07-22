@@ -110,30 +110,35 @@ fn emit_client(
     "pub fn \{client}::new_phantom(\n  \{comma_sig}) -> \{client} raise @common.AgentError {\n",
   )
   buf.write_string("  let constructor_input = \{ctor_input}\n")
+  let migration_ctor = if durable { "new_phantom" } else { "ephemeral" }
   buf.write_string(
-    "  let client = @rpc.AgentClient::new_phantom(\"\{escape_string_lit(agent.name)}\", constructor_input)\n",
+    "  let client = @rpc.AgentClient::\{migration_ctor}(\"\{escape_string_lit(agent.name)}\", constructor_input)\n",
   )
   buf.write_string("  { client, }\n}\n\n")
-  // get_phantom
-  buf.write_string("///|\n")
-  buf.write_string(
-    "pub fn \{client}::get_phantom(\n  \{comma_sig}phantom_id : @types.Uuid,\n) -> \{client} raise @common.AgentError {\n",
-  )
-  buf.write_string("  let constructor_input = \{ctor_input}\n")
-  buf.write_string(
-    "  let client = @rpc.AgentClient::get_phantom(\"\{escape_string_lit(agent.name)}\", constructor_input, phantom_id)\n",
-  )
-  buf.write_string("  { client, }\n}\n\n")
+  // Explicit phantom identities are meaningful only for durable agents.
+  if durable {
+    buf.write_string("///|\n")
+    buf.write_string(
+      "pub fn \{client}::get_phantom(\n  \{comma_sig}phantom_id : @types.Uuid,\n) -> \{client} raise @common.AgentError {\n",
+    )
+    buf.write_string("  let constructor_input = \{ctor_input}\n")
+    buf.write_string(
+      "  let client = @rpc.AgentClient::get_phantom(\"\{escape_string_lit(agent.name)}\", constructor_input, phantom_id)\n",
+    )
+    buf.write_string("  { client, }\n}\n\n")
+  }
   // get_agent_id
-  buf.write_string("///|\n")
-  buf.write_string(
-    "pub fn \{client}::get_agent_id(self : \{client}) -> String raise @common.AgentError {\n  self.client.get_agent_id()\n}\n\n",
-  )
-  // phantom_id
-  buf.write_string("///|\n")
-  buf.write_string(
-    "pub fn \{client}::phantom_id(self : \{client}) -> @types.Uuid? {\n  self.client.phantom_id()\n}\n\n",
-  )
+  if durable {
+    buf.write_string("///|\n")
+    buf.write_string(
+      "pub fn \{client}::get_agent_id(self : \{client}) -> String raise @common.AgentError {\n  self.client.get_agent_id()\n}\n\n",
+    )
+    // phantom_id
+    buf.write_string("///|\n")
+    buf.write_string(
+      "pub fn \{client}::phantom_id(self : \{client}) -> @types.Uuid? {\n  self.client.phantom_id()\n}\n\n",
+    )
+  }
   // drop
   buf.write_string("///|\n")
   buf.write_string(
@@ -144,15 +149,17 @@ fn emit_client(
     emit_client_scoped(buf, client, "scoped", "get", vis, [])
   }
   emit_client_scoped(buf, client, "scoped_new_phantom", "new_phantom", vis, [])
-  emit_client_scoped(buf, client, "scoped_get_phantom", "get_phantom", vis, [
-    ("phantom_id", "@types.Uuid"),
-  ])
+  if durable {
+    emit_client_scoped(buf, client, "scoped_get_phantom", "get_phantom", vis, [
+      ("phantom_id", "@types.Uuid"),
+    ])
+  }
   // methods
   for meth in agent.methods {
     if method_has_rpc_incompatible_types(meth) {
       continue
     }
-    emit_client_method(buf, agent, meth, client)
+    emit_client_method(buf, agent, meth, client, durable)
   }
   // _with_config variants
   match resolve_config_type(agent, config_types, agent_package) {
@@ -222,6 +229,7 @@ fn emit_client_method(
   agent : AgentInfo,
   meth : MethodInfo,
   client : String,
+  durable : Bool,
 ) -> Unit {
   let vis = visible_params(meth.params)
   let ctx = escape_string_lit("\{agent.name}.\{meth.name}")
@@ -232,9 +240,14 @@ fn emit_client_method(
   } else {
     "self : \{client}, \{arg_sig}"
   }
-  let ret = match meth.return_type {
+  let value_ret = match meth.return_type {
     None => "Unit"
     Some(pt) => param_type_to_type_string(pt)
+  }
+  let ret = if durable {
+    value_ret
+  } else {
+    "@rpc.InvocationResult[\{value_ret}]"
   }
   // awaited invoke
   buf.write_string("///|\n")
@@ -242,18 +255,27 @@ fn emit_client_method(
     "pub async fn \{client}::\{meth.name}(\n  \{self_args},\n) -> \{ret} {\n",
   )
   buf.write_string("  let input = \{input_expr}\n")
+  buf.write_string(
+    "  let response = self.client.invoke_and_await(\"\{escape_string_lit(meth.name)}\", input)\n",
+  )
   match meth.return_type {
     None =>
       buf.write_string(
-        "  let _ = self.client.invoke_and_await(\"\{escape_string_lit(meth.name)}\", input)\n",
+        if durable {
+          "  let _ = response.value\n"
+        } else {
+          "  { metadata: response.metadata, value: () }\n"
+        },
       )
     Some(_) => {
-      buf.write_string(
-        "  let result = self.client.invoke_and_await(\"\{escape_string_lit(meth.name)}\", input)\n",
-      )
+      buf.write_string("  let result = response.value\n")
       buf.write_string("  match result {\n")
       buf.write_string(
-        "    Some(tree) => @agents.decode_output(tree, \"\{ctx}\")\n",
+        if durable {
+          "    Some(tree) => @agents.decode_output(tree, \"\{ctx}\")\n"
+        } else {
+          "    Some(tree) => { metadata: response.metadata, value: @agents.decode_output(tree, \"\{ctx}\") }\n"
+        },
       )
       buf.write_string(
         "    None => raise @common.AgentError::InvalidType(\"\{ctx}: expected a return value, got none\")\n",
@@ -265,31 +287,31 @@ fn emit_client_method(
   // trigger
   buf.write_string("///|\n")
   buf.write_string(
-    "pub fn \{client}::trigger_\{meth.name}(\n  \{self_args},\n) -> Unit raise @common.AgentError {\n",
+    "pub fn \{client}::trigger_\{meth.name}(\n  \{self_args},\n) -> \{if durable { "Unit" } else { "@rpc.InvocationMetadata" }} raise @common.AgentError {\n",
   )
   buf.write_string("  let input = \{input_expr}\n")
   buf.write_string(
-    "  self.client.invoke(\"\{escape_string_lit(meth.name)}\", input)\n}\n\n",
+    "  \{if durable { "let _ = " } else { "" }}self.client.invoke(\"\{escape_string_lit(meth.name)}\", input)\n}\n\n",
   )
   // schedule
   let sched_args = "self : \{client}, scheduled_at : @systemClock.Instant" +
     (if arg_sig.is_empty() { "" } else { ", " + arg_sig })
   buf.write_string("///|\n")
   buf.write_string(
-    "pub fn \{client}::schedule_\{meth.name}(\n  \{sched_args},\n) -> Unit raise @common.AgentError {\n",
+    "pub fn \{client}::schedule_\{meth.name}(\n  \{sched_args},\n) -> \{if durable { "Unit" } else { "@rpc.ScheduledInvocationReceipt" }} raise @common.AgentError {\n",
   )
   buf.write_string("  let input = \{input_expr}\n")
   buf.write_string(
-    "  self.client.schedule_invocation(scheduled_at, \"\{escape_string_lit(meth.name)}\", input)\n}\n\n",
+    "  \{if durable { "let _ = " } else { "" }}self.client.schedule_invocation(scheduled_at, \"\{escape_string_lit(meth.name)}\", input)\n}\n\n",
   )
   // schedule_cancelable
   buf.write_string("///|\n")
   buf.write_string(
-    "pub fn \{client}::schedule_cancelable_\{meth.name}(\n  \{sched_args},\n) -> @agentHost.CancellationToken raise @common.AgentError {\n",
+    "pub fn \{client}::schedule_cancelable_\{meth.name}(\n  \{sched_args},\n) -> \{if durable { "@agentHost.CancellationToken" } else { "@rpc.CancelableScheduledInvocationReceipt" }} raise @common.AgentError {\n",
   )
   buf.write_string("  let input = \{input_expr}\n")
   buf.write_string(
-    "  self.client.schedule_cancelable_invocation(scheduled_at, \"\{escape_string_lit(meth.name)}\", input)\n}\n\n",
+    "  \{if durable { "self.client.schedule_cancelable_invocation(scheduled_at, \"" + escape_string_lit(meth.name) + "\", input).cancellation_token" } else { "self.client.schedule_cancelable_invocation(scheduled_at, \"" + escape_string_lit(meth.name) + "\", input)" }}\n}\n\n",
   )
 }
 
@@ -327,21 +349,28 @@ fn emit_client_config_variants(
   )
   buf.write_string("  let constructor_input = \{ctor_input}\n")
   buf.write_string("  let agent_config = \{walker}(config, [])\n")
+  let config_ctor = if durable {
+    "new_phantom_with_config"
+  } else {
+    "ephemeral_with_config"
+  }
   buf.write_string(
-    "  let client = @rpc.AgentClient::new_phantom_with_config(\"\{escape_string_lit(agent.name)}\", constructor_input, agent_config)\n",
+    "  let client = @rpc.AgentClient::\{config_ctor}(\"\{escape_string_lit(agent.name)}\", constructor_input, agent_config)\n",
   )
   buf.write_string("  { client, }\n}\n\n")
   // get_phantom_with_config
-  buf.write_string("///|\n")
-  buf.write_string(
-    "pub fn \{client}::get_phantom_with_config(\n  \{comma_sig}phantom_id : @types.Uuid,\n  config : \{override_name},\n) -> \{client} raise @common.AgentError {\n",
-  )
-  buf.write_string("  let constructor_input = \{ctor_input}\n")
-  buf.write_string("  let agent_config = \{walker}(config, [])\n")
-  buf.write_string(
-    "  let client = @rpc.AgentClient::get_phantom_with_config(\"\{escape_string_lit(agent.name)}\", constructor_input, phantom_id, agent_config)\n",
-  )
-  buf.write_string("  { client, }\n}\n\n")
+  if durable {
+    buf.write_string("///|\n")
+    buf.write_string(
+      "pub fn \{client}::get_phantom_with_config(\n  \{comma_sig}phantom_id : @types.Uuid,\n  config : \{override_name},\n) -> \{client} raise @common.AgentError {\n",
+    )
+    buf.write_string("  let constructor_input = \{ctor_input}\n")
+    buf.write_string("  let agent_config = \{walker}(config, [])\n")
+    buf.write_string(
+      "  let client = @rpc.AgentClient::get_phantom_with_config(\"\{escape_string_lit(agent.name)}\", constructor_input, phantom_id, agent_config)\n",
+    )
+    buf.write_string("  { client, }\n}\n\n")
+  }
   // scoped variants
   if durable {
     emit_client_scoped_with_config(
@@ -363,15 +392,17 @@ fn emit_client_config_variants(
     [],
     override_name,
   )
-  emit_client_scoped_with_config(
-    buf,
-    client,
-    "scoped_get_phantom_with_config",
-    "get_phantom_with_config",
-    vis,
-    [("phantom_id", "@types.Uuid")],
-    override_name,
-  )
+  if durable {
+    emit_client_scoped_with_config(
+      buf,
+      client,
+      "scoped_get_phantom_with_config",
+      "get_phantom_with_config",
+      vis,
+      [("phantom_id", "@types.Uuid")],
+      override_name,
+    )
+  }
 }
 
 ///|

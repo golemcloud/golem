@@ -14,7 +14,7 @@
 
 use crate::model::text::fmt::format_stderr;
 use anyhow::anyhow;
-use golem_common::schema::AgentTypeSchema;
+use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use itertools::Itertools;
 use std::path::Path;
 use wasmtime_wasi::p2::pipe;
@@ -49,19 +49,21 @@ fn map_extraction_error(
     err
 }
 
-/// Extracts the implemented agent types from the given WASM component, assuming it implements the `golem:agent/guest` interface.
-/// If it does not, it fails.
+/// Extracts the agent types and tools implemented by the given WASM component
+/// in a single instantiation, assuming it implements the `golem:agent/guest`
+/// interface. If it does not, it fails. Tools are optional: components without
+/// the `golem:tool/guest` interface yield an empty tool list.
 ///
-/// Returns the schema-native [`AgentTypeSchema`] model (the discover-agent-types
-/// wasm export already produces schema-native wire types).
-pub async fn extract_agent_type_schemas(
+/// Returns the schema-native [`ExtractedComponentMetadata`] model (the
+/// discover wasm exports already produce schema-native wire types).
+pub async fn extract_component_metadata(
     wasm_path: &Path,
     enable_wasmtime_fs_cache: bool,
-) -> anyhow::Result<Vec<AgentTypeSchema>> {
+) -> anyhow::Result<ExtractedComponentMetadata> {
     let stdout = pipe::MemoryOutputPipe::new(usize::MAX);
     let stderr = pipe::MemoryOutputPipe::new(usize::MAX);
 
-    golem_common::model::agent::extraction::extract_agent_type_schemas_with_streams(
+    golem_common::model::agent::extraction::extract_component_metadata_with_streams(
         wasm_path,
         Some(stdout.clone()),
         Some(stderr.clone()),

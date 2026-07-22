@@ -362,7 +362,7 @@ The SDK supports a large variety of data types to be used in agent constructors 
     </Tabs.Tab>
 
     <Tabs.Tab>
-    In Scala, custom types used in constructors, method parameters, and return types need an implicit `zio.blocks.schema.Schema`. In Scala 3, this is usually done with `derives Schema` or `given Schema[T] = Schema.derived`; in Scala 2, use an `implicit val schema: Schema[T] = Schema.derived`. See the [page about data type mapping](/next/type-mapping) for more details.
+    In Scala, custom types used in constructors, method parameters, and return types need a `zio.blocks.schema.Schema`. This is usually provided with `derives Schema` or `given Schema[T] = Schema.derived`. See the [page about data type mapping](/next/type-mapping) for more details.
     </Tabs.Tab>
 
     <Tabs.Tab>

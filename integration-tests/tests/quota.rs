@@ -57,7 +57,7 @@ async fn provision_capacity_resource(
     Ok(def)
 }
 
-async fn provision_rate_resource(
+pub(crate) async fn provision_rate_resource(
     client: &impl RegistryServiceClient,
     env_id: &uuid::Uuid,
     name: &str,

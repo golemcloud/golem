@@ -21,10 +21,10 @@
 //!   form is `data:;base64,<base64>`. An explicit `Some("")` mime is
 //!   rejected at encode time — we never emit a form we would not decode
 //!   back to the same payload.
-//! - JSON form: `{ "bytes": "<base64>", "mime_type": "...?" }`. The
-//!   `mime_type` field is absent (not `null`) on output when `None`; the
-//!   decoder rejects an explicit `mime_type: null` and an empty string.
-//! - When `mime_type` is `Some(s)`, `s` must match a minimal MIME regex
+//! - JSON form: `{ "bytes": "<base64>", "mimeType": "...?" }`. The
+//!   `mimeType` field is absent (not `null`) on output when `None`; the
+//!   decoder rejects an explicit `mimeType: null` and an empty string.
+//! - When the MIME type is `Some(s)`, `s` must match a minimal MIME regex
 //!   (`type/subtype` with a small ASCII-only character set).
 
 use crate::schema::canonical::error::ParseError;
@@ -98,7 +98,7 @@ pub fn to_json(payload: &BinaryValuePayload) -> Result<Value, ParseError> {
         Value::String(URL_SAFE_NO_PAD.encode(&payload.bytes)),
     );
     if let Some(mime) = &payload.mime_type {
-        obj.insert("mime_type".to_string(), Value::String(mime.clone()));
+        obj.insert("mimeType".to_string(), Value::String(mime.clone()));
     }
     Ok(Value::Object(obj))
 }
@@ -119,7 +119,7 @@ pub fn from_json(value: &Value) -> Result<BinaryValuePayload, ParseError> {
     let bytes = URL_SAFE_NO_PAD
         .decode(b64.as_bytes())
         .map_err(|e| ParseError::InvalidBase64(e.to_string()))?;
-    let mime_type = match obj.get("mime_type") {
+    let mime_type = match obj.get("mimeType") {
         Some(Value::String(s)) => {
             validate_mime(s)?;
             Some(s.clone())
@@ -128,12 +128,12 @@ pub fn from_json(value: &Value) -> Result<BinaryValuePayload, ParseError> {
         Some(_) => {
             return Err(ParseError::TypeField {
                 expected: "string",
-                field: Some("mime_type"),
+                field: Some("mimeType"),
             });
         }
     };
     for key in obj.keys() {
-        if key != "bytes" && key != "mime_type" {
+        if key != "bytes" && key != "mimeType" {
             return Err(ParseError::ExtraField(key.clone()));
         }
     }
@@ -257,7 +257,7 @@ mod tests {
 
     #[test]
     fn empty_mime_type_json_decode_rejected() {
-        let v = serde_json::json!({ "bytes": "AAEC", "mime_type": "" });
+        let v = serde_json::json!({ "bytes": "AAEC", "mimeType": "" });
         assert!(matches!(from_json(&v), Err(ParseError::BadFormat(_))));
     }
 
@@ -279,24 +279,24 @@ mod tests {
 
     #[test]
     fn json_mime_wrong_type_rejected() {
-        let v = serde_json::json!({ "bytes": "AA", "mime_type": 42 });
+        let v = serde_json::json!({ "bytes": "AA", "mimeType": 42 });
         assert_eq!(
             from_json(&v),
             Err(ParseError::TypeField {
                 expected: "string",
-                field: Some("mime_type"),
+                field: Some("mimeType"),
             })
         );
     }
 
     #[test]
     fn json_mime_null_rejected() {
-        let v = serde_json::json!({ "bytes": "AA", "mime_type": null });
+        let v = serde_json::json!({ "bytes": "AA", "mimeType": null });
         assert_eq!(
             from_json(&v),
             Err(ParseError::TypeField {
                 expected: "string",
-                field: Some("mime_type"),
+                field: Some("mimeType"),
             })
         );
     }
@@ -309,7 +309,7 @@ mod tests {
 
     #[test]
     fn json_invalid_mime_rejected() {
-        let v = serde_json::json!({ "bytes": "AA", "mime_type": "no slash" });
+        let v = serde_json::json!({ "bytes": "AA", "mimeType": "no slash" });
         assert!(matches!(from_json(&v), Err(ParseError::BadFormat(_))));
     }
 }

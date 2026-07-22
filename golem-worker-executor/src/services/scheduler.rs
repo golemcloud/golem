@@ -20,16 +20,20 @@ use crate::services::promise::PromiseService;
 use crate::services::shard::ShardService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_activator::WorkerActivator;
-use crate::storage::scheduler::{ClaimedScheduledAction, SchedulerStorage};
-use crate::worker::Worker;
+use crate::storage::scheduler::{ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError};
+use crate::worker::{INACTIVE_EPHEMERAL_AGENT_ERROR, Worker};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use golem_common::model::RetryConfig;
 use golem_common::model::agent::Principal;
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{
     AgentFingerprint, AgentInvocation, OwnedAgentId, ScheduleId, ScheduledAction, ShardId,
 };
+use golem_common::retries::get_delay;
 use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::future::Future;
@@ -75,6 +79,11 @@ pub trait SchedulerWorkerAccess {
         &self,
         owned_agent_id: &OwnedAgentId,
         invocation: AgentInvocation,
+        worker_env: Option<Vec<(String, String)>>,
+        worker_agent_config: Vec<AgentConfigEntryDto>,
+        component_revision: Option<ComponentRevision>,
+        worker_parent: Option<golem_common::model::AgentId>,
+        worker_creation_principal: Principal,
     ) -> Result<(), WorkerExecutorError>;
 }
 
@@ -113,16 +122,21 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         &self,
         owned_agent_id: &OwnedAgentId,
         invocation: AgentInvocation,
+        worker_env: Option<Vec<(String, String)>>,
+        worker_agent_config: Vec<AgentConfigEntryDto>,
+        component_revision: Option<ComponentRevision>,
+        worker_parent: Option<golem_common::model::AgentId>,
+        worker_creation_principal: Principal,
     ) -> Result<(), WorkerExecutorError> {
         let worker = self
             .get_or_create_suspended(
                 owned_agent_id,
-                None,
-                Vec::new(),
-                None,
-                None,
+                worker_env,
+                worker_agent_config,
+                component_revision,
+                worker_parent,
                 &InvocationContextStack::fresh(),
-                Principal::anonymous(),
+                worker_creation_principal,
             )
             .await?;
 
@@ -146,6 +160,7 @@ pub struct SchedulerServiceDefault {
     claim_batch_size: u32,
     lease_ttl: Duration,
     max_batches_per_tick: u32,
+    storage_retry: RetryConfig,
 }
 
 impl SchedulerServiceDefault {
@@ -160,6 +175,7 @@ impl SchedulerServiceDefault {
         claim_batch_size: u32,
         lease_ttl: Duration,
         max_batches_per_tick: u32,
+        storage_retry: RetryConfig,
         shutdown_token: CancellationToken,
     ) -> Arc<Self> {
         let svc = Self {
@@ -173,6 +189,7 @@ impl SchedulerServiceDefault {
             claim_batch_size,
             lease_ttl,
             max_batches_per_tick,
+            storage_retry,
         };
         let svc = Arc::new(svc);
         let background_handle = {
@@ -210,6 +227,41 @@ impl SchedulerServiceDefault {
         *svc.background_handle.lock().unwrap() = Some(background_handle);
 
         svc
+    }
+
+    /// Runs a scheduler storage operation, retrying transient errors (such as
+    /// connection pool exhaustion) according to `storage_retry`. Panics on a
+    /// non-transient error, or after the configured retries are exhausted.
+    async fn retry_storage_op<T, F, Fut>(&self, op_name: &str, target: &str, mut op: F) -> T
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T, SchedulerStorageError>>,
+    {
+        let mut attempts = 0u32;
+        loop {
+            attempts += 1;
+            match op().await {
+                Ok(val) => return val,
+                Err(SchedulerStorageError::Transient(msg)) => {
+                    if let Some(delay) = get_delay(&self.storage_retry, attempts) {
+                        warn!(
+                            op = op_name,
+                            attempt = attempts,
+                            delay_ms = delay.as_millis() as u64,
+                            "Transient scheduler storage error for {target}, retrying: {msg}"
+                        );
+                        tokio::time::sleep(delay).await;
+                    } else {
+                        panic!(
+                            "scheduler storage operation '{op_name}' failed for {target} after {attempts} attempts: Transient storage error: {msg}"
+                        );
+                    }
+                }
+                Err(SchedulerStorageError::Other(msg)) => {
+                    panic!("scheduler storage operation '{op_name}' failed for {target}: {msg}");
+                }
+            }
+        }
     }
 
     async fn process(&self, now: DateTime<Utc>) -> Result<(), String> {
@@ -465,7 +517,15 @@ impl SchedulerServiceDefault {
                     // We don't really care that it completes here, but it needs to be persisted in the invocation queue.
                     let result = self
                         .worker_access
-                        .enqueue_invocation(&owned_agent_id, *invocation)
+                        .enqueue_invocation(
+                            &owned_agent_id,
+                            *invocation,
+                            None,
+                            Vec::new(),
+                            None,
+                            None,
+                            Principal::anonymous(),
+                        )
                         .await;
 
                     if let Err(e) = result {
@@ -476,6 +536,50 @@ impl SchedulerServiceDefault {
                         false
                     } else {
                         true
+                    }
+                }
+            }
+            ScheduledAction::InvokeEphemeral {
+                account_id: _,
+                owned_agent_id,
+                invocation,
+                component_revision,
+                env: worker_env,
+                config: worker_agent_config,
+                parent: worker_parent,
+                creation_principal: worker_creation_principal,
+            } => {
+                let result = self
+                    .worker_access
+                    .enqueue_invocation(
+                        &owned_agent_id,
+                        *invocation,
+                        Some(worker_env),
+                        worker_agent_config,
+                        Some(component_revision),
+                        worker_parent,
+                        *worker_creation_principal,
+                    )
+                    .await;
+
+                match result {
+                    Ok(()) => true,
+                    Err(WorkerExecutorError::InvalidRequest { details })
+                        if details == INACTIVE_EPHEMERAL_AGENT_ERROR =>
+                    {
+                        info!(
+                            agent_id = owned_agent_id.to_string(),
+                            error = details,
+                            "Dropping terminally failed scheduled ephemeral invocation"
+                        );
+                        true
+                    }
+                    Err(error) => {
+                        error!(
+                            agent_id = owned_agent_id.to_string(),
+                            "Failed to invoke worker with scheduled ephemeral invocation: {error}"
+                        );
+                        false
                     }
                 }
             }
@@ -525,22 +629,19 @@ impl SchedulerService for SchedulerServiceDefault {
             );
         }
 
-        self.scheduler_storage
-            .insert(schedule_id, time, shard_id, &action)
-            .await
-            .unwrap_or_else(|err| {
-                panic!("failed to add schedule for action {action} in scheduler storage: {err}")
-            });
+        self.retry_storage_op("insert", &format!("action {action}"), || {
+            self.scheduler_storage
+                .insert(schedule_id, time, shard_id, &action)
+        })
+        .await;
         schedule_id
     }
 
     async fn cancel(&self, id: ScheduleId) {
-        self.scheduler_storage
-            .cancel(&id)
-            .await
-            .unwrap_or_else(|err| {
-                panic!("failed to remove schedule {id} from scheduler storage: {err}")
-            });
+        self.retry_storage_op("cancel", &format!("schedule {id}"), || {
+            self.scheduler_storage.cancel(&id)
+        })
+        .await;
     }
 }
 
@@ -554,28 +655,33 @@ mod tests {
     use crate::services::shard::{ShardService, ShardServiceDefault};
     use crate::services::worker::{GetWorkerMetadataResult, WorkerService};
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
-    use crate::storage::scheduler::SchedulerStorage;
     use crate::storage::scheduler::memory::InMemorySchedulerStorage;
+    use crate::storage::scheduler::{
+        ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError,
+    };
+    use crate::worker::INACTIVE_EPHEMERAL_AGENT_ERROR;
     use async_trait::async_trait;
-    use chrono::DateTime;
+    use chrono::{DateTime, Utc};
     use golem_common::model::AgentStatusRecord;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::{AgentMode, Principal};
-    use golem_common::model::component::ComponentId;
+    use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::OplogIndex;
+    use golem_common::model::worker::AgentConfigEntryDto;
     use golem_common::model::{
         AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, OwnedAgentId, PromiseId,
-        ScheduleId, ScheduledAction, ShardAssignment, ShardId,
+        RetryConfig, ScheduleId, ScheduledAction, ShardAssignment, ShardId,
     };
     use golem_common::schema::SchemaValue;
+    use golem_common::serialization::serialize;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use std::collections::HashSet;
     use std::str::FromStr;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use test_r::test;
     use tokio_util::sync::CancellationToken;
@@ -605,6 +711,11 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _invocation: AgentInvocation,
+            _worker_env: Option<Vec<(String, String)>>,
+            _worker_agent_config: Vec<AgentConfigEntryDto>,
+            _component_revision: Option<ComponentRevision>,
+            _worker_parent: Option<golem_common::model::AgentId>,
+            _worker_creation_principal: Principal,
         ) -> Result<(), WorkerExecutorError> {
             unimplemented!()
         }
@@ -613,6 +724,75 @@ mod tests {
     struct ActiveWorkerAccessMock {
         fingerprint: AgentFingerprint,
         enqueue_count: Arc<AtomicUsize>,
+    }
+
+    type RecordedEphemeralEnqueue = (
+        OwnedAgentId,
+        Option<Vec<(String, String)>>,
+        Vec<AgentConfigEntryDto>,
+        Option<ComponentRevision>,
+        Option<AgentId>,
+        Principal,
+    );
+
+    struct EphemeralWorkerAccessMock {
+        recorded: Arc<Mutex<Option<RecordedEphemeralEnqueue>>>,
+        terminal: bool,
+        fail_first_transiently: bool,
+        enqueue_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl SchedulerWorkerAccess for EphemeralWorkerAccessMock {
+        async fn active_worker_fingerprint(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Option<AgentFingerprint> {
+            panic!("ephemeral schedules must not look up a target fingerprint")
+        }
+
+        async fn activate_worker(&self, _owned_agent_id: &OwnedAgentId) {
+            unreachable!()
+        }
+
+        async fn open_oplog(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+            unreachable!()
+        }
+
+        async fn enqueue_invocation(
+            &self,
+            owned_agent_id: &OwnedAgentId,
+            _invocation: AgentInvocation,
+            worker_env: Option<Vec<(String, String)>>,
+            worker_agent_config: Vec<AgentConfigEntryDto>,
+            component_revision: Option<ComponentRevision>,
+            worker_parent: Option<AgentId>,
+            worker_creation_principal: Principal,
+        ) -> Result<(), WorkerExecutorError> {
+            let attempt = self.enqueue_count.fetch_add(1, Ordering::SeqCst);
+            *self.recorded.lock().unwrap() = Some((
+                owned_agent_id.clone(),
+                worker_env,
+                worker_agent_config,
+                component_revision,
+                worker_parent,
+                worker_creation_principal,
+            ));
+            if self.terminal {
+                Err(WorkerExecutorError::invalid_request(
+                    INACTIVE_EPHEMERAL_AGENT_ERROR,
+                ))
+            } else if self.fail_first_transiently && attempt == 0 {
+                Err(WorkerExecutorError::invalid_request(
+                    "Failed to upload invocation payload: temporary storage failure",
+                ))
+            } else {
+                Ok(())
+            }
+        }
     }
 
     #[async_trait]
@@ -637,6 +817,11 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _invocation: AgentInvocation,
+            _worker_env: Option<Vec<(String, String)>>,
+            _worker_agent_config: Vec<AgentConfigEntryDto>,
+            _component_revision: Option<ComponentRevision>,
+            _worker_parent: Option<golem_common::model::AgentId>,
+            _worker_creation_principal: Principal,
         ) -> Result<(), WorkerExecutorError> {
             self.enqueue_count.fetch_add(1, Ordering::SeqCst);
             Ok(())
@@ -744,8 +929,116 @@ mod tests {
             100,
             Duration::from_secs(30),
             10,
+            RetryConfig::max_attempts_3(),
             CancellationToken::new(),
         )
+    }
+
+    /// Scheduler storage wrapper whose `insert` fails with a transient error the
+    /// first `transient_failures` times, then delegates to the inner storage.
+    #[derive(Debug)]
+    struct FlakyInsertSchedulerStorage {
+        inner: InMemorySchedulerStorage,
+        transient_failures: AtomicU32,
+        insert_attempts: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl SchedulerStorage for FlakyInsertSchedulerStorage {
+        async fn insert(
+            &self,
+            schedule_id: ScheduleId,
+            due_at: DateTime<Utc>,
+            shard_id: ShardId,
+            action: &ScheduledAction,
+        ) -> Result<(), SchedulerStorageError> {
+            self.insert_attempts.fetch_add(1, Ordering::SeqCst);
+            let remaining =
+                self.transient_failures
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
+            if remaining.is_ok() {
+                return Err(SchedulerStorageError::Transient(
+                    "simulated pool timeout".to_string(),
+                ));
+            }
+            self.inner
+                .insert(schedule_id, due_at, shard_id, action)
+                .await
+        }
+
+        async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), SchedulerStorageError> {
+            self.inner.cancel(schedule_id).await
+        }
+
+        async fn claim_due(
+            &self,
+            now: DateTime<Utc>,
+            assignment: &ShardAssignment,
+            limit: u32,
+            lease_ttl: Duration,
+        ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError> {
+            self.inner
+                .claim_due(now, assignment, limit, lease_ttl)
+                .await
+        }
+
+        async fn extend_lease(
+            &self,
+            schedule_id: &ScheduleId,
+            lease_owner: Uuid,
+            lease_until: DateTime<Utc>,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner
+                .extend_lease(schedule_id, lease_owner, lease_until)
+                .await
+        }
+
+        async fn ack(
+            &self,
+            schedule_id: &ScheduleId,
+            lease_owner: Uuid,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner.ack(schedule_id, lease_owner).await
+        }
+    }
+
+    #[test]
+    async fn schedule_retries_transient_storage_errors() {
+        let insert_attempts = Arc::new(AtomicUsize::new(0));
+        let storage = Arc::new(FlakyInsertSchedulerStorage {
+            inner: InMemorySchedulerStorage::new(),
+            transient_failures: AtomicU32::new(2),
+            insert_attempts: insert_attempts.clone(),
+        });
+        let promise_service = create_promise_service_mock();
+        let svc = create_scheduler(storage.clone(), promise_service).await;
+
+        let action = complete_promise_action(promise(agent("inst1"), 101));
+        let schedule_id = ScheduleId::fresh();
+        let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+
+        // Two transient failures are retried; the third attempt succeeds without panicking.
+        assert_eq!(
+            svc.schedule_with_id(schedule_id, due_at, action).await,
+            schedule_id
+        );
+        assert_eq!(insert_attempts.load(Ordering::SeqCst), 3);
+
+        let assignment = ShardAssignment {
+            number_of_shards: 1,
+            shard_ids: HashSet::from_iter([ShardId::new(0)]),
+        };
+        let claimed = storage
+            .claim_due(
+                DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
+                &assignment,
+                10,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].schedule_id, schedule_id);
     }
 
     fn promise(agent_id: AgentId, idx: u64) -> PromiseId {
@@ -914,6 +1207,7 @@ mod tests {
             100,
             Duration::from_secs(30),
             10,
+            RetryConfig::max_attempts_3(),
             CancellationToken::new(),
         );
 
@@ -934,6 +1228,195 @@ mod tests {
             .unwrap();
 
         assert_eq!(enqueue_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    async fn scheduled_ephemeral_invoke_skips_fingerprint_lookup_and_preserves_creation_data() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let recorded = Arc::new(Mutex::new(None));
+        let enqueue_count = Arc::new(AtomicUsize::new(0));
+        let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+            Arc::new(EphemeralWorkerAccessMock {
+                recorded: recorded.clone(),
+                terminal: false,
+                fail_first_transiently: false,
+                enqueue_count,
+            });
+        let svc = SchedulerServiceDefault::new(
+            storage,
+            create_shard_service_mock(),
+            create_promise_service_mock(),
+            worker_access,
+            create_oplog_service_mock().await,
+            create_worker_service_mock(),
+            Duration::from_secs(1000),
+            100,
+            Duration::from_secs(30),
+            10,
+            RetryConfig::max_attempts_3(),
+            CancellationToken::new(),
+        );
+
+        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("ephemeral"));
+        let parent = agent("caller");
+        let config = vec![AgentConfigEntryDto {
+            path: vec!["database".to_string()],
+            value: serde_json::Value::String("test".to_string()).into(),
+        }];
+        svc.schedule(
+            DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+            ScheduledAction::InvokeEphemeral {
+                account_id: AccountId::new(),
+                owned_agent_id: owned_agent_id.clone(),
+                invocation: Box::new(agent_method_invocation()),
+                component_revision: ComponentRevision::INITIAL,
+                env: vec![("KEY".to_string(), "value".to_string())],
+                config: config.clone(),
+                parent: Some(parent.clone()),
+                creation_principal: Box::new(Principal::anonymous()),
+            },
+        )
+        .await;
+
+        svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *recorded.lock().unwrap(),
+            Some((
+                owned_agent_id,
+                Some(vec![("KEY".to_string(), "value".to_string())]),
+                config,
+                Some(ComponentRevision::INITIAL),
+                Some(parent),
+                Principal::anonymous(),
+            ))
+        );
+    }
+
+    #[test]
+    fn scheduled_action_constructor_indices_preserve_persisted_compatibility() {
+        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("target"));
+        let resume = ScheduledAction::Resume {
+            agent_created_by: AccountId::new(),
+            owned_agent_id: owned_agent_id.clone(),
+        };
+        let ephemeral = ScheduledAction::InvokeEphemeral {
+            account_id: AccountId::new(),
+            owned_agent_id,
+            invocation: Box::new(agent_method_invocation()),
+            component_revision: ComponentRevision::INITIAL,
+            env: vec![],
+            config: vec![],
+            parent: None,
+            creation_principal: Box::new(Principal::anonymous()),
+        };
+
+        assert_eq!(serialize(&resume).unwrap()[2], 3);
+        assert_eq!(serialize(&ephemeral).unwrap()[2], 4);
+    }
+
+    #[test]
+    async fn terminal_scheduled_ephemeral_failure_is_acknowledged_without_redelivery() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let enqueue_count = Arc::new(AtomicUsize::new(0));
+        let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+            Arc::new(EphemeralWorkerAccessMock {
+                recorded: Arc::new(Mutex::new(None)),
+                terminal: true,
+                fail_first_transiently: false,
+                enqueue_count: enqueue_count.clone(),
+            });
+        let svc = SchedulerServiceDefault::new(
+            storage,
+            create_shard_service_mock(),
+            create_promise_service_mock(),
+            worker_access,
+            create_oplog_service_mock().await,
+            create_worker_service_mock(),
+            Duration::from_secs(1000),
+            100,
+            Duration::from_secs(30),
+            10,
+            RetryConfig::max_attempts_3(),
+            CancellationToken::new(),
+        );
+
+        svc.schedule(
+            DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+            ScheduledAction::InvokeEphemeral {
+                account_id: AccountId::new(),
+                owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("ephemeral")),
+                invocation: Box::new(agent_method_invocation()),
+                component_revision: ComponentRevision::INITIAL,
+                env: vec![],
+                config: vec![],
+                parent: None,
+                creation_principal: Box::new(Principal::anonymous()),
+            },
+        )
+        .await;
+
+        svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+            .await
+            .unwrap();
+        svc.process(DateTime::from_str("2023-07-17T10:16:00Z").unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(enqueue_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    async fn transient_invalid_request_does_not_drop_scheduled_ephemeral_invocation() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let enqueue_count = Arc::new(AtomicUsize::new(0));
+        let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+            Arc::new(EphemeralWorkerAccessMock {
+                recorded: Arc::new(Mutex::new(None)),
+                terminal: false,
+                fail_first_transiently: true,
+                enqueue_count: enqueue_count.clone(),
+            });
+        let svc = SchedulerServiceDefault::new(
+            storage,
+            create_shard_service_mock(),
+            create_promise_service_mock(),
+            worker_access,
+            create_oplog_service_mock().await,
+            create_worker_service_mock(),
+            Duration::from_secs(1000),
+            100,
+            Duration::from_secs(30),
+            10,
+            RetryConfig::max_attempts_3(),
+            CancellationToken::new(),
+        );
+
+        svc.schedule(
+            DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+            ScheduledAction::InvokeEphemeral {
+                account_id: AccountId::new(),
+                owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("ephemeral")),
+                invocation: Box::new(agent_method_invocation()),
+                component_revision: ComponentRevision::INITIAL,
+                env: vec![],
+                config: vec![],
+                parent: None,
+                creation_principal: Box::new(Principal::anonymous()),
+            },
+        )
+        .await;
+
+        svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+            .await
+            .unwrap();
+        svc.process(DateTime::from_str("2023-07-17T10:16:00Z").unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(enqueue_count.load(Ordering::SeqCst), 2);
     }
 
     #[test]

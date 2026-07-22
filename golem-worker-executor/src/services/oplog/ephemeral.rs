@@ -14,7 +14,8 @@
 
 use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::multilayer::{
-    BackgroundTransferMessage, InstrumentedOplogArchive, OplogArchive, WrappedOplogArchive,
+    BackgroundTransferMessage, InstrumentedOplogArchive, MultiLayerOplogService, OplogArchive,
+    TransferFiber, WrappedOplogArchive,
 };
 use crate::services::oplog::{
     CommitLevel, Oplog, OplogService, OrderedOplogStart, PendingUpload, downcast_oplog,
@@ -29,7 +30,7 @@ use nonempty_collections::NEVec;
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -52,7 +53,8 @@ pub struct EphemeralOplog {
     actor: tokio::task::JoinHandle<()>,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
     transfer: UnboundedSender<BackgroundTransferMessage>,
-    transfer_fiber: Arc<StdMutex<Option<tokio::task::JoinHandle<()>>>>,
+    transfer_fiber: TransferFiber,
+    multi_layer_oplog_service: MultiLayerOplogService,
     close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
 
@@ -128,7 +130,7 @@ impl EphemeralOplogState {
     }
 
     async fn commit(&mut self) -> BTreeMap<OplogIndex, OplogEntry> {
-        let entries = self.buffer.drain(..).collect::<Vec<OplogEntry>>();
+        let entries = std::mem::take(&mut self.buffer);
 
         let mut result = BTreeMap::new();
         let mut pairs = Vec::new();
@@ -146,7 +148,7 @@ impl EphemeralOplogState {
 
 impl EphemeralOplog {
     #[allow(clippy::too_many_arguments)]
-    pub async fn new(
+    pub(crate) async fn new(
         owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
         last_oplog_idx: OplogIndex,
@@ -154,7 +156,8 @@ impl EphemeralOplog {
         primary_service: Arc<dyn OplogService>,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
         transfer: UnboundedSender<BackgroundTransferMessage>,
-        transfer_fiber: tokio::task::JoinHandle<()>,
+        transfer_fiber: TransferFiber,
+        multi_layer_oplog_service: MultiLayerOplogService,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
         let target = lower.first().clone();
@@ -217,7 +220,8 @@ impl EphemeralOplog {
             actor,
             lower,
             transfer,
-            transfer_fiber: Arc::new(StdMutex::new(Some(transfer_fiber))),
+            transfer_fiber,
+            multi_layer_oplog_service,
             close_fn: Some(close),
         }
     }
@@ -249,15 +253,20 @@ impl EphemeralOplog {
 
     pub async fn try_archive(this: &Arc<dyn Oplog>) -> Option<bool> {
         let this = downcast_oplog::<EphemeralOplog>(this)?;
-        Some(this.archive(false).await)
+        Some(this.archive(false, false).await)
     }
 
     pub async fn try_archive_blocking(this: &Arc<dyn Oplog>) -> Option<bool> {
         let this = downcast_oplog::<EphemeralOplog>(this)?;
-        Some(this.archive(true).await)
+        Some(this.archive(true, false).await)
     }
 
-    async fn archive(self: &Arc<Self>, blocking: bool) -> bool {
+    pub async fn try_archive_background(this: &Arc<dyn Oplog>) -> Option<bool> {
+        let this = downcast_oplog::<EphemeralOplog>(this)?;
+        Some(this.archive(false, true).await)
+    }
+
+    async fn archive(self: &Arc<Self>, blocking: bool, drain: bool) -> bool {
         // With only one lower layer there is nowhere to transfer to.
         if self.lower.len().get() <= 1 {
             return false;
@@ -292,6 +301,7 @@ impl EphemeralOplog {
                     last_transferred_idx: last_idx,
                     keep_alive: Some(keep_alive),
                     done: done_tx,
+                    drain,
                 })
                 .expect("Failed to enqueue transfer of ephemeral oplog entries");
             // Return true if there are more movable layers that could still hold data
@@ -316,9 +326,15 @@ impl EphemeralOplog {
         owned_agent_id: OwnedAgentId,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
         rx: UnboundedReceiver<BackgroundTransferMessage>,
+        start: tokio::sync::oneshot::Receiver<()>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(
-            Self::background_transfer(owned_agent_id, lower, rx).instrument(
+            async move {
+                if start.await.is_ok() {
+                    Self::background_transfer(owned_agent_id, lower, rx).await;
+                }
+            }
+            .instrument(
                 span!(parent: None, Level::INFO, "Ephemeral oplog background transfer")
                     .follows_from(Span::current())
                     .clone(),
@@ -338,6 +354,7 @@ impl EphemeralOplog {
                     last_transferred_idx,
                     mut keep_alive,
                     done,
+                    drain,
                 } => {
                     if source + 1 >= lower.len().get() {
                         warn!(
@@ -375,6 +392,10 @@ impl EphemeralOplog {
                         }
                     }
 
+                    if drain && let Some(oplog) = keep_alive.as_ref() {
+                        let _ = EphemeralOplog::try_archive_background(oplog).await;
+                    }
+
                     let _ = keep_alive.take();
                     if let Some(done) = done {
                         let _ = done.send(());
@@ -409,27 +430,39 @@ impl EphemeralOplog {
         account_id: golem_common::model::account::AccountId,
         entry_count_limit: u64,
         transfer_tx: &UnboundedSender<BackgroundTransferMessage>,
+        fresh: bool,
     ) -> NEVec<Arc<dyn OplogArchive + Send + Sync>> {
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
         for (i, layer) in lower_services.iter().enumerate() {
+            let raw = if fresh {
+                layer.open_fresh(owned_agent_id, agent_mode).await
+            } else {
+                layer.open(owned_agent_id, agent_mode).await
+            };
             if i != (lower_services.len().get() - 1) {
-                let raw = layer.open(owned_agent_id, agent_mode).await;
                 let instrumented = Arc::new(InstrumentedOplogArchive::new(
                     raw,
                     account_id,
                     owned_agent_id.environment_id(),
                 ));
-                lower.push(Arc::new(
+                let wrapped = if fresh {
+                    WrappedOplogArchive::new_fresh(
+                        i,
+                        instrumented,
+                        transfer_tx.clone(),
+                        entry_count_limit,
+                    )
+                } else {
                     WrappedOplogArchive::new(
                         i,
                         instrumented,
                         transfer_tx.clone(),
                         entry_count_limit,
                     )
-                    .await,
-                ));
+                    .await
+                };
+                lower.push(Arc::new(wrapped));
             } else {
-                let raw = layer.open(owned_agent_id, agent_mode).await;
                 lower.push(Arc::new(InstrumentedOplogArchive::new(
                     raw,
                     account_id,
@@ -443,12 +476,13 @@ impl EphemeralOplog {
 
 impl Drop for EphemeralOplog {
     fn drop(&mut self) {
+        self.multi_layer_oplog_service
+            .unregister_transfer(&self.owned_agent_id.agent_id, &self.transfer_fiber);
         if let Some(close_fn) = self.close_fn.take() {
             close_fn();
         }
-        if let Some(fiber) = self.transfer_fiber.lock().unwrap().take() {
-            fiber.abort();
-        }
+        self.multi_layer_oplog_service
+            .abort_transfer_in_drop(&self.transfer_fiber);
         // In-flight `Oplog` calls borrow `self`, so at this point no caller can be awaiting a
         // job reply anymore and aborting the actor cannot lose an observed operation.
         self.actor.abort();

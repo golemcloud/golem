@@ -103,6 +103,7 @@ use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
 use golem_common::config::DbSqliteConfig;
+use golem_common::model::RetryConfig;
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 use golem_service_base::config::BlobStorageConfig;
@@ -233,6 +234,13 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             registry_service.clone(),
             blob_storage,
         )
+    }
+
+    fn create_card_service(
+        &self,
+        registry_service: Arc<dyn RegistryService>,
+    ) -> Arc<dyn CardService> {
+        Arc::new(CardServiceDefault::new(registry_service))
     }
 
     fn create_resource_limits(
@@ -505,6 +513,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
         )?;
+        crate::preview2::golem::tool::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+            &mut linker,
+            DurableWorkerCtxView::durable_ctx_mut,
+        )?;
         golem_schema::schema::wit::wire::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
@@ -546,9 +558,12 @@ pub async fn create_worker_executor_impl<
             (Some(pool), None, key_value_storage)
         }
         KeyValueStorageConfig::Postgres(postgres) => {
-            let kv = PostgresKeyValueStorage::configured(postgres)
-                .await
-                .map_err(|err| anyhow!(err))?;
+            let kv = PostgresKeyValueStorage::configured(
+                postgres,
+                golem_config.key_value_storage_retry.clone(),
+            )
+            .await
+            .map_err(|err| anyhow!(err))?;
             let kv_metrics = kv.clone();
             join_set.spawn(async move { kv_metrics.run_metrics_loop("key_value_storage").await });
             let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(kv);
@@ -558,6 +573,7 @@ pub async fn create_worker_executor_impl<
             let (cache_redis, cache_sqlite, cache_storage) = build_inner_key_value_storage(
                 &namespace_routed.cache,
                 "key_value_storage_cache",
+                golem_config.key_value_storage_retry.clone(),
                 join_set,
             )
             .await?;
@@ -565,6 +581,7 @@ pub async fn create_worker_executor_impl<
                 build_inner_key_value_storage(
                     &namespace_routed.persistent,
                     "key_value_storage_persistent",
+                    golem_config.key_value_storage_retry.clone(),
                     join_set,
                 )
                 .await?;
@@ -583,9 +600,12 @@ pub async fn create_worker_executor_impl<
             (None, None, Arc::new(InMemoryKeyValueStorage::new()))
         }
         KeyValueStorageConfig::Sqlite(sqlite) => {
-            let storage = SqliteKeyValueStorage::configured(sqlite)
-                .await
-                .map_err(|err| anyhow!(err))?;
+            let storage = SqliteKeyValueStorage::configured(
+                sqlite,
+                golem_config.key_value_storage_retry.clone(),
+            )
+            .await
+            .map_err(|err| anyhow!(err))?;
             let pool = storage.pool();
             let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(storage);
             (None, Some(pool), key_value_storage)
@@ -596,6 +616,7 @@ pub async fn create_worker_executor_impl<
                     &multi_sqlite.root_dir,
                     multi_sqlite.max_connections,
                     multi_sqlite.foreign_keys,
+                    golem_config.key_value_storage_retry.clone(),
                 ));
             (None, None, key_value_storage)
         }
@@ -708,8 +729,7 @@ pub async fn create_worker_executor_impl<
         registry_service.clone(),
         blob_storage.clone(),
     );
-    let card_service: Arc<dyn CardService> =
-        Arc::new(CardServiceDefault::new(registry_service.clone()));
+    let card_service = bootstrap.create_card_service(registry_service.clone());
 
     let environment_state_service = bootstrap.create_environment_state_service(
         &golem_config.environment_state_service,
@@ -755,7 +775,7 @@ pub async fn create_worker_executor_impl<
         let svc: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
             indexed_storage.clone(),
             idx,
-            golem_config.oplog.indexed_storage_retry.clone(),
+            golem_config.indexed_storage_retry.clone(),
         ));
         oplog_archives.push(svc);
     }
@@ -774,7 +794,7 @@ pub async fn create_worker_executor_impl<
                 golem_config.oplog.max_operations_before_commit,
                 golem_config.oplog.max_operations_before_commit_ephemeral,
                 golem_config.oplog.max_payload_size,
-                golem_config.oplog.indexed_storage_retry.clone(),
+                golem_config.indexed_storage_retry.clone(),
             )
             .await,
         ),
@@ -786,7 +806,7 @@ pub async fn create_worker_executor_impl<
                     golem_config.oplog.max_operations_before_commit,
                     golem_config.oplog.max_operations_before_commit_ephemeral,
                     golem_config.oplog.max_payload_size,
-                    golem_config.oplog.indexed_storage_retry.clone(),
+                    golem_config.indexed_storage_retry.clone(),
                 )
                 .await,
             );
@@ -912,6 +932,7 @@ pub async fn create_worker_executor_impl<
         golem_config.scheduler.claim_batch_size,
         golem_config.scheduler.lease_ttl,
         golem_config.scheduler.max_batches_per_tick,
+        golem_config.scheduler_storage_retry.clone(),
         shutdown_token.clone(),
     );
 
@@ -1174,6 +1195,7 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
 async fn build_inner_key_value_storage(
     config: &KeyValueStorageInnerConfig,
     svc_name: &'static str,
+    retry_config: RetryConfig,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<
     (
@@ -1193,7 +1215,7 @@ async fn build_inner_key_value_storage(
             Ok((Some(pool), None, key_value_storage))
         }
         KeyValueStorageInnerConfig::Postgres(postgres) => {
-            let kv = PostgresKeyValueStorage::configured(postgres)
+            let kv = PostgresKeyValueStorage::configured(postgres, retry_config)
                 .await
                 .map_err(|err| anyhow!(err))?;
             let kv_metrics = kv.clone();
@@ -1207,7 +1229,7 @@ async fn build_inner_key_value_storage(
             Ok((None, None, key_value_storage))
         }
         KeyValueStorageInnerConfig::Sqlite(sqlite) => {
-            let storage = SqliteKeyValueStorage::configured(sqlite)
+            let storage = SqliteKeyValueStorage::configured(sqlite, retry_config)
                 .await
                 .map_err(|err| anyhow!(err))?;
             let pool = storage.pool();
@@ -1220,6 +1242,7 @@ async fn build_inner_key_value_storage(
                     &multi_sqlite.root_dir,
                     multi_sqlite.max_connections,
                     multi_sqlite.foreign_keys,
+                    retry_config,
                 ));
             Ok((None, None, key_value_storage))
         }

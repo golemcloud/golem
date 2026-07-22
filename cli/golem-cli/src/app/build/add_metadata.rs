@@ -16,7 +16,7 @@ use crate::app::build::task_result_marker::{AddMetadataMarkerHash, TaskResultMar
 use crate::app::build::up_to_date_check::is_up_to_date;
 use crate::app::context::BuildContext;
 use crate::fs;
-use crate::log::{LogColorize, LogIndent, log_action, log_skipping_up_to_date};
+use crate::log::{LogColorize, log_action, log_skipping_up_to_date};
 use anyhow::Context;
 use golem_common::model::component::ComponentName;
 use std::path::Path;
@@ -64,51 +64,49 @@ fn add_metadata(
     Ok(())
 }
 
-pub async fn add_metadata_to_selected_components(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
-    log_action("Adding", "metadata to components");
-    let _indent = LogIndent::new();
+pub async fn add_metadata_to_components(
+    ctx: &BuildContext<'_>,
+    component_name: &ComponentName,
+) -> anyhow::Result<()> {
+    let component = ctx.application().component(component_name);
+    let source_wasm = component.wasm();
+    let final_wasm = component.final_wasm();
 
-    for component_name in ctx.application_context().selected_component_names() {
-        let component = ctx.application().component(component_name);
-        let source_wasm = component.wasm();
-        let final_wasm = component.final_wasm();
+    let root_package_name = component_name_to_package_name(component_name);
 
-        let root_package_name = component_name_to_package_name(component_name);
+    let task_result_marker = TaskResultMarker::new(
+        &ctx.application().task_result_marker_dir(),
+        AddMetadataMarkerHash {
+            component_name,
+            root_package_name: root_package_name.clone(),
+        },
+    )?;
 
-        let task_result_marker = TaskResultMarker::new(
-            &ctx.application().task_result_marker_dir(),
-            AddMetadataMarkerHash {
-                component_name,
-                root_package_name: root_package_name.clone(),
-            },
-        )?;
-
-        if is_up_to_date(
-            ctx.skip_up_to_date_checks() || !task_result_marker.is_up_to_date(),
-            || [&source_wasm],
-            || [&final_wasm],
-        ) {
-            log_skipping_up_to_date(format!(
-                "adding metadata to {}",
-                component_name.as_str().log_color_highlight(),
-            ));
-            continue;
-        }
-
-        task_result_marker.result(
-            async {
-                log_action(
-                    "Adding",
-                    format!(
-                        "metadata to {}",
-                        component_name.as_str().log_color_highlight()
-                    ),
-                );
-                add_metadata(&source_wasm, root_package_name, &final_wasm)
-            }
-            .await,
-        )?;
+    if is_up_to_date(
+        ctx.skip_up_to_date_checks() || !task_result_marker.is_up_to_date(),
+        || [&source_wasm],
+        || [&final_wasm],
+    ) {
+        log_skipping_up_to_date(format!(
+            "adding metadata to {}",
+            component_name.as_str().log_color_highlight(),
+        ));
+        return Ok(());
     }
+
+    task_result_marker.result(
+        async {
+            log_action(
+                "Adding",
+                format!(
+                    "metadata to {}",
+                    component_name.as_str().log_color_highlight()
+                ),
+            );
+            add_metadata(&source_wasm, root_package_name, &final_wasm)
+        }
+        .await,
+    )?;
 
     Ok(())
 }

@@ -72,6 +72,38 @@ use wasmtime_wasi_http::p2::types::HostIncomingResponse;
     golem_schema_derive::FromSchema,
 )]
 #[desert(evolution())]
+pub struct SecretRevealAudit {
+    pub calling_agent: AgentId,
+    pub config_key: Option<Vec<String>>,
+    pub timestamp: SerializableDateTime,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SecretRevealError {
+    Unavailable(String),
+    VersionNotFound(u64),
+    Internal(String),
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
 pub struct ObjectMetadata {
     pub name: String,
     pub container: String,
@@ -1717,6 +1749,12 @@ pub enum SerializableStreamError {
 
 impl From<StreamError> for SerializableStreamError {
     fn from(value: StreamError) -> Self {
+        Self::from(&value)
+    }
+}
+
+impl From<&StreamError> for SerializableStreamError {
+    fn from(value: &StreamError) -> Self {
         match value {
             StreamError::Closed => Self::Closed,
             StreamError::LastOperationFailed(e) => Self::LastOperationFailed(e.to_string()),
@@ -2173,8 +2211,28 @@ impl From<SerializableP3SocketErrorCode> for p3_socket_types::ErrorCode {
 #[desert(evolution())]
 pub enum SerializableInvokeResult {
     Failed(String),
+    FailedClassified {
+        kind: SerializableHostFailureKind,
+        message: String,
+    },
     Pending,
     Completed(Result<SchemaValue, SerializableRpcError>),
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableHostFailureKind {
+    Transient,
+    Permanent,
 }
 
 #[derive(

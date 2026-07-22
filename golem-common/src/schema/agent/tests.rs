@@ -22,8 +22,8 @@ use crate::schema::agent::{
 };
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, TypeId};
-use crate::schema::schema_type::{NamedFieldType, SchemaType, VariantCaseType};
-use crate::schema::schema_value::{SchemaValue, VariantValuePayload};
+use crate::schema::schema_type::{NamedFieldType, SchemaType, SecretSpec, VariantCaseType};
+use crate::schema::schema_value::{SchemaValue, SecretValuePayload, VariantValuePayload};
 use proptest::prelude::*;
 use serde_json::json;
 use test_r::test;
@@ -349,12 +349,12 @@ fn json_input_projects_away_unreachable_defs() {
     ]);
     let input_schema =
         InputSchema::parameters([NamedField::user_supplied("seed", SchemaType::u64())]);
-    let json = serde_json::to_value(SchemaValue::Record {
+    let value = SchemaValue::Record {
         fields: vec![SchemaValue::U64(7)],
-    })
-    .unwrap();
+    };
 
-    let typed = json_input_schema_value_to_typed_schema_value(json, &graph, &input_schema).unwrap();
+    let typed =
+        json_input_schema_value_to_typed_schema_value(value, &graph, &input_schema).unwrap();
 
     assert!(typed.graph().defs.is_empty());
     assert_eq!(
@@ -386,16 +386,16 @@ fn json_input_keeps_transitively_reachable_defs_in_order() {
         SchemaType::ref_to(TypeId::new("A")),
     )]);
     // record { a: A { b: B { s: "x" } } }
-    let json = serde_json::to_value(SchemaValue::Record {
+    let value = SchemaValue::Record {
         fields: vec![SchemaValue::Record {
             fields: vec![SchemaValue::Record {
                 fields: vec![SchemaValue::String("x".to_string())],
             }],
         }],
-    })
-    .unwrap();
+    };
 
-    let typed = json_input_schema_value_to_typed_schema_value(json, &graph, &input_schema).unwrap();
+    let typed =
+        json_input_schema_value_to_typed_schema_value(value, &graph, &input_schema).unwrap();
 
     assert_eq!(proj_ids(&typed), vec!["A".to_string(), "B".to_string()]);
 }
@@ -418,7 +418,7 @@ fn json_input_handles_recursive_defs_without_looping() {
         SchemaType::ref_to(TypeId::new("Node")),
     )]);
     // record { n: Node { value: 1, next: Some(Node { value: 2, next: None }) } }
-    let json = serde_json::to_value(SchemaValue::Record {
+    let value = SchemaValue::Record {
         fields: vec![SchemaValue::Record {
             fields: vec![
                 SchemaValue::U64(1),
@@ -429,10 +429,10 @@ fn json_input_handles_recursive_defs_without_looping() {
                 },
             ],
         }],
-    })
-    .unwrap();
+    };
 
-    let typed = json_input_schema_value_to_typed_schema_value(json, &graph, &input_schema).unwrap();
+    let typed =
+        json_input_schema_value_to_typed_schema_value(value, &graph, &input_schema).unwrap();
 
     assert_eq!(proj_ids(&typed), vec!["Node".to_string()]);
 }
@@ -466,17 +466,17 @@ fn json_input_projects_all_schema_alternatives_not_value_branch() {
     ]);
     let input_schema = InputSchema::parameters([NamedField::user_supplied("choice", variant)]);
     // record { choice: variant#0(First { x: 1 }) }
-    let json = serde_json::to_value(SchemaValue::Record {
+    let value = SchemaValue::Record {
         fields: vec![SchemaValue::Variant(VariantValuePayload {
             case: 0,
             payload: Some(Box::new(SchemaValue::Record {
                 fields: vec![SchemaValue::U32(1)],
             })),
         })],
-    })
-    .unwrap();
+    };
 
-    let typed = json_input_schema_value_to_typed_schema_value(json, &graph, &input_schema).unwrap();
+    let typed =
+        json_input_schema_value_to_typed_schema_value(value, &graph, &input_schema).unwrap();
 
     let mut ids = proj_ids(&typed);
     ids.sort();
@@ -492,12 +492,11 @@ fn json_input_dangling_ref_reports_error_not_panic() {
         "x",
         SchemaType::ref_to(TypeId::new("Missing")),
     )]);
-    let json = serde_json::to_value(SchemaValue::Record {
+    let value = SchemaValue::Record {
         fields: vec![SchemaValue::U32(1)],
-    })
-    .unwrap();
+    };
 
-    let err = json_input_schema_value_to_typed_schema_value(json, &graph, &input_schema)
+    let err = json_input_schema_value_to_typed_schema_value(value, &graph, &input_schema)
         .expect_err("dangling ref must fail validation");
 
     assert!(
@@ -521,14 +520,14 @@ fn json_input_projected_result_round_trips_and_revalidates() {
         "k",
         SchemaType::ref_to(TypeId::new("Keep")),
     )]);
-    let json = serde_json::to_value(SchemaValue::Record {
+    let value = SchemaValue::Record {
         fields: vec![SchemaValue::Record {
             fields: vec![SchemaValue::String("hi".to_string())],
         }],
-    })
-    .unwrap();
+    };
 
-    let typed = json_input_schema_value_to_typed_schema_value(json, &graph, &input_schema).unwrap();
+    let typed =
+        json_input_schema_value_to_typed_schema_value(value, &graph, &input_schema).unwrap();
     assert_eq!(proj_ids(&typed), vec!["Keep".to_string()]);
 
     let encoded = serde_json::to_string(&typed).unwrap();
@@ -541,6 +540,38 @@ fn json_input_projected_result_round_trips_and_revalidates() {
         decoded.value(),
     )
     .expect("projected value must still validate against its own graph");
+}
+
+#[test]
+fn json_input_with_auto_injected_field_validates_caller_only_record() {
+    // A method/constructor input schema that mixes user-supplied fields with an
+    // auto-injected `principal` field. The REST caller supplies only the
+    // user-supplied values (the host fills the principal out of band), so the
+    // caller-only record must validate, and the synthesized self-contained root
+    // must describe exactly the user-supplied fields.
+    let input_schema = InputSchema::parameters([
+        NamedField::user_supplied("count", SchemaType::u32()),
+        NamedField::user_supplied("label", SchemaType::string()),
+        NamedField::auto_injected(
+            "principal",
+            AutoInjectedKind::Principal,
+            SchemaType::string(),
+        ),
+    ]);
+    // Caller supplies only the two user-supplied values.
+    let value = SchemaValue::Record {
+        fields: vec![SchemaValue::U32(7), SchemaValue::String("hi".to_string())],
+    };
+
+    let typed =
+        json_input_schema_value_to_typed_schema_value(value, &SchemaGraph::empty(), &input_schema)
+            .expect("caller-only record (excluding auto-injected fields) must validate");
+
+    let SchemaType::Record { fields, .. } = typed.root_type() else {
+        panic!("expected record root, got {:?}", typed.root_type());
+    };
+    let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, vec!["count", "label"]);
 }
 
 // --- typed_schema_value_with_projected_defs (A4/A5/agent_config site 2) ---
@@ -583,6 +614,28 @@ fn projected_helper_keeps_only_reachable_defs_and_sets_root() {
         typed.value(),
     )
     .expect("projected carrier must validate against its own graph");
+}
+
+#[test]
+fn projected_helper_keeps_defs_reachable_from_secret_inner() {
+    let graph = registry(vec![proj_def("SecretInner", SchemaType::string())]);
+    let root = SchemaType::secret(SecretSpec {
+        inner: Box::new(SchemaType::ref_to(TypeId::new("SecretInner"))),
+        category: None,
+    });
+    let value = SchemaValue::Secret(SecretValuePayload {
+        secret_id: uuid::Uuid::nil(),
+        config_key: None,
+        version: 0,
+        resolved_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+        category: None,
+    });
+
+    let typed = typed_schema_value_with_projected_defs(&graph, root, value);
+
+    assert_eq!(proj_ids(&typed), vec!["SecretInner".to_string()]);
+    crate::schema::validation::validate_graph(typed.graph())
+        .expect("projected carrier must keep refs from SecretSpec.inner self-contained");
 }
 
 #[test]

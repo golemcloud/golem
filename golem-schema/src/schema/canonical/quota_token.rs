@@ -21,15 +21,15 @@
 //! - JSON form:
 //!   ```json
 //!   {
-//!     "environment_id": "<uuid>",
-//!     "resource_name": "...",
-//!     "expected_use": "<u64-as-string>",
-//!     "last_credit": "<i64-as-string>",
-//!     "last_credit_at": "<rfc3339>"
+//!     "environmentId": "<uuid>",
+//!     "resourceName": "...",
+//!     "expectedUse": "<u64-as-string>",
+//!     "lastCredit": "<i64-as-string>",
+//!     "lastCreditAt": "<rfc3339>"
 //!   }
 //!   ```
-//!   `environment_id` is the canonical hyphenated UUID string.
-//!   `expected_use` and `last_credit` are written as JSON **strings** on
+//!   `environmentId` is the canonical hyphenated UUID string.
+//!   `expectedUse` and `lastCredit` are written as JSON **strings** on
 //!   output (so JavaScript-side parsers can preserve the full u64 / i64
 //!   range without precision loss). On input both a JSON number and a JSON
 //!   string are accepted for those two fields.
@@ -44,11 +44,11 @@ use serde_json::{Map, Value};
 
 const TEXT_PREFIX: &str = "quota-token:";
 
-const FIELD_ENV_ID: &str = "environment_id";
-const FIELD_RESOURCE: &str = "resource_name";
-const FIELD_EXPECTED_USE: &str = "expected_use";
-const FIELD_LAST_CREDIT: &str = "last_credit";
-const FIELD_LAST_CREDIT_AT: &str = "last_credit_at";
+const FIELD_ENV_ID: &str = "environmentId";
+const FIELD_RESOURCE: &str = "resourceName";
+const FIELD_EXPECTED_USE: &str = "expectedUse";
+const FIELD_LAST_CREDIT: &str = "lastCredit";
+const FIELD_LAST_CREDIT_AT: &str = "lastCreditAt";
 
 pub fn to_text(payload: &QuotaTokenValuePayload) -> Result<String, ParseError> {
     let json = to_json(payload)?;
@@ -153,11 +153,11 @@ pub fn from_json(value: &Value) -> Result<QuotaTokenValuePayload, ParseError> {
     }
     let env_id_str = obj
         .get(FIELD_ENV_ID)
-        .ok_or(ParseError::MissingField("environment_id"))?
+        .ok_or(ParseError::MissingField("environmentId"))?
         .as_str()
         .ok_or(ParseError::TypeField {
             expected: "string",
-            field: Some("environment_id"),
+            field: Some("environmentId"),
         })?;
     let environment_id = EnvironmentId::new(
         uuid::Uuid::parse_str(env_id_str)
@@ -165,26 +165,26 @@ pub fn from_json(value: &Value) -> Result<QuotaTokenValuePayload, ParseError> {
     );
     let resource_name = obj
         .get(FIELD_RESOURCE)
-        .ok_or(ParseError::MissingField("resource_name"))?
+        .ok_or(ParseError::MissingField("resourceName"))?
         .as_str()
         .ok_or(ParseError::TypeField {
             expected: "string",
-            field: Some("resource_name"),
+            field: Some("resourceName"),
         })?
         .to_string();
     let expected_use = parse_u64_field(
         obj.get(FIELD_EXPECTED_USE)
-            .ok_or(ParseError::MissingField("expected_use"))?,
-        "expected_use",
+            .ok_or(ParseError::MissingField("expectedUse"))?,
+        "expectedUse",
     )?;
     let last_credit = parse_i64_field(
         obj.get(FIELD_LAST_CREDIT)
-            .ok_or(ParseError::MissingField("last_credit"))?,
-        "last_credit",
+            .ok_or(ParseError::MissingField("lastCredit"))?,
+        "lastCredit",
     )?;
     let last_credit_at = datetime::from_json(
         obj.get(FIELD_LAST_CREDIT_AT)
-            .ok_or(ParseError::MissingField("last_credit_at"))?,
+            .ok_or(ParseError::MissingField("lastCreditAt"))?,
     )
     .map_err(|e| ParseError::Nested(Box::new(e)))?;
     Ok(QuotaTokenValuePayload {
@@ -292,25 +292,22 @@ mod tests {
     #[test]
     fn json_missing_field() {
         let v = serde_json::json!({
-            "environment_id": "00000000-0000-0000-0000-000000000000",
-            "resource_name": "r",
-            "expected_use": "1",
-            "last_credit": "0"
+            "environmentId": "00000000-0000-0000-0000-000000000000",
+            "resourceName": "r",
+            "expectedUse": "1",
+            "lastCredit": "0"
         });
-        assert_eq!(
-            from_json(&v),
-            Err(ParseError::MissingField("last_credit_at"))
-        );
+        assert_eq!(from_json(&v), Err(ParseError::MissingField("lastCreditAt")));
     }
 
     #[test]
     fn json_extra_field_rejected() {
         let v = serde_json::json!({
-            "environment_id": "00000000-0000-0000-0000-000000000000",
-            "resource_name": "r",
-            "expected_use": "1",
-            "last_credit": "0",
-            "last_credit_at": "2025-01-01T00:00:00Z",
+            "environmentId": "00000000-0000-0000-0000-000000000000",
+            "resourceName": "r",
+            "expectedUse": "1",
+            "lastCredit": "0",
+            "lastCreditAt": "2025-01-01T00:00:00Z",
             "stowaway": true
         });
         assert_eq!(
@@ -322,11 +319,11 @@ mod tests {
     #[test]
     fn expected_use_accepts_number_or_string() {
         let base = serde_json::json!({
-            "environment_id": "00000000-0000-0000-0000-000000000000",
-            "resource_name": "r",
-            "expected_use": 42,
-            "last_credit": -1,
-            "last_credit_at": "2025-01-01T00:00:00Z"
+            "environmentId": "00000000-0000-0000-0000-000000000000",
+            "resourceName": "r",
+            "expectedUse": 42,
+            "lastCredit": -1,
+            "lastCreditAt": "2025-01-01T00:00:00Z"
         });
         let v_num = from_json(&base).expect("number form");
         assert_eq!(v_num.expected_use, 42);
@@ -370,11 +367,11 @@ mod tests {
     #[test]
     fn invalid_uuid_rejected() {
         let v = serde_json::json!({
-            "environment_id": "not a uuid",
-            "resource_name": "r",
-            "expected_use": "1",
-            "last_credit": "0",
-            "last_credit_at": "2025-01-01T00:00:00Z"
+            "environmentId": "not a uuid",
+            "resourceName": "r",
+            "expectedUse": "1",
+            "lastCredit": "0",
+            "lastCreditAt": "2025-01-01T00:00:00Z"
         });
         assert!(matches!(from_json(&v), Err(ParseError::BadFormat(_))));
     }
@@ -382,17 +379,17 @@ mod tests {
     #[test]
     fn wrong_expected_use_type_rejected() {
         let v = serde_json::json!({
-            "environment_id": "00000000-0000-0000-0000-000000000000",
-            "resource_name": "r",
-            "expected_use": true,
-            "last_credit": "0",
-            "last_credit_at": "2025-01-01T00:00:00Z"
+            "environmentId": "00000000-0000-0000-0000-000000000000",
+            "resourceName": "r",
+            "expectedUse": true,
+            "lastCredit": "0",
+            "lastCreditAt": "2025-01-01T00:00:00Z"
         });
         assert_eq!(
             from_json(&v),
             Err(ParseError::TypeField {
                 expected: "number or string",
-                field: Some("expected_use"),
+                field: Some("expectedUse"),
             })
         );
     }
@@ -400,17 +397,17 @@ mod tests {
     #[test]
     fn wrong_last_credit_type_rejected() {
         let v = serde_json::json!({
-            "environment_id": "00000000-0000-0000-0000-000000000000",
-            "resource_name": "r",
-            "expected_use": "0",
-            "last_credit": true,
-            "last_credit_at": "2025-01-01T00:00:00Z"
+            "environmentId": "00000000-0000-0000-0000-000000000000",
+            "resourceName": "r",
+            "expectedUse": "0",
+            "lastCredit": true,
+            "lastCreditAt": "2025-01-01T00:00:00Z"
         });
         assert_eq!(
             from_json(&v),
             Err(ParseError::TypeField {
                 expected: "number or string",
-                field: Some("last_credit"),
+                field: Some("lastCredit"),
             })
         );
     }
@@ -418,11 +415,11 @@ mod tests {
     #[test]
     fn invalid_last_credit_at_rejected() {
         let v = serde_json::json!({
-            "environment_id": "00000000-0000-0000-0000-000000000000",
-            "resource_name": "r",
-            "expected_use": "0",
-            "last_credit": "0",
-            "last_credit_at": "not a date"
+            "environmentId": "00000000-0000-0000-0000-000000000000",
+            "resourceName": "r",
+            "expectedUse": "0",
+            "lastCredit": "0",
+            "lastCreditAt": "not a date"
         });
         assert!(matches!(from_json(&v), Err(ParseError::Nested(_))));
     }

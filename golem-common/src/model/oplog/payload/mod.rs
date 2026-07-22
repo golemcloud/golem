@@ -20,12 +20,13 @@ mod tests;
 use crate::model::agent::AgentTypeName;
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
+use crate::model::oplog::CardInstallFailure;
 use crate::model::oplog::PayloadId;
 use crate::model::oplog::payload::types::{
-    FileSystemError, ObjectMetadata, SerializableDateTime, SerializableFileTimes,
-    SerializableP3FileSystemError, SerializableP3IpSocketAddress, SerializableP3SocketErrorCode,
-    SerializableP3UdpDatagram, SerializableSocketError, SerializableWebsocketError,
-    SerializableWebsocketMessage,
+    FileSystemError, ObjectMetadata, SecretRevealAudit, SecretRevealError, SerializableDateTime,
+    SerializableFileTimes, SerializableP3FileSystemError, SerializableP3IpSocketAddress,
+    SerializableP3SocketErrorCode, SerializableP3UdpDatagram, SerializableSocketError,
+    SerializableWebsocketError, SerializableWebsocketMessage,
 };
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
@@ -263,6 +264,13 @@ oplog_payload! {
         /// `Start`/`End` payload pair.
         P3HttpClientRequestBodyFrame {
             frame: SerializableP3HttpRequestBodyFrame
+        },
+        GolemApiCard {
+            card_id: Uuid
+        },
+        SecretReveal {
+            secret_id: Uuid,
+            expected_type: SchemaGraph
         },
     }
 }
@@ -519,6 +527,19 @@ oplog_payload! {
         },
         P3HttpClientRequestBodyTransmission {
             result: Result<(), SerializableHttpErrorCode>
+        },
+        SecretRevealed {
+            secret_id: Uuid,
+            pinned_revision: u64,
+            resolved_at: SerializableDateTime,
+            result: Result<(), SecretRevealError>,
+            audit: SecretRevealAudit,
+        },
+        GolemApiCard {
+            result: Result<Uuid, String>
+        },
+        GolemApiInstallCard {
+            result: Result<(), CardInstallFailure>,
         }
     }
 }
@@ -679,7 +700,13 @@ pub mod host_functions {
         (P3HttpClientSend => "http::client", "send", P3HttpClientSend, P3HttpClientSendResult),
         (P3HttpClientConsumeBody => "http::types::response", "consume-body", NoInput, P3HttpClientConsumeBodyResult),
         (P3HttpClientConsumeBodyChunk => "http::types::response", "consume-body-chunk", NoInput, P3HttpClientConsumeBodyChunk),
-        (P3HttpClientRequestBodyTransmission => "http::types::request", "body-transmission", NoInput, P3HttpClientRequestBodyTransmission)
+        (P3HttpClientRequestBodyTransmission => "http::types::request", "body-transmission", NoInput, P3HttpClientRequestBodyTransmission),
+        (GolemSecretsReveal => "golem::secrets::reveal", "reveal", SecretReveal, SecretRevealed),
+        (GolemApiDeriveCard => "golem::api", "derive-card", GolemApiCard, GolemApiCard),
+        (GolemApiInstallCard => "golem::api", "install-card", GolemApiCard, GolemApiInstallCard),
+        (FilesystemInputStreamRead => "filesystem::input_stream", "read", NoInput, StreamSkip),
+        (FilesystemInputStreamSkip => "filesystem::input_stream", "skip", NoInput, StreamSkip),
+        (FilesystemOutputStreamCheckWrite => "filesystem::output_stream", "check_write", NoInput, StreamCheckWrite)
     }
 }
 

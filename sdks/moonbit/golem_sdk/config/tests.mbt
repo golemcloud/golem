@@ -39,7 +39,7 @@ test "collect_entries_of - Secret is a SECRET declaration over the inner type" {
   inspect(
     entries[0].value_type.root,
     content=(
-      #|{body: String, metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}
+      #|{body: Secret({inner: {body: String, metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, category: None}), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}
     ),
   )
 }

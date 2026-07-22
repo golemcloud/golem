@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -130,6 +130,59 @@ object AgentClientRuntime {
       input: In
     ): Future[CancellationToken] =
       runScheduledCancelable(method, datetime, input)
+
+    def awaitWithMetadata[In, Out](method: AgentMethod[Trait, In, Out], input: In): Future[InvocationResult[Out]] = {
+      val result = for {
+        params <- encodeInput(method.inputCodec, input)
+        raw    <- client.rpc.invokeAndAwaitWithMetadata(method.functionName, params)
+        value  <- decodeOutput(method.outputCodec, raw.value)
+      } yield InvocationResult(raw.metadata, value)
+      FutureInterop.fromEither(result)
+    }
+
+    def cancelableAwaitWithMetadata[In, Out](
+      method: AgentMethod[Trait, In, Out],
+      input: In
+    ): Either[String, CancelableAsyncInvocation[Out]] =
+      for {
+        params <- encodeInput(method.inputCodec, input)
+        raw    <- client.rpc.asyncInvokeAndAwaitWithMetadata(method.functionName, params)
+      } yield CancelableAsyncInvocation(
+        raw.metadata,
+        raw.result.map(value =>
+          decodeOutput(method.outputCodec, value).fold(
+            err => throw js.JavaScriptException(err),
+            identity
+          )
+        )(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue),
+        raw.cancellationToken
+      )
+
+    def triggerWithMetadata[In](method: AgentMethod[Trait, In, _], input: In): Future[InvocationReceipt] =
+      FutureInterop.fromEither(for {
+        params   <- encodeInput(method.inputCodec, input)
+        metadata <- client.rpc.invokeWithMetadata(method.functionName, params)
+      } yield InvocationReceipt(metadata))
+
+    def scheduleWithMetadata[In](
+      method: AgentMethod[Trait, In, _],
+      datetime: Datetime,
+      input: In
+    ): Future[InvocationReceipt] =
+      FutureInterop.fromEither(for {
+        params  <- encodeInput(method.inputCodec, input)
+        receipt <- client.rpc.scheduleInvocationWithMetadata(datetime, method.functionName, params)
+      } yield receipt)
+
+    def scheduleCancelableWithMetadata[In](
+      method: AgentMethod[Trait, In, _],
+      datetime: Datetime,
+      input: In
+    ): Future[CancelableInvocationReceipt] =
+      FutureInterop.fromEither(for {
+        params  <- encodeInput(method.inputCodec, input)
+        receipt <- client.rpc.scheduleCancelableInvocationWithMetadata(datetime, method.functionName, params)
+      } yield receipt)
 
     private def runAwaitable[In, Out](method: AgentMethod[Trait, In, Out], input: In): Future[Out] = {
       // The default await path uses the synchronous host `invoke-and-await`

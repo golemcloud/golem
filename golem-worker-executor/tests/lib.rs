@@ -12,13 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
+
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use golem_worker_executor_test_utils::{
     LastUniqueId, LastUniqueIdOwner, PrecompiledComponent, WorkerExecutorTestDependencies,
     test_component,
 };
 use std::fmt::Debug;
-use test_r::{sequential_suite, tag_suite, test_dep, timeout_suite};
+use std::sync::Once;
+use test_r::{sequential_suite, tag_suite, test_dep};
 
 pub mod agent;
 pub mod agent_sdk_ts;
@@ -38,11 +41,13 @@ pub mod key_value_storage;
 pub mod keyvalue;
 pub mod namespace_routed_key_value_storage;
 pub mod observability;
+pub mod oplog_blob_archive;
 pub mod oplog_metrics;
 pub mod rdbms;
 pub mod rdbms_service;
 pub mod readonly;
 pub mod resource_limits;
+pub mod retry_lifecycle;
 pub mod retry_policies;
 pub mod revert;
 pub mod rpc;
@@ -81,6 +86,7 @@ pub fn raw_params(
 }
 
 tag_suite!(api, group1);
+tag_suite!(retry_lifecycle, group1);
 tag_suite!(blobstore, group1);
 tag_suite!(keyvalue, group1);
 tag_suite!(in_function_retry, group1);
@@ -111,19 +117,28 @@ tag_suite!(storage_quota, group1);
 sequential_suite!(key_value_storage);
 sequential_suite!(namespace_routed_key_value_storage);
 sequential_suite!(indexed_storage);
-
-timeout_suite!(in_function_retry, "2 minutes");
+sequential_suite!(oplog_blob_archive);
 
 #[derive(Debug)]
 pub struct Tracing;
 
+static TRACING_INIT: Once = Once::new();
+
+impl Tracing {
+    pub fn init() -> Self {
+        TRACING_INIT.call_once(|| {
+            init_tracing_with_default_debug_env_filter(
+                &TracingConfig::test_pretty_without_time("worker-executor-tests")
+                    .with_env_overrides(),
+            );
+        });
+        Self
+    }
+}
+
 #[test_dep(scope = PerWorker)]
 pub fn tracing() -> Tracing {
-    init_tracing_with_default_debug_env_filter(
-        &TracingConfig::test_pretty_without_time("worker-executor-tests").with_env_overrides(),
-    );
-
-    Tracing
+    Tracing::init()
 }
 
 // `WorkerExecutorTestDependencies` is a Hosted dep so workers

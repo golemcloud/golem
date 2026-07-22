@@ -10,10 +10,6 @@ fn wasmImportGetArguments(p0 : Int) = "wasi:cli/environment@0.3.0" "get-argument
 fn wasmImportGetInitialCwd(p0 : Int) = "wasi:cli/environment@0.3.0" "get-initial-cwd"
 
 ///|
-extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load)
-
-///|
 extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
   #|(func (param i32) (result i32) (local i32)
   #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
@@ -27,6 +23,10 @@ extern "wasm" fn mbt_ffi_free(position : Int) =
 ///|
 extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
   #|(func (param i32) (result i32) local.get 0 i32.load8_u)
+
+///|
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load)
 
 ///|
 extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =

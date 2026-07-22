@@ -17,6 +17,8 @@ use golem_common::base_model::retry_policy::{
     ApiCountBoxPolicy, ApiPeriodicPolicy, ApiPredicate, ApiPredicateTrue, ApiPredicateValue,
     ApiPropertyComparison, ApiRetryPolicy, ApiTextValue,
 };
+use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::component::ComponentDto;
 use golem_common::model::retry_policy::{
     RetryPolicyCreation, RetryPolicyRevision, RetryPolicyUpdate,
 };
@@ -27,6 +29,7 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::assert_eq;
 use test_r::{inherit_test_dep, test};
+use tokio::time::{Duration, Instant, sleep};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
@@ -50,6 +53,40 @@ fn simple_policy() -> UntypedJsonBody {
     policy(ApiRetryPolicy::Periodic(ApiPeriodicPolicy {
         delay_ms: 1000,
     }))
+}
+
+async fn wait_for_retry_policy_visibility<T: TestDsl + Sync>(
+    user: &T,
+    component: &ComponentDto,
+    agent_id: &ParsedAgentId,
+    policy_name: &str,
+    expected: bool,
+) -> anyhow::Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let expected = SchemaValue::Bool(expected);
+
+    loop {
+        let has = user
+            .invoke_and_await_agent(
+                component,
+                agent_id,
+                "has_retry_policy",
+                data_value!(policy_name.to_string()),
+            )
+            .await?
+            .into_return_value()
+            .unwrap();
+
+        if has == expected {
+            return Ok(());
+        }
+
+        if Instant::now() >= deadline {
+            assert_eq!(has, expected);
+        }
+
+        sleep(Duration::from_millis(100)).await;
+    }
 }
 
 #[test]
@@ -496,17 +533,7 @@ async fn environment_policy_created_while_agent_running(
     };
     client.create_retry_policy(&env.id.0, &creation).await?;
 
-    let has = user
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "has_retry_policy",
-            data_value!("late-arrival".to_string()),
-        )
-        .await?
-        .into_return_value()
-        .unwrap();
-    assert_eq!(has, SchemaValue::Bool(true));
+    wait_for_retry_policy_visibility(&user, &component, &agent_id, "late-arrival", true).await?;
 
     Ok(())
 }
@@ -552,17 +579,7 @@ async fn environment_policy_deleted_while_agent_running(
         .delete_retry_policy(&created.id.0, created.revision.into())
         .await?;
 
-    let has = user
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "has_retry_policy",
-            data_value!("to-delete".to_string()),
-        )
-        .await?
-        .into_return_value()
-        .unwrap();
-    assert_eq!(has, SchemaValue::Bool(false));
+    wait_for_retry_policy_visibility(&user, &component, &agent_id, "to-delete", false).await?;
 
     Ok(())
 }

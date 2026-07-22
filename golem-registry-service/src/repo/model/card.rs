@@ -187,35 +187,41 @@ impl CardRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::component::ComponentName;
-    use golem_common::model::component_metadata::AgentInitialPermissionTemplate;
-    use golem_common::model::environment::EnvironmentName;
+    use golem_common::model::card::default_agent_initial_permission_grants;
+    use golem_common::model::card::recipient::RecipientPattern;
     use test_r::test;
 
     #[test]
-    fn polymorphic_creation_persists_agent_initial_template_grants() {
-        let template = AgentInitialPermissionTemplate::default_for(
-            &EnvironmentName::try_from("prod").unwrap(),
-            &ComponentName("cart-svc".to_string()),
-        );
+    fn polymorphic_creation_persists_agent_initial_card_grants() {
+        let initial_card = PolymorphicCard {
+            card_id: CardId::new(),
+            parent_ids: Vec::new(),
+            lower_positive: default_agent_initial_permission_grants(RecipientPattern::Any),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            system_card: false,
+        };
 
         let record = CardRecord::polymorphic_creation(
-            template.card_id,
-            Vec::new(),
-            template.lower_positive.clone(),
-            template.lower_negative.clone(),
-            template.upper_positive.clone(),
-            template.upper_negative.clone(),
-            None,
-            false,
+            initial_card.card_id,
+            initial_card.parent_ids.clone(),
+            initial_card.lower_positive.clone(),
+            initial_card.lower_negative.clone(),
+            initial_card.upper_positive.clone(),
+            initial_card.upper_negative.clone(),
+            initial_card.expires_at,
+            initial_card.system_card,
             None,
         );
         let card = PolymorphicCard::try_from(record).unwrap();
 
-        assert_eq!(card.card_id, template.card_id);
-        assert_eq!(card.lower_positive, template.lower_positive);
-        assert_eq!(card.lower_negative, template.lower_negative);
-        assert_eq!(card.upper_positive, template.upper_positive);
-        assert_eq!(card.upper_negative, template.upper_negative);
+        assert_eq!(card.card_id, initial_card.card_id);
+        assert_eq!(card.lower_positive, initial_card.lower_positive);
+        assert_eq!(card.lower_negative, initial_card.lower_negative);
+        assert_eq!(card.upper_positive, initial_card.upper_positive);
+        assert_eq!(card.upper_negative, initial_card.upper_negative);
     }
 }

@@ -234,8 +234,10 @@ pub enum ValueError {
         path: ValuePath,
         reason: String,
     },
-    SecretRefEmpty {
+    SecretCategoryMismatch {
         path: ValuePath,
+        expected: String,
+        found: Option<String>,
     },
     QuotaTokenResourceMismatch {
         path: ValuePath,
@@ -416,9 +418,15 @@ impl Display for ValueError {
             ValueError::QuantityOutOfRange { path, reason } => {
                 write!(f, "quantity value at {path} is out of range ({reason})")
             }
-            ValueError::SecretRefEmpty { path } => {
-                write!(f, "secret value at {path} has an empty `secret_ref`")
-            }
+            ValueError::SecretCategoryMismatch {
+                path,
+                expected,
+                found,
+            } => write!(
+                f,
+                "secret value at {path} expected category `{expected}`, found `{}`",
+                found.as_deref().unwrap_or("<none>")
+            ),
             ValueError::QuotaTokenResourceMismatch {
                 path,
                 expected,
@@ -1054,14 +1062,18 @@ fn check_quantity(
 }
 
 fn check_secret(
-    _spec: &SecretSpec,
+    spec: &SecretSpec,
     payload: &SecretValuePayload,
     path: &mut ValuePath,
     errors: &mut Vec<ValueError>,
 ) {
-    if payload.secret_ref.is_empty() {
-        errors.push(ValueError::SecretRefEmpty {
+    if let Some(expected) = &spec.category
+        && payload.category.as_ref() != Some(expected)
+    {
+        errors.push(ValueError::SecretCategoryMismatch {
             path: path.snapshot(),
+            expected: expected.clone(),
+            found: payload.category.clone(),
         });
     }
 }

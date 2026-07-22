@@ -160,6 +160,10 @@ function leafBodyArbs(ids: string[]): Arbitrary<SchemaTypeBody>[] {
     fc.record({
       tag: fc.constant<'secret'>('secret'),
       spec: fc.record({ category: fc.option(fc.string({ maxLength: 6 }), { nil: undefined }) }),
+      inner: fc.record({
+        body: fc.constant({ tag: 'string' } as SchemaTypeBody),
+        metadata: arbMetadata,
+      }),
     }),
     fc.record({
       tag: fc.constant<'quota-token'>('quota-token'),
@@ -270,13 +274,11 @@ const arbDatetime = fc.record({
   nanoseconds: fc.integer({ min: 0, max: 999_999_999 }),
 });
 
-const arbQuotaTokenValue = fc.record({
-  environmentId: fc.record({ uuid: fc.record({ highBits: arbU64, lowBits: arbU64 }) }),
-  resourceName: fc.string({ maxLength: 8 }),
-  expectedUse: arbU64,
-  lastCredit: arbS64,
-  lastCreditAt: arbDatetime,
-});
+// NOTE: `quota-token` values are intentionally excluded from these generators.
+// A quota-token value carries an affine, owned `own<quota-token>` handle: it can
+// be lowered to the wire exactly once (encoding consumes it) and cannot be
+// structurally compared or re-encoded. The handle semantics are covered by the
+// dedicated tests in `edge-cases.test.ts` instead.
 
 function leafValueArbs(): Arbitrary<SchemaValue>[] {
   return [
@@ -319,8 +321,6 @@ function leafValueArbs(): Arbitrary<SchemaValue>[] {
     fc.record({ tag: fc.constant<'datetime'>('datetime'), value: arbDatetime }),
     fc.record({ tag: fc.constant<'duration'>('duration'), nanoseconds: arbS64 }),
     fc.record({ tag: fc.constant<'quantity'>('quantity'), value: arbQuantityValue }),
-    fc.record({ tag: fc.constant<'secret'>('secret'), secretRef: fc.string({ maxLength: 10 }) }),
-    fc.record({ tag: fc.constant<'quota-token'>('quota-token'), value: arbQuotaTokenValue }),
   ];
 }
 

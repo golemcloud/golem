@@ -15,10 +15,11 @@
 use crate::workspace_path;
 use golem_cli::model::GuestLanguage;
 use golem_common::model::Empty;
-use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
+use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, Snapshotting};
+use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::{
     AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, MetadataEnvelope,
-    NamedField, NamedFieldType, OutputSchema, SchemaGraph, SchemaType, SchemaTypeDef, TypeId,
+    NamedField, NamedFieldType, OutputSchema, Role, SchemaGraph, SchemaType, SchemaTypeDef, TypeId,
     VariantCaseType,
 };
 
@@ -39,6 +40,23 @@ pub fn variant_case(name: impl Into<String>, payload: Option<SchemaType>) -> Var
         name: name.into(),
         payload,
         metadata: MetadataEnvelope::default(),
+    }
+}
+
+/// A canonical multimodal schema type: `list<variant<…>>` whose list carries
+/// the `Role::Multimodal` marker. Each modality case must declare a payload.
+pub fn multimodal(cases: Vec<VariantCaseType>) -> SchemaType {
+    let mut list = SchemaType::list(SchemaType::variant(cases));
+    list.metadata_mut().role = Some(Role::Multimodal);
+    list
+}
+
+/// A local (caller-overridable) agent config declaration.
+pub fn local_config(path: Vec<&str>, value_type: SchemaType) -> AgentConfigDeclarationSchema {
+    AgentConfigDeclarationSchema {
+        source: AgentConfigSource::Local,
+        path: path.into_iter().map(|s| s.to_string()).collect(),
+        value_type,
     }
 }
 

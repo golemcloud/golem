@@ -32,10 +32,8 @@ impl Clock for ClockImpl {
     }
 
     async fn sleep_p3(&self, secs: u64) -> bool {
-        golem_rust::wasip3::clocks::monotonic_clock::wait_for(
-            secs.saturating_mul(1_000_000_000),
-        )
-        .await;
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(secs.saturating_mul(1_000_000_000))
+            .await;
         true
     }
 
@@ -46,10 +44,13 @@ impl Clock for ClockImpl {
     async fn sleep_during_request(&self, secs: u64) -> String {
         let response = send_request();
         let timeout = async {
-            golem_rust::wasip3::clocks::monotonic_clock::wait_for(secs.saturating_mul(1_000_000_000)).await;
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+                secs.saturating_mul(1_000_000_000),
+            )
+            .await;
             Err("Timeout".to_string())
         };
-        let (Ok(result) | Err(result)) = ((response, timeout)).race().await;
+        let (Ok(result) | Err(result)) = (response, timeout).race().await;
         result
     }
 
@@ -76,10 +77,13 @@ impl Clock for ClockImpl {
             Ok(result)
         };
         let timeout = async {
-            golem_rust::wasip3::clocks::monotonic_clock::wait_for(secs.saturating_mul(1_000_000_000)).await;
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+                secs.saturating_mul(1_000_000_000),
+            )
+            .await;
             Err("Timeout".to_string())
         };
-        let (Ok(result) | Err(result)) = ((response1, response2, response3, timeout)).race().await;
+        let (Ok(result) | Err(result)) = (response1, response2, response3, timeout).race().await;
         result
     }
 
@@ -87,7 +91,10 @@ impl Clock for ClockImpl {
         let mut result = String::new();
         for _ in 0..(n as usize) {
             result.push_str(&format!("{:?}\n", send_request().await));
-            golem_rust::wasip3::clocks::monotonic_clock::wait_for(secs.saturating_mul(1_000_000_000)).await;
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+                secs.saturating_mul(1_000_000_000),
+            )
+            .await;
         }
         result
     }
@@ -142,9 +149,5 @@ async fn send_request() -> Result<String, String> {
         .send()
         .await
         .map_err(|e| e.to_string())?;
-    response
-        .into_body()
-        .text()
-        .await
-        .map_err(|e| e.to_string())
+    response.into_body().text().await.map_err(|e| e.to_string())
 }

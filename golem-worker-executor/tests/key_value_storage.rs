@@ -138,7 +138,12 @@ impl GetKeyValueStorage for SqliteKeyValueStorageWrapper {
             max_connections: 10,
             foreign_keys: false,
         };
-        let kvs = SqliteKeyValueStorage::configured(&config).await.unwrap();
+        let kvs = SqliteKeyValueStorage::configured(
+            &config,
+            golem_common::model::RetryConfig::max_attempts_3(),
+        )
+        .await
+        .unwrap();
         Arc::new(kvs)
     }
 }
@@ -168,7 +173,12 @@ impl GetKeyValueStorage for MultiSqliteKeyValueStorageWrapper {
         let path = tempdir.path().to_path_buf();
         self.tempdirs.lock().unwrap().push(tempdir);
 
-        let kvs = MultiSqliteKeyValueStorage::new(&path, 10, true);
+        let kvs = MultiSqliteKeyValueStorage::new(
+            &path,
+            10,
+            true,
+            golem_common::model::RetryConfig::max_attempts_3(),
+        );
         Arc::new(kvs)
     }
 }
@@ -228,9 +238,12 @@ impl GetKeyValueStorage for PostgresKeyValueStorageWrapper {
 
         let config = KeyValueStoragePostgresConfig { postgres };
 
-        let kvs = PostgresKeyValueStorage::configured(&config)
-            .await
-            .expect("Cannot create postgres key value storage");
+        let kvs = PostgresKeyValueStorage::configured(
+            &config,
+            golem_common::model::RetryConfig::max_attempts_3(),
+        )
+        .await
+        .expect("Cannot create postgres key value storage");
         Arc::new(kvs)
     }
 }
@@ -302,9 +315,12 @@ impl GetKeyValueStorage for NamespaceRoutedKeyValueStorageWrapper {
         };
         let postgres_config = KeyValueStoragePostgresConfig { postgres };
         let postgres_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
-            PostgresKeyValueStorage::configured(&postgres_config)
-                .await
-                .expect("Cannot create postgres key value storage for routed kvs"),
+            PostgresKeyValueStorage::configured(
+                &postgres_config,
+                golem_common::model::RetryConfig::max_attempts_3(),
+            )
+            .await
+            .expect("Cannot create postgres key value storage for routed kvs"),
         );
 
         Arc::new(NamespaceRoutedKeyValueStorage::new(

@@ -24,7 +24,8 @@ members = [
 
 exclude = [
     "test-components",
-    "sdks/golem-rust"
+    "sdks/golem-rust",
+    "dev-tools"
 ]
 
 [workspace.metadata]
@@ -97,7 +98,7 @@ crossterm = "0.29"
 darling = "0.20.11"
 dashmap = "7.0.0-rc2"
 derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
-desert_rust = { version = "0.1.8", features = ["bigdecimal", "uuid", "chrono", "nonempty-collections", "serde-json", "bit-vec", "url", "mac_address"] }
+desert_rust = { version = "0.1.9", features = ["bigdecimal", "uuid", "chrono", "nonempty-collections", "serde-json", "bit-vec", "url", "mac_address"] }
 dir-diff = "0.3.3"
 dirs = "6.0.0"
 dotenvy = "0.15.7"
@@ -181,7 +182,7 @@ opentelemetry-prometheus-text-exporter = "=0.2.0"
 opentelemetry_sdk = "0.30.0"
 phf = { version = "0.11.3", features = ["macros"] }
 pin-project = "1.1.10"
-pgvector = { version = "0.4", features = ["sqlx", "halfvec"] }
+pgvector = { version = "=0.4.1", features = ["sqlx", "halfvec"] }
 poem = { version = "=3.1.12", features = ["cookie", "multipart", "opentelemetry", "prometheus", "requestid", "test", ] }
 poem-derive = { version = "=3.1.12" }
 poem-openapi = { version = "=5.1.16", features = ["chrono", "cookie", "humantime", "swagger-ui", "time", "url", "uuid", "websocket", ] }
@@ -246,7 +247,7 @@ system-interface = "0.27.3"
 tap = "1.0.1"
 tempfile = "3.18.0"
 terminal_size = "0.4.2"
-test-r = { version = "3.0.10", default-features = true }
+test-r = { version = "3.0.11", default-features = true }
 testcontainers = { version = "0.27.1" }
 testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis", "minio", "mysql", ] }
 textwrap = "0.16.1"
@@ -301,12 +302,13 @@ wasmprinter = "0.248.0"
 wasmtime = { version = "=46.0.1", features = ["component-model", "component-model-async", "component-model-bytes", "anyhow"] }
 wasmtime-wasi = { version = "=46.0.1", features = ["p3"] }
 wasmtime-wasi-http = { version = "=46.0.1", features = ["p3"] }
+wat = "1.248.0"
 wax = "0.6.0"
 webbrowser = "1.0.4"
 webpki-roots = { version = "0.26.7" }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console"] }
 which = "8.0.0"
-wit-bindgen = "0.58.0"
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "af9743984748cc5d9ec0b3498bb6f70b623d0405", version = "=0.58.0" }
 wit-bindgen-rust = "0.58.0"
 wit-component = "0.248"
 wit-encoder = "0.248"

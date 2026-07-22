@@ -18,14 +18,14 @@ pub mod canonical;
 pub mod conversion;
 pub mod derive;
 pub mod graph;
+pub mod host_managed;
 pub mod metadata;
 pub mod multimodal;
-#[cfg(feature = "full")]
-pub mod poem;
 #[cfg(feature = "full")]
 pub mod protobuf;
 pub mod schema_type;
 pub mod schema_value;
+pub mod tool;
 pub mod unstructured;
 pub mod validation;
 #[cfg(all(
@@ -39,11 +39,13 @@ pub mod proptest_strategies;
 
 pub use conversion::{
     DecodeError, FromSchema, FromSchemaError, IntoSchema, IntoTypedSchemaValue, MergeError,
-    SchemaBuilder, merge_agent_graphs, try_into_schema_graph, try_into_typed_schema_value,
+    Quantity, QuantityUnit, SchemaBuilder, merge_agent_graphs, try_into_schema_graph,
+    try_into_typed_schema_value,
 };
 #[cfg(feature = "derive")]
 pub use golem_schema_derive::{FromSchema, IntoSchema, Schema};
 pub use graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
+pub use host_managed::{HostManagedKind, RedactedSchemaValue, redacted_schema_value_debug};
 pub use metadata::{MetadataEnvelope, Role, TypeId};
 pub use schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, PathDirection,

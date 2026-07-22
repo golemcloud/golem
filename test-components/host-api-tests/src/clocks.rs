@@ -51,8 +51,8 @@ impl Clocks for ClocksImpl {
     fn sleep_for(&self, seconds: f64) -> f64 {
         let instant1 = Instant::now();
         sleep(Duration::from_millis((seconds * 1000.0) as u64));
-        let elapsed = instant1.elapsed().as_secs_f64();
-        elapsed
+
+        instant1.elapsed().as_secs_f64()
     }
 
     fn interruption(&self) -> String {

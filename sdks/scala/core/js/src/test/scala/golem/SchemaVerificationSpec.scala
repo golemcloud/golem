@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -161,34 +161,34 @@ object SchemaVerificationSpec extends ZIOSpecDefault {
       assertTrue(inputElementNames("multiParamMethod") == List("name", "age", "active"))
     },
     test("byte method produces s8 schema body") {
-      assertTrue(firstParamBody("byteMethod") == SchemaTypeBody.S8Type)
+      assertTrue(firstParamBody("byteMethod") == SchemaTypeBody.S8Type())
     },
     test("short method produces s16 schema body") {
-      assertTrue(firstParamBody("shortMethod") == SchemaTypeBody.S16Type)
+      assertTrue(firstParamBody("shortMethod") == SchemaTypeBody.S16Type())
     },
     test("int method produces s32 schema body") {
-      assertTrue(firstParamBody("intMethod") == SchemaTypeBody.S32Type)
+      assertTrue(firstParamBody("intMethod") == SchemaTypeBody.S32Type())
     },
     test("long method produces s64 schema body") {
-      assertTrue(firstParamBody("longMethod") == SchemaTypeBody.S64Type)
+      assertTrue(firstParamBody("longMethod") == SchemaTypeBody.S64Type())
     },
     test("float method produces f32 schema body") {
-      assertTrue(firstParamBody("floatMethod") == SchemaTypeBody.F32Type)
+      assertTrue(firstParamBody("floatMethod") == SchemaTypeBody.F32Type())
     },
     test("double method produces f64 schema body") {
-      assertTrue(firstParamBody("doubleMethod") == SchemaTypeBody.F64Type)
+      assertTrue(firstParamBody("doubleMethod") == SchemaTypeBody.F64Type())
     },
     test("ubyte method produces u8 schema body") {
-      assertTrue(firstParamBody("ubyteMethod") == SchemaTypeBody.U8Type)
+      assertTrue(firstParamBody("ubyteMethod") == SchemaTypeBody.U8Type())
     },
     test("ushort method produces u16 schema body") {
-      assertTrue(firstParamBody("ushortMethod") == SchemaTypeBody.U16Type)
+      assertTrue(firstParamBody("ushortMethod") == SchemaTypeBody.U16Type())
     },
     test("uint method produces u32 schema body") {
-      assertTrue(firstParamBody("uintMethod") == SchemaTypeBody.U32Type)
+      assertTrue(firstParamBody("uintMethod") == SchemaTypeBody.U32Type())
     },
     test("ulong method produces u64 schema body") {
-      assertTrue(firstParamBody("ulongMethod") == SchemaTypeBody.U64Type)
+      assertTrue(firstParamBody("ulongMethod") == SchemaTypeBody.U64Type())
     },
     test("string method produces string schema body") {
       assertTrue(firstParamBody("stringMethod") == SchemaTypeBody.StringType)

@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use crate::bridge_gen::fixtures::{
-    agent, code_first_snippets_agent_type, field, method, multi_agent_wrapper_2_types,
-    single_agent_wrapper_types,
+    agent, code_first_snippets_agent_type, field, local_config, method,
+    multi_agent_wrapper_2_types, single_agent_wrapper_types,
 };
 use crate::bridge_gen::type_naming::test_type_naming;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_cli::bridge_gen::typescript::{TypeScriptBridgeGenerator, TypeScriptTypeName};
-use golem_cli::bridge_gen::{BridgeGenerator, bridge_client_directory_name};
+use golem_cli::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use golem_cli::model::GuestLanguage;
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::{AgentTypeSchema, SchemaType};
@@ -107,6 +107,43 @@ fn code_first_snippets_ts_foo_agent_compiles(
 }
 
 #[test]
+fn ephemeral_agent_is_a_local_metadata_bearing_proxy() {
+    let mut agent_type = agent(
+        "EphemeralAgent",
+        "typescript",
+        vec![field("name", SchemaType::string())],
+        vec![method("run", vec![], Some(SchemaType::string()))],
+        vec![],
+        AgentMode::Ephemeral,
+    );
+    agent_type.config = vec![local_config(vec!["model"], SchemaType::string())];
+
+    let pkg = GeneratedPackage::new(agent_type);
+    let package_dir = generated_package_dir(pkg.target_dir(), "ephemeral-agent");
+    let client = std::fs::read_to_string(package_dir.join("ephemeral-agent-client.ts")).unwrap();
+
+    assert!(client.contains("static async newPhantom("));
+    assert!(client.contains("static async newPhantomWithConfig("));
+    assert!(!client.contains("static async getPhantom("));
+    assert!(!client.contains("base.createAgent("));
+    assert!(client.contains("readonly #agentConfig: base.AgentConfigEntry[];"));
+    assert!(client.contains("config: this.#agentConfig,"));
+    assert!(client.contains("base.createEphemeralRemoteMethod"));
+}
+
+#[test]
+fn ephemeral_agent_method_can_be_named_agent_config() {
+    GeneratedPackage::new(agent(
+        "EphemeralAgentConfig",
+        "typescript",
+        vec![],
+        vec![method("agentConfig", vec![], Some(SchemaType::string()))],
+        vec![],
+        AgentMode::Ephemeral,
+    ));
+}
+
+#[test]
 fn bridge_tests_schema_value_encoding(
     #[tagged_as("ts_code_first_snippets_foo_agent")] pkg: &GeneratedPackage,
 ) {
@@ -127,7 +164,7 @@ fn test_type_naming_rust_foo_agent_for_ts_bridge() {
 }
 
 fn generate_and_compile(agent_type: AgentTypeSchema, target_dir: &Utf8Path) {
-    let package_name = bridge_client_directory_name(&agent_type.type_name);
+    let package_name = bridge_client_directory_name(&agent_type.type_name, BridgeMode::External);
     let package_dir = target_dir.join(package_name);
     let mut generator = TypeScriptBridgeGenerator::new(agent_type, &package_dir, true).unwrap();
     generator.generate().unwrap();

@@ -41,17 +41,19 @@ use tokio_util::sync::CancellationToken;
 
 use tracing::{Instrument, debug};
 
+use crate::services::HasAll;
+use crate::services::card_interest::CardInterestIndex;
 use crate::services::golem_config::{
     AgentStatusFlushConfig, FilesystemStorageConfig, MemoryConfig,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
-use crate::services::{HasAll, HasCardService};
 use crate::worker::Worker;
 use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::Principal;
+use golem_common::model::agent::{InvocationFreshnessDisposition, Principal};
+use golem_common::model::card::CardId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -77,6 +79,7 @@ impl RegisteredConcurrentAccount {
 /// Holds the metadata and wasmtime structures of currently active Golem workers
 pub struct ActiveWorkers<Ctx: WorkerCtx> {
     workers: Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
+    card_interest_index: Arc<CardInterestIndex>,
     worker_filesystem_storage: Arc<FilesystemStorageSemaphore>,
     concurrent_agents: Arc<ConcurrentAgentsScheduler>,
     acquire_retry_delay: Duration,
@@ -150,6 +153,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         });
         let active_workers = Self {
             workers,
+            card_interest_index: Arc::new(CardInterestIndex::new()),
             worker_filesystem_storage: Arc::new(FilesystemStorageSemaphore::new(
                 storage_config.worker_filesystem_storage(),
                 storage_config.acquire_retry_delay,
@@ -203,7 +207,36 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         principal: Principal,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
-        T: HasAll<Ctx> + HasCardService + Clone + Send + Sync + 'static,
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        self.get_or_add_with_freshness(
+            deps,
+            owned_agent_id,
+            worker_env,
+            worker_agent_config,
+            component_revision,
+            parent,
+            invocation_context_stack,
+            principal,
+            InvocationFreshnessDisposition::MayExist,
+        )
+        .await
+    }
+
+    pub async fn get_or_add_with_freshness<T>(
+        &self,
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        worker_env: Option<Vec<(String, String)>>,
+        worker_agent_config: Vec<AgentConfigEntryDto>,
+        component_revision: Option<ComponentRevision>,
+        parent: Option<AgentId>,
+        invocation_context_stack: &InvocationContextStack,
+        principal: Principal,
+        freshness_disposition: InvocationFreshnessDisposition,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
         let agent_id = owned_agent_id.agent_id();
 
@@ -213,21 +246,22 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         self.workers
             .get_or_insert_simple(&agent_id, || {
                 Box::pin(async move {
-                    let worker = Arc::new(
-                        Worker::new(
-                            &deps,
-                            owned_agent_id,
-                            worker_env,
-                            worker_agent_config,
-                            component_revision,
-                            parent,
-                            &invocation_context_stack,
-                            principal,
-                        )
-                        .in_current_span()
-                        .await?,
-                    );
-                    Ok(worker)
+                    let worker = Worker::new(
+                        &deps,
+                        self.card_interest_index.clone(),
+                        owned_agent_id.clone(),
+                        worker_env,
+                        worker_agent_config,
+                        component_revision,
+                        parent,
+                        &invocation_context_stack,
+                        principal,
+                        freshness_disposition,
+                    )
+                    .in_current_span()
+                    .await;
+
+                    worker.map(Arc::new)
                 })
             })
             .await
@@ -239,7 +273,30 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     }
 
     pub async fn remove(&self, agent_id: &AgentId) {
+        if let Some(worker) = self.workers.get(agent_id).await {
+            self.card_interest_index
+                .set_card_interest(worker.owned_agent_id().clone(), &[])
+                .await;
+        }
         self.workers.remove(agent_id).await
+    }
+
+    pub async fn tracked_card_ids(&self) -> Vec<CardId> {
+        self.card_interest_index.tracked_card_ids().await
+    }
+
+    pub async fn notify_revoked_cards(&self, card_ids: &[CardId]) {
+        let affected_agent_cards = self.card_interest_index.interested_agents(card_ids).await;
+
+        for (owned_agent_id, affected_card_ids) in affected_agent_cards {
+            let Some(worker) = self.try_get(&owned_agent_id).await else {
+                continue;
+            };
+
+            for card_id in affected_card_ids {
+                worker.queue_card_revocation(card_id).await;
+            }
+        }
     }
 
     pub async fn snapshot(&self) -> Vec<(AgentId, Arc<Worker<Ctx>>)> {

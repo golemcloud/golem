@@ -28,7 +28,7 @@ fn branch(
 ///|
 test "well-formed record graph passes" {
   let rec = schema_type(
-    Record([field("name", vstr()), field("age", schema_type(S32))]),
+    Record([field("name", vstr()), field("age", schema_type(S32(None)))]),
   )
   let g : SchemaGraph = {
     defs: [def("Person", rec)],
@@ -53,7 +53,7 @@ test "map with primitive key resolved through a ref passes" {
 ///|
 test "duplicate type id" {
   let g : SchemaGraph = {
-    defs: [def("a", vstr()), def("a", schema_type(S32))],
+    defs: [def("a", vstr()), def("a", schema_type(S32(None)))],
     root: schema_type(Ref("a")),
   }
   inspect(
@@ -370,7 +370,7 @@ test "union string rule on non-string body" {
   let g : SchemaGraph = {
     defs: [],
     root: schema_type(
-      Union([branch("t", schema_type(S32), @types.Prefix("a"))]),
+      Union([branch("t", schema_type(S32(None)), @types.Prefix("a"))]),
     ),
   }
   inspect(
@@ -433,7 +433,7 @@ test "union field-equals literal on non-string field" {
       Union([
         branch(
           "t",
-          schema_type(Record([field("x", schema_type(S32))])),
+          schema_type(Record([field("x", schema_type(S32(None)))])),
           @types.FieldEquals({ field_name: "x", literal: Some("v") }),
         ),
       ]),

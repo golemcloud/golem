@@ -24,6 +24,7 @@ declare module 'golem:api/oplog@1.5.0' {
   }
   export type Datetime = wasiClocks030SystemClock.Instant;
   export type AccountId = golemCore200Types.AccountId;
+  export type CardId = golemCore200Types.CardId;
   export type SchemaValueTree = golemCore200Types.SchemaValueTree;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
   export type ComponentRevision = golemApi150Host.ComponentRevision;
@@ -269,12 +270,68 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     name: string;
   };
+  export type QueuedCardEventInstall = {
+    cardId: CardId;
+  };
+  export type QueuedCardEventRevoke = {
+    cardId: CardId;
+  };
+  export type QueuedCardEvent =
+  {
+    tag: 'install'
+    val: QueuedCardEventInstall
+  } |
+  {
+    tag: 'revoke'
+    val: QueuedCardEventRevoke
+  };
+  /**
+   * Parameters for a card-event-queued oplog entry.
+   */
+  export type CardEventQueuedParameters = {
+    timestamp: Datetime;
+    event: QueuedCardEvent;
+  };
+  /**
+   * Parameters for a card-installed oplog entry.
+   */
+  export type CardInstalledParameters = {
+    timestamp: Datetime;
+    queuedEventIndex?: OplogIndex;
+    cardId: CardId;
+  };
+  /**
+   * Raw parameters for a card-installed oplog entry.
+   */
+  export type RawCardInstalledParameters = {
+    timestamp: Datetime;
+    queuedEventIndex?: OplogIndex;
+    card: Uint8Array;
+  };
+  export type CardInstallFailure = "card-revoked" | "not-found" | "recipient-mismatch" | "not-permitted";
+  /**
+   * Parameters for a card-install-failed oplog entry.
+   */
+  export type CardInstallFailedParameters = {
+    timestamp: Datetime;
+    queuedEventIndex: OplogIndex;
+    cardId: CardId;
+    reason: CardInstallFailure;
+  };
   /**
    * Parameters for a card-revoked oplog entry.
    */
   export type CardRevokedParameters = {
     timestamp: Datetime;
-    cardId: Uuid;
+    queuedEventIndex: OplogIndex;
+    cardId: CardId;
+  };
+  /**
+   * Parameters for a card-expired oplog entry.
+   */
+  export type CardExpiredParameters = {
+    timestamp: Datetime;
+    cardId: CardId;
   };
   /**
    * Identifies which host-owned stream a host-stream-frame oplog entry belongs to.
@@ -991,10 +1048,30 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'remove-retry-policy'
     val: RemoveRetryPolicyParameters
   } |
+  /** Durable queue entry for pending permission-card work */
+  {
+    tag: 'card-event-queued'
+    val: CardEventQueuedParameters
+  } |
+  /** Records successful installation of a permission card into the agent wallet */
+  {
+    tag: 'card-installed'
+    val: RawCardInstalledParameters
+  } |
+  /** Records failed installation of a permission card into the agent wallet */
+  {
+    tag: 'card-install-failed'
+    val: CardInstallFailedParameters
+  } |
   /** Records that a permission card used by the agent has been revoked */
   {
     tag: 'card-revoked'
     val: CardRevokedParameters
+  } |
+  /** Records that a permission card used by the agent has expired */
+  {
+    tag: 'card-expired'
+    val: CardExpiredParameters
   } |
   /**
    * A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
@@ -1240,10 +1317,30 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'remove-retry-policy'
     val: RemoveRetryPolicyParameters
   } |
+  /** Durable queue entry for pending permission-card work */
+  {
+    tag: 'card-event-queued'
+    val: CardEventQueuedParameters
+  } |
+  /** Records successful installation of a permission card into the agent wallet */
+  {
+    tag: 'card-installed'
+    val: CardInstalledParameters
+  } |
+  /** Records failed installation of a permission card into the agent wallet */
+  {
+    tag: 'card-install-failed'
+    val: CardInstallFailedParameters
+  } |
   /** Records that a permission card used by the agent has been revoked */
   {
     tag: 'card-revoked'
     val: CardRevokedParameters
+  } |
+  /** Records that a permission card used by the agent has expired */
+  {
+    tag: 'card-expired'
+    val: CardExpiredParameters
   } |
   /**
    * A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),

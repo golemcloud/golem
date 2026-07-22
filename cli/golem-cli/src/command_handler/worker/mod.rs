@@ -33,7 +33,8 @@ use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::action_result::{
-    AgentDeleteResult, AgentPluginToggleResult, AgentRevertResult,
+    AgentCancelInvocationResult, AgentDeleteResult, AgentFileContentsResult, AgentInterruptResult,
+    AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
 };
 use crate::model::text::fmt::{log_fuzzy_match, log_text_view};
 use crate::model::text::help::{
@@ -41,8 +42,8 @@ use crate::model::text::help::{
     ParameterErrorTableView,
 };
 use crate::model::text::worker::{
-    FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView, format_agent_name_match,
-    format_timestamp,
+    AgentOplogEntryView, FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView,
+    format_agent_name_match, format_timestamp,
 };
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use chrono::{DateTime, Utc};
@@ -60,10 +61,10 @@ use golem_client::api::{AgentClient, ComponentClient, WorkerClient};
 use golem_client::model::ScanCursor;
 use golem_client::model::{
     AgentInvocationMode, AgentInvocationRequest, ComponentDto, RevertWorkerTarget,
-    UpdateWorkerRequest,
+    UpdateWorkerRequest, WorkersMetadataRequest,
 };
 use golem_common::model::agent::typed_constructor_parameters;
-use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId};
+use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, ParsedAgentId};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -84,7 +85,7 @@ use crossterm::queue;
 use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use inquire::Confirm;
 use itertools::{EitherOrBoth, Itertools};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{Stdout, Write};
 use std::path::Path;
@@ -322,7 +323,7 @@ impl WorkerCommandHandler {
         };
 
         logln("");
-        self.ctx.log_handler().log_view(&WorkerCreateView {
+        self.ctx.log_handler().log_output(WorkerCreateView {
             component_name: agent_name_match.component_name,
             agent_name: Some(display_agent_name),
         })?;
@@ -397,7 +398,15 @@ impl WorkerCommandHandler {
 
         let (agent_id, agent_type) =
             agent_id_and_type.ok_or_else(|| anyhow!("Agent invoke requires an agent component"))?;
-        let agent_id = normalize_public_agent_id(&agent_id, &agent_type)?;
+        validate_public_invocation_agent_id(&agent_id, &agent_type)?;
+        let stream_agent_id =
+            if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_none() {
+                agent_id
+                    .with_ephemeral_invocation_phantom(&idempotency_key)
+                    .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?
+            } else {
+                agent_id.clone()
+            };
 
         let matched_method_name = resolve_agent_method_name(function_name, &agent_type);
         let method_name = match matched_method_name {
@@ -488,7 +497,7 @@ impl WorkerCommandHandler {
                 self.ctx.worker_service_url().clone(),
                 self.ctx.auth_token().await?,
                 &component.id,
-                agent_id.to_string(),
+                stream_agent_id.to_string(),
                 stream_args.into(),
                 self.ctx.allow_insecure(),
                 self.ctx.format(),
@@ -512,10 +521,11 @@ impl WorkerCommandHandler {
             app_name: environment.application_name.to_string(),
             env_name: environment.environment_name.to_string(),
             agent_type_name: agent_id.agent_type.0.clone(),
-            parameters: serde_json::to_value(agent_id.parameters.value())?,
+            parameters: agent_id.parameters.value().clone(),
             phantom_id: agent_id.phantom_id,
+            config: None,
             method_name: method_name.clone(),
-            method_parameters: serde_json::to_value(method_parameters)?,
+            method_parameters,
             mode,
             schedule_at,
             idempotency_key: Some(idempotency_key.value.clone()),
@@ -538,12 +548,12 @@ impl WorkerCommandHandler {
             log_action("Triggered", "invocation");
             self.ctx
                 .log_handler()
-                .log_view(&InvokeResultView::new_trigger(idempotency_key))?;
+                .log_output(InvokeResultView::new_trigger(idempotency_key))?;
         } else {
             logln("");
             self.ctx
                 .log_handler()
-                .log_view(&InvokeResultView::new_agent_invoke(
+                .log_output(InvokeResultView::new_agent_invoke(
                     idempotency_key,
                     result,
                     &agent_type,
@@ -620,7 +630,12 @@ impl WorkerCommandHandler {
             anyhow!("Failed to match agent type parameters to the current metadata: {err}")
         })?;
         let typed_parameters = typed_constructor_parameters(&agent_type.agent_type, value);
-        let agent_id = build_repl_agent_id(&agent_type.agent_type, typed_parameters, phantom_id)?;
+        let agent_id = build_repl_agent_id(
+            &agent_type.agent_type,
+            typed_parameters,
+            phantom_id,
+            &idempotency_key,
+        )?;
         let agent_name = RawAgentId(agent_id.to_string());
 
         let connection = WorkerConnection::new(
@@ -658,6 +673,13 @@ impl WorkerCommandHandler {
             "Simulated crash",
             format!("for agent {}", format_agent_name_match(&agent_name_match)),
         );
+
+        self.ctx
+            .log_handler()
+            .log_output(AgentSimulateCrashResult {
+                simulated: true,
+                agent: agent_name.0.clone(),
+            })?;
 
         Ok(())
     }
@@ -706,7 +728,11 @@ impl WorkerCommandHandler {
 
             if !entries.is_empty() {
                 had_entries = true;
-                self.ctx.log_handler().log_view(&entries)?;
+                for (index, entry) in entries {
+                    self.ctx
+                        .log_handler()
+                        .log_output(AgentOplogEntryView { index, entry })?;
+                }
             }
 
             if cursor.is_none() {
@@ -714,7 +740,7 @@ impl WorkerCommandHandler {
             }
         }
 
-        if !had_entries {
+        if !self.ctx.format().is_structured() && !had_entries {
             log_warn("No results.")
         }
 
@@ -777,7 +803,7 @@ impl WorkerCommandHandler {
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
 
-        self.ctx.log_handler().log_view(&AgentRevertResult {
+        self.ctx.log_handler().log_output(AgentRevertResult {
             reverted: true,
             agent: agent_name.0.clone(),
             last_oplog_index,
@@ -816,12 +842,19 @@ impl WorkerCommandHandler {
             .map(|result| result.canceled)
             .map_service_error()?;
 
-        // TODO: json / yaml response?
         if canceled {
             log_action("Canceled", "");
         } else {
             log_warn_action("Failed", "to cancel, invocation already started");
         }
+
+        self.ctx
+            .log_handler()
+            .log_output(AgentCancelInvocationResult {
+                canceled,
+                agent: agent_name.0,
+                idempotency_key: idempotency_key.value,
+            })?;
 
         Ok(())
     }
@@ -837,6 +870,15 @@ impl WorkerCommandHandler {
         precise: bool,
         refresh: Option<u64>,
     ) -> anyhow::Result<()> {
+        if refresh.is_some() && self.ctx.format().is_structured() {
+            bail!("Refresh mode is only supported with --format text");
+        }
+
+        let mode_overlay = if mode == AgentListMode::All && !user_set_mode_filter(&filters) {
+            Some(all_modes_filter())
+        } else {
+            None
+        };
         let filters = apply_list_mode_filter(filters, mode);
         let (components, filters) = self
             .resolve_list_components(agent_type_name, component_name, filters)
@@ -846,6 +888,7 @@ impl WorkerCommandHandler {
             self.list_with_refresh(
                 &components,
                 &filters,
+                mode_overlay.as_ref(),
                 scan_cursor.as_ref(),
                 max_count,
                 precise,
@@ -857,13 +900,14 @@ impl WorkerCommandHandler {
                 .list_agents(
                     &components,
                     &filters,
+                    mode_overlay.as_ref(),
                     scan_cursor.as_ref(),
                     max_count,
                     precise,
                     false,
                 )
                 .await?;
-            self.ctx.log_handler().log_view(&view)?;
+            self.ctx.log_handler().log_output(view)?;
             Ok(())
         }
     }
@@ -872,6 +916,7 @@ impl WorkerCommandHandler {
         &self,
         components: &[ComponentDto],
         filters: &[String],
+        mode_overlay: Option<&AgentFilter>,
         scan_cursor: Option<&ScanCursor>,
         max_count: Option<u64>,
         precise: bool,
@@ -887,12 +932,20 @@ impl WorkerCommandHandler {
 
                 // Fetch first — while the previous frame is still visible
                 let output = self
-                    .list_agents(components, filters, scan_cursor, max_count, precise, true)
+                    .list_agents(
+                        components,
+                        filters,
+                        mode_overlay,
+                        scan_cursor,
+                        max_count,
+                        precise,
+                        true,
+                    )
                     .await
                     .and_then(|view| {
                         self.ctx
                             .log_handler()
-                            .render_view_truncated(&view, term_height)
+                            .render_view_truncated(view, term_height)
                     })
                     .unwrap_or_else(|e| format!("Error: {e:#}"));
 
@@ -1013,6 +1066,7 @@ impl WorkerCommandHandler {
         &self,
         components: &[ComponentDto],
         filters: &[String],
+        mode_overlay: Option<&AgentFilter>,
         scan_cursor: Option<&ScanCursor>,
         max_count: Option<u64>,
         precise: bool,
@@ -1043,6 +1097,7 @@ impl WorkerCommandHandler {
                     &component.component_name,
                     &component.id,
                     Some(filters),
+                    mode_overlay,
                     scan_cursor,
                     max_count,
                     precise,
@@ -1064,16 +1119,13 @@ impl WorkerCommandHandler {
                 let parsed_agent_type_name =
                     ParsedAgentId::parse_agent_type_name(&raw_agent_name).ok();
 
-                let defaults = parsed_agent_type_name
-                    .as_ref()
-                    .and_then(|agent_type_name| {
-                        worker_component
-                            .metadata
-                            .agent_type_provision_configs()
-                            .get(agent_type_name)
-                            .cloned()
-                    })
-                    .unwrap_or_default();
+                let defaults = parsed_agent_type_name.as_ref().and_then(|agent_type_name| {
+                    worker_component
+                        .metadata
+                        .agent_type_provision_configs()
+                        .get(agent_type_name)
+                        .cloned()
+                });
 
                 let source_language = parsed_agent_type_name
                     .as_ref()
@@ -1087,7 +1139,19 @@ impl WorkerCommandHandler {
                     })
                     .unwrap_or_default();
 
-                let mut agent_view = AgentMetadataView::from(worker).with_defaults(defaults);
+                let secret_config_paths = parsed_agent_type_name
+                    .as_ref()
+                    .map(|agent_type_name| {
+                        secret_config_paths_for_agent_type(
+                            worker_component.metadata.agent_types(),
+                            agent_type_name,
+                        )
+                    })
+                    .unwrap_or_default();
+
+                let mut agent_view = AgentMetadataView::from(worker)
+                    .with_defaults(defaults)
+                    .with_secret_config_paths(secret_config_paths);
 
                 if source_language.is_known()
                     && let Ok(parsed) =
@@ -1155,6 +1219,11 @@ impl WorkerCommandHandler {
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
 
+        self.ctx.log_handler().log_output(AgentInterruptResult {
+            interrupted: true,
+            agent: agent_name.0.clone(),
+        })?;
+
         Ok(())
     }
 
@@ -1176,6 +1245,11 @@ impl WorkerCommandHandler {
             "Resumed",
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
+
+        self.ctx.log_handler().log_output(AgentResumeResult {
+            resumed: true,
+            agent: agent_name.0.clone(),
+        })?;
 
         Ok(())
     }
@@ -1228,16 +1302,38 @@ impl WorkerCommandHandler {
             }
         };
 
-        self.update_worker(
-            &component.component_name,
-            &component.id,
-            &agent_name.0,
-            mode,
-            target_revision,
-            await_update,
-            disable_wakeup,
-        )
-        .await?;
+        let mut update_results = TryUpdateAllWorkersResult::default();
+        match self
+            .update_worker(
+                &component.component_name,
+                &component.id,
+                &agent_name.0,
+                mode,
+                target_revision,
+                await_update,
+                disable_wakeup,
+            )
+            .await
+        {
+            Ok(()) => update_results.triggered.push(WorkerUpdateAttempt {
+                component_name: component.component_name.clone(),
+                target_revision,
+                agent_name: agent_name.0.as_str().into(),
+                error: None,
+            }),
+            Err(error) => {
+                update_results.failed.push(WorkerUpdateAttempt {
+                    component_name: component.component_name.clone(),
+                    target_revision,
+                    agent_name: agent_name.0.as_str().into(),
+                    error: Some(error.to_string()),
+                });
+                self.ctx.log_handler().log_output(update_results)?;
+                return Err(error);
+            }
+        }
+
+        self.ctx.log_handler().log_output(update_results)?;
 
         Ok(())
     }
@@ -1265,11 +1361,16 @@ impl WorkerCommandHandler {
             .metadata
             .agent_type_provision_configs()
             .get(&agent_name_match.agent_type_name)
-            .cloned()
-            .unwrap_or_default();
+            .cloned();
+
+        let secret_config_paths = secret_config_paths_for_agent_type(
+            component.metadata.agent_types(),
+            &agent_name_match.agent_type_name,
+        );
 
         let mut metadata_view = AgentMetadataView::from(metadata)
             .with_defaults(defaults)
+            .with_secret_config_paths(secret_config_paths)
             .with_source_language(agent_name_match.source_language.clone());
         if let Some(parsed) = &agent_name_match.parsed_agent_id
             && agent_name_match.source_language.is_known()
@@ -1281,7 +1382,7 @@ impl WorkerCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&WorkerGetView::from_metadata(metadata_view, true))?;
+            .log_output(WorkerGetView::from_metadata(metadata_view, true))?;
 
         Ok(())
     }
@@ -1305,7 +1406,7 @@ impl WorkerCommandHandler {
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
 
-        self.ctx.log_handler().log_view(&AgentDeleteResult {
+        self.ctx.log_handler().log_output(AgentDeleteResult {
             deleted: true,
             agent: agent_name.0.clone(),
         })?;
@@ -1369,7 +1470,7 @@ impl WorkerCommandHandler {
                 .collect(),
         };
 
-        self.ctx.log_handler().log_view(&view)?;
+        self.ctx.log_handler().log_output(view)?;
 
         log_action(
             "Listed files",
@@ -1442,6 +1543,13 @@ impl WorkerCommandHandler {
                     "File download cancelled",
                     format!("by user for file {}", output_path.log_color_highlight()),
                 );
+                self.ctx.log_handler().log_output(AgentFileContentsResult {
+                    saved: false,
+                    agent: agent_name.0.clone(),
+                    path,
+                    output_path: output_path.into(),
+                    bytes: 0,
+                })?;
                 return Ok(());
             }
         }
@@ -1452,6 +1560,13 @@ impl WorkerCommandHandler {
                     "File saved",
                     format!("to {}", output_path.log_color_highlight()),
                 );
+                self.ctx.log_handler().log_output(AgentFileContentsResult {
+                    saved: true,
+                    agent: agent_name.0.clone(),
+                    path,
+                    output_path: output_path.into(),
+                    bytes: file_contents.len(),
+                })?;
                 Ok(())
             }
             Err(e) => {
@@ -1505,7 +1620,7 @@ impl WorkerCommandHandler {
             ),
         );
 
-        self.ctx.log_handler().log_view(&AgentPluginToggleResult {
+        self.ctx.log_handler().log_output(AgentPluginToggleResult {
             activated: true,
             agent: agent_name.0.clone(),
             plugin: plugin_name.clone(),
@@ -1556,7 +1671,7 @@ impl WorkerCommandHandler {
             ),
         );
 
-        self.ctx.log_handler().log_view(&AgentPluginToggleResult {
+        self.ctx.log_handler().log_output(AgentPluginToggleResult {
             activated: false,
             agent: agent_name.0.clone(),
             plugin: plugin_name.clone(),
@@ -1718,6 +1833,7 @@ impl WorkerCommandHandler {
                 component_name,
                 component_id,
                 Some(&agent_filters),
+                None,
                 None,
                 None,
                 false,
@@ -1946,7 +2062,7 @@ impl WorkerCommandHandler {
         component_id: &ComponentId,
     ) -> anyhow::Result<()> {
         let (workers, _) = self
-            .list_component_workers(component_name, component_id, None, None, None, false)
+            .list_component_workers(component_name, component_id, None, None, None, None, false)
             .await?;
 
         if workers.is_empty() {
@@ -1989,7 +2105,7 @@ impl WorkerCommandHandler {
         show_skip: bool,
     ) -> anyhow::Result<usize> {
         let (workers, _) = self
-            .list_component_workers(component_name, component_id, None, None, None, false)
+            .list_component_workers(component_name, component_id, None, None, None, None, false)
             .await?;
 
         if workers.is_empty() {
@@ -2091,6 +2207,7 @@ impl WorkerCommandHandler {
         component_name: &ComponentName,
         component_id: &ComponentId,
         filters: Option<&[String]>,
+        mode_overlay: Option<&AgentFilter>,
         start_scan_cursor: Option<&ScanCursor>,
         max_count: Option<u64>,
         precise: bool,
@@ -2099,18 +2216,38 @@ impl WorkerCommandHandler {
         let mut workers = Vec::<AgentMetadata>::new();
         let mut final_result_cursor = Option::<ScanCursor>::None;
 
-        let start_scan_cursor = start_scan_cursor.map(scan_cursor_to_string);
-        let mut current_scan_cursor = start_scan_cursor.clone();
+        // The structured `find_workers_metadata` POST endpoint is used for all
+        // listing: string filters are converted to a structured `AgentFilter`
+        // and combined with the optional mode overlay (`--mode all`), which the
+        // string-filter GET endpoint cannot express as it only supports `And`
+        // composition.
+        let string_filter = match filters {
+            Some(filters) if !filters.is_empty() => Some(
+                AgentFilter::from(filters.to_vec())
+                    .map_err(|e| anyhow::anyhow!("Invalid agent filter: {e}"))?,
+            ),
+            _ => None,
+        };
+        let filter = match (string_filter, mode_overlay) {
+            (Some(f), Some(mode_overlay)) => Some(f.and(mode_overlay.clone())),
+            (Some(f), None) => Some(f),
+            (None, Some(mode_overlay)) => Some(mode_overlay.clone()),
+            (None, None) => None,
+        };
+
+        let mut current_scan_cursor = start_scan_cursor.cloned();
         loop {
             let result_cursor = {
                 let results = clients
                     .worker
-                    .get_workers_metadata(
+                    .find_workers_metadata(
                         &component_id.0,
-                        filters,
-                        current_scan_cursor.as_deref(),
-                        max_count.or(Some(self.ctx.http_batch_size())),
-                        Some(precise),
+                        &WorkersMetadataRequest {
+                            filter: filter.clone(),
+                            cursor: current_scan_cursor.clone(),
+                            count: max_count.or(Some(self.ctx.http_batch_size())),
+                            precise: Some(precise),
+                        },
                     )
                     .await
                     .map_service_error()?;
@@ -2128,22 +2265,20 @@ impl WorkerCommandHandler {
             match result_cursor {
                 Some(next_cursor) => {
                     if max_count.is_none() {
-                        current_scan_cursor = Some(scan_cursor_to_string(&next_cursor));
+                        current_scan_cursor = Some(next_cursor);
                     } else {
                         final_result_cursor = Some(next_cursor);
                         break;
                     }
                 }
-                None => {
-                    break;
-                }
+                None => break,
             }
         }
 
         Ok((workers, final_result_cursor))
     }
 
-    async fn component_by_agent_name_match(
+    pub(crate) async fn component_by_agent_name_match(
         &self,
         agent_name_match: &AgentNameMatch,
     ) -> anyhow::Result<(ComponentDto, RawAgentId)> {
@@ -2822,13 +2957,34 @@ fn scan_cursor_to_string(cursor: &ScanCursor) -> String {
     format!("{}/{}", cursor.layer, cursor.cursor)
 }
 
+fn secret_config_paths_for_agent_type(
+    agent_types: &[AgentTypeSchema],
+    agent_type_name: &AgentTypeName,
+) -> BTreeSet<String> {
+    agent_types
+        .iter()
+        .find(|agent_type| &agent_type.type_name == agent_type_name)
+        .map(|agent_type| {
+            agent_type
+                .config
+                .iter()
+                .filter(|config| config.source == AgentConfigSource::Secret)
+                .map(|config| config.path.join("."))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Injects a `mode == ...` filter string at the front of `filters` based on
 /// the user-supplied `--mode` flag, unless the user already provided their own
 /// `mode ...` filter via `--filter`.
 ///
-/// `AgentListMode::All` never injects a filter (the listing then includes both
-/// modes). For `Durable` / `Ephemeral`, the corresponding equality filter is
-/// prepended so the executor can use it to scan only the matching mode.
+/// `AgentListMode::All` never injects a string filter here; instead
+/// [`all_modes_filter`] returns a structured `Or` overlay that the listing
+/// path sends via the structured `find_workers_metadata` endpoint so the
+/// executor scans both durable and ephemeral oplogs. For `Durable` /
+/// `Ephemeral`, the corresponding equality filter is prepended so the
+/// executor narrows the oplog scan to only the matching mode.
 fn apply_list_mode_filter(filters: Vec<String>, mode: AgentListMode) -> Vec<String> {
     let user_set_mode = filters
         .iter()
@@ -2845,6 +3001,27 @@ fn apply_list_mode_filter(filters: Vec<String>, mode: AgentListMode) -> Vec<Stri
     out.push(mode_filter.to_string());
     out.extend(filters);
     out
+}
+
+/// Returns `true` if `filters` contains a user-supplied `mode ...` constraint,
+/// meaning the caller should not add its own mode overlay.
+fn user_set_mode_filter(filters: &[String]) -> bool {
+    filters
+        .iter()
+        .any(|s| s.split_whitespace().next().map(str::to_ascii_lowercase) == Some("mode".into()))
+}
+
+/// Structured filter matching agents in either durability mode, used for
+/// `--mode all` so the executor scans both durable and ephemeral oplogs
+/// (its `modes_from_filter` returns `None` for an `Or` containing `Mode`),
+/// while the post-scan matcher accepts both modes. Sent via the structured
+/// `find_workers_metadata` endpoint because the string-filter GET endpoint
+/// only supports `And` composition.
+fn all_modes_filter() -> AgentFilter {
+    AgentFilter::new_or(vec![
+        AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable),
+        AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral),
+    ])
 }
 
 fn parse_worker_error(status: u16, body: Vec<u8>) -> ServiceError {
@@ -2920,14 +3097,19 @@ fn build_repl_agent_id(
     agent_type: &AgentTypeSchema,
     typed_parameters: TypedSchemaValue,
     phantom_id: Option<Uuid>,
+    idempotency_key: &IdempotencyKey,
 ) -> anyhow::Result<ParsedAgentId> {
-    ParsedAgentId::new_auto_phantom(
-        agent_type.type_name.clone(),
-        typed_parameters,
-        phantom_id,
-        agent_type.mode,
-    )
-    .map_err(|e| anyhow!("Failed to format agent ID: {e}"))
+    let agent_id =
+        ParsedAgentId::try_new(agent_type.type_name.clone(), typed_parameters, phantom_id)
+            .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?;
+
+    if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_none() {
+        agent_id
+            .with_ephemeral_invocation_phantom(idempotency_key)
+            .map_err(|e| anyhow!("Failed to format agent ID: {e}"))
+    } else {
+        Ok(agent_id)
+    }
 }
 
 fn normalize_public_agent_id(
@@ -2943,15 +3125,25 @@ fn normalize_public_agent_id(
     .map_err(|e| anyhow!("Failed to format agent ID: {e}"))
 }
 
+fn validate_public_invocation_agent_id(
+    agent_id: &ParsedAgentId,
+    agent_type: &AgentTypeSchema,
+) -> anyhow::Result<()> {
+    if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_some() {
+        bail!("Explicit phantom IDs cannot be used to invoke ephemeral agents");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AgentListMode, apply_list_mode_filter, build_repl_agent_id, normalize_public_agent_id,
-        parse_method_argument_schema_value, split_agent_name,
+        parse_method_argument_schema_value, split_agent_name, validate_public_invocation_agent_id,
     };
     use crate::agent_id_display::SourceLanguage;
-    use golem_common::model::Empty;
     use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId, Snapshotting};
+    use golem_common::model::{Empty, IdempotencyKey};
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
     };
@@ -3059,15 +3251,25 @@ mod tests {
     }
 
     #[test]
-    fn repl_agent_id_auto_generates_phantom_for_ephemeral_agents() {
-        let agent_id = build_repl_agent_id(
+    fn repl_agent_id_derives_stable_phantom_for_ephemeral_invocation() {
+        let idempotency_key = IdempotencyKey::new("repl-invocation".to_string());
+        let first = build_repl_agent_id(
             &test_agent_type_schema(AgentMode::Ephemeral),
             empty_typed_parameters(),
             None,
+            &idempotency_key,
+        )
+        .unwrap();
+        let second = build_repl_agent_id(
+            &test_agent_type_schema(AgentMode::Ephemeral),
+            empty_typed_parameters(),
+            None,
+            &idempotency_key,
         )
         .unwrap();
 
-        assert!(agent_id.phantom_id.is_some());
+        assert!(first.phantom_id.is_some());
+        assert_eq!(first.phantom_id, second.phantom_id);
     }
 
     #[test]
@@ -3076,6 +3278,7 @@ mod tests {
             &test_agent_type_schema(AgentMode::Durable),
             empty_typed_parameters(),
             None,
+            &IdempotencyKey::new("repl-invocation".to_string()),
         )
         .unwrap();
 
@@ -3089,6 +3292,7 @@ mod tests {
             &test_agent_type_schema(AgentMode::Ephemeral),
             empty_typed_parameters(),
             Some(explicit_phantom_id),
+            &IdempotencyKey::new("repl-invocation".to_string()),
         )
         .unwrap();
 
@@ -3107,6 +3311,24 @@ mod tests {
         let normalized = normalize_public_agent_id(&agent_id, &agent_type).unwrap();
 
         assert!(normalized.phantom_id.is_some());
+    }
+
+    #[test]
+    fn explicit_ephemeral_phantom_is_rejected_for_public_invocation() {
+        let agent_type = test_agent_type_schema(AgentMode::Ephemeral);
+        let agent_id = ParsedAgentId::try_new(
+            AgentTypeName("repl-agent".to_string()),
+            empty_typed_parameters(),
+            Some(Uuid::new_v4()),
+        )
+        .unwrap();
+
+        let error = validate_public_invocation_agent_id(&agent_id, &agent_type).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Explicit phantom IDs cannot be used to invoke ephemeral agents"
+        );
     }
 
     #[test]

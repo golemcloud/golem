@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -25,6 +25,18 @@ final case class Uuid(highBits: BigInt, lowBits: BigInt)
 
 object Uuid {
   implicit val schema: Schema[Uuid] = Schema.derived
+
+  def random(): Uuid = {
+    val high = (randomUnsigned64() & ~BigInt(0xf000)) | BigInt(0x4000)
+    val low  = (randomUnsigned64() & ~(BigInt(0xc000) << 48)) | (BigInt(0x8000) << 48)
+    Uuid(high, low)
+  }
+
+  private def randomUnsigned64(): BigInt = {
+    val high = (scala.math.random() * 4294967296.0).toLong
+    val low  = (scala.math.random() * 4294967296.0).toLong
+    (BigInt(high) << 32) | BigInt(low)
+  }
 
   def toStandardString(uuid: Uuid): String = {
     val hi = uuid.highBits

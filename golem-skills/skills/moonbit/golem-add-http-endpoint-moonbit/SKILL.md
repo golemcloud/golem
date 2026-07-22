@@ -18,7 +18,7 @@ Golem agents can be exposed over HTTP using code-first route definitions. This i
 |---|---|
 | `golem-add-agent-moonbit` | Creating a new agent from scratch before adding HTTP endpoints |
 | `golem-http-params-moonbit` | Path/query/header variable mapping, body mapping, supported types, response mapping |
-| `golem-configure-api-domain` | Setting up `httpApi` in `golem.yaml`, security schemes, domain deployments |
+| `golem-configure-api-domain` | Setting up `httpApi` in `golem.yaml`, security schemes, domain deployments, and `subdomain` versus `domain` choices |
 
 ## Steps
 
@@ -261,7 +261,7 @@ pub fn TaskAgent::complete_task(self : Self, id : String) -> Task? {
 httpApi:
   deployments:
     local:
-    - domain: my-app.localhost:9006
+    - subdomain: my-app  # resolves to my-app.localhost:9006 by default
       agents:
         TaskAgent: {}
 ```

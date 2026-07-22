@@ -78,10 +78,7 @@ impl KeyValue for KeyValueImpl {
 
                 let mut result = Vec::new();
                 for maybe_value in maybe_values {
-                    match maybe_value {
-                        Some(value) => result.push(value),
-                        None => return None,
-                    }
+                    result.push(maybe_value?);
                 }
                 Some(result)
             }

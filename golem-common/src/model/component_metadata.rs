@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::component::ComponentName;
-use super::environment::EnvironmentName;
 pub use super::parsed_function_name::{
     ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
 };
@@ -25,16 +23,7 @@ use crate::component_introspection::metadata::Producers as IntrospectionProducer
 use crate::component_introspection::wit_parser::WitAnalysisContext;
 use crate::component_introspection::{AnalysisFailure, AnalysisResult, TopLevelExport};
 use crate::model::agent::AgentTypeName;
-use crate::model::card::owner::{
-    PolymorphicAgentOwnerPattern, PolymorphicComponentOwnerPattern,
-    PolymorphicEnvironmentOwnerPattern,
-};
-use crate::model::card::recipient::RecipientPattern;
-use crate::model::card::{
-    AgentResourcePattern, AgentVerb, ComponentResourcePattern, ComponentVerb,
-    EnvironmentResourcePattern, EnvironmentVerb, PolymorphicClassPermissionPattern,
-    PolymorphicPermissionPattern,
-};
+use crate::model::card::PolymorphicCard;
 use crate::model::component::InstalledPlugin;
 use crate::schema::agent::AgentTypeSchema;
 use std::collections::BTreeMap;
@@ -70,7 +59,6 @@ impl ComponentMetadata {
                 root_package_version,
                 agent_types,
                 agent_type_provision_configs,
-                agent_type_initial_permissions: std::collections::BTreeMap::new(),
             }),
         }
     }
@@ -92,26 +80,6 @@ impl ComponentMetadata {
                 root_package_version: data.root_package_version.clone(),
                 agent_types: data.agent_types.clone(),
                 agent_type_provision_configs,
-                agent_type_initial_permissions: data.agent_type_initial_permissions.clone(),
-            }),
-        }
-    }
-
-    pub fn with_agent_initial_permissions(
-        &self,
-        agent_type_initial_permissions: BTreeMap<AgentTypeName, AgentInitialPermissionTemplate>,
-    ) -> Self {
-        let data = self.data.as_ref();
-        Self {
-            data: Arc::new(ComponentMetadataInnerData {
-                known_exports: data.known_exports.clone(),
-                producers: data.producers.clone(),
-                memories: data.memories.clone(),
-                root_package_name: data.root_package_name.clone(),
-                root_package_version: data.root_package_version.clone(),
-                agent_types: data.agent_types.clone(),
-                agent_type_provision_configs: data.agent_type_provision_configs.clone(),
-                agent_type_initial_permissions,
             }),
         }
     }
@@ -153,17 +121,12 @@ impl ComponentMetadata {
         self.data.agent_type_provision_configs.get(name)
     }
 
-    pub fn agent_type_initial_permission_template(
+    pub fn agent_type_initial_permission_card(
         &self,
         name: &AgentTypeName,
-    ) -> Option<&AgentInitialPermissionTemplate> {
-        self.data.agent_type_initial_permissions.get(name)
-    }
-
-    pub fn agent_type_initial_permission_templates(
-        &self,
-    ) -> &BTreeMap<AgentTypeName, AgentInitialPermissionTemplate> {
-        &self.data.agent_type_initial_permissions
+    ) -> Option<&PolymorphicCard> {
+        self.agent_type_provision_config(name)
+            .map(|config| &config.initial_permissions)
     }
 
     pub fn agent_type_env(&self, name: &AgentTypeName) -> Option<&BTreeMap<String, String>> {
@@ -490,51 +453,8 @@ impl RawComponentMetadata {
             root_package_version: self.root_package_version,
             agent_types,
             agent_type_provision_configs,
-            agent_type_initial_permissions: BTreeMap::new(),
         }
     }
-}
-
-impl AgentInitialPermissionTemplate {
-    pub fn default_for(
-        _environment_name: &EnvironmentName,
-        _component_name: &ComponentName,
-    ) -> Self {
-        let recipient = RecipientPattern::Any;
-        Self {
-            card_id: crate::model::card::CardId::new(),
-            lower_positive: vec![
-                PolymorphicPermissionPattern::Environment(PolymorphicClassPermissionPattern {
-                    owner: PolymorphicEnvironmentOwnerPattern::Env,
-                    recipient: recipient.clone(),
-                    verb: Some(EnvironmentVerb::View),
-                    resource: EnvironmentResourcePattern::Any,
-                }),
-                PolymorphicPermissionPattern::Component(PolymorphicClassPermissionPattern {
-                    owner: PolymorphicComponentOwnerPattern::Component,
-                    recipient: recipient.clone(),
-                    verb: Some(ComponentVerb::View),
-                    resource: ComponentResourcePattern::Any,
-                }),
-                agent_permission(AgentVerb::View, recipient.clone()),
-                agent_permission(AgentVerb::Invoke, recipient.clone()),
-                agent_permission(AgentVerb::Resume, recipient.clone()),
-                agent_permission(AgentVerb::UpdateRevision, recipient),
-            ],
-            lower_negative: Vec::new(),
-            upper_positive: Vec::new(),
-            upper_negative: Vec::new(),
-        }
-    }
-}
-
-fn agent_permission(verb: AgentVerb, recipient: RecipientPattern) -> PolymorphicPermissionPattern {
-    PolymorphicPermissionPattern::Agent(PolymorphicClassPermissionPattern {
-        owner: PolymorphicAgentOwnerPattern::EnvAgents,
-        recipient,
-        verb: Some(verb),
-        resource: AgentResourcePattern::Any,
-    })
 }
 
 impl From<crate::component_introspection::metadata::Producers> for Producers {
@@ -756,14 +676,6 @@ mod protobuf {
                             .map(|config| (AgentTypeName(k), config))
                     })
                     .collect::<Result<_, _>>()?,
-                agent_type_initial_permissions: value
-                    .agent_type_initial_permissions
-                    .into_iter()
-                    .map(|(k, v)| {
-                        crate::serialization::deserialize(&v)
-                            .map(|template| (AgentTypeName(k), template))
-                    })
-                    .collect::<Result<_, _>>()?,
             })
         }
     }
@@ -827,15 +739,6 @@ mod protobuf {
                         )
                     })
                     .collect(),
-                agent_type_initial_permissions: value
-                    .agent_type_initial_permissions
-                    .into_iter()
-                    .map(|(k, v)| {
-                        crate::serialization::serialize(&v)
-                            .map(|template| (k.0, template))
-                            .expect("failed to serialize agent initial permission template")
-                    })
-                    .collect(),
             }
         }
     }
@@ -868,8 +771,10 @@ mod protobuf {
                 .into_iter()
                 .map(InitialAgentFile::try_from)
                 .collect::<Result<Vec<_>, _>>()?;
+            let initial_permission = crate::serialization::deserialize(&proto.initial_permissions)?;
 
             Ok(AgentTypeProvisionConfig {
+                initial_permissions: initial_permission,
                 env: proto.env.into_iter().collect(),
                 config,
                 plugins,
@@ -885,6 +790,8 @@ mod protobuf {
             use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
 
             Self {
+                initial_permissions: crate::serialization::serialize(&config.initial_permissions)
+                    .expect("failed to serialize agent initial permission card"),
                 env: config.env.into_iter().collect(),
                 config: config
                     .config
@@ -916,8 +823,6 @@ mod tests {
     use crate::component_introspection::{ExportedInstance, TopLevelExport};
     use crate::model::agent::AgentTypeName;
     use crate::model::card::CardId;
-    use crate::model::component::ComponentName;
-    use crate::model::environment::EnvironmentName;
     use test_r::test;
 
     fn instance_export(name: &str) -> TopLevelExport {
@@ -1006,11 +911,19 @@ mod tests {
     fn component_metadata_grpc_roundtrip_preserves_agent_initial_permissions() {
         let agent_type = AgentTypeName("Cart".to_string());
         let card_id = CardId::new();
-        let mut template = AgentInitialPermissionTemplate::default_for(
-            &EnvironmentName::try_from("prod").unwrap(),
-            &ComponentName("cart-svc".to_string()),
-        );
-        template.card_id = card_id;
+        let card = crate::model::card::PolymorphicCard {
+            card_id,
+            parent_ids: Vec::new(),
+            lower_positive: crate::model::card::default_agent_initial_permission_grants(
+                crate::model::card::recipient::RecipientPattern::Any,
+            ),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            system_card: false,
+        };
 
         let metadata = ComponentMetadata::from_parts(
             KnownExports::default(),
@@ -1018,16 +931,24 @@ mod tests {
             None,
             None,
             Vec::new(),
-            BTreeMap::new(),
-        )
-        .with_agent_initial_permissions(BTreeMap::from([(agent_type.clone(), template.clone())]));
+            BTreeMap::from([(
+                agent_type.clone(),
+                AgentTypeProvisionConfig {
+                    initial_permissions: card.clone(),
+                    env: BTreeMap::new(),
+                    config: Vec::new(),
+                    plugins: Vec::new(),
+                    files: Vec::new(),
+                },
+            )]),
+        );
 
         let proto: golem_api_grpc::proto::golem::component::ComponentMetadata = metadata.into();
         let decoded = ComponentMetadata::try_from(proto).unwrap();
 
         assert_eq!(
-            decoded.agent_type_initial_permission_template(&agent_type),
-            Some(&template)
+            decoded.agent_type_initial_permission_card(&agent_type),
+            Some(&card)
         );
     }
 }

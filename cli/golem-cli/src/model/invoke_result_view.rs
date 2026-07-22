@@ -14,6 +14,7 @@
 
 use crate::agent_id_display::{SourceLanguage, render_typed_schema_value};
 use crate::log::log_error;
+use crate::model::cli_output::StructuredOutput;
 use anyhow::anyhow;
 use golem_client::model::AgentInvocationResult;
 use golem_common::model::IdempotencyKey;
@@ -22,6 +23,7 @@ use golem_common::schema::agent::{AgentTypeSchema, OutputSchema};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InvokeResultView {
     pub idempotency_key: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -32,6 +34,10 @@ pub struct InvokeResultView {
     pub result_format: Option<String>,
     #[serde(skip)]
     pub is_void_result: bool,
+}
+
+impl StructuredOutput for InvokeResultView {
+    const KIND: &'static str = "agent.invoke";
 }
 
 impl InvokeResultView {

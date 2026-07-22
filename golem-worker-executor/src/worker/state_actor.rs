@@ -61,7 +61,6 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AgentStatus, AgentStatusRecord, OwnedAgentId, ScheduledAction};
-use golem_service_base::error::worker_executor::InterruptKind;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -216,9 +215,9 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                             worker.add_to_oplog(OplogEntry::grow_memory(delta)).await;
                             if let Err(error) = worker.increase_memory(delta).await {
                                 warn!(
-                                    "Failed to acquire {delta} bytes of additional memory: {error}; restarting the worker"
+                                    "Failed to acquire {delta} bytes of additional memory: {error}; restarting the worker after releasing its memory permits"
                                 );
-                                worker.set_interrupting(InterruptKind::Restart).await;
+                                worker.interrupt_for_permit_reacquire().await;
                             }
                         }
                     }

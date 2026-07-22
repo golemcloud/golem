@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::golem_agentic::exports::golem::tool::guest::ToolError;
 use crate::golem_agentic::golem::agent::common::AgentError;
 use crate::schema::IntoTypedSchemaValue;
 
@@ -35,4 +36,33 @@ pub fn invalid_input_error(msg: impl ToString) -> AgentError {
 
 pub fn invalid_method_error(method_name: impl ToString) -> AgentError {
     AgentError::InvalidMethod(method_name.to_string())
+}
+
+pub fn invalid_tool_name(tool_name: impl ToString) -> ToolError {
+    ToolError::InvalidToolName(tool_name.to_string())
+}
+
+pub fn invalid_command_path(path: Vec<String>) -> ToolError {
+    ToolError::InvalidCommandPath(path)
+}
+
+pub fn invalid_input(msg: impl ToString) -> ToolError {
+    ToolError::InvalidInput(msg.to_string())
+}
+
+pub fn constraint_violation(msg: impl ToString) -> ToolError {
+    ToolError::ConstraintViolation(msg.to_string())
+}
+
+pub fn invalid_result(msg: impl ToString) -> ToolError {
+    ToolError::InvalidResult(msg.to_string())
+}
+
+pub fn custom_tool_error<T: IntoTypedSchemaValue>(value: T) -> ToolError {
+    let typed = value
+        .into_typed_schema_value()
+        .expect("failed to encode custom tool error");
+    ToolError::CustomError(
+        crate::encode_typed_schema_value(&typed).expect("failed to encode custom tool error"),
+    )
 }

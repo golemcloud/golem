@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_rust::quota::{QuotaToken, with_reservation};
+use golem_rust::quota::QuotaToken;
 use golem_rust::{FromSchema, IntoSchema, agent_definition, agent_implementation};
 use serde::{Deserialize, Serialize};
 
@@ -135,7 +135,7 @@ impl QuotaApi for QuotaApiImpl {
 
     fn reserve_and_drop(&self, resource_name: String, expected_use: u64, amount: u64) -> u64 {
         let token = QuotaToken::new(&resource_name, expected_use);
-        token.reserve(amount).expect("reservation should succeed");
+        let _ = token.reserve(amount).expect("reservation should succeed");
         amount
     }
 

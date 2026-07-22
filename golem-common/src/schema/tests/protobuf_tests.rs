@@ -188,3 +188,40 @@ fn field_source_round_trips() {
         assert_eq!(source, back);
     }
 }
+
+/// Deterministic numeric-restriction vectors round-trip through the protobuf
+/// mirror exactly.
+#[test]
+fn numeric_restrictions_proto_golden_round_trip() {
+    for (label, ty) in crate::schema::tests::golden_numeric_schema_types() {
+        let graph = SchemaGraph::anonymous(ty);
+        let proto: golem_api_grpc::proto::golem::schema::SchemaGraph = graph.clone().into();
+        let back: SchemaGraph = proto.try_into().expect("decode");
+        assert_eq!(graph, back, "proto numeric golden mismatch: {label}");
+    }
+}
+
+/// A stored `Some(empty)` numeric restriction normalizes to `None` when it
+/// crosses the protobuf decode boundary (covers both `unit: None` and the
+/// empty-string `unit` case).
+#[test]
+fn numeric_empty_restrictions_normalize_to_none_proto() {
+    use crate::schema::schema_type::{NumericRestrictions, SchemaType};
+
+    for empty in [
+        NumericRestrictions::default(),
+        NumericRestrictions {
+            min: None,
+            max: None,
+            unit: Some(String::new()),
+        },
+    ] {
+        let graph = SchemaGraph::anonymous(SchemaType::U32 {
+            restrictions: Some(empty),
+            metadata: MetadataEnvelope::default(),
+        });
+        let proto: golem_api_grpc::proto::golem::schema::SchemaGraph = graph.into();
+        let back: SchemaGraph = proto.try_into().expect("decode");
+        assert_eq!(back.root.numeric_restrictions(), None);
+    }
+}

@@ -15,11 +15,15 @@
 use anyhow::{Context, anyhow};
 use golem_common::base_model::component_metadata::{AgentTypeProvisionConfig, KnownExports};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::model::account::AccountEmail;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::extraction::extract_agent_type_schemas;
 use golem_common::model::application::{ApplicationId, ApplicationName};
-use golem_common::model::component::{ComponentDto, ComponentId, ComponentName, ComponentRevision};
+use golem_common::model::card::recipient::RecipientPattern;
+use golem_common::model::component::{
+    AgentTypeInitialPermissions, ComponentDto, ComponentId, ComponentName, ComponentRevision,
+};
 use golem_common::model::component_metadata::{
     ComponentMetadata, LinearMemory, RawComponentMetadata,
 };
@@ -193,6 +197,9 @@ impl FileSystemComponentWriter {
             .await
             .map_err(|err| anyhow!("Failed to read component size: {err:#}"))?
             .len();
+
+        let agent_type_provision_configs =
+            with_default_initial_permissions(agent_type_provision_configs, &agent_types);
 
         let metadata = LocalFileSystemComponentMetadata {
             account_id,
@@ -635,4 +642,27 @@ impl From<LocalFileSystemComponentMetadata> for Component {
             object_store_key: "".to_string(),
         }
     }
+}
+
+fn with_default_initial_permissions(
+    mut provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
+    agent_types: &[AgentTypeSchema],
+) -> BTreeMap<AgentTypeName, AgentTypeProvisionConfig> {
+    for agent_type in agent_types {
+        provision_configs
+            .entry(agent_type.type_name.clone())
+            .or_insert_with(|| AgentTypeProvisionConfig {
+                initial_permissions: AgentTypeInitialPermissions::default_for_recipient(
+                    RecipientPattern::Account {
+                        account: AccountEmail::new("test@golem"),
+                    },
+                )
+                .to_polymorphic_card(),
+                env: BTreeMap::new(),
+                config: Vec::new(),
+                plugins: Vec::new(),
+                files: Vec::new(),
+            });
+    }
+    provision_configs
 }

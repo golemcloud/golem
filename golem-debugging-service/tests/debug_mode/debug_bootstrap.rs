@@ -15,7 +15,7 @@ use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
-use golem_worker_executor::services::card::CardService;
+use golem_worker_executor::services::card::{CardService, NoopCardService};
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::direct_invocation_auth::DirectInvocationAuthService;
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
@@ -104,6 +104,13 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             Duration::from_secs(3600),
             Arc::new(DefaultCompiledComponentService::new(blob_storage)),
         ))
+    }
+
+    fn create_card_service(
+        &self,
+        _registry_service: Arc<dyn RegistryService>,
+    ) -> Arc<dyn CardService> {
+        Arc::new(NoopCardService)
     }
 
     fn create_resource_limits(

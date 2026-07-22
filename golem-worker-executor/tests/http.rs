@@ -16,6 +16,7 @@ use crate::Tracing;
 use axum::Router;
 use axum::routing::post;
 use bytes::Bytes;
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{AgentStatus, IdempotencyKey};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
@@ -2480,12 +2481,24 @@ async fn outgoing_http_contains_idempotency_key(
         .invoke_and_await_agent_with_key(&component, &agent_id, &key, "run", data_value!())
         .await?;
 
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let sends = partition_starts(&oplog, "http::client::send");
+    assert_eq!(
+        sends.counts(),
+        (0, 1, 0),
+        "the request must have exactly one completed durable send: {sends:?}"
+    );
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     // The injected key is derived from the invocation idempotency key and the send's own
-    // host-call `Start` index, so it is a deterministic value for the first call of this
-    // invocation.
-    let expected_response = "200 ExampleResponse { percentage: 0.0, message: Some(\"e7158c39-c997-5318-9d0d-a3c47f406e12\") }";
+    // physical host-call `Start` index. Derive the expectation from that persisted index rather
+    // than from a fixed position, because unrelated invocation bookkeeping may add or remove
+    // entries before the send without changing this contract.
+    let expected_key = IdempotencyKey::derived(&key, sends.ended[0]);
+    let expected_response = format!(
+        "200 ExampleResponse {{ percentage: 0.0, message: Some(\"{}\") }}",
+        expected_key.value
+    );
     assert_eq!(result.into_typed::<String>()?, expected_response);
 
     // Restart the executor to force a full oplog replay and repeat the invocation with the same

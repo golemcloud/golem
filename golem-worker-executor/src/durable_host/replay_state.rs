@@ -16,6 +16,7 @@ use crate::durable_host::concurrent::{
     ConcurrentReplayResolver, ReplayCallHandle, Resolution, ResolutionOutcome,
 };
 use crate::services::oplog::{Oplog, OplogOps};
+use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
@@ -30,7 +31,7 @@ use golem_common::model::{
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::hash::Hasher;
 use std::sync::Arc;
@@ -40,11 +41,16 @@ use tokio::sync::{Mutex, MutexGuard, Notify};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
+const CHUNK_SIZE: u64 = 1024;
+
 #[derive(Debug, Clone)]
 pub enum ReplayEvent {
     ReplayFinished,
     UpdateReplayed { new_revision: ComponentRevision },
     ForkReplayed { new_phantom_id: Uuid },
+    CardInstalled { card: StoredCard },
+    CardRevoked { card_id: CardId },
+    CardExpired { card_id: CardId },
 }
 
 #[derive(Debug, Clone)]
@@ -320,6 +326,8 @@ struct PublishedPosition {
 struct CursorState {
     skipped_regions: DeletedRegions,
     next_skipped_region: Option<OplogRegion>,
+    /// Entries prefetched from the oplog, beginning at the next speculative cursor position.
+    replay_buffer: VecDeque<(OplogIndex, OplogEntry)>,
     /// `Start` entries for `GolemApiFork` whose matching `End` has not yet been replayed. When the
     /// matching `End` is read, the response is decoded and a `ForkReplayed` event is emitted. The
     /// legacy adapter only ever has at most one in flight at a time (it writes the matched `End`
@@ -500,12 +508,56 @@ impl CursorTx<'_> {
     /// expected entry is missing, so the caller propagates a non-retriable trap instead of crashing
     /// the executor process.
     async fn raw_read_next_oplog_entry(
-        &self,
+        &mut self,
     ) -> Result<(OplogIndex, OplogEntry), WorkerExecutorError> {
         let read_idx = self.cursor.last_replayed_index().next();
 
-        let oplog_entries = self.cursor.read_oplog(read_idx, 1).await;
-        let oplog_entry = if let Some((_, oplog_entry)) = oplog_entries.into_iter().next() {
+        while self
+            .st
+            .replay_buffer
+            .front()
+            .is_some_and(|(idx, _)| *idx < read_idx)
+        {
+            self.st.replay_buffer.pop_front();
+        }
+        if self
+            .st
+            .replay_buffer
+            .front()
+            .is_some_and(|(idx, _)| *idx > read_idx)
+        {
+            self.st.replay_buffer.clear();
+        }
+        if self.st.replay_buffer.is_empty() {
+            let remaining = u64::from(self.cursor.replay_target())
+                .saturating_sub(u64::from(read_idx))
+                .saturating_add(1);
+            self.st.replay_buffer = self
+                .cursor
+                .read_oplog(read_idx, remaining.min(CHUNK_SIZE))
+                .await
+                .into_iter()
+                .collect();
+
+            // Snapshot/cache churn can make a cross-layer batch start after the requested index.
+            if !self
+                .st
+                .replay_buffer
+                .front()
+                .is_some_and(|(idx, _)| *idx == read_idx)
+            {
+                self.st.replay_buffer = self
+                    .cursor
+                    .read_oplog(read_idx, 1)
+                    .await
+                    .into_iter()
+                    .collect();
+            }
+        }
+
+        let oplog_entry = if let Some((idx, oplog_entry)) = self.st.replay_buffer.pop_front()
+            && idx == read_idx
+        {
             oplog_entry
         } else {
             // Use `unexpected_oplog_entry` so the typing survives the wasmtime
@@ -663,6 +715,7 @@ impl CursorTx<'_> {
             } else {
                 // Predicate failed: the speculative read published nothing, so the cursor,
                 // skipped-region state, and side effects are already untouched.
+                self.st.replay_buffer.push_front((read_idx, entry));
                 return Ok(None);
             }
         }
@@ -863,6 +916,15 @@ impl CursorTx<'_> {
         // End (via `start_index`) we decode the response and emit `ForkReplayed`
         // if necessary.
         match oplog_entry {
+            OplogEntry::CardInstalled { card, .. } => {
+                self.record_replay_event(ReplayEvent::CardInstalled { card: card.clone() });
+            }
+            OplogEntry::CardRevoked { card_id, .. } => {
+                self.record_replay_event(ReplayEvent::CardRevoked { card_id: *card_id });
+            }
+            OplogEntry::CardExpired { card_id, .. } => {
+                self.record_replay_event(ReplayEvent::CardExpired { card_id: *card_id });
+            }
             OplogEntry::Start { function_name, .. }
                 if function_name == &HostFunctionName::GolemApiFork =>
             {
@@ -1405,6 +1467,7 @@ impl CursorTx<'_> {
         // Scan-ahead-claimed `Start`s the cursor never reached are moot now: their awaiters were
         // just failed with `Incomplete`, and the cursor will not read again.
         self.st.claimed_starts.clear();
+        self.st.replay_buffer.clear();
         self.notify_progress = true;
     }
 
@@ -1419,6 +1482,7 @@ impl CursorTx<'_> {
         self.cursor.set_log_hashes(HashMap::new());
         self.cursor.pending_replay_events.lock().unwrap().clear();
         self.st.claimed_starts.clear();
+        self.st.replay_buffer.clear();
         self.cursor
             .position
             .last_replayed_index
@@ -1454,6 +1518,7 @@ impl ReplayState {
             state: Mutex::new(CursorState {
                 skipped_regions,
                 next_skipped_region,
+                replay_buffer: VecDeque::new(),
                 pending_fork_starts: HashSet::new(),
                 concurrent_resolver: ConcurrentReplayResolver::default(),
                 claimed_starts: HashSet::new(),
@@ -1634,12 +1699,13 @@ impl ReplayState {
         new_target: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
         let cursor = &*self.cursor;
-        let tx = cursor.tx().await;
+        let mut tx = cursor.tx().await;
         let result = async {
             let old_target = cursor.replay_target();
             match new_target.cmp(&old_target) {
                 std::cmp::Ordering::Equal => {}
                 std::cmp::Ordering::Less => {
+                    tx.st.replay_buffer.clear();
                     cursor
                         .discarded_completions
                         .lock()

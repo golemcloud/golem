@@ -67,6 +67,9 @@ wasmtime::component::bindgen!({
         "golem:agent/host.wasm-rpc": super::durable_host::wasm_rpc::WasmRpcEntry,
         "golem:agent/host.future-invoke-result": super::durable_host::wasm_rpc::FutureInvokeResultEntry,
         "golem:agent/host.cancellation-token": super::durable_host::wasm_rpc::CancellationTokenEntry,
+        "golem:tool/common": golem_common::schema::agent::bindings::golem::tool::common,
+        "golem:tool/host.tool-rpc": super::durable_host::tool::ToolRpcEntry,
+        "golem:tool/host.future-invoke-result": super::durable_host::tool::FutureInvokeResultEntry,
         // shared wasi dependencies of golem:rpc/wasm-rpc and golem:api/golem
         "wasi:clocks/system-clock": wasmtime_wasi::p3::bindings::clocks::system_clock,
         "golem:rdbms/ignite2.db-connection": super::durable_host::rdbms::ignite::Ignite2DbConnection,
@@ -81,7 +84,6 @@ wasmtime::component::bindgen!({
         "golem:rdbms/postgres.lazy-db-column-type": super::durable_host::rdbms::postgres::LazyDbColumnTypeEntry,
         "golem:rdbms/postgres.lazy-db-value": super::durable_host::rdbms::postgres::LazyDbValueEntry,
         "golem:websocket/client.websocket-connection": super::durable_host::websocket::client::WebSocketConnectionEntry,
-        "golem:quota/types.quota-token": super::durable_host::quota::types::QuotaTokenEntry,
         "golem:quota/types.reservation": super::durable_host::quota::types::ReservationEntry,
     },
 });

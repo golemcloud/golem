@@ -25,7 +25,7 @@ wasi-fetch = "=0.2.0"
 # Must be the exact wit-bindgen version golem-rust generates the export glue with:
 # `spawn` shares a process-global with the export glue and silently drops the
 # spawned future when the versions differ (e.g. the one re-exported via wasip3).
-wit-bindgen = { version = "=0.58.0", features = ["async", "async-spawn"] }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "af9743984748cc5d9ec0b3498bb6f70b623d0405", version = "=0.58.0", features = ["async", "async-spawn"] }
 futures-concurrency = "7.6.3"
 rand = "0.9.0"
 wasi-logger = { version = "0.1.2", features = ["kv"] }
