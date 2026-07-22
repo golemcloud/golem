@@ -4,6 +4,6 @@ name: cloud-density-promise-2pod
 section: promise
 defaultRamp: [1, 2, 4, 8, 16, 32, 64, 128, 256]
 cells:
-  - { name: promise-medium-cold-rust-2pod, payloadSize: 16777216, waiterPresence: cold, runtime: rust }
-  - { name: promise-medium-warm-rust-2pod, payloadSize: 16777216, waiterPresence: warm, runtime: rust }
-  - { name: promise-medium-mixed-rust-2pod, payloadSize: 16777216, waiterPresence: mixed, runtime: rust }
+  - { name: promise-medium-cold-rust-2pod, enabled: true, payloadSize: 16777216, waiterPresence: cold, runtime: rust }
+  - { name: promise-medium-warm-rust-2pod, enabled: true, payloadSize: 16777216, waiterPresence: warm, runtime: rust }
+  - { name: promise-medium-mixed-rust-2pod, enabled: true, payloadSize: 16777216, waiterPresence: mixed, runtime: rust }
