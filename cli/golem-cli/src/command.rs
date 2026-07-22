@@ -55,6 +55,7 @@ use lenient_bool::LenientBool;
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// Golem Command Line Interface
 #[derive(Debug, Parser)]
@@ -222,6 +223,9 @@ pub struct GolemCliGlobalFlags {
     http_parallelism: Option<usize>,
 
     #[arg(skip)]
+    agent_stream_ping_interval: Option<Duration>,
+
+    #[arg(skip)]
     pub auth_token: Option<String>,
 
     #[arg(skip)]
@@ -294,6 +298,16 @@ impl GolemCliGlobalFlags {
             })?)
         }
 
+        if let Ok(interval) = std::env::var("GOLEM_AGENT_STREAM_PING_INTERVAL") {
+            self.agent_stream_ping_interval = Some(
+                iso8601::duration(&interval)
+                    .map_err(|err| {
+                        anyhow!("Failed to parse GOLEM_AGENT_STREAM_PING_INTERVAL ({interval}): {err}")
+                    })?
+                    .into(),
+            );
+        }
+
         if let Ok(auth_token) = std::env::var("GOLEM_AUTH_TOKEN") {
             self.auth_token = Some(
                 auth_token
@@ -331,6 +345,11 @@ impl GolemCliGlobalFlags {
 
     pub fn http_parallelism(&self) -> usize {
         self.http_parallelism.unwrap_or(4)
+    }
+
+    pub fn agent_stream_ping_interval(&self) -> Duration {
+        self.agent_stream_ping_interval
+            .unwrap_or_else(|| Duration::from_secs(1))
     }
 
     pub fn verbosity(&self) -> clap_verbosity_flag::Verbosity {
@@ -1288,7 +1307,6 @@ pub mod worker {
             #[arg(short, long, value_parser = parse_agent_config, verbatim_doc_comment)]
             config: Vec<AgentConfigEntryDto>,
         },
-        // TODO: json args
         /// Invoke (or enqueue invocation for) agent
         #[command(after_help = crate::command_examples::AGENT_INVOKE)]
         Invoke {

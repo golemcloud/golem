@@ -150,8 +150,15 @@ pub async fn start_router(
         .with(OpenTelemetryMetrics::new())
         .with(Tracing);
 
-    // TODO: have proper healtchchecks, pass them through the different services and expose here -- similar to metrics
-    // for now just use the one from component service.
+    // `/healthcheck` is intentionally served by the registry service's static endpoint (via the `*`
+    // fallback above) rather than an aggregated per-service check. The router only starts once every
+    // service has started and bound its ports, so this is a "server process is up" signal for the local
+    // tooling that polls it. It deliberately does NOT reflect deep readiness: worker executors register
+    // with an empty shard set and receive assignments in the background, the shard manager reconciles its
+    // ring in the background, and the worker service connects to the registry lazily. Since no service
+    // gates its own health on that readiness, an aggregated check here could not report it either. The CLI
+    // does not consume healthchecks, and deployed servers use each service's own per-service probe, so
+    // aggregating here would add nothing.
 
     join_set.spawn(
         async move {

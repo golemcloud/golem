@@ -1369,7 +1369,8 @@
       "x-golem-command": "agent new",
       "required": [
         "$type",
-        "componentName"
+        "componentName",
+        "agentName"
       ],
       "properties": {
         "$type": {
@@ -1379,7 +1380,7 @@
           "type": "string"
         },
         "agentName": {
-          "type": ["string", "null"]
+          "type": "string"
         }
       },
       "additionalProperties": false

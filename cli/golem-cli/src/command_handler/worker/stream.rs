@@ -48,6 +48,7 @@ pub struct WorkerConnection {
     idempotency_key: Option<IdempotencyKey>,
     last_seen_idempotency_key: Arc<Mutex<Option<IdempotencyKey>>>,
     goal_reached: Arc<AtomicBool>,
+    ping_interval: Duration,
 }
 
 impl WorkerConnection {
@@ -60,6 +61,7 @@ impl WorkerConnection {
         connect_options: AgentLogStreamOptions,
         allow_insecure: bool,
         format: Format,
+        ping_interval: Duration,
         idempotency_key: Option<IdempotencyKey>,
     ) -> anyhow::Result<WorkerConnection> {
         let (request, connector) = Self::create_request(
@@ -81,6 +83,7 @@ impl WorkerConnection {
             idempotency_key,
             last_seen_idempotency_key,
             goal_reached,
+            ping_interval,
         })
     }
 
@@ -117,7 +120,8 @@ impl WorkerConnection {
 
         let (write, read) = ws_stream.split();
 
-        let pings = task::spawn(async move { Self::ping_loop(write).await });
+        let ping_interval = self.ping_interval;
+        let pings = task::spawn(async move { Self::ping_loop(write, ping_interval).await });
 
         let output = self.output.clone();
         let last_seen_idempotency_key = self.last_seen_idempotency_key.clone();
@@ -195,8 +199,9 @@ impl WorkerConnection {
 
     async fn ping_loop(
         mut write: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
+        ping_interval: Duration,
     ) -> anyhow::Error {
-        let mut interval = time::interval(Duration::from_secs(1)); // TODO configure
+        let mut interval = time::interval(ping_interval);
         let mut cnt: i64 = 1;
 
         loop {

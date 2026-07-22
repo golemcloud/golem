@@ -333,7 +333,6 @@ pub struct ClientConfig {
     pub worker_url: Url,
     pub service_http_client_config: HttpClientConfig,
     pub invoke_http_client_config: HttpClientConfig,
-    pub health_check_http_client_config: HttpClientConfig,
     pub file_download_http_client_config: HttpClientConfig,
 }
 
@@ -353,7 +352,6 @@ impl From<&Profile> for ClientConfig {
             worker_url,
             service_http_client_config: HttpClientConfig::new_for_service_calls(allow_insecure),
             invoke_http_client_config: HttpClientConfig::new_for_invoke(allow_insecure),
-            health_check_http_client_config: HttpClientConfig::new_for_health_check(allow_insecure),
             file_download_http_client_config: HttpClientConfig::new_for_file_download(
                 allow_insecure,
             ),
@@ -405,7 +403,6 @@ impl From<&Server> for ClientConfig {
             worker_url,
             service_http_client_config: HttpClientConfig::new_for_service_calls(allow_insecure),
             invoke_http_client_config: HttpClientConfig::new_for_invoke(allow_insecure),
-            health_check_http_client_config: HttpClientConfig::new_for_health_check(allow_insecure),
             file_download_http_client_config: HttpClientConfig::new_for_file_download(
                 allow_insecure,
             ),
@@ -440,16 +437,6 @@ impl HttpClientConfig {
             read_timeout: None,
         }
         .with_env_overrides("GOLEM_HTTP_INVOKE")
-    }
-
-    pub fn new_for_health_check(allow_insecure: bool) -> Self {
-        Self {
-            allow_insecure,
-            timeout: Some(Duration::from_secs(2)),
-            connect_timeout: Some(Duration::from_secs(1)),
-            read_timeout: Some(Duration::from_secs(1)),
-        }
-        .with_env_overrides("GOLEM_HTTP_HEALTHCHECK")
     }
 
     pub fn new_for_file_download(allow_insecure: bool) -> Self {

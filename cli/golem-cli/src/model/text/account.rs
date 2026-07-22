@@ -248,22 +248,3 @@ impl TextOutput for PermissionShareListView {
 impl StructuredOutput for PermissionShareListView {
     const KIND: &'static str = "account.permission-share.list";
 }
-
-// TODO: atomic
-/*
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
-pub struct GrantGetView(pub Vec<Role>);
-
-impl TextRender for GrantGetView {
-    fn log(&self) {
-        if self.0.is_empty() {
-            logln("No roles granted")
-        } else {
-            logln("Granted roles:");
-            for role in &self.0 {
-                logln(format!("  - {role}"));
-            }
-        }
-    }
-}
-*/

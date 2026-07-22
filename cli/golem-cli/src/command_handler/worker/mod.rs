@@ -325,7 +325,7 @@ impl WorkerCommandHandler {
         logln("");
         self.ctx.log_handler().log_output(WorkerCreateView {
             component_name: agent_name_match.component_name,
-            agent_name: Some(display_agent_name),
+            agent_name: display_agent_name,
         })?;
 
         Ok(())
@@ -501,6 +501,7 @@ impl WorkerCommandHandler {
                 stream_args.into(),
                 self.ctx.allow_insecure(),
                 self.ctx.format(),
+                self.ctx.agent_stream_ping_interval(),
                 if trigger {
                     None
                 } else {
@@ -589,6 +590,7 @@ impl WorkerCommandHandler {
             stream_args.into(),
             self.ctx.allow_insecure(),
             self.ctx.format(),
+            self.ctx.agent_stream_ping_interval(),
             None,
         )
         .await?;
@@ -646,6 +648,7 @@ impl WorkerCommandHandler {
             stream_args.into(),
             self.ctx.allow_insecure(),
             self.ctx.format(),
+            self.ctx.agent_stream_ping_interval(),
             Some(idempotency_key),
         )
         .await?;

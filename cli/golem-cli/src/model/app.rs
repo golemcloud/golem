@@ -1731,18 +1731,12 @@ impl<'a> Component<'a> {
         self.component_name
     }
 
-    // TODO: FCL: cleanup this, and make lang ids reserved for template names
+    // Guesses the language from the applied language templates, which are named after the
+    // language id they provide (see `GuestLanguage::from_id_string`).
     pub fn guess_language(&self) -> Option<GuestLanguage> {
-        self.applied_layers().iter().find_map(|(id, _)| {
-            id.template_name()
-                .and_then(|template_name| match template_name {
-                    "ts" => Some(GuestLanguage::TypeScript),
-                    "rust" => Some(GuestLanguage::Rust),
-                    "scala" => Some(GuestLanguage::Scala),
-                    "moonbit" => Some(GuestLanguage::MoonBit),
-                    _ => None,
-                })
-        })
+        self.applied_layers()
+            .iter()
+            .find_map(|(id, _)| id.template_name().and_then(GuestLanguage::from_id_string))
     }
 
     pub fn source(&self) -> &Path {
@@ -3748,6 +3742,7 @@ mod app_builder {
                         component_dir,
                         &component_layer_properties,
                     );
+                    Self::validate_unique_file_targets(validation, &component_properties);
                     self.validate_component_dependencies(
                         validation,
                         &component_name,
@@ -3759,6 +3754,32 @@ mod app_builder {
                     );
                 }
                 Err(err) => validation.add_error(format!("Failed to resolve component: {err}")),
+            }
+        }
+
+        // Manifest-time check for duplicate IFS target paths. This catches obvious
+        // collisions between literal file entries early (before deploy). Directory sources
+        // are only expanded at build time, so `ifs::validate_unique_targets` remains the
+        // backstop for collisions that only appear after expansion.
+        fn validate_unique_file_targets(
+            validation: &mut ValidationBuilder,
+            component_properties: &ComponentProperties,
+        ) {
+            let duplicate_targets = component_properties
+                .files
+                .iter()
+                .map(|file| &file.target.path)
+                .counts()
+                .into_iter()
+                .filter(|&(_, count)| count > 1)
+                .map(|(path, _)| path.to_string())
+                .collect::<Vec<_>>();
+
+            if !duplicate_targets.is_empty() {
+                validation.add_error(format!(
+                    "Multiple initial component files map to the same target path: {}",
+                    duplicate_targets.into_iter().join(", ")
+                ));
             }
         }
 
@@ -4616,6 +4637,33 @@ mod test {
         assert_eq!(errors.len(), 1);
         assert!(
             errors[0].contains("depends on unknown component app:missing"),
+            "unexpected error: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn component_files_reject_duplicate_target_paths() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                files:
+                  - sourcePath: a.txt
+                    targetPath: /data/shared.txt
+                  - sourcePath: b.txt
+                    targetPath: /data/shared.txt
+        "# });
+
+        assert_eq!(errors.len(), 1, "unexpected errors: {errors:?}");
+        assert!(
+            errors[0].contains("same target path") && errors[0].contains("/data/shared.txt"),
             "unexpected error: {}",
             errors[0]
         );

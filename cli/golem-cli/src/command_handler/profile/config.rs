@@ -17,9 +17,12 @@ use crate::command_handler::Handlers;
 use crate::config::{Config, ProfileName};
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
-use crate::log::log_action;
 use crate::log::log_error;
+use crate::log::logln;
+use crate::log::log_action;
 use crate::model::format::Format;
+use crate::model::text::fmt::log_text_view;
+use crate::model::text::help::AvailableProfileNamesHelp;
 use crate::model::text::profile::ProfileConfigSetFormatResult;
 use anyhow::bail;
 use std::sync::Arc;
@@ -72,7 +75,10 @@ impl ProfileConfigCommandHandler {
             }
             None => {
                 log_error(format!("Profile {profile_name} not found"));
-                // TODO: show available profiles
+                logln("");
+                log_text_view(&AvailableProfileNamesHelp::from_config_dir(
+                    self.ctx.config_dir(),
+                )?);
                 bail!(NonSuccessfulExit);
             }
         }

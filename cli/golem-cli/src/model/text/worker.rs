@@ -52,26 +52,17 @@ use std::fmt::Write;
 #[serde(rename_all = "camelCase")]
 pub struct WorkerCreateView {
     pub component_name: ComponentName,
-    pub agent_name: Option<RawAgentId>,
+    pub agent_name: RawAgentId,
 }
 
 impl Masked for WorkerCreateView {}
 
 impl MessageWithFields for WorkerCreateView {
     fn message(&self) -> String {
-        if let Some(agent_name) = &self.agent_name {
-            format!(
-                "Created new agent {}",
-                format_message_highlight(&agent_name)
-            )
-        } else {
-            // TODO: review: do we really want to hide the worker name? it is provided now
-            //       in "worker new"
-            format!(
-                "Created new agent with a {}",
-                format_message_highlight("random generated name")
-            )
-        }
+        format!(
+            "Created new agent {}",
+            format_message_highlight(&self.agent_name)
+        )
     }
 
     fn fields(&self) -> Vec<(String, String)> {
@@ -79,7 +70,7 @@ impl MessageWithFields for WorkerCreateView {
 
         fields
             .fmt_field("Component name", &self.component_name, format_id)
-            .fmt_field_option("Agent name", &self.agent_name, format_agent_name);
+            .fmt_field("Agent name", &self.agent_name, format_agent_name);
 
         fields.build()
     }
