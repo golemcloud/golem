@@ -53,7 +53,7 @@ use golem_common::model::card::{
     CardHolder, CardId, CardManagedBy, CardManagedByRuntimeDerived, CardParseError,
     CardResourcePattern, CardVerb, ClassPermissionTarget, DelegationSurface, EffectiveSurface,
     PermissionPattern, PermissionTarget, PolymorphicCard, PolymorphicPermissionPattern,
-    RenderedPermissionFields, StoredCard, WalletDerivationParent,
+    RenderedPermissionFields, ScopeCard, StoredCard, WalletDerivationParent,
     agent_delegation_surface_from_wallet, instantiate_polymorphic_card_for_agent,
     monomorphize_card_for_agent, parse_permission_fields, permission_class_metadata,
 };
@@ -78,23 +78,103 @@ use uuid::Uuid;
 use wasmtime::component::Resource;
 
 #[derive(Clone, Debug)]
-struct PermissionCardEntry {
-    snapshot: PermissionCardValuePayload,
-    card: Option<StoredCard>,
+enum PermissionCardEntry {
+    Persistent {
+        snapshot: PermissionCardValuePayload,
+        card: Option<StoredCard>,
+    },
+    Scope(ScopeCard),
 }
 
 impl PermissionCardEntry {
     fn from_card(card: StoredCard) -> Self {
-        Self {
+        Self::Persistent {
             snapshot: snapshot_from_card(&card),
             card: Some(card),
         }
     }
 
     fn from_snapshot(snapshot: PermissionCardValuePayload) -> Self {
-        Self {
+        Self::Persistent {
             snapshot,
             card: None,
+        }
+    }
+
+    fn snapshot(&self) -> Result<PermissionCardValuePayload, WorkerExecutorError> {
+        match self {
+            Self::Persistent { snapshot, .. } => Ok(snapshot.clone()),
+            Self::Scope(_) => Err(scope_card_snapshot_error()),
+        }
+    }
+
+    fn into_snapshot(self) -> Result<PermissionCardValuePayload, WorkerExecutorError> {
+        match self {
+            Self::Persistent { snapshot, .. } => Ok(snapshot),
+            Self::Scope(_) => Err(scope_card_snapshot_error()),
+        }
+    }
+
+    fn cached_card(&self) -> Option<StoredCard> {
+        match self {
+            Self::Persistent { card, .. } => card.clone(),
+            Self::Scope(_) => None,
+        }
+    }
+
+    fn scope_card(&self) -> Option<&ScopeCard> {
+        match self {
+            Self::Persistent { .. } => None,
+            Self::Scope(card) => Some(card),
+        }
+    }
+}
+
+impl From<ScopeCard> for PermissionCardEntry {
+    fn from(card: ScopeCard) -> Self {
+        Self::Scope(card)
+    }
+}
+
+#[derive(Clone, Debug)]
+enum ResolvedPermissionCard {
+    Persistent(StoredCard),
+    Scope(ScopeCard),
+}
+
+impl ResolvedPermissionCard {
+    fn card_id(&self) -> CardId {
+        match self {
+            Self::Persistent(card) => card.card_id(),
+            Self::Scope(card) => card.scope_card_id,
+        }
+    }
+
+    fn parent_ids(&self) -> &[CardId] {
+        match self {
+            Self::Persistent(card) => card.parent_ids(),
+            Self::Scope(card) => &card.root_card_ids,
+        }
+    }
+
+    fn expires_at(&self) -> Option<DateTime<Utc>> {
+        match self {
+            Self::Persistent(card) => card.expires_at(),
+            Self::Scope(_) => None,
+        }
+    }
+
+    fn is_polymorphic(&self) -> bool {
+        matches!(self, Self::Persistent(StoredCard::Polymorphic(_)))
+    }
+
+    fn into_persistent(
+        self,
+        operation: &'static str,
+    ) -> Result<StoredCard, permissions_types::PermissionError> {
+        match self {
+            Self::Persistent(card) => Ok(card),
+            Self::Scope(_) => Err(scope_card_operation_error(operation)),
         }
     }
 }
@@ -153,11 +233,23 @@ fn invalid_handle_error(error: impl std::fmt::Display) -> WorkerExecutorError {
     WorkerExecutorError::runtime(format!("invalid permission-card handle: {error}"))
 }
 
+fn scope_card_snapshot_error() -> WorkerExecutorError {
+    WorkerExecutorError::runtime(
+        "scope-card handles cannot be serialized as persistent permission-card snapshots",
+    )
+}
+
+fn scope_card_operation_error(operation: &'static str) -> permissions_types::PermissionError {
+    permissions_types::PermissionError::NotPermitted(format!(
+        "{operation} does not accept scope cards"
+    ))
+}
+
 fn permission_card_snapshot_from_rep(
     rep: &PermissionCardHandleRep,
 ) -> Result<PermissionCardValuePayload, WorkerExecutorError> {
     if let Some(entry) = rep.downcast_ref::<PermissionCardEntry>() {
-        Ok(entry.snapshot.clone())
+        entry.snapshot()
     } else if let Some(snapshot) = rep.downcast_ref::<PermissionCardValuePayload>() {
         Ok(snapshot.clone())
     } else {
@@ -182,7 +274,18 @@ fn permission_card_cached_card<Ctx: WorkerCtx>(
     let rep = ctx.table().get(handle).map_err(invalid_handle_error)?;
     Ok(rep
         .downcast_ref::<PermissionCardEntry>()
-        .and_then(|entry| entry.card.clone()))
+        .and_then(PermissionCardEntry::cached_card))
+}
+
+fn permission_card_scope_card<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: &Resource<PermissionCardHandleRep>,
+) -> Result<Option<ScopeCard>, WorkerExecutorError> {
+    let rep = ctx.table().get(handle).map_err(invalid_handle_error)?;
+    Ok(rep
+        .downcast_ref::<PermissionCardEntry>()
+        .and_then(PermissionCardEntry::scope_card)
+        .cloned())
 }
 
 async fn resolve_permission_card<Ctx: WorkerCtx>(
@@ -241,11 +344,28 @@ async fn resolve_permission_card<Ctx: WorkerCtx>(
     }
 }
 
-async fn resolve_permission_card_or_trap<Ctx: WorkerCtx>(
+async fn resolve_permission_card_handle<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     handle: &Resource<PermissionCardHandleRep>,
-) -> anyhow::Result<StoredCard> {
-    resolve_permission_card(ctx, handle)
+) -> Result<ResolvedPermissionCard, permissions_types::PermissionError> {
+    let scope_card = permission_card_scope_card(ctx, handle).map_err(|error| {
+        permissions_types::PermissionError::NotPermitted(format!(
+            "invalid permission-card handle: {error}"
+        ))
+    })?;
+    match scope_card {
+        Some(card) => Ok(ResolvedPermissionCard::Scope(card)),
+        None => resolve_permission_card(ctx, handle)
+            .await
+            .map(ResolvedPermissionCard::Persistent),
+    }
+}
+
+async fn resolve_permission_card_handle_or_trap<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: &Resource<PermissionCardHandleRep>,
+) -> anyhow::Result<ResolvedPermissionCard> {
+    resolve_permission_card_handle(ctx, handle)
         .await
         .map_err(permission_error_to_anyhow)
 }
@@ -324,20 +444,30 @@ fn polymorphic_pattern_grants(
 }
 
 fn card_view(
-    card: &StoredCard,
+    card: &ResolvedPermissionCard,
 ) -> Result<permissions_types::CardView, permissions_types::PermissionError> {
     match card {
-        StoredCard::Concrete(card) => Ok(permissions_types::CardView {
+        ResolvedPermissionCard::Persistent(StoredCard::Concrete(card)) => {
+            Ok(permissions_types::CardView {
+                lower_positive: concrete_pattern_grants(&card.lower_positive)?,
+                lower_negative: concrete_pattern_grants(&card.lower_negative)?,
+                upper_positive: concrete_pattern_grants(&card.upper_positive)?,
+                upper_negative: concrete_pattern_grants(&card.upper_negative)?,
+            })
+        }
+        ResolvedPermissionCard::Persistent(StoredCard::Polymorphic(card)) => {
+            Ok(permissions_types::CardView {
+                lower_positive: polymorphic_pattern_grants(&card.lower_positive)?,
+                lower_negative: polymorphic_pattern_grants(&card.lower_negative)?,
+                upper_positive: polymorphic_pattern_grants(&card.upper_positive)?,
+                upper_negative: polymorphic_pattern_grants(&card.upper_negative)?,
+            })
+        }
+        ResolvedPermissionCard::Scope(card) => Ok(permissions_types::CardView {
             lower_positive: concrete_pattern_grants(&card.lower_positive)?,
             lower_negative: concrete_pattern_grants(&card.lower_negative)?,
             upper_positive: concrete_pattern_grants(&card.upper_positive)?,
             upper_negative: concrete_pattern_grants(&card.upper_negative)?,
-        }),
-        StoredCard::Polymorphic(card) => Ok(permissions_types::CardView {
-            lower_positive: polymorphic_pattern_grants(&card.lower_positive)?,
-            lower_negative: polymorphic_pattern_grants(&card.lower_negative)?,
-            upper_positive: polymorphic_pattern_grants(&card.upper_positive)?,
-            upper_negative: polymorphic_pattern_grants(&card.upper_negative)?,
         }),
     }
 }
@@ -1808,7 +1938,7 @@ impl<Ctx: WorkerCtx> PermissionCardResolver for DurableWorkerCtx<Ctx> {
     ) -> Result<PermissionCardValuePayload, Self::Error> {
         let rep = self.table().delete(handle).map_err(invalid_handle_error)?;
         match rep.into_payload::<PermissionCardEntry>() {
-            Ok(entry) => Ok(entry.snapshot),
+            Ok(entry) => entry.into_snapshot(),
             Err(rep) => rep
                 .into_payload::<PermissionCardValuePayload>()
                 .map_err(|_| {
@@ -1856,7 +1986,7 @@ impl<Ctx: WorkerCtx> permissions_types::Host for DurableWorkerCtx<Ctx> {
         c: Resource<PermissionCardHandleRep>,
     ) -> anyhow::Result<permissions_types::CardId> {
         DurabilityHost::observe_function_call(self, "golem::permissions::types", "id");
-        let card = resolve_permission_card_or_trap(self, &c).await?;
+        let card = resolve_permission_card_handle_or_trap(self, &c).await?;
         Ok(card.card_id().into())
     }
 
@@ -1865,7 +1995,7 @@ impl<Ctx: WorkerCtx> permissions_types::Host for DurableWorkerCtx<Ctx> {
         c: Resource<PermissionCardHandleRep>,
     ) -> anyhow::Result<Vec<permissions_types::CardId>> {
         DurabilityHost::observe_function_call(self, "golem::permissions::types", "parents");
-        let card = resolve_permission_card_or_trap(self, &c).await?;
+        let card = resolve_permission_card_handle_or_trap(self, &c).await?;
         Ok(card.parent_ids().iter().copied().map(Into::into).collect())
     }
 
@@ -1874,7 +2004,7 @@ impl<Ctx: WorkerCtx> permissions_types::Host for DurableWorkerCtx<Ctx> {
         c: Resource<PermissionCardHandleRep>,
     ) -> anyhow::Result<Option<permissions_types::Timestamp>> {
         DurabilityHost::observe_function_call(self, "golem::permissions::types", "expires-at");
-        let card = resolve_permission_card_or_trap(self, &c).await?;
+        let card = resolve_permission_card_handle_or_trap(self, &c).await?;
         Ok(card.expires_at().map(Into::into))
     }
 
@@ -1883,8 +2013,8 @@ impl<Ctx: WorkerCtx> permissions_types::Host for DurableWorkerCtx<Ctx> {
         c: Resource<PermissionCardHandleRep>,
     ) -> anyhow::Result<bool> {
         DurabilityHost::observe_function_call(self, "golem::permissions::types", "is-polymorphic");
-        let card = resolve_permission_card_or_trap(self, &c).await?;
-        Ok(matches!(card, StoredCard::Polymorphic(_)))
+        let card = resolve_permission_card_handle_or_trap(self, &c).await?;
+        Ok(card.is_polymorphic())
     }
 }
 
@@ -1897,7 +2027,7 @@ impl<Ctx: WorkerCtx> permissions_inspect::Host for DurableWorkerCtx<Ctx> {
         DurabilityHost::observe_function_call(self, "golem::permissions::inspect", "inspect-card");
         let result = async {
             ensure_card_permission(self, CardVerb::Inspect, CardResourcePattern::Any)?;
-            let card = resolve_permission_card(self, &c).await?;
+            let card = resolve_permission_card_handle(self, &c).await?;
             card_view(&card)
         }
         .await;
@@ -1920,7 +2050,9 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
 
         async {
             ensure_card_permission(self, CardVerb::Derive, CardResourcePattern::Any)?;
-            let parent = resolve_permission_card(self, &parent).await?;
+            let parent = resolve_permission_card_handle(self, &parent)
+                .await?
+                .into_persistent("derive")?;
             let StoredCard::Concrete(parent) = parent else {
                 return Ok(Err(
                     permissions_types::PermissionError::CardPolymorphicNotUsable(
@@ -1993,7 +2125,10 @@ impl<Ctx: WorkerCtx> permissions_revoke::Host for DurableWorkerCtx<Ctx> {
         c: Resource<PermissionCardHandleRep>,
     ) -> anyhow::Result<Result<u32, permissions_types::PermissionError>> {
         DurabilityHost::observe_function_call(self, "golem::permissions::revoke", "revoke-card");
-        let result = revoke_and_persist_card(self, &c).await;
+        let result = match permission_card_scope_card(self, &c) {
+            Ok(Some(_)) => Ok(Err(scope_card_operation_error("revoke-card"))),
+            Ok(None) | Err(_) => revoke_and_persist_card(self, &c).await,
+        };
         self.drop_permission_card_handle(c);
         result
     }
@@ -2038,8 +2173,11 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                 Ok(target) => target,
                 Err(error) => return Ok(Err(error)),
             };
-            let source_card = match resolve_permission_card(self, &card).await {
-                Ok(card) => card,
+            let source_card = match resolve_permission_card_handle(self, &card).await {
+                Ok(card) => match card.into_persistent("install-card") {
+                    Ok(card) => card,
+                    Err(error) => return Ok(Err(error)),
+                },
                 Err(error) => return Ok(Err(error)),
             };
             let target = match resolve_install_target_context(self, target).await {
@@ -2194,6 +2332,106 @@ mod tests {
             verb: "read".to_string(),
             resource_id: "/data/**".to_string(),
         }
+    }
+
+    fn scope_card(card_id: CardId, root_card_ids: Vec<CardId>) -> ScopeCard {
+        let grant = parse_pattern_grant(&valid_filesystem_grant()).unwrap();
+        ScopeCard {
+            scope_card_id: card_id,
+            root_card_ids,
+            lower_positive: vec![grant.clone()],
+            lower_negative: vec![grant.clone()],
+            upper_positive: vec![grant.clone()],
+            upper_negative: vec![grant],
+        }
+    }
+
+    fn comparable_grants(
+        grants: &[permissions_types::PatternGrant],
+    ) -> Vec<(String, String, String, String, String)> {
+        grants
+            .iter()
+            .map(|grant| {
+                (
+                    grant.class.clone(),
+                    grant.owner.clone(),
+                    grant.recipient.clone(),
+                    grant.verb.clone(),
+                    grant.resource_id.clone(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn scope_and_persistent_cards_share_the_metadata_and_inspection_shape() {
+        let card_id = CardId(Uuid::from_u128(10));
+        let parent_ids = vec![CardId(Uuid::from_u128(1)), CardId(Uuid::from_u128(2))];
+        let scope = scope_card(card_id, parent_ids.clone());
+        let persistent = StoredCard::Concrete(Card {
+            card_id,
+            parent_ids,
+            lower_positive: scope.lower_positive.clone(),
+            lower_negative: scope.lower_negative.clone(),
+            upper_positive: scope.upper_positive.clone(),
+            upper_negative: scope.upper_negative.clone(),
+            created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        });
+        let persistent = ResolvedPermissionCard::Persistent(persistent);
+        let scope = ResolvedPermissionCard::Scope(scope);
+
+        assert_eq!(scope.card_id(), persistent.card_id());
+        assert_eq!(scope.parent_ids(), persistent.parent_ids());
+        assert_eq!(scope.expires_at(), persistent.expires_at());
+        assert_eq!(scope.is_polymorphic(), persistent.is_polymorphic());
+
+        let persistent_view = card_view(&persistent).unwrap();
+        let scope_view = card_view(&scope).unwrap();
+        assert_eq!(
+            comparable_grants(&scope_view.lower_positive),
+            comparable_grants(&persistent_view.lower_positive)
+        );
+        assert_eq!(
+            comparable_grants(&scope_view.lower_negative),
+            comparable_grants(&persistent_view.lower_negative)
+        );
+        assert_eq!(
+            comparable_grants(&scope_view.upper_positive),
+            comparable_grants(&persistent_view.upper_positive)
+        );
+        assert_eq!(
+            comparable_grants(&scope_view.upper_negative),
+            comparable_grants(&persistent_view.upper_negative)
+        );
+    }
+
+    #[test]
+    fn persistent_operations_reject_scope_cards() {
+        let scope = scope_card(CardId(Uuid::from_u128(10)), Vec::new());
+
+        for operation in ["derive", "revoke-card", "install-card"] {
+            assert!(matches!(
+                ResolvedPermissionCard::Scope(scope.clone()).into_persistent(operation),
+                Err(permissions_types::PermissionError::NotPermitted(message))
+                    if message == format!("{operation} does not accept scope cards")
+            ));
+        }
+    }
+
+    #[test]
+    fn scope_cards_cannot_use_persistent_snapshot_transport() {
+        let entry = PermissionCardEntry::Scope(scope_card(
+            CardId(Uuid::from_u128(10)),
+            vec![CardId(Uuid::from_u128(1))],
+        ));
+
+        let error = entry.into_snapshot().unwrap_err();
+        assert!(error.to_string().contains(
+            "scope-card handles cannot be serialized as persistent permission-card snapshots"
+        ));
     }
 
     fn derive_authorization_surface() -> EffectiveSurface {

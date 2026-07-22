@@ -111,6 +111,16 @@ declare_structs! {
     }
 
     #[derive(Eq)]
+    pub struct ScopeCard {
+        pub scope_card_id: CardId,
+        pub root_card_ids: Vec<CardId>,
+        pub lower_positive: Vec<PermissionPattern>,
+        pub lower_negative: Vec<PermissionPattern>,
+        pub upper_positive: Vec<PermissionPattern>,
+        pub upper_negative: Vec<PermissionPattern>,
+    }
+
+    #[derive(Eq)]
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     pub struct PolymorphicCard {
         pub card_id: CardId,

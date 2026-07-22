@@ -358,6 +358,14 @@ impl Drop for StoreAliveGuard {
 const DERIVED_CARD_ID_CONTEXT: &str = "golem:permissions:derived-card-id:v1";
 const TRANSFER_ID_CONTEXT: &str = "golem:permissions:transfer-id:v1";
 const INSTALLED_CHILD_CARD_ID_CONTEXT: &str = "golem:permissions:installed-child-card-id:v1";
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "scope-card construction requires a validated invocation-local ordinal"
+    )
+)]
+const SCOPE_CARD_ID_CONTEXT: &str = "golem:permissions:scope-card-id:v1";
 const UUID_V7_MAX_TIMESTAMP: u64 = (1_u64 << 48) - 1;
 
 fn derive_permission_uuid(
@@ -366,8 +374,20 @@ fn derive_permission_uuid(
     invocation_key: &IdempotencyKey,
     oplog_index: OplogIndex,
 ) -> Uuid {
-    let oplog_index = oplog_index.as_u64();
+    derive_permission_uuid_for_sequence(
+        context,
+        owned_agent_id,
+        invocation_key,
+        oplog_index.as_u64(),
+    )
+}
 
+fn derive_permission_uuid_for_sequence(
+    context: &'static str,
+    owned_agent_id: &OwnedAgentId,
+    invocation_key: &IdempotencyKey,
+    sequence: u64,
+) -> Uuid {
     let agent_name = owned_agent_id.agent_id.agent_id.as_bytes();
     let invocation_key = invocation_key.value.as_bytes();
     let mut hasher = blake3::Hasher::new_derive_key(context);
@@ -377,10 +397,10 @@ fn derive_permission_uuid(
     hasher.update(agent_name);
     hasher.update(&(invocation_key.len() as u64).to_be_bytes());
     hasher.update(invocation_key);
-    hasher.update(&oplog_index.to_be_bytes());
+    hasher.update(&sequence.to_be_bytes());
 
     let mut bytes = [0_u8; 16];
-    let timestamp = oplog_index.min(UUID_V7_MAX_TIMESTAMP);
+    let timestamp = sequence.min(UUID_V7_MAX_TIMESTAMP);
     bytes[..6].copy_from_slice(&timestamp.to_be_bytes()[2..]);
     bytes[6..].copy_from_slice(&hasher.finalize().as_bytes()[..10]);
     bytes[6] = (bytes[6] & 0x0f) | 0x70;
@@ -425,6 +445,23 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &self.owned_agent_id,
             invocation_key,
             oplog_index,
+        ))
+    }
+
+    #[expect(
+        dead_code,
+        reason = "scope-card construction requires a validated invocation-local ordinal"
+    )]
+    pub(crate) fn derive_scope_card_id(
+        &self,
+        invocation_key: &IdempotencyKey,
+        ordinal: u64,
+    ) -> CardId {
+        CardId(derive_permission_uuid_for_sequence(
+            SCOPE_CARD_ID_CONTEXT,
+            &self.owned_agent_id,
+            invocation_key,
+            ordinal,
         ))
     }
 
@@ -4883,6 +4920,12 @@ mod tests {
             &invocation_key,
             oplog_index,
         );
+        let scope_card_id = derive_permission_uuid_for_sequence(
+            SCOPE_CARD_ID_CONTEXT,
+            &owned_agent_id,
+            &invocation_key,
+            42,
+        );
 
         assert_eq!(
             card_id,
@@ -4896,8 +4939,14 @@ mod tests {
             installed_child_id,
             Uuid::parse_str("00000000-002a-7607-aaa4-0b04c840169d").unwrap()
         );
+        assert_eq!(
+            scope_card_id,
+            Uuid::parse_str("00000000-002a-7680-bbdb-7f78bd28fc43").unwrap()
+        );
         assert_eq!(card_id.as_bytes()[6] >> 4, 7);
         assert_eq!(card_id.as_bytes()[8] >> 6, 2);
+        assert_eq!(scope_card_id.as_bytes()[6] >> 4, 7);
+        assert_eq!(scope_card_id.as_bytes()[8] >> 6, 2);
     }
 
     #[test]
@@ -4914,6 +4963,23 @@ mod tests {
 
         assert!(derive(41) < derive(42));
         assert!(derive(42) < derive(43));
+    }
+
+    #[test]
+    fn scope_card_ids_follow_the_invocation_local_ordinal() {
+        let (owned_agent_id, invocation_key) = permission_id_test_inputs();
+        let derive = |ordinal| {
+            derive_permission_uuid_for_sequence(
+                SCOPE_CARD_ID_CONTEXT,
+                &owned_agent_id,
+                &invocation_key,
+                ordinal,
+            )
+        };
+
+        assert!(derive(0) < derive(1));
+        assert!(derive(1) < derive(2));
+        assert_ne!(derive(0), derive(1));
     }
 
     #[test]
@@ -4966,9 +5032,15 @@ mod tests {
                 &invocation_key,
                 oplog_index,
             ),
+            derive_permission_uuid_for_sequence(
+                SCOPE_CARD_ID_CONTEXT,
+                &owned_agent_id,
+                &invocation_key,
+                oplog_index.as_u64(),
+            ),
         ];
 
-        assert_eq!(ids.into_iter().collect::<HashSet<_>>().len(), 3);
+        assert_eq!(ids.into_iter().collect::<HashSet<_>>().len(), 4);
     }
 
     #[test]
