@@ -269,3 +269,54 @@ func TestWorkerRunsOneOfSeveralAgentTypes(t *testing.T) {
 		t.Fatal("unknown agent type should map to invalid-type")
 	}
 }
+
+// Regression: a method whose declared output is an interface (a variant) must
+// keep that declared type through encoding. reflect.ValueOf on an interface
+// yields the concrete type it holds, so encoding the handler result directly
+// would look up the wrong codec.
+var tPay = DefineMethod[tEchoId, Unit, PaymentMethod]("pay")
+
+func init() {
+	Implement(tEcho, tPay, func(*Context[tEchoState], Unit) (PaymentMethod, error) {
+		return Transfer{IBAN: "GB33"}, nil
+	})
+}
+
+func TestVariantTypedMethodOutputRoundTripsThroughTheExports(t *testing.T) {
+	active = nil
+	if res := guestExports.Initialize("TestEcho", params(types.MakeSchemaValueNodeStringValue("> ")),
+		common.MakePrincipalAnonymous()); res.IsErr() {
+		t.Fatalf("initialize failed: %v", res.Err())
+	}
+
+	out := guestExports.Invoke("pay", params(), common.MakePrincipalAnonymous())
+	if out.IsErr() {
+		t.Fatalf("pay errored: %v", out.Err())
+	}
+	tree := out.Ok().Some()
+	node := tree.ValueNodes[tree.Root]
+	if node.Tag() != types.SchemaValueNodeVariantValue {
+		t.Fatalf("expected a variant value, got tag %d", node.Tag())
+	}
+	if got := node.VariantValue().Case; got != 2 {
+		t.Fatalf("case index = %d, want 2 (transfer)", got)
+	}
+
+	// and the published schema agrees
+	def := guestExports.GetDefinition()
+	var pay *common.AgentMethod
+	for i := range def.Methods {
+		if def.Methods[i].Name == "pay" {
+			pay = &def.Methods[i]
+		}
+	}
+	if pay == nil {
+		t.Fatal("method pay missing from the definition")
+	}
+	if pay.OutputSchema.Tag() != common.OutputSchemaSingle {
+		t.Fatal("pay should declare a single output")
+	}
+	if body := def.Schema.TypeNodes[pay.OutputSchema.Single()].Body; body.Tag() != types.SchemaTypeBodyVariantType {
+		t.Fatalf("pay output type tag = %d, want variant", body.Tag())
+	}
+}

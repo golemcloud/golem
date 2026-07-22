@@ -114,7 +114,9 @@ func roundTrip[T any](t *testing.T, in T) T {
 	t.Helper()
 	c := compile(reflect.TypeFor[T]())
 
-	tree := encodeWith(c, reflect.ValueOf(in))
+	// &in, not in: reflect.ValueOf would unwrap an interface-typed T to its
+	// concrete type, which is exactly what a variant must not lose.
+	tree := encodeWith(c, reflect.ValueOf(&in).Elem())
 
 	var g graphBuilder
 	root := g.node(c)
@@ -377,5 +379,129 @@ func TestNilSliceDecodesAsEmptySlice(t *testing.T) {
 	type withMap struct{ M map[string]int64 }
 	if m := roundTrip(t, withMap{M: nil}); m.M == nil || len(m.M) != 0 {
 		t.Fatalf("expected a non-nil empty map, got %#v", m.M)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// variants and enums
+// ---------------------------------------------------------------------------
+
+// A closed sum type: the unexported marker method means no type outside this
+// package can join the variant.
+type PaymentMethod interface{ isPaymentMethod() }
+
+type Card struct {
+	Number string
+	Expiry Status
+}
+type Cash struct{}
+type Transfer struct{ IBAN string }
+
+func (Card) isPaymentMethod()     {}
+func (Cash) isPaymentMethod()     {}
+func (Transfer) isPaymentMethod() {}
+
+type Status int32
+
+const (
+	StatusActive Status = iota
+	StatusExpired
+	StatusRevoked
+)
+
+var _ = DefineEnum[Status]("active", "expired", "revoked")
+
+var _ = DefineVariant[PaymentMethod](
+	Case[Card]("card"),
+	Case[Cash]("cash"),
+	Case[Transfer]("transfer"),
+)
+
+func TestRoundTripVariantAndEnum(t *testing.T) {
+	assertRoundTrip(t, "enum", StatusExpired)
+	assertRoundTrip(t, "variant (card)", PaymentMethod(Card{Number: "4242", Expiry: StatusActive}))
+	assertRoundTrip(t, "variant (empty case)", PaymentMethod(Cash{}))
+	assertRoundTrip(t, "variant (transfer)", PaymentMethod(Transfer{IBAN: "DE00"}))
+
+	// Variants compose with everything else, which is the point of the codec design.
+	assertRoundTrip(t, "option<variant>", Some(PaymentMethod(Cash{})))
+	assertRoundTrip(t, "none of variant", None[PaymentMethod]())
+	assertRoundTrip(t, "list<variant>", []PaymentMethod{
+		Card{Number: "1", Expiry: StatusRevoked}, Cash{}, Transfer{IBAN: "X"},
+	})
+	assertRoundTrip(t, "result<variant, enum>",
+		Ok[PaymentMethod, Status](Card{Number: "9", Expiry: StatusActive}))
+	assertRoundTrip(t, "err arm carrying an enum",
+		Err[PaymentMethod, Status](StatusRevoked))
+	assertRoundTrip(t, "map<string, variant>", map[string]PaymentMethod{
+		"a": Cash{}, "b": Transfer{IBAN: "Y"},
+	})
+}
+
+func TestVariantSchemaNamesCasesInDeclarationOrder(t *testing.T) {
+	var g graphBuilder
+	root := g.node(compile(reflect.TypeFor[PaymentMethod]()))
+	graph := g.build()
+
+	body := graph.TypeNodes[root].Body
+	if body.Tag() != types.SchemaTypeBodyVariantType {
+		t.Fatalf("expected a variant-type node, got tag %d", body.Tag())
+	}
+	var names []string
+	for _, c := range body.VariantType() {
+		names = append(names, c.Name)
+	}
+	want := []string{"card", "cash", "transfer"}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("variant cases = %v, want %v", names, want)
+	}
+}
+
+func TestEnumSchemaCarriesTheDeclaredNames(t *testing.T) {
+	var g graphBuilder
+	root := g.node(compile(reflect.TypeFor[Status]()))
+	graph := g.build()
+
+	body := graph.TypeNodes[root].Body
+	if body.Tag() != types.SchemaTypeBodyEnumType {
+		t.Fatalf("expected an enum-type node, got tag %d", body.Tag())
+	}
+	if want := []string{"active", "expired", "revoked"}; !reflect.DeepEqual(body.EnumType(), want) {
+		t.Fatalf("enum names = %v, want %v", body.EnumType(), want)
+	}
+}
+
+func TestVariantAndEnumMisuseIsRejected(t *testing.T) {
+	// An interface that was never declared as a variant.
+	type Unregistered interface{ marker() }
+	mustPanic(t, "not a registered variant", func() { compile(reflect.TypeFor[Unregistered]()) })
+
+	// A value outside the declared enum range must not be silently truncated.
+	c := compile(reflect.TypeFor[Status]())
+	mustPanic(t, "outside the declared enum range", func() {
+		encodeWith(c, reflect.ValueOf(Status(99)))
+	})
+
+	// A nil interface holds no case.
+	vc := compile(reflect.TypeFor[PaymentMethod]())
+	mustPanic(t, "must hold one of its cases", func() {
+		encodeWith(vc, reflect.ValueOf(&[]PaymentMethod{nil}[0]).Elem())
+	})
+
+	// Declaration-time validation.
+	mustPanic(t, "requires an interface type", func() { DefineVariant[Money]() })
+	mustPanic(t, "requires a named integer type", func() { DefineEnum[string]("a") })
+}
+
+// A decoded variant must be usable through its interface, not just structurally
+// equal — the decoder sets a concrete type into the interface slot.
+func TestDecodedVariantSatisfiesItsInterface(t *testing.T) {
+	got := roundTrip(t, PaymentMethod(Transfer{IBAN: "NL01"}))
+	tr, ok := got.(Transfer)
+	if !ok {
+		t.Fatalf("decoded value is %T, want Transfer", got)
+	}
+	if tr.IBAN != "NL01" {
+		t.Fatalf("IBAN = %q", tr.IBAN)
 	}
 }

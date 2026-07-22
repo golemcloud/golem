@@ -201,7 +201,10 @@ func Implement[Id any, S any, In any, Out any](
 		}
 
 		stage = stageEncode
-		encoded := encodeWith(me.outCodec, reflect.ValueOf(result))
+		// &result, not result: reflect.ValueOf unwraps an interface to the
+		// concrete type it holds, which would lose the declared type of a
+		// variant-typed output.
+		encoded := encodeWith(me.outCodec, reflect.ValueOf(&result).Elem())
 		return &encoded, nil
 	}
 

@@ -65,6 +65,17 @@ func compile(t reflect.Type) *codec {
 }
 
 func buildCodec(c *codec) {
+	// User-declared variants and enums are looked up before the kind switch:
+	// an enum is a named integer, which would otherwise compile as a plain
+	// integer, and a variant is an interface, which has no other meaning.
+	if d, ok := variantRegistry[c.typ]; ok {
+		compileVariant(c, d)
+		return
+	}
+	if d, ok := enumRegistry[c.typ]; ok {
+		compileEnum(c, d)
+		return
+	}
 	// SDK composite types are structs, so they must be recognised before the
 	// generic struct-as-record case. The check is an interface assertion on the
 	// zero value, done once here rather than per value.
@@ -180,6 +191,9 @@ func buildCodec(c *codec) {
 
 	case reflect.Int, reflect.Uint:
 		panic(fmt.Sprintf("golem: %s has a platform-dependent width; use a sized type such as int64/uint64", c.typ))
+
+	case reflect.Interface:
+		panic(fmt.Sprintf("golem: interface type %s is not a registered variant; declare it with golem.DefineVariant", c.typ))
 
 	default:
 		panic(fmt.Sprintf("golem: unsupported type %s (kind %s)", c.typ, c.typ.Kind()))
@@ -538,5 +552,115 @@ func compileResult(c *codec, okC, errC *codec) {
 			return fmt.Errorf("%s: ok arm carries no value", c.typ)
 		}
 		return okC.decode(d, setter.resultSetOk(), child.Some())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// variants and enums
+// ---------------------------------------------------------------------------
+
+func compileVariant(c *codec, d *variantDef) {
+	caseCodecs := make([]*codec, len(d.cases))
+	byType := make(map[reflect.Type]int, len(d.cases))
+	for i, cs := range d.cases {
+		caseCodecs[i] = compile(cs.typ)
+		byType[cs.typ] = i
+	}
+
+	c.body = func(g *graphBuilder) types.SchemaTypeBody {
+		out := make([]types.VariantCaseType, 0, len(d.cases))
+		for i, cs := range d.cases {
+			out = append(out, types.VariantCaseType{
+				Name:    cs.name,
+				Payload: witTypes.Some(g.node(caseCodecs[i])),
+			})
+		}
+		return types.MakeSchemaTypeBodyVariantType(out)
+	}
+
+	c.encode = func(b *valBuilder, v reflect.Value) int32 {
+		concrete := v
+		if v.Kind() == reflect.Interface {
+			if v.IsNil() {
+				panic(fmt.Sprintf("golem: nil %s cannot be encoded; a variant must hold one of its cases", c.typ))
+			}
+			concrete = v.Elem()
+		}
+		i, ok := byType[concrete.Type()]
+		if !ok {
+			panic(fmt.Sprintf("golem: %s is not a registered case of variant %s", concrete.Type(), c.typ))
+		}
+		payload := caseCodecs[i].encode(b, concrete)
+		return b.push(types.MakeSchemaValueNodeVariantValue(types.VariantValuePayload{
+			Case:    uint32(i),
+			Payload: witTypes.Some(payload),
+		}))
+	}
+
+	c.decode = func(dec *decoder, dst reflect.Value, idx int32) error {
+		n, err := dec.node(idx)
+		if err != nil {
+			return err
+		}
+		if n.Tag() != types.SchemaValueNodeVariantValue {
+			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.typ)
+		}
+		p := n.VariantValue()
+		if int(p.Case) >= len(d.cases) {
+			return fmt.Errorf("%s: case index %d out of range (%d cases)", c.typ, p.Case, len(d.cases))
+		}
+		if p.Payload.IsNone() {
+			return fmt.Errorf("%s: case %q carries no payload", c.typ, d.cases[p.Case].name)
+		}
+		out := reflect.New(d.cases[p.Case].typ).Elem()
+		if err := caseCodecs[p.Case].decode(dec, out, p.Payload.Some()); err != nil {
+			return fmt.Errorf("%s case %q: %w", c.typ, d.cases[p.Case].name, err)
+		}
+		dst.Set(out)
+		return nil
+	}
+}
+
+func compileEnum(c *codec, d *enumDef) {
+	signed := false
+	switch c.typ.Kind() {
+	case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		signed = true
+	}
+
+	c.body = func(*graphBuilder) types.SchemaTypeBody {
+		return types.MakeSchemaTypeBodyEnumType(d.names)
+	}
+	c.encode = func(b *valBuilder, v reflect.Value) int32 {
+		var i int64
+		if signed {
+			i = v.Int()
+		} else {
+			i = int64(v.Uint())
+		}
+		if i < 0 || int(i) >= len(d.names) {
+			panic(fmt.Sprintf("golem: %s value %d is outside the declared enum range 0..%d",
+				c.typ, i, len(d.names)-1))
+		}
+		return b.push(types.MakeSchemaValueNodeEnumValue(uint32(i)))
+	}
+	c.decode = func(dec *decoder, dst reflect.Value, idx int32) error {
+		n, err := dec.node(idx)
+		if err != nil {
+			return err
+		}
+		if n.Tag() != types.SchemaValueNodeEnumValue {
+			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.typ)
+		}
+		i := n.EnumValue()
+		if int(i) >= len(d.names) {
+			return fmt.Errorf("%s: enum index %d out of range (%d names)", c.typ, i, len(d.names))
+		}
+		if signed {
+			dst.SetInt(int64(i))
+		} else {
+			dst.SetUint(uint64(i))
+		}
+		return nil
 	}
 }
