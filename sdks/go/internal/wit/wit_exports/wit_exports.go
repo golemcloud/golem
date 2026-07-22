@@ -32,9 +32,9 @@
 package wit_exports
 
 import (
-	"github.com/golemcloud/golem-go/internal/wit/export_golem_agent_guest"
-	"github.com/golemcloud/golem-go/internal/wit/export_golem_api_load_snapshot"
-	"github.com/golemcloud/golem-go/internal/wit/export_golem_api_save_snapshot"
+	"github.com/golemcloud/golem-go/internal/exports/export_golem_agent_guest"
+	"github.com/golemcloud/golem-go/internal/exports/export_golem_api_load_snapshot"
+	"github.com/golemcloud/golem-go/internal/exports/export_golem_api_save_snapshot"
 	"github.com/golemcloud/golem-go/internal/wit/golem_agent_common"
 	"github.com/golemcloud/golem-go/internal/wit/golem_api_host"
 	"github.com/golemcloud/golem-go/internal/wit/golem_core_types"

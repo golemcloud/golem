@@ -1,4 +1,4 @@
-module smoke
+module counter
 
 go 1.25.5
 
