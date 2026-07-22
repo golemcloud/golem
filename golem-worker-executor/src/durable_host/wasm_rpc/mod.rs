@@ -606,7 +606,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &idempotency_key,
         )?;
 
-        if remote_agent_id == own_agent_id {
+        // Self-call is only rejected for durable targets: an ephemeral
+        // invocation always creates a new instance with a freshly derived
+        // identity, so it can never target the caller's own invocation queue.
+        if ephemeral_logical_agent_id.is_none() && remote_agent_id == own_agent_id {
             return Err(anyhow::anyhow!(
                 "RPC calls to the same agent are not supported"
             ));

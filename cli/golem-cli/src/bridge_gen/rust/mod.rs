@@ -435,6 +435,11 @@ impl RustBridgeGenerator {
             quote! {}
         };
 
+        let new_phantom_doc = if self.agent_type.mode == AgentMode::Durable {
+            "Creates a new agent instance with a fresh random phantom id."
+        } else {
+            "Creates a local logical proxy; each invocation receives a fresh final identity."
+        };
         let with_config_methods = if !local_configs.is_empty() {
             let get_phantom_with_config = (self.agent_type.mode == AgentMode::Durable).then(|| quote! {
                 pub async fn get_phantom_with_config(uuid: uuid::Uuid, #(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
@@ -453,6 +458,7 @@ impl RustBridgeGenerator {
                 #get_with_config_method
                 #get_phantom_with_config
 
+                #[doc = #new_phantom_doc]
                 pub async fn new_phantom_with_config(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
                     let mut agent_config = Vec::new();
@@ -546,6 +552,7 @@ impl RustBridgeGenerator {
 
                 #get_phantom_method
 
+                #[doc = #new_phantom_doc]
                 pub async fn new_phantom(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
                     Self::__create(constructor_parameters, #new_phantom_id, vec![]).await
@@ -798,6 +805,11 @@ impl RustBridgeGenerator {
             quote! {}
         };
 
+        let new_phantom_doc = if self.agent_type.mode == AgentMode::Durable {
+            "Creates a new agent instance with a fresh random phantom id."
+        } else {
+            "Creates a local logical proxy; each invocation receives a fresh final identity."
+        };
         let with_config_methods = if !local_configs.is_empty() {
             let new_phantom_with_config_method_name = new_phantom_with_config_method_name
                 .as_ref()
@@ -823,6 +835,7 @@ impl RustBridgeGenerator {
 
                 #get_phantom_with_config_method
 
+                #[doc = #new_phantom_doc]
                 pub fn #new_phantom_with_config_method_name(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let mut #agent_config_values = Vec::new();
                     #(#config_encode_stmts)*
@@ -881,6 +894,7 @@ impl RustBridgeGenerator {
 
                 #get_phantom_method
 
+                #[doc = #new_phantom_doc]
                 pub fn #new_phantom_method_name(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     Self::#create_method_name(#new_phantom_id, Vec::new(), #(#constructor_param_refs),*)
                 }
@@ -3139,6 +3153,106 @@ mod tests {
         assert!(rendered.contains("pub use golem_rust :: agentic :: *"));
         assert!(!rendered.contains("golem_common"));
         assert!(!rendered.contains("golem_client"));
+    }
+
+    #[test]
+    fn guest_runtime_prelude_compiles_with_generated_golem_rust_dependency_flags() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let golem_rust_path = workspace_root().unwrap().join("sdks/rust/golem-rust");
+        let golem_rust_path = golem_rust_path.to_string_lossy();
+
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            format!(
+                r#"[package]
+name = "guest-runtime-prelude-generated-flags-check"
+version = "0.0.1"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+golem-rust = {{ path = {golem_rust_path:?}, default-features = false, features = ["export_golem_agentic", "macro"] }}
+"#
+            ),
+        )
+        .unwrap();
+
+        let prelude = prettyplease::unparse(
+            &syn::parse2::<syn::File>(
+                RustRuntimeConfig::new(RustBridgeMode::GuestWasmRpc).generated_prelude(),
+            )
+            .unwrap(),
+        );
+        let body = guest_generated_unstructured_body();
+        std::fs::write(dir.path().join("src/lib.rs"), format!("{prelude}\n{body}")).unwrap();
+
+        let shared_target_dir = workspace_root().unwrap().join("target/shared_bridge_tests");
+        let output = std::process::Command::new("cargo")
+            .arg("check")
+            .arg("--target-dir")
+            .arg(shared_target_dir)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn guest_generated_unstructured_body() -> &'static str {
+        r#"
+pub fn takes_unrestricted_binary(
+    _value: crate::__golem_bridge_runtime::agentic::UnstructuredBinary<String>,
+) {
+}
+
+pub mod mimetypes {
+    #[derive(Debug, Clone)]
+    pub enum Mimetypes0 {
+        ApplicationJson,
+    }
+
+    impl crate::__golem_bridge_runtime::agentic::AllowedMimeTypes for Mimetypes0 {
+        fn all() -> &'static [&'static str] {
+            &["application/json"]
+        }
+
+        fn from_string(mime_type: &str) -> Option<Self> {
+            match mime_type {
+                "application/json" => Some(Self::ApplicationJson),
+                _ => None,
+            }
+        }
+
+        fn to_string(&self) -> String {
+            match self {
+                Self::ApplicationJson => "application/json".to_string(),
+            }
+        }
+    }
+}
+
+pub fn encode_text(
+    value: crate::__golem_bridge_runtime::agentic::UnstructuredText,
+) -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
+    <crate::__golem_bridge_runtime::agentic::UnstructuredText as crate::__golem_bridge_runtime::agentic::Schema>::to_schema_value(value)
+}
+
+pub fn decode_text(
+    value: crate::__golem_bridge_runtime::schema::SchemaValue,
+) -> Result<crate::__golem_bridge_runtime::agentic::UnstructuredText, String> {
+    <crate::__golem_bridge_runtime::agentic::UnstructuredText as crate::__golem_bridge_runtime::agentic::Schema>::from_schema_value(
+        value,
+        <crate::__golem_bridge_runtime::agentic::UnstructuredText as crate::__golem_bridge_runtime::agentic::Schema>::get_type(),
+    )
+}
+"#
     }
 
     #[test]

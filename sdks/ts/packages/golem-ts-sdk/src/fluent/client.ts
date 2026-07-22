@@ -282,7 +282,8 @@ export function clientFor<
     config?: Record<string, unknown>,
   ): RemoteClient<Methods, Mode> => {
     const constructorTree = encodeRecord(idCodecs, id as Record<string, unknown>);
-    const agentId = makeAgentId(def.name, constructorTree, phantomId);
+    const agentId =
+      def.mode === 'ephemeral' ? def.name : makeAgentId(def.name, constructorTree, phantomId);
     const agentConfig = config ? encodeConfigOverrides(configDecls, config) : [];
     const wasmRpc = new WasmRpc(def.name, constructorTree, phantomId, agentConfig);
 

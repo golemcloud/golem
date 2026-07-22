@@ -312,10 +312,38 @@ impl OplogService for PrimaryOplogService {
         last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
-        self.create(
+        record_oplog_call("create_fresh");
+
+        let key = Self::oplog_key(&owned_agent_id.agent_id);
+
+        // The caller guarantees the agent id is freshly derived and unused, so
+        // the existence probe performed by `create` is skipped: the initial
+        // entry is appended directly without any prior read.
+        {
+            let is = self.indexed_storage.clone();
+            let agent_id = owned_agent_id.agent_id();
+            let key = key.clone();
+            retry_storage_op(&self.retry_config, "create_fresh_append", &key, || {
+                let is = is.clone();
+                let ns = IndexedStorageNamespace::OpLog {
+                    agent_id: agent_id.clone(),
+                    agent_mode,
+                };
+                let key = key.clone();
+                let entry = initial_entry.clone();
+                async move {
+                    is.with_entity("oplog", "create_fresh", "entry")
+                        .append(ns, &key, 1, &entry)
+                        .await
+                }
+            })
+            .await;
+        }
+
+        self.open(
             owned_agent_id,
             agent_mode,
-            initial_entry,
+            Some(OplogIndex::INITIAL),
             initial_worker_metadata,
             last_known_status,
             execution_status,
