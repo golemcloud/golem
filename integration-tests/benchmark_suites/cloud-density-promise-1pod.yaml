@@ -5,26 +5,26 @@ name: cloud-density-promise-1pod
 section: promise
 defaultRamp: [2, 4, 8, 16, 32, 64, 128, 256]
 cells:
-  - { name: promise-boolean-cold-rust-1pod, enabled: false, payloadSize: 1, waiterPresence: cold, runtime: rust }
-  - { name: promise-boolean-warm-rust-1pod, enabled: false, payloadSize: 1, waiterPresence: warm, runtime: rust }
-  - { name: promise-boolean-mixed-rust-1pod, enabled: false, payloadSize: 1, waiterPresence: mixed, runtime: rust }
-  - { name: promise-one-integer-cold-rust-1pod, enabled: false, payloadSize: 8, waiterPresence: cold, runtime: rust }
-  - { name: promise-one-integer-warm-rust-1pod, enabled: false, payloadSize: 8, waiterPresence: warm, runtime: rust }
-  - { name: promise-one-integer-mixed-rust-1pod, enabled: false, payloadSize: 8, waiterPresence: mixed, runtime: rust }
-  - { name: promise-two-integers-cold-rust-1pod, enabled: false, payloadSize: 16, waiterPresence: cold, runtime: rust }
-  - { name: promise-two-integers-warm-rust-1pod, enabled: false, payloadSize: 16, waiterPresence: warm, runtime: rust }
-  - { name: promise-two-integers-mixed-rust-1pod, enabled: false, payloadSize: 16, waiterPresence: mixed, runtime: rust }
-  - { name: promise-tiny-cold-rust-1pod, enabled: false, payloadSize: 256, waiterPresence: cold, runtime: rust }
-  - { name: promise-tiny-warm-rust-1pod, enabled: false, payloadSize: 256, waiterPresence: warm, runtime: rust }
-  - { name: promise-tiny-mixed-rust-1pod, enabled: false, payloadSize: 256, waiterPresence: mixed, runtime: rust }
-  - { name: promise-small-cold-rust-1pod, enabled: false, payloadSize: 65536, waiterPresence: cold, runtime: rust, ramp: [2, 4, 8, 16, 32, 64] }
-  - { name: promise-small-warm-rust-1pod, enabled: false, payloadSize: 65536, waiterPresence: warm, runtime: rust, ramp: [2, 4, 8, 16, 32, 64] }
-  - { name: promise-small-mixed-rust-1pod, enabled: false, payloadSize: 65536, waiterPresence: mixed, runtime: rust, ramp: [2, 4, 8, 16, 32, 64] }
-  - { name: promise-medium-cold-rust-1pod, enabled: false, payloadSize: 16777216, waiterPresence: cold, runtime: rust, ramp: [1, 2, 4] }
-  - { name: promise-medium-warm-rust-1pod, enabled: false, payloadSize: 16777216, waiterPresence: warm, runtime: rust, ramp: [1, 2, 4] }
-  - { name: promise-medium-mixed-rust-1pod, enabled: false, payloadSize: 16777216, waiterPresence: mixed, runtime: rust, ramp: [1, 2, 4] }
-  - { name: promise-huge-cold-rust-1pod, enabled: false, payloadSize: 32505856, waiterPresence: cold, runtime: rust, ramp: [1, 2] }
-  - { name: promise-huge-warm-rust-1pod, enabled: false, payloadSize: 32505856, waiterPresence: warm, runtime: rust, ramp: [1, 2] }
-  - { name: promise-huge-mixed-rust-1pod, enabled: false, payloadSize: 32505856, waiterPresence: mixed, runtime: rust, ramp: [1, 2] }
+  - { name: promise-boolean-cold-rust-1pod, enabled: true, payloadSize: 1, waiterPresence: cold, runtime: rust }
+  - { name: promise-boolean-warm-rust-1pod, enabled: true, payloadSize: 1, waiterPresence: warm, runtime: rust }
+  - { name: promise-boolean-mixed-rust-1pod, enabled: true, payloadSize: 1, waiterPresence: mixed, runtime: rust }
+  - { name: promise-one-integer-cold-rust-1pod, enabled: true, payloadSize: 8, waiterPresence: cold, runtime: rust }
+  - { name: promise-one-integer-warm-rust-1pod, enabled: true, payloadSize: 8, waiterPresence: warm, runtime: rust }
+  - { name: promise-one-integer-mixed-rust-1pod, enabled: true, payloadSize: 8, waiterPresence: mixed, runtime: rust }
+  - { name: promise-two-integers-cold-rust-1pod, enabled: true, payloadSize: 16, waiterPresence: cold, runtime: rust }
+  - { name: promise-two-integers-warm-rust-1pod, enabled: true, payloadSize: 16, waiterPresence: warm, runtime: rust }
+  - { name: promise-two-integers-mixed-rust-1pod, enabled: true, payloadSize: 16, waiterPresence: mixed, runtime: rust }
+  - { name: promise-tiny-cold-rust-1pod, enabled: true, payloadSize: 256, waiterPresence: cold, runtime: rust }
+  - { name: promise-tiny-warm-rust-1pod, enabled: true, payloadSize: 256, waiterPresence: warm, runtime: rust }
+  - { name: promise-tiny-mixed-rust-1pod, enabled: true, payloadSize: 256, waiterPresence: mixed, runtime: rust }
+  - { name: promise-small-cold-rust-1pod, enabled: true, payloadSize: 65536, waiterPresence: cold, runtime: rust, ramp: [2, 4, 8, 16, 32, 64, 128] }
+  - { name: promise-small-warm-rust-1pod, enabled: true, payloadSize: 65536, waiterPresence: warm, runtime: rust, ramp: [2, 4, 8, 16, 32, 64, 128] }
+  - { name: promise-small-mixed-rust-1pod, enabled: true, payloadSize: 65536, waiterPresence: mixed, runtime: rust, ramp: [2, 4, 8, 16, 32, 64, 128] }
+  - { name: promise-medium-cold-rust-1pod, enabled: true, payloadSize: 16777216, waiterPresence: cold, runtime: rust, ramp: [1, 2, 4, 8] }
+  - { name: promise-medium-warm-rust-1pod, enabled: true, payloadSize: 16777216, waiterPresence: warm, runtime: rust, ramp: [1, 2, 4, 8] }
+  - { name: promise-medium-mixed-rust-1pod, enabled: true, payloadSize: 16777216, waiterPresence: mixed, runtime: rust, ramp: [1, 2, 4, 8] }
+  - { name: promise-huge-cold-rust-1pod, enabled: true, payloadSize: 32505856, waiterPresence: cold, runtime: rust, ramp: [1, 2, 4] }
+  - { name: promise-huge-warm-rust-1pod, enabled: true, payloadSize: 32505856, waiterPresence: warm, runtime: rust, ramp: [1, 2, 4] }
+  - { name: promise-huge-mixed-rust-1pod, enabled: true, payloadSize: 32505856, waiterPresence: mixed, runtime: rust, ramp: [1, 2, 4] }
   - { name: promise-tiny-cold-ts-1pod, enabled: true, payloadSize: 256, waiterPresence: cold, runtime: ts }
   - { name: promise-tiny-warm-ts-1pod, enabled: true, payloadSize: 256, waiterPresence: warm, runtime: ts }
