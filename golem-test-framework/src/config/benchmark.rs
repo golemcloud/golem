@@ -280,10 +280,14 @@ pub enum TestMode {
         #[arg(long)]
         admin_account_token: String,
         /// UUID of the builtin-plugin-owner account.
-        #[arg(long)]
+        /// Only needed for environment-plugin-grant tests; benchmarks do not
+        /// use it so the default (nil UUID) is fine for benchmark runs.
+        #[arg(long, default_value_t = Uuid::nil())]
         builtin_plugin_owner_account_id: Uuid,
         /// UUID of the default plan on the target cluster.
-        #[arg(long)]
+        /// Only needed for environment-plugin-grant tests; benchmarks do not
+        /// use it so the default (nil UUID) is fine for benchmark runs.
+        #[arg(long, default_value_t = Uuid::nil())]
         default_plan_id: Uuid,
         /// Optional shard-manager gRPC hostname for a kubectl port-forward
         /// (e.g. `localhost`). When set together with

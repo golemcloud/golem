@@ -15,8 +15,15 @@
 mod config;
 mod results;
 
-pub use config::{BenchmarkConfig, BenchmarkSuite, BenchmarkSuiteItem, RunConfig};
-pub use results::{BenchmarkResult, BenchmarkRunResult, BenchmarkSuiteResult, ResultKey};
+pub use config::{
+    BenchmarkConfig, BenchmarkSuite, BenchmarkSuiteItem, DensityAction, DensityAgentModeArg,
+    DensityPromiseRuntimeArg, DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg,
+    DensityScenarioArg, DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg,
+    DensitySectionArg, DensitySharingArg, DensitySnapshottingArg, RunConfig,
+};
+pub use results::{
+    BenchmarkResult, BenchmarkRunResult, BenchmarkSuiteResult, ResultKey, RunMetadata,
+};
 
 use crate::config::benchmark::TestMode;
 use async_trait::async_trait;

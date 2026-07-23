@@ -1,0 +1,89 @@
+# Cloud schedule-density benchmark suite.
+#
+# The buildspec drives each cell through `benchmarks density --section schedule`.
+# Warm cells continuously ramp schedule-registration rate. Operators read
+# scheduler lag manually in Grafana or Prometheus. Cold cells queue a timed
+# realistic batch, restart the executor, then measure recovery as a diagnostic.
+
+name: cloud-density-schedule
+section: schedule
+
+defaultRateRamp:
+  # First offered schedule-registration rate, in actions per second.
+  initialPerSec: 1
+  # Time each offered rate runs before moving to the next doubled rate through
+  # 256 actions per second.
+  doublingPeriodSecs: 60
+
+cells:
+  # Primary scheduler-capacity cells. Targets and the shared component are
+  # pre-warmed; poll is a no-op so scheduler lag is not confounded by guest work.
+  # Spread uses one target per offered action/second, so each selected target
+  # receives about one scheduled action per second. Realistic rotates actions
+  # through a fixed pool of 1,000 warm targets to model broad production load.
+  - name: sched-warm-d1-spread
+    enabled: true
+    targetResidency: warm
+    contextSpans: 1
+    targetPattern: spread
+  - name: sched-warm-d1-realistic
+    enabled: true
+    targetResidency: warm
+    contextSpans: 1
+    targetPattern: realistic
+  - name: sched-warm-d50-spread
+    enabled: true
+    targetResidency: warm
+    contextSpans: 50
+    targetPattern: spread
+  - name: sched-warm-d50-realistic
+    enabled: true
+    targetResidency: warm
+    contextSpans: 50
+    targetPattern: realistic
+  - name: sched-warm-d500-spread
+    enabled: true
+    targetResidency: warm
+    contextSpans: 500
+    targetPattern: spread
+  - name: sched-warm-d500-realistic
+    enabled: true
+    targetResidency: warm
+    contextSpans: 500
+    targetPattern: realistic
+
+  # Temporary sustained-load controls. Keep disabled outside scheduler
+  # investigations; regular ramp cells cover the current capacity check.
+  - name: sched-soak-d1-spread-128
+    enabled: false
+    targetResidency: warm
+    contextSpans: 1
+    targetPattern: spread
+    ramp: [128]
+    ratePeriodSecs: 900
+  - name: sched-soak-d1-realistic-128
+    enabled: false
+    targetResidency: warm
+    contextSpans: 1
+    targetPattern: realistic
+    ramp: [128]
+    ratePeriodSecs: 900
+
+  # Cold controls deliberately stage a finite batch before restart. They are not
+  # rate-ceiling cells: they isolate recovery-plus-delivery from warm scheduler
+  # capacity. Realistic spread avoids one-agent queueing dominating recovery.
+  - name: sched-cold-d1-realistic
+    enabled: false
+    targetResidency: cold
+    contextSpans: 1
+    targetPattern: realistic
+  - name: sched-cold-d50-realistic
+    enabled: false
+    targetResidency: cold
+    contextSpans: 50
+    targetPattern: realistic
+  - name: sched-cold-d500-realistic
+    enabled: false
+    targetResidency: cold
+    contextSpans: 500
+    targetPattern: realistic
