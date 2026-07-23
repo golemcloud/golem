@@ -284,7 +284,7 @@ impl DefaultPromiseService {
             )
             .await
             .unwrap_or_else(|err| {
-                panic!("failed to check if promise {promise_id} exists in Redis: {err}")
+                panic!("failed to check if promise {promise_id} exists in storage: {err}")
             })
     }
 
@@ -326,12 +326,12 @@ impl PromiseService for DefaultPromiseService {
                 &RedisPromiseState::Pending,
             )
             .await
-            .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in Redis: {err}"));
+            .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in storage: {err}"));
 
         record_promise_created();
         crate::metrics::promises::inc_promise_pending_count();
 
-        // start tracking the promise locally so poll does not need to go to redis
+        // Start tracking the promise locally so poll does not need to go to storage.
         {
             let mut reg = self.registry.lock().await;
             reg.get_or_insert(&promise_id);
@@ -355,7 +355,7 @@ impl PromiseService for DefaultPromiseService {
             reg.get_or_insert(&promise_id)
         };
 
-        // Check if already completed in Redis
+        // Check if already completed in storage
         if let Some(data) = self.completed_data(&promise_id).await {
             let _ = handle.complete(data).await;
         }
@@ -385,7 +385,7 @@ impl PromiseService for DefaultPromiseService {
                 &RedisPromiseState::Complete(data.clone()),
             )
             .await
-            .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in Redis: {err}"));
+            .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in storage: {err}"));
 
         // Also wake any in-memory handle, ensuring that still running workers that wait on the pollable can continue
         let completed_data = if written {
@@ -410,7 +410,7 @@ impl PromiseService for DefaultPromiseService {
 
         // Wake up the worker that owns the promise, ensuring that it resumes its work.
         // We do this unconditionally here as the only reason complete will be called again during replay is if we managed to write
-        // the result to redis, but failed before the worker could persist the result.
+        // the result to storage, but failed before the worker could persist the result.
         self.worker_access
             .activate_worker_if_needed(&promise_id)
             .await?;
