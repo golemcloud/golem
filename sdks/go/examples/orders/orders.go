@@ -103,7 +103,29 @@ var (
 	Place  = golem.DefineMethod[OrderId, PlaceIn, Order]("place", golem.Desc("Place the order"))
 	Get    = golem.DefineMethod[OrderId, golem.Unit, Order]("get")
 	Refund = golem.DefineMethod[OrderId, RefundIn, Order]("refund", golem.Desc("Refund, recording success or failure as a value"))
+	Audit  = golem.DefineMethod[OrderId, golem.Unit, []Money]("audit", golem.Desc("Fan out to the ledger agents"))
 )
+
+// --- a second agent, called over RPC --------------------------------------
+
+type LedgerId struct{ Region string }
+type LedgerState struct{ total Money }
+
+var Ledger = golem.DefineAgent[LedgerId, LedgerState](
+	golem.Spec{Name: "LedgerAgent", Description: "Per-region ledger", Mode: golem.Durable},
+	func(id LedgerId) *LedgerState {
+		return &LedgerState{total: Money{Currency: "EUR"}}
+	},
+)
+
+var Record = golem.DefineMethod[LedgerId, RefundIn, Money]("record")
+
+func init() {
+	golem.Implement(Ledger, Record, func(ctx *golem.Context[LedgerState], in RefundIn) (Money, error) {
+		ctx.State.total.Amount += in.Amount.Amount
+		return ctx.State.total, nil
+	})
+}
 
 func init() {
 	golem.Implement(Orders, Place, func(ctx *golem.Context[OrderState], in PlaceIn) (Order, error) {
@@ -117,8 +139,6 @@ func init() {
 		ctx.State.order.State = StatePaid
 		return ctx.State.order, nil
 	})
-
-	golem.Implement(Orders, Get, golem.Bind0NoErr((*OrderState).snapshot))
 
 	golem.Implement(Orders, Refund, func(ctx *golem.Context[OrderState], in RefundIn) (Order, error) {
 		// An expected, typed failure: this is a *value*, not an error, so
@@ -135,5 +155,41 @@ func init() {
 
 // snapshot is an ordinary Go method, bound with a method expression.
 func (s *OrderState) snapshot() Order { return s.order }
+
+func init() {
+	golem.Implement(Orders, Audit, func(ctx *golem.Context[OrderState], _ golem.Unit) ([]Money, error) {
+		regions := []string{"eu-west", "eu-central", "us-east"}
+
+		// Fan out. CallAsync returns immediately, so all three are in flight;
+		// a goroutine blocked in Get yields to the component-model event loop.
+		// (Concurrency is across DIFFERENT targets — one agent instance still
+		// handles a single invocation at a time.)
+		futures := make([]*golem.Future[Money], 0, len(regions))
+		for _, region := range regions {
+			client, err := golem.ClientFor(Ledger, LedgerId{Region: region})
+			if err != nil {
+				return nil, err
+			}
+			f, err := Record.CallAsync(client, RefundIn{Amount: Money{Amount: 1, Currency: "EUR"}})
+			if err != nil {
+				return nil, err
+			}
+			futures = append(futures, f)
+		}
+
+		totals := make([]Money, 0, len(futures))
+		for _, f := range futures {
+			total, err := f.Get()
+			if err != nil {
+				return nil, fmt.Errorf("ledger fan-out failed: %w", err)
+			}
+			totals = append(totals, total)
+		}
+		return totals, nil
+	})
+
+	// The blocking form, for the single-call case.
+	golem.Implement(Orders, Get, golem.Bind0NoErr((*OrderState).snapshot))
+}
 
 func main() {}
