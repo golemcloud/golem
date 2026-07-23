@@ -17,7 +17,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use crate::TypedSchemaValue;
-use crate::agentic::{InputStream, OutputStream};
+use crate::agentic::InputStream;
 use crate::bindings::golem::tool::host::RpcError as WitRpcError;
 use crate::bindings::golem::tool::host::{self, ToolRpc as HostToolRpc};
 use crate::schema::{FromSchema, FromSchemaError};
@@ -93,7 +93,7 @@ impl<E: Error + 'static> Error for ToolError<E> {
 /// Decoded successful result of `tool-rpc.invoke-and-await`.
 pub struct InvocationResult {
     pub result: Option<TypedSchemaValue>,
-    pub stdout: Option<OutputStream>,
+    pub stdout: Option<InputStream>,
 }
 
 /// Decodes an invocation result declared to carry both a value and a stdout
@@ -101,7 +101,7 @@ pub struct InvocationResult {
 /// protocol error.
 pub fn decode_result_with_stdout<T: FromSchema, E>(
     result: InvocationResult,
-) -> Result<(T, OutputStream), ToolError<E>> {
+) -> Result<(T, InputStream), ToolError<E>> {
     let stdout = expect_stdout(result.stdout)?;
     let value = decode_expected_value(result.result)?;
     Ok((value, stdout))
@@ -116,9 +116,7 @@ pub fn decode_result_value<T: FromSchema, E>(result: InvocationResult) -> Result
 
 /// Decodes an invocation result declared to carry a stdout stream and no
 /// value.
-pub fn decode_result_stdout_only<E>(
-    result: InvocationResult,
-) -> Result<OutputStream, ToolError<E>> {
+pub fn decode_result_stdout_only<E>(result: InvocationResult) -> Result<InputStream, ToolError<E>> {
     let stdout = expect_stdout(result.stdout)?;
     expect_no_value(result.result)?;
     Ok(stdout)
@@ -132,14 +130,14 @@ pub fn decode_result_empty<E>(result: InvocationResult) -> Result<(), ToolError<
 }
 
 /// Requires the declared stdout stream to be present in an invocation result.
-pub fn expect_stdout<E>(stdout: Option<OutputStream>) -> Result<OutputStream, ToolError<E>> {
+pub fn expect_stdout<E>(stdout: Option<InputStream>) -> Result<InputStream, ToolError<E>> {
     stdout.ok_or_else(|| {
         protocol_error("tool result did not contain declared stdout stream".to_string())
     })
 }
 
 /// Rejects an invocation result that unexpectedly carries a stdout stream.
-pub fn expect_no_stdout<E>(stdout: Option<OutputStream>) -> Result<(), ToolError<E>> {
+pub fn expect_no_stdout<E>(stdout: Option<InputStream>) -> Result<(), ToolError<E>> {
     if stdout.is_some() {
         return Err(protocol_error(
             "tool result unexpectedly contained stdout stream".to_string(),
@@ -177,6 +175,7 @@ pub fn expect_no_value<E>(value: Option<TypedSchemaValue>) -> Result<(), ToolErr
 }
 
 /// Tool RPC resource types accepted by typed tool client helpers.
+#[allow(async_fn_in_trait)]
 pub trait ToolRpcClient {
     async fn invoke_and_await_tool(
         &self,

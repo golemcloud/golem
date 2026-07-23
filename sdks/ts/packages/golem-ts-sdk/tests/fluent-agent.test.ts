@@ -19,11 +19,23 @@ import { method } from '../src/fluent/method';
 import { AgentClassName } from '../src/agentClassName';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { schemaValueFromWit, schemaValueToWit, v } from '../src/internal/schema-model';
-import { guest } from '../src';
+import { golemTool010Guest, guest, tool } from '../src';
 
 const get = (name: string) => AgentTypeRegistry.get(new AgentClassName(name));
 
 describe('fluent agent metadata (Phase 3)', () => {
+  it('exports the canonical empty tool guest', () => {
+    expect(tool).toBe(golemTool010Guest);
+    expect(tool.discoverTools()).toEqual([]);
+
+    try {
+      tool.getTool('missing');
+      expect.fail('getTool should reject an unknown tool');
+    } catch (error) {
+      expect(error).toEqual({ tag: 'invalid-tool-name', val: 'missing' });
+    }
+  });
+
   it('propagates agent description and promptHint into the AgentType', () => {
     defineAgent({
       name: 'metaDescribed',

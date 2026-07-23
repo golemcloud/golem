@@ -4482,13 +4482,15 @@ struct AccessRevisionUpdateInputs {
     current_revision: ComponentRevision,
 }
 
+type AccessRevisionUpdateAgentState = (
+    HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
+    golem_common::model::card::EffectiveSurface,
+    BTreeMap<golem_common::model::card::CardId, golem_common::model::card::StoredCard>,
+);
+
 struct AccessRevisionUpdate {
     metadata: Component,
-    agent_state: Option<(
-        HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
-        golem_common::model::card::EffectiveSurface,
-        BTreeMap<golem_common::model::card::CardId, golem_common::model::card::StoredCard>,
-    )>,
+    agent_state: Option<AccessRevisionUpdateAgentState>,
     files: HashMap<PathBuf, IFSWorkerFile>,
 }
 

@@ -295,7 +295,7 @@ warp = "0.3.7"
 wasip2 = "1.0.2"
 wasm-encoder = "0.248.0"
 wasm-metadata = { version = "0.248.0", features = ["oci"] }
-wasm-rquickjs = { git = "https://github.com/golemcloud/wasm-rquickjs", rev = "d2b7119c8286d6fc8225a2afdb40e896dd3e89df", features = ["optimize", "use-golem-wasmtime"] }
+wasm-rquickjs = { git = "https://github.com/golemcloud/wasm-rquickjs", rev = "c28b95d0470b17dbf07a27d3e729d28e8185c974", features = ["optimize", "use-golem-wasmtime"] }
 wasm-wave = "0.248"
 wasmparser = "0.248.0"
 wasmprinter = "0.248.0"
@@ -308,7 +308,7 @@ webbrowser = "1.0.4"
 webpki-roots = { version = "0.26.7" }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console"] }
 which = "8.0.0"
-wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "af9743984748cc5d9ec0b3498bb6f70b623d0405", version = "=0.58.0" }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.59.0" }
 wit-bindgen-rust = "0.58.0"
 wit-component = "0.248"
 wit-encoder = "0.248"

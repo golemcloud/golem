@@ -79,7 +79,7 @@ declare module 'golem:api/context@1.5.0' {
   /**
    * Possible span attribute value types
    */
-  export type AttributeValue = 
+  export type AttributeValue =
   /** A string value */
   {
     tag: 'string'

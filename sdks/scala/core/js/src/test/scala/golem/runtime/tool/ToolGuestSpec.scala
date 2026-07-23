@@ -17,7 +17,7 @@
 package golem.runtime.tool
 
 import golem.host.SchemaWireInterop
-import golem.host.js.tool.{JsInvocationResult, JsTool}
+import golem.host.js.tool.{JsInvocationResult, JsTool, JsWasiOutputStream}
 import golem.runtime.guest.Guest
 import golem.schema.{SchemaValue, TypedSchemaValue}
 import golem.schema.wire.{SchemaWire, WitTypedSchemaValue}
@@ -91,6 +91,15 @@ object ToolGuestSpec extends ZIOSpecDefault {
     ToolRegistry.registerInvoker(echoTool("guest-failing"), invoker)
   }
 
+  private lazy val streamingRegistered: Unit = {
+    val stdout = js.Dynamic.global
+      .eval("(async function* () { yield 17; yield 23; })()")
+      .asInstanceOf[JsWasiOutputStream]
+    val invoker: ToolRegistry.ToolInvoker = (_, _, _, _) =>
+      Future.successful(Right(ToolInvocationResult(None, Some(stdout))))
+    ToolRegistry.registerInvoker(echoTool("guest-streaming"), invoker)
+  }
+
   private lazy val definitionOnlyRegistered: Unit =
     ToolRegistry.register(leafTool("guest-definition-only"))
 
@@ -155,6 +164,28 @@ object ToolGuestSpec extends ZIOSpecDefault {
                  .asInstanceOf[js.Promise[JsInvocationResult]]
              )
       } yield assertTrue(captured.commandPath == List("sub", "leaf"))
+    },
+    test("invoke_returns_stdout_as_a_preview_3_async_iterable") {
+      streamingRegistered
+      val input = SchemaWireInterop.typedToJs(typed("stream"))
+      for {
+        res <- fromPromise(
+                 guest
+                   .invoke("guest-streaming", js.Array[String](), input, noStdin, anonymousPrincipal)
+                   .asInstanceOf[js.Promise[JsInvocationResult]]
+               )
+        stdout   = res.stdout.get
+        iterator = stdout.asyncIterator()
+        first   <- fromPromise(iterator.next())
+        second  <- fromPromise(iterator.next())
+        end     <- fromPromise(iterator.next())
+      } yield assertTrue(
+        !first.done,
+        first.value == 17,
+        !second.done,
+        second.value == 23,
+        end.done
+      )
     },
     test("invoke_rejects_unknown_tools_with_invalid_tool_name") {
       val input = SchemaWireInterop.typedToJs(typed("x"))

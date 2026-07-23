@@ -105,32 +105,24 @@ wasm-rquickjs generate-wrapper-crate \
 # generated manifest before building.
 echo "[agent-guest] Rewriting wit-bindgen dependency to Golem's outline-lift fork..." >&2
 cargo_toml="$wrapper_dir/Cargo.toml"
-wit_bindgen_line='wit-bindgen = { version = "0.42.1", default-features = false, features = ["macros"] }'
-wit_bindgen_rt_line='wit-bindgen-rt = { version = "0.42.1", features = ["bitflags"] }'
-forked_line='wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.58.0", default-features = false, features = ["macros"] }'
+wit_bindgen_line='wit-bindgen-p3 = { package = "wit-bindgen", version = "0.58.0", default-features = false, features = ["async", "async-spawn", "macros", "inter-task-wakeup"], optional = true }'
+forked_line='wit-bindgen-p3 = { package = "wit-bindgen", git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.59.0", default-features = false, features = ["async", "async-spawn", "macros", "inter-task-wakeup"], optional = true }'
 
 if [[ "$(grep -cF -- "$wit_bindgen_line" "$cargo_toml")" != "1" ]]; then
   echo "[agent-guest] ERROR: expected exactly one wit-bindgen dependency line in $cargo_toml" >&2
   echo "[agent-guest]   The wasm-rquickjs skeleton may have changed; update this script." >&2
   exit 1
 fi
-if [[ "$(grep -cF -- "$wit_bindgen_rt_line" "$cargo_toml")" != "1" ]]; then
-  echo "[agent-guest] ERROR: expected exactly one wit-bindgen-rt dependency line in $cargo_toml" >&2
-  echo "[agent-guest]   The wasm-rquickjs skeleton may have changed; update this script." >&2
-  exit 1
-fi
-
-# Drop the separate wit-bindgen-rt crate (the fork embeds its runtime) and point
-# wit-bindgen at Golem's outline-lift fork.
-WB_LINE="$wit_bindgen_line" WB_RT_LINE="$wit_bindgen_rt_line" FORK_LINE="$forked_line" \
+# Point the active Preview 3 bindings at Golem's outline-lift fork. The separate
+# Preview 2 dependency remains available for the generated crate's P2 features.
+WB_LINE="$wit_bindgen_line" FORK_LINE="$forked_line" \
   perl -ni -e '
     chomp(my $chomped = $_);
-    next if $chomped eq $ENV{WB_RT_LINE};
     if ($chomped eq $ENV{WB_LINE}) { print "$ENV{FORK_LINE}\n"; next; }
     print;
   ' "$cargo_toml"
 
-if ! grep -qF -- "golemcloud/wit-bindgen" "$cargo_toml" || grep -qF -- "$wit_bindgen_rt_line" "$cargo_toml"; then
+if ! grep -qF -- "$forked_line" "$cargo_toml" || grep -qF -- "$wit_bindgen_line" "$cargo_toml"; then
   echo "[agent-guest] ERROR: failed to rewrite wit-bindgen dependency in $cargo_toml" >&2
   exit 1
 fi

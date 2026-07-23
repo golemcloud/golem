@@ -256,6 +256,9 @@ object Guest {
       "discoverAgentTypes" -> (() => discoverAgentTypes())
     )
 
+  @JSExportTopLevel("guest")
+  val guest: js.Dynamic = golemAgent200Guest
+
   @JSExportTopLevel("golemTool010Guest")
   val golemTool010Guest: js.Dynamic =
     js.Dynamic.literal(

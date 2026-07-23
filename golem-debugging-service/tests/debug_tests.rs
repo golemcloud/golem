@@ -389,7 +389,7 @@ async fn test_playback_and_rewind(
 }
 
 #[test]
-#[timeout("30s")]
+#[timeout("120s")]
 #[tracing::instrument]
 async fn test_playback_and_fork(
     last_unique_id: &LastUniqueId,

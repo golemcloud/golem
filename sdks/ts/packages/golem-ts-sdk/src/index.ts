@@ -16,6 +16,7 @@ import { ResolvedAgent } from './internal/resolvedAgent';
 import { AgentType, Principal } from 'golem:agent/common@2.0.0';
 import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0';
 import type { Snapshot } from 'golem:api/host@1.5.0';
+import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
 import { schemaValueFromWit } from './internal/schema-model';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
@@ -66,6 +67,18 @@ interface GolemAgentGuest {
     principal: Principal,
   ): Promise<SchemaValueTree | undefined>;
   getDefinition(): AgentType;
+}
+
+interface GolemToolGuest {
+  discoverTools(): Tool[];
+  getTool(name: string): Tool;
+  invoke(
+    toolName: string,
+    commandPath: string[],
+    input: TypedSchemaValue,
+    stdin: AsyncIterable<number> | undefined,
+    principal: Principal,
+  ): Promise<InvocationResult>;
 }
 
 interface SaveSnapshotGuest {
@@ -131,6 +144,28 @@ async function invokeAgent(
   } else {
     throw result.val;
   }
+}
+
+function discoverTools(): Tool[] {
+  return [];
+}
+
+function getTool(name: string): Tool {
+  throw { tag: 'invalid-tool-name', val: name } satisfies ToolError;
+}
+
+async function invokeTool(
+  toolName: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _commandPath: string[],
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _input: TypedSchemaValue,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _stdin: AsyncIterable<number> | undefined,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _principal: Principal,
+): Promise<InvocationResult> {
+  throw { tag: 'invalid-tool-name', val: toolName } satisfies ToolError;
 }
 
 function discoverAgentTypes(): AgentType[] {
@@ -435,6 +470,15 @@ export const golemAgent200Guest: GolemAgentGuest = {
 // short name (`guest.discoverAgentTypes` of golem:agent/guest@2.0.0). Export `guest`
 // as an alias of golemAgent200Guest so the generated wrapper finds it.
 export const guest: GolemAgentGuest = golemAgent200Guest;
+
+export const golemTool010Guest: GolemToolGuest = {
+  discoverTools,
+  getTool,
+  invoke: invokeTool,
+};
+
+// The generated wrapper also looks up the tool guest by its short interface name.
+export const tool: GolemToolGuest = golemTool010Guest;
 
 export const saveSnapshot: SaveSnapshotGuest = {
   save,

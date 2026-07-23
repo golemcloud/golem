@@ -102,7 +102,7 @@ private[golem] object ToolHostApi {
       commandPath: js.Array[String],
       input: JsTypedSchemaValue,
       stdin: js.UndefOr[JsWasiInputStream]
-    ): JsInvocationResult = js.native
+    ): js.Promise[JsInvocationResult] = js.native
 
     def invoke(
       commandPath: js.Array[String],

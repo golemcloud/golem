@@ -117,7 +117,7 @@ declare module 'golem:agent/host@2.0.0' {
   /**
    * Possible failures of an RPC call
    */
-  export type RpcError = 
+  export type RpcError =
   /** Protocol level error */
   {
     tag: 'protocol-error'

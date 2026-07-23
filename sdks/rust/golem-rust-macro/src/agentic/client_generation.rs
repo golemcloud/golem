@@ -744,12 +744,11 @@ mod tests {
                             {
                                 return agent_id_is_shadowed;
                             }
-                            if let syn::Stmt::Local(local) = stmt {
-                                if let syn::Pat::Ident(pat_ident) = &local.pat {
-                                    if pat_ident.ident == "agent_id" {
-                                        agent_id_is_shadowed = true;
-                                    }
-                                }
+                            if let syn::Stmt::Local(local) = stmt
+                                && let syn::Pat::Ident(pat_ident) = &local.pat
+                                && pat_ident.ident == "agent_id"
+                            {
+                                agent_id_is_shadowed = true;
                             }
                         }
                         false

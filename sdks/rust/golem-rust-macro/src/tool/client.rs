@@ -1081,8 +1081,8 @@ fn client_result_type(output: &ReturnType, has_stdout: bool) -> TokenStream {
         .map(|ty| quote! { #ty })
         .unwrap_or_else(|| quote! { ::std::convert::Infallible });
     let ok_ty = match (ok, has_stdout) {
-        (Some(ok), true) => quote! { (#ok, golem_rust::agentic::OutputStream) },
-        (None, true) => quote! { golem_rust::agentic::OutputStream },
+        (Some(ok), true) => quote! { (#ok, golem_rust::agentic::InputStream) },
+        (None, true) => quote! { golem_rust::agentic::InputStream },
         (Some(ok), false) => quote! { #ok },
         (None, false) => quote! { () },
     };

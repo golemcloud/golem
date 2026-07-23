@@ -3,7 +3,6 @@ declare module 'agent-guest' {
   import * as golemApi150Host from 'golem:api/host@1.5.0';
   import * as golemCore200Types from 'golem:core/types@2.0.0';
   import * as golemTool010Common from 'golem:tool/common@0.1.0';
-  import * as wasiIo023Streams from 'wasi:io/streams@0.2.3';
   /**
    * Interface exported by a component that provides tools. The component
    * declares which tools it exposes, supplies their metadata, and accepts
@@ -19,12 +18,12 @@ declare module 'agent-guest' {
      * is complete (full command tree and schema graph).
      * @throws ToolError
      */
-    export function discoverTools(): Promise<Tool[]>;
+    export function discoverTools(): Tool[];
     /**
      * Look up a single tool by name.
      * @throws ToolError
      */
-    export function getTool(name: string): Promise<Tool>;
+    export function getTool(name: string): Tool;
     /**
      * Invoke a command of a tool.
      * `command-path` selects the command body to execute. An empty list
@@ -37,20 +36,19 @@ declare module 'agent-guest' {
      * on or above the body, each field typed by the matching type node in
      * the body's schema.
      * `stdin` is supplied when the selected body declared a stdin
-     * `stream-spec`. Stream ownership: the `stdin` resource handle is moved
-     * into the callee for the duration of the call.
+     * `stream-spec`. The callee consumes the stream for the duration of the
+     * call; dropping its reader closes further consumption.
      * `principal` carries the caller's authenticated identity for
      * authorization and audit, identical in semantics to the parameter
      * of the same name in `golem:agent/guest.invoke`.
      * @throws ToolError
      */
-    export function invoke(toolName: string, commandPath: string[], input: TypedSchemaValue, stdin: InputStream | undefined, principal: Principal): Promise<InvocationResult>;
+    export function invoke(toolName: string, commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<number> | undefined, principal: Principal): Promise<InvocationResult>;
     export type Tool = golemTool010Common.Tool;
     export type ToolError = golemTool010Common.ToolError;
     export type InvocationResult = golemTool010Common.InvocationResult;
     export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
     export type Principal = golemAgent200Common.Principal;
-    export type InputStream = wasiIo023Streams.InputStream;
     export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
   }
   /**

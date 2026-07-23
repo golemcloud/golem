@@ -10,14 +10,14 @@ import { join, resolve } from 'node:path';
 // rewrite that dependency after generation.
 // ---------------------------------------------------------------------------
 const WIT_BINDGEN_GIT = 'https://github.com/golemcloud/wit-bindgen';
-const WIT_BINDGEN_REVISION = 'af9743984748cc5d9ec0b3498bb6f70b623d0405';
+const WIT_BINDGEN_REVISION = '4407232ead86d9bcbd06cbebd790a52120a4087a';
 
 function useForkedWitBindgen(cargoTomlPath) {
   const original = readFileSync(cargoTomlPath, 'utf8');
 
   const witBindgenLine =
     'wit-bindgen-p3 = { package = "wit-bindgen", version = "0.58.0", default-features = false, features = ["async", "async-spawn", "macros", "inter-task-wakeup"], optional = true }';
-  const forkedLine = `wit-bindgen-p3 = { package = "wit-bindgen", git = "${WIT_BINDGEN_GIT}", rev = "${WIT_BINDGEN_REVISION}", default-features = false, features = ["async", "async-spawn", "macros", "inter-task-wakeup"], optional = true }`;
+  const forkedLine = `wit-bindgen-p3 = { package = "wit-bindgen", git = "${WIT_BINDGEN_GIT}", rev = "${WIT_BINDGEN_REVISION}", version = "=0.59.0", default-features = false, features = ["async", "async-spawn", "macros", "inter-task-wakeup"], optional = true }`;
 
   const witBindgenCount = original.split(witBindgenLine).length - 1;
   if (witBindgenCount !== 1) {

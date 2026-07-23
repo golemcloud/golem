@@ -29,7 +29,7 @@ declare module 'golem:api/retry@1.5.0' {
    * ── Predicate value ──────────────────────────────────────────────
    * Dynamic value for property comparisons in retry predicates
    */
-  export type PredicateValue = 
+  export type PredicateValue =
   {
     tag: 'text'
     val: string
@@ -59,7 +59,7 @@ declare module 'golem:api/retry@1.5.0' {
     propertyName: string;
     pattern: string;
   };
-  export type PredicateNode = 
+  export type PredicateNode =
   {
     tag: 'prop-eq'
     val: PropertyComparison
@@ -170,7 +170,7 @@ declare module 'golem:api/retry@1.5.0' {
     predicate: RetryPredicate;
     inner: PolicyNodeIndex;
   };
-  export type PolicyNode = 
+  export type PolicyNode =
   {
     tag: 'periodic'
     val: Duration
