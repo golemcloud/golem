@@ -3,7 +3,7 @@
 // Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 
-//! Promise-completion density benchmark (golemcloud/golem#3525).
+//! Promise-completion density benchmark.
 
 use super::prep::PrepManifest;
 use super::{PromiseRuntime, PromiseTopology, PromiseWaiterPresence};

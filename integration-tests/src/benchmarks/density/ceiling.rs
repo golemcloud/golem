@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Ceiling-detection state machine (golemcloud/golem#3519, Module 3).
+//! Ceiling-detection state machine.
 //!
 //! Consumes a stream of timestamped latency samples plus executor-state
 //! observations and emits ceiling-crossing events. Used by all density
@@ -78,8 +78,8 @@ pub const ESCALATED_TIMEOUT: Duration = Duration::from_secs(300);
 /// catastrophic condition.
 pub const OVERLOAD_RUN_LENGTH: u32 = 200;
 
-/// Why a cell stopped. The integer encoding is part of the result schema
-/// (golemcloud/golem#3516) and must not be reordered.
+/// Why a cell stopped. The integer encoding is part of the result schema and
+/// must not be reordered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminatedReason {
     OomKill = 1,

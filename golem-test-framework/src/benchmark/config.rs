@@ -68,7 +68,7 @@ pub enum BenchmarkConfig {
         #[command(subcommand)]
         mode: TestMode,
     },
-    /// Cloud density benchmarks (golemcloud/golem#3516). The buildspec drives
+    /// Cloud density benchmarks. The buildspec drives
     /// the cell-by-cell loop; this subcommand runs exactly one action per
     /// invocation. `--action prep` performs the one-time density-prep and
     /// writes the prep manifest; `--action cell` runs one density cell using a

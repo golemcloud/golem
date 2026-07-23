@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Schedule-density benchmark configuration (golemcloud/golem#3524).
+//! Schedule-density benchmark configuration.
 //!
 //! Operators observe scheduler metrics manually in Grafana or Prometheus. In-driver executor
 //! metric scraping is unreliable for agent-density benchmarks.

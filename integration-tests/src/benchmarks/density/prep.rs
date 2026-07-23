@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Density-prep tooling (golemcloud/golem#3522).
+//! Density-prep tooling.
 //!
 //! Shared setup every density section depends on: creates one density account,
 //! one application, one environment, uploads the section's components once, and

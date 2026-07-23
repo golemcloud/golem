@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Agent-density benchmark driver (golemcloud/golem#3523).
+//! Agent-density benchmark driver.
 //!
 //! Answers: how many agents can a single worker-executor pod hold before
 //! something falls over, across realistic workload mixes. Each cell runs in its
@@ -53,7 +53,7 @@
 //! round's concurrent invocations *are* that round's ephemeral agents (created
 //! and gone within the round).
 //!
-//! # Operational definitions (from #3523)
+//! # Operational definitions
 //!
 //! - Load round: one concurrent invocation per agent in the load set, all in
 //!   flight at once, awaited together. Scenario 2 uses `busy_for(250ms)` only for
@@ -558,11 +558,6 @@ impl AdaptiveTimeout {
     }
 }
 
-/// Heuristically classifies an invocation error as connection-level (transport
-/// failure / reset / refused) vs. an application error. Connection-level errors
-/// are the driver-local signal for the catastrophic connection-lost condition,
-/// which is the backstop for an OOM-killed pod even when the kubectl
-/// restart-count poll misses it.
 /// Heuristically classifies an invocation error as transport-level (the request
 /// never completed a round-trip) vs. an application error. Transport-level
 /// errors are the driver-local signal for the catastrophic connection-lost
@@ -646,8 +641,7 @@ async fn timed_invoke(
 
 // ── Result schema ─────────────────────────────────────────────────────────
 
-/// Named count keys emitted in a cell's `BenchmarkResult` (the S3 schema from
-/// golemcloud/golem#3523).
+/// Named count keys emitted in a cell's `BenchmarkResult` S3 schema.
 mod keys {
     pub const SOFT_CEILING_AGENTS: &str = "soft-ceiling-agents";
     pub const USABILITY_CEILING_AGENTS: &str = "usability-ceiling-agents";

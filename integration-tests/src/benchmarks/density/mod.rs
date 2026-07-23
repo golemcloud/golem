@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Cloud density benchmarks (golemcloud/golem#3516).
+//! Cloud density benchmarks.
 //!
 //! Density benchmarks measure the per-pod ceiling of a single worker-executor
 //! under realistic workload mixes. Unlike cloud-perf (which keeps load below
