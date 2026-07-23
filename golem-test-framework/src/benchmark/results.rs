@@ -544,10 +544,16 @@ impl RunMetadata {
             std::env::var(key).ok().filter(|v| !v.is_empty())
         }
         fn env_u32(key: &str) -> Option<u32> {
-            env_str(key).and_then(|v| v.parse().ok())
+            env_str(key).map(|v| {
+                v.parse()
+                    .unwrap_or_else(|_| panic!("{key} must be an unsigned integer, got {v:?}"))
+            })
         }
         fn env_f64(key: &str) -> Option<f64> {
-            env_str(key).and_then(|v| v.parse().ok())
+            env_str(key).map(|v| {
+                v.parse()
+                    .unwrap_or_else(|_| panic!("{key} must be a number, got {v:?}"))
+            })
         }
 
         Self {
@@ -583,6 +589,7 @@ pub struct BenchmarkSuiteResultCollection {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkSuiteResult {
     /// Result format version. Always `1` for results produced by this binary.
+    #[serde(default = "default_schema_version")]
     pub schema_version: u32,
     pub suite: String,
     pub environment: String,
@@ -597,6 +604,10 @@ pub struct BenchmarkSuiteResult {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub run_metadata: Option<RunMetadata>,
     pub results: Vec<BenchmarkResult>,
+}
+
+fn default_schema_version() -> u32 {
+    1
 }
 
 impl BenchmarkSuiteResult {
@@ -846,5 +857,21 @@ impl BenchmarkRunResult {
             let results = self.count_results.entry(key.clone()).or_default();
             results.add_iteration(&counts);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn legacy_suite_result_defaults_schema_version() {
+        let mut result = serde_json::to_value(BenchmarkSuiteResult::new("legacy")).unwrap();
+        result.as_object_mut().unwrap().remove("schema_version");
+
+        let result: BenchmarkSuiteResult = serde_json::from_value(result).unwrap();
+
+        assert_eq!(result.schema_version, 1);
     }
 }

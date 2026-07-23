@@ -24,3 +24,4 @@ golem-wasi-http = { version = "0.2.0", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ctor = "0.4.3"
+wstd = { version = "=0.6.5", features = ["default", "json"] }

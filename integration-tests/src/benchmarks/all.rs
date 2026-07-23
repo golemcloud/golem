@@ -21,13 +21,22 @@ use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkApi, BenchmarkConfig, BenchmarkResult, BenchmarkSuite, BenchmarkSuiteItem,
-    BenchmarkSuiteResult, RunMetadata,
+    BenchmarkSuiteResult, DensityAction, DensityAgentModeArg, DensityPromiseRuntimeArg,
+    DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg, DensityScenarioArg,
+    DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg, DensitySectionArg,
+    DensitySharingArg, DensitySnapshottingArg, RunMetadata,
 };
 use golem_test_framework::config::benchmark::{TestMode, cloud_bench_run_id};
 use golem_test_framework::config::{
     BenchmarkCliParameters, BenchmarkTestDependencies, TestDependencies,
 };
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use integration_tests::benchmarks::density::agent::{CellConfig, ExecutorProbe, Scenario};
+use integration_tests::benchmarks::density::prep::{PrepManifest, run_prep};
+use integration_tests::benchmarks::density::{
+    AgentMode, ComponentSharing, DensitySection, PromiseRuntime, PromiseTopology,
+    PromiseWaiterPresence,
+};
 use integration_tests::benchmarks::{
     cleanup_account, cleanup_user_state, delete_workers, invoke_and_await_agent,
 };
@@ -133,31 +142,6 @@ async fn main() {
             >(mode, verbosity, item, primary_only, otlp))
         }),
     );
-    benchmarks_by_name.insert(
-        "throughput-saturation-counters",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::throughput_saturation::ThroughputSaturationCounters,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "throughput-saturation-echo-rust",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::throughput_saturation::ThroughputSaturationEchoRust,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "throughput-saturation-echo-ts",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::throughput_saturation::ThroughputSaturationEchoTs,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-
     let params = BenchmarkCliParameters::parse_from(std::env::args_os());
     let tracer_provider = BenchmarkTestDependencies::init_logging(&params);
 
@@ -287,6 +271,59 @@ async fn main() {
             } else {
                 println!("{}", suite_result.view());
             }
+        }
+        BenchmarkConfig::Density {
+            action,
+            section,
+            prep_manifest,
+            scenario,
+            agent_mode,
+            sharing,
+            snapshotting,
+            active_fraction,
+            prefill,
+            ramp,
+            schedule_target_residency,
+            schedule_context_spans,
+            schedule_target_pattern,
+            schedule_rate_period_secs,
+            promise_payload_size,
+            promise_waiter_presence,
+            promise_topology,
+            promise_runtime,
+            executor_pod_name,
+            executor_namespace,
+            save_to_json,
+            ..
+        } => {
+            run_density(
+                params.benchmark_config.mode(),
+                params.service_verbosity(),
+                params.otlp,
+                *action,
+                map_section(*section),
+                prep_manifest,
+                scenario.map(map_scenario),
+                agent_mode.map(map_agent_mode),
+                sharing.map(map_sharing),
+                map_snapshotting(*snapshotting),
+                *active_fraction,
+                *prefill,
+                ramp.clone(),
+                schedule_target_residency.map(map_schedule_target_residency),
+                *schedule_context_spans,
+                schedule_target_pattern.map(map_schedule_target_pattern),
+                *schedule_rate_period_secs,
+                *promise_payload_size,
+                promise_waiter_presence.map(map_promise_waiter_presence),
+                promise_topology.map(map_promise_topology),
+                promise_runtime.map(map_promise_runtime),
+                executor_pod_name.clone(),
+                executor_namespace.clone(),
+                save_to_json.clone(),
+                params.json,
+            )
+            .await;
         }
     }
 
@@ -477,4 +514,241 @@ async fn cloud_preflight_warmup(mode: &TestMode, verbosity: Level, otlp: bool) {
     deps.kill_all().await;
 
     info!("Cloud pre-flight warmup complete.");
+}
+
+// ── Density subcommand handling ───────────────────────────────────────────────
+
+fn map_section(arg: DensitySectionArg) -> DensitySection {
+    match arg {
+        DensitySectionArg::Agent => DensitySection::Agent,
+        DensitySectionArg::Schedule => DensitySection::Schedule,
+        DensitySectionArg::Promise => DensitySection::Promise,
+    }
+}
+
+fn map_scenario(arg: DensityScenarioArg) -> Scenario {
+    match arg {
+        DensityScenarioArg::CreateOnly => Scenario::CreateOnly,
+        DensityScenarioArg::CreateWithActive => Scenario::CreateWithActiveFraction,
+        DensityScenarioArg::ConcurrentActive => Scenario::ConcurrentActive,
+        DensityScenarioArg::ResumeUnderSaturation => Scenario::ResumeUnderSaturation,
+    }
+}
+
+fn map_agent_mode(arg: DensityAgentModeArg) -> AgentMode {
+    match arg {
+        DensityAgentModeArg::Durable => AgentMode::Durable,
+        DensityAgentModeArg::Ephemeral => AgentMode::Ephemeral,
+    }
+}
+
+fn map_sharing(arg: DensitySharingArg) -> ComponentSharing {
+    match arg {
+        DensitySharingArg::Shared => ComponentSharing::Shared,
+        DensitySharingArg::PerAgent => ComponentSharing::PerAgent,
+    }
+}
+
+fn map_snapshotting(arg: DensitySnapshottingArg) -> bool {
+    match arg {
+        DensitySnapshottingArg::Disabled => false,
+        DensitySnapshottingArg::Enabled => true,
+    }
+}
+
+fn map_schedule_target_residency(
+    arg: DensityScheduleTargetResidencyArg,
+) -> integration_tests::benchmarks::density::ScheduleTargetResidency {
+    match arg {
+        DensityScheduleTargetResidencyArg::Warm => {
+            integration_tests::benchmarks::density::ScheduleTargetResidency::Warm
+        }
+        DensityScheduleTargetResidencyArg::Cold => {
+            integration_tests::benchmarks::density::ScheduleTargetResidency::Cold
+        }
+    }
+}
+
+fn map_schedule_target_pattern(
+    arg: DensityScheduleTargetPatternArg,
+) -> integration_tests::benchmarks::density::ScheduleTargetPattern {
+    match arg {
+        DensityScheduleTargetPatternArg::Spread => {
+            integration_tests::benchmarks::density::ScheduleTargetPattern::Spread
+        }
+        DensityScheduleTargetPatternArg::Realistic => {
+            integration_tests::benchmarks::density::ScheduleTargetPattern::Realistic
+        }
+    }
+}
+
+fn map_promise_waiter_presence(arg: DensityPromiseWaiterPresenceArg) -> PromiseWaiterPresence {
+    match arg {
+        DensityPromiseWaiterPresenceArg::Cold => PromiseWaiterPresence::Cold,
+        DensityPromiseWaiterPresenceArg::Warm => PromiseWaiterPresence::Warm,
+        DensityPromiseWaiterPresenceArg::Mixed => PromiseWaiterPresence::Mixed,
+    }
+}
+
+fn map_promise_topology(arg: DensityPromiseTopologyArg) -> PromiseTopology {
+    match arg {
+        DensityPromiseTopologyArg::OnePod => PromiseTopology::OnePod,
+        DensityPromiseTopologyArg::TwoPod => PromiseTopology::TwoPod,
+    }
+}
+
+fn map_promise_runtime(arg: DensityPromiseRuntimeArg) -> PromiseRuntime {
+    match arg {
+        DensityPromiseRuntimeArg::Rust => PromiseRuntime::Rust,
+        DensityPromiseRuntimeArg::Ts => PromiseRuntime::Ts,
+    }
+}
+
+/// Runs one density action: either the one-time prep (writing the manifest) or
+/// a single cell (using a previously-written manifest).
+#[allow(clippy::too_many_arguments)]
+async fn run_density(
+    mode: &TestMode,
+    verbosity: Level,
+    otlp: bool,
+    action: DensityAction,
+    section: DensitySection,
+    prep_manifest_path: &std::path::Path,
+    scenario: Option<Scenario>,
+    agent_mode: Option<AgentMode>,
+    sharing: Option<ComponentSharing>,
+    snapshotting: bool,
+    active_fraction: Option<u32>,
+    prefill: Option<u32>,
+    ramp: Option<Vec<u32>>,
+    schedule_target_residency: Option<
+        integration_tests::benchmarks::density::ScheduleTargetResidency,
+    >,
+    schedule_context_spans: Option<u32>,
+    schedule_target_pattern: Option<integration_tests::benchmarks::density::ScheduleTargetPattern>,
+    schedule_rate_period_secs: Option<u64>,
+    promise_payload_size: Option<usize>,
+    promise_waiter_presence: Option<PromiseWaiterPresence>,
+    promise_topology: Option<PromiseTopology>,
+    promise_runtime: Option<PromiseRuntime>,
+    executor_pod_name: Option<String>,
+    executor_namespace: String,
+    save_to_json: Option<std::path::PathBuf>,
+    json: bool,
+) {
+    if !matches!(mode, TestMode::Cloud { .. }) {
+        panic!("density benchmarks require cloud mode");
+    }
+
+    let deps = BenchmarkTestDependencies::new(mode, verbosity, 0, false, otlp).await;
+
+    match action {
+        DensityAction::Prep => {
+            let manifest = run_prep(&deps, section).await.expect("density-prep failed");
+            manifest
+                .save(prep_manifest_path)
+                .expect("failed to write prep manifest");
+            info!("Density-prep manifest written to {prep_manifest_path:?}");
+        }
+        DensityAction::Cell => {
+            let manifest =
+                PrepManifest::load(prep_manifest_path).expect("failed to load prep manifest");
+
+            let probe = ExecutorProbe::new(executor_pod_name, executor_namespace).await;
+            let result = match section {
+                DensitySection::Agent => {
+                    let config = CellConfig {
+                        scenario: scenario.expect("--scenario required for --action cell"),
+                        mode: agent_mode.expect("--agent-mode required for --action cell"),
+                        sharing: sharing.expect("--sharing required for --action cell"),
+                        snapshotting,
+                        active_fraction,
+                        prefill_n: prefill,
+                        ramp: ramp.unwrap_or_else(|| {
+                            integration_tests::benchmarks::density::DEFAULT_AGENT_RAMP.to_vec()
+                        }),
+                    };
+                    integration_tests::benchmarks::density::agent::run_cell(
+                        &config, &manifest, &deps, &probe,
+                    )
+                    .await
+                    .expect("density agent cell failed")
+                }
+                DensitySection::Schedule => {
+                    let config = integration_tests::benchmarks::density::schedule::CellConfig {
+                        residency: schedule_target_residency
+                            .expect("--schedule-target-residency required for schedule cells"),
+                        context_spans: schedule_context_spans
+                            .expect("--schedule-context-spans required for schedule cells"),
+                        target_pattern: schedule_target_pattern
+                            .expect("--schedule-target-pattern required for schedule cells"),
+                        rate_period: std::time::Duration::from_secs(
+                            schedule_rate_period_secs.unwrap_or_else(|| {
+                                integration_tests::benchmarks::density::schedule::DEFAULT_RATE_PERIOD
+                                    .as_secs()
+                            }),
+                        ),
+                    };
+                    integration_tests::benchmarks::density::schedule::run_cell(
+                        &config,
+                        ramp.as_deref(),
+                        &manifest,
+                        &deps,
+                        &probe,
+                    )
+                    .await
+                    .expect("density schedule cell failed")
+                }
+                DensitySection::Promise => {
+                    let config = integration_tests::benchmarks::density::promise::CellConfig {
+                        payload_size: promise_payload_size
+                            .expect("--promise-payload-size required for promise cells"),
+                        waiter_presence: promise_waiter_presence
+                            .expect("--promise-waiter-presence required for promise cells"),
+                        topology: promise_topology
+                            .expect("--promise-topology required for promise cells"),
+                        runtime: promise_runtime
+                            .expect("--promise-runtime required for promise cells"),
+                    };
+                    integration_tests::benchmarks::density::promise::run_cell(
+                        &config,
+                        ramp.as_deref(),
+                        &manifest,
+                        &deps,
+                    )
+                    .await
+                    .expect("density promise cell failed")
+                }
+            };
+
+            // Emit the cell result as a single-result suite so the JSON shape
+            // matches cloud-perf (BenchmarkSuiteResultCollection), and the
+            // buildspec can upload it directly to S3.
+            let mut suite_result = BenchmarkSuiteResult::new(&format!("density-{section}"));
+            suite_result.add(result);
+            if let Some(run_id) = cloud_bench_run_id() {
+                suite_result.run_id = Some(format!("bench-{run_id}"));
+                let metadata = RunMetadata::from_env();
+                if !metadata.is_empty() {
+                    suite_result.run_metadata = Some(metadata);
+                }
+            }
+
+            if let Some(path) = &save_to_json {
+                suite_result
+                    .save_to_json(path)
+                    .expect("Failed to save density cell JSON result");
+            }
+
+            if json {
+                let str = serde_json::to_string(&suite_result)
+                    .expect("Failed to serialize density cell result");
+                println!("{str}");
+            } else {
+                println!("{}", suite_result.view());
+            }
+        }
+    }
+
+    deps.kill_all().await;
 }
