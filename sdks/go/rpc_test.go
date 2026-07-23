@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	common "github.com/golemcloud/golem-go/internal/wit/golem_agent_common"
-	host "github.com/golemcloud/golem-go/internal/wit/golem_agent_host"
-	types "github.com/golemcloud/golem-go/internal/wit/golem_core_types"
+	common "github.com/golemcloud/golem/sdks/go/internal/wit/golem_agent_common"
+	host "github.com/golemcloud/golem/sdks/go/internal/wit/golem_agent_host"
+	types "github.com/golemcloud/golem/sdks/go/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 

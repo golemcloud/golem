@@ -17,7 +17,7 @@
 package export_golem_api_load_snapshot
 
 import (
-	host "github.com/golemcloud/golem-go/internal/wit/golem_api_host"
+	host "github.com/golemcloud/golem/sdks/go/internal/wit/golem_api_host"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 

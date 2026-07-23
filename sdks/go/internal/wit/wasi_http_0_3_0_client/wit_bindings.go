@@ -32,7 +32,7 @@
 package wasi_http_0_3_0_client
 
 import (
-	"github.com/golemcloud/golem-go/internal/wit/wasi_http_0_3_0_types"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/wasi_http_0_3_0_types"
 	witAsync "go.bytecodealliance.org/pkg/wit/async"
 	witRuntime "go.bytecodealliance.org/pkg/wit/runtime"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"

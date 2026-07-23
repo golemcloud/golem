@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	guestExports "github.com/golemcloud/golem-go/internal/exports/export_golem_agent_guest"
-	common "github.com/golemcloud/golem-go/internal/wit/golem_agent_common"
-	types "github.com/golemcloud/golem-go/internal/wit/golem_core_types"
+	guestExports "github.com/golemcloud/golem/sdks/go/internal/exports/export_golem_agent_guest"
+	common "github.com/golemcloud/golem/sdks/go/internal/wit/golem_agent_common"
+	types "github.com/golemcloud/golem/sdks/go/internal/wit/golem_core_types"
 )
 
 // These tests run natively (host arch): they exercise the real export slots and

@@ -32,7 +32,7 @@
 package golem_api_load_snapshot
 
 import (
-	"github.com/golemcloud/golem-go/internal/wit/golem_api_host"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/golem_api_host"
 )
 
 type Snapshot = golem_api_host.Snapshot

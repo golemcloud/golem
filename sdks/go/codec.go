@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	types "github.com/golemcloud/golem-go/internal/wit/golem_core_types"
+	types "github.com/golemcloud/golem/sdks/go/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 

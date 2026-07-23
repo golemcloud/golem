@@ -19,9 +19,9 @@ import (
 	"reflect"
 	"time"
 
-	host "github.com/golemcloud/golem-go/internal/wit/golem_agent_host"
-	types "github.com/golemcloud/golem-go/internal/wit/golem_core_types"
-	clock "github.com/golemcloud/golem-go/internal/wit/wasi_clocks_0_3_0_system_clock"
+	host "github.com/golemcloud/golem/sdks/go/internal/wit/golem_agent_host"
+	types "github.com/golemcloud/golem/sdks/go/internal/wit/golem_core_types"
+	clock "github.com/golemcloud/golem/sdks/go/internal/wit/wasi_clocks_0_3_0_system_clock"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 

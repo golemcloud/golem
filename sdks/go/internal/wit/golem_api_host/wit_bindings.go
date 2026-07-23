@@ -32,7 +32,7 @@
 package golem_api_host
 
 import (
-	"github.com/golemcloud/golem-go/internal/wit/golem_core_types"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/golem_core_types"
 	witAsync "go.bytecodealliance.org/pkg/wit/async"
 	witRuntime "go.bytecodealliance.org/pkg/wit/runtime"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"

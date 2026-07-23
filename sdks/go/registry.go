@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"reflect"
 
-	common "github.com/golemcloud/golem-go/internal/wit/golem_agent_common"
-	types "github.com/golemcloud/golem-go/internal/wit/golem_core_types"
+	common "github.com/golemcloud/golem/sdks/go/internal/wit/golem_agent_common"
+	types "github.com/golemcloud/golem/sdks/go/internal/wit/golem_core_types"
 )
 
 // fieldInfo is one exported struct field, in declaration order. Declaration

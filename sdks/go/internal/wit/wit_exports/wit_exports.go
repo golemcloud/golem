@@ -32,12 +32,12 @@
 package wit_exports
 
 import (
-	"github.com/golemcloud/golem-go/internal/exports/export_golem_agent_guest"
-	"github.com/golemcloud/golem-go/internal/exports/export_golem_api_load_snapshot"
-	"github.com/golemcloud/golem-go/internal/exports/export_golem_api_save_snapshot"
-	"github.com/golemcloud/golem-go/internal/wit/golem_agent_common"
-	"github.com/golemcloud/golem-go/internal/wit/golem_api_host"
-	"github.com/golemcloud/golem-go/internal/wit/golem_core_types"
+	"github.com/golemcloud/golem/sdks/go/internal/exports/export_golem_agent_guest"
+	"github.com/golemcloud/golem/sdks/go/internal/exports/export_golem_api_load_snapshot"
+	"github.com/golemcloud/golem/sdks/go/internal/exports/export_golem_api_save_snapshot"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/golem_agent_common"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/golem_api_host"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/golem_core_types"
 	witAsync "go.bytecodealliance.org/pkg/wit/async"
 	witRuntime "go.bytecodealliance.org/pkg/wit/runtime"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"

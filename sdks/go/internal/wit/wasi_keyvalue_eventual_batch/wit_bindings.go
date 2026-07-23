@@ -32,8 +32,8 @@
 package wasi_keyvalue_eventual_batch
 
 import (
-	"github.com/golemcloud/golem-go/internal/wit/wasi_keyvalue_types"
-	"github.com/golemcloud/golem-go/internal/wit/wasi_keyvalue_wasi_keyvalue_error"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/wasi_keyvalue_types"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/wasi_keyvalue_wasi_keyvalue_error"
 	witRuntime "go.bytecodealliance.org/pkg/wit/runtime"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 	"runtime"

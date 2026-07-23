@@ -32,11 +32,11 @@
 package golem_api_oplog
 
 import (
-	"github.com/golemcloud/golem-go/internal/wit/golem_api_context"
-	"github.com/golemcloud/golem-go/internal/wit/golem_api_host"
-	"github.com/golemcloud/golem-go/internal/wit/golem_api_retry"
-	"github.com/golemcloud/golem-go/internal/wit/golem_core_types"
-	"github.com/golemcloud/golem-go/internal/wit/wasi_clocks_0_3_0_system_clock"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/golem_api_context"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/golem_api_host"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/golem_api_retry"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/golem_core_types"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/wasi_clocks_0_3_0_system_clock"
 	witRuntime "go.bytecodealliance.org/pkg/wit/runtime"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 	"runtime"

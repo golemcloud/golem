@@ -27,8 +27,8 @@
 package export_golem_agent_guest
 
 import (
-	common "github.com/golemcloud/golem-go/internal/wit/golem_agent_common"
-	types "github.com/golemcloud/golem-go/internal/wit/golem_core_types"
+	common "github.com/golemcloud/golem/sdks/go/internal/wit/golem_agent_common"
+	types "github.com/golemcloud/golem/sdks/go/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 

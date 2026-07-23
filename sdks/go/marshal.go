@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"reflect"
 
-	types "github.com/golemcloud/golem-go/internal/wit/golem_core_types"
+	types "github.com/golemcloud/golem/sdks/go/internal/wit/golem_core_types"
 )
 
 // Values cross the boundary as a schema-value-tree: a flat pool of nodes plus

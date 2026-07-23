@@ -1,4 +1,4 @@
-module github.com/golemcloud/golem-go
+module github.com/golemcloud/golem/sdks/go
 
 go 1.25.5
 

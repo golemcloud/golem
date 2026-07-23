@@ -45,14 +45,14 @@
 // Importing this package links the generated golem:agent/guest export glue into
 // the component, so an agent's main package needs only:
 //
-//	import _ "github.com/golemcloud/golem-go"
+//	import _ "github.com/golemcloud/golem/sdks/go"
 package golem
 
 import (
-	common "github.com/golemcloud/golem-go/internal/wit/golem_agent_common"
+	common "github.com/golemcloud/golem/sdks/go/internal/wit/golem_agent_common"
 
 	// Links the generated wasmexport glue into the component.
-	_ "github.com/golemcloud/golem-go/internal/wit/wit_exports"
+	_ "github.com/golemcloud/golem/sdks/go/internal/wit/wit_exports"
 )
 
 // Unit is the empty input/output marker. Go has no arity overloading, so a

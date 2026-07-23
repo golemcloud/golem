@@ -32,8 +32,8 @@
 package golem_secrets_reveal
 
 import (
-	"github.com/golemcloud/golem-go/internal/wit/golem_core_types"
-	"github.com/golemcloud/golem-go/internal/wit/golem_secrets_types"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/golem_core_types"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/golem_secrets_types"
 	witRuntime "go.bytecodealliance.org/pkg/wit/runtime"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 	"runtime"

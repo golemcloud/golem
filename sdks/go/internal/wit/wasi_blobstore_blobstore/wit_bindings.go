@@ -32,8 +32,8 @@
 package wasi_blobstore_blobstore
 
 import (
-	"github.com/golemcloud/golem-go/internal/wit/wasi_blobstore_container"
-	"github.com/golemcloud/golem-go/internal/wit/wasi_blobstore_types"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/wasi_blobstore_container"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/wasi_blobstore_types"
 	witRuntime "go.bytecodealliance.org/pkg/wit/runtime"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 	"runtime"

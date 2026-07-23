@@ -32,9 +32,9 @@
 package golem_agent_host
 
 import (
-	"github.com/golemcloud/golem-go/internal/wit/golem_agent_common"
-	"github.com/golemcloud/golem-go/internal/wit/golem_core_types"
-	"github.com/golemcloud/golem-go/internal/wit/wasi_clocks_0_3_0_system_clock"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/golem_agent_common"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/golem_core_types"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/wasi_clocks_0_3_0_system_clock"
 	witAsync "go.bytecodealliance.org/pkg/wit/async"
 	witRuntime "go.bytecodealliance.org/pkg/wit/runtime"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"

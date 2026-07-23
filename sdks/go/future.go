@@ -17,7 +17,7 @@ package golem
 import (
 	"fmt"
 
-	host "github.com/golemcloud/golem-go/internal/wit/golem_agent_host"
+	host "github.com/golemcloud/golem/sdks/go/internal/wit/golem_agent_host"
 )
 
 // Future is an invocation that has been started but not yet awaited, returned by

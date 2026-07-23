@@ -32,8 +32,8 @@
 package golem_agent_guest
 
 import (
-	"github.com/golemcloud/golem-go/internal/wit/golem_agent_common"
-	"github.com/golemcloud/golem-go/internal/wit/golem_core_types"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/golem_agent_common"
+	"github.com/golemcloud/golem/sdks/go/internal/wit/golem_core_types"
 )
 
 type SchemaValueTree = golem_core_types.SchemaValueTree

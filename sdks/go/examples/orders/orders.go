@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	golem "github.com/golemcloud/golem-go"
+	golem "github.com/golemcloud/golem/sdks/go"
 )
 
 // --- domain types -----------------------------------------------------------

@@ -17,7 +17,7 @@
 // the generated glue). See export_golem_agent_guest for the pattern.
 package export_golem_api_save_snapshot
 
-import host "github.com/golemcloud/golem-go/internal/wit/golem_api_host"
+import host "github.com/golemcloud/golem/sdks/go/internal/wit/golem_api_host"
 
 var Exports struct {
 	Save func() host.Snapshot
