@@ -155,16 +155,30 @@ moon fmt
 moon info    # Regenerate .mbti interface files
 ```
 
-## Go SDK (`sdks/go/`)
+## Go SDK (`sdks/go/golem/`)
 
-Module path **`github.com/golemcloud/golem/sdks/go`**, package `golem`. Built with
+Module path **`github.com/golemcloud/golem/sdks/go/golem`**, package `golem`.
+
+The directory is `sdks/go/golem`, not `sdks/go`, on purpose: Go binds an import to the *package
+clause*, but tooling and readers expect it to match the **last path element**. Naming the directory
+`golem` makes them agree, so agents import the SDK with no alias:
+
+```go
+import "github.com/golemcloud/golem/sdks/go/golem"   // binds `golem`
+```
+
+A hyphenated name (`golem-go-sdk`) could not do this — hyphens are not valid Go identifiers, so it
+would force an alias back. It also leaves `sdks/go/` free for siblings; `sdks/go/examples/` already
+lives there.
+
+Built with
 `componentize-go`, which is pinned per-project through Go's `tool` directive — never installed
 globally.
 
 ### Building and testing
 
 ```shell
-cd sdks/go
+cd sdks/go/golem
 go build ./...
 go test ./...                     # native tests; fast, no wasm needed
 GOOS=wasip1 GOARCH=wasm go vet -unsafeptr=false -composites=false ./...
@@ -202,8 +216,8 @@ Because the module lives in a subdirectory, Go **requires** the tag to be prefix
 subdirectory. This is a Go rule, not a choice:
 
 ```
-sdks/go/v0.1.0        ✅ the only form Go recognises
-golem-go-v0.1.0       ❌ invisible to Go — do not use
+sdks/go/golem/v0.1.0   ✅ the only form Go recognises
+golem-go-v0.1.0        ❌ invisible to Go — do not use
 ```
 
 Notes:
@@ -212,13 +226,17 @@ Notes:
   avoided; see <https://go.dev/ref/mod> ("module subdirectory ... also serves as a prefix for
   semantic version tags").
 - It does **not** collide with anything. There is no root `go.mod`, so the repo's `v1.5.x` release
-  tags are invisible to Go, and no existing tag has the `sdks/go/` shape.
+  tags are invisible to Go, and no existing tag has the `sdks/go/golem/` shape.
 - **Major version v2+** additionally requires a `/v2` suffix on the module path
-  (`github.com/golemcloud/golem/sdks/go/v2`), tagged `sdks/go/v2.0.0`.
-- Consumers using the default `GOPROXY` download only the `sdks/go` subtree (~7 MB), not the whole
-  repository. Only `GOPROXY=direct` clones the full repo, once per module cache.
-- `sdks/go/examples/*` have their own `go.mod`, so they are nested modules and are **excluded** from
-  the published module zip.
+  (`github.com/golemcloud/golem/sdks/go/golem/v2`), tagged `sdks/go/golem/v2.0.0`.
+- Consumers using the default `GOPROXY` download only the `sdks/go/golem` subtree (~7 MB), not the
+  whole repository. Only `GOPROXY=direct` clones the full repo, once per module cache. Repo size is
+  not a concern: the mirror serves far larger monorepos of exactly this shape (aws-sdk-go-v2 is
+  ~1.2 GB with subdirectory-tagged modules); the only hard limit is 500 MiB on the *module zip*.
+- `sdks/go/examples/*` are siblings of the module with their own `go.mod`, so they are never part of
+  the published zip.
+- The mirror stores a module permanently only if it can **detect a license**. Confirm licensing is
+  visible for the `sdks/go/golem` subtree before cutting the first tag.
 
 ### Local SDK overrides
 

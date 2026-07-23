@@ -1,0 +1,19 @@
+// Each Go component is its OWN module, with go.mod in the component directory.
+//
+// This is required, not stylistic: componentize-go discovers the SDK's WIT by
+// scanning the module and its dependencies for componentize-go.toml, and that
+// scan only resolves when it runs from the module root. A single app-level
+// module would fail with "failed to read path for WIT".
+module component_name
+
+go GOLEM_GO_DEP_GO_VERSION
+
+require GOLEM_GO_DEP_SDK_MODULE GOLEM_GO_DEP_SDK_VERSION
+
+require github.com/bytecodealliance/componentize-go GOLEM_GO_DEP_COMPONENTIZE_GO_VERSION
+
+// componentize-go is pinned per-app through this directive rather than installed
+// globally, so `go tool componentize-go` always runs the version this app was
+// built against.
+tool github.com/bytecodealliance/componentize-go
+GOLEM_GO_DEP_SDK_REPLACE

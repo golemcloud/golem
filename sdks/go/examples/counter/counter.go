@@ -1,7 +1,7 @@
 // Package main is the canonical Golem Go agent example: a durable counter.
 package main
 
-import golem "github.com/golemcloud/golem/sdks/go"
+import "github.com/golemcloud/golem/sdks/go/golem"
 
 type CounterId struct{ Name string }    // constructor params; also the type-level marker
 type CounterState struct{ count int64 } // private durable state

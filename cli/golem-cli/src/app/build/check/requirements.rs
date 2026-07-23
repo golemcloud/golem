@@ -162,12 +162,28 @@ const MOONBIT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
     },
 ];
 
+// Go needs only the stock `go` toolchain. componentize-go arrives through the
+// project's `tool` directive (so it is pinned per-app, never installed
+// globally), and it downloads the patched Go it needs into its own cache
+// side-by-side with the user's installation.
+const GO_TOOL_REQUIREMENTS: &[ToolRequirement] = &[ToolRequirement {
+    key: "go",
+    name: "Go",
+    check: ToolRequirementCheck::CommandVersion {
+        command: "go",
+        args: &["version"],
+    },
+    version_range: Some(VersionRange::at_least(versions::build_tool::GO_MIN)),
+    install_hint: "Install Go 1.25.5 or newer: https://go.dev/dl/",
+}];
+
 pub fn tool_requirements_for_language(language: GuestLanguage) -> &'static [ToolRequirement] {
     match language {
         GuestLanguage::Rust => RUST_TOOL_REQUIREMENTS,
         GuestLanguage::TypeScript => TYPESCRIPT_TOOL_REQUIREMENTS,
         GuestLanguage::Scala => SCALA_TOOL_REQUIREMENTS,
         GuestLanguage::MoonBit => MOONBIT_TOOL_REQUIREMENTS,
+        GuestLanguage::Go => GO_TOOL_REQUIREMENTS,
     }
 }
 

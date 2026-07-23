@@ -1740,6 +1740,7 @@ impl<'a> Component<'a> {
                     "rust" => Some(GuestLanguage::Rust),
                     "scala" => Some(GuestLanguage::Scala),
                     "moonbit" => Some(GuestLanguage::MoonBit),
+                    "go" => Some(GuestLanguage::Go),
                     _ => None,
                 })
         })
