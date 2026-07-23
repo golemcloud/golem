@@ -808,9 +808,8 @@ where
         // response-body resume (416 / short full response — deterministic for
         // the same request).
         let mut retry_exempt = false;
-        // In-function retry budget of the response-body resume path (T16 /
-        // "http-zone2-read"): shared across all resume attempts of this
-        // consume-body scope.
+        // In-function retry budget of the response-body resume path, shared across all resume
+        // attempts of this consume-body scope.
         let mut resume_retry_state = InFunctionRetryState::new();
         let mut resume_retry_ctx: Option<TaskRetryContext<Ctx>> = None;
         // Bytes delivered to the guest-facing stream so far (replayed chunks +

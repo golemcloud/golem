@@ -1793,7 +1793,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         if self.state.opens_durable_scope(function_type) {
-            // During replay, the scope `End` is folded into the resolver (FU4): claiming the scope
+            // During replay, the scope `End` is folded into the resolver: claiming the scope
             // `Start` registers an awaiter keyed by its `begin_index`, and `end_function` awaits it
             // instead of reading the `End` positionally. The handle is carried in the active scope
             // and only stored when the scope continues replaying (not when recovery switches to live
@@ -1986,10 +1986,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 // The durable scope opened in `begin_function` is now closed.
                 self.state.remove_durable_scope(begin_index)?;
             } else {
-                // FU4: the scope `End` was folded into the resolver at scope-open, so consume it
+                // The scope `End` was folded into the resolver at scope-open, so consume it
                 // through the resolver (never positionally, which under overlap could steal a
                 // concurrently-replaying sibling call's terminal). This also repairs a
-                // crash-induced half-pair (FU5) and closes the in-memory scope.
+                // crash-induced half-pair and closes the in-memory scope.
                 self.close_durable_scope_replay(begin_index).await?;
             }
             Ok(())
@@ -1998,15 +1998,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    /// Closes a durable scope during replay by awaiting its `End` through the resolver (FU4), then
+    /// Closes a durable scope during replay by awaiting its `End` through the resolver, then
     /// removing the in-memory scope. The scope `End` was registered as a resolver awaiter when its
     /// `Start` was claimed (`claim_scope_start`), so it is delivered here whether it is the entry at
     /// the cursor head or was already auto-drained to this scope's handle by another cursor driver.
     ///
     /// A crash between a scope's terminal marker and its `End` (`add_pair` gives contiguity, not
-    /// crash atomicity — §5.4.4) truncates the oplog at the marker, so the awaited `End` resolves as
+    /// crash atomicity) truncates the oplog at the marker, so the awaited `End` resolves as
     /// `Incomplete`; rather than hard-failing we append the missing `End` live to repair the pair for
-    /// future replays (FU5). A `None` handle means the scope was opened live (or recovery switched to
+    /// future replays. A `None` handle means the scope was opened live (or recovery switched to
     /// live at scope-open), in which case there is no recorded `End` to await.
     async fn close_durable_scope_replay(
         &mut self,
@@ -2049,7 +2049,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         ));
                     }
                     concurrent::ResolutionOutcome::Incomplete => {
-                        // FU5 half-pair recovery: the scope `Start` (and any terminal marker) is
+                        // Half-pair recovery: the scope `Start` (and any terminal marker) is
                         // committed but the scope `End` was lost to a crash. Replay has reached the
                         // end of the oplog, so append the missing `End` live to complete the pair.
                         self.state
@@ -2185,7 +2185,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         } else {
             // The transaction scope `Start` is preserved across restarts, so its index is the
             // stable original begin index that keys every transaction marker. Its `End` is folded
-            // into the resolver (FU4): `claim_scope_start` consumes the `Start`, validates the exact
+            // into the resolver: `claim_scope_start` consumes the `Start`, validates the exact
             // `<scope:transaction>` shape `begin_transaction_function` writes (so a corrupt or
             // interleaved oplog fails here instead of silently driving the recovery logic with the
             // wrong scope), and registers an awaiter the transaction terminal awaits instead of
@@ -2462,8 +2462,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 self.state.replay_state,
                 OplogEntry::CommittedRemoteTransaction
             )?;
-            // FU4: the scope `End` was folded into the resolver at scope-open, so await it (the
-            // terminal marker stays positional). FU5: if the crash split the marker/`End` pair, the
+            // The scope `End` was folded into the resolver at scope-open, so await it (the
+            // terminal marker stays positional). If a crash split the marker/`End` pair, the
             // `End` resolves as `Incomplete` and is repaired live. Also closes the in-memory scope.
             self.close_durable_scope_replay(begin_index).await?;
         }
@@ -2513,8 +2513,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 self.state.replay_state,
                 OplogEntry::RolledBackRemoteTransaction
             )?;
-            // FU4: the scope `End` was folded into the resolver at scope-open, so await it (the
-            // terminal marker stays positional). FU5: if the crash split the marker/`End` pair, the
+            // The scope `End` was folded into the resolver at scope-open, so await it (the
+            // terminal marker stays positional). If a crash split the marker/`End` pair, the
             // `End` resolves as `Incomplete` and is repaired live. Also closes the in-memory scope.
             self.close_durable_scope_replay(begin_index).await?;
         }
@@ -5806,7 +5806,7 @@ struct ActiveDurableScope {
     start_index: OplogIndex,
     #[allow(dead_code)]
     kind: DurableScopeKind,
-    /// During replay, the resolver handle for this scope's `End` (FU4): registered when the scope
+    /// During replay, the resolver handle for this scope's `End`: registered when the scope
     /// `Start` is claimed, awaited (and taken) when the scope closes. `None` on the live path (the
     /// scope `End` is written, not replayed) and once the handle has been taken by the closing
     /// `end_function` / transaction terminal.
@@ -6514,7 +6514,7 @@ impl PrivateDurableWorkerState {
 
     /// Opens a durable scope identified by its `Start` index. Must be balanced by
     /// `remove_durable_scope` on the matching `End`/`Cancelled`. `replay_end` is the resolver handle
-    /// for the scope `End` when the scope was claimed during replay (FU4), or `None` on the live
+    /// for the scope `End` when the scope was claimed during replay, or `None` on the live
     /// path.
     fn push_durable_scope(
         &mut self,
@@ -6545,7 +6545,7 @@ impl PrivateDurableWorkerState {
     }
 
     /// Takes the resolver handle for the scope `End` of the open scope at `start_index`, if one was
-    /// registered during replay (FU4). Leaves the scope open (it is closed by `remove_durable_scope`
+    /// registered during replay. Leaves the scope open (it is closed by `remove_durable_scope`
     /// after the `End` has been awaited). Returns `None` if the scope was opened live or the handle
     /// was already taken.
     fn take_durable_scope_replay_handle(

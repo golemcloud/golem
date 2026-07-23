@@ -1069,9 +1069,9 @@ where
                 .await?;
 
             if rolled_back.is_some() {
-                // The rollback was recorded in a previous incarnation. FU4: the scope `End` was
+                // The rollback was recorded in a previous incarnation. The scope `End` was
                 // folded into the resolver in `begin_transaction_function`, so close the durable
-                // scope by awaiting it (FU5 repairs a crash-split half-pair by appending the missing
+                // scope by awaiting it (repairing a crash-split half-pair by appending the missing
                 // `End` live) instead of a positional read. Otherwise the begin index would dangle in
                 // `active_durable_scopes` and mis-parent later `Start` entries.
                 ctx.close_durable_scope_replay(entry.begin_index).await?;

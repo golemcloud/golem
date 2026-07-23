@@ -585,7 +585,7 @@ impl BinaryDeserializer for SerializableFsErrorCode {
     }
 }
 
-// Schema-native A2 impl: a flat enum mirroring the legacy schema
+// Schema-native representation mirroring the legacy schema
 // above: a flat enum with the same 37 cases/indices.
 impl crate::schema::conversion::IntoSchema for SerializableFsErrorCode {
     fn type_id() -> TypeId {
@@ -851,7 +851,7 @@ impl BinaryDeserializer for SerializableSocketErrorCode {
     }
 }
 
-// Schema-native A2 impl: a flat enum mirroring the legacy schema
+// Schema-native representation mirroring the legacy schema
 // above: a flat enum with the same 21 cases/indices.
 impl crate::schema::conversion::IntoSchema for SerializableSocketErrorCode {
     fn type_id() -> TypeId {
@@ -1477,8 +1477,6 @@ impl Display for SerializableHttpMethod {
 /// except the body bytes. The outgoing request body is a `stream<u8>` the guest
 /// writes; its bytes are owned by that stream's own durable wrapper (the
 /// outgoing-body stream path), so they are intentionally not duplicated here.
-/// Whether the consuming `send` already captures those outgoing bytes is a
-/// step-3 open question; this payload assumes not and leaves them out.
 #[derive(
     Debug,
     Clone,
@@ -1812,7 +1810,7 @@ impl From<SerializableIpAddress> for IpAddress {
     }
 }
 
-// Schema-native A2 impl: a flat enum mirroring the legacy schema
+// Schema-native representation mirroring the legacy schema
 // above: the address rendered as a string.
 impl crate::schema::conversion::IntoSchema for SerializableIpAddress {
     fn type_id() -> TypeId {
@@ -2471,7 +2469,7 @@ pub enum SerializableRdbmsError {
 #[desert(transparent)]
 pub struct SerializableMacAddress(pub MacAddress);
 
-// Schema-native A2 impl: a flat enum mirroring the legacy schema
+// Schema-native representation mirroring the legacy schema
 // above: the MAC address rendered as a string.
 impl crate::schema::conversion::IntoSchema for SerializableMacAddress {
     fn type_id() -> TypeId {

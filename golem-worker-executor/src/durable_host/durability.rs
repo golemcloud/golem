@@ -15,16 +15,10 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::Resolution;
 use crate::metrics::wasm::{record_host_function_call, record_in_function_retry};
-// `TrapType` was used for the legacy retry-config fallback; no longer needed
-// here after the refactor that funnels every host-trap retry decision through
-// named-policy resolution.
-// use crate::model::TrapType;
 use crate::preview2::golem::durability::durability;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasOplog, HasWorker};
-// `RetryDecision` was used by the legacy retry-config fallback removed from
-// `try_trigger_retry`.
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use async_trait::async_trait;
@@ -201,8 +195,8 @@ pub struct DurableCallTrapContext {
     /// the call's execution scope, so it needs no early snapshot and cannot be made stale by a
     /// sibling. Currently inert for any marked error: it only feeds `TrapType::Error.in_atomic_region`,
     /// which `fixed_decision_for_trap_type` consults solely for `AgentError::DeterministicTrap`, and a
-    /// host-call trap is never a deterministic wasm trap. Kept so a future FU1 (atomic-region legality
-    /// under overlap) has the call's own membership available.
+    /// host-call trap is never a deterministic wasm trap. Kept so atomic-region legality checks
+    /// under overlap have the call's own membership available.
     pub in_atomic_region: bool,
 }
 
@@ -740,16 +734,15 @@ pub trait DurabilityHost: InFunctionRetryHost {
         &mut self,
     ) -> Result<PersistedDurableFunctionInvocation, WorkerExecutorError>;
 
-    /// Checks if the current retry policy allows more retries, and if yes, then returns
-    /// with `Err(failure)`. This error should be directly returned from host function
-    /// implementations, triggering a retry.
+    /// Classifies a failed host operation and delegates transient failures to the worker's retry
+    /// policy. If that policy permits another attempt, the returned error should be propagated by
+    /// the host function to trigger the retry.
     ///
     /// If retrying is not possible, the function returns Ok(()) and the host function
     /// can continue persisting the failed result permanently.
     ///
-    /// The `properties` bag is used for semantic policy resolution when named retry
-    /// policies are available. When empty or when no semantic policy matches, the
-    /// legacy `RetryConfig` fallback is used.
+    /// The `properties` bag is used for semantic policy resolution. The available named policies
+    /// include a synthesized default policy that matches any property set.
     async fn try_trigger_retry(
         &mut self,
         failure: Error,
@@ -1383,12 +1376,10 @@ impl InFunctionRetryController {
     /// If retrying is not possible, the function returns Ok(()) and the host function
     /// can continue persisting the failed result permanently.
     ///
-    /// The `classify` closure inspects the error and returns a `HostFailureKind` which determines
-    /// whether the error is wrapped as `AgentError::TransientError` or `AgentError::PermanentError`.
-    ///
-    /// When `Permanent`, the method returns `Ok(())` immediately (no retry, persist the failure).
-    /// When `Transient`, the inner `try_trigger_retry` is called, and if it triggers a retry,
-    /// the error is wrapped in a `ClassifiedHostError` so `TrapType::from_error` can detect it.
+    /// The `classify` closure determines whether the failure is transient or permanent. Permanent
+    /// failures return `Ok(())` immediately so the caller can persist them. Transient failures are
+    /// wrapped in [`ClassifiedHostError`] before retry-policy evaluation so trap classification
+    /// preserves the failure kind.
     pub async fn try_trigger_retry<Ok, Err: Display>(
         &self,
         ctx: &mut impl DurabilityHost,

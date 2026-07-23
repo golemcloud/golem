@@ -1038,8 +1038,8 @@ pub(super) fn deserialize_transmission_result(
     result.map_err(deserialize_error_code)
 }
 
-/// Starts the (demand-gated) durable recording of a sent request's body
-/// transmission result (G8): spawns [`HttpRequestBodyTransmissionTask`] for
+/// Starts the demand-gated durable recording of a sent request's body transmission result by
+/// spawning [`HttpRequestBodyTransmissionTask`] for
 /// the request's transmission wiring. The spawn happens at this deterministic
 /// point — right after the send terminal and its span entries — so that when
 /// the guest demands the result, the task's `Start` append/claim lands at a
@@ -1092,7 +1092,7 @@ pub(super) fn fail_transmission_task(
 /// deterministic function of guest behaviour, identical live and on replay
 /// (a demanding guest re-demands during replay, so the recorded `Start` is
 /// always claimed). This gating is what keeps a fire-and-forget send safe:
-/// `run_concurrent` does not drain spawned tasks (G25/T28), and a task left
+/// `run_concurrent` returns before spawned tasks settle, and a task left
 /// parked on replay-cursor machinery when the invocation's event loop exits
 /// would strand the fair cursor lock and deadlock the worker. Parked on the
 /// plain demand channel, an undemanded task is inert.
@@ -1113,8 +1113,8 @@ pub(super) fn fail_transmission_task(
 /// transmission's entries land before `AgentInvocationFinished`. A guest that
 /// demands, *cancels* the read, and immediately finishes the invocation can
 /// still leave this task parked on the replay cursor past `run_concurrent`
-/// exit — that residual exposure is shared with the other spawned durable
-/// tasks and is resolved by the T28 invocation-end drain.
+/// exit. The invocation-end tail-work drain keeps driving the store until the
+/// task finishes or reaches a safe park point.
 pub(super) struct HttpRequestBodyTransmissionTask<Ctx> {
     raw_rx: oneshot::Receiver<Result<(), ErrorCode>>,
     resolution_tx: oneshot::Sender<HttpTransmissionResolution>,

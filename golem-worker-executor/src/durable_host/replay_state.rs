@@ -1246,7 +1246,7 @@ impl CursorTx<'_> {
     /// Claims the next durable-*scope* `Start` (a request-less, unowned scope `Start` such as
     /// `<scope:batched-write>` / `<scope:transaction>`) matching the expected function
     /// name and the expected durable function type, and registers a resolver awaiter keyed by its
-    /// index so the matching scope `End` is routed through the resolver (FU4) instead of being
+    /// index so the matching scope `End` is routed through the resolver instead of being
     /// read positionally. Returns the scope's begin index and the handle its `end_function` /
     /// transaction-terminal awaits.
     ///
@@ -1287,7 +1287,7 @@ impl CursorTx<'_> {
             )
             .await?;
         let start_idx = handle.start_idx();
-        // FU7 (cursor liveness invariant, wiring side): every durable scope `Start` consumed during
+        // Every durable scope `Start` consumed during
         // replay leaves a registered awaiter, so its `End` is always a resolver-routed *awaited
         // terminal* and never an orphan that a parked awaiter behind it could sleep on until
         // `switch_to_live`. The only un-drained terminals the cursor may leave at its head are then
@@ -2202,7 +2202,7 @@ impl ReplayState {
     }
 
     /// Claims the next durable-scope `Start` matching exactly the expected name and registers a
-    /// resolver awaiter for it (FU4), so its matching scope `End` is consumed through
+    /// resolver awaiter for it, so its matching scope `End` is consumed through
     /// [`Self::await_resolution_outcome`] rather than a positional read. See
     /// [`CursorTx::claim_scope_start`].
     pub async fn claim_scope_start(
@@ -2702,7 +2702,7 @@ mod tests {
 
     /// A `Start` for the legacy `golem::api` fork pair. Its only special replay behaviour is the
     /// commit-only side effect in [`ReplayState::apply_commit_effects`] (recording its index in
-    /// `pending_fork_starts`), which the FU8 speculative-rollback test exercises.
+    /// `pending_fork_starts`), which the speculative-rollback test exercises.
     fn fork_start() -> OplogEntry {
         OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
@@ -2887,7 +2887,7 @@ mod tests {
 
     #[test]
     async fn speculative_rollback_does_not_apply_side_effects() {
-        // FU8: a speculative read whose predicate fails rolls the cursor back AND applies none of the
+        // A speculative read whose predicate fails rolls the cursor back AND applies none of the
         // entry's commit-only side effects. A GolemApiFork `Start` records its index in
         // `pending_fork_starts` only when permanently consumed; a rolled-back read must not.
         let rs = replay_state_over(vec![noop(), fork_start()]).await;
@@ -5283,7 +5283,7 @@ mod tests {
         }
     }
 
-    /// G18 compatibility: a representative pre-concurrency oplog — written by a build where
+    /// A representative pre-concurrency oplog — written by a build where
     /// durable execution was strictly sequential, so every host call is an *adjacent*
     /// `Start`/`End` pair appended atomically via `Oplog::add_pair` — must replay cleanly
     /// through the concurrent resolver.
@@ -5300,7 +5300,7 @@ mod tests {
     ///
     /// Replay drives the same claim/await sequence the sequential durability layer performs:
     /// each call is claimed then awaited immediately, scope `End`s resolve through the
-    /// resolver (FU4), and positional markers are consumed by `get_oplog_entry`.
+    /// resolver, and positional markers are consumed by `get_oplog_entry`.
     #[test]
     async fn pre_migration_adjacent_pair_oplog_replays_through_concurrent_resolver() {
         // [ 1: NoOp,
@@ -5393,7 +5393,7 @@ mod tests {
             matches!(entry, OplogEntry::EndAtomicRegion { begin_index, .. } if begin_index == OplogIndex::from_u64(7))
         );
 
-        // Batched-write scope: scope Start claims through the resolver (FU4), the child call
+        // Batched-write scope: scope Start claims through the resolver, the child call
         // is claimed by identity (parent_start_index), and the scope End resolves response-less.
         let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
         let (scope_idx, scope_handle) = rs

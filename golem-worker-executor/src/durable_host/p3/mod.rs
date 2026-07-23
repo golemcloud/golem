@@ -15,9 +15,8 @@
 //! Golem-owned wrappers for the WASI Preview 3 interfaces.
 //!
 //! These mirror the Preview 2 wrappers in the parent module: every host function has a
-//! Golem-owned implementation so that durability can be layered on later. For now every
-//! method directly delegates to the underlying `wasmtime_wasi` / `wasmtime_wasi_http`
-//! implementation.
+//! Golem-owned implementation that either applies Golem's durability semantics or delegates to
+//! the underlying `wasmtime_wasi` / `wasmtime_wasi_http` implementation.
 //!
 //! The Preview 3 bindings split each interface into a synchronous `Host` trait (implemented
 //! on a `HasData::Data` view type) and a store-based `HostWithStore` trait (implemented on

@@ -150,7 +150,7 @@ where
     // *derived*: its span id is a deterministic function of the send's own
     // host-call `Start` index, so no separate `StartSpan`/`FinishSpan` entries
     // are written or consumed — positional span entries are unsound under
-    // concurrent sends (G35). Oplogs recorded by older executors still carry a
+    // concurrent sends. Oplogs recorded by older executors still carry a
     // positional `StartSpan` between the durable scope `Start` and the
     // host-call `Start`; the request builder consumes it from that position
     // when present and the recorded span id is used instead (legacy mode).

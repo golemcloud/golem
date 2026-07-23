@@ -5232,7 +5232,7 @@ mod tests {
     }
 
     /// A synthetic, already-finished handle carrying an arbitrary [`CallExecutionScope`]. Used by the
-    /// Seam-2 terminal-failure tests to drive `trap_context()` (the call-owned classification a
+    /// Terminal-failure tests use this to drive `trap_context()` (the call-owned classification a
     /// terminal-step failure attaches) for a call initiated in a specific scope, without standing up
     /// a full `DurableWorkerCtx`. `finished` is set so dropping the handle is a no-op (no drop
     /// event), and no `drop_sink` is attached. `start_idx`/`begin_index` are set from
@@ -5819,7 +5819,7 @@ mod tests {
 
     #[test]
     async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
-        // Seam-2 ordering, proven against the production persistence stage itself
+        // Ordering is proven against the production persistence stage itself
         // (`CallHandle::persist_access_terminal`, the exact code `complete_access_impl` runs for a
         // persisted live call): while the terminal `End` append is still in flight, the live-call
         // permit must stay held and no cleanup event may become visible; both are released only
@@ -6306,13 +6306,13 @@ mod tests {
         assert_eq!(override_b.retry_from, idx(8));
     }
 
-    // ---- Seam-2 terminal-step failures ----
+    // ---- terminal-step failures ----
 
     /// Classifies a terminal-step failure the way the invocation loop does, with a deliberately
     /// *hostile* ambient fallback (a retry point and atomic-region membership belonging to no real
     /// call). A call-owned [`DurableCallTrapContext`] marker carried by the error must override both
     /// fallbacks; if the terminal path lost the marker, the classifier would silently adopt these
-    /// ambient values instead — the exact §5.7.3 misclassification we are guarding against.
+    /// ambient values instead.
     fn classify_with_hostile_ambient(error: &anyhow::Error) -> crate::model::TrapType {
         crate::model::TrapType::from_error::<crate::workerctx::default::Context>(
             error,
@@ -6361,8 +6361,8 @@ mod tests {
     fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
         // Two durable calls overlap in flight and share the same ambient worker state. Each one's
         // terminal-step failure must still be classified against its OWN retry point and
-        // atomic-region membership. Before §5.7.3 these escaped unmarked and fell back to that shared
-        // ambient state, so an overlapping sibling could clobber the grouping.
+        // atomic-region membership. Without the call-owned marker these would fall back to that
+        // shared ambient state, so an overlapping sibling could clobber the grouping.
         let scope_a = CallExecutionScope {
             retry_from: idx(42),
             durable_scope: Some(idx(40)),
