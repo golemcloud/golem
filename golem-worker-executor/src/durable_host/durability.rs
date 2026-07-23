@@ -439,6 +439,45 @@ pub(crate) fn collect_named_retry_policies(
     policies
 }
 
+/// Merges the named-retry-policy tiers into the effective policy list, shared by the direct
+/// worker context and the spawned-task retry context: the config-based default catch-all
+/// (tier 0), agent-config policies (tier 1), and environment-level policies (tier 2) override
+/// each other by name in that order, then the runtime overlay (tier 3, highest precedence) is
+/// applied — a `Some` mutation inserts/replaces the policy, a `None` mutation removes it. The
+/// result is sorted by descending priority, then by name.
+pub(crate) fn merge_named_retry_policy_tiers(
+    default_policy: NamedRetryPolicy,
+    agent_config_policies: impl IntoIterator<Item = NamedRetryPolicy>,
+    environment_policies: impl IntoIterator<Item = NamedRetryPolicy>,
+    runtime_retry_policy_mutations: &BTreeMap<String, Option<NamedRetryPolicy>>,
+) -> Vec<NamedRetryPolicy> {
+    let mut deduped = BTreeMap::new();
+    deduped.insert(default_policy.name.clone(), default_policy);
+    for policy in agent_config_policies {
+        deduped.insert(policy.name.clone(), policy);
+    }
+    for policy in environment_policies {
+        deduped.insert(policy.name.clone(), policy);
+    }
+    for (name, mutation) in runtime_retry_policy_mutations {
+        match mutation {
+            Some(policy) => {
+                deduped.insert(name.clone(), policy.clone());
+            }
+            None => {
+                deduped.remove(name);
+            }
+        }
+    }
+    let mut policies: Vec<NamedRetryPolicy> = deduped.into_values().collect();
+    policies.sort_by(|a, b| {
+        b.priority
+            .cmp(&a.priority)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    policies
+}
+
 pub(crate) fn evaluate_named_policy_step(
     named_policy: &NamedRetryPolicy,
     properties: &RetryProperties,
@@ -1615,34 +1654,12 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
                 vec![]
             });
 
-        let mut deduped = BTreeMap::new();
-        deduped.insert(
-            self.default_retry_policy.name.clone(),
+        merge_named_retry_policy_tiers(
             self.default_retry_policy.clone(),
-        );
-        for policy in &self.agent_config_retry_policies {
-            deduped.insert(policy.name.clone(), policy.clone());
-        }
-        for policy in environment_policies {
-            deduped.insert(policy.name.clone(), policy);
-        }
-        for (name, mutation) in &self.runtime_retry_policy_mutations {
-            match mutation {
-                Some(policy) => {
-                    deduped.insert(name.clone(), policy.clone());
-                }
-                None => {
-                    deduped.remove(name);
-                }
-            }
-        }
-        let mut policies: Vec<NamedRetryPolicy> = deduped.into_values().collect();
-        policies.sort_by(|a, b| {
-            b.priority
-                .cmp(&a.priority)
-                .then_with(|| a.name.cmp(&b.name))
-        });
-        policies
+            self.agent_config_retry_policies.iter().cloned(),
+            environment_policies,
+            &self.runtime_retry_policy_mutations,
+        )
     }
 
     async fn current_retry_state_for(&self, _retry_from: OplogIndex) -> Option<RetryPolicyState> {
@@ -3087,5 +3104,72 @@ mod tests {
                 ),
             }
         }
+    }
+
+    fn named_policy(name: &str, priority: u32, policy: RetryPolicy) -> NamedRetryPolicy {
+        NamedRetryPolicy {
+            name: name.to_string(),
+            priority,
+            predicate: Predicate::True,
+            policy,
+        }
+    }
+
+    /// `merge_named_retry_policy_tiers` must apply name-based overrides in tier order
+    /// (default < agent-config < environment < runtime mutations), honor runtime removals,
+    /// and sort the result by descending priority then by name.
+    #[test]
+    async fn merge_named_retry_policy_tiers_precedence_removal_and_sorting() {
+        let default_policy = named_policy("default", 0, RetryPolicy::Never);
+
+        let agent_config_policies = vec![
+            // Overridden by the environment tier below.
+            named_policy("shared", 10, RetryPolicy::Never),
+            named_policy("agent-only", 5, RetryPolicy::Immediate),
+            // Removed by a runtime mutation below.
+            named_policy("removed", 99, RetryPolicy::Immediate),
+        ];
+
+        let environment_policies = vec![
+            named_policy("shared", 20, RetryPolicy::Immediate),
+            // Same priority as "agent-only" to exercise the name tie-break.
+            named_policy("env-only", 5, RetryPolicy::Immediate),
+        ];
+
+        let mut mutations: BTreeMap<String, Option<NamedRetryPolicy>> = BTreeMap::new();
+        mutations.insert(
+            "runtime-added".to_string(),
+            Some(named_policy("runtime-added", 30, RetryPolicy::Immediate)),
+        );
+        mutations.insert(
+            "shared".to_string(),
+            Some(named_policy("shared", 1, RetryPolicy::Never)),
+        );
+        mutations.insert("removed".to_string(), None);
+
+        let merged = merge_named_retry_policy_tiers(
+            default_policy,
+            agent_config_policies,
+            environment_policies,
+            &mutations,
+        );
+
+        let names_and_priorities: Vec<(&str, u32)> = merged
+            .iter()
+            .map(|p| (p.name.as_str(), p.priority))
+            .collect();
+        assert_eq!(
+            names_and_priorities,
+            vec![
+                ("runtime-added", 30),
+                ("agent-only", 5),
+                ("env-only", 5),
+                ("shared", 1),
+                ("default", 0),
+            ]
+        );
+        // The runtime mutation (highest tier) determines the surviving "shared" policy.
+        let shared = merged.iter().find(|p| p.name == "shared").unwrap();
+        assert_eq!(shared.policy, RetryPolicy::Never);
     }
 }

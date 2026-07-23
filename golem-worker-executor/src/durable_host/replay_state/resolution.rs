@@ -23,14 +23,13 @@ impl ReplayState {
     /// [`Self::await_resolution_outcome`]; it never blocks (it parks by returning, not suspending).
     pub(super) async fn drain_awaited_terminals(&self) -> Result<(), WorkerExecutorError> {
         self.run_owned_cursor_op(|state| async move {
-            let cursor = &*state.cursor;
-            let mut tx = cursor.tx().await;
             // `|_| false` never matches a non-terminal, so the transaction only auto-drains the
             // awaited terminals at the head and then returns `None` on the first non-terminal
             // entry (or at end-of-replay) without consuming it.
-            let result = tx.try_get_oplog_entry(|_| false).await;
-            cursor.finish_tx(tx);
-            result.map(|_| ())
+            state
+                .with_tx(async |tx| tx.try_get_oplog_entry(|_| false).await)
+                .await
+                .map(|_| ())
         })
         .await
     }

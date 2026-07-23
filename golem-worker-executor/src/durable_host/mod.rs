@@ -6474,14 +6474,7 @@ impl PrivateDurableWorkerState {
         let default_policy = NamedRetryPolicy::default_from_config(&self.config.retry);
 
         // Tier 1: agent_config policies (cached; invalidated on component update)
-        let agent_config_policies =
-            if let Some(ref cached) = self.cached_agent_config_retry_policies {
-                cached.clone()
-            } else {
-                let policies = collect_named_retry_policies(&self.agent_config);
-                self.cached_agent_config_retry_policies = Some(policies.clone());
-                policies
-            };
+        let agent_config_policies = self.agent_config_retry_policies();
 
         // Tier 2: environment-level policies (fetched dynamically)
         let environment_policies = self
@@ -6494,31 +6487,12 @@ impl PrivateDurableWorkerState {
             });
 
         // Tier 3: runtime overlay (highest precedence)
-        let mut deduped = std::collections::BTreeMap::new();
-        deduped.insert(default_policy.name.clone(), default_policy);
-        for policy in agent_config_policies {
-            deduped.insert(policy.name.clone(), policy);
-        }
-        for policy in environment_policies {
-            deduped.insert(policy.name.clone(), policy);
-        }
-        for (name, mutation) in &self.runtime_retry_policy_mutations {
-            match mutation {
-                Some(policy) => {
-                    deduped.insert(name.clone(), policy.clone());
-                }
-                None => {
-                    deduped.remove(name);
-                }
-            }
-        }
-        let mut policies: Vec<NamedRetryPolicy> = deduped.into_values().collect();
-        policies.sort_by(|a, b| {
-            b.priority
-                .cmp(&a.priority)
-                .then_with(|| a.name.cmp(&b.name))
-        });
-        policies
+        merge_named_retry_policy_tiers(
+            default_policy,
+            agent_config_policies,
+            environment_policies,
+            &self.runtime_retry_policy_mutations,
+        )
     }
 
     /// Apply a set-retry-policy mutation (from oplog replay or live execution).
@@ -7392,9 +7366,9 @@ fn compute_read_only_paths(files: &HashMap<PathBuf, IFSWorkerFile>) -> HashSet<P
 /// entry was not the expected one.
 #[macro_export]
 macro_rules! get_oplog_entry {
-    ($replay_state:expr, $($cases:path),+) => {
+    (@reader $reader:expr; $($cases:path),+) => {
         loop {
-            let (oplog_index, oplog_entry) = $replay_state.get_oplog_entry().await?;
+            let (oplog_index, oplog_entry) = $reader.await?;
             match oplog_entry {
                 $($cases { .. } => {
                     break Ok((oplog_index, oplog_entry));
@@ -7409,6 +7383,9 @@ macro_rules! get_oplog_entry {
             }
         }
     };
+    ($replay_state:expr, $($cases:path),+) => {
+        $crate::get_oplog_entry!(@reader ($replay_state).get_oplog_entry(); $($cases),+)
+    };
 }
 
 /// [`get_oplog_entry!`] variant for call sites running inside Wasmtime accessor futures: reads
@@ -7418,21 +7395,7 @@ macro_rules! get_oplog_entry {
 #[macro_export]
 macro_rules! get_oplog_entry_owned {
     ($replay_state:expr, $($cases:path),+) => {
-        loop {
-            let (oplog_index, oplog_entry) = $replay_state.get_oplog_entry_owned().await?;
-            match oplog_entry {
-                $($cases { .. } => {
-                    break Ok((oplog_index, oplog_entry));
-                })+
-                _ => {
-                    tracing::error!("Unexpected oplog entry - expected {}, got {:?}", stringify!($($cases |)+), oplog_entry);
-                    break Err(golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
-                        stringify!($($cases |)+),
-                        format!("{:?}", oplog_entry),
-                    ));
-                }
-            }
-        }
+        $crate::get_oplog_entry!(@reader ($replay_state).get_oplog_entry_owned(); $($cases),+)
     };
 }
 

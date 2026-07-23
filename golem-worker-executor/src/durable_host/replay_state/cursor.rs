@@ -1337,12 +1337,41 @@ impl ReplayState {
         }
     }
 
-    pub async fn drop_override_and_restart(&self) -> Result<(), WorkerExecutorError> {
+    /// Runs `op` inside a cursor transaction: acquires the cursor lock via [`ReplayCursor::tx`],
+    /// awaits the operation, and always finishes the transaction via [`ReplayCursor::finish_tx`]
+    /// (publishing the cursor position and waking parked awaiters) before returning the
+    /// operation's result — including when the operation returns an error, since a failed
+    /// operation may still have made cursor progress (e.g. auto-drained awaited terminals) that
+    /// parked awaiters must observe.
+    ///
+    /// This wraps only the transaction lifecycle. It is *not* accessor-safe by itself: callers
+    /// running inside Wasmtime accessor futures must reach it through
+    /// [`Self::run_owned_cursor_op`] so they never queue on the fair cursor mutex directly.
+    pub(super) async fn with_tx<R>(&self, op: impl AsyncFnOnce(&mut CursorTx<'_>) -> R) -> R {
         let cursor = &*self.cursor;
         let mut tx = cursor.tx().await;
-        let result = tx.drop_override_and_restart().await;
+        let result = op(&mut tx).await;
         cursor.finish_tx(tx);
         result
+    }
+
+    /// The error returned when a positional oplog reader expects a next entry but the cursor is
+    /// at end-of-replay.
+    fn end_of_replay_error(&self) -> WorkerExecutorError {
+        WorkerExecutorError::unexpected_oplog_entry(
+            "next oplog entry to replay",
+            format!(
+                "end of replay for {} at index {}; replay target = {}",
+                self.cursor.owned_agent_id,
+                self.cursor.last_replayed_index(),
+                self.cursor.replay_target(),
+            ),
+        )
+    }
+
+    pub async fn drop_override_and_restart(&self) -> Result<(), WorkerExecutorError> {
+        self.with_tx(async |tx| tx.drop_override_and_restart().await)
+            .await
     }
 
     /// Runs a finite cursor operation on an independently-scheduled owned task and awaits its
@@ -1386,15 +1415,13 @@ impl ReplayState {
     pub async fn switch_to_live(&self) {
         let result = self
             .run_owned_cursor_op(|state| async move {
-                let cursor = &*state.cursor;
-                let mut tx = cursor.tx().await;
-                tx.switch_to_live();
-                cursor.finish_tx(tx);
+                state.with_tx(async |tx| tx.switch_to_live()).await;
                 // `CursorTx::switch_to_live` publishes the cursor position directly (not via
                 // `move_replay_idx`), so replay-progress observers are notified here.
-                cursor
+                state
+                    .cursor
                     .oplog
-                    .on_replay_progress(cursor.last_replayed_index())
+                    .on_replay_progress(state.cursor.last_replayed_index())
                     .await;
                 Ok(())
             })
@@ -1440,8 +1467,7 @@ impl ReplayState {
         new_target: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
         let cursor = &*self.cursor;
-        let mut tx = cursor.tx().await;
-        let result = async {
+        self.with_tx(async |tx| {
             let old_target = cursor.replay_target();
             match new_target.cmp(&old_target) {
                 std::cmp::Ordering::Equal => {}
@@ -1481,10 +1507,8 @@ impl ReplayState {
             }
             cursor.replay_target.set(new_target);
             Ok(())
-        }
-        .await;
-        cursor.finish_tx(tx);
-        result
+        })
+        .await
     }
 
     /// Whether `oplog_index` lies in a deleted (skipped) oplog region. Used as a validity guard
@@ -1534,23 +1558,11 @@ impl ReplayState {
     /// corrupted GolemApiFork payload) so the worker can fail the agent with a
     /// non-retriable trap rather than panicking the executor.
     pub async fn get_oplog_entry(&self) -> Result<(OplogIndex, OplogEntry), WorkerExecutorError> {
-        let cursor = &*self.cursor;
-        let mut tx = cursor.tx().await;
         // The closure always returns true, so the only `None` case is end-of-replay (a positional
         // reader expecting an entry that the oplog does not contain).
-        let result = tx.try_get_oplog_entry(|_| true).await;
-        cursor.finish_tx(tx);
-        result?.ok_or_else(|| {
-            WorkerExecutorError::unexpected_oplog_entry(
-                "next oplog entry to replay",
-                format!(
-                    "end of replay for {} at index {}; replay target = {}",
-                    cursor.owned_agent_id,
-                    cursor.last_replayed_index(),
-                    cursor.replay_target(),
-                ),
-            )
-        })
+        self.with_tx(async |tx| tx.try_get_oplog_entry(|_| true).await)
+            .await?
+            .ok_or_else(|| self.end_of_replay_error())
     }
 
     /// Reads the next oplog entry, and if it matches the given condition, skips
@@ -1571,11 +1583,8 @@ impl ReplayState {
         &self,
         condition: impl FnMut(&OplogEntry) -> bool,
     ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
-        let cursor = &*self.cursor;
-        let mut tx = cursor.tx().await;
-        let result = tx.try_get_oplog_entry(condition).await;
-        cursor.finish_tx(tx);
-        result
+        self.with_tx(async |tx| tx.try_get_oplog_entry(condition).await)
+            .await
     }
 
     /// [`Self::get_oplog_entry`] variant for callers running inside Wasmtime accessor futures:
@@ -1586,21 +1595,10 @@ impl ReplayState {
         &self,
     ) -> Result<(OplogIndex, OplogEntry), WorkerExecutorError> {
         self.run_owned_cursor_op(|state| async move {
-            let cursor = &*state.cursor;
-            let mut tx = cursor.tx().await;
-            let result = tx.try_get_oplog_entry(|_| true).await;
-            cursor.finish_tx(tx);
-            result?.ok_or_else(|| {
-                WorkerExecutorError::unexpected_oplog_entry(
-                    "next oplog entry to replay",
-                    format!(
-                        "end of replay for {} at index {}; replay target = {}",
-                        cursor.owned_agent_id,
-                        cursor.last_replayed_index(),
-                        cursor.replay_target(),
-                    ),
-                )
-            })
+            state
+                .with_tx(async |tx| tx.try_get_oplog_entry(|_| true).await)
+                .await?
+                .ok_or_else(|| state.end_of_replay_error())
         })
         .await
     }
@@ -1820,22 +1818,11 @@ impl ReplayState {
         &self,
         abandoned: &mut AbandonedStarts,
     ) -> Result<(OplogIndex, OplogEntry), WorkerExecutorError> {
-        let cursor = &*self.cursor;
-        let mut tx = cursor.tx().await;
-        let result = tx
-            .try_get_oplog_entry_at_invocation_boundary(abandoned, |_| true)
-            .await;
-        cursor.finish_tx(tx);
-        result?.ok_or_else(|| {
-            WorkerExecutorError::unexpected_oplog_entry(
-                "next oplog entry to replay",
-                format!(
-                    "end of replay for {} at index {}; replay target = {}",
-                    cursor.owned_agent_id,
-                    cursor.last_replayed_index(),
-                    cursor.replay_target(),
-                ),
-            )
+        self.with_tx(async |tx| {
+            tx.try_get_oplog_entry_at_invocation_boundary(abandoned, |_| true)
+                .await
         })
+        .await?
+        .ok_or_else(|| self.end_of_replay_error())
     }
 }

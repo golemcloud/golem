@@ -1651,26 +1651,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         // the drop policy. The host-call `End` is what makes the call durable, not these follow-ups.
         self.finished = true;
         if self.persisted {
-            // Surface a deferred request-upload failure here, at the call site, before recording the
-            // `End` that references the request. The leaf oplog's commit barrier is the backstop, but
-            // awaiting here turns an upload failure into a graceful error instead of a commit-time
-            // panic. A no-op when the request was inline or eagerly uploaded.
             let oplog = ctx.state.oplog.clone();
-            if let Err(err) = self.request_upload.wait().await.map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "failed to serialize and store durable call request: {err}"
-                ))
-            }) {
-                self.execution_scope.release_atomic_lease();
-                return Err(err);
-            }
             let host_response: HostResponse = response.clone().into();
-            let response_payload = match oplog.upload_payload(&host_response).await.map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "failed to serialize and store durable call response: {err}"
-                ))
-            }) {
-                Ok(payload) => payload,
+            let end = match prepare_end_entry(
+                &oplog,
+                &self.request_upload,
+                self.start_idx,
+                &host_response,
+            )
+            .await
+            {
+                Ok(end) => end,
                 Err(err) => {
                     self.execution_scope.release_atomic_lease();
                     return Err(err);
@@ -1687,12 +1678,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     self.start_idx
                 )));
             }
-            let end = OplogEntry::End {
-                timestamp: Timestamp::now_utc(),
-                start_index: self.start_idx,
-                response: Some(response_payload),
-                forced_commit: false,
-            };
             oplog.add(end).await;
             self.execution_scope.release_atomic_lease();
             // Close the durable scope (if one was opened), commit at the right boundary, and run the
@@ -1884,28 +1869,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         response: &Pair::Resp,
         post_end_entry: Option<OplogEntry>,
     ) -> Result<(), WorkerExecutorError> {
-        guard
-            .call()
-            .expect("terminal guard is armed")
-            .wait_request_upload()
-            .await
-            .map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "failed to serialize and store durable call request: {err}"
-                ))
-            })?;
         let host_response: HostResponse = response.clone().into();
-        let response_payload = oplog.upload_payload(&host_response).await.map_err(|err| {
-            WorkerExecutorError::runtime(format!(
-                "failed to serialize and store durable call response: {err}"
-            ))
-        })?;
-        let end = OplogEntry::End {
-            timestamp: Timestamp::now_utc(),
-            start_index: start_idx,
-            response: Some(response_payload),
-            forced_commit: false,
-        };
+        let end = prepare_end_entry(
+            &oplog,
+            &guard
+                .call()
+                .expect("terminal guard is armed")
+                .request_upload,
+            start_idx,
+            &host_response,
+        )
+        .await?;
         let terminal_oplog = oplog.clone();
         let terminal = tokio::spawn(async move {
             terminal_oplog.add(end).await;
@@ -1950,7 +1924,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .replay
             .take()
             .expect("replay() called on a live handle");
-        let start_idx = self.start_idx;
         let outcome = ctx
             .state
             .replay_state
@@ -1961,19 +1934,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 // Terminal: mark finished up front so a decode / scope-close failure below does not
                 // drop the (replay) handle as "unfinished".
                 self.finished = true;
-                let payload = response.ok_or_else(|| {
-                    WorkerExecutorError::unexpected_oplog_entry(
-                        "End { response: Some(..) }",
-                        "End { response: None }".to_string(),
-                    )
-                })?;
                 let oplog = ctx.state.oplog.clone();
-                let host_response = oplog.download_payload(payload).await.map_err(|err| {
-                    WorkerExecutorError::runtime(format!("End payload cannot be downloaded: {err}"))
-                })?;
-                let response: Pair::Resp = host_response
-                    .try_into()
-                    .map_err(|err| WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN, err))?;
+                let response = decode_completed_response::<Pair>(&oplog, response).await?;
                 ctx.end_durable_function(self.retry.function_type(), self.begin_index, false)
                     .await?;
                 Ok(CallReplayOutcome::Replayed(response))
@@ -1985,14 +1947,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 self.finished = true;
                 if let Some(payload) = partial {
                     let oplog = ctx.state.oplog.clone();
-                    let host_response = oplog.download_payload(payload).await.map_err(|err| {
-                        WorkerExecutorError::runtime(format!(
-                            "Cancelled partial payload cannot be downloaded: {err}"
-                        ))
-                    })?;
-                    let response: Pair::Resp = host_response.try_into().map_err(|err| {
-                        WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN, err)
-                    })?;
+                    let response = download_and_decode_response::<Pair>(
+                        &oplog,
+                        payload,
+                        "Cancelled partial payload",
+                    )
+                    .await?;
                     ctx.end_durable_function(self.retry.function_type(), self.begin_index, false)
                         .await?;
                     Ok(CallReplayOutcome::Replayed(response))
@@ -2020,35 +1980,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 ))
             }
             ResolutionOutcome::Incomplete => {
-                if !Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS {
-                    // Debug sessions must never re-execute side effects; refuse instead of
-                    // switching to live repair.
-                    self.finished = true;
-                    Err(WorkerExecutorError::invalid_request(format!(
-                        "the replay target lies inside an in-flight durable call (Start at {start_idx} has no End/Cancelled before the replay target); live re-execution of incomplete durable calls is disabled in debug sessions"
-                    )))
-                } else if self.retry.can_reexecute_on_incomplete_replay() {
-                    // Switch the handle to live completion of the existing, committed `Start`: the
-                    // caller re-runs the side effect and `complete`s, appending the missing `End`.
-                    // A failure during re-execution stays grouped at this call's own retry point via
-                    // the call-owned `execution_scope` (and the semantic-trap error marker).
-                    self.is_live = true;
-                    self.persisted = true;
-                    self.live_call_permit =
-                        Some(LiveCallPermit::new(ctx.state.live_host_call_counter()));
-                    Ok(CallReplayOutcome::Incomplete(self))
-                } else {
-                    // Re-executing a non-idempotent / batched / transaction write could duplicate an
-                    // external side effect. Reaching here means the surrounding scope recovery did
-                    // not already resolve it; fail hard, as before.
-                    self.finished = true;
-                    Err(WorkerExecutorError::unexpected_oplog_entry(
-                        "End or Cancelled",
-                        format!(
-                            "incomplete non-idempotent durable call Start at {start_idx} cannot be safely re-executed"
-                        ),
-                    ))
-                }
+                self.prepare_incomplete_live_repair(
+                    Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
+                    || ctx.state.live_host_call_counter(),
+                )?;
+                Ok(CallReplayOutcome::Incomplete(self))
             }
         }
     }
@@ -2075,23 +2011,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .replay
             .take()
             .expect("replay_access() called on a live handle");
-        let start_idx = self.start_idx;
         let outcome = replay_state.await_resolution_outcome(replay).await?;
         match outcome {
             ResolutionOutcome::Resolved(Resolution::Completed { response, .. }) => {
                 self.finished = true;
-                let payload = response.ok_or_else(|| {
-                    WorkerExecutorError::unexpected_oplog_entry(
-                        "End { response: Some(..) }",
-                        "End { response: None }".to_string(),
-                    )
-                })?;
-                let host_response = oplog.download_payload(payload).await.map_err(|err| {
-                    WorkerExecutorError::runtime(format!("End payload cannot be downloaded: {err}"))
-                })?;
-                let response: Pair::Resp = host_response
-                    .try_into()
-                    .map_err(|err| WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN, err))?;
+                let response = decode_completed_response::<Pair>(&oplog, response).await?;
                 end_durable_function_access(store, get_ctx, function_type, begin_index, false)
                     .await?;
                 Ok(CallReplayOutcome::Replayed(response))
@@ -2102,14 +2026,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             }) => {
                 if let Some(payload) = partial {
                     self.finished = true;
-                    let host_response = oplog.download_payload(payload).await.map_err(|err| {
-                        WorkerExecutorError::runtime(format!(
-                            "Cancelled partial payload cannot be downloaded: {err}"
-                        ))
-                    })?;
-                    let response: Pair::Resp = host_response.try_into().map_err(|err| {
-                        WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN, err)
-                    })?;
+                    let response = download_and_decode_response::<Pair>(
+                        &oplog,
+                        payload,
+                        "Cancelled partial payload",
+                    )
+                    .await?;
                     end_durable_function_access(store, get_ctx, function_type, begin_index, false)
                         .await?;
                     Ok(CallReplayOutcome::Replayed(response))
@@ -2159,29 +2081,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 unreachable!("std::future::pending never completes")
             }
             ResolutionOutcome::Incomplete => {
-                if !Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS {
-                    // Debug sessions must never re-execute side effects; refuse instead of
-                    // switching to live repair.
-                    self.finished = true;
-                    Err(WorkerExecutorError::invalid_request(format!(
-                        "the replay target lies inside an in-flight durable call (Start at {start_idx} has no End/Cancelled before the replay target); live re-execution of incomplete durable calls is disabled in debug sessions"
-                    )))
-                } else if self.retry.can_reexecute_on_incomplete_replay() {
-                    self.is_live = true;
-                    self.persisted = true;
-                    self.live_call_permit = Some(LiveCallPermit::new(store.with(|mut access| {
-                        get_ctx(access.data_mut()).state.live_host_call_counter()
-                    })));
-                    Ok(CallReplayOutcome::Incomplete(self))
-                } else {
-                    self.finished = true;
-                    Err(WorkerExecutorError::unexpected_oplog_entry(
-                        "End or Cancelled",
-                        format!(
-                            "incomplete non-idempotent durable call Start at {start_idx} cannot be safely re-executed"
-                        ),
-                    ))
-                }
+                self.prepare_incomplete_live_repair(
+                    Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
+                    || {
+                        store.with(|mut access| {
+                            get_ctx(access.data_mut()).state.live_host_call_counter()
+                        })
+                    },
+                )?;
+                Ok(CallReplayOutcome::Incomplete(self))
             }
         }
     }
@@ -2214,23 +2122,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .replay
             .take()
             .expect("replay_access_deferred() called on a live handle");
-        let start_idx = self.start_idx;
         let outcome = replay_state.await_resolution_outcome(replay).await?;
         match outcome {
             ResolutionOutcome::Resolved(Resolution::Completed { response, .. }) => {
                 self.finished = true;
-                let payload = response.ok_or_else(|| {
-                    WorkerExecutorError::unexpected_oplog_entry(
-                        "End { response: Some(..) }",
-                        "End { response: None }".to_string(),
-                    )
-                })?;
-                let host_response = oplog.download_payload(payload).await.map_err(|err| {
-                    WorkerExecutorError::runtime(format!("End payload cannot be downloaded: {err}"))
-                })?;
-                let response: Pair::Resp = host_response
-                    .try_into()
-                    .map_err(|err| WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN, err))?;
+                let response = decode_completed_response::<Pair>(&oplog, response).await?;
                 end_durable_function_access(store, get_ctx, function_type, begin_index, false)
                     .await?;
                 Ok(DeferredCallReplayOutcome::Replayed(
@@ -2254,18 +2150,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                      parking at the delivery boundary"
                 );
                 self.finished = true;
-                let payload = response.ok_or_else(|| {
-                    WorkerExecutorError::unexpected_oplog_entry(
-                        "End { response: Some(..) }",
-                        "End { response: None }".to_string(),
-                    )
-                })?;
-                let host_response = oplog.download_payload(payload).await.map_err(|err| {
-                    WorkerExecutorError::runtime(format!("End payload cannot be downloaded: {err}"))
-                })?;
-                let response: Pair::Resp = host_response
-                    .try_into()
-                    .map_err(|err| WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN, err))?;
+                let response = decode_completed_response::<Pair>(&oplog, response).await?;
                 end_durable_function_access(store, get_ctx, function_type, begin_index, false)
                     .await?;
                 Ok(DeferredCallReplayOutcome::Replayed(
@@ -2279,14 +2164,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             }) => {
                 if let Some(payload) = partial {
                     self.finished = true;
-                    let host_response = oplog.download_payload(payload).await.map_err(|err| {
-                        WorkerExecutorError::runtime(format!(
-                            "Cancelled partial payload cannot be downloaded: {err}"
-                        ))
-                    })?;
-                    let response: Pair::Resp = host_response.try_into().map_err(|err| {
-                        WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN, err)
-                    })?;
+                    let response = download_and_decode_response::<Pair>(
+                        &oplog,
+                        payload,
+                        "Cancelled partial payload",
+                    )
+                    .await?;
                     end_durable_function_access(store, get_ctx, function_type, begin_index, false)
                         .await?;
                     Ok(DeferredCallReplayOutcome::Replayed(
@@ -2309,29 +2192,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 }
             }
             ResolutionOutcome::Incomplete => {
-                if !Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS {
-                    // Debug sessions must never re-execute side effects; refuse instead of
-                    // switching to live repair.
-                    self.finished = true;
-                    Err(WorkerExecutorError::invalid_request(format!(
-                        "the replay target lies inside an in-flight durable call (Start at {start_idx} has no End/Cancelled before the replay target); live re-execution of incomplete durable calls is disabled in debug sessions"
-                    )))
-                } else if self.retry.can_reexecute_on_incomplete_replay() {
-                    self.is_live = true;
-                    self.persisted = true;
-                    self.live_call_permit = Some(LiveCallPermit::new(store.with(|mut access| {
-                        get_ctx(access.data_mut()).state.live_host_call_counter()
-                    })));
-                    Ok(DeferredCallReplayOutcome::Incomplete(self))
-                } else {
-                    self.finished = true;
-                    Err(WorkerExecutorError::unexpected_oplog_entry(
-                        "End or Cancelled",
-                        format!(
-                            "incomplete non-idempotent durable call Start at {start_idx} cannot be safely re-executed"
-                        ),
-                    ))
-                }
+                self.prepare_incomplete_live_repair(
+                    Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
+                    || {
+                        store.with(|mut access| {
+                            get_ctx(access.data_mut()).state.live_host_call_counter()
+                        })
+                    },
+                )?;
+                Ok(DeferredCallReplayOutcome::Incomplete(self))
             }
         }
     }
@@ -2441,16 +2310,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 .take()
                 .expect("cancel() in replay called on a live handle");
             let resolution = ctx.state.replay_state.await_resolution(replay).await?;
-            match resolution {
-                Resolution::Completed { end_idx, .. }
-                | Resolution::CompletedButDiscarded { end_idx, .. } => {
-                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        "Cancelled",
-                        format!("End at {end_idx}"),
-                    ));
-                }
-                Resolution::Cancelled { .. } => {}
-            }
+            expect_cancelled_resolution(&resolution)?;
             ctx.end_durable_function(self.retry.function_type(), self.begin_index, false)
                 .await?;
         }
@@ -2551,16 +2411,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 .take()
                 .expect("cancel_access() in replay called on a live handle");
             let resolution = replay_state.await_resolution(replay).await?;
-            match resolution {
-                Resolution::Completed { end_idx, .. }
-                | Resolution::CompletedButDiscarded { end_idx, .. } => {
-                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        "Cancelled",
-                        format!("End at {end_idx}"),
-                    ));
-                }
-                Resolution::Cancelled { .. } => {}
-            }
+            expect_cancelled_resolution(&resolution)?;
             end_durable_function_access(store, get_ctx, function_type, begin_index, false).await?;
         }
         Ok(())
@@ -2579,6 +2430,127 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             )))
         }
     }
+
+    /// Handles a [`ResolutionOutcome::Incomplete`] resolution, shared by every replay variant.
+    ///
+    /// Either refuses — debug sessions (`allow_live_repair == false`) must never re-execute side
+    /// effects, and non-re-executable function types (non-idempotent / batched / transaction
+    /// writes) could duplicate an external side effect — or switches this handle to live
+    /// completion of the existing, committed `Start`: the caller re-runs the side effect and
+    /// `complete`s, appending the missing `End`. A failure during re-execution stays grouped at
+    /// this call's own retry point via the call-owned `execution_scope` (and the semantic-trap
+    /// error marker).
+    ///
+    /// On refusal the handle is marked finished (the outcome is terminal); on success it is live,
+    /// persisted, and holds a fresh in-flight permit obtained from `get_counter` (a closure so
+    /// accessor callers can bound their `store.with` window to the refusal-free path).
+    fn prepare_incomplete_live_repair(
+        &mut self,
+        allow_live_repair: bool,
+        get_counter: impl FnOnce() -> Arc<AtomicUsize>,
+    ) -> Result<(), WorkerExecutorError> {
+        if !allow_live_repair {
+            self.finished = true;
+            return Err(WorkerExecutorError::invalid_request(format!(
+                "the replay target lies inside an in-flight durable call (Start at {} has no End/Cancelled before the replay target); live re-execution of incomplete durable calls is disabled in debug sessions",
+                self.start_idx
+            )));
+        }
+        if !self.retry.can_reexecute_on_incomplete_replay() {
+            // Reaching here means the surrounding scope recovery did not already resolve the
+            // incomplete call; fail hard, as before.
+            self.finished = true;
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "End or Cancelled",
+                format!(
+                    "incomplete non-idempotent durable call Start at {} cannot be safely re-executed",
+                    self.start_idx
+                ),
+            ));
+        }
+        self.is_live = true;
+        self.persisted = true;
+        self.live_call_permit = Some(LiveCallPermit::new(get_counter()));
+        Ok(())
+    }
+}
+
+/// Downloads a recorded response payload and decodes it into the call's typed response,
+/// preserving the canonical error classification: a failed download is a runtime error, a type
+/// mismatch is an unexpected-oplog-entry error against the call's fully qualified function name.
+async fn download_and_decode_response<Pair: HostPayloadPair>(
+    oplog: &Arc<dyn Oplog>,
+    payload: OplogPayload<HostResponse>,
+    payload_kind: &str,
+) -> Result<Pair::Resp, WorkerExecutorError> {
+    let host_response = oplog.download_payload(payload).await.map_err(|err| {
+        WorkerExecutorError::runtime(format!("{payload_kind} cannot be downloaded: {err}"))
+    })?;
+    host_response
+        .try_into()
+        .map_err(|err| WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN, err))
+}
+
+/// Decodes a replayed successful completion's response: requires the recorded `End` to carry a
+/// response payload, then downloads and decodes it via [`download_and_decode_response`].
+async fn decode_completed_response<Pair: HostPayloadPair>(
+    oplog: &Arc<dyn Oplog>,
+    response: Option<OplogPayload<HostResponse>>,
+) -> Result<Pair::Resp, WorkerExecutorError> {
+    let payload = response.ok_or_else(|| {
+        WorkerExecutorError::unexpected_oplog_entry(
+            "End { response: Some(..) }",
+            "End { response: None }".to_string(),
+        )
+    })?;
+    download_and_decode_response::<Pair>(oplog, payload, "End payload").await
+}
+
+/// Validates a replay-side cancellation: the recorded resolution must be `Cancelled`. A recorded
+/// completion (delivered or discarded) means the replayed guest cancelled a call that the
+/// recorded run completed — a replay divergence.
+fn expect_cancelled_resolution(resolution: &Resolution) -> Result<(), WorkerExecutorError> {
+    match resolution {
+        Resolution::Completed { end_idx, .. }
+        | Resolution::CompletedButDiscarded { end_idx, .. } => Err(
+            WorkerExecutorError::unexpected_oplog_entry("Cancelled", format!("End at {end_idx}")),
+        ),
+        Resolution::Cancelled { .. } => Ok(()),
+    }
+}
+
+/// Store-free persistence preparation shared by the direct ([`CallHandle::complete`]) and
+/// accessor ([`CallHandle::persist_access_terminal`]) completion paths: waits for the (possibly
+/// deferred) request upload, uploads the response payload, and constructs the terminal `End`
+/// entry — without appending it, touching atomic-region state, or closing scopes, which the two
+/// paths deliberately order differently (direct appends inline; accessor hands the append to an
+/// owned task via its terminal guard).
+async fn prepare_end_entry(
+    oplog: &Arc<dyn Oplog>,
+    request_upload: &PendingUpload,
+    start_idx: OplogIndex,
+    host_response: &HostResponse,
+) -> Result<OplogEntry, WorkerExecutorError> {
+    // Surface a deferred request-upload failure here, at the call site, before recording the
+    // `End` that references the request. The leaf oplog's commit barrier is the backstop, but
+    // awaiting here turns an upload failure into a graceful error instead of a commit-time
+    // panic. A no-op when the request was inline or eagerly uploaded.
+    request_upload.wait().await.map_err(|err| {
+        WorkerExecutorError::runtime(format!(
+            "failed to serialize and store durable call request: {err}"
+        ))
+    })?;
+    let response_payload = oplog.upload_payload(host_response).await.map_err(|err| {
+        WorkerExecutorError::runtime(format!(
+            "failed to serialize and store durable call response: {err}"
+        ))
+    })?;
+    Ok(OplogEntry::End {
+        timestamp: Timestamp::now_utc(),
+        start_index: start_idx,
+        response: Some(response_payload),
+        forced_commit: false,
+    })
 }
 
 pub(crate) async fn end_durable_function_access<T, D, Ctx>(

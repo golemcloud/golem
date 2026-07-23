@@ -25,13 +25,12 @@ impl ReplayState {
         let expected_function_name = expected_function_name.clone();
         let expected_function_type = expected_function_type.clone();
         self.run_owned_cursor_op(move |state| async move {
-            let cursor = &*state.cursor;
-            let mut tx = cursor.tx().await;
-            let result = tx
-                .claim_unowned_start(&expected_function_name, &expected_function_type)
-                .await;
-            cursor.finish_tx(tx);
-            result
+            state
+                .with_tx(async |tx| {
+                    tx.claim_unowned_start(&expected_function_name, &expected_function_type)
+                        .await
+                })
+                .await
         })
         .await
     }
@@ -51,11 +50,9 @@ impl ReplayState {
         &self,
     ) -> Result<ClaimedConcurrentStart, WorkerExecutorError> {
         self.run_owned_cursor_op(|state| async move {
-            let cursor = &*state.cursor;
-            let mut tx = cursor.tx().await;
-            let result = tx.claim_any_concurrent_start().await;
-            cursor.finish_tx(tx);
-            result
+            state
+                .with_tx(async |tx| tx.claim_any_concurrent_start().await)
+                .await
         })
         .await
     }
@@ -73,17 +70,16 @@ impl ReplayState {
         let expected_function_name = expected_function_name.clone();
         let expected_function_type = expected_function_type.clone();
         self.run_owned_cursor_op(move |state| async move {
-            let cursor = &*state.cursor;
-            let mut tx = cursor.tx().await;
-            let result = tx
-                .claim_owned_start(
-                    &expected_function_name,
-                    &expected_function_type,
-                    parent_start_index,
-                )
-                .await;
-            cursor.finish_tx(tx);
-            result
+            state
+                .with_tx(async |tx| {
+                    tx.claim_owned_start(
+                        &expected_function_name,
+                        &expected_function_type,
+                        parent_start_index,
+                    )
+                    .await
+                })
+                .await
         })
         .await
     }
@@ -100,13 +96,12 @@ impl ReplayState {
         let expected_function_name = expected_function_name.clone();
         let expected_function_type = expected_function_type.clone();
         self.run_owned_cursor_op(move |state| async move {
-            let cursor = &*state.cursor;
-            let mut tx = cursor.tx().await;
-            let result = tx
-                .claim_scope_start(&expected_function_name, &expected_function_type)
-                .await;
-            cursor.finish_tx(tx);
-            result
+            state
+                .with_tx(async |tx| {
+                    tx.claim_scope_start(&expected_function_name, &expected_function_type)
+                        .await
+                })
+                .await
         })
         .await
     }
@@ -123,17 +118,16 @@ impl ReplayState {
         let expected_function_type = expected_function_type.clone();
         let expected_request = expected_request.clone();
         self.run_owned_cursor_op(move |state| async move {
-            let cursor = &*state.cursor;
-            let mut tx = cursor.tx().await;
-            let result = tx
-                .claim_unowned_start_matching_request(
-                    &expected_function_name,
-                    &expected_function_type,
-                    &expected_request,
-                )
-                .await;
-            cursor.finish_tx(tx);
-            result
+            state
+                .with_tx(async |tx| {
+                    tx.claim_unowned_start_matching_request(
+                        &expected_function_name,
+                        &expected_function_type,
+                        &expected_request,
+                    )
+                    .await
+                })
+                .await
         })
         .await
     }
@@ -151,18 +145,17 @@ impl ReplayState {
         let expected_function_type = expected_function_type.clone();
         let expected_request = expected_request.clone();
         self.run_owned_cursor_op(move |state| async move {
-            let cursor = &*state.cursor;
-            let mut tx = cursor.tx().await;
-            let result = tx
-                .claim_owned_start_matching_request(
-                    &expected_function_name,
-                    &expected_function_type,
-                    parent_start_index,
-                    &expected_request,
-                )
-                .await;
-            cursor.finish_tx(tx);
-            result
+            state
+                .with_tx(async |tx| {
+                    tx.claim_owned_start_matching_request(
+                        &expected_function_name,
+                        &expected_function_type,
+                        parent_start_index,
+                        &expected_request,
+                    )
+                    .await
+                })
+                .await
         })
         .await
     }
