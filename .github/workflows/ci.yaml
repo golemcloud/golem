@@ -580,15 +580,15 @@ jobs:
           core-version: ${{ env.MOONBIT_INSTALL_VERSION }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Update MoonBit workspace dependencies
+        run: moon update
+        working-directory: sdks/moonbit
       - name: Check SDK
         run: moon check --target wasm
         working-directory: sdks/moonbit/golem_sdk
       - name: Test SDK
         run: moon test --target wasm
         working-directory: sdks/moonbit/golem_sdk
-      - name: Install tools dependencies
-        run: moon update && moon install
-        working-directory: sdks/moonbit/golem_sdk_tools
       - name: Check tools
         run: moon check
         working-directory: sdks/moonbit/golem_sdk_tools
@@ -600,14 +600,11 @@ jobs:
     runs-on: blacksmith
     steps:
       - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-rust
         with:
-          prefix-key: v2-golem-rust
-          shared-key: debug
-          cache-all-crates: true
-          save-if: false
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+          rust-targets: 'wasm32-wasip2'
+          cache-prefix-key: 'v2-golem-rust'
+          install-cargo-make: 'false'
       - name: Check formatting
         run: cargo fmt -- --check
         working-directory: sdks/rust

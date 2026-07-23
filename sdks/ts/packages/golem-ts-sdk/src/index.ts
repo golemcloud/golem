@@ -188,9 +188,7 @@ async function invokeTool(
   let inputCleanup: Promise<void> | undefined;
   const disposeInput = async (reason?: unknown): Promise<void> => {
     if (!inputCleanup) {
-      inputCleanup = inputAdapter
-        ? inputAdapter.dispose(reason)
-        : closeAsyncIterable(stdin);
+      inputCleanup = inputAdapter ? inputAdapter.dispose(reason) : closeAsyncIterable(stdin);
     }
     await inputCleanup;
   };
