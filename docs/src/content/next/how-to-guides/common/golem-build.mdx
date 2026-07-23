@@ -17,7 +17,7 @@ The build is a multi-step pipeline:
 1. **Check** — verifies that required build tools are installed (e.g., `cargo` for Rust, `npm`/`node` for TypeScript).
 2. **Build** — executes the build commands defined in `golem.yaml` for each component. These commands are language-specific:
    - **Rust**: runs `cargo build --target wasm32-wasip2` (or with `--release` for the release preset).
-   - **TypeScript**: runs a multi-stage pipeline — `tsc` for type checking, `golem-typegen` for metadata extraction, `rollup` for bundling, then injects the bundle into a prebuilt QuickJS WASM and optionally preinitializes it.
+   - **TypeScript**: runs `rollup` to bundle the component (type checking happens in-process during bundling), then injects the bundle into a prebuilt QuickJS WASM and optionally preinitializes it.
    - **Scala**: runs Scala.js compilation, JavaScript linking, QuickJS WASM injection, agent wrapper generation, and WASM composition.
 3. **Add Metadata** — embeds component name and version into the output WASM binary.
 4. **Generate Bridge** — generates bridge SDK code if the project uses inter-component communication.

@@ -226,6 +226,7 @@ const zodWalker: SchemaWalker = (schema, recurse): FluentCodec => {
     const optionCodec: FluentCodec = {
       graph: { defs: innerCodec.graph.defs, root },
       optionKind: kind as 'optional' | 'nullable',
+      optionInner: innerCodec,
       toValue: (value) =>
         isNone(value) ? v.option(undefined) : v.option(innerCodec.toValue(value)),
       fromValue: (sv) => {
@@ -288,6 +289,7 @@ const zodWalker: SchemaWalker = (schema, recurse): FluentCodec => {
       const elemCodec = recurse(element);
       return {
         graph: { defs: elemCodec.graph.defs, root: t.list(elemCodec.graph.root) },
+        listItem: elemCodec,
         toValue: (value) => v.list((value as unknown[]).map((e) => elemCodec.toValue(e))),
         fromValue: (sv) =>
           (sv as Extract<SchemaValue, { tag: 'list' }>).elements.map((e) => elemCodec.fromValue(e)),
@@ -389,6 +391,8 @@ const zodWalker: SchemaWalker = (schema, recurse): FluentCodec => {
       const defs = mergeGraphDefs([keyCodec.graph, valCodec.graph]);
       return {
         graph: { defs, root: t.map(keyCodec.graph.root, valCodec.graph.root) },
+        mapKey: keyCodec,
+        mapValue: valCodec,
         toValue: (value) =>
           v.map(
             Object.entries(value as Record<string, unknown>).map(([k, val]) => ({
@@ -412,6 +416,8 @@ const zodWalker: SchemaWalker = (schema, recurse): FluentCodec => {
       const defs = mergeGraphDefs([keyCodec.graph, valCodec.graph]);
       return {
         graph: { defs, root: t.map(keyCodec.graph.root, valCodec.graph.root) },
+        mapKey: keyCodec,
+        mapValue: valCodec,
         toValue: (value) =>
           v.map(
             Array.from((value as Map<unknown, unknown>).entries()).map(([k, val]) => ({

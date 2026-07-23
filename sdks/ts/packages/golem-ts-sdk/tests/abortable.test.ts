@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { describe, it, expect } from 'vitest';
-import { throwIfAborted, awaitPollable } from '../src/internal/pollableUtils';
+import { describe, expect, it, vi } from 'vitest';
+import { awaitPollable, disposeWitResource, throwIfAborted } from '../src/internal/pollableUtils';
 
 describe('throwIfAborted', () => {
   it('does nothing when signal is undefined', () => {
@@ -63,17 +63,58 @@ describe('throwIfAborted', () => {
   });
 });
 
+describe('disposeWitResource', () => {
+  it('accepts missing and non-callable disposal support as a no-op', () => {
+    expect(() => disposeWitResource(undefined)).not.toThrow();
+    expect(() => disposeWitResource(null)).not.toThrow();
+    expect(() => disposeWitResource({})).not.toThrow();
+    expect(() => disposeWitResource({ [Symbol.dispose]: 'not callable' })).not.toThrow();
+  });
+
+  it('invokes a disposer exactly once with the resource as its receiver', () => {
+    const dispose = vi.fn(function (this: unknown) {
+      expect(this).toBe(resource);
+    });
+    const resource = { [Symbol.dispose]: dispose };
+
+    disposeWitResource(resource);
+
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('suppresses failures while reading or invoking the disposer', () => {
+    const getterFailure = Object.defineProperty({}, Symbol.dispose, {
+      get() {
+        throw new Error('dispose getter failed');
+      },
+    });
+    const invocationFailure = {
+      [Symbol.dispose]() {
+        throw new Error('dispose failed');
+      },
+    };
+
+    expect(() => disposeWitResource(getterFailure)).not.toThrow();
+    expect(() => disposeWitResource(invocationFailure)).not.toThrow();
+  });
+});
+
 describe('awaitPollable', () => {
-  it('rejects immediately with pre-aborted signal', async () => {
+  it('rejects immediately with pre-aborted signal and disposes the unconsumed pollable', async () => {
     const signal = AbortSignal.abort('pre-aborted');
+    let disposed = false;
     const fakePollable = {
       promise: () => new Promise<void>(() => {}), // never resolves
       abortablePromise: (_signal: AbortSignal) => new Promise<void>(() => {}),
       ready: () => false,
       block: () => {},
+      [Symbol.dispose]: () => {
+        disposed = true;
+      },
     };
 
     await expect(awaitPollable(fakePollable as any, signal)).rejects.toBe('pre-aborted');
+    expect(disposed).toBe(true);
   });
 
   it('calls promise() when no signal is provided', async () => {
@@ -169,5 +210,24 @@ describe('awaitPollable', () => {
     };
 
     await expect(awaitPollable(fakePollable as any, controller.signal)).rejects.toBe(err);
+  });
+
+  it('preserves successful and failed polling outcomes when disposal throws', async () => {
+    const primaryFailure = new Error('poll failed');
+    const successful = {
+      promise: vi.fn().mockResolvedValue(undefined),
+      [Symbol.dispose]() {
+        throw new Error('dispose failed');
+      },
+    };
+    const failed = {
+      promise: vi.fn().mockRejectedValue(primaryFailure),
+      [Symbol.dispose]() {
+        throw new Error('dispose failed');
+      },
+    };
+
+    await expect(awaitPollable(successful as any)).resolves.toBeUndefined();
+    await expect(awaitPollable(failed as any)).rejects.toBe(primaryFailure);
   });
 });

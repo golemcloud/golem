@@ -14,6 +14,24 @@
 
 import type { Pollable } from 'wasi:io/poll@0.2.3';
 
+const disposeSymbol = (Symbol as typeof Symbol & { readonly dispose?: symbol }).dispose;
+
+export function disposeWitResource(resource: unknown): void {
+  if (
+    !disposeSymbol ||
+    resource === null ||
+    (typeof resource !== 'object' && typeof resource !== 'function')
+  )
+    return;
+
+  try {
+    const dispose = (resource as Record<symbol, unknown>)[disposeSymbol];
+    if (typeof dispose === 'function') dispose.call(resource);
+  } catch {
+    // Generated WIT resources are always released on a best-effort basis.
+  }
+}
+
 export function throwIfAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) return;
 
@@ -27,11 +45,17 @@ export function throwIfAborted(signal?: AbortSignal): void {
 }
 
 export async function awaitPollable(pollable: Pollable, signal?: AbortSignal): Promise<void> {
-  if (!signal) {
-    await pollable.promise();
-    return;
-  }
+  try {
+    if (!signal) {
+      await pollable.promise();
+      return;
+    }
 
-  throwIfAborted(signal);
-  await pollable.abortablePromise(signal);
+    throwIfAborted(signal);
+    await pollable.abortablePromise(signal);
+  } finally {
+    // wasm-rquickjs consumes a pollable while awaiting it, except when an
+    // already-aborted signal rejects before that transfer takes place.
+    disposeWitResource(pollable);
+  }
 }

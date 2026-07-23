@@ -65,6 +65,14 @@ vi.mock('golem:agent/host@2.0.0', () => ({
   })),
 }));
 
+vi.mock('golem:tool/host@0.1.0', () => ({
+  ToolRpc: vi.fn().mockImplementation(() => ({
+    invokeAndAwait: vi.fn(),
+    invoke: vi.fn(),
+    asyncInvokeAndAwait: vi.fn(),
+  })),
+}));
+
 vi.mock('golem:core/types@2.0.0', () => ({
   parseUuid: (uuid: string) => {
     const parts = uuid.replace(/-/g, '');
@@ -93,6 +101,12 @@ vi.mock('golem:secrets/reveal@0.1.0', () => ({
   reveal: () => {
     throw new Error('reveal is not mocked in this test setup');
   },
+}));
+
+vi.mock('wasi:cli/stdout@0.2.3', () => ({
+  getStdout: vi.fn(() => {
+    throw new Error('getStdout is not mocked for this test');
+  }),
 }));
 
 (globalThis as any).currentAgentId = 'foo-agent(123)';
