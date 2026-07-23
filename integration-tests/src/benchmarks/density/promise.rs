@@ -19,7 +19,7 @@ use golem_test_framework::benchmark::{
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::FromValue;
+use golem_wasm::{FromValue, ValueAndType};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Semaphore, mpsc};
@@ -71,6 +71,7 @@ struct PromiseWork {
     parsed_agent: ParsedAgentId,
     completer: Option<ParsedAgentId>,
     promise: PromiseId,
+    promise_value: ValueAndType,
     wait: bool,
     runtime: PromiseRuntime,
 }
@@ -301,6 +302,7 @@ async fn stage_work(
             parsed_agent,
             completer,
             promise,
+            promise_value,
             wait,
             runtime,
         },
@@ -458,7 +460,7 @@ async fn complete_promise(
             component,
             completer,
             "complete_promise",
-            data_value!(work.promise.clone(), payload_size),
+            data_value!(work.promise_value.clone(), payload_size),
         )
         .await?;
     } else {
