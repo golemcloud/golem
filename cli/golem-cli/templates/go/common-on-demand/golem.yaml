@@ -6,6 +6,8 @@ componentTemplates:
       debug:
         default: true
         build:
+        - command: go mod tidy
+          dir: "{{ componentDir }}"
         - command: go tool componentize-go build -o "{{ componentDir }}/golem-temp/{{ componentName | to_snake_case }}.wasm"
           dir: "{{ componentDir }}"
           mkdirs:
@@ -13,6 +15,8 @@ componentTemplates:
         componentWasm: "{{ componentDir }}/golem-temp/{{ componentName | to_snake_case }}.wasm"
       release:
         build:
+        - command: go mod tidy
+          dir: "{{ componentDir }}"
         - command: go tool componentize-go build -o "{{ componentDir }}/golem-temp/{{ componentName | to_snake_case }}.wasm"
           dir: "{{ componentDir }}"
           mkdirs:

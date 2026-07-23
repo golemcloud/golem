@@ -1,8 +1,10 @@
 # golem-app-manifest-header
 
-httpApi:
-  deployments:
-    local:
-    - subdomain: app-name  # resolves to app-name.localhost:9006 by default
-      agents:
-        CounterAgent: {}
+# NOTE: no `httpApi` deployment here yet.
+#
+# Exposing an agent over HTTP requires the agent type to carry http-mount
+# details, which the Go SDK does not emit yet (HTTP mount + endpoint metadata is
+# still to come). Declaring a deployment without it fails at deploy time with
+# HTTP_API_AGENT_TYPE_MISSING_HTTP_MOUNT. Invoke the agent directly meanwhile:
+#
+#   golem agent invoke 'CounterAgent("c1")' increment
