@@ -39,7 +39,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 
 > **Go support is new.** Go-specific skills (`golem-add-agent-go`, `golem-add-http-endpoint-go`, …)
 > are not available yet, so only the common skills are listed above. Until they land, use the Go SDK's
-> own documentation and the examples under `sdks/go/examples`.
+> own documentation.
 
 # Golem Application Development Guide (Go)
 

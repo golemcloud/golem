@@ -168,8 +168,7 @@ import "github.com/golemcloud/golem/sdks/go/golem"   // binds `golem`
 ```
 
 A hyphenated name (`golem-go-sdk`) could not do this — hyphens are not valid Go identifiers, so it
-would force an alias back. It also leaves `sdks/go/` free for siblings; `sdks/go/examples/` already
-lives there.
+would force an alias back. It also leaves `sdks/go/` free for siblings.
 
 Built with
 `componentize-go`, which is pinned per-project through Go's `tool` directive — never installed
@@ -187,13 +186,8 @@ GOOS=wasip1 GOARCH=wasm go vet -unsafeptr=false -composites=false ./...
 Native tests cover everything that does not reach a host import. `empty.s` lets a generated package
 *compile* for the host, but the linker still needs a definition for any `//go:wasmimport` symbol that
 host-arch code actually **references** — so RPC calls, `Future`, and `ClientFor` can only run under
-wasm. Those are covered by building an example component:
-
-```shell
-cd sdks/go/examples/counter        # or examples/orders
-go tool componentize-go build -o counter.wasm
-wasm-tools validate --features all counter.wasm
-```
+wasm. Exercise those by creating an app with `golem app new … go` in a playground and building it;
+the playground's `.golem-sdk-overrides` points the generated `go.mod` at this checkout.
 
 ### Regenerating WIT bindings
 
@@ -227,16 +221,13 @@ Notes:
   semantic version tags").
 - It does **not** collide with anything. There is no root `go.mod`, so the repo's `v1.5.x` release
   tags are invisible to Go, and no existing tag has the `sdks/go/golem/` shape.
-- **Major version v2+** additionally requires a `/v2` suffix on the module path
-  (`github.com/golemcloud/golem/sdks/go/golem/v2`), tagged `sdks/go/golem/v2.0.0`.
 - Consumers using the default `GOPROXY` download only the `sdks/go/golem` subtree (~7 MB), not the
   whole repository. Only `GOPROXY=direct` clones the full repo, once per module cache. Repo size is
   not a concern: the mirror serves far larger monorepos of exactly this shape (aws-sdk-go-v2 is
   ~1.2 GB with subdirectory-tagged modules); the only hard limit is 500 MiB on the *module zip*.
-- `sdks/go/examples/*` are siblings of the module with their own `go.mod`, so they are never part of
-  the published zip.
-- The mirror stores a module permanently only if it can **detect a license**. Confirm licensing is
-  visible for the `sdks/go/golem` subtree before cutting the first tag.
+- The mirror stores a module permanently only if it can **detect a license**, and Go has no metadata
+  field for it — `sdks/go/golem/LICENSE` is the only mechanism, so it must stay in the module subtree.
+  It carries the Golem Source License, matching the TS SDK packages.
 
 ### Local SDK overrides
 
@@ -280,7 +271,7 @@ cargo make wit
 2. SDK builds successfully
 3. SDK tests pass
 4. Agent template rebuilt (if TS SDK runtime code changed)
-5. Example component still builds and validates (Go SDK — the only cover for host-call paths)
+5. Go SDK: a generated app still builds (the only cover for host-call paths)
 6. Dependent test components rebuilt (if any)
 7. Platform tests pass (`cargo make worker-executor-tests` for Rust SDK, `cargo make cli-integration-tests` for TS SDK)
 8. Code formatted and linted

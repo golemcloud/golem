@@ -4,7 +4,7 @@
 // scanning the module and its dependencies for componentize-go.toml, and that
 // scan only resolves when it runs from the module root. A single app-level
 // module would fail with "failed to read path for WIT".
-module component_name
+module component-name
 
 go GOLEM_GO_DEP_GO_VERSION
 
