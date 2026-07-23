@@ -410,7 +410,7 @@ fn get_promise_method(runtime: PromiseRuntime) -> &'static str {
 fn await_promise_method(runtime: PromiseRuntime) -> &'static str {
     match runtime {
         PromiseRuntime::Rust => "await_promise",
-        PromiseRuntime::Ts => "await-promise",
+        PromiseRuntime::Ts => "awaitPromiseVoid",
     }
 }
 

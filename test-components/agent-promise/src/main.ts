@@ -26,6 +26,10 @@ class PromiseAgent extends BaseAgent {
       return new TextDecoder().decode(resultBytes)
     }
 
+    async awaitPromiseVoid(id: PromiseId): Promise<void> {
+      await awaitPromise(id)
+    }
+
     async forkAndSyncWithPromise(): Promise<string> {
       const promiseId = createPromise();
       const forkResult = fork();

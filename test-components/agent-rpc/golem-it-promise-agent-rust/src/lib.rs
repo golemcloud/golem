@@ -4,7 +4,7 @@ use golem_rust::{PromiseId, agent_definition, agent_implementation};
 pub trait PromiseAgent {
     fn new(name: String) -> Self;
     fn get_promise(&self) -> PromiseId;
-    fn await_promise(&self, promise_id: PromiseId) -> String;
+    fn await_promise(&self, promise_id: PromiseId);
 }
 
 struct PromiseAgentImpl {
@@ -21,7 +21,7 @@ impl PromiseAgent for PromiseAgentImpl {
         golem_rust::create_promise()
     }
 
-    fn await_promise(&self, promise_id: PromiseId) -> String {
-        String::from_utf8_lossy(&golem_rust::blocking_await_promise(&promise_id)).into_owned()
+    fn await_promise(&self, promise_id: PromiseId) {
+        let _ = golem_rust::blocking_await_promise(&promise_id);
     }
 }
