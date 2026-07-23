@@ -8,17 +8,17 @@ componentTemplates:
         build:
         - command: go mod tidy
           dir: "{{ componentDir }}"
-        - command: go tool componentize-go build -o "{{ componentDir }}/golem-temp/{{ componentName | to_snake_case }}.wasm"
+        - command: go tool componentize-go build -o "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
           dir: "{{ componentDir }}"
           mkdirs:
-          - "{{ componentDir }}/golem-temp"
-        componentWasm: "{{ componentDir }}/golem-temp/{{ componentName | to_snake_case }}.wasm"
+          - "{{ golemTempDir }}/agents"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
       release:
         build:
         - command: go mod tidy
           dir: "{{ componentDir }}"
-        - command: go tool componentize-go build -o "{{ componentDir }}/golem-temp/{{ componentName | to_snake_case }}.wasm"
+        - command: go tool componentize-go build -o "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
           dir: "{{ componentDir }}"
           mkdirs:
-          - "{{ componentDir }}/golem-temp"
-        componentWasm: "{{ componentDir }}/golem-temp/{{ componentName | to_snake_case }}.wasm"
+          - "{{ golemTempDir }}/agents"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
