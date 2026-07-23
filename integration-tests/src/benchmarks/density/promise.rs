@@ -120,7 +120,11 @@ pub async fn run_cell(
             rate,
         )
         .await?;
+        let terminal = period.waiter_timeouts > 0;
         outcome.record(rate, period);
+        if terminal {
+            break;
+        }
     }
 
     drop(ready_sender);
@@ -419,9 +423,14 @@ async fn complete_at_rate(
             .ok_or_else(|| anyhow::anyhow!("completion producer stopped"))?;
         completions.push(completion?);
     }
+    let mut waiter_timeouts = 0;
     while let Some(restage) = restages.join_next().await {
         match restage {
             Ok(Ok(())) => {}
+            Ok(Err(error)) if is_waiter_timeout(&error) => {
+                waiter_timeouts += 1;
+                println!("Promise-density: terminal waiter timeout at {rate}/s: {error:#}");
+            }
             Ok(Err(error)) => return Err(error),
             Err(error) if error.is_cancelled() => {}
             Err(error) => return Err(error.into()),
@@ -447,7 +456,14 @@ async fn complete_at_rate(
         elapsed: deadline.duration_since(started),
         completion_latencies,
         restage_timings,
+        waiter_timeouts,
     })
+}
+
+fn is_waiter_timeout(error: &anyhow::Error) -> bool {
+    error
+        .to_string()
+        .starts_with("Timeout waiting for worker status Idle")
 }
 
 async fn complete_promise(
@@ -563,6 +579,7 @@ struct Period {
     elapsed: Duration,
     completion_latencies: Vec<Duration>,
     restage_timings: Vec<RestageTimings>,
+    waiter_timeouts: u64,
 }
 
 impl Outcome {
@@ -600,6 +617,14 @@ impl Outcome {
                 )),
                 (period.completed as f64 / period.elapsed.as_secs_f64()).round() as u64,
             );
+            if period.waiter_timeouts > 0 {
+                recorder.count(
+                    &ResultKey::primary(format!(
+                        "terminal-promise-waiter-timeouts-at-offered-{rate}-per-sec"
+                    )),
+                    period.waiter_timeouts,
+                );
+            }
             for latency in period.completion_latencies {
                 recorder.duration(&ResultKey::primary("promise-completion-latency"), latency);
                 recorder.duration(
