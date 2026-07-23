@@ -36,6 +36,10 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::HashMap;
 #[cfg(test)]
 use std::collections::HashSet;
+#[cfg(test)]
+use std::future::Future;
+#[cfg(test)]
+use std::pin::Pin;
 use std::sync::{Arc, Weak};
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -47,11 +51,26 @@ pub struct PromiseHandle {
     inner: Arc<PromiseHandleInner>,
 }
 
-#[derive(Debug)]
+#[cfg_attr(not(test), derive(Debug))]
 pub struct PromiseHandleInner {
     notify: Notify,
     state: Mutex<Option<Vec<u8>>>,
+    /// Test-only seam: pauses after observing an incomplete promise but before
+    /// awaiting notification, so a test can deterministically interleave completion.
+    #[cfg(test)]
+    await_ready_interleave: std::sync::Mutex<Option<AwaitReadyInterleaveHook>>,
 }
+
+#[cfg(test)]
+impl std::fmt::Debug for PromiseHandleInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PromiseHandleInner").finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+type AwaitReadyInterleaveHook =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 impl PromiseHandle {
     fn new() -> Self {
@@ -59,6 +78,8 @@ impl PromiseHandle {
             inner: Arc::new(PromiseHandleInner {
                 notify: Notify::new(),
                 state: Mutex::new(None),
+                #[cfg(test)]
+                await_ready_interleave: std::sync::Mutex::new(None),
             }),
         }
     }
@@ -78,7 +99,19 @@ impl PromiseHandle {
         if self.is_ready().await {
             return;
         }
+        #[cfg(test)]
+        {
+            let hook = self.inner.await_ready_interleave.lock().unwrap().clone();
+            if let Some(hook) = hook {
+                hook().await;
+            }
+        }
         notified.await;
+    }
+
+    #[cfg(test)]
+    fn set_await_ready_interleave(&self, hook: AwaitReadyInterleaveHook) {
+        *self.inner.await_ready_interleave.lock().unwrap() = Some(hook);
     }
 
     pub async fn get(&self) -> Option<Vec<u8>> {
@@ -91,6 +124,7 @@ impl PromiseHandle {
         if state.is_some() {
             return false;
         }
+        // State update and wakeup must remain atomic with respect to awaiting handles.
         *state = Some(data);
         self.inner.notify.notify_waiters();
         true
@@ -249,7 +283,7 @@ impl DefaultPromiseService {
             )
             .await
             .unwrap_or_else(|err| {
-                panic!("failed to check if promise {promise_id} exists in Redis: {err}")
+                panic!("failed to check if promise {promise_id} exists in storage: {err}")
             })
     }
 
@@ -263,7 +297,7 @@ impl DefaultPromiseService {
                 &get_promise_result_redis_key(promise_id),
             )
             .await
-            .unwrap_or_else(|err| panic!("failed to get promise {promise_id} from Redis: {err}"))
+            .unwrap_or_else(|err| panic!("failed to get promise {promise_id} from storage: {err}"))
             .and_then(|state| match state {
                 RedisPromiseState::Complete(data) => Some(data),
                 RedisPromiseState::Pending => None,
@@ -291,12 +325,12 @@ impl PromiseService for DefaultPromiseService {
                 &RedisPromiseState::Pending,
             )
             .await
-            .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in Redis: {err}"));
+            .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in storage: {err}"));
 
         record_promise_created();
         crate::metrics::promises::inc_promise_pending_count();
 
-        // start tracking the promise locally so poll does not need to go to redis
+        // Start tracking the promise locally so poll does not need to go to storage.
         {
             let mut reg = self.registry.lock().await;
             reg.get_or_insert(&promise_id);
@@ -320,7 +354,7 @@ impl PromiseService for DefaultPromiseService {
             reg.get_or_insert(&promise_id)
         };
 
-        // Check if already completed in Redis
+        // Check if already completed in storage
         if let Some(data) = self.completed_data(&promise_id).await {
             let _ = handle.complete(data).await;
         }
@@ -350,7 +384,7 @@ impl PromiseService for DefaultPromiseService {
                 &RedisPromiseState::Complete(data.clone()),
             )
             .await
-            .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in Redis: {err}"));
+            .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in storage: {err}"));
 
         // Also wake any in-memory handle, ensuring that still running workers that wait on the pollable can continue
         let completed_data = if written {
@@ -375,7 +409,7 @@ impl PromiseService for DefaultPromiseService {
 
         // Wake up the worker that owns the promise, ensuring that it resumes its work.
         // We do this unconditionally here as the only reason complete will be called again during replay is if we managed to write
-        // the result to redis, but failed before the worker could persist the result.
+        // the result to storage, but failed before the worker could persist the result.
         self.worker_access
             .activate_worker_if_needed(&promise_id)
             .await?;
@@ -585,6 +619,7 @@ impl PromiseService for PromiseServiceMock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
     use golem_common::base_model::component::ComponentId;
     use proptest::prelude::*;
     use std::sync::Arc;
@@ -593,6 +628,18 @@ mod tests {
     use uuid::Uuid;
 
     test_r::enable!();
+
+    struct NoopPromiseWorkerAccess;
+
+    #[async_trait::async_trait]
+    impl PromiseWorkerAccess for NoopPromiseWorkerAccess {
+        async fn activate_worker_if_needed(
+            &self,
+            _promise_id: &PromiseId,
+        ) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
+    }
 
     fn promise_id() -> PromiseId {
         PromiseId {
@@ -626,12 +673,65 @@ mod tests {
         assert_eq!(handle.get().await, Some(vec![1]));
     }
 
+    #[test]
+    async fn duplicate_completion_wakes_local_handle_with_original_payload() {
+        let storage = Arc::new(InMemoryKeyValueStorage::new());
+        let service_a =
+            DefaultPromiseService::new(storage.clone(), Arc::new(NoopPromiseWorkerAccess));
+        let service_b = DefaultPromiseService::new(storage, Arc::new(NoopPromiseWorkerAccess));
+        let id = promise_id();
+        let id = service_a.create(&id.agent_id, id.oplog_idx).await;
+        let handle = service_b.poll(id.clone()).await.unwrap();
+
+        assert!(service_a.complete(id.clone(), vec![1]).await.unwrap());
+        assert!(!service_b.complete(id, vec![2]).await.unwrap());
+        assert_eq!(handle.get().await, Some(vec![1]));
+    }
+
+    #[test]
+    async fn completion_does_not_miss_waiter_between_state_check_and_wait() {
+        let handle = PromiseHandle::new();
+        let entered = Arc::new(Notify::new());
+        let resume = Arc::new(Notify::new());
+        let hook: AwaitReadyInterleaveHook = {
+            let entered = entered.clone();
+            let resume = resume.clone();
+            Arc::new(move || {
+                let entered = entered.clone();
+                let resume = resume.clone();
+                Box::pin(async move {
+                    entered.notify_one();
+                    resume.notified().await;
+                })
+            })
+        };
+        handle.set_await_ready_interleave(hook);
+
+        let waiter = tokio::spawn({
+            let handle = handle.clone();
+            async move {
+                handle.await_ready().await;
+                handle.get().await
+            }
+        });
+        entered.notified().await;
+        assert!(handle.complete(vec![1]).await);
+        resume.notify_one();
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+            .await
+            .expect("waiter missed completion between state check and wait")
+            .unwrap();
+        assert_eq!(received, Some(vec![1]));
+    }
+
     proptest! {
         #[test]
         fn concurrent_completions_keep_exactly_one_payload(
             payloads in prop::collection::vec(prop::collection::vec(any::<u8>(), 0..64), 1..32),
         ) {
-            let runtime = tokio::runtime::Builder::new_current_thread()
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
                 .enable_all()
                 .build()
                 .unwrap();
@@ -641,12 +741,16 @@ mod tests {
                 let completions = payloads.iter().cloned().map(|payload| {
                     let handle = handle.clone();
                     let barrier = barrier.clone();
-                    async move {
+                    tokio::spawn(async move {
                         barrier.wait().await;
                         handle.complete(payload).await
-                    }
+                    })
                 });
-                let results = futures::future::join_all(completions).await;
+                let results = futures::future::join_all(completions)
+                    .await
+                    .into_iter()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
                 let stored = handle.get().await.unwrap();
 
                 prop_assert_eq!(results.into_iter().filter(|completed| *completed).count(), 1);
@@ -655,31 +759,5 @@ mod tests {
             }).unwrap();
         }
 
-        #[test]
-        fn completion_never_loses_a_registered_waiter(payload in prop::collection::vec(any::<u8>(), 0..64)) {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            runtime.block_on(async move {
-                let handle = PromiseHandle::new();
-                let waiter = tokio::spawn({
-                    let handle = handle.clone();
-                    async move {
-                        handle.await_ready().await;
-                        handle.get().await
-                    }
-                });
-                tokio::task::yield_now().await;
-                assert!(handle.complete(payload.clone()).await);
-                let received = tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
-                    .await
-                    .expect("registered waiter was not notified")
-                    .unwrap();
-
-                prop_assert_eq!(received, Some(payload));
-                Ok(())
-            }).unwrap();
-        }
     }
 }
