@@ -80,8 +80,8 @@ export type {
 
 /** A schema type node: a structural body plus its metadata envelope. */
 export interface SchemaType {
-  body: SchemaTypeBody;
-  metadata: MetadataEnvelope;
+  readonly body: SchemaTypeBody;
+  readonly metadata: MetadataEnvelope;
 }
 
 export type SchemaTypeBody =
@@ -155,8 +155,8 @@ export interface UnionBranch {
 
 export interface SchemaTypeDef {
   /** Optional human-readable qualified name (display only). */
-  name?: string;
-  body: SchemaType;
+  readonly name?: string;
+  readonly body: SchemaType;
 }
 
 /**
@@ -164,8 +164,228 @@ export interface SchemaTypeDef {
  * stable `type-id`) plus a root type. `ref` bodies reference entries in `defs`.
  */
 export interface SchemaGraph {
-  defs: Map<TypeId, SchemaTypeDef>;
-  root: SchemaType;
+  readonly defs: ReadonlyMap<TypeId, SchemaTypeDef>;
+  readonly root: SchemaType;
+}
+
+const SCHEMA_SHAPE_MAX_DEPTH = 32;
+
+/** Compare canonical value shape while ignoring metadata and refinable restrictions. */
+export function schemaShapesMatch(left: SchemaGraph, right: SchemaGraph): boolean {
+  return schemaTypesMatch(left, left.root, right, right.root, SCHEMA_SHAPE_MAX_DEPTH, new Map());
+}
+
+function schemaTypesMatch(
+  leftGraph: SchemaGraph,
+  leftType: SchemaType,
+  rightGraph: SchemaGraph,
+  rightType: SchemaType,
+  depth: number,
+  visiting: Map<TypeId, Set<TypeId>>,
+): boolean {
+  if (leftType.body.tag === 'ref' && rightType.body.tag === 'ref') {
+    const rightIds = visiting.get(leftType.body.id);
+    if (rightIds?.has(rightType.body.id)) return true;
+    if (rightIds) rightIds.add(rightType.body.id);
+    else visiting.set(leftType.body.id, new Set([rightType.body.id]));
+  }
+
+  const left = resolveShapeType(leftGraph, leftType);
+  const right = resolveShapeType(rightGraph, rightType);
+  if (!left || !right || depth === 0) return false;
+  const next = depth - 1;
+
+  if (left.tag === 'string' && right.tag === 'text') {
+    return right.restrictions.languages === undefined;
+  }
+  if (left.tag === 'text' && right.tag === 'string') {
+    return left.restrictions.languages === undefined;
+  }
+  if (left.tag !== right.tag) return false;
+
+  switch (left.tag) {
+    case 'record': {
+      const other = right as Extract<SchemaTypeBody, { tag: 'record' }>;
+      return (
+        left.fields.length === other.fields.length &&
+        left.fields.every(
+          (field, index) =>
+            field.name === other.fields[index].name &&
+            schemaTypesMatch(
+              leftGraph,
+              field.body,
+              rightGraph,
+              other.fields[index].body,
+              next,
+              visiting,
+            ),
+        )
+      );
+    }
+    case 'variant': {
+      const other = right as Extract<SchemaTypeBody, { tag: 'variant' }>;
+      return (
+        left.cases.length === other.cases.length &&
+        left.cases.every((variantCase, index) => {
+          const otherCase = other.cases[index];
+          return (
+            variantCase.name === otherCase.name &&
+            optionalSchemaTypesMatch(
+              leftGraph,
+              variantCase.payload,
+              rightGraph,
+              otherCase.payload,
+              next,
+              visiting,
+            )
+          );
+        })
+      );
+    }
+    case 'enum':
+      return stringArraysEqual(left.cases, (right as typeof left).cases);
+    case 'flags':
+      return stringArraysEqual(left.names, (right as typeof left).names);
+    case 'tuple': {
+      const other = right as Extract<SchemaTypeBody, { tag: 'tuple' }>;
+      return (
+        left.elements.length === other.elements.length &&
+        left.elements.every((element, index) =>
+          schemaTypesMatch(leftGraph, element, rightGraph, other.elements[index], next, visiting),
+        )
+      );
+    }
+    case 'list':
+    case 'option': {
+      const other = right as typeof left;
+      return schemaTypesMatch(leftGraph, left.element, rightGraph, other.element, next, visiting);
+    }
+    case 'fixed-list': {
+      const other = right as Extract<SchemaTypeBody, { tag: 'fixed-list' }>;
+      return (
+        left.length === other.length &&
+        schemaTypesMatch(leftGraph, left.element, rightGraph, other.element, next, visiting)
+      );
+    }
+    case 'map': {
+      const other = right as Extract<SchemaTypeBody, { tag: 'map' }>;
+      return (
+        schemaTypesMatch(leftGraph, left.key, rightGraph, other.key, next, visiting) &&
+        schemaTypesMatch(leftGraph, left.value, rightGraph, other.value, next, visiting)
+      );
+    }
+    case 'result': {
+      const other = right as Extract<SchemaTypeBody, { tag: 'result' }>;
+      return (
+        optionalSchemaTypesMatch(leftGraph, left.ok, rightGraph, other.ok, next, visiting) &&
+        optionalSchemaTypesMatch(leftGraph, left.err, rightGraph, other.err, next, visiting)
+      );
+    }
+    case 'union': {
+      const other = right as Extract<SchemaTypeBody, { tag: 'union' }>;
+      return (
+        left.branches.length === other.branches.length &&
+        left.branches.every((branch, index) => {
+          const otherBranch = other.branches[index];
+          return (
+            branch.tag === otherBranch.tag &&
+            deepEqual(branch.discriminator, otherBranch.discriminator) &&
+            schemaTypesMatch(leftGraph, branch.body, rightGraph, otherBranch.body, next, visiting)
+          );
+        })
+      );
+    }
+    case 'quantity': {
+      const other = right as Extract<SchemaTypeBody, { tag: 'quantity' }>;
+      return (
+        left.spec.baseUnit === other.spec.baseUnit &&
+        stringSetsEqual(effectiveQuantityUnits(left.spec), effectiveQuantityUnits(other.spec))
+      );
+    }
+    case 'secret': {
+      const other = right as Extract<SchemaTypeBody, { tag: 'secret' }>;
+      return (
+        left.spec.category === other.spec.category &&
+        schemaTypesMatch(leftGraph, left.inner, rightGraph, other.inner, next, visiting)
+      );
+    }
+    case 'quota-token':
+      return (
+        left.spec.resourceName ===
+        (right as Extract<SchemaTypeBody, { tag: 'quota-token' }>).spec.resourceName
+      );
+    case 'text':
+      return optionalStringSetsEqual(
+        left.restrictions.languages,
+        (right as Extract<SchemaTypeBody, { tag: 'text' }>).restrictions.languages,
+      );
+    case 'binary':
+      return optionalStringSetsEqual(
+        left.restrictions.mimeTypes,
+        (right as Extract<SchemaTypeBody, { tag: 'binary' }>).restrictions.mimeTypes,
+      );
+    case 'future':
+    case 'stream': {
+      const other = right as typeof left;
+      return optionalSchemaTypesMatch(
+        leftGraph,
+        left.element,
+        rightGraph,
+        other.element,
+        next,
+        visiting,
+      );
+    }
+    default:
+      return true;
+  }
+}
+
+function resolveShapeType(graph: SchemaGraph, type: SchemaType): SchemaTypeBody | undefined {
+  let current = type;
+  const seen = new Set<TypeId>();
+  while (current.body.tag === 'ref') {
+    if (seen.has(current.body.id)) return undefined;
+    seen.add(current.body.id);
+    const definition = graph.defs.get(current.body.id);
+    if (!definition) return undefined;
+    current = definition.body;
+  }
+  return current.body;
+}
+
+function optionalSchemaTypesMatch(
+  leftGraph: SchemaGraph,
+  left: SchemaType | undefined,
+  rightGraph: SchemaGraph,
+  right: SchemaType | undefined,
+  depth: number,
+  visiting: Map<TypeId, Set<TypeId>>,
+): boolean {
+  return left === undefined || right === undefined
+    ? left === right
+    : schemaTypesMatch(leftGraph, left, rightGraph, right, depth, visiting);
+}
+
+function stringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function stringSetsEqual(left: readonly string[], right: readonly string[]): boolean {
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  return leftSet.size === rightSet.size && [...leftSet].every((value) => rightSet.has(value));
+}
+
+function optionalStringSetsEqual(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined,
+): boolean {
+  return left === undefined || right === undefined ? left === right : stringSetsEqual(left, right);
+}
+
+function effectiveQuantityUnits(spec: QuantitySpec): readonly string[] {
+  return spec.allowedSuffixes.length === 0 ? [spec.baseUnit] : spec.allowedSuffixes;
 }
 
 // ============================================================
@@ -338,6 +558,59 @@ export const v = {
   secret: (handle: GuestSecretHandle): SchemaValue => ({ tag: 'secret', handle }),
   quotaToken: (handle: GuestQuotaTokenHandle): SchemaValue => ({ tag: 'quota-token', handle }),
 };
+
+/** Clone a schema value without duplicating affine capability handles. */
+export function cloneSchemaValue(value: SchemaValue): SchemaValue {
+  switch (value.tag) {
+    case 'record':
+      return { tag: 'record', fields: value.fields.map(cloneSchemaValue) };
+    case 'variant':
+      return {
+        tag: 'variant',
+        caseIndex: value.caseIndex,
+        payload: value.payload ? cloneSchemaValue(value.payload) : undefined,
+      };
+    case 'flags':
+      return { tag: 'flags', flags: [...value.flags] };
+    case 'tuple':
+      return { tag: 'tuple', elements: value.elements.map(cloneSchemaValue) };
+    case 'list':
+      return { tag: 'list', elements: value.elements.map(cloneSchemaValue) };
+    case 'fixed-list':
+      return { tag: 'fixed-list', elements: value.elements.map(cloneSchemaValue) };
+    case 'map':
+      return {
+        tag: 'map',
+        entries: value.entries.map((entry) => ({
+          key: cloneSchemaValue(entry.key),
+          value: cloneSchemaValue(entry.value),
+        })),
+      };
+    case 'option':
+      return {
+        tag: 'option',
+        value: value.value !== undefined ? cloneSchemaValue(value.value) : undefined,
+      };
+    case 'result':
+      return {
+        tag: 'result',
+        result: {
+          tag: value.result.tag,
+          value:
+            value.result.value !== undefined ? cloneSchemaValue(value.result.value) : undefined,
+        },
+      };
+    case 'binary':
+      return { ...value, bytes: value.bytes.slice() };
+    case 'datetime':
+    case 'quantity':
+      return { ...value, value: { ...value.value } };
+    case 'union':
+      return { tag: 'union', unionTag: value.unionTag, body: cloneSchemaValue(value.body) };
+    default:
+      return { ...value };
+  }
+}
 
 // ============================================================
 // Structural equality (bigint / Uint8Array / Map aware)

@@ -116,13 +116,13 @@ export class RecursionRegistry {
     const defs = new Map<TypeId, SchemaTypeDef>(inline.graph.defs);
     defs.set(typeId, { body: inline.graph.root });
     const recursiveCodec: FluentCodec = {
+      ...inline,
       graph: { defs, root: t.ref(typeId) },
       // The record's recursive field IS the same `ref` codec, which delegates
       // back to this codec, so nested recursion round-trips through one shared
       // encode/decode pair.
       toValue: inline.toValue,
       fromValue: inline.fromValue,
-      ...(inline.fields !== undefined ? { fields: inline.fields } : {}),
     };
     entry.codec = recursiveCodec;
     entry.done = true;

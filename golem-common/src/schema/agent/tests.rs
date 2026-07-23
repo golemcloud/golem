@@ -348,12 +348,12 @@ fn json_input_projects_away_unreachable_defs() {
     ]);
     let input_schema =
         InputSchema::parameters([NamedField::user_supplied("seed", SchemaType::u64())]);
-    let json = serde_json::to_value(SchemaValue::Record {
+    let value = SchemaValue::Record {
         fields: vec![SchemaValue::U64(7)],
-    })
-    .unwrap();
+    };
 
-    let typed = json_input_schema_value_to_typed_schema_value(json, &graph, &input_schema).unwrap();
+    let typed =
+        json_input_schema_value_to_typed_schema_value(value, &graph, &input_schema).unwrap();
 
     assert!(typed.graph().defs.is_empty());
     assert_eq!(
@@ -385,16 +385,16 @@ fn json_input_keeps_transitively_reachable_defs_in_order() {
         SchemaType::ref_to(TypeId::new("A")),
     )]);
     // record { a: A { b: B { s: "x" } } }
-    let json = serde_json::to_value(SchemaValue::Record {
+    let value = SchemaValue::Record {
         fields: vec![SchemaValue::Record {
             fields: vec![SchemaValue::Record {
                 fields: vec![SchemaValue::String("x".to_string())],
             }],
         }],
-    })
-    .unwrap();
+    };
 
-    let typed = json_input_schema_value_to_typed_schema_value(json, &graph, &input_schema).unwrap();
+    let typed =
+        json_input_schema_value_to_typed_schema_value(value, &graph, &input_schema).unwrap();
 
     assert_eq!(proj_ids(&typed), vec!["A".to_string(), "B".to_string()]);
 }
@@ -417,7 +417,7 @@ fn json_input_handles_recursive_defs_without_looping() {
         SchemaType::ref_to(TypeId::new("Node")),
     )]);
     // record { n: Node { value: 1, next: Some(Node { value: 2, next: None }) } }
-    let json = serde_json::to_value(SchemaValue::Record {
+    let value = SchemaValue::Record {
         fields: vec![SchemaValue::Record {
             fields: vec![
                 SchemaValue::U64(1),
@@ -428,10 +428,10 @@ fn json_input_handles_recursive_defs_without_looping() {
                 },
             ],
         }],
-    })
-    .unwrap();
+    };
 
-    let typed = json_input_schema_value_to_typed_schema_value(json, &graph, &input_schema).unwrap();
+    let typed =
+        json_input_schema_value_to_typed_schema_value(value, &graph, &input_schema).unwrap();
 
     assert_eq!(proj_ids(&typed), vec!["Node".to_string()]);
 }
@@ -465,17 +465,17 @@ fn json_input_projects_all_schema_alternatives_not_value_branch() {
     ]);
     let input_schema = InputSchema::parameters([NamedField::user_supplied("choice", variant)]);
     // record { choice: variant#0(First { x: 1 }) }
-    let json = serde_json::to_value(SchemaValue::Record {
+    let value = SchemaValue::Record {
         fields: vec![SchemaValue::Variant(VariantValuePayload {
             case: 0,
             payload: Some(Box::new(SchemaValue::Record {
                 fields: vec![SchemaValue::U32(1)],
             })),
         })],
-    })
-    .unwrap();
+    };
 
-    let typed = json_input_schema_value_to_typed_schema_value(json, &graph, &input_schema).unwrap();
+    let typed =
+        json_input_schema_value_to_typed_schema_value(value, &graph, &input_schema).unwrap();
 
     let mut ids = proj_ids(&typed);
     ids.sort();
@@ -491,12 +491,11 @@ fn json_input_dangling_ref_reports_error_not_panic() {
         "x",
         SchemaType::ref_to(TypeId::new("Missing")),
     )]);
-    let json = serde_json::to_value(SchemaValue::Record {
+    let value = SchemaValue::Record {
         fields: vec![SchemaValue::U32(1)],
-    })
-    .unwrap();
+    };
 
-    let err = json_input_schema_value_to_typed_schema_value(json, &graph, &input_schema)
+    let err = json_input_schema_value_to_typed_schema_value(value, &graph, &input_schema)
         .expect_err("dangling ref must fail validation");
 
     assert!(
@@ -520,14 +519,14 @@ fn json_input_projected_result_round_trips_and_revalidates() {
         "k",
         SchemaType::ref_to(TypeId::new("Keep")),
     )]);
-    let json = serde_json::to_value(SchemaValue::Record {
+    let value = SchemaValue::Record {
         fields: vec![SchemaValue::Record {
             fields: vec![SchemaValue::String("hi".to_string())],
         }],
-    })
-    .unwrap();
+    };
 
-    let typed = json_input_schema_value_to_typed_schema_value(json, &graph, &input_schema).unwrap();
+    let typed =
+        json_input_schema_value_to_typed_schema_value(value, &graph, &input_schema).unwrap();
     assert_eq!(proj_ids(&typed), vec!["Keep".to_string()]);
 
     let encoded = serde_json::to_string(&typed).unwrap();
@@ -559,13 +558,12 @@ fn json_input_with_auto_injected_field_validates_caller_only_record() {
         ),
     ]);
     // Caller supplies only the two user-supplied values.
-    let json = serde_json::to_value(SchemaValue::Record {
+    let value = SchemaValue::Record {
         fields: vec![SchemaValue::U32(7), SchemaValue::String("hi".to_string())],
-    })
-    .unwrap();
+    };
 
     let typed =
-        json_input_schema_value_to_typed_schema_value(json, &SchemaGraph::empty(), &input_schema)
+        json_input_schema_value_to_typed_schema_value(value, &SchemaGraph::empty(), &input_schema)
             .expect("caller-only record (excluding auto-injected fields) must validate");
 
     let SchemaType::Record { fields, .. } = typed.root_type() else {

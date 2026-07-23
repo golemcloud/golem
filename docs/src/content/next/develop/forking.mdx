@@ -125,32 +125,36 @@ The following code snippet demonstrates calling `fork` and continuing on two dif
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
   <Tabs.Tab>
   ```typescript
-  import { BaseAgent, agent, fork, type ForkResult } from '@golemcloud/golem-ts-sdk';
+  import { z } from 'zod';
+  import { defineAgent, method, fork, type ForkResult } from '@golemcloud/golem-ts-sdk';
 
-  @agent()
-  class ExampleAgent extends BaseAgent {
-    name: string;
+  export const ExampleAgent = defineAgent({
+    name: 'ExampleAgent',
+    id: { name: z.string() },
+    methods: {
+      run: method({ input: {}, returns: z.void() }),
+    },
+  });
 
-    constructor(name: string) {
-      super();
-      this.name = name;
-    }
+  export const ExampleAgentImpl = ExampleAgent.implement({
+    init: ({ id }) => ({ name: id.name }),
+    methods: {
+      run(): void {
+        const result: ForkResult = fork();
 
-    run(): void {
-      const result: ForkResult = fork();
-
-      switch (result.tag) {
-        case 'original': {
-          // ...
-          break;
+        switch (result.tag) {
+          case 'original': {
+            // ...
+            break;
+          }
+          case 'forked': {
+            // ...
+            break;
+          }
         }
-        case 'forked': {
-          // ...
-          break;
-        }
-      }
-    }
-  }
+      },
+    },
+  });
   ```
   </Tabs.Tab>
   <Tabs.Tab>
@@ -255,10 +259,11 @@ The following code snippet demonstrates this pattern:
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
   <Tabs.Tab>
   ```typescript
+  import { z } from 'zod';
   import {
-    BaseAgent,
     PromiseId,
-    agent,
+    defineAgent,
+    method,
     awaitPromise,
     completePromise,
     createPromise,
@@ -269,44 +274,47 @@ The following code snippet demonstrates this pattern:
     message: string;
   };
 
-  @agent()
-  class ExampleAgent extends BaseAgent {
-    name: string;
+  export const ExampleAgent = defineAgent({
+    name: 'ExampleAgent',
+    id: { name: z.string() },
+    methods: {
+      run: method({ input: {}, returns: z.void() }),
+    },
+  });
 
-    constructor(name: string) {
-      super();
-      this.name = name;
-    }
+  export const ExampleAgentImpl = ExampleAgent.implement({
+    init: ({ id }) => ({ name: id.name }),
+    methods: {
+      async run(): Promise<void> {
+        const promiseId: PromiseId = createPromise();
 
-    async run(): Promise<void> {
-      const promiseId: PromiseId = createPromise();
+        switch (fork().tag) {
+          case 'original': {
+            const localResult: RunResult = {
+              message: `Hello from original agent with name: ${this.name}`,
+            };
 
-      switch (fork().tag) {
-        case 'original': {
-          const localResult: RunResult = {
-            message: `Hello from original agent with name: ${this.name}`,
-          };
+            const rawForkResult: Uint8Array = await awaitPromise(promiseId);
+            const forkResult: RunResult = JSON.parse(new TextDecoder().decode(rawForkResult));
 
-          const rawForkResult: Uint8Array = await awaitPromise(promiseId);
-          const forkResult: RunResult = JSON.parse(new TextDecoder().decode(rawForkResult));
+            console.log('local result :', localResult.message);
+            console.log('forked result:', forkResult.message);
+            break;
+          }
+          case 'forked': {
+            const result: RunResult = {
+              message: `Hello from forked agent with name: ${this.name}`,
+            };
 
-          console.log('local result :', localResult.message);
-          console.log('forked result:', forkResult.message);
-          break;
+            const rawResult: Uint8Array = new TextEncoder().encode(JSON.stringify(result));
+            completePromise(promiseId, rawResult);
+
+            break;
+          }
         }
-        case 'forked': {
-          const result: RunResult = {
-            message: `Hello from forked agent with name: ${this.name}`,
-          };
-
-          const rawResult: Uint8Array = new TextEncoder().encode(JSON.stringify(result));
-          completePromise(promiseId, rawResult);
-
-          break;
-        }
-      }
-    }
-  }
+      },
+    },
+  });
   ```
 
   <Callout type="warning">

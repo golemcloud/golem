@@ -30,7 +30,6 @@ import {
   emptyMetadata,
   field,
   mergeGraphDefs,
-  NamedFieldType,
   schemaType,
   SchemaType,
   SchemaValue,
@@ -47,7 +46,15 @@ import { GuestSecretHandle } from '../../internal/schema-model/secretHandle';
 import { SECRET_INTERNAL } from '../../internal/schema-model/secretInternal';
 import { GuestQuotaTokenHandle } from '../../internal/schema-model/quotaTokenHandle';
 import { QUOTA_INTERNAL } from '../../internal/schema-model/quotaInternal';
-import type { Secret as RawSecret, QuotaToken as RawQuotaToken } from 'golem:core/types@2.0.0';
+import type {
+  BinaryRestrictions,
+  PathDirection,
+  PathKind,
+  QuantitySpec,
+  QuantityValue,
+  Secret as RawSecret,
+  QuotaToken as RawQuotaToken,
+} from 'golem:core/types@2.0.0';
 import { FluentCodec } from './codec';
 import { buildResultCodec } from './result';
 import { StandardSchemaV1 } from './standardSchema';
@@ -156,7 +163,9 @@ export function isMarkerSchema(value: unknown): value is MarkerSchema {
 // Marker construction helpers
 // ============================================================
 
-type Validator<Output> = (value: unknown) => StandardSchemaV1.Result<Output>;
+type Validator<Output> = (
+  value: unknown,
+) => StandardSchemaV1.Result<Output> | Promise<StandardSchemaV1.Result<Output>>;
 
 /**
  * Mint a marker: a Standard Schema whose `~standard.validate` runs `validate`,
@@ -235,6 +244,8 @@ interface IntPin {
   big: boolean;
 }
 
+function intMarker(pin: IntPin & { big: false }, opts?: NumericOpts): MarkerSchema<number>;
+function intMarker(pin: IntPin & { big: true }, opts?: NumericOpts): MarkerSchema<bigint>;
 function intMarker(pin: IntPin, opts?: NumericOpts): MarkerSchema<number | bigint> {
   const { tag, min: typeMin, max: typeMax, big } = pin;
   const kind: BoundKind = tag.startsWith('s') ? 'signed' : 'unsigned';
@@ -353,6 +364,254 @@ function urlMarker(): MarkerSchema<string> {
   return marker(validate, descriptor);
 }
 
+// ============================================================
+// Tool value markers: path / quantity / key-value / binary
+// ============================================================
+
+export interface PathOptions {
+  direction?: PathDirection;
+  kind?: PathKind;
+  allowedMimeTypes?: string[];
+  allowedExtensions?: string[];
+}
+
+function pathMarker(options: PathOptions = {}): MarkerSchema<string> {
+  const spec = {
+    direction: options.direction ?? ('in-out' as const),
+    kind: options.kind ?? ('any' as const),
+    allowedMimeTypes: options.allowedMimeTypes ? [...options.allowedMimeTypes] : undefined,
+    allowedExtensions: options.allowedExtensions ? [...options.allowedExtensions] : undefined,
+  };
+  return marker(
+    (value) => {
+      if (typeof value !== 'string') return fail('Expected a string path');
+      if (value.length === 0) return fail('Expected a non-empty path');
+      const name = value.split('/').at(-1);
+      const dot = name?.lastIndexOf('.') ?? -1;
+      const extension =
+        dot >= 0 && dot + 1 < (name?.length ?? 0) ? name?.slice(dot + 1) : undefined;
+      if (
+        extension !== undefined &&
+        spec.allowedExtensions !== undefined &&
+        !spec.allowedExtensions.includes(extension)
+      ) {
+        return fail(`Path extension ${extension} is not allowed`);
+      }
+      return ok(value);
+    },
+    () => ({
+      graph: { defs: new Map(), root: t.path(spec) },
+      toValue: (value) => v.path(value as string),
+      fromValue: (value) => (value as Extract<SchemaValue, { tag: 'path' }>).value,
+    }),
+  );
+}
+
+export interface QuantityOptions {
+  baseUnit: string;
+  allowedSuffixes?: string[];
+  min?: QuantityValue;
+  max?: QuantityValue;
+}
+
+function isQuantityValue(value: unknown): value is QuantityValue {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as QuantityValue).mantissa === 'bigint' &&
+    (value as QuantityValue).mantissa >= -(2n ** 63n) &&
+    (value as QuantityValue).mantissa <= 2n ** 63n - 1n &&
+    Number.isSafeInteger((value as QuantityValue).scale) &&
+    (value as QuantityValue).scale >= -(2 ** 31) &&
+    (value as QuantityValue).scale <= 2 ** 31 - 1 &&
+    typeof (value as QuantityValue).unit === 'string'
+  );
+}
+
+const I128_MIN = -(2n ** 127n);
+const I128_MAX = 2n ** 127n - 1n;
+
+function quantityLessOrEqual(a: QuantityValue, b: QuantityValue): boolean | undefined {
+  const commonScale = Math.max(a.scale, b.scale);
+  const leftShift = commonScale - a.scale;
+  const rightShift = commonScale - b.scale;
+  if (leftShift > 38 || rightShift > 38) return undefined;
+  const left = a.mantissa * 10n ** BigInt(leftShift);
+  const right = b.mantissa * 10n ** BigInt(rightShift);
+  if (left < I128_MIN || left > I128_MAX || right < I128_MIN || right > I128_MAX) {
+    return undefined;
+  }
+  return left <= right;
+}
+
+function quantityMarker(options: QuantityOptions): MarkerSchema<QuantityValue> {
+  const spec: QuantitySpec = {
+    baseUnit: options.baseUnit,
+    allowedSuffixes: options.allowedSuffixes ? [...options.allowedSuffixes] : [],
+    min: options.min,
+    max: options.max,
+  };
+  const allowedUnits = new Set(
+    spec.allowedSuffixes.length === 0 ? [spec.baseUnit] : spec.allowedSuffixes,
+  );
+  return marker(
+    (value) => {
+      if (!isQuantityValue(value)) {
+        return fail('Expected a { mantissa: bigint, scale: number, unit: string } quantity');
+      }
+      if (
+        (spec.min && (!isQuantityValue(spec.min) || spec.min.unit !== spec.baseUnit)) ||
+        (spec.max && (!isQuantityValue(spec.max) || spec.max.unit !== spec.baseUnit)) ||
+        (spec.min && spec.max && quantityLessOrEqual(spec.min, spec.max) !== true)
+      ) {
+        return fail('Quantity schema has invalid bounds');
+      }
+      if (!allowedUnits.has(value.unit)) {
+        return fail(`Quantity unit ${value.unit} is not allowed`);
+      }
+      if (spec.min && quantityLessOrEqual(spec.min, value) !== true) {
+        return fail('Quantity value is below the minimum');
+      }
+      if (spec.max && quantityLessOrEqual(value, spec.max) !== true) {
+        return fail('Quantity value is above the maximum');
+      }
+      return ok(value);
+    },
+    () => ({
+      graph: { defs: new Map(), root: t.quantity(spec) },
+      toValue: (value) => v.quantity(value as QuantityValue),
+      fromValue: (value) => (value as Extract<SchemaValue, { tag: 'quantity' }>).value,
+    }),
+  );
+}
+
+export interface KeyValueOptions<Key> {
+  keySchema?: StandardSchemaV1<Key>;
+}
+
+function keyValueMarker<Value, Key = string>(
+  valueSchema: StandardSchemaV1<Value>,
+  options?: KeyValueOptions<Key>,
+): MarkerSchema<Map<Key, Value>> {
+  return marker(
+    (value) => {
+      if (!(value instanceof Map)) return fail('Expected a Map value');
+      const results = [...value].flatMap(([key, item]) => [
+        options?.keySchema
+          ? options.keySchema['~standard'].validate(key)
+          : typeof key === 'string'
+            ? ok(key)
+            : fail('Expected a string map key'),
+        valueSchema['~standard'].validate(item),
+      ]);
+      const finish = (
+        resolved: StandardSchemaV1.Result<unknown>[],
+      ): StandardSchemaV1.Result<Map<Key, Value>> => {
+        const failure = resolved.find(
+          (result): result is StandardSchemaV1.FailureResult => result.issues !== undefined,
+        );
+        if (failure) return { issues: failure.issues };
+        const transformed = new Map<Key, Value>();
+        for (let index = 0; index < resolved.length; index += 2) {
+          transformed.set(
+            (resolved[index] as StandardSchemaV1.SuccessResult<Key>).value,
+            (resolved[index + 1] as StandardSchemaV1.SuccessResult<Value>).value,
+          );
+        }
+        return ok(transformed);
+      };
+      return results.some((result) => result instanceof Promise)
+        ? Promise.all(results).then(finish)
+        : finish(results as StandardSchemaV1.Result<unknown>[]);
+    },
+    (recurse) => {
+      const keyCodec: FluentCodec = options?.keySchema
+        ? recurse(options.keySchema)
+        : {
+            graph: { defs: new Map(), root: t.string() },
+            toValue: (value) => v.string(value as string),
+            fromValue: (value) => (value as Extract<SchemaValue, { tag: 'string' }>).value,
+          };
+      const valueCodec = recurse(valueSchema);
+      const defs = mergeGraphDefs([keyCodec.graph, valueCodec.graph]);
+      return {
+        graph: { defs, root: t.map(keyCodec.graph.root, valueCodec.graph.root) },
+        mapKey: keyCodec,
+        mapValue: valueCodec,
+        toValue: (value) =>
+          v.map(
+            [...(value as Map<Key, Value>)].map(([key, item]) => ({
+              key: keyCodec.toValue(key),
+              value: valueCodec.toValue(item),
+            })),
+          ),
+        fromValue: (value) =>
+          new Map(
+            (value as Extract<SchemaValue, { tag: 'map' }>).entries.map((entry) => [
+              keyCodec.fromValue(entry.key) as Key,
+              valueCodec.fromValue(entry.value) as Value,
+            ]),
+          ),
+      };
+    },
+  );
+}
+
+function binaryMarker(options: BinaryRestrictions = {}): MarkerSchema<Uint8Array> {
+  const restrictions: BinaryRestrictions = {
+    mimeTypes: options.mimeTypes ? [...options.mimeTypes] : undefined,
+    minBytes: options.minBytes,
+    maxBytes: options.maxBytes,
+  };
+  return marker(
+    (value) => {
+      if (!(value instanceof Uint8Array)) return fail('Expected a Uint8Array for WIT binary');
+      if (restrictions.minBytes !== undefined && value.byteLength < restrictions.minBytes) {
+        return fail(`Binary value has fewer than ${restrictions.minBytes} bytes`);
+      }
+      if (restrictions.maxBytes !== undefined && value.byteLength > restrictions.maxBytes) {
+        return fail(`Binary value has more than ${restrictions.maxBytes} bytes`);
+      }
+      return ok(value);
+    },
+    () => ({
+      graph: { defs: new Map(), root: schemaType({ tag: 'binary', restrictions }) },
+      toValue: (value) => ({ tag: 'binary', bytes: value as Uint8Array }),
+      fromValue: (value) => (value as Extract<SchemaValue, { tag: 'binary' }>).bytes,
+    }),
+  );
+}
+
+/** A filesystem path value backed by the rich WIT `path` schema node. */
+export function Path(options?: PathOptions): MarkerSchema<string> {
+  return pathMarker(options);
+}
+
+/** A fixed-point quantity backed by the rich WIT `quantity` schema node. */
+export function Quantity(options: QuantityOptions): MarkerSchema<QuantityValue> {
+  return quantityMarker(options);
+}
+
+/** A key-value collection backed by a real WIT `map` node. */
+export function KeyValue<Value>(
+  valueSchema: StandardSchemaV1<Value>,
+): MarkerSchema<Map<string, Value>>;
+export function KeyValue<Value, Key>(
+  valueSchema: StandardSchemaV1<Value>,
+  options: KeyValueOptions<Key> & { keySchema: StandardSchemaV1<Key> },
+): MarkerSchema<Map<Key, Value>>;
+export function KeyValue<Value, Key = string>(
+  valueSchema: StandardSchemaV1<Value>,
+  options?: KeyValueOptions<Key>,
+): MarkerSchema<Map<Key, Value>> {
+  return keyValueMarker(valueSchema, options);
+}
+
+/** Binary data backed by the rich WIT `binary` node, not `list<u8>`. */
+export function Bytes(options?: BinaryRestrictions): MarkerSchema<Uint8Array> {
+  return binaryMarker(options);
+}
+
 /**
  * A typed-array marker: a JS TypedArray (`Int32Array`, `Float64Array`, `Uint8Array`,
  * …) carried as a WIT `list<primN>`. Generalises the former `bytesMarker`: the
@@ -371,18 +630,26 @@ function typedArrayMarker<TArr, E extends number | bigint>(spec: {
     value instanceof spec.ctor
       ? ok(value)
       : fail(`Expected a ${spec.ctor.name} for a typed-array WIT list`);
-  const descriptor: MarkerDescriptor = () => ({
-    graph: { defs: new Map(), root: t.list(spec.elemType()) },
-    toValue: (value) => v.list(Array.from(value as Iterable<E>).map((x) => spec.elemValue(x))),
-    fromValue: (sv) => {
-      const elements = (sv as Extract<SchemaValue, { tag: 'list' }>).elements;
-      const out = new spec.ctor(elements.length);
-      elements.forEach((e, i) => {
-        (out as Record<number, E>)[i] = (e as unknown as { value: E }).value;
-      });
-      return out;
-    },
-  });
+  const descriptor: MarkerDescriptor = () => {
+    const itemCodec: FluentCodec = {
+      graph: { defs: new Map(), root: spec.elemType() },
+      toValue: (value) => spec.elemValue(value as E),
+      fromValue: (value) => (value as unknown as { value: E }).value,
+    };
+    return {
+      graph: { defs: new Map(), root: t.list(itemCodec.graph.root) },
+      listItem: itemCodec,
+      toValue: (value) => v.list(Array.from(value as Iterable<E>).map((x) => spec.elemValue(x))),
+      fromValue: (sv) => {
+        const elements = (sv as Extract<SchemaValue, { tag: 'list' }>).elements;
+        const out = new spec.ctor(elements.length);
+        elements.forEach((e, i) => {
+          (out as Record<number, E>)[i] = (e as unknown as { value: E }).value;
+        });
+        return out;
+      },
+    };
+  };
   return marker<TArr, 'typed-array'>(validate, descriptor);
 }
 
@@ -888,6 +1155,7 @@ export const s = {
   duration: () => durationMarker(),
   url: () => urlMarker(),
   bytes: () => typedArrayMarker({ ctor: Uint8Array, elemType: t.u8, elemValue: v.u8 }),
+  binary: (opts?: BinaryRestrictions) => binaryMarker(opts),
 
   // Typed arrays: each JS TypedArray kind → WIT `list<primN>`, decoded to the
   // concrete subclass. `s.bytes()` above is the `Uint8Array` alias.

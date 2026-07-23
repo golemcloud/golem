@@ -40,7 +40,6 @@ pub mod build_tool {
 
 // Keep this aligned with the TS component template
 pub mod ts_dep {
-    pub const ROLLUP_PLUGIN_ALIAS: &str = "^5.1.1";
     pub const ROLLUP_PLUGIN_NODE_RESOLVE: &str = "^16.0.1";
     pub const ROLLUP_PLUGIN_TYPESCRIPT: &str = "^12.1.4";
     pub const ROLLUP_PLUGIN_COMMONJS: &str = "^28.0.6";

@@ -45,9 +45,62 @@ export { method } from './method';
 export type { InputRecord, MethodSpec } from './method';
 
 export type { StandardSchemaV1 } from './schema/standardSchema';
-export { s } from './schema/markers';
+export { Bytes, KeyValue, Path, Quantity, s } from './schema/markers';
+export type { KeyValueOptions, PathOptions, QuantityOptions } from './schema/markers';
 export { registerSchemaWalker, registeredVendors, compileSchema } from './schema/adapter';
 export type { FluentCodec, SchemaWalker } from './schema/codec';
+
+export {
+  c,
+  client,
+  command,
+  err,
+  ok,
+  renderArgumentHelp,
+  renderHelp,
+  ToolCallError,
+  toolDefinition,
+} from './tool';
+export type {
+  CamelCase,
+  ConstraintRef,
+  DocInput,
+  ErrorOptions,
+  FlagOptions,
+  FormatterInput,
+  GlobalCountFlagOptions,
+  GlobalFlagOptions,
+  GlobalValueOptions,
+  ImplementedTool,
+  NestedCommandImplementation,
+  OptionOptions,
+  PositionalOptions,
+  RepeatableMode,
+  ReturnsOptions,
+  StreamOptions,
+  TailOptions,
+  ToolBodyModel,
+  ToolCallErrorCause,
+  ToolClient,
+  ToolClientErrors,
+  ToolClientInvocationResult,
+  ToolClientMethod,
+  ToolClientOptions,
+  ToolClientTransport,
+  ToolCommandModel,
+  ToolCommandModelOf,
+  ToolConstraint,
+  ToolDefinition,
+  ToolErr,
+  ToolHandler,
+  ToolHelpError,
+  ToolHelpResult,
+  ToolImplementation,
+  ToolInvocationContext,
+  ToolOk,
+  ToolResult,
+  ToolSubtreeModel,
+} from './tool';
 
 // wasm-RPC client for calling other agents.
 export { clientFor, RemoteCallError } from './client';

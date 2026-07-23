@@ -16,9 +16,18 @@ import { ResolvedAgent } from './internal/resolvedAgent';
 import { AgentType, Principal } from 'golem:agent/common@2.0.0';
 import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0';
 import type { Snapshot } from 'golem:api/host@1.5.0';
-import type { InputStream } from 'wasi:io/streams@0.2.3';
+import { getStdout } from 'wasi:cli/stdout@0.2.3';
+import type { InputStream, OutputStream } from 'wasi:io/streams@0.2.3';
 import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
-import { schemaValueFromWit } from './internal/schema-model';
+import { schemaValueConforms, type ExtendedCommandBody } from './internal/tool';
+import {
+  deepEqual,
+  schemaValueFromWit,
+  t,
+  typedSchemaValueFromWit,
+  typedSchemaValueToWit,
+  v,
+} from './internal/schema-model';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
@@ -26,6 +35,10 @@ import { AgentInitiator } from './internal/agentInitiator';
 import { setAgentId } from './internal/registry/agentId';
 import { encodeMultipart, decodeMultipart } from './internal/multipart';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
+import { ToolRegistry } from './internal/registry/toolRegistry';
+import { sdkPrincipalFromHost } from './principal';
+import type { FluentCodec } from './fluent/schema/codec';
+import { awaitPollable, disposeWitResource, throwIfAborted } from './internal/pollableUtils';
 
 export { Uuid } from './uuid';
 export { ComponentId, AccountId, EnvironmentId } from './ids';
@@ -148,25 +161,427 @@ async function invokeAgent(
 }
 
 async function discoverTools(): Promise<Tool[]> {
-  return [];
+  const registrationErrors = ToolRegistry.getRegistrationErrors();
+  if (registrationErrors.length > 0) {
+    throw invalidToolResult(
+      `Tool registration failed:\n${registrationErrors
+        .map(({ toolName, messages }) => `- Tool "${toolName}": ${messages.join('; ')}`)
+        .join('\n')}`,
+    );
+  }
+  return ToolRegistry.getRegisteredTools();
 }
 
 async function getTool(name: string): Promise<Tool> {
-  throw { tag: 'invalid-tool-name', val: name } satisfies ToolError;
+  const registered = ToolRegistry.getTool(name);
+  if (!registered) throw invalidToolName(name);
+  return registered;
 }
 
 async function invokeTool(
   toolName: string,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _commandPath: string[],
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _input: TypedSchemaValue,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _stdin: InputStream | undefined,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _principal: Principal,
+  commandPath: string[],
+  input: TypedSchemaValue,
+  stdin: InputStream | undefined,
+  principal: Principal,
 ): Promise<InvocationResult> {
-  throw { tag: 'invalid-tool-name', val: toolName } satisfies ToolError;
+  let inputAdapter: ToolInputStreamAdapter | undefined;
+  let output: OutputStream | undefined;
+  let outputAdapter: ToolOutputStreamAdapter | undefined;
+  let inputCleanup: Promise<void> | undefined;
+  const disposeInput = async (): Promise<void> => {
+    if (!inputCleanup) {
+      inputCleanup = inputAdapter
+        ? inputAdapter.dispose()
+        : Promise.resolve().then(() => disposeWitResource(stdin));
+    }
+    await inputCleanup;
+  };
+
+  try {
+    const resolved = ToolRegistry.resolveInvocation(toolName, commandPath);
+
+    let decodedInput;
+    try {
+      decodedInput = typedSchemaValueFromWit(input);
+    } catch (error) {
+      throw invalidToolInput(`malformed invocation input: ${errorMessage(error)}`);
+    }
+
+    const prepared = resolved.prepare(decodedInput);
+    const body = resolved.command.body;
+    if (!body) throw { tag: 'invalid-command-path', val: [...commandPath] } satisfies ToolError;
+
+    const context: Record<string, unknown> = {
+      principal: sdkPrincipalFromHost(principal),
+    };
+    if (body.stdin) {
+      if (!stdin && body.stdin.required) {
+        throw invalidToolInput('tool invocation did not contain declared stdin stream');
+      }
+      if (stdin) {
+        inputAdapter = readableStreamFromInput(stdin);
+        context.stdin = inputAdapter.stream;
+      }
+    }
+
+    output = body.stdout ? getStdout() : undefined;
+    if (output) {
+      outputAdapter = writableStreamFromOutput(output);
+      context.stdout = outputAdapter.stream;
+    }
+
+    const outcome = await prepared.invoke(context);
+    await outputAdapter?.flush();
+    const result = projectToolOutcome(body, outcome, undefined);
+    await disposeInput();
+    disposeWitResource(output);
+    output = undefined;
+    if (body.stdout) result.stdout = getStdout();
+    return result;
+  } catch (error) {
+    await Promise.allSettled([outputAdapter?.abort(error), disposeInput()]);
+    disposeWitResource(output);
+    throw error;
+  }
+}
+
+function projectToolOutcome(
+  body: ExtendedCommandBody,
+  outcome: unknown,
+  stdout: OutputStream | undefined,
+): InvocationResult {
+  if (!isRecord(outcome) || typeof outcome.tag !== 'string') {
+    throw invalidToolResult('tool handler returned an invalid outcome');
+  }
+
+  if (outcome.tag === 'ok') {
+    if (!Object.prototype.hasOwnProperty.call(outcome, 'value')) {
+      throw invalidToolResult('tool handler success is missing its value');
+    }
+    if (!body.result) {
+      if (outcome.value !== undefined) {
+        throw invalidToolResult('unit tool handler returned a structured result');
+      }
+      return { result: undefined, stdout };
+    }
+    return {
+      result: encodeToolValue(body.result.codec, outcome.value, 'tool result'),
+      stdout,
+    };
+  }
+
+  if (outcome.tag === 'err') {
+    if (typeof outcome.name !== 'string' || typeof outcome.hasPayload !== 'boolean') {
+      throw invalidToolResult('tool handler returned an invalid declared error');
+    }
+    const errorCase = body.errors.find((candidate) => candidate.name === outcome.name);
+    if (!errorCase) {
+      throw invalidToolResult(`tool handler returned undeclared error "${outcome.name}"`);
+    }
+
+    let payload: TypedSchemaValue;
+    if (errorCase.payloadCodec) {
+      if (!outcome.hasPayload || !Object.prototype.hasOwnProperty.call(outcome, 'payload')) {
+        throw invalidToolResult(`tool error "${outcome.name}" requires a payload`);
+      }
+      payload = encodeToolValue(
+        errorCase.payloadCodec,
+        outcome.payload,
+        `tool error "${outcome.name}" payload`,
+      );
+    } else {
+      if (outcome.hasPayload || Object.prototype.hasOwnProperty.call(outcome, 'payload')) {
+        throw invalidToolResult(`tool error "${outcome.name}" does not declare a payload`);
+      }
+      payload = typedSchemaValueToWit({
+        graph: { defs: new Map(), root: t.tuple([]) },
+        value: v.tuple([]),
+      });
+    }
+    throw { tag: 'custom-error', val: payload } satisfies ToolError;
+  }
+
+  throw invalidToolResult(`tool handler returned unknown outcome tag "${outcome.tag}"`);
+}
+
+function encodeToolValue(codec: FluentCodec, value: unknown, position: string): TypedSchemaValue {
+  try {
+    const encoded = codec.toValue(value);
+    if (!schemaValueConforms(codec.graph, codec.graph.root, encoded)) {
+      throw new Error('does not match its declared schema');
+    }
+    if (!deepEqual(codec.fromValue(encoded), value)) {
+      throw new Error('is not canonical for its declared schema');
+    }
+    return typedSchemaValueToWit({ graph: codec.graph, value: encoded });
+  } catch (error) {
+    throw invalidToolResult(`${position}: ${errorMessage(error)}`);
+  }
+}
+
+interface ToolInputStreamAdapter {
+  readonly stream: ReadableStream<Uint8Array>;
+  dispose(reason?: unknown): Promise<void>;
+}
+
+interface ToolOutputStreamAdapter {
+  readonly stream: WritableStream<Uint8Array>;
+  flush(): Promise<void>;
+  abort(reason?: unknown): Promise<void>;
+}
+
+function readableStreamFromInput(input: InputStream): ToolInputStreamAdapter {
+  const cancellation = new AbortController();
+  let activePull: Promise<void> | undefined;
+  let disposal: Promise<void> | undefined;
+
+  const dispose = async (reason?: unknown): Promise<void> => {
+    if (!disposal) {
+      cancellation.abort(reason);
+      const pull = activePull;
+      disposal = (async () => {
+        if (pull) {
+          try {
+            await pull;
+          } catch {
+            // Cancellation only needs to establish that the child pollable was released.
+          }
+        }
+        disposeWitResource(input);
+      })();
+    }
+    await disposal;
+  };
+
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      const operation = pullInput(input, controller, cancellation.signal);
+      const tracked = operation.finally(() => {
+        if (activePull === tracked) activePull = undefined;
+      });
+      activePull = tracked;
+      return tracked;
+    },
+    cancel(reason) {
+      return dispose(reason);
+    },
+  });
+
+  return { stream, dispose };
+}
+
+async function pullInput(
+  input: InputStream,
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  signal: AbortSignal,
+): Promise<void> {
+  while (!signal.aborted) {
+    try {
+      const contents = input.read(64n * 1024n);
+      if (contents.length > 0) {
+        controller.enqueue(contents);
+        return;
+      }
+    } catch (error) {
+      if (isClosedStreamError(error)) controller.close();
+      else controller.error(error);
+      return;
+    }
+
+    try {
+      await awaitPollable(input.subscribe(), signal);
+    } catch (error) {
+      if (signal.aborted) {
+        closeReadableStream(controller);
+      } else {
+        controller.error(error);
+      }
+      return;
+    }
+  }
+  closeReadableStream(controller);
+}
+
+function writableStreamFromOutput(output: OutputStream): ToolOutputStreamAdapter {
+  const cancellation = new AbortController();
+  const invocationCompleted = new Error('tool invocation completed');
+  let activeOperation: Promise<void> | undefined;
+  let controller: WritableStreamDefaultController | undefined;
+  let acceptingOperations = true;
+  let lateOperation: { promise: Promise<void>; reject: (reason: unknown) => void } | undefined;
+  let failed = false;
+  let failure: unknown;
+  let dirty = false;
+
+  const recordFailure = (error: unknown): void => {
+    if (failed) return;
+    failed = true;
+    failure = error;
+  };
+
+  const track = (operation: Promise<void>): Promise<void> => {
+    const tracked = operation
+      .catch((error) => {
+        recordFailure(error);
+        throw error;
+      })
+      .finally(() => {
+        if (activeOperation === tracked) activeOperation = undefined;
+      });
+    activeOperation = tracked;
+    return tracked;
+  };
+
+  const settle = async (): Promise<void> => {
+    while (true) {
+      const operation = activeOperation;
+      if (operation) {
+        await operation;
+        continue;
+      }
+
+      // WritableStream starts the next queued sink operation in a promise
+      // reaction after the previous operation settles.
+      await Promise.resolve();
+      if (!activeOperation) return;
+    }
+  };
+
+  const flushDirty = async (): Promise<void> => {
+    if (!dirty) return;
+    throwIfAborted(cancellation.signal);
+    output.flush();
+    do {
+      await awaitPollable(output.subscribe(), cancellation.signal);
+    } while (output.checkWrite() === 0n);
+    dirty = false;
+  };
+
+  const waitForFinalization = (): Promise<void> => {
+    if (!lateOperation) {
+      let reject!: (reason: unknown) => void;
+      const promise = new Promise<void>((_resolve, rejectPromise) => {
+        reject = rejectPromise;
+      });
+      lateOperation = { promise, reject };
+    }
+    return lateOperation.promise;
+  };
+
+  const rejectLateOperation = (reason: unknown): void => {
+    lateOperation?.reject(reason);
+  };
+
+  const abort = async (reason?: unknown): Promise<void> => {
+    const abortReason = reason === undefined ? new Error('tool stdout stream was aborted') : reason;
+    recordFailure(abortReason);
+    acceptingOperations = false;
+    controller?.error(abortReason);
+    rejectLateOperation(abortReason);
+    cancellation.abort(abortReason);
+    try {
+      await settle();
+    } catch {
+      // The invocation path propagates the handler or stream failure that caused the abort.
+    }
+  };
+
+  const stream = new WritableStream<Uint8Array>({
+    start(value) {
+      controller = value;
+    },
+    write(contents) {
+      if (!acceptingOperations) return waitForFinalization();
+      return track(
+        writeOutput(output, contents, cancellation.signal, () => {
+          dirty = true;
+        }),
+      );
+    },
+    close() {
+      if (!acceptingOperations) return waitForFinalization();
+      return track(flushDirty());
+    },
+    abort,
+  });
+
+  return {
+    stream,
+    async flush() {
+      await settle();
+      if (failed) throw failure;
+      acceptingOperations = false;
+      await settle();
+      if (failed) throw failure;
+      try {
+        await flushDirty();
+      } catch (error) {
+        recordFailure(error);
+        controller?.error(error);
+        rejectLateOperation(error);
+        throw error;
+      }
+      controller?.error(invocationCompleted);
+      rejectLateOperation(invocationCompleted);
+    },
+    abort,
+  };
+}
+
+async function writeOutput(
+  output: OutputStream,
+  contents: Uint8Array,
+  signal: AbortSignal,
+  markDirty: () => void,
+): Promise<void> {
+  let offset = 0;
+  while (offset < contents.length) {
+    throwIfAborted(signal);
+    const capacity = output.checkWrite();
+    if (capacity === 0n) {
+      await awaitPollable(output.subscribe(), signal);
+      continue;
+    }
+
+    const remaining = BigInt(contents.length - offset);
+    const length = Number(capacity < remaining ? capacity : remaining);
+    output.write(contents.subarray(offset, offset + length));
+    markDirty();
+    offset += length;
+  }
+}
+
+function closeReadableStream(controller: ReadableStreamDefaultController<Uint8Array>): void {
+  try {
+    controller.close();
+  } catch {
+    // Cancellation may already have closed the web stream.
+  }
+}
+
+function invalidToolName(name: string): ToolError {
+  return { tag: 'invalid-tool-name', val: name };
+}
+
+function invalidToolInput(message: string): ToolError {
+  return { tag: 'invalid-input', val: message };
+}
+
+function invalidToolResult(message: string): ToolError {
+  return { tag: 'invalid-result', val: message };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isClosedStreamError(value: unknown): boolean {
+  return isRecord(value) && value.tag === 'closed';
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function discoverAgentTypes(): Promise<AgentType[]> {

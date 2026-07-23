@@ -1,50 +1,54 @@
-import alias from "@rollup/plugin-alias";
 import commonjs from "@rollup/plugin-commonjs";
 import json from "@rollup/plugin-json";
 import nodeResolve from "@rollup/plugin-node-resolve";
 import typescript from "@rollup/plugin-typescript";
+import ts from "typescript";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-// Rollup config for the fluent (ts) component template. Unlike the
-// decorator `ts` template there is NO typegen step: the fluent SDK derives agent
-// metadata at runtime from the schemas, so the virtual entry simply imports the
-// user's main module for its `defineAgent(...).implement(...)` registration side
-// effects. `@golemcloud/golem-ts-sdk` and the `golem:*` host packages are
-// externalized (provided by the prebuilt agent_guest.wasm); the schema library
-// and user code are bundled into main.js and injected into that wasm.
+// Rollup config for a fluent (ts) agent component.
+//
+// The component's tsconfig.json is the single source of truth: it decides which
+// files are compiled (`include`/`files`) and how module path aliases resolve
+// (`compilerOptions.paths`). This config reads it once and defers to
+// @rollup/plugin-typescript rather than restating any of it here, so the build
+// and the type checker always agree on the same file set and resolution rules.
+//
+// The fluent SDK derives agent metadata at runtime from the schemas, so the
+// virtual entry only imports the user's main module for its side-effecting
+// `defineAgent(...).implement(...)` registrations. `@golemcloud/golem-ts-sdk` and
+// the `golem:*` host packages are externalized (provided by the prebuilt
+// agent_guest.wasm); user code and the schema library are bundled into main.js
+// and injected into that wasm.
 
-function readTsConfigPaths(componentDir) {
+// Read tsconfig.json through the TypeScript compiler API — the same path
+// @rollup/plugin-typescript takes — so comments and `extends` are honored, and a
+// missing or invalid tsconfig fails the build with a clear error instead of being
+// ignored and producing a confusing failure further down the pipeline.
+function loadComponentTsConfig(componentDir) {
     const tsconfigPath = path.join(componentDir, "tsconfig.json");
     if (!fs.existsSync(tsconfigPath)) {
-        return { aliasEntries: [], tsIncludes: [] };
+        throw new Error(`tsconfig.json not found at ${tsconfigPath}`);
     }
 
-    try {
-        const tsconfig = JSON.parse(fs.readFileSync(tsconfigPath, "utf-8"));
-        const paths = tsconfig?.compilerOptions?.paths;
-        if (!paths) {
-            return { aliasEntries: [], tsIncludes: [] };
-        }
-
-        const aliasEntries = [];
-        const tsIncludes = [];
-
-        for (const [key, values] of Object.entries(paths)) {
-            if (!values || values.length === 0) continue;
-
-            const find = key.replace(/\/\*$/, "");
-            const replacement = path.resolve(componentDir, values[0].replace(/\/\*$/, ""));
-
-            aliasEntries.push({ find, replacement });
-            tsIncludes.push(path.resolve(componentDir, values[0].replace(/\*$/, "**/*.ts")));
-        }
-
-        return { aliasEntries, tsIncludes };
-    } catch {
-        return { aliasEntries: [], tsIncludes: [] };
+    const { config, error } = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
+    if (error) {
+        throw new Error(
+            `Failed to read ${tsconfigPath}: ${ts.flattenDiagnosticMessageText(error.messageText, "\n")}`,
+        );
     }
+
+    const parsed = ts.parseJsonConfigFileContent(config, ts.sys, componentDir);
+    const errors = parsed.errors.filter((d) => d.category === ts.DiagnosticCategory.Error);
+    if (errors.length > 0) {
+        const message = errors
+            .map((d) => ts.flattenDiagnosticMessageText(d.messageText, "\n"))
+            .join("\n");
+        throw new Error(`Invalid ${tsconfigPath}:\n${message}`);
+    }
+
+    return parsed;
 }
 
 function componentRollupConfig() {
@@ -58,7 +62,21 @@ function componentRollupConfig() {
     }
 
     const componentDir = process.cwd();
-    const { aliasEntries, tsIncludes } = readTsConfigPaths(componentDir);
+    const parsedTsConfig = loadComponentTsConfig(componentDir);
+
+    // Compile exactly the files the tsconfig resolves. `parsed.fileNames` is
+    // TypeScript's own expansion of `include`/`files`/`exclude`, which excludes
+    // node_modules by default. Scoping the plugin to this set keeps dependencies
+    // out of TypeScript compilation: a package that ships `.ts` sources next to
+    // its compiled `.js` would otherwise be dragged in through TypeScript's
+    // `.js`->`.ts` source redirect, and rollup would fail parsing that `.ts` as
+    // plain JavaScript. Path aliases (`compilerOptions.paths`) are resolved by the
+    // plugin itself (`ts.resolveModuleName`), so no separate alias plugin is
+    // needed. Fall back to the conventional `src/` glob only when the tsconfig
+    // resolves no files.
+    const include = parsedTsConfig.fileNames.length > 0
+        ? parsedTsConfig.fileNames
+        : ["./src/**/*.ts"];
 
     const externalPackages = (id) =>
         id === "@golemcloud/golem-ts-sdk" || id.startsWith("golem:");
@@ -80,23 +98,16 @@ function componentRollupConfig() {
         },
     });
 
-    const plugins = [virtualAgentMainPlugin()];
-
-    if (aliasEntries.length > 0) {
-        plugins.push(alias({ entries: aliasEntries }));
-    }
-
-    plugins.push(
+    const plugins = [
+        virtualAgentMainPlugin(),
         nodeResolve({ extensions: [".mjs", ".js", ".node", ".ts"] }),
         commonjs(),
         json(),
         typescript({
             noEmitOnError: true,
-            ...(tsIncludes.length > 0
-                ? { include: ["./src/**/*.ts", ...tsIncludes] }
-                : {}),
+            include,
         }),
-    );
+    ];
 
     return {
         input: virtualAgentMainId,

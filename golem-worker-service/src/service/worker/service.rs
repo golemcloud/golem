@@ -980,7 +980,7 @@ impl WorkerService {
         Ok(output)
     }
 
-    /// REST/JSON path: resolves agent via registry, converts JSON parameters, then creates the agent.
+    /// REST path: resolves the agent via the registry, validates its parameters, then creates it.
     pub async fn create_agent_rest(
         &self,
         request: CreateAgentRequest,
@@ -1048,7 +1048,7 @@ impl WorkerService {
         })
     }
 
-    /// REST/JSON path: resolves agent via registry, converts JSON parameters, then delegates.
+    /// REST path: resolves the agent via the registry, validates its parameters, then delegates.
     pub async fn invoke_agent_rest(
         &self,
         request: AgentInvocationRequest,
@@ -1313,7 +1313,7 @@ mod tests {
     use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
     use golem_common::schema::{
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
-        SchemaGraph,
+        SchemaGraph, SchemaValue,
     };
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
     use golem_service_base::model::auth::AuthCtx;
@@ -2166,11 +2166,8 @@ mod tests {
         }
     }
 
-    fn empty_json_tuple() -> serde_json::Value {
-        // Schema-native `SchemaValue::Record { fields: [] }` (adjacently tagged
-        // `kind`/`value`), i.e. the empty parameter record the REST invoke path
-        // now expects.
-        serde_json::json!({ "kind": "record", "value": { "fields": [] } })
+    fn empty_json_tuple() -> SchemaValue {
+        SchemaValue::Record { fields: vec![] }
     }
 
     fn phantom_id(agent_id: &AgentId) -> Option<Uuid> {

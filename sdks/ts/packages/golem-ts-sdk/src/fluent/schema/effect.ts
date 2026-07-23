@@ -205,6 +205,7 @@ function walkTupleType(ast: Ast, reg: RecursionRegistry): FluentCodec {
     const elemCodec = walkAst(rest[0].type ?? rest[0], reg);
     return {
       graph: { defs: elemCodec.graph.defs, root: t.list(elemCodec.graph.root) },
+      listItem: elemCodec,
       toValue: (value) => v.list((value as unknown[]).map((e) => elemCodec.toValue(e))),
       fromValue: (sv) =>
         (sv as Extract<SchemaValue, { tag: 'list' }>).elements.map((e) => elemCodec.fromValue(e)),
@@ -241,6 +242,8 @@ function walkTypeLiteral(ast: Ast, reg: RecursionRegistry): FluentCodec {
     const defs = mergeGraphDefs([keyCodec.graph, valCodec.graph]);
     return {
       graph: { defs, root: t.map(keyCodec.graph.root, valCodec.graph.root) },
+      mapKey: keyCodec,
+      mapValue: valCodec,
       toValue: (value) =>
         v.map(
           Object.entries(value as Record<string, unknown>).map(([k, val]) => ({
@@ -320,6 +323,7 @@ function optionCodec(
   const wrapped: FluentCodec = {
     graph: { defs: innerCodec.graph.defs, root: t.option(innerCodec.graph.root) },
     optionKind: mode,
+    optionInner: innerCodec,
     toValue: (value) => (isNone(value) ? v.option(undefined) : v.option(innerCodec.toValue(value))),
     fromValue: (sv) => {
       const opt = (sv as Extract<SchemaValue, { tag: 'option' }>).value;

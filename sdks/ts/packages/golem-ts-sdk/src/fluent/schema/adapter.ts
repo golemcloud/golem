@@ -22,8 +22,8 @@
 // structure) and must NOT statically `import` the schema library, so no schema
 // library is baked into the SDK / WASM — it lives only in the component bundle.
 
-import { FluentCodec, SchemaWalker } from './codec';
-import { isStandardSchema } from './standardSchema';
+import { FluentCodec, freezeFluentCodec, SchemaWalker } from './codec';
+import { isStandardSchema, type StandardSchemaV1 } from './standardSchema';
 import { isMarkerSchema, WIT_MARKER } from './markers';
 import { RecursionRegistry } from './recursion';
 
@@ -45,7 +45,7 @@ export function registeredVendors(): string[] {
  * the registry is threaded through the recursive walk (see {@link compileSchemaWith}).
  */
 export function compileSchema(schema: unknown): FluentCodec {
-  return compileSchemaWith(schema, new RecursionRegistry());
+  return freezeFluentCodec(compileSchemaWith(schema, new RecursionRegistry()));
 }
 
 /**
@@ -60,7 +60,7 @@ function compileSchemaWith(schema: unknown, registry: RecursionRegistry): Fluent
   // can express WIT kinds Standard Schema can't. Intercept them BEFORE the
   // vendor dispatch; non-markers fall through to the per-vendor walker path.
   if (isMarkerSchema(schema)) {
-    return schema[WIT_MARKER](recurse);
+    return withSourceSchema(schema[WIT_MARKER](recurse), schema);
   }
   if (!isStandardSchema(schema)) {
     throw new Error(
@@ -80,5 +80,12 @@ function compileSchemaWith(schema: unknown, registry: RecursionRegistry): Fluent
   // Route through the registry keyed on the schema object identity: a recursive
   // re-entry short-circuits to a `ref`, and only genuinely recursive schemas are
   // promoted to a named def (non-recursive ones pass through inline).
-  return registry.compile(schema as object, () => walker(schema, recurse));
+  return withSourceSchema(
+    registry.compile(schema as object, () => walker(schema, recurse)),
+    schema,
+  );
+}
+
+function withSourceSchema(codec: FluentCodec, schema: StandardSchemaV1): FluentCodec {
+  return codec.sourceSchema === schema ? codec : { ...codec, sourceSchema: schema };
 }

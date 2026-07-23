@@ -124,8 +124,20 @@ You can customize the webhook URL suffix using the `webhookSuffix` annotation on
 
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
     <Tabs.Tab>
+        In the fluent SDK the suffix is passed as the `webhookSuffix` option of `http.mount(...)` on `defineAgent(...)`:
+
         ```typescript
-        @agent({ mount: "/workflow/{id}", webhookSuffix: "/workflow-hooks" })
+        import { z } from "zod"
+        import { defineAgent, method, http } from "@golemcloud/golem-ts-sdk"
+
+        export const WorkflowAgent = defineAgent({
+          name: "WorkflowAgent",
+          id: { id: z.string() },
+          http: http.mount("/workflow/{id}", { webhookSuffix: "/workflow-hooks" }),
+          methods: {
+            // ...
+          },
+        })
         ```
     </Tabs.Tab>
     <Tabs.Tab>
