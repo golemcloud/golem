@@ -403,7 +403,7 @@ fn should_wait(presence: PromiseWaiterPresence, index: usize) -> bool {
 fn get_promise_method(runtime: PromiseRuntime) -> &'static str {
     match runtime {
         PromiseRuntime::Rust => "get_promise",
-        PromiseRuntime::Ts => "get-promise",
+        PromiseRuntime::Ts => "getPromise",
     }
 }
 
