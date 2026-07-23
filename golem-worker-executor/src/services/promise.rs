@@ -36,6 +36,10 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::HashMap;
 #[cfg(test)]
 use std::collections::HashSet;
+#[cfg(test)]
+use std::future::Future;
+#[cfg(test)]
+use std::pin::Pin;
 use std::sync::{Arc, Weak};
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -47,11 +51,26 @@ pub struct PromiseHandle {
     inner: Arc<PromiseHandleInner>,
 }
 
-#[derive(Debug)]
+#[cfg_attr(not(test), derive(Debug))]
 pub struct PromiseHandleInner {
     notify: Notify,
     state: Mutex<Option<Vec<u8>>>,
+    /// Test-only seam: pauses after observing an incomplete promise but before
+    /// awaiting notification, so a test can deterministically interleave completion.
+    #[cfg(test)]
+    await_ready_interleave: std::sync::Mutex<Option<AwaitReadyInterleaveHook>>,
 }
+
+#[cfg(test)]
+impl std::fmt::Debug for PromiseHandleInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PromiseHandleInner").finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+type AwaitReadyInterleaveHook =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 impl PromiseHandle {
     fn new() -> Self {
@@ -59,6 +78,8 @@ impl PromiseHandle {
             inner: Arc::new(PromiseHandleInner {
                 notify: Notify::new(),
                 state: Mutex::new(None),
+                #[cfg(test)]
+                await_ready_interleave: std::sync::Mutex::new(None),
             }),
         }
     }
@@ -79,7 +100,19 @@ impl PromiseHandle {
         if self.is_ready().await {
             return;
         }
+        #[cfg(test)]
+        {
+            let hook = self.inner.await_ready_interleave.lock().unwrap().clone();
+            if let Some(hook) = hook {
+                hook().await;
+            }
+        }
         notified.await;
+    }
+
+    #[cfg(test)]
+    fn set_await_ready_interleave(&self, hook: AwaitReadyInterleaveHook) {
+        *self.inner.await_ready_interleave.lock().unwrap() = Some(hook);
     }
 
     pub async fn get(&self) -> Option<Vec<u8>> {
@@ -265,7 +298,7 @@ impl DefaultPromiseService {
                 &get_promise_result_redis_key(promise_id),
             )
             .await
-            .unwrap_or_else(|err| panic!("failed to get promise {promise_id} from Redis: {err}"))
+            .unwrap_or_else(|err| panic!("failed to get promise {promise_id} from storage: {err}"))
             .and_then(|state| match state {
                 RedisPromiseState::Complete(data) => Some(data),
                 RedisPromiseState::Pending => None,
@@ -663,6 +696,43 @@ mod tests {
         assert!(service_a.complete(id.clone(), vec![1]).await.unwrap());
         assert!(!service_b.complete(id, vec![2]).await.unwrap());
         assert_eq!(handle.get().await, Some(vec![1]));
+    }
+
+    #[test]
+    async fn completion_does_not_miss_waiter_between_state_check_and_wait() {
+        let handle = PromiseHandle::new();
+        let entered = Arc::new(Notify::new());
+        let resume = Arc::new(Notify::new());
+        let hook: AwaitReadyInterleaveHook = {
+            let entered = entered.clone();
+            let resume = resume.clone();
+            Arc::new(move || {
+                let entered = entered.clone();
+                let resume = resume.clone();
+                Box::pin(async move {
+                    entered.notify_one();
+                    resume.notified().await;
+                })
+            })
+        };
+        handle.set_await_ready_interleave(hook);
+
+        let waiter = tokio::spawn({
+            let handle = handle.clone();
+            async move {
+                handle.await_ready().await;
+                handle.get().await
+            }
+        });
+        entered.notified().await;
+        assert!(handle.complete(vec![1]).await);
+        resume.notify_one();
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+            .await
+            .expect("waiter missed completion between state check and wait")
+            .unwrap();
+        assert_eq!(received, Some(vec![1]));
     }
 
     proptest! {
