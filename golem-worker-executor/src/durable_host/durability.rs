@@ -15,6 +15,7 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::Resolution;
 use crate::metrics::wasm::{record_host_function_call, record_in_function_retry};
+use crate::model::ExecutionStatus;
 use crate::preview2::golem::durability::durability;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::oplog::{CommitLevel, OplogOps};
@@ -1299,22 +1300,32 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
     }
 
     fn create_interrupt_signal(&self) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
-        // The invocation-deadline broadcast only reaches subscribers that already exist, so a
-        // signal created *after* the deadline latched must resolve immediately — otherwise a
-        // park entered post-deadline would never observe the synthetic interrupt.
+        // Synthetic deadline broadcasts only reach subscribers that already exist, so a signal
+        // is created before checking the latches. That closes the check-before-subscribe race: a
+        // deadline either sets its latch first or broadcasts to this subscription. A real external
+        // interrupt keeps precedence over either synthetic deadline.
+        let interrupt_signal = {
+            let status = self.execution_status.read().unwrap();
+            status.create_await_interrupt_signal()
+        };
         if self
             .state
             .invocation_deadline_exceeded
             .load(std::sync::atomic::Ordering::Acquire)
+            || self
+                .state
+                .tail_work_deadline_exceeded
+                .load(std::sync::atomic::Ordering::Acquire)
         {
+            let status = self.execution_status.read().unwrap();
+            if matches!(&*status, ExecutionStatus::Interrupting { .. }) {
+                return status.create_await_interrupt_signal();
+            }
             return Box::pin(std::future::ready(InterruptKind::Interrupt(
                 Timestamp::now_utc(),
             )));
         }
-        self.execution_status
-            .read()
-            .unwrap()
-            .create_await_interrupt_signal()
+        interrupt_signal
     }
 
     fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap> {

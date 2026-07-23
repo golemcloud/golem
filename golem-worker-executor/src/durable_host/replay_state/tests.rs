@@ -7,7 +7,7 @@ use golem_common::model::oplog::payload::types::{
     SerializableP3HttpBodyChunk, SerializableP3HttpConsumeBodyResult,
 };
 use golem_common::model::oplog::{
-    AgentError, DurableFunctionType, HostRequest, HostRequestNoInput,
+    AgentError, DurableFunctionType, HostRequest, HostRequestNoInput, HostRequestPollCount,
     HostResponseMonotonicClockTimestamp, HostResponseP3HttpClientConsumeBodyChunk,
     HostResponseP3HttpClientConsumeBodyResult, OplogPayload, PayloadId, RawOplogPayload,
 };
@@ -16,16 +16,35 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use test_r::test;
 
+type StoredExternalPayload = (PayloadId, Vec<u8>, Vec<u8>);
+
 /// Minimal in-memory `Oplog` used to drive a [`ReplayState`] over hand-built entries.
 #[derive(Debug)]
 struct InMemoryOplog {
     entries: tokio::sync::Mutex<Vec<OplogEntry>>,
+    external_payloads: tokio::sync::Mutex<Vec<StoredExternalPayload>>,
 }
 
 impl InMemoryOplog {
     fn new() -> Self {
         Self {
             entries: tokio::sync::Mutex::new(Vec::new()),
+            external_payloads: tokio::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    async fn store_external_request(&self, request: &HostRequest) -> OplogPayload<HostRequest> {
+        let bytes = golem_common::serialization::serialize(request).unwrap();
+        let payload_id = PayloadId::new();
+        let md5_hash = vec![self.external_payloads.lock().await.len() as u8];
+        self.external_payloads
+            .lock()
+            .await
+            .push((payload_id.clone(), md5_hash.clone(), bytes));
+        OplogPayload::External {
+            payload_id,
+            md5_hash,
+            cached: None,
         }
     }
 }
@@ -100,10 +119,16 @@ impl Oplog for InMemoryOplog {
 
     async fn download_raw_payload(
         &self,
-        _payload_id: PayloadId,
-        _md5_hash: Vec<u8>,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
-        unimplemented!()
+        self.external_payloads
+            .lock()
+            .await
+            .iter()
+            .find(|(id, hash, _)| id == &payload_id && hash == &md5_hash)
+            .map(|(_, _, bytes)| bytes.clone())
+            .ok_or_else(|| format!("missing test payload {payload_id}"))
     }
 
     async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
@@ -248,6 +273,74 @@ async fn claim_and_await_resolves_completed() {
         }
         other => panic!("expected Completed, got {other:?}"),
     }
+}
+
+#[test]
+async fn request_matching_downloads_uncached_external_payloads() {
+    let oplog = Arc::new(InMemoryOplog::new());
+    oplog.add(noop()).await;
+
+    let first_request: HostRequest = HostRequestPollCount { count: 1 }.into();
+    let second_request: HostRequest = HostRequestPollCount { count: 2 }.into();
+    let first_payload = oplog.store_external_request(&first_request).await;
+    let second_payload = oplog.store_external_request(&second_request).await;
+
+    for payload in [first_payload, second_payload] {
+        oplog
+            .add(OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: None,
+                function_name: HostFunctionName::MonotonicClockNow,
+                request: Some(payload),
+                durable_function_type: DurableFunctionType::ReadLocal,
+            })
+            .await;
+    }
+
+    let oplog: Arc<dyn Oplog> = oplog;
+    let rs = ReplayState::new(test_agent_id(), oplog, DeletedRegions::default())
+        .await
+        .unwrap();
+
+    let second = rs
+        .claim_concurrent_start_matching_request(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            &second_request,
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.start_idx(), OplogIndex::from_u64(3));
+
+    let first = rs
+        .claim_concurrent_start_matching_request(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            &first_request,
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.start_idx(), OplogIndex::from_u64(2));
+}
+
+#[test]
+async fn identity_claim_includes_replay_target_after_full_scan_chunk() {
+    let mut entries = Vec::with_capacity(CHUNK_SIZE as usize + 2);
+    entries.push(noop());
+    entries.extend((0..CHUNK_SIZE).map(|_| noop()));
+    entries.push(start_now());
+    let target = OplogIndex::from_u64(entries.len() as u64);
+    let rs = replay_state_over(entries).await;
+
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(handle.start_idx(), target);
 }
 
 #[test]

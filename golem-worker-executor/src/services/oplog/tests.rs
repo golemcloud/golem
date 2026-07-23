@@ -661,6 +661,10 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
     assert_eq!(buffered_entries, vec![entry4.clone(), entry5.clone()]);
     assert_eq!(indexed_storage.read_count(), read_count);
 
+    assert_eq!(oplog.read(OplogIndex::from_u64(4)).await, entry4.clone());
+    assert_eq!(oplog.read(OplogIndex::from_u64(5)).await, entry5.clone());
+    assert_eq!(indexed_storage.read_count(), read_count);
+
     let entries = oplog
         .read_many(OplogIndex::INITIAL, 5)
         .await

@@ -909,8 +909,8 @@ impl PrimaryOplog {
 
 /// A snapshot of [`PrimaryOplogState`] sufficient to serve reads. Reads run on this snapshot
 /// after the state lock has been released, so read I/O never holds the lock (see the
-/// lock-discipline note on [`PrimaryOplog::state`]). The buffer snapshot keeps `read_many`'s
-/// visibility of not-yet-committed entries.
+/// lock-discipline note on [`PrimaryOplog::state`]). The buffer snapshot keeps both single and
+/// batched reads' visibility of not-yet-committed entries.
 struct OplogReader {
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
     retry_config: RetryConfig,
@@ -925,6 +925,16 @@ struct OplogReader {
 impl OplogReader {
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
         record_oplog_call("read");
+
+        let buffer_start = self.last_committed_idx.next();
+        if oplog_index >= buffer_start {
+            let offset = u64::from(oplog_index).saturating_sub(u64::from(buffer_start));
+            if let Ok(offset) = usize::try_from(offset)
+                && let Some(entry) = self.buffer.get(offset)
+            {
+                return entry.clone();
+            }
+        }
 
         let entries: Vec<(u64, OplogEntry)> = {
             let is = self.indexed_storage.clone();

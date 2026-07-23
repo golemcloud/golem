@@ -184,13 +184,16 @@ pub(super) fn parent_start_index_of(function_type: &DurableFunctionType) -> Opti
 /// Whether a recorded `Start` request payload equals the expected request *value*. The comparison
 /// must be by value, never by serialized bytes: payload types can contain `HashMap`s (e.g. the
 /// header map of a P3 HTTP request head), whose serialization order depends on the process-random
-/// hasher seed, so bytes recorded before a restart do not reproduce.
-pub(super) fn recorded_request_payload_matches(
+/// hasher seed, so bytes recorded before a restart do not reproduce. Uncached external payloads
+/// are downloaded before comparison; falling back to oplog order could pair concurrent calls with
+/// different requests and deliver the wrong recorded response.
+pub(super) async fn recorded_request_payload_matches(
+    oplog: &dyn Oplog,
     recorded: &OplogPayload<HostRequest>,
     expected: &HostRequest,
-) -> bool {
+) -> Result<bool, String> {
     match recorded {
-        OplogPayload::Inline(value) => value.as_ref() == expected,
+        OplogPayload::Inline(value) => Ok(value.as_ref() == expected),
         OplogPayload::SerializedInline {
             cached: Some(cached),
             ..
@@ -198,17 +201,16 @@ pub(super) fn recorded_request_payload_matches(
         | OplogPayload::External {
             cached: Some(cached),
             ..
-        } => cached.as_ref() == expected,
+        } => Ok(cached.as_ref() == expected),
         OplogPayload::SerializedInline {
             bytes,
             cached: None,
         } => golem_common::serialization::deserialize::<HostRequest>(bytes)
             .map(|value| &value == expected)
-            .unwrap_or(false),
-        // The payload lives in external storage and the synchronous claim matcher cannot fetch
-        // it, so it is accepted as a match: the identity filters (function name, type, parent)
-        // still apply, and among equally-identified candidates the claim falls back to oplog
-        // order — the pre-payload-matching behavior.
-        OplogPayload::External { cached: None, .. } => true,
+            .map_err(|err| format!("failed to deserialize inline request payload: {err}")),
+        OplogPayload::External { cached: None, .. } => oplog
+            .download_payload(recorded.clone())
+            .await
+            .map(|value| &value == expected),
     }
 }

@@ -389,6 +389,9 @@ pub struct Limits {
     /// retry handling applies. `None` (the default) leaves invocations unbounded.
     #[serde(with = "humantime_serde", default)]
     pub max_invocation_duration: Option<Duration>,
+    /// Maximum time to drain active tail work after a guest export returns.
+    #[serde(with = "humantime_serde")]
+    pub tail_work_settle_timeout: Duration,
 }
 
 impl SafeDisplay for Limits {
@@ -446,6 +449,11 @@ impl SafeDisplay for Limits {
             &mut result,
             "max invocation duration: {:?}",
             self.max_invocation_duration
+        );
+        let _ = writeln!(
+            &mut result,
+            "tail work settle timeout: {:?}",
+            self.tail_work_settle_timeout
         );
 
         result
@@ -1663,6 +1671,7 @@ impl Default for Limits {
             max_oplog_query_pages_size: 100,
             max_invocation_context_stack_depth: 1024,
             max_invocation_duration: None,
+            tail_work_settle_timeout: Duration::from_secs(30),
         }
     }
 }

@@ -272,9 +272,16 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     /// and forget: called from the `memory.grow` resource limiter, which runs on a store-keeping
     /// fiber and must not await anything.
     pub fn grow_memory(&self, worker: Arc<Worker<Ctx>>, delta: u64) {
-        let _ = self
+        if self
             .lifecycle_jobs
-            .send(LifecycleJob::GrowMemory { worker, delta });
+            .send(LifecycleJob::GrowMemory { worker, delta })
+            .is_err()
+        {
+            panic!(
+                "Worker state actor for {} terminated unexpectedly",
+                self.owned_agent_id
+            );
+        }
     }
 
     /// Sends a job to the status task and waits for its reply.

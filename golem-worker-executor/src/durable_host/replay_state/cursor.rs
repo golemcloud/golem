@@ -829,17 +829,18 @@ impl CursorTx<'_> {
         // The head belongs to someone else: scan ahead for the first not-yet-claimed matching
         // `Start`, skipping deleted regions exactly like the cursor itself would.
         let already_claimed = self.st.claimed_starts.clone();
+        let replay_target = self.cursor.replay_target();
         let scan_result = self
             .cursor
             .scan_oplog(
                 self.cursor.last_replayed_index().next(),
-                self.cursor.replay_target(),
+                replay_target.next(),
                 &self.st.skipped_regions,
                 self.st.next_skipped_region.clone(),
                 OplogIndex::NONE,
                 |entry, _begin_idx, state: &Option<OplogIndex>| {
                     state
-                        .map(|idx| !already_claimed.contains(&idx))
+                        .map(|idx| idx <= replay_target && !already_claimed.contains(&idx))
                         .unwrap_or(false)
                         && matches_identity(entry)
                 },
@@ -865,6 +866,81 @@ impl CursorTx<'_> {
                 ))
             }
         }
+    }
+
+    /// Request-matching counterpart of [`Self::claim_start_matching`]. It scans identity-matching
+    /// candidates in oplog order and resolves each recorded payload to a value before claiming it.
+    /// Payload resolution is deliberately outside the synchronous scan predicate because an
+    /// external payload may require blob I/O.
+    pub(super) async fn claim_start_matching_request(
+        &mut self,
+        matches_identity: impl Fn(&OplogEntry) -> bool,
+        expected_request: &HostRequest,
+        expected: impl FnOnce() -> String,
+    ) -> Result<(ReplayCallHandle, Box<OplogEntry>), WorkerExecutorError> {
+        let already_claimed = self.st.claimed_starts.clone();
+        let mut scan_start = self.cursor.last_replayed_index().next();
+        let replay_target = self.cursor.replay_target();
+
+        while scan_start <= replay_target {
+            let scan_result = self
+                .cursor
+                .scan_oplog(
+                    scan_start,
+                    replay_target.next(),
+                    &self.st.skipped_regions,
+                    self.st.skipped_regions.find_next_deleted_region(scan_start),
+                    OplogIndex::NONE,
+                    |entry, _begin_idx, state: &Option<OplogIndex>| {
+                        state
+                            .map(|idx| idx <= replay_target && !already_claimed.contains(&idx))
+                            .unwrap_or(false)
+                            && matches_identity(entry)
+                    },
+                    |_, _, _| true,
+                    None,
+                    |_, idx, state: &mut Option<OplogIndex>| {
+                        *state = Some(idx);
+                    },
+                )
+                .await;
+
+            let OplogEntryLookupResult::Found { index, entry, .. } = scan_result else {
+                break;
+            };
+            let OplogEntry::Start {
+                request: Some(recorded_request),
+                ..
+            } = entry.as_ref()
+            else {
+                unreachable!("the request-matching claim predicate only accepts Start entries")
+            };
+
+            let payload_matches = recorded_request_payload_matches(
+                self.cursor.oplog.as_ref(),
+                recorded_request,
+                expected_request,
+            )
+            .await
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to load durable call request payload at Start {index}: {err}"
+                ))
+            })?;
+            if payload_matches {
+                self.st.claimed_starts.insert(index);
+                let receiver = self.st.concurrent_resolver.register(index);
+                self.notify_progress = true;
+                return Ok((ReplayCallHandle::new(index, receiver), entry));
+            }
+
+            scan_start = index.next();
+        }
+
+        Err(WorkerExecutorError::unexpected_oplog_entry(
+            expected(),
+            "no matching Start between the replay cursor and the replay target".to_string(),
+        ))
     }
 
     /// Claims the next top-level (unowned) durable-call `Start` **without** validating its
@@ -1055,19 +1131,19 @@ impl CursorTx<'_> {
     ) -> Result<ReplayCallHandle, WorkerExecutorError> {
         let expected_parent = parent_start_index_of(expected_function_type);
         let (handle, _) = self
-            .claim_start_matching(
+            .claim_start_matching_request(
                 |entry| {
                     matches!(entry, OplogEntry::Start {
                         function_name,
-                        request: Some(request),
+                        request: Some(_),
                         durable_function_type,
                         parent_start_index,
                         ..
                     } if function_name == expected_function_name
                         && durable_function_type == expected_function_type
-                        && *parent_start_index == expected_parent
-                        && recorded_request_payload_matches(request, expected_request))
+                        && *parent_start_index == expected_parent)
                 },
+                expected_request,
                 || {
                     format!(
                         "Start {{ {expected_function_name}, {expected_function_type:?}, request: Some(<matching payload>), parent_start_index: {expected_parent:?} }}"
@@ -1091,19 +1167,19 @@ impl CursorTx<'_> {
         expected_request: &HostRequest,
     ) -> Result<ReplayCallHandle, WorkerExecutorError> {
         let (handle, _) = self
-            .claim_start_matching(
+            .claim_start_matching_request(
                 |entry| {
                     matches!(entry, OplogEntry::Start {
                         function_name,
-                        request: Some(request),
+                        request: Some(_),
                         durable_function_type,
                         parent_start_index,
                         ..
                     } if function_name == expected_function_name
                         && durable_function_type == expected_function_type
-                        && *parent_start_index == Some(expected_parent_start_index)
-                        && recorded_request_payload_matches(request, expected_request))
+                        && *parent_start_index == Some(expected_parent_start_index))
                 },
+                expected_request,
                 || {
                     format!(
                         "Start {{ {expected_function_name}, {expected_function_type:?}, request: Some(<matching payload>), parent_start_index: Some({expected_parent_start_index}) }}"

@@ -224,18 +224,6 @@ async fn apply_invocation_deadline<Ctx: WorkerCtx>(
     }
 }
 
-/// Upper bound on the post-completion tail-work drain of a guest call: how long
-/// [`run_guest_call_settled`] keeps the store's event loop running after the guest export has
-/// returned, waiting for still-active Golem-spawned store tasks (see
-/// [`tail_work`](crate::durable_host::tail_work)) to finish or reach a safe park point.
-///
-/// The drain normally settles as soon as the tasks' pending durable appends and I/O complete;
-/// this bound only fires when such work is stuck (e.g. an unresponsive peer without its own
-/// timeout). Hitting it fails the guest call like a trap: the invocation is torn down without an
-/// `AgentInvocationFinished` entry and normal retry handling replays it, re-executing any calls
-/// left incomplete — the same contract as a crash at this point.
-const TAIL_WORK_SETTLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
 /// Runs a guest export call on the store's event loop, draining Golem-spawned tail work before
 /// returning.
 ///
@@ -256,8 +244,12 @@ const TAIL_WORK_SETTLE_TIMEOUT: std::time::Duration = std::time::Duration::from_
 /// a redundant safety net that keeps the invariant explicit even if a future task's accounting
 /// regresses.
 ///
-/// The drain phase is bounded by [`TAIL_WORK_SETTLE_TIMEOUT`]; see its documentation for the
-/// timeout semantics.
+/// The drain phase is bounded by `limits.tail_work_settle_timeout`. It normally settles as soon as
+/// the tasks' pending durable appends and I/O complete; the bound only fires when such work is
+/// stuck (e.g. an unresponsive peer without its own timeout). Hitting it cooperatively interrupts
+/// the store tasks and fails the guest call like a trap after they unwind: no unfinished event-loop
+/// future is dropped, no `AgentInvocationFinished` entry is written, and normal retry handling
+/// replays any calls left incomplete — the same contract as a crash at this point.
 ///
 /// The event loop future itself is never dropped while unfinished: durable `CallHandle`s owned
 /// by parked host futures are not cancellation-safe (`NotCancellable` handles panic when dropped
@@ -296,17 +288,22 @@ async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
         );
         active == 0 && !replay_cursor_open
     };
-    let drain_timeout = async {
-        drain_started.notified().await;
-        tokio::time::sleep(TAIL_WORK_SETTLE_TIMEOUT).await;
-    };
-    tokio::select! {
-        biased;
-        result = store.as_context_mut().run_concurrent_and_settle(fun, &mut settled) => result,
-        _ = drain_timeout => Err(wasmtime::Error::msg(format!(
-            "invocation tail work did not settle within {TAIL_WORK_SETTLE_TIMEOUT:?}: {} spawned task(s) still active",
+    let tail_work_deadline = store
+        .data()
+        .durable_ctx()
+        .arm_tail_work_deadline(drain_started);
+    let result = store
+        .as_context_mut()
+        .run_concurrent_and_settle(fun, &mut settled)
+        .await;
+    if tail_work_deadline.exceeded() && !store.data().durable_ctx().is_interrupting() {
+        let timeout = tail_work_deadline.duration();
+        Err(wasmtime::Error::msg(format!(
+            "invocation tail work did not settle within {timeout:?}: {} spawned task(s) still active",
             tracker_for_error.active_count()
-        ))),
+        )))
+    } else {
+        result
     }
 }
 

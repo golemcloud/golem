@@ -429,6 +429,34 @@ impl Drop for InvocationDeadline {
     }
 }
 
+/// Guard for the post-completion tail-work deadline. When the deadline fires it cooperatively
+/// interrupts store tasks; dropping the guard aborts the timer and clears the latch before the
+/// next guest call.
+pub(crate) struct TailWorkDeadline {
+    latch: Arc<AtomicBool>,
+    duration: Duration,
+    timer: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl TailWorkDeadline {
+    pub(crate) fn exceeded(&self) -> bool {
+        self.latch.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn duration(&self) -> Duration {
+        self.duration
+    }
+}
+
+impl Drop for TailWorkDeadline {
+    fn drop(&mut self) {
+        if let Some(timer) = self.timer.take() {
+            timer.abort();
+        }
+        self.latch.store(false, Ordering::Release);
+    }
+}
+
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) fn derive_idempotency_key(&mut self, oplog_index: OplogIndex) -> IdempotencyKey {
         let current_idempotency_key = self
@@ -3038,6 +3066,42 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
+    /// Arms a deadline that starts when `drain_started` is notified after the guest export has
+    /// returned. When it fires, the shared latch and interrupt broadcast make both existing and
+    /// subsequently-created cooperative park points unwind their durable call handles safely.
+    pub(crate) fn arm_tail_work_deadline(
+        &self,
+        drain_started: Arc<tokio::sync::Notify>,
+    ) -> TailWorkDeadline {
+        let latch = self.state.tail_work_deadline_exceeded.clone();
+        latch.store(false, Ordering::Release);
+        let timer_latch = latch.clone();
+        let execution_status = self.execution_status.clone();
+        let duration = self.state.config.limits.tail_work_settle_timeout;
+        let timer = tokio::spawn(async move {
+            drain_started.notified().await;
+            tokio::time::sleep(duration).await;
+            timer_latch.store(true, Ordering::Release);
+            let interrupt_signal = {
+                let status = execution_status.read().unwrap();
+                match &*status {
+                    ExecutionStatus::Running {
+                        interrupt_signal, ..
+                    } => Some(interrupt_signal.clone()),
+                    _ => None,
+                }
+            };
+            if let Some(interrupt_signal) = interrupt_signal {
+                let _ = interrupt_signal.send(InterruptKind::Interrupt(Timestamp::now_utc()));
+            }
+        });
+        TailWorkDeadline {
+            latch,
+            duration,
+            timer: Some(timer),
+        }
+    }
+
     /// Whether the worker is currently being interrupted through the Golem API
     /// (`ExecutionStatus::Interrupting`), independent of the invocation-deadline latch.
     pub fn is_interrupting(&self) -> bool {
@@ -3391,13 +3455,17 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
                 return Some(*interrupt_kind);
             }
         }
-        // An exceeded invocation deadline surfaces as a synthetic interrupt so CPU-bound wasm
-        // traps at the next epoch check; the invocation boundary converts the unwind into a
-        // typed timeout failure (see `arm_invocation_deadline`).
+        // An exceeded invocation or tail-work deadline surfaces as a synthetic interrupt so work
+        // traps at the next epoch check. The corresponding invocation boundary converts the
+        // unwind into the appropriate timeout failure.
         if self
             .state
             .invocation_deadline_exceeded
             .load(Ordering::Acquire)
+            || self
+                .state
+                .tail_work_deadline_exceeded
+                .load(Ordering::Acquire)
         {
             return Some(InterruptKind::Interrupt(Timestamp::now_utc()));
         }
@@ -6120,6 +6188,11 @@ struct PrivateDurableWorkerState {
     /// its guard drops at the invocation boundary.
     invocation_deadline_exceeded: Arc<AtomicBool>,
 
+    /// Latched when post-completion tail work exceeds its settlement deadline. Cooperative park
+    /// points and the epoch callback observe this just like the invocation deadline, but the
+    /// guest-call wrapper reports the dedicated tail-work timeout after the event loop unwinds.
+    tail_work_deadline_exceeded: Arc<AtomicBool>,
+
     dropped_call_events: (
         tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>,
         tokio::sync::mpsc::UnboundedReceiver<concurrent::DropEvent>,
@@ -6373,6 +6446,7 @@ impl PrivateDurableWorkerState {
             suspendable_waits: Arc::new(Mutex::new(BTreeMap::new())),
             next_suspendable_wait_id: AtomicU64::new(1),
             invocation_deadline_exceeded: Arc::new(AtomicBool::new(false)),
+            tail_work_deadline_exceeded: Arc::new(AtomicBool::new(false)),
             dropped_call_events,
             min_exposed_marker: None,
             current_phantom_id: original_phantom_id,
