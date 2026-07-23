@@ -584,16 +584,16 @@ jobs:
         run: moon update
         working-directory: sdks/moonbit
       - name: Check SDK
-        run: moon check . --target wasm
+        run: find . -name moon.pkg -exec dirname {} \; | xargs moon check --target wasm
         working-directory: sdks/moonbit/golem_sdk
       - name: Test SDK
-        run: moon test . --target wasm
+        run: find . -name moon.pkg -exec dirname {} \; | xargs moon test --target wasm
         working-directory: sdks/moonbit/golem_sdk
       - name: Check tools
-        run: moon check .
+        run: moon check cmd lib
         working-directory: sdks/moonbit/golem_sdk_tools
       - name: Test tools
-        run: moon test .
+        run: moon test cmd lib
         working-directory: sdks/moonbit/golem_sdk_tools
 
   build-golem-rust:
