@@ -18,6 +18,7 @@ pub mod types;
 mod tests;
 
 use crate::model::agent::AgentTypeName;
+use crate::model::card::ScopeCard;
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
 use crate::model::oplog::CardInstallFailure;
@@ -149,6 +150,8 @@ oplog_payload! {
             #[transient(None::<TypedSchemaValue>)]
             #[schema(skip)]
             remote_agent_parameters: Option<TypedSchemaValue>, // enriched field, only filled when exposed as public oplog entry
+            #[schema(skip)]
+            scope_card: Option<ScopeCard>,
         },
         GolemRpcScheduledInvocation {
             remote_agent_id: AgentId,

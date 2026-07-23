@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::SafeDisplay;
-use golem_common::model::card::{CardId, CardManagedByRuntimeDerived, StoredCard};
+use golem_common::model::card::{CardId, CardManagedByRuntimeDerived, ScopeCard, StoredCard};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -95,6 +95,57 @@ pub enum CardRevokeResult {
     Revoked(Vec<CardId>),
     AlreadyRevoked(String),
     NotPermitted(String),
+}
+
+pub async fn validate_scope_card(
+    card_service: &dyn CardService,
+    scope_card: &ScopeCard,
+) -> Result<(), WorkerExecutorError> {
+    if scope_card.scope_card_id.0.is_nil() {
+        return Err(WorkerExecutorError::permission_denied(
+            "not-permitted: scope-card ID must not be nil",
+        ));
+    }
+    if scope_card.root_card_ids.is_empty() {
+        return Err(WorkerExecutorError::permission_denied(
+            "not-permitted: scope card must reference at least one root card",
+        ));
+    }
+    if scope_card
+        .root_card_ids
+        .windows(2)
+        .any(|ids| ids[0] >= ids[1])
+    {
+        return Err(WorkerExecutorError::permission_denied(
+            "not-permitted: scope-card root IDs must be strictly increasing",
+        ));
+    }
+
+    let states = card_service
+        .check_cards(scope_card.root_card_ids.clone())
+        .await?;
+    for card_id in &scope_card.root_card_ids {
+        match states.get(card_id) {
+            Some(CardState::Live(card)) if card.card_id() == *card_id => {}
+            Some(CardState::Live(_)) => {
+                return Err(WorkerExecutorError::permission_denied(format!(
+                    "not-permitted: scope-card root {card_id} does not match the registry payload"
+                )));
+            }
+            Some(CardState::Revoked) => {
+                return Err(WorkerExecutorError::permission_denied(format!(
+                    "card-revoked: scope-card root {card_id} is revoked or expired"
+                )));
+            }
+            Some(CardState::Unknown) | None => {
+                return Err(WorkerExecutorError::permission_denied(format!(
+                    "not-permitted: scope-card root {card_id} could not be verified"
+                )));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 pub struct NoopCardService;
@@ -1160,6 +1211,132 @@ mod tests {
                 .unwrap()
                 .get(&revoked),
             Some(CardState::Revoked)
+        ));
+    }
+
+    fn scope_card_with_roots(mut root_card_ids: Vec<CardId>) -> ScopeCard {
+        root_card_ids.sort_unstable();
+        ScopeCard {
+            scope_card_id: CardId::new(),
+            root_card_ids,
+            lower_positive: Vec::new(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+        }
+    }
+
+    #[test]
+    async fn scope_card_admission_requires_and_accepts_all_live_roots() {
+        let first = CardId::new();
+        let second = CardId::new();
+        let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_cards(
+            vec![stored_card(first), stored_card(second)],
+            Arc::new(AtomicUsize::new(0)),
+        )));
+
+        validate_scope_card(&service, &scope_card_with_roots(vec![first, second]))
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    async fn scope_card_admission_rejects_a_revoked_root() {
+        let live = CardId::new();
+        let revoked = CardId::new();
+        let service = service();
+        service.record_revoked_cards(&[revoked]).await;
+
+        let error = validate_scope_card(&service, &scope_card_with_roots(vec![live, revoked]))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkerExecutorError::PermissionDenied { details }
+                if details.starts_with("card-revoked:") && details.contains(&revoked.to_string())
+        ));
+    }
+
+    #[test]
+    async fn scope_card_admission_negatively_caches_a_registry_missing_root() {
+        let live = CardId::new();
+        let missing = CardId::new();
+        let service = CardServiceDefault::new(Arc::new(TestRegistryService::with_cards(
+            vec![stored_card(live)],
+            Arc::new(AtomicUsize::new(0)),
+        )));
+
+        let error = validate_scope_card(&service, &scope_card_with_roots(vec![live, missing]))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkerExecutorError::PermissionDenied { details }
+                if details.starts_with("card-revoked:") && details.contains(&missing.to_string())
+        ));
+        assert_eq!(
+            service
+                .check_cards(vec![missing])
+                .await
+                .unwrap()
+                .get(&missing),
+            Some(&CardState::Revoked)
+        );
+    }
+
+    struct FailingCardService;
+
+    #[async_trait]
+    impl CardService for FailingCardService {
+        async fn record_revoked_cards(&self, _card_ids: &[CardId]) {}
+
+        async fn check_cards(
+            &self,
+            _card_ids: Vec<CardId>,
+        ) -> Result<HashMap<CardId, CardState>, WorkerExecutorError> {
+            Err(WorkerExecutorError::runtime("registry unavailable"))
+        }
+    }
+
+    #[test]
+    async fn scope_card_admission_propagates_liveness_service_errors() {
+        let error = validate_scope_card(
+            &FailingCardService,
+            &scope_card_with_roots(vec![CardId::new()]),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, WorkerExecutorError::Runtime { .. }));
+    }
+
+    struct OmittingCardService;
+
+    #[async_trait]
+    impl CardService for OmittingCardService {
+        async fn record_revoked_cards(&self, _card_ids: &[CardId]) {}
+
+        async fn check_cards(
+            &self,
+            _card_ids: Vec<CardId>,
+        ) -> Result<HashMap<CardId, CardState>, WorkerExecutorError> {
+            Ok(HashMap::new())
+        }
+    }
+
+    #[test]
+    async fn scope_card_admission_rejects_an_omitted_root_as_unverifiable() {
+        let root = CardId::new();
+        let error = validate_scope_card(&OmittingCardService, &scope_card_with_roots(vec![root]))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkerExecutorError::PermissionDenied { details }
+                if details.starts_with("not-permitted:") && details.contains(&root.to_string())
         ));
     }
 

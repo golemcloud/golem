@@ -26,6 +26,7 @@ import "golem/worker/v1/worker_error.proto";
 import "golem/worker/worker_filter.proto";
 import "golem/worker/worker_id.proto";
 import "golem/worker/raw_oplog.proto";
+import "golem/worker/scope_card.proto";
 import "golem/worker/worker_metadata.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -151,6 +152,7 @@ message InvokeAgentRequest {
   optional golem.common.EnvironmentId environment_id = 10;
   InvocationFreshnessDisposition freshness_disposition = 11;
   repeated golem.worker.AgentConfigEntryDto config = 12;
+  optional golem.worker.EncodedScopeCard scope_card = 13;
 }
 
 enum InvocationFreshnessDisposition {

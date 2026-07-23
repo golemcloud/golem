@@ -426,7 +426,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             &idempotency_key,
         )?;
         let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
-        let request = prepared.invoke_request(&remote_agent_id, &idempotency_key);
+        let request =
+            prepared.invoke_request(&remote_agent_id, &idempotency_key, scope_card.as_ref());
+        let dispatched_scope_card = request.scope_card.clone();
         let mut handle = if begun.is_live() {
             begun.start_live(self, request).await?
         } else {
@@ -454,7 +456,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             idempotency_key,
             span,
             handle,
-            scope_card,
+            dispatched_scope_card,
         )
         .await?
         {
@@ -500,7 +502,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             &idempotency_key,
         )?;
         let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
-        let request = prepared.invoke_request(&remote_agent_id, &idempotency_key);
+        let request = prepared.invoke_request(&remote_agent_id, &idempotency_key, None);
         let mut handle = if begun.is_live() {
             begun.start_live(self, request).await?
         } else {
@@ -704,6 +706,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         },
                         remote_agent_type: None,
                         remote_agent_parameters: None,
+                        scope_card: scope_card.clone(),
                     };
                     let fut = self.table().push(FutureInvokeResultEntry {
                         payload: Box::new(FutureInvokeResultState::Completed {
@@ -728,7 +731,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             input: input_value.clone(),
             remote_agent_type: None,
             remote_agent_parameters: None,
+            scope_card: scope_card.clone(),
         };
+        let dispatched_scope_card = request.scope_card.clone();
 
         let result = if self.state.is_live() {
             if ephemeral_logical_agent_id.is_none() {
@@ -800,7 +805,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 self.agent_auth_ctx(),
                 None,
                 initial_freshness_disposition,
-                scope_card.clone(),
+                dispatched_scope_card,
             );
 
             let fut = self.table().push(FutureInvokeResultEntry {
@@ -987,6 +992,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             input: input_value,
             invocation_context: stack,
             principal: Principal::anonymous(),
+            scope_card: None,
         });
         let action = if ephemeral_logical_agent_id.is_some() {
             ScheduledAction::InvokeEphemeral {
@@ -1064,6 +1070,7 @@ impl PreparedRpcInvocation {
         &self,
         remote_agent_id: &OwnedAgentId,
         idempotency_key: &IdempotencyKey,
+        scope_card: Option<&ScopeCard>,
     ) -> HostRequestGolemRpcInvoke {
         HostRequestGolemRpcInvoke {
             remote_agent_id: remote_agent_id.agent_id(),
@@ -1072,6 +1079,7 @@ impl PreparedRpcInvocation {
             input: self.input_value.clone(),
             remote_agent_type: None,
             remote_agent_parameters: None,
+            scope_card: scope_card.cloned(),
         }
     }
 
@@ -1725,6 +1733,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     idempotency_key,
                     method_name,
                     method_parameters,
+                    scope_card,
                     ..
                 } => (
                     true,
@@ -1737,6 +1746,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         input: method_parameters.clone(),
                         remote_agent_type: None,
                         remote_agent_parameters: None,
+                        scope_card: scope_card.clone(),
                     },
                 ),
                 FutureInvokeResultState::Completed { request, .. }
@@ -1793,6 +1803,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     idempotency_key,
                     span_id,
                     begin_index,
+                    scope_card,
                     ..
                 } => {
                     *state = FutureInvokeResultState::Cancelled {
@@ -1803,6 +1814,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                             input: method_parameters.clone(),
                             remote_agent_type: None,
                             remote_agent_parameters: None,
+                            scope_card: scope_card.clone(),
                         },
                         span_id: span_id.clone(),
                         begin_index: *begin_index,
@@ -2495,7 +2507,9 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         input: method_parameters.clone(),
         remote_agent_type: None,
         remote_agent_parameters: None,
+        scope_card: scope_card.clone(),
     };
+    let dispatched_scope_card = request.scope_card.clone();
     let mut retry_properties = RetryContext::rpc("invoke-and-await", remote_agent_id, method_name);
     if let Some((agent_id, assume_idempotence)) = enrichment {
         retry_properties.set(
@@ -2537,7 +2551,7 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         auth_ctx.clone(),
         target_activation,
         InvocationFreshnessDisposition::MayExist,
-        scope_card.clone(),
+        dispatched_scope_card,
     );
 
     let span_id = span_id.clone();
@@ -3431,6 +3445,7 @@ mod tests {
             input: SchemaValue::Tuple { elements: vec![] },
             remote_agent_type: None,
             remote_agent_parameters: None,
+            scope_card: None,
         };
         let mut state = FutureInvokeResultState::Completed {
             request,

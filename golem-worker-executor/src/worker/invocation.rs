@@ -121,17 +121,29 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     // Encode the schema-native inputs into wire trees (minting any quota-token
     // handles into the guest store) before the invocation is marked started, so
     // an encoding failure surfaces before invocation bookkeeping.
-    let call = materialize_call(&mut store, call)?;
+    let call = match materialize_call(&mut store, call) {
+        Ok(call) => call,
+        Err(error) => {
+            if matches!(&mode, InvocationMode::Replay) {
+                store.data_mut().on_agent_invocation_finished().await;
+            }
+            return Err(error);
+        }
+    };
 
     if let InvocationMode::Live(invocation) = mode {
-        async {
+        let started = async {
             store
                 .data_mut()
                 .on_agent_invocation_started(invocation)
                 .await
         }
         .instrument(span!(Level::INFO, "on_agent_invocation_started"))
-        .await?;
+        .await;
+        if let Err(error) = started {
+            store.data_mut().on_agent_invocation_finished().await;
+            return Err(error);
+        }
     }
 
     store.data_mut().set_running();
@@ -153,6 +165,8 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     if read_only_method.is_some() {
         store.data_mut().exit_read_only_mode();
     }
+
+    store.data_mut().on_agent_invocation_finished().await;
 
     let call_result = match call_outcome {
         Ok(result) => result,
@@ -990,6 +1004,7 @@ mod tests {
             input,
             invocation_context: InvocationContextStack::fresh(),
             principal: Principal::anonymous(),
+            scope_card: None,
         }
     }
 

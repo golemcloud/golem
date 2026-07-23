@@ -61,7 +61,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentMode, InvocationFreshnessDisposition, ParsedAgentId, Principal,
 };
-use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient};
+use golem_common::model::card::{CardId, ScopeCard, StoredCard, card_matches_agent_recipient};
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -1934,6 +1934,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let mode = request.mode();
 
+        let scope_card: Option<ScopeCard> = request
+            .scope_card
+            .clone()
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(WorkerExecutorError::permission_denied)?;
+        if scope_card.is_some()
+            && mode != golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await
+        {
+            return Err(WorkerExecutorError::permission_denied(
+                "scope cards are supported only for invoke-and-await",
+            ));
+        }
+
         let ik = idempotency_key.unwrap_or(IdempotencyKey::fresh());
         let final_agent_id: AgentId = request
             .agent_id
@@ -2041,6 +2055,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             input: method_parameters,
             invocation_context,
             principal,
+            scope_card,
         };
 
         match mode {

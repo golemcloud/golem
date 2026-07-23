@@ -176,6 +176,7 @@ fn agent_method_invocation() -> AgentInvocation {
         input: method_input_value(),
         invocation_context: InvocationContextStack::fresh(),
         principal: Principal::anonymous(),
+        scope_card: None,
     }
 }
 

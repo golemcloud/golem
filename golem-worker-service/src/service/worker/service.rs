@@ -962,6 +962,7 @@ impl WorkerService {
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
         known_environment_id: Option<EnvironmentId>,
+        scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
     ) -> WorkerResult<AgentInvocationOutput> {
         let component = self
             .component_service
@@ -1011,6 +1012,7 @@ impl WorkerService {
                 component.account_id,
                 auth_ctx,
                 principal,
+                scope_card,
             )
             .await?;
         output.agent_id.get_or_insert(agent_id);
@@ -1253,6 +1255,7 @@ impl WorkerService {
                 component_owner_account_id,
                 auth,
                 principal,
+                None,
             )
             .await?;
 
@@ -2016,6 +2019,7 @@ mod tests {
             _: AccountId,
             _: AuthCtx,
             _: golem_api_grpc::proto::golem::component::Principal,
+            _: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         ) -> WorkerResult<AgentInvocationOutput> {
             self.invocations.lock().unwrap().push((
                 agent_id.clone(),
@@ -2542,6 +2546,7 @@ mod tests {
                 Vec::new(),
                 AuthCtx::system(),
                 Principal::anonymous().into(),
+                None,
                 None,
             )
             .await

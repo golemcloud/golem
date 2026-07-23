@@ -118,6 +118,7 @@ pub async fn invoke_tool(
             auth_ctx,
             proto_principal,
             None,
+            None,
         )
         .await
         .map_err(|e| {

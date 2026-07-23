@@ -516,8 +516,8 @@ impl WorkerGrpcApi {
             .map(|entry| entry.try_into().map_err(WorkerServiceError::TypeChecker))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let is_lookup =
-            request.mode() == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup;
+        let mode = request.mode();
+        let is_lookup = mode == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup;
 
         let auth: AuthCtx = request
             .auth_ctx
@@ -525,6 +525,18 @@ impl WorkerGrpcApi {
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let trusted_internal_caller = matches!(&auth, AuthCtx::System | AuthCtx::Agent(_));
+        if request.scope_card.is_some() && !trusted_internal_caller {
+            return Err(bad_request_error(
+                "scope cards are accepted only from trusted internal callers",
+            ));
+        }
+        if request.scope_card.is_some()
+            && mode != golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await
+        {
+            return Err(bad_request_error(
+                "scope cards are supported only for invoke-and-await",
+            ));
+        }
         let freshness_disposition = sanitize_invocation_freshness_disposition(
             requested_freshness_disposition,
             trusted_internal_caller,
@@ -571,6 +583,7 @@ impl WorkerGrpcApi {
                 auth,
                 principal,
                 environment_id,
+                request.scope_card,
             )
             .await?;
 

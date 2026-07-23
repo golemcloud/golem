@@ -320,6 +320,9 @@ pub trait InvocationHooks {
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError>;
 
+    /// Clears invocation-scoped runtime state after the guest call returns or traps.
+    async fn on_agent_invocation_finished(&mut self);
+
     /// Called when a worker invocation fails
     async fn on_invocation_failure(
         &mut self,

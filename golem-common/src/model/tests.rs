@@ -537,3 +537,42 @@ fn agent_invocation_result_redacted_debug_hides_capability_material() {
         format!("{:?}", AgentInvocationResult::ManualUpdate)
     );
 }
+
+#[test]
+fn agent_invocation_payload_round_trip_preserves_scope_card() {
+    use crate::model::card::{CardId, ScopeCard};
+    use crate::model::invocation_context::InvocationContextStack;
+    use crate::model::{AgentInvocation, AgentInvocationPayload, Principal};
+    use crate::schema::SchemaValue;
+    use crate::serialization::{deserialize, serialize};
+
+    let scope_card = ScopeCard {
+        scope_card_id: CardId(Uuid::from_u128(1)),
+        root_card_ids: vec![CardId(Uuid::from_u128(2))],
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+    };
+    let invocation = AgentInvocation::AgentMethod {
+        idempotency_key: IdempotencyKey::fresh(),
+        method_name: "run".to_string(),
+        input: SchemaValue::Tuple {
+            elements: Vec::new(),
+        },
+        invocation_context: InvocationContextStack::fresh(),
+        principal: Principal::anonymous(),
+        scope_card: Some(scope_card.clone()),
+    };
+    let (_, payload, _) = invocation.into_parts();
+    let encoded = serialize(&payload).unwrap();
+    let decoded: AgentInvocationPayload = deserialize(&encoded).unwrap();
+
+    assert!(matches!(
+        decoded,
+        AgentInvocationPayload::AgentMethod {
+            scope_card: Some(decoded_scope_card),
+            ..
+        } if decoded_scope_card == scope_card
+    ));
+}

@@ -456,6 +456,14 @@ impl TrapType {
                                         .clone(),
                                 }
                             }
+                            Some(WorkerExecutorError::PermissionDenied { details }) => {
+                                TrapType::Error {
+                                    error: AgentError::PermanentError(details.clone()),
+                                    retry_from,
+                                    semantic_trap_retry_override: semantic_trap_retry_override
+                                        .clone(),
+                                }
+                            }
                             Some(WorkerExecutorError::ParamTypeMismatch { details }) => {
                                 TrapType::Error {
                                     error: AgentError::InvalidRequest(details.clone()),
@@ -965,6 +973,32 @@ mod tests {
             }
             other => panic!("expected TrapType::Error(AgentError::InternalError), got {other:?}"),
         }
+
+        let decision = crate::durable_host::DurableWorkerCtx::<
+            crate::workerctx::default::Context,
+        >::fixed_decision_for_trap_type(&trap, false);
+        assert_eq!(decision, Some(RetryDecision::None));
+    }
+
+    #[test]
+    fn permission_denied_is_non_retriable() {
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &anyhow::Error::from(
+                golem_service_base::error::worker_executor::WorkerExecutorError::permission_denied(
+                    "card-revoked: scope root was revoked while the invocation was queued",
+                ),
+            ),
+            OplogIndex::INITIAL,
+            AgentMode::Durable,
+        );
+
+        assert!(matches!(
+            trap,
+            TrapType::Error {
+                error: AgentError::PermanentError(ref details),
+                ..
+            } if details.starts_with("card-revoked:")
+        ));
 
         let decision = crate::durable_host::DurableWorkerCtx::<
             crate::workerctx::default::Context,

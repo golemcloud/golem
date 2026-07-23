@@ -17,7 +17,7 @@ use super::owner::*;
 use super::recipient::RecipientPattern;
 use super::{
     Card, CardId, DelegationSurface, EffectiveSurface, PermissionPattern, PolymorphicCard,
-    PolymorphicPermissionPattern, StoredCard,
+    PolymorphicPermissionPattern, ScopeCard, StoredCard,
 };
 use crate::model::account::AccountEmail;
 use crate::model::agent::AgentTypeName;
@@ -44,6 +44,29 @@ pub fn agent_effective_surface_from_wallet<'a>(
     let cards = monomorphize_wallet_cards(context, wallet_cards);
 
     EffectiveSurface::from_cards(&cards, &holder).unwrap_or_default()
+}
+
+pub fn agent_effective_surface_from_wallet_and_scope<'a>(
+    context: &AgentPermissionMonomorphizationContext,
+    wallet_cards: impl IntoIterator<Item = &'a StoredCard>,
+    scope_card: Option<&ScopeCard>,
+) -> EffectiveSurface {
+    let mut surface = agent_effective_surface_from_wallet(context, wallet_cards);
+    if let Some(scope_card) = scope_card {
+        let holder = agent_recipient_pattern(context);
+        if let Ok(mut scope_surface) = EffectiveSurface::from_grants(
+            &scope_card.lower_positive,
+            &scope_card.lower_negative,
+            &scope_card.upper_positive,
+            &scope_card.upper_negative,
+            &holder,
+        ) {
+            surface.source_card_ids.push(scope_card.scope_card_id);
+            surface.lower.append(&mut scope_surface.lower);
+            surface.upper.append(&mut scope_surface.upper);
+        }
+    }
+    surface
 }
 
 pub fn agent_delegation_surface_from_wallet<'a>(
@@ -615,7 +638,6 @@ mod tests {
     use crate::model::account::AccountEmail;
     use crate::model::agent::AgentTypeName;
     use crate::model::application::ApplicationName;
-    use crate::model::card::default_agent_initial_permission_grants;
     use crate::model::card::recipient::RecipientPattern;
     use crate::model::card::{
         AgentClass, AgentResourcePattern, AgentVerb, CardId, ClassPermissionTarget, ComponentClass,
@@ -623,6 +645,7 @@ mod tests {
         EnvironmentVerb, PermissionTarget, PolymorphicCard, PolymorphicClassPermissionPattern,
         PolymorphicPermissionPattern, StoredCard,
     };
+    use crate::model::card::{default_agent_initial_permission_grants, parse_permission};
     use crate::model::component::ComponentName;
     use crate::model::environment::EnvironmentName;
 
@@ -669,6 +692,93 @@ mod tests {
             owner: AgentOwnerPattern::parse(owner).unwrap(),
             resource: AgentResourcePattern::Any,
         })
+    }
+
+    #[test]
+    fn invocation_scope_card_contributes_lower_and_upper_authority() {
+        let context = context();
+        let scope_card_id = CardId(uuid::Uuid::from_u128(10));
+        let grant = parse_permission(
+            "agent(owner@example.com/shop/prod/cart-svc/Cart(*)) @ owner@example.com/shop/prod/cart-svc/Cart : view : *",
+        )
+        .unwrap();
+        let scope_card = ScopeCard {
+            scope_card_id,
+            root_card_ids: vec![CardId(uuid::Uuid::from_u128(11))],
+            lower_positive: vec![grant.clone()],
+            lower_negative: Vec::new(),
+            upper_positive: vec![grant],
+            upper_negative: Vec::new(),
+        };
+
+        let without_scope = agent_effective_surface_from_wallet(&context, std::iter::empty());
+        let with_scope = agent_effective_surface_from_wallet_and_scope(
+            &context,
+            std::iter::empty(),
+            Some(&scope_card),
+        );
+        let request = agent_target(
+            "owner@example.com/shop/prod/cart-svc/Cart(alice)",
+            AgentVerb::View,
+        );
+
+        assert!(!without_scope.authorize(&request).unwrap());
+        assert!(with_scope.authorize(&request).unwrap());
+        assert_eq!(with_scope.source_card_ids, vec![scope_card_id]);
+        assert_eq!(with_scope.lower.len(), 1);
+        assert_eq!(with_scope.upper.len(), 1);
+    }
+
+    #[test]
+    fn upper_only_invocation_scope_card_clamps_persistent_authority() {
+        let context = context();
+        let persistent_grant = parse_permission(
+            "agent(owner@example.com/shop/prod/cart-svc/Cart(*)) @ owner@example.com/shop/prod/cart-svc/Cart : view : *",
+        )
+        .unwrap();
+        let scope_ceiling = parse_permission(
+            "agent(owner@example.com/shop/prod/cart-svc/Cart(*)) @ owner@example.com/shop/prod/cart-svc/Cart : invoke : *",
+        )
+        .unwrap();
+        let persistent_card = StoredCard::Concrete(Card {
+            card_id: CardId(uuid::Uuid::from_u128(20)),
+            parent_ids: Vec::new(),
+            lower_positive: vec![persistent_grant],
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        });
+        let scope_card = ScopeCard {
+            scope_card_id: CardId(uuid::Uuid::from_u128(21)),
+            root_card_ids: vec![persistent_card.card_id()],
+            lower_positive: Vec::new(),
+            lower_negative: Vec::new(),
+            upper_positive: vec![scope_ceiling],
+            upper_negative: Vec::new(),
+        };
+        let request = agent_target(
+            "owner@example.com/shop/prod/cart-svc/Cart(alice)",
+            AgentVerb::View,
+        );
+
+        assert!(
+            agent_effective_surface_from_wallet(&context, [&persistent_card])
+                .authorize(&request)
+                .unwrap()
+        );
+        assert!(
+            !agent_effective_surface_from_wallet_and_scope(
+                &context,
+                [&persistent_card],
+                Some(&scope_card),
+            )
+            .authorize(&request)
+            .unwrap()
+        );
     }
 
     #[test]

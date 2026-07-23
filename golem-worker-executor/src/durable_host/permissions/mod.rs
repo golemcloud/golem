@@ -1587,16 +1587,7 @@ async fn complete_source_card_transfer<Ctx: WorkerCtx>(
             )?
         {
             ctx.rederive_agent_effective_surface_from_wallet();
-            let wallet_card_ids = ctx
-                .state
-                .agent_wallet_cards
-                .keys()
-                .copied()
-                .collect::<Vec<_>>();
-            ctx.state
-                .card_interest_index
-                .set_card_interest(ctx.owned_agent_id.clone(), &wallet_card_ids)
-                .await;
+            ctx.refresh_card_interest().await;
         }
 
         ctx.public_state
@@ -2103,6 +2094,7 @@ async fn revoke_and_persist_card<Ctx: WorkerCtx>(
 impl<Ctx: WorkerCtx> HostPermissionCard for DurableWorkerCtx<Ctx> {
     async fn drop(&mut self, rep: Resource<PermissionCardHandleRep>) -> anyhow::Result<()> {
         DurabilityHost::observe_function_call(self, "golem::core::permission-card", "drop");
+        self.state.invocation_scope_handles.remove(&rep.rep());
         self.table().delete(rep)?;
         Ok(())
     }
@@ -2115,6 +2107,7 @@ impl<Ctx: WorkerCtx> PermissionCardResolver for DurableWorkerCtx<Ctx> {
         &mut self,
         handle: Resource<PermissionCardHandleRep>,
     ) -> Result<PermissionCardValuePayload, Self::Error> {
+        self.state.invocation_scope_handles.remove(&handle.rep());
         let rep = self.table().delete(handle).map_err(invalid_handle_error)?;
         match rep.into_payload::<PermissionCardEntry>() {
             Ok(entry) => entry.into_snapshot(),
@@ -2155,6 +2148,7 @@ impl<Ctx: WorkerCtx> PermissionCardResolver for DurableWorkerCtx<Ctx> {
     }
 
     fn drop_permission_card_handle(&mut self, handle: Resource<PermissionCardHandleRep>) {
+        self.state.invocation_scope_handles.remove(&handle.rep());
         let _ = self.table().delete(handle);
     }
 }
@@ -2337,9 +2331,13 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
             Ok(result) => result,
             Err(error) => return Ok(Err(error)),
         };
+        let root_card_ids = card.root_card_ids.clone();
         let handle = self.table().push(PermissionCardHandleRep::new(
             PermissionCardEntry::from_scope(card, invocation_key),
         ))?;
+        self.state
+            .invocation_scope_handles
+            .insert(handle.rep(), root_card_ids);
         self.state.scope_card_mint_ordinal = next_ordinal;
         Ok(Ok(handle))
     }
@@ -2364,7 +2362,7 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
     async fn self_wallet(&mut self) -> anyhow::Result<Vec<Resource<PermissionCardHandleRep>>> {
         DurabilityHost::observe_function_call(self, "golem::permissions::wallet", "self-wallet");
         let cards = self.active_agent_wallet_cards_snapshot().await?;
-        cards
+        let mut handles = cards
             .into_iter()
             .map(|card| {
                 self.table().push(PermissionCardHandleRep::new(
@@ -2372,7 +2370,23 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                 ))
             })
             .collect::<Result<Vec<_>, _>>()
-            .map_err(Into::into)
+            .map_err(anyhow::Error::from)?;
+
+        if let Some(scope_card) = self.state.invocation_scope_card.clone() {
+            let invocation_key = self.state.get_current_idempotency_key().ok_or_else(|| {
+                anyhow::anyhow!("an admitted scope card requires an active invocation")
+            })?;
+            let root_card_ids = scope_card.root_card_ids.clone();
+            let handle = self.table().push(PermissionCardHandleRep::new(
+                PermissionCardEntry::from_scope(scope_card, invocation_key),
+            ))?;
+            self.state
+                .invocation_scope_handles
+                .insert(handle.rep(), root_card_ids);
+            handles.push(handle);
+        }
+
+        Ok(handles)
     }
 
     async fn self_version(&mut self) -> anyhow::Result<permissions_types::WalletVersionToken> {

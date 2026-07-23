@@ -184,6 +184,7 @@ impl From<WorkerExecutorError> for RpcError {
             WorkerExecutorError::InvalidAccount => RpcError::Denied {
                 details: "Invalid account".to_string(),
             },
+            WorkerExecutorError::PermissionDenied { details } => RpcError::Denied { details },
             WorkerExecutorError::InvalidRequest { details } => RpcError::ProtocolError { details },
             _ => RpcError::RemoteInternalError {
                 details: value.to_string(),
@@ -344,7 +345,7 @@ impl Rpc for RemoteInvocationRpc {
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
-        _scope_card: Option<ScopeCard>,
+        scope_card: Option<ScopeCard>,
     ) -> Result<SchemaValue, RpcError> {
         let principal = caller_agent_principal(self_agent_id);
 
@@ -365,6 +366,7 @@ impl Rpc for RemoteInvocationRpc {
                 principal,
                 owned_agent_id.environment_id,
                 auth_ctx,
+                scope_card,
             )
             .await?;
 
@@ -410,6 +412,7 @@ impl Rpc for RemoteInvocationRpc {
                 principal,
                 owned_agent_id.environment_id,
                 auth_ctx,
+                None,
             )
             .await?;
 
@@ -949,6 +952,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 input: method_parameters,
                 invocation_context: self_stack,
                 principal,
+                scope_card,
             };
 
             let output = worker.invoke_and_await(invocation).await?;
@@ -1050,6 +1054,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 input: method_parameters,
                 invocation_context: self_stack,
                 principal,
+                scope_card: None,
             };
 
             match worker.clone().invoke(invocation).await? {

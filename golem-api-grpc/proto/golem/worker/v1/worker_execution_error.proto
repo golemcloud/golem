@@ -37,6 +37,7 @@ message WorkerExecutionError {
     InitialAgentFileDownloadFailed initial_agent_file_download_failed = 25;
     FileSystemError file_system_error = 26;
     InvocationFailed invocation_failed = 27;
+    PermissionDenied permission_denied = 28;
   }
 }
 
@@ -151,4 +152,8 @@ message FileSystemError {
 message InvocationFailed {
   AgentError error = 1;
   string stderr = 2;
+}
+
+message PermissionDenied {
+  string details = 1;
 }

@@ -111,6 +111,7 @@ declare_structs! {
     }
 
     #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     pub struct ScopeCard {
         pub scope_card_id: CardId,
         pub root_card_ids: Vec<CardId>,

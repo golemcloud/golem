@@ -1869,6 +1869,7 @@ mod test {
                 },
                 invocation_context: InvocationContextStack::fresh(),
                 principal: Principal::anonymous(),
+                scope_card: None,
             })
             .agent_invocation_finished(
                 AgentInvocationResult::AgentInitialization,
@@ -1913,6 +1914,7 @@ mod test {
                 },
                 invocation_context: InvocationContextStack::fresh(),
                 principal: Principal::anonymous(),
+                scope_card: None,
             })
             .pending_invocation(AgentInvocation::AgentMethod {
                 idempotency_key: k2.clone(),
@@ -1920,6 +1922,7 @@ mod test {
                 input: SchemaValue::Record { fields: vec![] },
                 invocation_context: InvocationContextStack::fresh(),
                 principal: Principal::anonymous(),
+                scope_card: None,
             })
             .cancel_pending_invocation(k1)
             .build();
@@ -2185,6 +2188,7 @@ mod test {
                 method_name: function_name.to_string(),
                 input: SchemaValue::Record { fields: request },
                 principal: Principal::anonymous(),
+                scope_card: None,
             };
             self.add(
                 OplogEntry::AgentInvocationStarted {

@@ -117,6 +117,7 @@ struct ReadOnlyContext {
     principal: Principal,
     cfg: golem_common::base_model::agent::ReadOnlyConfig,
     component_revision: ComponentRevision,
+    cacheable: bool,
 }
 
 /// `Ttl(0)` is folded in as it is equivalent to `NoCache`.
@@ -985,6 +986,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             method_name,
             input,
             principal,
+            scope_card,
             ..
         } = invocation
         else {
@@ -1006,6 +1008,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             principal: principal.clone(),
             cfg: cfg.clone(),
             component_revision,
+            cacheable: scope_card.is_none(),
         })
     }
 
@@ -1035,7 +1038,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         // Cache HIT: still refuse on deleting / startup-failed worker.
         if let Some(ro) = &read_only_ctx {
-            let no_cache = is_no_cache(&ro.cfg.cache_policy);
+            let no_cache = !ro.cacheable || is_no_cache(&ro.cfg.cache_policy);
             if !no_cache {
                 let cur_epoch = self.read_only_cache_epoch.load(Ordering::SeqCst);
                 let principal_ref = if ro.cfg.uses_principal {
@@ -1078,7 +1081,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // Subscribe before enqueue/lookup to avoid missing the completion event.
         let subscription = self.events().subscribe();
         let observer_sub = if let Some(ro) = &read_only_ctx {
-            if is_no_cache(&ro.cfg.cache_policy) {
+            if !ro.cacheable || is_no_cache(&ro.cfg.cache_policy) {
                 None
             } else {
                 Some(self.events().subscribe())
@@ -1097,6 +1100,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             LookupResult::Pending => (ResultOrSubscription::Pending(subscription), None),
             LookupResult::New => {
+                if let AgentInvocation::AgentMethod {
+                    scope_card: Some(scope_card),
+                    ..
+                } = &invocation
+                {
+                    crate::services::card::validate_scope_card(
+                        self.card_service().as_ref(),
+                        scope_card,
+                    )
+                    .await?;
+                }
                 // For ReadOnly the helper returns the epoch captured under the
                 // enqueue lock; using any other epoch could store stale data.
                 let captured = self
@@ -1186,6 +1200,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // current-epoch entry shadow the recorded idempotency result.
         // Instead we handle non-`New` results inline below.
         let lookup_for_coalesce = if let Some(ro) = self.read_only_context_for(&invocation)
+            && ro.cacheable
             && !is_no_cache(&ro.cfg.cache_policy)
         {
             Some((ro, self.lookup_invocation_result(&idempotency_key).await))

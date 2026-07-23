@@ -1305,6 +1305,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
                 },
                 invocation_context: InvocationContextStack::fresh_rounded(),
                 principal: Principal::anonymous(),
+                scope_card: None,
             },
             invocation_wallet_pin(),
         )
@@ -1515,6 +1516,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
                 },
                 invocation_context: InvocationContextStack::fresh_rounded(),
                 principal: Principal::anonymous(),
+                scope_card: None,
             },
             invocation_wallet_pin(),
         )

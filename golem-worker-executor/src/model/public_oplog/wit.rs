@@ -2340,6 +2340,7 @@ mod tests {
                 method_name: "test".to_string(),
                 input: SchemaValue::Record { fields: Vec::new() },
                 principal: Principal::anonymous(),
+                scope_card: None,
             })),
             trace_id: TraceId::generate(),
             trace_states: Vec::new(),

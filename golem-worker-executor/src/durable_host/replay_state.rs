@@ -1929,6 +1929,54 @@ mod tests {
     }
 
     #[test]
+    async fn invocation_scope_removal_replays_after_the_wallet_pin() {
+        let owned_agent_id = test_agent_id();
+        let scope_card_id = CardId::new();
+        let root_card_id = CardId::new();
+        let wallet_pin = InvocationWalletPin {
+            wallet_token: WalletVersionToken {
+                wallet_id_hash: CardHolder::Agent(AgentCardHolder {
+                    agent_id: owned_agent_id.agent_id,
+                })
+                .wallet_id_hash(),
+                generation: 0,
+            },
+            pinned_card_ids: Vec::new(),
+            scope_card_id: Some(scope_card_id),
+        };
+        let entries = vec![
+            noop(),
+            invocation_started(wallet_pin.clone()),
+            OplogEntry::CardRevokedCascade {
+                timestamp: Timestamp::now_utc(),
+                revoked_card_ids: vec![root_card_id],
+                affected_wallets: Vec::new(),
+                local_wallet_generation: Some(0),
+            },
+            start_now(),
+            start_now(),
+        ];
+        let mut replay_state = replay_state_over(entries).await;
+
+        assert!(replay_state.take_new_replay_events().await.is_empty());
+        replay_state
+            .get_oplog_entry_agent_invocation_started()
+            .await
+            .expect("failed to replay invocation start")
+            .expect("expected invocation start");
+        assert_eq!(
+            replay_state.take_new_replay_events().await,
+            vec![
+                ReplayEvent::InvocationWalletPinned { wallet_pin },
+                ReplayEvent::CardRevokedCascade {
+                    card_ids: vec![root_card_id],
+                    local_wallet_generation: Some(0),
+                },
+            ]
+        );
+    }
+
+    #[test]
     async fn transfer_replay_events_are_preserved_across_deleted_regions() {
         let (transfer_entries, expected_events) = transfer_replay_fixture();
         let mut entries = vec![noop(), start_now()];

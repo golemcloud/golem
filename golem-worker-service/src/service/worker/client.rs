@@ -260,6 +260,7 @@ pub trait WorkerClient: Send + Sync {
         account_id: AccountId,
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
+        scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
     ) -> WorkerResult<AgentInvocationOutput>;
 
     async fn deliver_card_transfer(
@@ -1393,6 +1394,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         account_id: AccountId,
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
+        scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
     ) -> WorkerResult<AgentInvocationOutput> {
         let agent_id = agent_id.clone();
         let agent_id_clone = agent_id.clone();
@@ -1429,6 +1431,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                                 }
                             },
                             config: config.clone().into_iter().map(Into::into).collect(),
+                            scope_card: scope_card.clone(),
                         },
                     ))
                 },

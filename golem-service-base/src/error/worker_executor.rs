@@ -128,6 +128,9 @@ pub enum WorkerExecutorError {
         method: String,
         host_function: String,
     },
+    PermissionDenied {
+        details: String,
+    },
 }
 
 impl WorkerExecutorError {
@@ -171,6 +174,12 @@ impl WorkerExecutorError {
 
     pub fn invalid_request(details: impl Into<String>) -> Self {
         Self::InvalidRequest {
+            details: details.into(),
+        }
+    }
+
+    pub fn permission_denied(details: impl Into<String>) -> Self {
+        Self::PermissionDenied {
             details: details.into(),
         }
     }
@@ -324,6 +333,9 @@ impl Display for WorkerExecutorError {
                     "Read-only agent method '{method}' attempted side effect via '{host_function}'"
                 )
             }
+            Self::PermissionDenied { details } => {
+                write!(f, "Permission denied: {details}")
+            }
         }
     }
 }
@@ -367,6 +379,7 @@ impl Error for WorkerExecutorError {
             Self::ShardingNotReady => "Sharding not ready",
             Self::FileSystemError { .. } => "File system error",
             Self::ReadOnlyViolation { .. } => "Read-only agent method attempted a side effect",
+            Self::PermissionDenied { .. } => "Permission denied",
         }
     }
 }
@@ -402,6 +415,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::ShardingNotReady => "ShardingNotReady",
             Self::FileSystemError { .. } => "FileSystemError",
             Self::ReadOnlyViolation { .. } => "ReadOnlyViolation",
+            Self::PermissionDenied { .. } => "PermissionDenied",
         }
     }
 
@@ -434,7 +448,8 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::Unknown { .. }
             | Self::ShardingNotReady
             | Self::FileSystemError { .. }
-            | Self::ReadOnlyViolation { .. } => false,
+            | Self::ReadOnlyViolation { .. }
+            | Self::PermissionDenied { .. } => false,
         }
     }
 
@@ -512,6 +527,7 @@ impl From<WorkerExecutorError> for Status {
             WorkerExecutorError::PreviousInvocationFailed { .. } => {
                 Self::failed_precondition(format!("{value}"))
             }
+            WorkerExecutorError::PermissionDenied { details } => Self::permission_denied(details),
             _ => Self::internal(format!("{value}")),
         }
     }
@@ -773,6 +789,13 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     },
                 )),
             },
+            WorkerExecutorError::PermissionDenied { details } => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::PermissionDenied(
+                        golem::worker::v1::PermissionDenied { details },
+                    ),
+                ),
+            },
         }
     }
 }
@@ -968,6 +991,11 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                 Ok(Self::InvocationFailed {
                     error: inner.error.ok_or("no trap_cause field")?.try_into()?,
                     stderr: inner.stderr,
+                })
+            }
+            Some(golem::worker::v1::worker_execution_error::Error::PermissionDenied(error)) => {
+                Ok(Self::PermissionDenied {
+                    details: error.details,
                 })
             }
         }

@@ -23,6 +23,7 @@ import "golem/worker/oplog_cursor.proto";
 import "golem/worker/promise_id.proto";
 import "golem/worker/public_oplog.proto";
 import "golem/worker/raw_oplog.proto";
+import "golem/worker/scope_card.proto";
 import "golem/worker/update_mode.proto";
 import "golem/worker/v1/worker_execution_error.proto";
 import "golem/worker/worker_filter.proto";
@@ -481,6 +482,7 @@ message InvokeAgentRequest {
   golem.component.Principal principal = 14;
   InvocationFreshnessDisposition freshness_disposition = 15;
   repeated golem.worker.AgentConfigEntryDto config = 16;
+  optional golem.worker.EncodedScopeCard scope_card = 17;
 }
 
 enum InvocationFreshnessDisposition {
