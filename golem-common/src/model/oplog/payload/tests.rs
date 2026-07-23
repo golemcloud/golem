@@ -468,19 +468,22 @@ fn p3_http_client_send_host_payload_pairs_roundtrip() {
         }),
     };
 
-    // Success result: response head (status + headers) round-trips.
+    // Success result: response head and request-body recording state round-trip.
     assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientSend>(
         HostRequestP3HttpClientSend {
             request: request.clone(),
         },
         HostResponseP3HttpClientSendResult {
-            result: SerializableP3HttpClientSendResult::Success(SerializableResponseHeaders {
-                status: 200,
-                headers: HashMap::from([(
-                    "content-type".to_string(),
-                    vec![b"application/json".to_vec()],
-                )]),
-            }),
+            result: SerializableP3HttpClientSendResult::SuccessWithRecordedRequestBody {
+                headers: SerializableResponseHeaders {
+                    status: 200,
+                    headers: HashMap::from([(
+                        "content-type".to_string(),
+                        vec![b"application/json".to_vec()],
+                    )]),
+                },
+                recording_complete_at_end: true,
+            },
         },
     );
 

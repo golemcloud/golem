@@ -25,7 +25,6 @@ use golem_common::model::oplog::payload::types::{
 };
 use http::{HeaderMap, HeaderName, HeaderValue};
 use http_body_util::BodyExt as _;
-use http_body_util::Empty;
 use http_body_util::combinators::UnsyncBoxBody;
 use tracing::debug;
 use wasmtime::AsContextMut;
@@ -39,11 +38,8 @@ pub(crate) struct P3HttpSendRebuild {
     /// The recorded response status, used only to log divergence of the fresh
     /// response's status; the recorded head stays authoritative for the guest.
     pub(super) recorded_status: u16,
-    /// The send's `Start` index — the `parent_start_index` key of its recorded
-    /// request-body frames — when the recorded result was
-    /// `SuccessWithRecordedRequestBody`. `None` for legacy (pre-recording)
-    /// sends, whose bodies cannot be reconstructed.
-    pub(super) recorded_request_body: Option<OplogIndex>,
+    /// The send's `Start` index — the `parent_start_index` key of its recorded request-body frames.
+    pub(super) recorded_request_body: OplogIndex,
     /// The live send's in-memory request-body recorder, present only in the
     /// session that performed the send (a replayed response carries `None`).
     /// A resend in the same session drains and replays through this handle,
@@ -51,26 +47,6 @@ pub(crate) struct P3HttpSendRebuild {
     /// the oplog yet; after a restart the body is reconstructed from the
     /// recorded frames instead.
     pub(super) durable_body: Option<DurableRequestBody>,
-}
-
-/// Compatibility guard for legacy sends recorded before request-body frames
-/// existed: detects whether the recorded head declares a request body (which
-/// such a send cannot reconstruct). Sends with a recorded request body never
-/// consult this — their body is streamed back from the oplog.
-pub(super) fn recorded_head_declares_body(request: &SerializableP3HttpClientSend) -> bool {
-    let content_length_declared = request.headers.get("content-length").is_some_and(|values| {
-        values.iter().any(|value| {
-            std::str::from_utf8(value)
-                .ok()
-                .and_then(|value| value.trim().parse::<u64>().ok())
-                != Some(0)
-        })
-    });
-    let transfer_encoding_declared = request
-        .headers
-        .get("transfer-encoding")
-        .is_some_and(|values| !values.is_empty());
-    content_length_declared || transfer_encoding_declared
 }
 
 /// Aborts the spawned I/O task of a re-issued request when dropped, bounding
@@ -99,11 +75,8 @@ pub(super) enum RebuildOutcome {
     /// body-transfer error and classified for worker-level retry like any live
     /// body failure.
     Failed(ErrorCode),
-    /// The recorded request body cannot be reconstructed — its recorded
-    /// terminal is a guest body error, its frames cannot be read back, or (for
-    /// legacy sends without a recording) the head declares a body: fail the
-    /// body transfer loud with a permanent error (never retry-routed — a retry
-    /// would hit the same refusal forever).
+    /// The recorded request body cannot be reconstructed — its recorded terminal is a guest body
+    /// error or its frames cannot be read back. Fail the body transfer loud with a permanent error.
     Refused(String),
 }
 
@@ -300,50 +273,31 @@ pub(super) async fn resend_recorded_request<Ctx: WorkerCtx, U: 'static>(
             }
         }
     } else {
-        match rebuild.recorded_request_body {
-            Some(send_start_index) => {
-                let oplog = accessor.with(|mut access| {
-                    let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-                    ctx.state.oplog.clone()
-                });
-                let scan = match scan_recorded_request_body_frames(oplog.clone(), send_start_index)
-                    .await
-                {
-                    Ok(scan) => scan,
-                    Err(error) => {
-                        return ResendOutcome::Refused(format!(
-                            "the recorded request-body frames could not be read back: {error}"
-                        ));
-                    }
-                };
-                match scan.terminal {
-                    Some(RecordedRequestBodyTerminal::End) => {
-                        recorded_request_body_replay(oplog, &scan)
-                    }
-                    Some(RecordedRequestBodyTerminal::Error(error)) => {
-                        return ResendOutcome::Refused(format!(
-                            "the recorded request body ended with a guest body error: {error:?}"
-                        ));
-                    }
-                    None => {
-                        return ResendOutcome::Refused(
-                        "the recorded request body is incomplete (no terminal frame was recorded)"
-                            .to_string(),
-                    );
-                    }
-                }
+        let send_start_index = rebuild.recorded_request_body;
+        let oplog = accessor.with(|mut access| {
+            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+            ctx.state.oplog.clone()
+        });
+        let scan = match scan_recorded_request_body_frames(oplog.clone(), send_start_index).await {
+            Ok(scan) => scan,
+            Err(error) => {
+                return ResendOutcome::Refused(format!(
+                    "the recorded request-body frames could not be read back: {error}"
+                ));
+            }
+        };
+        match scan.terminal {
+            Some(RecordedRequestBodyTerminal::End) => recorded_request_body_replay(oplog, &scan),
+            Some(RecordedRequestBodyTerminal::Error(error)) => {
+                return ResendOutcome::Refused(format!(
+                    "the recorded request body ended with a guest body error: {error:?}"
+                ));
             }
             None => {
-                // Legacy send recorded before request-body frames existed: only a
-                // bodiless head can be re-issued.
-                if recorded_head_declares_body(&rebuild.request) {
-                    return ResendOutcome::Refused(
-                        "the request had a body, which is not recorded in the oplog".to_string(),
-                    );
-                }
-                Empty::<Bytes>::new()
-                    .map_err(|never| match never {})
-                    .boxed_unsync()
+                return ResendOutcome::Refused(
+                    "the recorded request body is incomplete (no terminal frame was recorded)"
+                        .to_string(),
+                );
             }
         }
     };
@@ -412,6 +366,7 @@ pub(super) async fn resend_recorded_request<Ctx: WorkerCtx, U: 'static>(
 mod tests {
     use super::*;
     use golem_common::model::oplog::payload::types::*;
+    use http_body_util::Empty;
     use std::collections::HashMap;
     use test_r::test;
 
@@ -427,40 +382,6 @@ mod tests {
             headers,
             options: None,
         }
-    }
-
-    /// The legacy-send compatibility guard (sends recorded without
-    /// request-body frames): only a head that positively declares a request
-    /// body (`content-length` > 0 or unparseable, or any `transfer-encoding`)
-    /// refuses the re-issue; absent or zero `content-length` allows it.
-    #[test]
-    fn recorded_head_body_detection() {
-        let no_body = rebuild_head(SerializableHttpMethod::Get, HashMap::new());
-        assert!(!recorded_head_declares_body(&no_body));
-
-        let zero_length = rebuild_head(
-            SerializableHttpMethod::Get,
-            HashMap::from([("content-length".to_string(), vec![b"0".to_vec()])]),
-        );
-        assert!(!recorded_head_declares_body(&zero_length));
-
-        let with_length = rebuild_head(
-            SerializableHttpMethod::Post,
-            HashMap::from([("content-length".to_string(), vec![b"42".to_vec()])]),
-        );
-        assert!(recorded_head_declares_body(&with_length));
-
-        let unparseable_length = rebuild_head(
-            SerializableHttpMethod::Post,
-            HashMap::from([("content-length".to_string(), vec![b"not-a-number".to_vec()])]),
-        );
-        assert!(recorded_head_declares_body(&unparseable_length));
-
-        let chunked = rebuild_head(
-            SerializableHttpMethod::Post,
-            HashMap::from([("transfer-encoding".to_string(), vec![b"chunked".to_vec()])]),
-        );
-        assert!(recorded_head_declares_body(&chunked));
     }
 
     /// The rebuilt request must carry the recorded head exactly — method,
@@ -489,7 +410,7 @@ mod tests {
                 ("traceparent".to_string(), "00-abc-def-01".to_string()),
             ],
             recorded_status: 200,
-            recorded_request_body: None,
+            recorded_request_body: OplogIndex::INITIAL,
             durable_body: None,
         };
 

@@ -1553,15 +1553,10 @@ pub struct SerializableP3HttpRequestOptions {
 )]
 #[desert(evolution())]
 pub enum SerializableP3HttpClientSendResult {
-    Success(SerializableResponseHeaders),
     HttpError(SerializableHttpErrorCode),
-    /// Like `Success`, but marks that the outgoing request body was durably
-    /// recorded as `HostStreamFrame` hint entries under the send's `Start`
-    /// (see [`SerializableP3HttpRequestBodyFrame`]), so an interrupted
-    /// response-body stream can be rebuilt after a restart by re-issuing the
-    /// request with the recorded body. Sends recorded before frame recording
-    /// existed replay as plain `Success` and fall back to head-based body
-    /// detection.
+    /// The outgoing request body is durably recorded as `HostStreamFrame` hint entries under the
+    /// send's `Start` (see [`SerializableP3HttpRequestBodyFrame`]), so an interrupted response-body
+    /// stream can be rebuilt after a restart by re-issuing the request with the recorded body.
     SuccessWithRecordedRequestBody {
         headers: SerializableResponseHeaders,
         /// Whether the recording had already reached its terminal frame when

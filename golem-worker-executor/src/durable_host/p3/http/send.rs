@@ -19,9 +19,8 @@ use super::serialization::{
 };
 use super::*;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, AccessStartContext, CallHandle, Cancellable, DeferredCallReplayOutcome,
-    DropPolicy, LeaveIncompleteOnDrop, finish_span_access, finish_span_in_memory,
-    try_replay_recorded_start_span_access,
+    AccessClaimOptions, CallHandle, Cancellable, DeferredCallReplayOutcome, DropPolicy,
+    LeaveIncompleteOnDrop, finish_span_in_memory,
 };
 use crate::durable_host::durability::{
     AsyncRetryDecision, ClassifiedHostError, DurabilityHost, HostFailureKind, InFunctionRetryHost,
@@ -42,7 +41,7 @@ use golem_common::model::oplog::payload::types::{
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequest, HostRequestP3HttpClientSend,
-    HostResponseP3HttpClientSendResult, OplogEntry, OplogIndex,
+    HostResponseP3HttpClientSendResult, OplogIndex,
 };
 use golem_common::model::{
     NamedRetryPolicy, OwnedAgentId, PredicateValue, RetryContext, RetryProperties,
@@ -150,10 +149,7 @@ where
     // *derived*: its span id is a deterministic function of the send's own
     // host-call `Start` index, so no separate `StartSpan`/`FinishSpan` entries
     // are written or consumed — positional span entries are unsound under
-    // concurrent sends. Oplogs recorded by older executors still carry a
-    // positional `StartSpan` between the durable scope `Start` and the
-    // host-call `Start`; the request builder consumes it from that position
-    // when present and the recorded span id is used instead (legacy mode).
+    // concurrent sends.
     //
     // The Golem-managed headers (`traceparent`/`tracestate` and the derived
     // `idempotency-key`) are injected into the request *resource* only, after
@@ -162,8 +158,6 @@ where
     // state — the trace context of the send span (same derived/recorded span
     // id) and the idempotency key derived from the call's own `Start` index,
     // which is stable across live execution and replay.
-    let mut legacy_send_span: Option<SpanId> = None;
-    let legacy_send_span_out = &mut legacy_send_span;
     let serialized_request =
         serialize_request::<Ctx, U>(store, borrow_resource(&req)).map_err(|err| {
             HttpError::trap(WorkerExecutorError::runtime(format!(
@@ -193,46 +187,31 @@ where
         durable_worker_ctx::<Ctx, U>,
         function_type,
         claim_options,
-        async |start_context: AccessStartContext| {
-            if !start_context.is_live {
-                *legacy_send_span_out =
-                    try_replay_recorded_start_span_access(store, durable_worker_ctx::<Ctx, U>)
-                        .await?;
-            }
-            Ok(host_request)
-        },
+        async |_| Ok(host_request),
     )
     .await
     .map_err(HttpError::trap)?;
     let send_start_index = handle.start_index();
 
-    let span = match legacy_send_span {
-        Some(span_id) => P3HttpSendSpan {
-            span_id,
-            send_start_index,
-            legacy_durable: true,
-        },
-        None => store
-            .with(|mut access| {
-                let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-                let span_id = derive_p3_send_span_id(&ctx.state.owned_agent_id, send_start_index);
-                let parent = ctx.state.current_span_id.clone();
-                let span = ctx
-                    .state
-                    .invocation_context
-                    .start_span(&parent, Some(span_id.clone()))
-                    .map_err(WorkerExecutorError::runtime)?;
-                for (name, value) in outgoing_http_request_span_attributes(&serialized_request) {
-                    span.set_attribute(name, value);
-                }
-                Ok::<_, WorkerExecutorError>(P3HttpSendSpan {
-                    span_id,
-                    send_start_index,
-                    legacy_durable: false,
-                })
+    let span = store
+        .with(|mut access| {
+            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+            let span_id = derive_p3_send_span_id(&ctx.state.owned_agent_id, send_start_index);
+            let parent = ctx.state.current_span_id.clone();
+            let span = ctx
+                .state
+                .invocation_context
+                .start_span(&parent, Some(span_id.clone()))
+                .map_err(WorkerExecutorError::runtime)?;
+            for (name, value) in outgoing_http_request_span_attributes(&serialized_request) {
+                span.set_attribute(name, value);
+            }
+            Ok::<_, WorkerExecutorError>(P3HttpSendSpan {
+                span_id,
+                send_start_index,
             })
-            .map_err(HttpError::trap)?,
-    };
+        })
+        .map_err(HttpError::trap)?;
 
     if !handle.is_live() {
         // The guest may drop this send future at any await point below (e.g.
@@ -255,9 +234,8 @@ where
                 // it, drain its outgoing body) before returning the recorded
                 // response — otherwise the request leaks and a guest
                 // streaming a body or awaiting its transmission future hangs.
-                // A recorded-request-body result additionally lets the drain
-                // complete an interrupted frame recording (self-heal); legacy
-                // results keep the plain drain-and-discard.
+                // The recorded-request-body metadata additionally lets the drain complete an
+                // interrupted frame recording (self-heal).
                 let recorded_request_body = match &response.result {
                     SerializableP3HttpClientSendResult::SuccessWithRecordedRequestBody {
                         recording_complete_at_end,
@@ -266,12 +244,10 @@ where
                         send_start_index,
                         recording_complete_at_end: *recording_complete_at_end,
                     }),
-                    _ => None,
+                    SerializableP3HttpClientSendResult::HttpError(_) => None,
                 };
-                let has_recorded_request_body = recorded_request_body.is_some();
                 consume_replayed_request::<Ctx, U>(store, req, recorded_request_body).await?;
                 let recorded_status = match &response.result {
-                    SerializableP3HttpClientSendResult::Success(headers) => headers.status,
                     SerializableP3HttpClientSendResult::SuccessWithRecordedRequestBody {
                         headers,
                         ..
@@ -317,8 +293,7 @@ where
                                     request: serialized_request,
                                     injected_headers,
                                     recorded_status,
-                                    recorded_request_body: has_recorded_request_body
-                                        .then_some(send_start_index),
+                                    recorded_request_body: send_start_index,
                                     durable_body: None,
                                 }),
                                 body_is_placeholder: true,
@@ -422,16 +397,14 @@ where
                 let serialized_error = serialize_error_code(&error_code);
                 let result = SerializableP3HttpClientSendResult::HttpError(serialized_error);
                 // The guest-visible error return below is the real delivery boundary: record
-                // the terminal through the deferred API — the span's durable `FinishSpan`
-                // (legacy spans) rides the same owned task as the `End` — so a future torn
-                // between the `End` and the return records the discard instead of replay
-                // redelivering the error.
+                // the terminal through the deferred API so a future torn between the `End` and
+                // the return records the discard instead of replay redelivering the error.
                 let (_, delivery) = handle
                     .complete_access_deferred(
                         store,
                         durable_worker_ctx::<Ctx, U>,
                         HostResponseP3HttpClientSendResult { result },
-                        span.deferred_finish_entry(),
+                        None,
                     )
                     .await
                     .map_err(HttpError::trap)?;
@@ -700,13 +673,9 @@ where
             // shortcut only: frame appends run concurrently with the send, so
             // the recording may still complete after this point (its terminal
             // frame just lands later in the oplog).
-            let result = if physical.body.recording_enabled() {
-                SerializableP3HttpClientSendResult::SuccessWithRecordedRequestBody {
-                    headers,
-                    recording_complete_at_end: physical.body.recording_complete(),
-                }
-            } else {
-                SerializableP3HttpClientSendResult::Success(headers)
+            let result = SerializableP3HttpClientSendResult::SuccessWithRecordedRequestBody {
+                headers,
+                recording_complete_at_end: physical.body.recording_complete(),
             };
             // The guest-visible `Ok(response)` return below is the real delivery boundary:
             // record the terminal through the deferred API so a future torn between the `End`
@@ -741,10 +710,7 @@ where
                         request: serialized_request,
                         injected_headers,
                         recorded_status: response_status,
-                        recorded_request_body: physical
-                            .body
-                            .recording_enabled()
-                            .then_some(send_start_index),
+                        recorded_request_body: send_start_index,
                         durable_body: Some(physical.body.clone()),
                     }),
                     body_is_placeholder: false,
@@ -813,7 +779,7 @@ where
                     store,
                     durable_worker_ctx::<Ctx, U>,
                     HostResponseP3HttpClientSendResult { result },
-                    span.deferred_finish_entry(),
+                    None,
                 )
                 .await
                 .map_err(HttpError::trap)?;
@@ -1203,7 +1169,6 @@ pub(crate) struct P3HttpSendSpan {
     /// id and therefore changes when the oplog is forked to another agent), the `Start` index is
     /// part of the recorded oplog itself and survives fork/revert unchanged.
     pub(crate) send_start_index: OplogIndex,
-    pub(super) legacy_durable: bool,
 }
 
 /// Deterministically derives the span id of a p3 send's
@@ -1266,27 +1231,8 @@ pub(super) fn p3_send_request_discriminator(
     Ok(hasher.finalize().to_hex().to_string())
 }
 
-/// Finishes the send's `outgoing-http-request` span: in-memory only for
-/// derived spans (no span oplog entries exist), durably (positional
-/// `FinishSpan`) for spans replayed from legacy oplogs.
+/// Finishes the send's derived `outgoing-http-request` span in memory.
 pub(super) async fn finish_p3_send_span<Ctx: WorkerCtx, U: 'static>(
-    store: &Accessor<U, DurableP3<Ctx>>,
-    span: &P3HttpSendSpan,
-) -> Result<(), WorkerExecutorError> {
-    if span.legacy_durable {
-        finish_span_access(store, durable_worker_ctx::<Ctx, U>, &span.span_id).await
-    } else {
-        store.with(|mut access| {
-            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-            finish_span_in_memory(ctx, &span.span_id)
-        })
-    }
-}
-
-/// Finishes the send span at a live deferred-completion site: the durable positional
-/// `FinishSpan` (legacy spans only) is already appended by the owned terminal task — see
-/// [`P3HttpSendSpan::deferred_finish_entry`] — so only the synchronous in-memory finish remains.
-pub(super) fn finish_p3_send_span_in_memory<Ctx: WorkerCtx, U: 'static>(
     store: &Accessor<U, DurableP3<Ctx>>,
     span: &P3HttpSendSpan,
 ) -> Result<(), WorkerExecutorError> {
@@ -1296,15 +1242,15 @@ pub(super) fn finish_p3_send_span_in_memory<Ctx: WorkerCtx, U: 'static>(
     })
 }
 
-impl P3HttpSendSpan {
-    /// The owned post-`End` oplog append for closing this span through the deferred-delivery
-    /// API (`complete_access_deferred`): a positional durable `FinishSpan` for legacy-recorded
-    /// spans (whose replay consumes it via [`finish_p3_send_span`]), nothing for derived spans
-    /// (finished in memory only).
-    pub(super) fn deferred_finish_entry(&self) -> Option<OplogEntry> {
-        self.legacy_durable
-            .then(|| OplogEntry::finish_span(self.span_id.clone()))
-    }
+/// Finishes the send span synchronously at a live deferred-completion site.
+pub(super) fn finish_p3_send_span_in_memory<Ctx: WorkerCtx, U: 'static>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    span: &P3HttpSendSpan,
+) -> Result<(), WorkerExecutorError> {
+    store.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        finish_span_in_memory(ctx, &span.span_id)
+    })
 }
 
 /// Everything needed to re-issue a recorded p3 `client::send` after a restart
@@ -1316,8 +1262,7 @@ impl P3HttpSendSpan {
 /// the send's own `Start` index — so the re-issued request is byte-identical
 /// to the original in every Golem-controlled aspect.
 ///
-/// The request *body* is not recorded in the oplog, so only body-less requests
-/// can be re-issued; see [`recorded_head_declares_body`].
+/// The request body is reconstructed from its durable frame recording when the request is re-issued.
 pub(super) fn outgoing_http_request_uri(request: &SerializableP3HttpClientSend) -> String {
     let scheme = match request
         .scheme

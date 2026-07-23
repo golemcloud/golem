@@ -37,7 +37,7 @@ use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::invocation_context::{InvocationContextSpan, SpanId};
+use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry, OplogIndex,
@@ -4260,66 +4260,6 @@ where
     } else {
         Ok(false)
     }
-}
-
-/// Legacy-oplog fallback for the p3 HTTP send span: consumes a positional `StartSpan` entry at
-/// the replay cursor head, if one is there, and reconstructs the recorded span (same span id and
-/// start timestamp, recorded attributes) in the in-memory invocation context with the current
-/// span as parent. Returns `None` — consuming nothing — when the head is any other entry.
-///
-/// Oplogs written since the send span became *derived* (computed from the send's own host-call
-/// `Start` index, with no separate span entries) never contain a `StartSpan` at this position, so
-/// this only fires for oplogs recorded by older executors. For those, positional consumption is
-/// exactly how the entry was consumed before — best-effort for old *concurrent* recordings, which
-/// never carried owner identity in the first place.
-pub(crate) async fn try_replay_recorded_start_span_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
-    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-) -> Result<Option<SpanId>, WorkerExecutorError>
-where
-    T: 'static,
-    D: HasData + ?Sized,
-    Ctx: WorkerCtx,
-{
-    let replay_state = store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
-        ctx.state.replay_state.clone()
-    });
-
-    let consumed = replay_state
-        .try_get_oplog_entry_owned(|entry| matches!(entry, OplogEntry::StartSpan { .. }))
-        .await?;
-    let Some((
-        _,
-        OplogEntry::StartSpan {
-            timestamp,
-            span_id,
-            attributes,
-            ..
-        },
-    )) = consumed
-    else {
-        return Ok(None);
-    };
-
-    store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
-        let parent = ctx.state.current_span_id.clone();
-        let parent_span = ctx.state.invocation_context.get(&parent).map_err(|err| {
-            WorkerExecutorError::runtime(format!(
-                "parent span {parent} missing during StartSpan replay: {err}"
-            ))
-        })?;
-        let span = InvocationContextSpan::local()
-            .with_span_id(span_id.clone())
-            .with_start(timestamp)
-            .with_parent(parent_span)
-            .with_attributes(attributes.0.clone())
-            .build();
-        ctx.state.invocation_context.add_span(span);
-        Ok::<_, WorkerExecutorError>(())
-    })?;
-    Ok(Some(span_id))
 }
 
 /// Finishes a span in the in-memory invocation context only, without writing or consuming any

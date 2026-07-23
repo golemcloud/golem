@@ -1456,19 +1456,13 @@ where
         // so the terminal is recorded through the deferred-delivery API: a
         // closed trailers receiver after the persisted `End` records a
         // `CompletionDiscarded` marker instead of replay redelivering the
-        // outcome. The span's durable `FinishSpan` (legacy spans) rides the
-        // same owned task as the `End`, preserving the recorded
-        // `End → FinishSpan → CompletionDiscarded` order replay consumes
-        // positionally.
+        // outcome.
         //
         // Capture the parent scope's trap context first (it is a pure function of
         // the scope and survives the handle being consumed below) so every
         // finalize failure can tag the guest-facing trailers trap for correct
         // retry grouping.
         let parent_trap_context = parent.trap_context();
-        let post_end_entry = response_span
-            .as_ref()
-            .and_then(|span| span.deferred_finish_entry());
         let (outcome, delivery) = if parent.is_live() {
             match parent
                 .complete_access_deferred(
@@ -1477,7 +1471,7 @@ where
                     HostResponseP3HttpClientConsumeBodyResult {
                         result: serialize_consume_body_result(&terminal),
                     },
-                    post_end_entry,
+                    None,
                 )
                 .await
             {
@@ -1511,7 +1505,7 @@ where
                             HostResponseP3HttpClientConsumeBodyResult {
                                 result: serialize_consume_body_result(&terminal),
                             },
-                            post_end_entry,
+                            None,
                         )
                         .await
                     {
@@ -1542,12 +1536,7 @@ where
 
         // The response body reached its terminal and the parent marker is
         // committed/replayed: finish the send's `outgoing-http-request` span
-        // before resolving the guest-facing trailers. Live armed, the durable
-        // positional `FinishSpan` (legacy spans) is already appended by the
-        // owned terminal task, so only the synchronous in-memory finish
-        // remains; on replay (or an unpersisted live call) the original
-        // handling consumes/appends the positional entry, so its position
-        // stays stable relative to the parent terminal on both paths.
+        // before resolving the guest-facing trailers.
         if let Some(span) = &response_span {
             let finish_result = if delivery.is_live_armed() {
                 finish_p3_send_span_in_memory::<Ctx, U>(accessor, span)
@@ -1725,9 +1714,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         // A send-created response dropped before its body was consumed still
         // owns its `outgoing-http-request` span. This host call is synchronous,
         // so the finish is deferred to the next drop-event drain point (a
-        // deterministic replay point — which matters for legacy-recorded spans
-        // whose finish is durable), mirroring P2's `end_http_request` on
-        // response drop.
+        // deterministic replay point), mirroring P2's `end_http_request` on response drop.
         {
             let mut store_ctx = store.as_context_mut();
             let ctx = durable_worker_ctx::<Ctx, U>(store_ctx.data_mut());
@@ -1736,7 +1723,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
             {
                 let _ = sink.send(DropEvent::FinishSpan {
                     span_id: state.span.span_id,
-                    durable: state.span.legacy_durable,
+                    durable: false,
                 });
             }
         }

@@ -38,10 +38,7 @@ use wasmtime::component::{Accessor, AccessorTask, Resource};
 use wasmtime_wasi_http::p3::WasiHttp;
 use wasmtime_wasi_http::p3::bindings::http::types::{ErrorCode, Request, Response};
 
-/// Identity of a replayed send's recorded request-body frame stream, built
-/// from a recorded `SuccessWithRecordedRequestBody` result. `None` at the
-/// [`consume_replayed_request`] call site means a legacy send without recorded
-/// frames, which keeps the plain drain-and-discard behavior.
+/// Identity of a replayed send's recorded request-body frame stream.
 pub(super) struct ReplayedRequestBodyRecording {
     /// The send's `Start` index — the `parent_start_index` key of its frames.
     pub(super) send_start_index: OplogIndex,
@@ -237,10 +234,8 @@ where
             _phantom,
         } = self;
         let result = match recorded_body.filter(|recorded| !recorded.recording_complete_at_end) {
-            // Safe park: a plain drain only discards guest-(re)produced body
-            // frames and appends nothing, so the whole wait is guest-driven.
             None => activity.park(drain_request_body(body)).await,
-            Some(recorded) => {
+            Some(recorded_body) => {
                 let (oplog, recording_enabled) = accessor.with(|mut access| {
                     let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
                     (
@@ -253,12 +248,11 @@ where
                     drain_replayed_request_body_completing_recording(
                         body,
                         oplog,
-                        recorded.send_start_index,
+                        recorded_body.send_start_index,
                         &activity,
                     )
                     .await
                 } else {
-                    // Safe park: see the `None` arm.
                     activity.park(drain_request_body(body)).await
                 }
             }
@@ -408,9 +402,6 @@ pub(super) fn replay_send_response<Ctx: WorkerCtx, U: Send>(
     result: SerializableP3HttpClientSendResult,
 ) -> HttpResult<Resource<Response>> {
     match result {
-        SerializableP3HttpClientSendResult::Success(headers) => {
-            response_from_recorded_headers::<Ctx, U>(store, headers)
-        }
         SerializableP3HttpClientSendResult::SuccessWithRecordedRequestBody { headers, .. } => {
             response_from_recorded_headers::<Ctx, U>(store, headers)
         }

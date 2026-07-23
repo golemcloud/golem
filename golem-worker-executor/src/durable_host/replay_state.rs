@@ -330,8 +330,8 @@ struct CursorState {
     replay_buffer: VecDeque<(OplogIndex, OplogEntry)>,
     /// `Start` entries for `GolemApiFork` whose matching `End` has not yet been replayed. When the
     /// matching `End` is read, the response is decoded and a `ForkReplayed` event is emitted. The
-    /// legacy adapter only ever has at most one in flight at a time (it writes the matched `End`
-    /// immediately after the `Start`), but we use a set so that future concurrent recorders cannot
+    /// sequential adapter only ever has at most one in flight at a time (it writes the matched
+    /// `End` immediately after the `Start`), but we use a set so that future concurrent recorders cannot
     /// trip us up.
     pending_fork_starts: HashSet<OplogIndex>,
     /// Matches replayed `End`/`Cancelled` entries to the concurrent
@@ -910,7 +910,7 @@ impl CursorTx<'_> {
                 new_revision: *target_revision,
             });
         }
-        // The legacy adapter persists GolemApiFork as a matched
+        // The sequential adapter persists GolemApiFork as a matched
         // `Start { function_name: GolemApiFork, .. }` + `End { response: Some(..), .. }`
         // pair. On Start we remember the `Start`'s `OplogIndex`, on the matching
         // End (via `start_index`) we decode the response and emit `ForkReplayed`
@@ -1864,22 +1864,6 @@ impl ReplayState {
         .await
     }
 
-    /// [`Self::try_get_oplog_entry`] variant for callers running inside Wasmtime accessor
-    /// futures; see [`Self::get_oplog_entry_owned`].
-    pub async fn try_get_oplog_entry_owned(
-        &self,
-        condition: impl FnMut(&OplogEntry) -> bool + Send + 'static,
-    ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
-        self.run_owned_cursor_op(move |state| async move {
-            let cursor = &*state.cursor;
-            let mut tx = cursor.tx().await;
-            let result = tx.try_get_oplog_entry(condition).await;
-            cursor.finish_tx(tx);
-            result
-        })
-        .await
-    }
-
     /// Returns true if the given log entry has unmatched persisted occurrences since the last
     /// non-hint oplog entry.
     pub async fn seen_log(&self, level: LogLevel, context: &str, message: &str) -> bool {
@@ -2700,7 +2684,7 @@ mod tests {
         }
     }
 
-    /// A `Start` for the legacy `golem::api` fork pair. Its only special replay behaviour is the
+    /// A `Start` for the sequential `golem::api` fork pair. Its only special replay behaviour is the
     /// commit-only side effect in [`ReplayState::apply_commit_effects`] (recording its index in
     /// `pending_fork_starts`), which the speculative-rollback test exercises.
     fn fork_start() -> OplogEntry {
@@ -5267,7 +5251,7 @@ mod tests {
     }
 
     /// A host-call `Start` nested in the batched-write scope at `parent`, exactly as the
-    /// legacy sequential adapter recorded followup batched invocations:
+    /// sequential adapter records followup batched invocations:
     /// `parent_start_index: Some(scope)`, `WriteRemoteBatched(Some(scope))`.
     fn batched_child_start(parent: u64) -> OplogEntry {
         OplogEntry::Start {
@@ -5283,9 +5267,8 @@ mod tests {
         }
     }
 
-    /// A representative pre-concurrency oplog — written by a build where
-    /// durable execution was strictly sequential, so every host call is an *adjacent*
-    /// `Start`/`End` pair appended atomically via `Oplog::add_pair` — must replay cleanly
+    /// A representative oplog written by the sequential adapter, where every host call is an
+    /// *adjacent* `Start`/`End` pair appended atomically via `Oplog::add_pair`, must replay cleanly
     /// through the concurrent resolver.
     ///
     /// The fixture is synthesized in the exact shapes the sequential writers produced
@@ -5426,7 +5409,7 @@ mod tests {
             other => panic!("expected Completed for the scope, got {other:?}"),
         }
 
-        // The whole pre-migration oplog is consumed: replay is over and nothing is left pending.
+        // The whole sequential oplog is consumed: replay is over and nothing is left pending.
         assert!(rs.is_live(), "replay must reach live at the end");
         let internal = rs.cursor.state.lock().await;
         assert!(

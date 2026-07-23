@@ -251,12 +251,6 @@ impl DurableRequestBody {
         self.lock_state().pulled_frames > 0
     }
 
-    /// Whether pulled frames are being persisted as oplog entries (i.e. not in
-    /// `PersistNothing` or snapshotting mode).
-    pub(super) fn recording_enabled(&self) -> bool {
-        self.recording_enabled
-    }
-
     /// Whether the recording is complete *right now*: the body reached a
     /// terminal, every spawned frame append (including the terminal frame's)
     /// has landed in the oplog, and none failed. Appends run concurrently with
