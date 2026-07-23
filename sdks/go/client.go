@@ -97,8 +97,6 @@ func ClientFor[Id any, S any](a *Agent[Id, S], id Id, opts ...ClientOpt) (Client
 // Ephemeral agents have no durable identity, so this is the only way to obtain
 // a client for one.
 func NewPhantom[Id any, S any](a *Agent[Id, S], id Id) (Client[Id], types.Uuid, error) {
-	// The host's generator, not crypto/rand: a phantom id is chosen once and
-	// must come back identical on replay, so it has to be recorded in the oplog.
 	phantom := apiHost.GenerateIdempotencyKey()
 	c, err := ClientFor(a, id, WithPhantomID(phantom))
 	return c, phantom, err
