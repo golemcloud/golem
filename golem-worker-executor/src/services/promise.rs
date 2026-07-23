@@ -202,10 +202,6 @@ impl PromiseRegistry {
         })
     }
 
-    fn get_handle(&mut self, id: &PromiseId) -> Option<PromiseHandle> {
-        self.get(id)
-    }
-
     pub fn cleanup(&mut self) {
         self.handles.retain(|_, weak| weak.strong_count() > 0);
     }
@@ -366,7 +362,7 @@ impl PromiseService for DefaultPromiseService {
         };
         let handle = {
             let mut reg = self.registry.lock().await;
-            reg.get_handle(&promise_id)
+            reg.get(&promise_id)
         };
         if let (Some(handle), Some(data)) = (handle, completed_data) {
             let _ = handle.complete(data).await;
@@ -590,8 +586,13 @@ impl PromiseService for PromiseServiceMock {
 mod tests {
     use super::*;
     use golem_common::base_model::component::ComponentId;
+    use proptest::prelude::*;
+    use std::sync::Arc;
     use test_r::test;
+    use tokio::sync::Barrier;
     use uuid::Uuid;
+
+    test_r::enable!();
 
     fn promise_id() -> PromiseId {
         PromiseId {
@@ -609,7 +610,7 @@ mod tests {
         let mut registry = PromiseRegistry::new();
         let handle = registry.get_or_insert(&promise_id);
 
-        let completion_handle = registry.get_handle(&promise_id).unwrap();
+        let completion_handle = registry.get(&promise_id).unwrap();
         let _ = completion_handle.complete(vec![1]).await;
 
         assert_eq!(handle.get().await, Some(vec![1]));
@@ -623,5 +624,62 @@ mod tests {
         handle.complete(vec![2]).await;
 
         assert_eq!(handle.get().await, Some(vec![1]));
+    }
+
+    proptest! {
+        #[test]
+        fn concurrent_completions_keep_exactly_one_payload(
+            payloads in prop::collection::vec(prop::collection::vec(any::<u8>(), 0..64), 1..32),
+        ) {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                let handle = PromiseHandle::new();
+                let barrier = Arc::new(Barrier::new(payloads.len()));
+                let completions = payloads.iter().cloned().map(|payload| {
+                    let handle = handle.clone();
+                    let barrier = barrier.clone();
+                    async move {
+                        barrier.wait().await;
+                        handle.complete(payload).await
+                    }
+                });
+                let results = futures::future::join_all(completions).await;
+                let stored = handle.get().await.unwrap();
+
+                prop_assert_eq!(results.into_iter().filter(|completed| *completed).count(), 1);
+                prop_assert!(payloads.contains(&stored));
+                Ok(())
+            }).unwrap();
+        }
+
+        #[test]
+        fn completion_never_loses_a_registered_waiter(payload in prop::collection::vec(any::<u8>(), 0..64)) {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                let handle = PromiseHandle::new();
+                let waiter = tokio::spawn({
+                    let handle = handle.clone();
+                    async move {
+                        handle.await_ready().await;
+                        handle.get().await
+                    }
+                });
+                tokio::task::yield_now().await;
+                assert!(handle.complete(payload.clone()).await);
+                let received = tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+                    .await
+                    .expect("registered waiter was not notified")
+                    .unwrap();
+
+                prop_assert_eq!(received, Some(payload));
+                Ok(())
+            }).unwrap();
+        }
     }
 }

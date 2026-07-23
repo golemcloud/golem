@@ -10,14 +10,14 @@ use super::{PromiseRuntime, PromiseTopology, PromiseWaiterPresence};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use golem_common::base_model::agent::ParsedAgentId;
 use golem_common::base_model::{AgentId, PromiseId};
-use golem_common::model::AgentStatus;
 use golem_common::model::component::ComponentDto;
+use golem_common::model::{AgentStatus, RoutingTable};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
     BenchmarkRecorder, BenchmarkResult, BenchmarkRunResult, ResultKey, RunConfig,
 };
-use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::config::dsl_impl::TestUserContext;
+use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::FromValue;
 use std::sync::Arc;
@@ -69,6 +69,7 @@ impl CellConfig {
 struct PromiseWork {
     agent: AgentId,
     parsed_agent: ParsedAgentId,
+    completer: Option<ParsedAgentId>,
     promise: PromiseId,
     wait: bool,
     runtime: PromiseRuntime,
@@ -101,7 +102,8 @@ pub async fn run_cell(
         "Promise-density [{}]: preparing {PROMISE_POOL_SIZE} workers",
         config.cell_name()
     );
-    let (ready_sender, mut ready_work) = create_work_pool(&user, &component, config).await?;
+    let (ready_sender, mut ready_work, workers) =
+        create_work_pool(&user, &component, config, deps).await?;
 
     for &rate in rates {
         println!(
@@ -122,7 +124,7 @@ pub async fn run_cell(
 
     drop(ready_sender);
     drop(ready_work);
-    cleanup_pool(&user, &component, config).await?;
+    cleanup_pool(&user, workers).await?;
     Ok(outcome.into_benchmark_result(config))
 }
 
@@ -146,27 +148,61 @@ async fn create_work_pool(
     user: &TestUserContext<BenchmarkTestDependencies>,
     component: &ComponentDto,
     config: &CellConfig,
+    deps: &BenchmarkTestDependencies,
 ) -> anyhow::Result<(
     mpsc::Sender<anyhow::Result<PromiseWork>>,
     mpsc::Receiver<anyhow::Result<PromiseWork>>,
+    Vec<AgentId>,
 )> {
     let (ready_sender, ready_receiver) = mpsc::channel(READY_WORK_CAPACITY);
+    let routing_table = match config.topology {
+        PromiseTopology::OnePod => None,
+        PromiseTopology::TwoPod => {
+            let routing_table = deps.shard_manager().get_routing_table().await?;
+            if routing_table.all().len() != 2 {
+                anyhow::bail!(
+                    "two-pod promise benchmark requires exactly two worker-executor pods, found {}",
+                    routing_table.all().len()
+                );
+            }
+            Some(routing_table)
+        }
+    };
     stream::iter(0..PROMISE_POOL_SIZE)
         .map(|index| {
             let user = user.clone();
             let component = component.clone();
             let ready_sender = ready_sender.clone();
+            let routing_table = routing_table.clone();
             async move {
                 let name = format!("{}-{index}", config.cell_name());
                 let parsed_agent = agent_id!(PROMISE_AGENT_TYPE, name);
+                let completer = routing_table
+                    .as_ref()
+                    .map(|routing_table| {
+                        select_remote_completer(
+                            component.id,
+                            &parsed_agent,
+                            routing_table,
+                            config.cell_name(),
+                            index,
+                        )
+                    })
+                    .transpose()?;
                 let agent = user
                     .start_agent(&component.id, parsed_agent.clone())
                     .await?;
+                let completer_worker = if let Some(completer) = &completer {
+                    Some(user.start_agent(&component.id, completer.clone()).await?)
+                } else {
+                    None
+                };
                 let (work, _) = stage_work(
                     &user,
                     &component,
-                    agent,
+                    agent.clone(),
                     parsed_agent,
+                    completer,
                     should_wait(config.waiter_presence, index),
                     config.runtime,
                 )
@@ -174,29 +210,30 @@ async fn create_work_pool(
                 ready_sender
                     .send(Ok(work))
                     .await
-                    .map_err(|_| anyhow::anyhow!("promise work receiver closed"))
+                    .map_err(|_| anyhow::anyhow!("promise work receiver closed"))?;
+                Ok::<_, anyhow::Error>(
+                    std::iter::once(agent)
+                        .chain(completer_worker)
+                        .collect::<Vec<_>>(),
+                )
             }
         })
         .buffer_unordered(SETUP_CONCURRENCY)
-        .try_collect::<Vec<_>>()
-        .await?;
-    Ok((ready_sender, ready_receiver))
+        .try_collect::<Vec<Vec<AgentId>>>()
+        .await
+        .map(|workers| {
+            (
+                ready_sender,
+                ready_receiver,
+                workers.into_iter().flatten().collect(),
+            )
+        })
 }
 
 async fn cleanup_pool(
     user: &TestUserContext<BenchmarkTestDependencies>,
-    component: &ComponentDto,
-    config: &CellConfig,
+    workers: Vec<AgentId>,
 ) -> anyhow::Result<()> {
-    let workers = (0..PROMISE_POOL_SIZE)
-        .filter_map(|index| {
-            let agent = agent_id!(
-                PROMISE_AGENT_TYPE,
-                format!("{}-{index}", config.cell_name())
-            );
-            AgentId::from_agent_id(component.id, &agent).ok()
-        })
-        .collect::<Vec<_>>();
     crate::benchmarks::delete_workers(user, &workers).await;
     stream::iter(workers)
         .map(|worker| async move {
@@ -222,6 +259,7 @@ async fn stage_work(
     component: &ComponentDto,
     agent: AgentId,
     parsed_agent: ParsedAgentId,
+    completer: Option<ParsedAgentId>,
     wait: bool,
     runtime: PromiseRuntime,
 ) -> anyhow::Result<(PromiseWork, StageTimings)> {
@@ -261,6 +299,7 @@ async fn stage_work(
         PromiseWork {
             agent,
             parsed_agent,
+            completer,
             promise,
             wait,
             runtime,
@@ -287,7 +326,7 @@ async fn complete_at_rate(
     let completion_limit = Arc::new(Semaphore::new(COMPLETION_CONCURRENCY));
     let staging_limit = Arc::new(Semaphore::new(SETUP_CONCURRENCY));
     let (completion_sender, mut completion_receiver) =
-        mpsc::channel::<anyhow::Result<Duration>>(count);
+        mpsc::channel::<anyhow::Result<(Instant, Duration)>>(count);
     let (restage_sender, mut restage_receiver) = mpsc::channel(count);
     let mut restages = JoinSet::new();
     let mut minimum_ready_depth = PROMISE_POOL_SIZE;
@@ -322,8 +361,8 @@ async fn complete_at_rate(
             let latency = {
                 let _permit = completion_limit.acquire_owned().await?;
                 let completion_started = Instant::now();
-                user.complete_promise(&work.promise, payload).await?;
-                completion_started.elapsed()
+                complete_promise(&user, &component, &work, payload).await?;
+                (Instant::now(), completion_started.elapsed())
             };
             completion_sender
                 .send(Ok(latency))
@@ -339,6 +378,7 @@ async fn complete_at_rate(
                 &component,
                 work.agent,
                 work.parsed_agent,
+                work.completer.clone(),
                 work.wait,
                 work.runtime,
             )
@@ -357,13 +397,13 @@ async fn complete_at_rate(
     drop(completion_sender);
     drop(restage_sender);
 
-    let mut completion_latencies = Vec::with_capacity(scheduled_completions);
-    while completion_latencies.len() < scheduled_completions {
+    let mut completions = Vec::with_capacity(scheduled_completions);
+    while completions.len() < scheduled_completions {
         let completion = completion_receiver
             .recv()
             .await
             .ok_or_else(|| anyhow::anyhow!("completion producer stopped"))?;
-        completion_latencies.push(completion?);
+        completions.push(completion?);
     }
     while let Some(restage) = restages.join_next().await {
         match restage {
@@ -377,8 +417,12 @@ async fn complete_at_rate(
     while let Ok(restage) = restage_receiver.try_recv() {
         restage_timings.push(restage);
     }
+    let completion_latencies = completions
+        .into_iter()
+        .filter_map(|(completed_at, latency)| (completed_at <= deadline).then_some(latency))
+        .collect::<Vec<_>>();
     println!(
-        "Promise-density: offered={rate}/s completed={} pool-min-ready={minimum_ready_depth} \
+        "Promise-density: offered={rate}/s scheduled={scheduled_completions} completed={} pool-min-ready={minimum_ready_depth} \
          pool-starvations={starvation_count} restaged={}",
         completion_latencies.len(),
         restage_timings.len(),
@@ -390,6 +434,55 @@ async fn complete_at_rate(
         completion_latencies,
         restage_timings,
     })
+}
+
+async fn complete_promise(
+    user: &TestUserContext<BenchmarkTestDependencies>,
+    component: &ComponentDto,
+    work: &PromiseWork,
+    payload: Vec<u8>,
+) -> anyhow::Result<()> {
+    if let Some(completer) = &work.completer {
+        user.invoke_and_await_agent(
+            component,
+            completer,
+            "complete_promise",
+            data_value!(work.promise.clone(), payload),
+        )
+        .await?;
+    } else {
+        user.complete_promise(&work.promise, payload).await?;
+    }
+    Ok(())
+}
+
+fn select_remote_completer(
+    component_id: golem_common::model::component::ComponentId,
+    waiter: &ParsedAgentId,
+    routing_table: &RoutingTable,
+    cell_name: String,
+    index: usize,
+) -> anyhow::Result<ParsedAgentId> {
+    let waiter = AgentId::from_agent_id(component_id, waiter)
+        .map_err(|error| anyhow::anyhow!("invalid promise waiter agent id: {error}"))?;
+    let waiter_pod = routing_table
+        .lookup(&waiter)
+        .ok_or_else(|| anyhow::anyhow!("promise waiter has no assigned executor pod"))?;
+    for candidate in 0..PROMISE_POOL_SIZE {
+        let completer = agent_id!(
+            PROMISE_AGENT_TYPE,
+            format!("{cell_name}-completer-{index}-{candidate}")
+        );
+        let completer_id = AgentId::from_agent_id(component_id, &completer)
+            .map_err(|error| anyhow::anyhow!("invalid promise completer agent id: {error}"))?;
+        if routing_table
+            .lookup(&completer_id)
+            .is_some_and(|pod| pod != waiter_pod)
+        {
+            return Ok(completer);
+        }
+    }
+    anyhow::bail!("could not find a promise completer on a different executor pod")
 }
 
 fn should_wait(presence: PromiseWaiterPresence, index: usize) -> bool {
