@@ -681,12 +681,6 @@ pub mod scheduler {
             &["executor_id"]
         )
         .unwrap();
-        pub static ref SCHEDULER_DUE_ACTION_BACKLOG: GaugeVec = register_gauge_vec!(
-            "scheduler_due_action_backlog",
-            "Due scheduled actions not yet acknowledged at scheduler tick start, including currently leased actions",
-            &["executor_id"]
-        )
-        .unwrap();
         pub static ref SCHEDULER_DUE_ACTION_BACKLOG_AFTER_TICK: GaugeVec = register_gauge_vec!(
             "scheduler_due_action_backlog_after_tick",
             "Due scheduled actions not yet acknowledged after scheduler tick processing",
@@ -726,12 +720,6 @@ pub mod scheduler {
         SCHEDULER_QUEUE_DEPTH
             .with_label_values(&[crate::metrics::storage::executor_id()])
             .set(depth as f64);
-    }
-
-    pub fn set_scheduler_due_action_backlog(backlog: u64) {
-        SCHEDULER_DUE_ACTION_BACKLOG
-            .with_label_values(&[crate::metrics::storage::executor_id()])
-            .set(backlog as f64);
     }
 
     pub fn set_scheduler_due_action_backlog_after_tick(backlog: u64) {
