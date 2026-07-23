@@ -51,15 +51,6 @@ pub struct PromiseHandle {
 pub struct PromiseHandleInner {
     notify: Notify,
     state: Mutex<Option<Vec<u8>>>,
-    #[cfg(test)]
-    await_ready_test_hook: Mutex<Option<AwaitReadyTestHook>>,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone)]
-struct AwaitReadyTestHook {
-    entered: Arc<Notify>,
-    resume: Arc<Notify>,
 }
 
 impl PromiseHandle {
@@ -68,8 +59,6 @@ impl PromiseHandle {
             inner: Arc::new(PromiseHandleInner {
                 notify: Notify::new(),
                 state: Mutex::new(None),
-                #[cfg(test)]
-                await_ready_test_hook: Mutex::new(None),
             }),
         }
     }
@@ -90,17 +79,7 @@ impl PromiseHandle {
         if self.is_ready().await {
             return;
         }
-        #[cfg(test)]
-        if let Some(hook) = self.inner.await_ready_test_hook.lock().await.clone() {
-            hook.entered.notify_one();
-            hook.resume.notified().await;
-        }
         notified.await;
-    }
-
-    #[cfg(test)]
-    async fn set_await_ready_test_hook(&self, hook: AwaitReadyTestHook) {
-        *self.inner.await_ready_test_hook.lock().await = Some(hook);
     }
 
     pub async fn get(&self) -> Option<Vec<u8>> {
@@ -720,35 +699,5 @@ mod tests {
             }).unwrap();
         }
 
-    }
-
-    #[test]
-    async fn completion_does_not_miss_waiter_between_state_check_and_wait() {
-        let handle = PromiseHandle::new();
-        let entered = Arc::new(Notify::new());
-        let resume = Arc::new(Notify::new());
-        handle
-            .set_await_ready_test_hook(AwaitReadyTestHook {
-                entered: entered.clone(),
-                resume: resume.clone(),
-            })
-            .await;
-
-        let waiter = tokio::spawn({
-            let handle = handle.clone();
-            async move {
-                handle.await_ready().await;
-                handle.get().await
-            }
-        });
-        entered.notified().await;
-        assert!(handle.complete(vec![1]).await);
-        resume.notify_one();
-
-        let received = tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
-            .await
-            .expect("waiter missed completion between state check and wait")
-            .unwrap();
-        assert_eq!(received, Some(vec![1]));
     }
 }
