@@ -15,21 +15,24 @@
 use crate::agent_id_display::{SourceLanguage, render_type_for_language};
 use crate::log::{LogColorize, LogIndent, logln};
 use crate::model::component::show_exported_agent_constructors;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::{
-    Column, FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode, TextView, format_export,
-    log_table, new_table_full,
+    Column, FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode, TextOutput,
+    format_export, log_table, new_table_full,
 };
 use colored::Colorize;
 use comfy_table::{Cell, CellAlignment, Color as ComfyColor};
 use golem_client::model::ComponentDto;
-use golem_common::model::agent::{
-    AgentType, AgentTypeName, DeployedRegisteredAgentType, ElementSchema, LegacyParsedAgentId,
-};
+use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, ParsedAgentId};
 use golem_common::model::component::ComponentName;
+use golem_common::schema::agent::AgentTypeSchema;
+use golem_common::schema::{SchemaGraph, SchemaType};
 use indoc::indoc;
 use std::path::PathBuf;
 
 pub struct AgentNameHelp;
+
+impl Masked for AgentNameHelp {}
 
 impl MessageWithFields for AgentNameHelp {
     fn message(&self) -> String {
@@ -91,6 +94,8 @@ impl MessageWithFields for AgentNameHelp {
 }
 
 pub struct ComponentNameHelp;
+
+impl Masked for ComponentNameHelp {}
 
 impl MessageWithFields for ComponentNameHelp {
     fn message(&self) -> String {
@@ -157,7 +162,7 @@ impl MessageWithFields for ComponentNameHelp {
 
 pub struct AvailableComponentNamesHelp(pub Vec<ComponentName>);
 
-impl TextView for AvailableComponentNamesHelp {
+impl TextOutput for AvailableComponentNamesHelp {
     fn log(&self) {
         if self.0.is_empty() {
             logln(
@@ -190,8 +195,8 @@ pub struct AvailableFunctionNamesHelp {
 impl AvailableFunctionNamesHelp {
     pub fn new_agent(
         component: &ComponentDto,
-        agent_id: &LegacyParsedAgentId,
-        agent_type: &AgentType,
+        agent_id: &ParsedAgentId,
+        agent_type: &AgentTypeSchema,
     ) -> Self {
         AvailableFunctionNamesHelp {
             component_name: component.component_name.0.clone(),
@@ -201,7 +206,7 @@ impl AvailableFunctionNamesHelp {
     }
 }
 
-impl TextView for AvailableFunctionNamesHelp {
+impl TextOutput for AvailableFunctionNamesHelp {
     fn log(&self) {
         if self.function_names.is_empty() {
             match &self.agent_name {
@@ -268,20 +273,17 @@ impl AvailableAgentConstructorsHelp {
         component: &ComponentDto,
         target_agent_type: Option<&AgentTypeName>,
     ) -> Self {
+        let agent_types = component.metadata.agent_types();
         let constructors = if let Some(target_agent_type) = target_agent_type {
-            component
-                .metadata
-                .agent_types()
+            agent_types
                 .iter()
                 .find(|agent_type| agent_type.type_name == *target_agent_type)
                 .map(|agent_type| {
                     show_exported_agent_constructors(std::slice::from_ref(agent_type), true)
                 })
-                .unwrap_or_else(|| {
-                    show_exported_agent_constructors(component.metadata.agent_types(), true)
-                })
+                .unwrap_or_else(|| show_exported_agent_constructors(agent_types, true))
         } else {
-            show_exported_agent_constructors(component.metadata.agent_types(), true)
+            show_exported_agent_constructors(agent_types, true)
         };
 
         let component_name = &component.component_name.0;
@@ -313,7 +315,7 @@ impl AvailableAgentConstructorsHelp {
     }
 }
 
-impl TextView for AvailableAgentConstructorsHelp {
+impl TextOutput for AvailableAgentConstructorsHelp {
     fn log(&self) {
         if self.constructors.is_empty() {
             logln(self.empty_message.log_color_warn().to_string());
@@ -330,7 +332,7 @@ impl TextView for AvailableAgentConstructorsHelp {
 
 pub struct ArgumentError {
     pub argument_index: usize,
-    pub parameter_type: Option<ElementSchema>,
+    pub parameter_type: Option<(SchemaGraph, SchemaType)>,
     pub value: Option<String>,
     pub error: Option<String>,
     pub source_language: SourceLanguage,
@@ -338,7 +340,7 @@ pub struct ArgumentError {
 
 pub struct ParameterErrorTableView(pub Vec<ArgumentError>);
 
-impl TextView for ParameterErrorTableView {
+impl TextOutput for ParameterErrorTableView {
     fn log(&self) {
         let mut table = new_table_full(vec![
             Column::new("Arg #").fixed_right(),
@@ -374,53 +376,15 @@ impl TextView for ParameterErrorTableView {
 
 fn render_parameter_type_for_language(
     source_language: &SourceLanguage,
-    parameter_type: &ElementSchema,
+    parameter_type: &(SchemaGraph, SchemaType),
 ) -> String {
-    match parameter_type {
-        ElementSchema::ComponentModel(cm) => {
-            // Adapt the legacy AnalysedType at the boundary.
-            match golem_common::schema::adapters::analysed_type_to_schema_graph(&cm.element_type) {
-                Ok(graph) => {
-                    let root = graph.root.clone();
-                    render_type_for_language(source_language, &graph, &root, true)
-                }
-                Err(_) => "<unknown>".to_string(),
-            }
-        }
-        ElementSchema::UnstructuredText(text_descriptor) => {
-            let mut result = "text".to_string();
-            if let Some(restrictions) = &text_descriptor.restrictions {
-                result.push('[');
-                result.push_str(
-                    &restrictions
-                        .iter()
-                        .map(|restriction| restriction.language_code.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                );
-                result.push(']');
-            }
-            result
-        }
-        ElementSchema::UnstructuredBinary(binary_descriptor) => {
-            let mut result = "binary".to_string();
-            if let Some(restrictions) = &binary_descriptor.restrictions {
-                result.push('[');
-                result.push_str(
-                    &restrictions
-                        .iter()
-                        .map(|restriction| restriction.mime_type.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                );
-                result.push(']');
-            }
-            result
-        }
-    }
+    let (graph, schema) = parameter_type;
+    render_type_for_language(source_language, graph, schema, true)
 }
 
 pub struct EnvironmentNameHelp;
+
+impl Masked for EnvironmentNameHelp {}
 
 impl MessageWithFields for EnvironmentNameHelp {
     fn message(&self) -> String {
@@ -528,7 +492,7 @@ pub struct AppNewNextStepsHint {
     pub binary_name: String,
 }
 
-impl TextView for AppNewNextStepsHint {
+impl TextOutput for AppNewNextStepsHint {
     fn log(&self) {
         logln("");
 

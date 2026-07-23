@@ -14,22 +14,24 @@
 
 mod agent_config;
 mod api;
+mod capabilities;
 mod custom_api;
 mod fork;
 mod otlp_plugin;
 mod plugins;
 mod quota;
+mod rich_types;
 mod worker;
 
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 #[allow(unused_imports)]
 use golem_test_framework::config::WorkerExecutorClusterControl;
 use golem_test_framework::config::{
-    EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
+    DbType, EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
     WorkerExecutorClusterControlDispatch, WorkerExecutorClusterControlStub,
 };
 use std::sync::Once;
-use test_r::{tag_suite, test_dep};
+use test_r::{define_matrix_dimension, matrix_suite, tag_suite, test_dep};
 
 test_r::enable!();
 
@@ -44,9 +46,33 @@ tag_suite!(plugins, group7);
 
 tag_suite!(custom_api, group10);
 tag_suite!(quota, group10);
+tag_suite!(rich_types, group10);
+tag_suite!(capabilities, group10);
 
 test_r::sequential_suite!(otlp_plugin);
 test_r::sequential_suite!(plugins);
+
+// Matrix dimension for the DB backend. Paired suites (worker, fork, api,
+// agent_config, custom_api, quota, rich_types, capabilities) are multiplied
+// across this dimension via `matrix_suite!` below, producing one test per case
+// named `<test>_postgres` / `<test>_sqlite`, each carrying the `db_postgres` /
+// `db_sqlite` auto-tag (selectable with `:tag:db_postgres` / `:tag:db_sqlite`).
+// Unpaired suites (otlp_plugin, plugins) are NOT matrix-multiplied and run
+// once against the untagged (postgres) `create_deps` below.
+define_matrix_dimension!(db: EnvBasedTestDependencies -> "postgres", "sqlite");
+
+// Apply the `db` matrix to each paired suite. The target modules only need to
+// `inherit_test_dep!(EnvBasedTestDependencies)` (the untagged getter, which
+// they already do); the per-case tagged deps are materialized from the tagged
+// constructors below, and the untagged getter is aliased to them at runtime.
+matrix_suite!(worker, db, EnvBasedTestDependencies);
+matrix_suite!(fork, db, EnvBasedTestDependencies);
+matrix_suite!(api, db, EnvBasedTestDependencies);
+matrix_suite!(agent_config, db, EnvBasedTestDependencies);
+matrix_suite!(custom_api, db, EnvBasedTestDependencies);
+matrix_suite!(quota, db, EnvBasedTestDependencies);
+matrix_suite!(rich_types, db, EnvBasedTestDependencies);
+matrix_suite!(capabilities, db, EnvBasedTestDependencies);
 
 #[derive(Debug)]
 pub struct Tracing;
@@ -89,10 +115,52 @@ pub async fn create_deps() -> EnvBasedTestDependencies {
     // the same type as the `PerWorker` `tracing()` dep causes the
     // latter to silently be skipped in the `--nocapture`/no-spawn-
     // workers code path.
+    //
+    // This untagged constructor is the postgres backend used by the
+    // unpaired suites (otlp_plugin, plugins) which take a plain
+    // `&EnvBasedTestDependencies`. It is also the compile-time getter
+    // symbol the matrix-multiplied tests resolve against; their
+    // dependency is rewritten to the tagged variant at runtime, so this
+    // constructor's body is never materialized for them.
     Tracing::init();
 
     let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
         worker_executor_cluster_size: 3,
+        db_type: DbType::Postgres,
+        ..EnvBasedTestDependenciesConfig::new()
+    })
+    .await
+    .expect("Failed constructing test dependencies");
+
+    deps.redis_monitor().assert_valid();
+
+    deps
+}
+
+#[test_dep(scope = Hosted, worker = both(WorkerExecutorClusterControl), tagged_as = "postgres")]
+pub async fn create_deps_postgres() -> EnvBasedTestDependencies {
+    Tracing::init();
+
+    let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
+        worker_executor_cluster_size: 3,
+        db_type: DbType::Postgres,
+        ..EnvBasedTestDependenciesConfig::new()
+    })
+    .await
+    .expect("Failed constructing test dependencies");
+
+    deps.redis_monitor().assert_valid();
+
+    deps
+}
+
+#[test_dep(scope = Hosted, worker = both(WorkerExecutorClusterControl), tagged_as = "sqlite")]
+pub async fn create_deps_sqlite() -> EnvBasedTestDependencies {
+    Tracing::init();
+
+    let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
+        worker_executor_cluster_size: 3,
+        db_type: DbType::Sqlite,
         ..EnvBasedTestDependenciesConfig::new()
     })
     .await

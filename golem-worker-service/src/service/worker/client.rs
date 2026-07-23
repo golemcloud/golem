@@ -32,7 +32,8 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::model::RetryConfig;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::UntypedDataValue;
+use golem_common::model::agent::InvocationFreshnessDisposition;
+use golem_common::model::card::StoredCard;
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
@@ -53,10 +54,24 @@ use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, sync::Arc};
 use tonic::Code;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
+
+fn freshness_disposition_for_dispatch(
+    requested: InvocationFreshnessDisposition,
+    first_dispatch: &AtomicBool,
+) -> InvocationFreshnessDisposition {
+    if requested == InvocationFreshnessDisposition::KnownFresh
+        && first_dispatch.swap(false, Ordering::AcqRel)
+    {
+        InvocationFreshnessDisposition::KnownFresh
+    } else {
+        InvocationFreshnessDisposition::MayExist
+    }
+}
 
 #[async_trait]
 pub trait WorkerClient: Send + Sync {
@@ -170,6 +185,14 @@ pub trait WorkerClient: Send + Sync {
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>>;
 
+    async fn get_agent_wallet(
+        &self,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Vec<StoredCard>>;
+
     async fn get_file_contents(
         &self,
         agent_id: &AgentId,
@@ -226,11 +249,13 @@ pub trait WorkerClient: Send + Sync {
         &self,
         agent_id: &AgentId,
         method_name: Option<String>,
-        method_parameters: Option<golem_api_grpc::proto::golem::component::UntypedDataValue>,
+        method_parameters: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
         invocation_context: Option<InvocationContext>,
+        freshness_disposition: InvocationFreshnessDisposition,
+        config: Vec<AgentConfigEntryDto>,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
@@ -996,6 +1021,59 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             .await
     }
 
+    async fn get_agent_wallet(
+        &self,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Vec<StoredCard>> {
+        let agent_id = agent_id.clone();
+        self.call_worker_executor(
+            agent_id.clone(),
+            "get_agent_wallet",
+            move |worker_executor_client| {
+                let agent_id = agent_id.clone();
+                Box::pin(worker_executor_client.get_agent_wallet(
+                    workerexecutor::v1::GetAgentWalletRequest {
+                        agent_id: Some(agent_id.into()),
+                        component_owner_account_id: Some(account_id.into()),
+                        environment_id: Some(environment_id.into()),
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        principal: None,
+                    },
+                ))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::GetAgentWalletResponse {
+                    result:
+                        Some(workerexecutor::v1::get_agent_wallet_response::Result::Success(
+                            success,
+                        )),
+                } => success
+                    .wallet_cards
+                    .into_iter()
+                    .map(|bytes| {
+                        golem_common::serialization::deserialize(&bytes).map_err(|e| {
+                            WorkerServiceError::Internal(format!(
+                                "Failed to decode wallet card: {e}"
+                            ))
+                            .into()
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>(),
+                workerexecutor::v1::GetAgentWalletResponse {
+                    result: Some(workerexecutor::v1::get_agent_wallet_response::Result::Failure(err)),
+                } => Err(err.into()),
+                workerexecutor::v1::GetAgentWalletResponse { result: None } => {
+                    Err("Empty response".into())
+                }
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
     async fn get_file_contents(
         &self,
         agent_id: &AgentId,
@@ -1294,11 +1372,13 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         agent_id: &AgentId,
         method_name: Option<String>,
-        method_parameters: Option<golem_api_grpc::proto::golem::component::UntypedDataValue>,
+        method_parameters: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
         invocation_context: Option<InvocationContext>,
+        freshness_disposition: InvocationFreshnessDisposition,
+        config: Vec<AgentConfigEntryDto>,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
@@ -1306,12 +1386,15 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     ) -> WorkerResult<AgentInvocationOutput> {
         let agent_id = agent_id.clone();
         let agent_id_clone = agent_id.clone();
+        let first_dispatch = Arc::new(AtomicBool::new(true));
 
         let result = self
             .call_worker_executor(
                 agent_id.clone(),
                 "invoke_agent",
                 move |worker_executor_client| {
+                    let freshness_disposition =
+                        freshness_disposition_for_dispatch(freshness_disposition, &first_dispatch);
                     Box::pin(worker_executor_client.invoke_agent(
                         workerexecutor::v1::InvokeAgentRequest {
                             agent_id: Some(agent_id_clone.clone().into()),
@@ -1325,6 +1408,17 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             auth_ctx: Some(auth_ctx.clone().into()),
                             context: invocation_context.clone(),
                             principal: Some(principal.clone()),
+                            freshness_disposition: match freshness_disposition {
+                                InvocationFreshnessDisposition::MayExist => {
+                                    workerexecutor::v1::InvocationFreshnessDisposition::MayExist
+                                        as i32
+                                }
+                                InvocationFreshnessDisposition::KnownFresh => {
+                                    workerexecutor::v1::InvocationFreshnessDisposition::KnownFresh
+                                        as i32
+                                }
+                            },
+                            config: config.clone().into_iter().map(Into::into).collect(),
                         },
                     ))
                 },
@@ -1339,12 +1433,14 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                                     status,
                                     oplog_index,
                                     agent_fingerprint,
+                                    agent_id,
+                                    idempotency_key,
                                 },
                             )),
                     } => {
                         let invocation_result = match result {
                             Some(proto_val) => {
-                                let output = UntypedDataValue::try_from(proto_val)
+                                let output = golem_common::schema::SchemaValue::try_from(proto_val)
                                     .map_err(WorkerExecutorError::unknown)?;
                                 AgentInvocationResult::AgentMethod { output }
                             }
@@ -1363,6 +1459,11 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                                 .map(ComponentRevision::new)
                                 .transpose()
                                 .map_err(|err| WorkerExecutorError::unknown(err.to_string()))?,
+                            agent_id: agent_id
+                                .map(TryInto::try_into)
+                                .transpose()
+                                .map_err(|err: String| WorkerExecutorError::unknown(err))?,
+                            idempotency_key: idempotency_key.map(Into::into),
                             oplog_index: oplog_index.map(OplogIndex::from_u64),
                             agent_fingerprint: agent_fingerprint
                                 .map(|uuid| AgentFingerprint(uuid.into())),
@@ -1449,5 +1550,53 @@ fn is_filter_with_running_status(filter: &AgentFilter) -> bool {
         }
         AgentFilter::And(f) => f.filters.iter().any(is_filter_with_running_status),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod freshness_tests {
+    use super::freshness_disposition_for_dispatch;
+    use golem_common::model::agent::InvocationFreshnessDisposition;
+    use std::sync::atomic::AtomicBool;
+    use test_r::test;
+
+    #[test]
+    fn known_fresh_is_only_used_for_the_first_dispatch() {
+        let first_dispatch = AtomicBool::new(true);
+
+        assert_eq!(
+            freshness_disposition_for_dispatch(
+                InvocationFreshnessDisposition::KnownFresh,
+                &first_dispatch,
+            ),
+            InvocationFreshnessDisposition::KnownFresh
+        );
+        assert_eq!(
+            freshness_disposition_for_dispatch(
+                InvocationFreshnessDisposition::KnownFresh,
+                &first_dispatch,
+            ),
+            InvocationFreshnessDisposition::MayExist
+        );
+    }
+
+    #[test]
+    fn may_exist_remains_may_exist_on_every_dispatch() {
+        let first_dispatch = AtomicBool::new(true);
+
+        assert_eq!(
+            freshness_disposition_for_dispatch(
+                InvocationFreshnessDisposition::MayExist,
+                &first_dispatch,
+            ),
+            InvocationFreshnessDisposition::MayExist
+        );
+        assert_eq!(
+            freshness_disposition_for_dispatch(
+                InvocationFreshnessDisposition::MayExist,
+                &first_dispatch,
+            ),
+            InvocationFreshnessDisposition::MayExist
+        );
     }
 }

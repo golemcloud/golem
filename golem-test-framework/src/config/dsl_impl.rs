@@ -15,7 +15,8 @@
 use crate::components::redis::Redis;
 use crate::config::TestDependencies;
 use crate::dsl::{
-    EnvironmentOptions, TestDsl, TestDslExtended, WorkerLogEventStream, build_ifs_archive,
+    AgentResult, EnvironmentOptions, TestDsl, TestDslExtended, WorkerLogEventStream,
+    build_ifs_archive, default_agent_type_provision_config_creation_for_account,
 };
 use crate::model::IFSEntry;
 use anyhow::{Context, anyhow};
@@ -29,18 +30,20 @@ use golem_client::api::{
     WorkerError,
 };
 use golem_client::model::{CompleteParameters, UpdateWorkerRequest, WorkersMetadataRequest};
-use golem_common::base_model::agent::{DataValue, LegacyParsedAgentId};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::agent::extraction::extract_agent_types;
+use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::extraction::extract_agent_type_schemas;
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
 use golem_common::model::auth::TokenSecret;
+use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::component::{
-    AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate, ComponentCreation,
-    ComponentDto, ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
+    AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
+    ComponentCreation, ComponentDto, ComponentId, ComponentName, ComponentRevision,
+    ComponentUpdate,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentVersion};
@@ -54,6 +57,7 @@ use golem_common::model::worker::{
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
 };
+use golem_common::schema::TypedSchemaValue;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -64,7 +68,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::Payload;
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
-use tracing::{debug, trace};
+use tracing::trace;
 use uuid::Uuid;
 
 pub struct NameResolutionCache {
@@ -199,13 +203,17 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         self.deps.redis()
     }
 
+    fn account_email(&self) -> AccountEmail {
+        self.account_email.clone()
+    }
+
     async fn store_component_with(
         &self,
         wasm_name: &str,
         environment_id: EnvironmentId,
         name: &str,
         unique: bool,
-        agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
+        mut agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
@@ -219,7 +227,16 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
         let client = self.deps.registry_service().client(&self.token).await;
 
-        let agent_types = extract_agent_types(&source_path, false, true).await?;
+        let agent_types = extract_agent_type_schemas(&source_path, false, true).await?;
+        for agent_type in &agent_types {
+            agent_type_provision_configs
+                .entry(agent_type.type_name.clone())
+                .or_insert_with(|| {
+                    default_agent_type_provision_config_creation_for_account(
+                        self.account_email.clone(),
+                    )
+                });
+        }
 
         trace!("Agent types in component {component_name}:\n{agent_types:#?}");
 
@@ -288,11 +305,41 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         let updated_wasm = if let Some(wasm_name) = wasm_name {
             let source_path: PathBuf = component_directory.join(format!("{wasm_name}.wasm"));
 
-            let agent_types = extract_agent_types(&source_path, false, true).await?;
+            let agent_types = extract_agent_type_schemas(&source_path, false, true).await?;
 
             Some((File::open(source_path).await?, agent_types))
         } else {
             None
+        };
+
+        let agent_type_provision_config_updates = if let Some((_wasm, agent_types)) = &updated_wasm
+        {
+            let previous_component = client
+                .get_component_revision(&component_id.0, previous_revision.get())
+                .await?;
+            let mut updates = agent_type_provision_config_updates.unwrap_or_default();
+
+            for agent_type in agent_types {
+                if !previous_component
+                    .metadata
+                    .agent_type_provision_configs()
+                    .contains_key(&agent_type.type_name)
+                {
+                    let update = updates.entry(agent_type.type_name.clone()).or_default();
+                    if update.initial_permissions.is_none() {
+                        update.initial_permissions =
+                            Some(AgentTypeInitialPermissions::default_for_recipient(
+                                RecipientPattern::Account {
+                                    account: self.account_email.clone(),
+                                },
+                            ));
+                    }
+                }
+            }
+
+            (!updates.is_empty()).then_some(updates)
+        } else {
+            agent_type_provision_config_updates
         };
 
         let component = client
@@ -330,7 +377,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: LegacyParsedAgentId,
+        id: ParsedAgentId,
         env: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
@@ -356,10 +403,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn invoke_agent_with_key(
         &self,
         component: &ComponentDto,
-        agent_id: &LegacyParsedAgentId,
+        agent_id: &ParsedAgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
-        params: DataValue,
+        params: TypedSchemaValue,
     ) -> anyhow::Result<()> {
         let registry_client = self.registry_service_client().await;
         let app_name = self
@@ -370,6 +417,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .name_cache
             .resolve_env_name(&component.environment_id, &registry_client)
             .await?;
+
+        let method_parameters = params.value().clone();
 
         let client = self
             .deps
@@ -383,10 +432,11 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     app_name: app_name.0,
                     env_name: env_name.0,
                     agent_type_name: agent_id.agent_type.0.clone(),
-                    parameters: agent_id.parameters.clone().into(),
+                    parameters: agent_id.parameters.value().clone(),
                     phantom_id: agent_id.phantom_id,
+                    config: None,
                     method_name: method_name.to_string(),
-                    method_parameters: params.into(),
+                    method_parameters,
                     mode: golem_client::model::AgentInvocationMode::Schedule,
                     schedule_at: None,
                     idempotency_key: None,
@@ -402,20 +452,18 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn invoke_and_await_agent_impl(
         &self,
         component: &ComponentDto,
-        agent_id: &LegacyParsedAgentId,
+        agent_id: &ParsedAgentId,
         idempotency_key: Option<&IdempotencyKey>,
         deployment_revision: Option<DeploymentRevision>,
         principal: Option<golem_common::model::agent::Principal>,
         method_name: &str,
-        params: DataValue,
-    ) -> anyhow::Result<DataValue> {
+        params: TypedSchemaValue,
+    ) -> anyhow::Result<AgentResult> {
         if principal.is_some() {
             // The HTTP `AgentInvocationRequest` has no per-request `principal`
             // field — principal is derived from the request's auth headers.
-            // Tests that need to override the principal (e.g. the per-principal
-            // read-only cache test from issue #3393 T6) must use the
-            // worker-executor gRPC DSL (`golem-worker-executor-test-utils`)
-            // instead of this HTTP-based config DSL.
+            // Tests that need to override the principal must use the
+            // worker-executor gRPC DSL instead of this HTTP-based config DSL.
             anyhow::bail!(
                 "HTTP agent invocation DSL does not support overriding `principal`; \
                  use the worker-executor gRPC test DSL for principal-aware invocation"
@@ -435,6 +483,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .cloned()
             .unwrap_or_else(IdempotencyKey::fresh);
 
+        let method_parameters = params.value().clone();
+
         let client = self
             .deps
             .worker_service()
@@ -447,10 +497,11 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     app_name: app_name.0,
                     env_name: env_name.0,
                     agent_type_name: agent_id.agent_type.0.clone(),
-                    parameters: agent_id.parameters.clone().into(),
+                    parameters: agent_id.parameters.value().clone(),
                     phantom_id: agent_id.phantom_id,
+                    config: None,
                     method_name: method_name.to_string(),
-                    method_parameters: params.into(),
+                    method_parameters,
                     mode: golem_client::model::AgentInvocationMode::Await,
                     schedule_at: None,
                     idempotency_key: None,
@@ -461,37 +512,11 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .await?;
 
         match result.result {
-            Some(untyped_json) => {
-                let revision = ComponentRevision::new(
-                    result
-                        .component_revision
-                        .ok_or_else(|| anyhow!("Missing component_revision in response"))?,
-                )
-                .context("Invalid component_revision in response")?;
-                let component_at_rev = self
-                    .name_cache
-                    .resolve_component_at_revision(&component.id, revision, &registry_client)
-                    .await?;
-                let agent_type = component_at_rev
-                    .metadata
-                    .find_agent_type_by_name(&agent_id.agent_type)
-                    .ok_or_else(|| anyhow!("Agent type not found: {}", agent_id.agent_type))?;
-                let agent_method = agent_type
-                    .methods
-                    .iter()
-                    .find(|method| method.name == method_name)
-                    .ok_or_else(|| {
-                        debug!("Agent method not found: {}", method_name);
-                        debug!("In agent type: {:#?}", agent_type);
-                        anyhow!("Agent method not found: {}", method_name)
-                    })?;
-
-                DataValue::try_from_untyped_json(untyped_json, agent_method.output_schema.clone())
-                    .map_err(|err| anyhow!("DataValue conversion error: {err}"))
+            Some(typed_output) => {
+                let (_graph, value) = typed_output.into_parts();
+                Ok(AgentResult::new(Some(value)))
             }
-            None => Ok(DataValue::Tuple(
-                golem_common::base_model::agent::ElementValues { elements: vec![] },
-            )),
+            None => Ok(AgentResult::new(None)),
         }
     }
 

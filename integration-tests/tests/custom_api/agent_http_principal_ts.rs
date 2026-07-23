@@ -22,13 +22,20 @@ use golem_common::model::http_api_deployment::{
 use golem_test_framework::config::EnvBasedTestDependencies;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use test_r::test_dep;
+use test_r::{define_matrix_dimension, test_dep};
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(
+    #[tagged_as("postgres")]
+    EnvBasedTestDependencies
+);
+inherit_test_dep!(
+    #[tagged_as("sqlite")]
+    EnvBasedTestDependencies
+);
 
-#[test_dep(scope = PerWorker)]
-async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
+async fn build_test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
     make_test_context(
         deps,
         vec![(
@@ -48,9 +55,30 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
     .unwrap()
 }
 
+#[test_dep(scope = PerWorker)]
+async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
+    build_test_context(deps).await
+}
+
+#[test_dep(scope = PerWorker, tagged_as = "postgres")]
+async fn test_context_postgres(
+    #[tagged_as("postgres")] deps: &EnvBasedTestDependencies,
+) -> HttpTestContext {
+    build_test_context(deps).await
+}
+
+#[test_dep(scope = PerWorker, tagged_as = "sqlite")]
+async fn test_context_sqlite(
+    #[tagged_as("sqlite")] deps: &EnvBasedTestDependencies,
+) -> HttpTestContext {
+    build_test_context(deps).await
+}
+
+define_matrix_dimension!(db: HttpTestContext -> "postgres", "sqlite");
+
 #[test]
 #[tracing::instrument]
-async fn principal_auto_injection(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn principal_auto_injection(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -65,14 +93,16 @@ async fn principal_auto_injection(agent: &HttpTestContext) -> anyhow::Result<()>
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!({ "value": {"anonymous": null} }));
+    assert_eq!(body, json!({ "value": "anonymous" }));
 
     Ok(())
 }
 
 #[test]
 #[tracing::instrument]
-async fn principal_auto_injection_middle_segment(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn principal_auto_injection_middle_segment(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -88,7 +118,7 @@ async fn principal_auto_injection_middle_segment(agent: &HttpTestContext) -> any
 
     assert_eq!(
         body,
-        json!({ "value": {"anonymous": null}, "foo": "foo-value", "bar": 1.0 })
+        json!({ "value": "anonymous", "foo": "foo-value", "bar": 1.0 })
     );
 
     Ok(())
@@ -96,7 +126,9 @@ async fn principal_auto_injection_middle_segment(agent: &HttpTestContext) -> any
 
 #[test]
 #[tracing::instrument]
-async fn principal_auto_injection_last_segment(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn principal_auto_injection_last_segment(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -112,7 +144,7 @@ async fn principal_auto_injection_last_segment(agent: &HttpTestContext) -> anyho
 
     assert_eq!(
         body,
-        json!({ "value": {"anonymous": null}, "foo": "foo-value", "bar": 2.0 })
+        json!({ "value": "anonymous", "foo": "foo-value", "bar": 2.0 })
     );
 
     Ok(())
@@ -120,7 +152,9 @@ async fn principal_auto_injection_last_segment(agent: &HttpTestContext) -> anyho
 
 #[test]
 #[tracing::instrument]
-async fn default_test_header_oidc_principal(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn default_test_header_oidc_principal(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(
@@ -167,7 +201,9 @@ async fn default_test_header_oidc_principal(agent: &HttpTestContext) -> anyhow::
 
 #[test]
 #[tracing::instrument]
-async fn test_header_oidc_principal_with_overrides(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn test_header_oidc_principal_with_overrides(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
     let response = agent
         .client
         .get(

@@ -13,31 +13,95 @@
 // limitations under the License.
 
 use crate::agent_id_display::SourceLanguage;
+use crate::agent_id_display::render_type_for_language;
+use crate::model::app_raw;
 use crate::model::environment::ResolvedEnvironmentIdentity;
+use crate::model::masking::{
+    Masked, MaskingConfig, mask_sensitive_map, mask_typed_agent_config_entries,
+};
 use crate::model::worker::RawAgentId;
 use chrono::{DateTime, Utc};
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
-use golem_common::model::agent::AgentTypeName;
-use golem_common::model::agent::{
-    AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
-};
+use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
+use golem_common::model::card::PolymorphicManifestPermissionPattern;
+use golem_common::model::card::recipient::{RecipientMonomorphizationContext, RecipientPattern};
 use golem_common::model::component::{
     AgentConfigEntryDto, ComponentDto, ComponentId, ComponentRevision,
 };
 use golem_common::model::component::{
-    AgentFileOptions, AgentFilePath, AgentTypeProvisionConfigCreation, ArchiveFilePath,
-    PluginInstallation,
+    AgentFileOptions, AgentFilePath, AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation,
+    ArchiveFilePath, PluginInstallation,
 };
 use golem_common::model::component::{AgentFilePermissions, ComponentName};
-
-use crate::agent_id_display::render_type_for_language;
-use crate::model::app_raw;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::schema::agent::{AgentTypeSchema, FieldSource, InputSchema, OutputSchema};
+use golem_common::schema::graph::SchemaGraph;
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::str::FromStr;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParsedInitialPermissionCard {
+    pub lower_positive: Vec<PolymorphicManifestPermissionPattern>,
+    pub lower_negative: Vec<PolymorphicManifestPermissionPattern>,
+    pub upper_positive: Vec<PolymorphicManifestPermissionPattern>,
+    pub upper_negative: Vec<PolymorphicManifestPermissionPattern>,
+}
+
+impl ParsedInitialPermissionCard {
+    pub fn from_grant_strings(
+        lower_positive: Vec<String>,
+        lower_negative: Vec<String>,
+        upper_positive: Vec<String>,
+        upper_negative: Vec<String>,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
+            lower_positive: parse_manifest_grants(lower_positive)?,
+            lower_negative: parse_manifest_grants(lower_negative)?,
+            upper_positive: parse_manifest_grants(upper_positive)?,
+            upper_negative: parse_manifest_grants(upper_negative)?,
+        })
+    }
+
+    pub fn resolve_recipients(
+        self,
+        context: &RecipientMonomorphizationContext,
+    ) -> AgentTypeInitialPermissions {
+        AgentTypeInitialPermissions::from_patterns(
+            self.lower_positive
+                .into_iter()
+                .map(|grant| grant.monomorphize_recipient(context))
+                .collect(),
+            self.lower_negative
+                .into_iter()
+                .map(|grant| grant.monomorphize_recipient(context))
+                .collect(),
+            self.upper_positive
+                .into_iter()
+                .map(|grant| grant.monomorphize_recipient(context))
+                .collect(),
+            self.upper_negative
+                .into_iter()
+                .map(|grant| grant.monomorphize_recipient(context))
+                .collect(),
+        )
+    }
+}
+
+fn parse_manifest_grants(
+    grants: Vec<String>,
+) -> anyhow::Result<Vec<PolymorphicManifestPermissionPattern>> {
+    grants
+        .into_iter()
+        .map(|grant| {
+            PolymorphicManifestPermissionPattern::from_str(&grant)
+                .map_err(|err| anyhow::anyhow!("invalid grant '{}': {}", grant, err))
+        })
+        .collect()
+}
 
 pub enum ComponentRevisionSelection<'a> {
     ByAgentName(&'a RawAgentId),
@@ -87,9 +151,6 @@ impl ComponentUpsertResult {
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentView {
-    #[serde(skip)]
-    pub show_sensitive: bool,
-
     pub component_name: ComponentName,
     pub component_id: ComponentId,
     pub component_version: Option<String>,
@@ -98,20 +159,55 @@ pub struct ComponentView {
     pub created_at: DateTime<Utc>,
     pub environment_id: EnvironmentId,
     pub exports: Vec<String>,
-    pub agent_types: Vec<AgentType>,
+    pub agent_types: Vec<AgentTypeSchema>,
     pub agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
 }
 
-impl ComponentView {
-    pub fn new(show_sensitive: bool, value: ComponentDto) -> Self {
-        let exports = {
-            let agent_types = value.metadata.agent_types().to_vec();
+impl Masked for ComponentView {
+    fn masked(mut self, config: MaskingConfig) -> anyhow::Result<Self> {
+        if config.show_secrets {
+            return Ok(self);
+        }
 
-            show_exported_agents(&agent_types, true, true)
-        };
+        let secret_config_paths_by_agent_type = self
+            .agent_types
+            .iter()
+            .map(|agent_type| {
+                (
+                    agent_type.type_name.0.clone(),
+                    agent_type
+                        .config
+                        .iter()
+                        .filter(|config| config.source == AgentConfigSource::Secret)
+                        .map(|config| config.path.join("."))
+                        .collect::<BTreeSet<_>>(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        for (agent_type_name, provision_config) in &mut self.agent_type_provision_configs {
+            provision_config.env = mask_sensitive_map(config, &provision_config.env);
+
+            for plugin in &mut provision_config.plugins {
+                plugin.parameters = mask_sensitive_map(config, &plugin.parameters);
+            }
+
+            if let Some(secret_paths) = secret_config_paths_by_agent_type.get(&agent_type_name.0) {
+                provision_config.config =
+                    mask_typed_agent_config_entries(config, &provision_config.config, secret_paths);
+            }
+        }
+
+        Ok(self)
+    }
+}
+
+impl ComponentView {
+    pub fn new(value: ComponentDto) -> Self {
+        let agent_types = value.metadata.agent_types().to_vec();
+        let exports = { show_exported_agents(&agent_types, true, true) };
 
         ComponentView {
-            show_sensitive,
             component_name: value.component_name,
             component_id: value.id,
             component_version: value.metadata.root_package_version().clone(),
@@ -120,7 +216,7 @@ impl ComponentView {
             created_at: value.created_at,
             environment_id: value.environment_id,
             exports,
-            agent_types: value.metadata.agent_types().to_vec(),
+            agent_types,
             agent_type_provision_configs: value.metadata.agent_type_provision_configs().clone(),
         }
     }
@@ -130,6 +226,7 @@ impl ComponentView {
 pub struct AgentTypeManifestProvisionConfig {
     pub env: BTreeMap<String, String>,
     pub config: Vec<AgentConfigEntryDto>,
+    pub initial_card: Option<ParsedInitialPermissionCard>,
     pub files_source: PathBuf,
     pub files: Vec<app_raw::InitialComponentFile>,
     pub plugins: Vec<app_raw::PluginInstallation>,
@@ -139,7 +236,8 @@ impl AgentTypeManifestProvisionConfig {
     pub fn to_provision_config_creation(
         &self,
         resolved_plugins: Vec<PluginInstallation>,
-    ) -> AgentTypeProvisionConfigCreation {
+        initial_permissions: AgentTypeInitialPermissions,
+    ) -> anyhow::Result<AgentTypeProvisionConfigCreation> {
         let files = self
             .files
             .iter()
@@ -152,24 +250,77 @@ impl AgentTypeManifestProvisionConfig {
                 (archive_path, options)
             })
             .collect();
-        AgentTypeProvisionConfigCreation {
+        Ok(AgentTypeProvisionConfigCreation {
+            initial_permissions,
             env: self.env.clone(),
             config: self.config.clone(),
             files,
             plugin_installations: resolved_plugins,
-        }
+        })
     }
+
+    pub fn to_initial_permission(
+        &self,
+        context: &RecipientMonomorphizationContext,
+    ) -> AgentTypeInitialPermissions {
+        self.initial_card
+            .clone()
+            .map(|card| card.resolve_recipients(context))
+            .unwrap_or_else(|| {
+                AgentTypeInitialPermissions::default_for_recipient(initial_permission_recipient(
+                    context,
+                ))
+            })
+    }
+}
+
+pub fn initial_permission_from_manifest_card(
+    initial_card: &app_raw::ManifestInitialCard,
+) -> anyhow::Result<ParsedInitialPermissionCard> {
+    ParsedInitialPermissionCard::from_grant_strings(
+        initial_card.lower_bound.positive.clone(),
+        initial_card.lower_bound.negative.clone(),
+        initial_card.upper_bound.positive.clone(),
+        initial_card.upper_bound.negative.clone(),
+    )
+    .map_err(anyhow::Error::msg)
 }
 
 #[derive(Debug)]
 pub struct ComponentDeployProperties {
     pub wasm_path: PathBuf,
-    pub agent_types: Vec<AgentType>,
+    pub agent_types: Vec<AgentTypeSchema>,
     pub agent_type_configs: BTreeMap<AgentTypeName, AgentTypeManifestProvisionConfig>,
 }
 
+pub fn initial_permission_recipient_context(
+    environment: &ResolvedEnvironmentIdentity,
+    component_name: &ComponentName,
+    agent_type_name: &AgentTypeName,
+) -> RecipientMonomorphizationContext {
+    RecipientMonomorphizationContext {
+        account: environment.server_environment.owner_account_email.clone(),
+        application: environment.application_name.clone(),
+        environment: environment.environment_name.clone(),
+        component: component_name.clone(),
+        agent_type: agent_type_name.clone(),
+    }
+}
+
+pub fn initial_permission_recipient(
+    context: &RecipientMonomorphizationContext,
+) -> RecipientPattern {
+    RecipientPattern::Agent {
+        account: context.account.clone(),
+        application: context.application.clone(),
+        environment: context.environment.clone(),
+        component: context.component.clone(),
+        agent_type: context.agent_type.clone(),
+    }
+}
+
 pub fn show_exported_agents(
-    agents: &[AgentType],
+    agents: &[AgentTypeSchema],
     wrapper_naming: bool,
     show_dummy_return_type: bool,
 ) -> Vec<String> {
@@ -179,7 +330,10 @@ pub fn show_exported_agents(
         .collect()
 }
 
-pub fn show_exported_agent_constructors(agents: &[AgentType], wrapper_naming: bool) -> Vec<String> {
+pub fn show_exported_agent_constructors(
+    agents: &[AgentTypeSchema],
+    wrapper_naming: bool,
+) -> Vec<String> {
     agents
         .iter()
         .map(|c| render_agent_constructor(c, wrapper_naming, true))
@@ -187,7 +341,7 @@ pub fn show_exported_agent_constructors(agents: &[AgentType], wrapper_naming: bo
 }
 
 fn render_exported_agent(
-    agent: &AgentType,
+    agent: &AgentTypeSchema,
     wrapper_naming: bool,
     show_dummy_return_type: bool,
 ) -> Vec<String> {
@@ -205,21 +359,14 @@ fn render_exported_agent(
         "  ".to_string()
     };
     for method in &agent.methods {
-        let output = render_data_schema(&method.output_schema, &lang, false);
+        let output = render_output_schema(&agent.schema, &method.output_schema, &lang);
+        let input = render_input_schema(&agent.schema, &method.input_schema, &lang, true);
         if output.is_empty() {
-            result.push(format!(
-                "{}{}({})",
-                agent_name,
-                method.name,
-                render_data_schema(&method.input_schema, &lang, true),
-            ));
+            result.push(format!("{}{}({})", agent_name, method.name, input));
         } else {
             result.push(format!(
                 "{}{}({}) -> {}",
-                agent_name,
-                method.name,
-                render_data_schema(&method.input_schema, &lang, true),
-                output
+                agent_name, method.name, input, output
             ));
         }
     }
@@ -228,7 +375,7 @@ fn render_exported_agent(
 }
 
 pub fn render_agent_constructor(
-    agent: &AgentType,
+    agent: &AgentTypeSchema,
     wrapper_naming: bool,
     show_dummy_return_type: bool,
 ) -> String {
@@ -237,7 +384,7 @@ pub fn render_agent_constructor(
 }
 
 fn render_agent_constructor_with_lang(
-    agent: &AgentType,
+    agent: &AgentTypeSchema,
     wrapper_naming: bool,
     show_dummy_return_type: bool,
     lang: &SourceLanguage,
@@ -247,20 +394,16 @@ fn render_agent_constructor_with_lang(
     } else {
         ""
     };
+    let input = render_input_schema(&agent.schema, &agent.constructor.input_schema, lang, true);
     if wrapper_naming {
         format!(
             "{}({}){}",
             agent.type_name.0.clone(),
-            render_data_schema(&agent.constructor.input_schema, lang, true),
+            input,
             dummy_return_type
         )
     } else {
-        format!(
-            "{}({}){}",
-            agent.type_name,
-            render_data_schema(&agent.constructor.input_schema, lang, true),
-            dummy_return_type
-        )
+        format!("{}({}){}", agent.type_name, input, dummy_return_type)
     }
 }
 
@@ -274,72 +417,39 @@ fn render_param_name(name: &str, lang: &SourceLanguage) -> String {
     }
 }
 
-pub(crate) fn render_data_schema(
-    schema: &DataSchema,
+pub(crate) fn render_input_schema(
+    graph: &SchemaGraph,
+    input: &InputSchema,
     lang: &SourceLanguage,
     show_param_names: bool,
 ) -> String {
-    match schema {
-        DataSchema::Tuple(elements) => elements
-            .elements
-            .iter()
-            .map(|named_elem| {
-                let rendered_type = render_element_schema(&named_elem.schema, lang);
-                if show_param_names {
-                    format!(
-                        "{}: {}",
-                        render_param_name(&named_elem.name, lang),
-                        rendered_type
-                    )
-                } else {
-                    rendered_type
-                }
-            })
-            .join(", "),
-        DataSchema::Multimodal(elements) => elements
-            .elements
-            .iter()
-            .map(|named_elem| {
+    input
+        .fields()
+        .iter()
+        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+        .map(|field| {
+            let rendered_type = render_type_for_language(lang, graph, &field.schema, true);
+            if show_param_names {
                 format!(
-                    "{}({})",
-                    named_elem.name,
-                    render_element_schema(&named_elem.schema, lang)
+                    "{}: {}",
+                    render_param_name(&field.name, lang),
+                    rendered_type
                 )
-            })
-            .join(" | "),
-    }
+            } else {
+                rendered_type
+            }
+        })
+        .join(", ")
 }
 
-fn render_element_schema(schema: &ElementSchema, lang: &SourceLanguage) -> String {
-    match schema {
-        ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
-            // Adapt legacy AnalysedType at the boundary.
-            match golem_common::schema::adapters::analysed_type_to_schema_graph(element_type) {
-                Ok(graph) => {
-                    let root = graph.root.clone();
-                    render_type_for_language(lang, &graph, &root, true)
-                }
-                Err(_) => "<unknown>".to_string(),
-            }
-        }
-        ElementSchema::UnstructuredText(text_descriptor) => {
-            let mut result = "text".to_string();
-            if let Some(restrictions) = &text_descriptor.restrictions {
-                result.push('[');
-                result.push_str(&restrictions.iter().map(|r| &r.language_code).join(", "));
-                result.push(']');
-            }
-            result
-        }
-        ElementSchema::UnstructuredBinary(binary_descriptor) => {
-            let mut result = "binary".to_string();
-            if let Some(restrictions) = &binary_descriptor.restrictions {
-                result.push('[');
-                result.push_str(&restrictions.iter().map(|r| &r.mime_type).join(", "));
-                result.push(']');
-            }
-            result
-        }
+pub(crate) fn render_output_schema(
+    graph: &SchemaGraph,
+    output: &OutputSchema,
+    lang: &SourceLanguage,
+) -> String {
+    match output {
+        OutputSchema::Unit => String::new(),
+        OutputSchema::Single(ty) => render_type_for_language(lang, graph, ty, true),
     }
 }
 
@@ -351,5 +461,139 @@ pub fn agent_interface_name(component: &ComponentDto, agent_type_name: &str) -> 
         (Some(name), Some(version)) => Some(format!("{}/{}@{}", name, agent_type_name, version)),
         (Some(name), None) => Some(format!("{}/{}", name, agent_type_name)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AgentTypeManifestProvisionConfig, ParsedInitialPermissionCard};
+    use golem_common::model::account::AccountEmail;
+    use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::application::ApplicationName;
+    use golem_common::model::card::owner::{AgentOwnerLeafPattern, PolymorphicAgentOwnerPattern};
+    use golem_common::model::card::recipient::{
+        PolymorphicAgentRecipientPattern, PolymorphicRecipientPattern,
+        RecipientMonomorphizationContext, RecipientPattern,
+    };
+    use golem_common::model::card::{
+        AgentMethodName, AgentResourcePattern, AgentVerb, PolymorphicManifestPermissionPattern,
+    };
+    use golem_common::model::component::ComponentName;
+    use golem_common::model::environment::EnvironmentName;
+    use test_r::test;
+
+    fn manifest_card() -> ParsedInitialPermissionCard {
+        ParsedInitialPermissionCard::from_grant_strings(
+            vec![
+                "agent(?env/payment-svc/*) @ ?component/* : * : *".to_string(),
+                "agent(?env/payment-svc/PaymentAgent(*)) @ ?agent : invoke : charge".to_string(),
+            ],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn parsed_initial_permission_card_golden() {
+        let card = manifest_card();
+
+        assert_eq!(card.lower_positive.len(), 2);
+        match &card.lower_positive[0] {
+            PolymorphicManifestPermissionPattern::Agent(pattern) => {
+                assert_eq!(
+                    pattern.owner,
+                    PolymorphicAgentOwnerPattern::EnvComponentAgents {
+                        component: ComponentName("payment-svc".to_string())
+                    }
+                );
+                assert_eq!(
+                    pattern.recipient,
+                    PolymorphicRecipientPattern::Agent(
+                        PolymorphicAgentRecipientPattern::ComponentAgents
+                    )
+                );
+                assert_eq!(pattern.verb, None);
+                assert_eq!(pattern.resource, AgentResourcePattern::Any);
+            }
+            other => panic!("unexpected first grant: {other:?}"),
+        }
+        match &card.lower_positive[1] {
+            PolymorphicManifestPermissionPattern::Agent(pattern) => {
+                assert_eq!(
+                    pattern.owner,
+                    PolymorphicAgentOwnerPattern::EnvAgent {
+                        component: ComponentName("payment-svc".to_string()),
+                        agent: AgentOwnerLeafPattern::AgentTypeWildcard(AgentTypeName(
+                            "PaymentAgent".to_string()
+                        ))
+                    }
+                );
+                assert_eq!(
+                    pattern.recipient,
+                    PolymorphicRecipientPattern::Agent(PolymorphicAgentRecipientPattern::Agent)
+                );
+                assert_eq!(pattern.verb, Some(AgentVerb::Invoke));
+                assert_eq!(
+                    pattern.resource,
+                    AgentResourcePattern::Method(AgentMethodName("charge".to_string()))
+                );
+            }
+            other => panic!("unexpected second grant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parsed_initial_permission_card_monomorphizes_recipients() {
+        let context = test_context();
+
+        let initial_permission = manifest_card().resolve_recipients(&context);
+        let rendered = initial_permission
+            .lower_bound
+            .positive
+            .into_iter()
+            .map(|p| p.render().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            rendered,
+            vec![
+                "agent(?env/payment-svc/*) @ account@example.com/shop/prod/cart-svc/* : * : *",
+                "agent(?env/payment-svc/PaymentAgent(*)) @ account@example.com/shop/prod/cart-svc/Cart : invoke : charge",
+            ]
+        );
+    }
+
+    #[test]
+    fn default_initial_permission_card_uses_agent_recipient() {
+        let context = test_context();
+        let initial_permission =
+            AgentTypeManifestProvisionConfig::default().to_initial_permission(&context);
+        let expected = RecipientPattern::Agent {
+            account: context.account,
+            application: context.application,
+            environment: context.environment,
+            component: context.component,
+            agent_type: context.agent_type,
+        };
+
+        assert!(
+            initial_permission
+                .lower_bound
+                .positive
+                .iter()
+                .all(|permission| permission.recipient() == &expected)
+        );
+    }
+
+    fn test_context() -> RecipientMonomorphizationContext {
+        RecipientMonomorphizationContext {
+            account: AccountEmail::new("Account@Example.com"),
+            application: ApplicationName("shop".to_string()),
+            environment: EnvironmentName("prod".to_string()),
+            component: ComponentName("cart-svc".to_string()),
+            agent_type: AgentTypeName("Cart".to_string()),
+        }
     }
 }

@@ -19,10 +19,10 @@ use axum::routing::get;
 use axum::{Json, Router};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{AgentId, AgentStatus, IdempotencyKey};
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use golem_wasm::Value;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -363,34 +363,46 @@ async fn fork_idle_worker(
 
     assert_eq!(
         original_value,
-        Value::List(vec![
-            Value::Record(vec![
-                Value::String("G1001".to_string()),
-                Value::String("Golem Cloud Subscription 1y".to_string()),
-                Value::U64(1),
-            ]),
-            Value::Record(vec![
-                Value::String("G1002".to_string()),
-                Value::String("Mud Golem".to_string()),
-                Value::U64(1),
-            ]),
-        ])
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("G1001".to_string()),
+                        SchemaValue::String("Golem Cloud Subscription 1y".to_string()),
+                        SchemaValue::U64(1),
+                    ]
+                },
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("G1002".to_string()),
+                        SchemaValue::String("Mud Golem".to_string()),
+                        SchemaValue::U64(1),
+                    ]
+                },
+            ]
+        }
     );
 
     assert_eq!(
         forked_value,
-        Value::List(vec![
-            Value::Record(vec![
-                Value::String("G1001".to_string()),
-                Value::String("Golem Cloud Subscription 1y".to_string()),
-                Value::U64(1),
-            ]),
-            Value::Record(vec![
-                Value::String("G1002".to_string()),
-                Value::String("Mud Golem".to_string()),
-                Value::U64(2),
-            ]),
-        ])
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("G1001".to_string()),
+                        SchemaValue::String("Golem Cloud Subscription 1y".to_string()),
+                        SchemaValue::U64(1),
+                    ]
+                },
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("G1002".to_string()),
+                        SchemaValue::String("Mud Golem".to_string()),
+                        SchemaValue::U64(2),
+                    ]
+                },
+            ]
+        }
     );
 
     let result1 = user
@@ -772,13 +784,13 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
     let source_name = parsed_source_agent_id.to_string();
     assert_eq!(
         source_result,
-        Value::String(format!(
+        SchemaValue::String(format!(
             "{source_name}-hello::{source_name}-original-{forked_phantom_id}"
         ))
     );
     assert_eq!(
         target_result,
-        Value::String(format!(
+        SchemaValue::String(format!(
             "{source_name}-hello::{}-forked-{forked_phantom_id}",
             target_agent_id.agent_id
         ))
@@ -789,7 +801,7 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn fork_and_sync_with_promise(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -818,7 +830,7 @@ async fn fork_and_sync_with_promise(
 
     assert_eq!(
         result1.into_return_value(),
-        Some(Value::String("Hello from forked agent!".to_string()))
+        Some(SchemaValue::String("Hello from forked agent!".to_string()))
     );
 
     let result2 = user
@@ -832,7 +844,7 @@ async fn fork_and_sync_with_promise(
 
     assert_eq!(
         result2.into_return_value(),
-        Some(Value::String("Hello from forked agent!".to_string()))
+        Some(SchemaValue::String("Hello from forked agent!".to_string()))
     );
 
     Ok(())

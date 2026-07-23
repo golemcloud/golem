@@ -24,6 +24,7 @@ use self::component_writer::FileSystemComponentWriter;
 use crate::component_service::ComponentServiceLocalFileSystem;
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
+use chrono::DateTime;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetRunningWorkersMetadataRequest, get_running_workers_metadata_response,
@@ -31,9 +32,10 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::config::{DbSqliteConfig, RedisConfig};
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, UntypedDataValue};
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
+use golem_common::model::card::{Card, CardId, StoredCard};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{CanonicalFilePath, ComponentId};
 use golem_common::model::environment::EnvironmentId;
@@ -51,6 +53,9 @@ use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord,
     IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, TransactionId,
 };
+use golem_common::resource_runtime::Uri;
+use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
+use golem_common::schema::SchemaValue;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -69,8 +74,7 @@ use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
-use golem_wasm::Uri;
-use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
+pub use golem_test_framework::dsl::PrecompiledComponent;
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -78,15 +82,20 @@ use golem_worker_executor::model::{
     AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType,
 };
 use golem_worker_executor::preview2::golem::agent::host::{
-    CancellationToken, FutureInvokeResult, HostFutureInvokeResult, HostWasmRpc, RpcError, WasmRpc,
+    AsyncInvocationWithMetadata, CancelableScheduledInvocationReceipt, FutureInvokeResult,
+    HostFutureInvokeResult, HostWasmRpc, InvocationMetadata, InvocationResultWithMetadata,
+    RpcError, ScheduledInvocationReceipt, WasmRpc,
 };
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::active_workers::memory_probe::FixedProbe;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::{
     BlobStoreError, BlobStoreService, DefaultBlobStoreService,
 };
+use golem_worker_executor::services::card::{CardService, CardState, NoopCardService};
+use golem_worker_executor::services::card_interest::CardInterestIndex;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::direct_invocation_auth::{
     DirectInvocationAuthService, NoOpDirectInvocationAuthService,
@@ -134,7 +143,7 @@ use golem_worker_executor::workerctx::{
 use golem_worker_executor::{Bootstrap, RunDetails, bootstrap_and_run_worker_executor};
 use prometheus::Registry;
 use regex::Regex;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -148,15 +157,13 @@ use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tower::ServiceBuilder;
 use tracing::{Level, debug, info};
-use uuid::Uuid;
+use uuid::{Uuid, uuid};
 use wasmtime::component::{HasSelf, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
 
 #[cfg(test)]
 test_r::enable!();
-
-pub use golem_test_framework::dsl::PrecompiledComponent;
 
 /// A handle to either an owned `TempDir` (parent process) or a borrowed
 /// on-disk path (worker process).
@@ -1464,7 +1471,7 @@ impl WorkerCtx for TestWorkerCtx {
     async fn create(
         _account_id: AccountId,
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<LegacyParsedAgentId>,
+        agent_id: Option<ParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
@@ -1480,6 +1487,8 @@ impl WorkerCtx for TestWorkerCtx {
         scheduler_service: Arc<dyn SchedulerService>,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
+        card_service: Arc<dyn CardService>,
+        card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
@@ -1532,6 +1541,8 @@ impl WorkerCtx for TestWorkerCtx {
             scheduler_service,
             rpc,
             worker_proxy,
+            card_service,
+            card_interest_index,
             component_service,
             account_resource_limits,
             config,
@@ -1578,7 +1589,7 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.owned_agent_id()
     }
 
-    fn parsed_agent_id(&self) -> Option<LegacyParsedAgentId> {
+    fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
         self.durable_ctx.parsed_agent_id()
     }
 
@@ -1614,6 +1625,10 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn worker_proxy(&self) -> Arc<dyn WorkerProxy> {
         self.durable_ctx.worker_proxy()
+    }
+
+    fn card_service(&self) -> Arc<dyn CardService> {
+        self.durable_ctx.card_service()
     }
 
     fn component_service(&self) -> Arc<dyn ComponentService> {
@@ -1693,10 +1708,10 @@ impl HostWasmRpc for TestWorkerCtx {
     async fn new(
         &mut self,
         agent_type_name: String,
-        constructor: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-        phantom_id: Option<golem_wasm::Uuid>,
+        constructor: golem_schema::schema::wit::wire::SchemaValueTree,
+        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
         config: Vec<
-            golem_common::model::agent::bindings::golem::agent::common::TypedAgentConfigValue,
+            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
         >,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx
@@ -1708,10 +1723,8 @@ impl HostWasmRpc for TestWorkerCtx {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<
-        Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
-    > {
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
+    ) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
         self.durable_ctx
             .invoke_and_await(self_, method_name, input)
             .await
@@ -1721,8 +1734,8 @@ impl HostWasmRpc for TestWorkerCtx {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<Result<(), RpcError>> {
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
+    ) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
         self.durable_ctx.invoke(self_, method_name, input).await
     }
 
@@ -1730,8 +1743,8 @@ impl HostWasmRpc for TestWorkerCtx {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<Resource<FutureInvokeResult>> {
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
+    ) -> anyhow::Result<AsyncInvocationWithMetadata> {
         self.durable_ctx
             .async_invoke_and_await(self_, method_name, input)
             .await
@@ -1742,8 +1755,8 @@ impl HostWasmRpc for TestWorkerCtx {
         self_: Resource<WasmRpc>,
         scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<()> {
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
+    ) -> anyhow::Result<ScheduledInvocationReceipt> {
         self.durable_ctx
             .schedule_invocation(self_, scheduled_time, method_name, input)
             .await
@@ -1754,8 +1767,8 @@ impl HostWasmRpc for TestWorkerCtx {
         self_: Resource<WasmRpc>,
         scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<Resource<CancellationToken>> {
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
+    ) -> anyhow::Result<CancelableScheduledInvocationReceipt> {
         self.durable_ctx
             .schedule_cancelable_invocation(self_, scheduled_time, method_name, input)
             .await
@@ -1770,7 +1783,7 @@ impl HostFutureInvokeResult for TestWorkerCtx {
     async fn subscribe(
         &mut self,
         self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Resource<golem_wasm::DynPollable>> {
+    ) -> anyhow::Result<Resource<wasmtime_wasi::p2::DynPollable>> {
         HostFutureInvokeResult::subscribe(&mut self.durable_ctx, self_).await
     }
 
@@ -1778,9 +1791,7 @@ impl HostFutureInvokeResult for TestWorkerCtx {
         &mut self,
         self_: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<
-        Option<
-            Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
-        >,
+        Option<Result<Option<golem_schema::schema::wit::wire::SchemaValueTree>, RpcError>>,
     > {
         HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
     }
@@ -1842,6 +1853,36 @@ impl InvocationContextManagement for TestWorkerCtx {
 
 #[async_trait]
 impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
+    fn create_active_workers(
+        &self,
+        golem_config: &GolemConfig,
+        shutdown_token: tokio_util::sync::CancellationToken,
+    ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
+        // The in-process test harness shares its process (and RSS) with the test
+        // framework and other services, so a process-RSS probe cannot isolate
+        // this executor's footprint. When a test pins a memory limit via
+        // system_memory_override, give the gate a fixed probe reporting that
+        // limit with zero current usage, so admission is decided solely on the
+        // granted accounting (exact and process-isolated) against the pinned
+        // limit. The usable_ratio (worker_memory_ratio) still applies, matching
+        // the pre-gate semaphore pool size of system_memory_override * ratio.
+        match golem_config.memory.system_memory_override {
+            Some(limit) => Arc::new(ActiveWorkers::new_with_probe(
+                Box::new(FixedProbe::new(limit, 0)),
+                &golem_config.memory,
+                &golem_config.filesystem_storage,
+                &golem_config.agent_status_flush,
+                shutdown_token,
+            )),
+            None => Arc::new(ActiveWorkers::new(
+                &golem_config.memory,
+                &golem_config.filesystem_storage,
+                &golem_config.agent_status_flush,
+                shutdown_token,
+            )),
+        }
+    }
+
     fn create_shard_manager_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
@@ -1883,6 +1924,13 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             Duration::from_secs(3600),
             Arc::new(DefaultCompiledComponentService::new(blob_storage)),
         ))
+    }
+
+    fn create_card_service(
+        &self,
+        _registry_service: Arc<dyn RegistryService>,
+    ) -> Arc<dyn CardService> {
+        Arc::new(TestCardService)
     }
 
     fn create_additional_deps(
@@ -2004,6 +2052,13 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         ))
     }
 
+    fn create_card_service(
+        &self,
+        _registry_service: Arc<dyn RegistryService>,
+    ) -> Arc<dyn CardService> {
+        Arc::new(NoopCardService)
+    }
+
     fn create_resource_limits(
         &self,
         _golem_config: &GolemConfig,
@@ -2064,7 +2119,14 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
             &mut linker,
             <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
-        golem_wasm::golem_core_1_5_x::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+        golem_worker_executor::preview2::golem::tool::host::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Context>>,
+        >(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_schema::schema::wit::wire::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
             &mut linker,
             <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
@@ -3221,21 +3283,21 @@ impl Rpc for FailingRpc {
         &self,
         owned_agent_id: &OwnedAgentId,
         self_created_by: AccountId,
-        self_created_by_email: &golem_common::model::account::AccountEmail,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         self.inner
             .create_demand(
                 owned_agent_id,
                 self_created_by,
-                self_created_by_email,
                 self_agent_id,
                 self_env,
                 self_stack,
                 config,
+                auth_ctx,
             )
             .await
     }
@@ -3244,14 +3306,16 @@ impl Rpc for FailingRpc {
         &self,
         owned_agent_id: &OwnedAgentId,
         idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         method_name: String,
-        method_parameters: UntypedDataValue,
+        method_parameters: SchemaValue,
         self_created_by: AccountId,
-        self_created_by_email: &golem_common::model::account::AccountEmail,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
-    ) -> Result<UntypedDataValue, ServiceRpcError> {
+        config: Vec<golem_common::model::worker::AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<SchemaValue, ServiceRpcError> {
         if self
             .remaining_failures
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
@@ -3265,13 +3329,15 @@ impl Rpc for FailingRpc {
                 .invoke_and_await(
                     owned_agent_id,
                     idempotency_key,
+                    freshness_disposition,
                     method_name,
                     method_parameters,
                     self_created_by,
-                    self_created_by_email,
                     self_agent_id,
                     self_env,
                     self_stack,
+                    config,
+                    auth_ctx,
                 )
                 .await
         }
@@ -3281,26 +3347,68 @@ impl Rpc for FailingRpc {
         &self,
         owned_agent_id: &OwnedAgentId,
         idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         method_name: String,
-        method_parameters: UntypedDataValue,
+        method_parameters: SchemaValue,
         self_created_by: AccountId,
-        self_created_by_email: &golem_common::model::account::AccountEmail,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        config: Vec<golem_common::model::worker::AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), ServiceRpcError> {
         self.inner
             .invoke(
                 owned_agent_id,
                 idempotency_key,
+                freshness_disposition,
                 method_name,
                 method_parameters,
                 self_created_by,
-                self_created_by_email,
                 self_agent_id,
                 self_env,
                 self_stack,
+                config,
+                auth_ctx,
             )
             .await
+    }
+}
+
+pub const TEST_CARD_ID: CardId = CardId(uuid!("b7f515b3-eabb-4a39-8d94-fe6078ed441e"));
+
+pub struct TestCardService;
+
+#[async_trait]
+impl CardService for TestCardService {
+    async fn record_revoked_cards(&self, _card_ids: &[CardId]) {}
+
+    async fn check_cards(
+        &self,
+        card_ids: Vec<CardId>,
+    ) -> Result<HashMap<CardId, CardState>, WorkerExecutorError> {
+        let mut result = HashMap::new();
+
+        for card_id in card_ids {
+            let card_state = if card_id == TEST_CARD_ID {
+                CardState::Live(Box::new(StoredCard::Concrete(Card {
+                    card_id: TEST_CARD_ID,
+                    parent_ids: Vec::new(),
+                    lower_positive: Vec::new(),
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                    created_at: DateTime::from_timestamp_nanos(0),
+                    expires_at: None,
+                    system_card: false,
+                    managed_by: None,
+                })))
+            } else {
+                CardState::Unknown
+            };
+            result.insert(card_id, card_state);
+        }
+
+        Ok(result)
     }
 }

@@ -14,7 +14,7 @@ import "golem/worker/invocation_context.proto";
 import "golem/worker/retry_policy.proto";
 import "golem/worker/worker_id.proto";
 import "google/protobuf/timestamp.proto";
-import "wasm/rpc/value_and_type.proto";
+import "golem/schema/schema.proto";
 
 // Public oplog entry.
 //
@@ -67,6 +67,11 @@ message OplogEntry {
     StartParameters Start = 44;
     EndParameters End = 45;
     CancelledParameters Cancelled = 46;
+    CardRevokedParameters CardRevoked = 47;
+    CardEventQueuedParameters CardEventQueued = 48;
+    CardInstalledParameters CardInstalled = 49;
+    CardInstallFailedParameters CardInstallFailed = 50;
+    CardExpiredParameters CardExpired = 51;
   }
 }
 
@@ -92,12 +97,17 @@ message PluginInstallationDescription {
   golem.component.EnvironmentPluginGrantId environment_plugin_grant_id = 6;
 }
 
+message PublicTypedAgentConfigEntry {
+  repeated string path = 1;
+  golem.schema.TypedSchemaValue value = 2;
+}
+
 message CreateParameters {
   google.protobuf.Timestamp timestamp = 1;
   AgentId agent_id = 2;
   uint64 component_revision = 3;
   map<string, string> env = 5;
-  repeated TypedAgentConfigEntry config = 6;
+  repeated PublicTypedAgentConfigEntry config = 6;
   golem.common.AccountId created_by = 7;
   optional AgentId parent = 8;
   uint64 component_size = 9;
@@ -113,21 +123,21 @@ message StartParameters {
   google.protobuf.Timestamp timestamp = 1;
   optional uint64 parent_start_index = 3;
   string function_name = 4;
-  optional wasm.rpc.ValueAndType request = 5;
+  optional golem.schema.TypedSchemaValue request = 5;
   WrappedFunctionType durable_function_type = 6;
 }
 
 message EndParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 start_index = 2;
-  optional wasm.rpc.ValueAndType response = 3;
+  optional golem.schema.TypedSchemaValue response = 3;
   bool forced_commit = 4;
 }
 
 message CancelledParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 start_index = 2;
-  optional wasm.rpc.ValueAndType partial = 3;
+  optional golem.schema.TypedSchemaValue partial = 3;
 }
 
 message AgentInvocationStartedParameters {
@@ -140,6 +150,7 @@ message AgentInvocationFinishedParameters {
   PublicAgentInvocationResult result = 2;
   int64 consumed_fuel = 3;
   uint64 component_revision = 4;
+  optional string method_name = 5;
 }
 
 message PublicAgentInvocation {
@@ -155,7 +166,7 @@ message PublicAgentInvocation {
 
 message PublicAgentInitializationInvocation {
   golem.worker.IdempotencyKey idempotency_key = 1;
-  golem.component.TypedDataValue constructor_parameters = 2;
+  golem.schema.TypedSchemaValue constructor_parameters = 2;
   string trace_id = 3;
   repeated string trace_states = 4;
   repeated golem.worker.InvocationSpan invocation_context = 5;
@@ -164,7 +175,7 @@ message PublicAgentInitializationInvocation {
 message PublicAgentMethodInvocation {
   golem.worker.IdempotencyKey idempotency_key = 1;
   string method_name = 2;
-  golem.component.TypedDataValue function_input = 3;
+  golem.schema.TypedSchemaValue function_input = 3;
   string trace_id = 4;
   repeated string trace_states = 5;
   repeated golem.worker.InvocationSpan invocation_context = 6;
@@ -184,8 +195,8 @@ message ManualUpdateInvocationParameters {
 
 message PublicAgentInvocationResult {
   oneof result {
-    golem.component.TypedDataValue agent_initialization_output = 1;
-    golem.component.TypedDataValue agent_method_output = 2;
+    golem.schema.TypedSchemaValue agent_initialization_output = 1;
+    golem.schema.TypedSchemaValue agent_method_output = 2;
     golem.common.Empty manual_update = 3;
     OptionalError load_snapshot = 4;
     SnapshotData save_snapshot = 5;
@@ -267,6 +278,58 @@ message SetRetryPolicyParameters {
 message RemoveRetryPolicyParameters {
   google.protobuf.Timestamp timestamp = 1;
   string policy_name = 2;
+}
+
+message CardRevokedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 queued_event_index = 2;
+  golem.common.UUID card_id = 3;
+}
+
+message CardExpiredParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID card_id = 2;
+}
+
+message QueuedCardEvent {
+  message Install {
+    golem.common.UUID card_id = 1;
+  }
+
+  message Revoke {
+    golem.common.UUID card_id = 1;
+  }
+
+  oneof event {
+    Install install = 1;
+    Revoke revoke = 2;
+  }
+}
+
+enum CardInstallFailure {
+  CARD_INSTALL_FAILURE_UNSPECIFIED = 0;
+  CARD_INSTALL_FAILURE_CARD_REVOKED = 1;
+  CARD_INSTALL_FAILURE_NOT_FOUND = 2;
+  CARD_INSTALL_FAILURE_RECIPIENT_MISMATCH = 3;
+  CARD_INSTALL_FAILURE_NOT_PERMITTED = 4;
+}
+
+message CardEventQueuedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  QueuedCardEvent event = 2;
+}
+
+message CardInstalledParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  optional uint64 queued_event_index = 2;
+  golem.common.UUID card_id = 3;
+}
+
+message CardInstallFailedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 queued_event_index = 2;
+  golem.common.UUID card_id = 3;
+  CardInstallFailure reason = 4;
 }
 
 message EndAtomicRegionParameters {

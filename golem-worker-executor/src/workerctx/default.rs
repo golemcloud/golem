@@ -18,13 +18,17 @@ use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableW
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
 use crate::preview2::golem::agent::host::{
-    CancellationToken, FutureInvokeResult, Host as AgentHost, HostCancellationToken,
-    HostFutureInvokeResult, HostWasmRpc, RpcError, WasmRpc,
+    AsyncInvocationWithMetadata, CancelableScheduledInvocationReceipt, CancellationToken,
+    FutureInvokeResult, Host as AgentHost, HostCancellationToken, HostFutureInvokeResult,
+    HostWasmRpc, InvocationMetadata, InvocationResultWithMetadata, RpcError,
+    ScheduledInvocationReceipt, WasmRpc,
 };
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
+use crate::services::card::CardService;
+use crate::services::card_interest::CardInterestIndex;
 use crate::services::component::ComponentService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::file_loader::FileLoader;
@@ -55,7 +59,7 @@ use golem_common::base_model::OplogIndex;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
@@ -68,13 +72,13 @@ use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey,
     OwnedAgentId,
 };
+use golem_common::resource_runtime::Uri;
+use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::component::Component;
-use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm::{Uri, WitType};
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::{Arc, Weak};
@@ -601,10 +605,10 @@ impl HostWasmRpc for Context {
     async fn new(
         &mut self,
         agent_type_name: String,
-        constructor: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-        phantom_id: Option<golem_wasm::Uuid>,
+        constructor: golem_schema::schema::wit::wire::SchemaValueTree,
+        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
         config: Vec<
-            golem_common::model::agent::bindings::golem::agent::common::TypedAgentConfigValue,
+            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
         >,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx
@@ -616,10 +620,8 @@ impl HostWasmRpc for Context {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<
-        Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
-    > {
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
+    ) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
         self.durable_ctx
             .invoke_and_await(self_, method_name, input)
             .await
@@ -629,8 +631,8 @@ impl HostWasmRpc for Context {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<Result<(), RpcError>> {
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
+    ) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
         self.durable_ctx.invoke(self_, method_name, input).await
     }
 
@@ -638,8 +640,8 @@ impl HostWasmRpc for Context {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<Resource<FutureInvokeResult>> {
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
+    ) -> anyhow::Result<AsyncInvocationWithMetadata> {
         self.durable_ctx
             .async_invoke_and_await(self_, method_name, input)
             .await
@@ -650,8 +652,8 @@ impl HostWasmRpc for Context {
         self_: Resource<WasmRpc>,
         scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<()> {
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
+    ) -> anyhow::Result<ScheduledInvocationReceipt> {
         self.durable_ctx
             .schedule_invocation(self_, scheduled_time, method_name, input)
             .await
@@ -662,8 +664,8 @@ impl HostWasmRpc for Context {
         self_: Resource<WasmRpc>,
         scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<Resource<CancellationToken>> {
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
+    ) -> anyhow::Result<CancelableScheduledInvocationReceipt> {
         self.durable_ctx
             .schedule_cancelable_invocation(self_, scheduled_time, method_name, input)
             .await
@@ -678,7 +680,7 @@ impl HostFutureInvokeResult for Context {
     async fn subscribe(
         &mut self,
         self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Resource<golem_wasm::DynPollable>> {
+    ) -> anyhow::Result<Resource<wasmtime_wasi::p2::DynPollable>> {
         HostFutureInvokeResult::subscribe(&mut self.durable_ctx, self_).await
     }
 
@@ -686,9 +688,7 @@ impl HostFutureInvokeResult for Context {
         &mut self,
         self_: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<
-        Option<
-            Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
-        >,
+        Option<Result<Option<golem_schema::schema::wit::wire::SchemaValueTree>, RpcError>>,
     > {
         HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
     }
@@ -716,7 +716,7 @@ impl AgentHost for Context {
     async fn get_all_agent_types(
         &mut self,
     ) -> anyhow::Result<
-        Vec<golem_common::model::agent::bindings::golem::agent::common::RegisteredAgentType>,
+        Vec<golem_common::schema::agent::bindings::golem::agent::common::RegisteredAgentType>,
     > {
         AgentHost::get_all_agent_types(&mut self.durable_ctx).await
     }
@@ -725,7 +725,7 @@ impl AgentHost for Context {
         &mut self,
         agent_type_name: String,
     ) -> anyhow::Result<
-        Option<golem_common::model::agent::bindings::golem::agent::common::RegisteredAgentType>,
+        Option<golem_common::schema::agent::bindings::golem::agent::common::RegisteredAgentType>,
     > {
         AgentHost::get_agent_type(&mut self.durable_ctx, agent_type_name).await
     }
@@ -733,10 +733,10 @@ impl AgentHost for Context {
     async fn make_agent_id(
         &mut self,
         agent_type_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-        phantom_id: Option<golem_wasm::Uuid>,
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
+        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
     ) -> anyhow::Result<
-        Result<String, golem_common::model::agent::bindings::golem::agent::common::AgentError>,
+        Result<String, golem_common::schema::agent::bindings::golem::agent::common::AgentError>,
     > {
         AgentHost::make_agent_id(&mut self.durable_ctx, agent_type_name, input, phantom_id).await
     }
@@ -748,10 +748,10 @@ impl AgentHost for Context {
         Result<
             (
                 String,
-                golem_common::model::agent::bindings::golem::agent::common::DataValue,
-                Option<golem_wasm::Uuid>,
+                golem_schema::schema::wit::wire::TypedSchemaValue,
+                Option<golem_schema::schema::wit::wire::Uuid>,
             ),
-            golem_common::model::agent::bindings::golem::agent::common::AgentError,
+            golem_common::schema::agent::bindings::golem::agent::common::AgentError,
         >,
     > {
         AgentHost::parse_agent_id(&mut self.durable_ctx, agent_id).await
@@ -759,7 +759,7 @@ impl AgentHost for Context {
 
     async fn create_webhook(
         &mut self,
-        promise_id: crate::preview2::golem_api_1_x::host::PromiseId,
+        promise_id: golem_schema::schema::wit::wire::PromiseId,
     ) -> anyhow::Result<String> {
         AgentHost::create_webhook(&mut self.durable_ctx, promise_id).await
     }
@@ -767,9 +767,9 @@ impl AgentHost for Context {
     async fn get_config_value(
         &mut self,
         key: Vec<String>,
-        expected_type: WitType,
-    ) -> anyhow::Result<golem_wasm::WitValue> {
-        AgentHost::get_config_value(&mut self.durable_ctx, key, expected_type).await
+        expected: golem_schema::schema::wit::wire::SchemaGraph,
+    ) -> anyhow::Result<golem_schema::schema::wit::wire::SchemaValueTree> {
+        AgentHost::get_config_value(&mut self.durable_ctx, key, expected).await
     }
 }
 
@@ -850,7 +850,7 @@ impl WorkerCtx for Context {
     async fn create(
         account_id: AccountId,
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<LegacyParsedAgentId>,
+        agent_id: Option<ParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -866,6 +866,8 @@ impl WorkerCtx for Context {
         scheduler_service: Arc<dyn SchedulerService>,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
+        card_service: Arc<dyn CardService>,
+        card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
@@ -901,6 +903,8 @@ impl WorkerCtx for Context {
             scheduler_service,
             rpc,
             worker_proxy,
+            card_service,
+            card_interest_index,
             component_service,
             account_resource_limits.clone(),
             config.clone(),
@@ -947,7 +951,7 @@ impl WorkerCtx for Context {
         self.durable_ctx.owned_agent_id()
     }
 
-    fn parsed_agent_id(&self) -> Option<LegacyParsedAgentId> {
+    fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
         self.durable_ctx.parsed_agent_id()
     }
 
@@ -981,6 +985,10 @@ impl WorkerCtx for Context {
 
     fn worker_proxy(&self) -> Arc<dyn WorkerProxy> {
         self.durable_ctx.worker_proxy()
+    }
+
+    fn card_service(&self) -> Arc<dyn CardService> {
+        self.durable_ctx.card_service()
     }
 
     fn component_service(&self) -> Arc<dyn ComponentService> {

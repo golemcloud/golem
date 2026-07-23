@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::repo::card::DbCardRepo;
 use crate::repo::model::BindFields;
+use crate::repo::model::card::CardRecord;
 use crate::repo::model::component::{
     ComponentAuthExtRevisionRecord, ComponentExtRevisionRecord, ComponentRepoError,
     ComponentRevisionIdentityRecord, ComponentRevisionRecord,
@@ -21,9 +23,12 @@ use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use golem_common::model::card::{CardId, CardManagedBy, CardManagedByAgentInitial};
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
+use golem_service_base::repo::Blob;
 use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
 use indoc::indoc;
 use sqlx::{Database, Row};
@@ -38,11 +43,13 @@ pub trait ComponentRepo: Send + Sync {
         environment_id: Uuid,
         name: &str,
         revision: ComponentRevisionRecord,
+        cards_to_create: Vec<CardRecord>,
     ) -> Result<ComponentExtRevisionRecord, ComponentRepoError>;
 
     async fn update(
         &self,
         revision: ComponentRevisionRecord,
+        cards_to_create: Vec<CardRecord>,
     ) -> Result<ComponentExtRevisionRecord, ComponentRepoError>;
 
     async fn delete(
@@ -108,6 +115,11 @@ pub trait ComponentRepo: Send + Sync {
         deployment_revision_id: i64,
         name: &str,
     ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
+
+    async fn list_initial_permission_card_ids_by_account(
+        &self,
+        account_id: Uuid,
+    ) -> RepoResult<Vec<CardId>>;
 }
 
 pub struct LoggedComponentRepo<Repo: ComponentRepo> {
@@ -157,9 +169,10 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         environment_id: Uuid,
         name: &str,
         revision: ComponentRevisionRecord,
+        cards_to_create: Vec<CardRecord>,
     ) -> Result<ComponentExtRevisionRecord, ComponentRepoError> {
         self.repo
-            .create(environment_id, name, revision)
+            .create(environment_id, name, revision, cards_to_create)
             .instrument(Self::span_name(environment_id, name))
             .await
     }
@@ -167,9 +180,13 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
     async fn update(
         &self,
         revision: ComponentRevisionRecord,
+        cards_to_create: Vec<CardRecord>,
     ) -> Result<ComponentExtRevisionRecord, ComponentRepoError> {
         let span = Self::span_id(revision.component_id);
-        self.repo.update(revision).instrument(span).await
+        self.repo
+            .update(revision, cards_to_create)
+            .instrument(span)
+            .await
     }
 
     async fn delete(
@@ -202,6 +219,16 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         self.repo
             .get_staged_by_name(environment_id, name)
             .instrument(Self::span_name(environment_id, name))
+            .await
+    }
+
+    async fn list_initial_permission_card_ids_by_account(
+        &self,
+        account_id: Uuid,
+    ) -> RepoResult<Vec<CardId>> {
+        self.repo
+            .list_initial_permission_card_ids_by_account(account_id)
+            .instrument(info_span!(SPAN_NAME, account_id = %account_id))
             .await
     }
 
@@ -344,6 +371,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         environment_id: Uuid,
         name: &str,
         revision: ComponentRevisionRecord,
+        cards_to_create: Vec<CardRecord>,
     ) -> Result<ComponentExtRevisionRecord, ComponentRepoError> {
         let opt_deleted_revision: Option<ComponentRevisionIdentityRecord> = self.with_ro("create - get opt deleted").fetch_optional_as(
             sqlx::query_as(indoc! { r#"
@@ -359,7 +387,12 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         if let Some(deleted_revision) = opt_deleted_revision {
             let recreated_revision = revision
                 .for_recreation(deleted_revision.component_id, deleted_revision.revision_id)?;
-            return self.update(recreated_revision).await;
+            let cards_to_create = remap_agent_initial_card_records(
+                cards_to_create,
+                ComponentId(recreated_revision.component_id),
+                recreated_revision.revision_id.try_into()?,
+            );
+            return self.update(recreated_revision, cards_to_create).await;
         }
 
         let name = name.to_owned();
@@ -384,6 +417,10 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                 .await
                 .to_error_on_unique_violation(ComponentRepoError::ComponentViolatesUniqueness)?;
 
+                for card in cards_to_create {
+                    DbCardRepo::<PostgresPool>::create_in_tx(tx, card).await?;
+                }
+
                 let revision = Self::insert_revision(tx, revision).await?;
 
                 Ok(ComponentExtRevisionRecord {
@@ -400,9 +437,14 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
     async fn update(
         &self,
         revision: ComponentRevisionRecord,
+        cards_to_create: Vec<CardRecord>,
     ) -> Result<ComponentExtRevisionRecord, ComponentRepoError> {
         self.with_tx_err("update", |tx| {
             async move {
+                for card in cards_to_create {
+                    DbCardRepo::<PostgresPool>::create_in_tx(tx, card).await?;
+                }
+
                 let revision: ComponentRevisionRecord = Self::insert_revision(
                     tx,
                     revision,
@@ -734,6 +776,66 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         }
     }
 
+    async fn list_initial_permission_card_ids_by_account(
+        &self,
+        account_id: Uuid,
+    ) -> RepoResult<Vec<CardId>> {
+        let revisions: Vec<ComponentRevisionRecord> = self
+            .with_ro("list_initial_permission_card_ids_by_account")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT cr.component_id, cr.revision_id, cr.hash,
+                           cr.created_at, cr.created_by, cr.deleted,
+                           cr.size, cr.metadata,
+                           cr.object_store_key, cr.binary_hash
+                    FROM component_revisions cr
+                    JOIN components c ON c.component_id = cr.component_id
+                    JOIN environments e ON e.environment_id = c.environment_id
+                    JOIN applications ap ON ap.application_id = e.application_id
+                    JOIN accounts a ON a.account_id = ap.account_id
+                    WHERE ap.account_id = $1
+                        AND c.deleted_at IS NULL
+                        AND NOT cr.deleted
+                        AND c.current_revision_id = cr.revision_id
+                        -- Component ids can be reused after deleting and recreating a same-name component.
+                        -- Ignore all revisions at or before the latest deleted revision so old provision
+                        -- metadata cannot reappear as an agent-initial card.
+                        AND cr.revision_id > COALESCE(
+                            (
+                                SELECT MAX(deleted_cr.revision_id)
+                                FROM component_revisions deleted_cr
+                                WHERE deleted_cr.component_id = c.component_id
+                                    AND deleted_cr.deleted
+                            ),
+                            -1
+                        )
+                        AND e.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND a.deleted_at IS NULL
+                    ORDER BY cr.created_at, cr.component_id, cr.revision_id
+                "#})
+                .bind(account_id),
+            )
+            .await?;
+
+        let mut result = Vec::new();
+        for revision in revisions {
+            for config in revision
+                .metadata
+                .into_value()
+                .agent_type_provision_configs()
+                .values()
+            {
+                let card_id = config.initial_permissions.card_id;
+                if !result.contains(&card_id) {
+                    result.push(card_id);
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
     async fn list_staged(
         &self,
         environment_id: Uuid,
@@ -850,6 +952,33 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             None => Ok(None),
         }
     }
+}
+
+fn remap_agent_initial_card_records(
+    cards: Vec<CardRecord>,
+    component_id: ComponentId,
+    component_revision: ComponentRevision,
+) -> Vec<CardRecord> {
+    cards
+        .into_iter()
+        .map(|mut card| {
+            if let Some(managed_by) = card.managed_by.take() {
+                card.managed_by = match managed_by.into_value() {
+                    CardManagedBy::AgentInitial(CardManagedByAgentInitial {
+                        agent_type, ..
+                    }) => Some(Blob::new(CardManagedBy::AgentInitial(
+                        CardManagedByAgentInitial {
+                            component_id,
+                            component_revision,
+                            agent_type,
+                        },
+                    ))),
+                    other => Some(Blob::new(other)),
+                };
+            }
+            card
+        })
+        .collect()
 }
 
 #[async_trait]

@@ -22,7 +22,7 @@ pub mod sdk {
     #[macro_export]
     macro_rules! manifest_schema_version {
         () => {
-            "1.6.0-dev.1"
+            "1.6.0-dev.6"
         };
     }
 }
@@ -40,7 +40,6 @@ pub mod build_tool {
 
 // Keep this aligned with the TS component template
 pub mod ts_dep {
-    pub const ROLLUP_PLUGIN_ALIAS: &str = "^5.1.1";
     pub const ROLLUP_PLUGIN_NODE_RESOLVE: &str = "^16.0.1";
     pub const ROLLUP_PLUGIN_TYPESCRIPT: &str = "^12.1.4";
     pub const ROLLUP_PLUGIN_COMMONJS: &str = "^28.0.6";
@@ -49,6 +48,9 @@ pub mod ts_dep {
     pub const ROLLUP: &str = "^4.50.1";
     pub const TSLIB: &str = "^2.8.1";
     pub const TYPESCRIPT: &str = "^5.9.2";
+    pub const ZOD: &str = "^4.4.3";
+    pub const VALIBOT: &str = "^1.0.0";
+    pub const ARKTYPE: &str = "^2.1.0";
 }
 
 // Keep this aligned with the Rust component template
@@ -63,6 +65,13 @@ pub mod scala_dep {
     pub const SCALA_VERSION: &str = "3.8.2";
     pub const SCALAJS_PLUGIN_VERSION: &str = "1.20.2";
     pub const SBT_VERSION: &str = "1.12.0";
+    /// zio-blocks (schema/JSON) library used by the generated Scala bridge
+    /// client runtime for JSON parsing and rendering.
+    pub const ZIO_BLOCKS_VERSION: &str = "0.0.43";
+}
+
+pub mod moonbit_dep {
+    pub const ASYNC_VERSION: &str = "0.19.2";
 }
 
 pub mod ai {

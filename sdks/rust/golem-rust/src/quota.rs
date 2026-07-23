@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Ergonomic wrappers for the `golem:quota/host` WIT interface.
+//! Ergonomic wrappers for the `golem:quota/types` WIT interface.
 //!
 //! # Typical usage
 //!
@@ -27,13 +27,15 @@
 //! });
 //! ```
 
-use crate::bindings::golem::api::host::EnvironmentId;
 use crate::bindings::golem::quota::types;
-use crate::value_and_type::type_builder::TypeNodeBuilder;
-use crate::value_and_type::wasi::Datetime;
-use crate::value_and_type::{FromValueAndType, IntoValue};
-use golem_wasm::{NodeBuilder, WitValueExtractor};
+use crate::schema::wit::GuestQuotaTokenHandle;
 use std::time::Duration;
+
+#[cfg(feature = "export_golem_agentic")]
+use crate::schema::{
+    FromSchema, FromSchemaError, IntoSchema, QuotaTokenSpec, SchemaBuilder, SchemaType,
+    SchemaValue, TypeId,
+};
 
 /// Error returned when a reservation cannot be granted because the resource's
 /// enforcement policy is `reject`.
@@ -102,7 +104,7 @@ impl Reservation {
 /// }
 /// ```
 pub struct QuotaToken {
-    raw: types::QuotaToken,
+    handle: GuestQuotaTokenHandle,
 }
 
 impl QuotaToken {
@@ -113,7 +115,7 @@ impl QuotaToken {
     ///   credit rate and max-credit for fair scheduling.
     pub fn new(resource_name: &str, expected_use: u64) -> Self {
         Self {
-            raw: types::QuotaToken::new(resource_name, expected_use),
+            handle: GuestQuotaTokenHandle::new(types::new_token(resource_name, expected_use)),
         }
     }
 
@@ -126,9 +128,16 @@ impl QuotaToken {
     /// Returns `Err(FailedReservation)` when the enforcement policy is `reject`.
     /// For `throttle` / `terminate` policies the call suspends or terminates
     /// the agent before returning.
+    ///
+    /// # Panics
+    ///
+    /// Traps if this token has already been transferred (for example, sent to
+    /// another agent through an RPC call or returned from a method). Split the
+    /// token first if you need to both keep and send a capability.
     pub fn reserve(&self, amount: u64) -> Result<Reservation, FailedReservation> {
-        self.raw
-            .reserve(amount)
+        self.handle
+            .with_handle(|raw| types::reserve(raw, amount))
+            .unwrap_or_else(|| panic!("{TOKEN_CONSUMED}"))
             .map(|raw| Reservation { raw })
             .map_err(FailedReservation::from)
     }
@@ -140,10 +149,15 @@ impl QuotaToken {
     ///
     /// # Panics
     ///
-    /// Traps if `child_expected_use` exceeds the parent's current expected-use.
+    /// Traps if `child_expected_use` exceeds the parent's current expected-use,
+    /// or if this token has already been transferred.
     pub fn split(&mut self, child_expected_use: u64) -> QuotaToken {
+        let raw = self
+            .handle
+            .with_handle(|raw| types::split(raw, child_expected_use))
+            .unwrap_or_else(|| panic!("{TOKEN_CONSUMED}"));
         QuotaToken {
-            raw: self.raw.split(child_expected_use),
+            handle: GuestQuotaTokenHandle::new(raw),
         }
     }
 
@@ -154,18 +168,64 @@ impl QuotaToken {
     ///
     /// # Panics
     ///
-    /// Traps if the tokens refer to different resources.
+    /// Traps if the tokens refer to different resources, or if either token has
+    /// already been transferred.
     pub fn merge(&mut self, other: QuotaToken) {
-        self.raw.merge(other.raw);
+        // Reject merging a token into itself before taking any handle, so a
+        // shared handle is not consumed as `other` and then read again as the
+        // receiver.
+        if self.handle.cell_id() == other.handle.cell_id() {
+            panic!("cannot merge a quota token with itself");
+        }
+        // Check the receiver first so an already-transferred receiver does not
+        // consume `other`.
+        if !self.handle.is_present() {
+            panic!("{TOKEN_CONSUMED}");
+        }
+        let other_raw = other
+            .handle
+            .take()
+            .unwrap_or_else(|| panic!("{TOKEN_CONSUMED}"));
+        self.handle
+            .with_handle(|raw| types::merge(raw, other_raw))
+            .unwrap_or_else(|| panic!("{TOKEN_CONSUMED}"));
+    }
+}
+
+const TOKEN_CONSUMED: &str = "quota token has already been transferred and can no longer be used; split the token first if \
+     you need to both keep and send a capability";
+
+#[cfg(feature = "export_golem_agentic")]
+impl IntoSchema for QuotaToken {
+    fn type_id() -> TypeId {
+        TypeId::new("golem.core.QuotaToken")
     }
 
-    fn to_record(&self) -> types::QuotaTokenRecord {
-        self.raw.to_record()
+    fn register_in(_builder: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::quota_token(QuotaTokenSpec::default())
     }
 
-    fn from_record(record: &types::QuotaTokenRecord) -> QuotaToken {
-        QuotaToken {
-            raw: types::QuotaToken::from_record(record),
+    /// Lower the token into a schema value by sharing its opaque owned handle.
+    ///
+    /// The handle is not transferred here; it is moved out of the cell only when
+    /// the resulting [`SchemaValue`] is encoded into a WIT `schema-value-tree`.
+    fn to_value(&self) -> SchemaValue {
+        SchemaValue::QuotaToken(self.handle.clone())
+    }
+}
+
+#[cfg(feature = "export_golem_agentic")]
+impl FromSchema for QuotaToken {
+    fn from_value(value: &SchemaValue) -> Result<Self, FromSchemaError> {
+        match value {
+            SchemaValue::QuotaToken(handle) => Ok(QuotaToken {
+                handle: handle.clone(),
+            }),
+            other => Err(FromSchemaError::shape_mismatch(
+                "quota-token",
+                format!("{other:?}"),
+                "QuotaToken",
+            )),
         }
     }
 }
@@ -193,70 +253,4 @@ where
     let (used, value) = f(&reservation);
     reservation.commit(used);
     Ok(value)
-}
-
-impl IntoValue for QuotaToken {
-    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
-        let record = self.to_record();
-        let builder = builder.record();
-        let builder = record.environment_id.add_to_builder(builder.item());
-        let builder = record.resource_name.add_to_builder(builder.item());
-        let builder = record.expected_use.add_to_builder(builder.item());
-        let builder = record.last_credit.add_to_builder(builder.item());
-        let builder = record.last_credit_at.add_to_builder(builder.item());
-        builder.finish()
-    }
-
-    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        let builder = builder.record(
-            Some("QuotaTokenRecord".to_string()),
-            Some("golem:quota".to_string()),
-        );
-        let builder = <EnvironmentId>::add_to_type_builder(builder.field("environment-id"));
-        let builder = <String>::add_to_type_builder(builder.field("resource-name"));
-        let builder = <u64>::add_to_type_builder(builder.field("expected-use"));
-        let builder = <i64>::add_to_type_builder(builder.field("last-credit"));
-        let builder = <Datetime>::add_to_type_builder(builder.field("last-credit-at"));
-        builder.finish()
-    }
-}
-
-impl FromValueAndType for QuotaToken {
-    fn from_extractor<'a, 'b>(
-        extractor: &'a impl WitValueExtractor<'a, 'b>,
-    ) -> Result<Self, String> {
-        let environment_id = <EnvironmentId>::from_extractor(
-            &extractor
-                .field(0)
-                .ok_or_else(|| "Missing environment-id".to_string())?,
-        )?;
-        let resource_name = <String>::from_extractor(
-            &extractor
-                .field(1)
-                .ok_or_else(|| "Missing resource-name".to_string())?,
-        )?;
-        let expected_use = <u64>::from_extractor(
-            &extractor
-                .field(2)
-                .ok_or_else(|| "Missing expected-use".to_string())?,
-        )?;
-        let last_credit = <i64>::from_extractor(
-            &extractor
-                .field(3)
-                .ok_or_else(|| "Missing last-credit".to_string())?,
-        )?;
-        let last_credit_at = <Datetime>::from_extractor(
-            &extractor
-                .field(4)
-                .ok_or_else(|| "Missing last-credit-at".to_string())?,
-        )?;
-        let record = types::QuotaTokenRecord {
-            environment_id,
-            resource_name,
-            expected_use,
-            last_credit,
-            last_credit_at,
-        };
-        Ok(QuotaToken::from_record(&record))
-    }
 }

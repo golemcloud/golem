@@ -14,7 +14,6 @@ test "generate_reexports produces correct output for simple function" {
     output,
     content=(
       #|"///|\npub fn wasmExportSave() -> Int {\n  @gen.wasmExportSave()\n}\n\n"
-
     ),
   )
 }
@@ -35,7 +34,6 @@ test "generate_reexports produces correct output for function with params" {
     output,
     content=(
       #|"///|\npub fn cabi_realloc(p0 : Int, p1 : Int, p2 : Int, p3 : Int) -> Int {\n  @gen.mbt_ffi_cabi_realloc(p0, p1, p2, p3)\n}\n\n"
-
     ),
   )
 }
@@ -62,7 +60,6 @@ test "generate_reexports multiple functions" {
     output,
     content=(
       #|"///|\npub fn wasmExportSave() -> Int {\n  @gen.wasmExportSave()\n}\n\n///|\npub fn wasmExportSavePostReturn(p0 : Int) -> Unit {\n  @gen.wasmExportSavePostReturn(p0)\n}\n\n"
-
     ),
   )
 }

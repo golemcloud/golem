@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::account::{AccountError, AccountService};
+use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificationSignalExt};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::card::CardRecord;
 use crate::repo::model::permission_share::{
@@ -24,8 +25,8 @@ use golem_common::model::card::owner::AccountOwnerPattern;
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
     AccountPermissionShareResourcePattern, AccountPermissionShareVerb, Card, CardAlgebraError,
-    CardId, CardManagedBy, CardParseError, ClassPermissionTarget, EffectiveSurface,
-    PermissionPattern, PermissionTarget,
+    CardId, CardManagedBy, CardManagedByPermissionShare, CardParseError, ClassPermissionTarget,
+    EffectiveSurface, PermissionPattern, PermissionTarget,
 };
 use golem_common::model::permission_share::{
     PermissionShare, PermissionShareCreation, PermissionShareData, PermissionShareId,
@@ -84,16 +85,19 @@ error_forwarding!(PermissionShareError, PermissionShareRepoError, AccountError);
 pub struct PermissionShareService {
     permission_share_repo: Arc<dyn PermissionShareRepo>,
     account_service: Arc<AccountService>,
+    registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
 }
 
 impl PermissionShareService {
     pub fn new(
         permission_share_repo: Arc<dyn PermissionShareRepo>,
         account_service: Arc<AccountService>,
+        registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     ) -> Self {
         Self {
             permission_share_repo,
             account_service,
+            registry_change_notifier,
         }
     }
 
@@ -203,7 +207,13 @@ impl PermissionShareService {
                 .update(revision.clone(), replacement_card.clone())
                 .await
             {
-                Ok(record) => return Ok(record.try_into()?),
+                Ok(record) => {
+                    let permission_share: PermissionShare = record
+                        .signal_new_events_available(&self.registry_change_notifier)
+                        .try_into()?;
+
+                    return Ok(permission_share);
+                }
                 Err(PermissionShareRepoError::CardTreeChangedDuringDelete)
                     if attempt + 1 < MAX_CARD_TREE_DELETE_ATTEMPTS =>
                 {
@@ -260,7 +270,13 @@ impl PermissionShareService {
 
         for attempt in 0..MAX_CARD_TREE_DELETE_ATTEMPTS {
             match self.permission_share_repo.delete(revision.clone()).await {
-                Ok(record) => return Ok(record.try_into()?),
+                Ok(record) => {
+                    let permission_share: PermissionShare = record
+                        .signal_new_events_available(&self.registry_change_notifier)
+                        .try_into()?;
+
+                    return Ok(permission_share);
+                }
                 Err(PermissionShareRepoError::CardTreeChangedDuringDelete)
                     if attempt + 1 < MAX_CARD_TREE_DELETE_ATTEMPTS =>
                 {
@@ -408,6 +424,16 @@ impl PermissionShareService {
             .collect()
     }
 
+    pub async fn target_account_email(
+        &self,
+        permission_share_id: PermissionShareId,
+    ) -> Result<AccountEmail, PermissionShareError> {
+        Ok(self
+            .get_record_by_id(permission_share_id)
+            .await?
+            .target_account_email())
+    }
+
     async fn get_account(
         &self,
         account_id: AccountId,
@@ -458,9 +484,11 @@ impl PermissionShareService {
             parsed.upper_negative,
             None,
             true,
-            Some(CardManagedBy::PermissionShare {
-                permission_share_id: permission_share_id.0,
-            }),
+            Some(CardManagedBy::PermissionShare(
+                CardManagedByPermissionShare {
+                    permission_share_id: permission_share_id.0,
+                },
+            )),
         ))
     }
 
@@ -548,7 +576,7 @@ fn validate_recipient(
 ) -> Result<(), PermissionShareError> {
     match recipient {
         RecipientPattern::Any => Ok(()),
-        RecipientPattern::Account { account } if account == target_account => Ok(()),
+        RecipientPattern::Account { account } if account.as_str() == target_account => Ok(()),
         _ => Err(PermissionShareError::InvalidRecipient {
             target_account: target_account.to_string(),
         }),
@@ -579,6 +607,7 @@ fn validate_effective_surface_derivation(
 ) -> Result<(), PermissionShareError> {
     effective_surface
         .validates_derivation(&parsed.lower_positive, &parsed.upper_positive)
+        .map(|_| ())
         .map_err(derivation_error)
 }
 

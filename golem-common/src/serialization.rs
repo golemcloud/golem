@@ -22,17 +22,15 @@ pub const SERIALIZATION_VERSION_V2: u8 = 2u8;
 
 /// desert
 pub const SERIALIZATION_VERSION_V3: u8 = 3u8;
+const DEFAULT_SERIALIZATION_CAPACITY: usize = 128;
 
 pub fn serialize_with_version<T: BinarySerializer>(
     value: &T,
     version: u8,
 ) -> Result<Vec<u8>, String> {
-    let data = desert_rust::serialize_to_byte_vec(value)
-        .map_err(|e| format!("Failed to serialize value: {e}"))?;
-    let mut result = Vec::with_capacity(data.len() + 1);
+    let mut result = Vec::with_capacity(DEFAULT_SERIALIZATION_CAPACITY + 1);
     result.push(version);
-    result.extend(data);
-    Ok(result)
+    desert_rust::serialize(value, result).map_err(|e| format!("Failed to serialize value: {e}"))
 }
 
 pub fn serialize<T: BinarySerializer>(value: &T) -> Result<Vec<u8>, String> {
@@ -91,6 +89,7 @@ pub fn try_deserialize_with_version<T: BinaryDeserializer>(
 #[cfg(test)]
 mod tests {
     use crate::model::component::ComponentId;
+    use crate::serialization::SERIALIZATION_VERSION_V3;
     use desert_rust::BinaryCodec;
     use rand::Rng;
     use rand::distr::Alphanumeric;
@@ -128,6 +127,7 @@ mod tests {
         let example = Some(ComponentId::new());
         info!("example: {example:?}");
         let serialized = super::serialize(&example).unwrap();
+        assert_eq!(serialized[0], SERIALIZATION_VERSION_V3);
         let deserialized = super::deserialize(&serialized).unwrap();
         assert_eq!(example, deserialized);
     }

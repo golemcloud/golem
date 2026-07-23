@@ -17,40 +17,27 @@ use super::{
     PolymorphicPermissionPattern, ResourcePattern, VerbPattern,
 };
 use crate::base_model::card::parsing::CardParseError;
-use crate::model::card::owner::AccountOwnerPattern;
-use combine::{EasyParser, Parser, eof, many1, satisfy};
+use crate::model::card::owner::ApplicationOwnerPattern;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum ApplicationResourcePattern {
-    Any,
-    Application(ApplicationName),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(transparent))]
-pub struct ApplicationName(pub String);
+pub struct ApplicationResourcePattern;
 
 impl ResourcePattern for ApplicationResourcePattern {
     fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
-        if resource == "*" {
-            Ok(ApplicationResourcePattern::Any)
+        if resource.is_empty() || resource == "*" {
+            Ok(ApplicationResourcePattern)
         } else {
-            parse_application_resource(resource).map_err(|_| CardParseError::InvalidResource {
+            Err(CardParseError::InvalidResource {
                 class: ApplicationClass::NAME.to_string(),
                 resource: resource.to_string(),
             })
         }
     }
 
-    fn subsumes(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Any, _) => true,
-            (Self::Application(a), Self::Application(b)) => a == b,
-            (Self::Application(_), Self::Any) => false,
-        }
+    fn subsumes(&self, _other: &Self) -> bool {
+        true
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -79,7 +66,7 @@ pub struct ApplicationClass;
 
 impl PermissionClass for ApplicationClass {
     type Verb = ApplicationVerb;
-    type Owner = AccountOwnerPattern;
+    type Owner = ApplicationOwnerPattern;
     type Resource = ApplicationResourcePattern;
     const NAME: &'static str = "application";
 
@@ -92,29 +79,4 @@ impl PermissionClass for ApplicationClass {
     ) -> PolymorphicPermissionPattern {
         PolymorphicPermissionPattern::Application(pattern)
     }
-}
-
-fn parse_application_resource(resource: &str) -> Result<ApplicationResourcePattern, String> {
-    application_resource()
-        .skip(eof())
-        .easy_parse(resource)
-        .map(|(resource, _)| resource)
-        .map_err(|_| resource.to_string())
-}
-
-fn application_resource<Input>() -> impl Parser<Input, Output = ApplicationResourcePattern>
-where
-    Input: combine::Stream<Token = char>,
-{
-    application_name().map(ApplicationResourcePattern::Application)
-}
-
-fn application_name<Input>() -> impl Parser<Input, Output = ApplicationName>
-where
-    Input: combine::Stream<Token = char>,
-{
-    many1(satisfy(|c: char| {
-        c != ':' && c != '/' && !c.is_whitespace()
-    }))
-    .map(ApplicationName)
 }

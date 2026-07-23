@@ -21,8 +21,6 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::AgentError;
 use golem_common::model::quota::ResourceName;
 use golem_common::model::{AgentId, PromiseId, ShardId, Timestamp};
-use golem_wasm::wasmtime::EncodingError;
-use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
@@ -976,16 +974,6 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
     }
 }
 
-impl From<EncodingError> for WorkerExecutorError {
-    fn from(value: EncodingError) -> Self {
-        match value {
-            EncodingError::ParamTypeMismatch { details } => Self::ParamTypeMismatch { details },
-            EncodingError::ValueMismatch { details } => Self::ValueMismatch { details },
-            EncodingError::Unknown { details } => Self::Unknown { details },
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Hash)]
 pub enum GolemSpecificWasmTrap {
     WorkerOutOfMemory,
@@ -1075,18 +1063,7 @@ impl Display for GolemSpecificWasmTrap {
 impl Error for GolemSpecificWasmTrap {}
 
 #[derive(
-    Debug,
-    Copy,
-    Clone,
-    PartialOrd,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
+    Debug, Copy, Clone, PartialOrd, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec,
 )]
 pub enum InterruptKind {
     Interrupt(Timestamp),

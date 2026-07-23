@@ -28,10 +28,9 @@ use crate::services::environment::EnvironmentError;
 use futures::stream::BoxStream;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::{ApplicationId, ApplicationName};
-use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::owner::ComponentOwnerPattern;
 use golem_common::model::card::{
-    ClassPermissionTarget, ComponentName as CardComponentName, ComponentResourcePattern,
-    ComponentVerb, PermissionTarget,
+    CardId, ClassPermissionTarget, ComponentResourcePattern, ComponentVerb, PermissionTarget,
 };
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
@@ -84,8 +83,9 @@ impl ComponentService {
         authorize_component_permission(
             auth,
             &environment,
+            &ComponentName(record.component.name.clone()),
             ComponentVerb::View,
-            ComponentResourcePattern::Component(CardComponentName(record.component.name.clone())),
+            ComponentResourcePattern::Any,
         )
         .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
@@ -113,8 +113,9 @@ impl ComponentService {
         authorize_component_permission(
             auth,
             &environment,
+            &ComponentName(record.component.name.clone()),
             ComponentVerb::View,
-            ComponentResourcePattern::Component(CardComponentName(record.component.name.clone())),
+            ComponentResourcePattern::Any,
         )
         .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
@@ -133,8 +134,11 @@ impl ComponentService {
             .get_all_deployed_by_id(component_id.0)
             .await?;
 
-        let environment = if let Some(record) = records.first() {
-            environment_from_component_record(record)?
+        let (environment, component_name) = if let Some(record) = records.first() {
+            (
+                environment_from_component_record(record)?,
+                ComponentName(record.component.name.clone()),
+            )
         } else {
             return Err(ComponentError::ComponentNotFound(component_id));
         };
@@ -142,6 +146,7 @@ impl ComponentService {
         authorize_component_permission(
             auth,
             &environment,
+            &component_name,
             ComponentVerb::View,
             ComponentResourcePattern::Any,
         )
@@ -175,15 +180,25 @@ impl ComponentService {
         authorize_component_permission(
             auth,
             &environment,
+            &ComponentName(record.component.name.clone()),
             ComponentVerb::View,
             ComponentResourcePattern::Revision {
-                component: CardComponentName(record.component.name.clone()),
                 revision: revision.into(),
             },
         )
         .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
         Ok(record.try_into_model()?)
+    }
+
+    pub async fn list_initial_permission_card_ids_by_account(
+        &self,
+        account_id: AccountId,
+    ) -> Result<Vec<CardId>, ComponentError> {
+        Ok(self
+            .component_repo
+            .list_initial_permission_card_ids_by_account(account_id.0)
+            .await?)
     }
 
     pub async fn list_staged_components(
@@ -235,10 +250,9 @@ impl ComponentService {
                 authorize_component_permission(
                     auth,
                     environment,
+                    &component.component_name,
                     ComponentVerb::View,
-                    ComponentResourcePattern::Component(CardComponentName(
-                        component.component_name.0.clone(),
-                    )),
+                    ComponentResourcePattern::Any,
                 )
                 .is_ok()
             })
@@ -271,8 +285,9 @@ impl ComponentService {
         authorize_component_permission(
             auth,
             &environment,
+            component_name,
             ComponentVerb::View,
-            ComponentResourcePattern::Component(CardComponentName(component_name.0.clone())),
+            ComponentResourcePattern::Any,
         )
         .map_err(|_| ComponentError::ComponentByNameNotFound(component_name.clone()))?;
 
@@ -319,8 +334,9 @@ impl ComponentService {
         authorize_component_permission(
             auth,
             &environment,
+            component_name,
             ComponentVerb::View,
-            ComponentResourcePattern::Component(CardComponentName(component_name.0.clone())),
+            ComponentResourcePattern::Any,
         )
         .map_err(|_| ComponentError::ComponentByNameNotFound(component_name.clone()))?;
 
@@ -391,10 +407,9 @@ impl ComponentService {
                 authorize_component_permission(
                     auth,
                     &environment,
+                    &component.component_name,
                     ComponentVerb::View,
-                    ComponentResourcePattern::Component(CardComponentName(
-                        component.component_name.0.clone(),
-                    )),
+                    ComponentResourcePattern::Any,
                 )
                 .is_ok()
             })
@@ -432,8 +447,9 @@ impl ComponentService {
         authorize_component_permission(
             auth,
             &environment,
+            component_name,
             ComponentVerb::View,
-            ComponentResourcePattern::Component(CardComponentName(component_name.0.clone())),
+            ComponentResourcePattern::Any,
         )
         .map_err(|_| ComponentError::ComponentByNameNotFound(component_name.clone()))?;
 
@@ -481,15 +497,17 @@ impl ComponentService {
 fn authorize_component_permission(
     auth: &AuthCtx,
     environment: &Environment,
+    component_name: &ComponentName,
     verb: ComponentVerb,
     resource: ComponentResourcePattern,
 ) -> Result<(), AuthorizationError> {
     auth.authorize_permission(&PermissionTarget::Component(ClassPermissionTarget {
         verb: Some(verb),
-        owner: EnvironmentOwnerPattern::Environment {
+        owner: ComponentOwnerPattern::Component {
             account: environment.owner_account_email.clone(),
             application: environment.application_name.clone(),
             environment: environment.name.clone(),
+            component: component_name.clone(),
         },
         resource,
     }))

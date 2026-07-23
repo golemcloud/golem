@@ -18,8 +18,10 @@ pub mod sqlite;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use golem_common::SafeDisplay;
 use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
-use std::fmt::Debug;
+use golem_service_base::repo::RepoError;
+use std::fmt::{self, Debug, Display, Formatter};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -32,6 +34,59 @@ pub struct ClaimedScheduledAction {
     pub attempt_count: u32,
 }
 
+/// Typed error for [`SchedulerStorage`] operations.
+///
+/// `Transient` errors (pool exhaustion, connection resets) are retriable;
+/// `Other` errors (data issues, schema problems) are not.
+#[derive(Debug, Clone)]
+pub enum SchedulerStorageError {
+    /// Transient error — pool exhaustion, connection reset, broken pipe.
+    /// Caller may retry.
+    Transient(String),
+    /// Permanent error — data issue, unique violation, schema error.
+    /// Caller should not retry.
+    Other(String),
+}
+
+impl SchedulerStorageError {
+    pub fn is_retriable(&self) -> bool {
+        matches!(self, SchedulerStorageError::Transient(_))
+    }
+}
+
+impl Display for SchedulerStorageError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            SchedulerStorageError::Transient(msg) => write!(f, "Transient storage error: {msg}"),
+            SchedulerStorageError::Other(msg) => write!(f, "Storage error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for SchedulerStorageError {}
+
+impl From<String> for SchedulerStorageError {
+    fn from(s: String) -> Self {
+        SchedulerStorageError::Other(s)
+    }
+}
+
+impl From<RepoError> for SchedulerStorageError {
+    fn from(err: RepoError) -> Self {
+        if err.is_transient() {
+            SchedulerStorageError::Transient(err.to_safe_string())
+        } else {
+            SchedulerStorageError::Other(err.to_safe_string())
+        }
+    }
+}
+
+impl From<SchedulerStorageError> for String {
+    fn from(err: SchedulerStorageError) -> Self {
+        err.to_string()
+    }
+}
+
 #[async_trait]
 pub trait SchedulerStorage: Debug {
     async fn insert(
@@ -40,9 +95,9 @@ pub trait SchedulerStorage: Debug {
         due_at: DateTime<Utc>,
         shard_id: ShardId,
         action: &ScheduledAction,
-    ) -> Result<(), String>;
+    ) -> Result<(), SchedulerStorageError>;
 
-    async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), String>;
+    async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), SchedulerStorageError>;
 
     async fn claim_due(
         &self,
@@ -50,16 +105,20 @@ pub trait SchedulerStorage: Debug {
         assignment: &ShardAssignment,
         limit: u32,
         lease_ttl: Duration,
-    ) -> Result<Vec<ClaimedScheduledAction>, String>;
+    ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError>;
 
     async fn extend_lease(
         &self,
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
         lease_until: DateTime<Utc>,
-    ) -> Result<bool, String>;
+    ) -> Result<bool, SchedulerStorageError>;
 
-    async fn ack(&self, schedule_id: &ScheduleId, lease_owner: Uuid) -> Result<bool, String>;
+    async fn ack(
+        &self,
+        schedule_id: &ScheduleId,
+        lease_owner: Uuid,
+    ) -> Result<bool, SchedulerStorageError>;
 }
 
 pub fn datetime_to_millis(time: DateTime<Utc>) -> i64 {

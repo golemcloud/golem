@@ -1,0 +1,5 @@
+error: PoemSchema does not support `#[serde(untagged)]` enums
+  --> tests/compile_fail/poem_untagged_enum.rs:18:9
+   |
+18 | #[serde(untagged)]
+   |         ^^^^^^^^

@@ -14,12 +14,13 @@
 
 use crate::Tracing;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
+use std::time::{Duration, SystemTime};
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -67,8 +68,8 @@ async fn set_retry_policy_is_persisted_to_oplog(
             data_value!("test-policy".to_string()),
         )
         .await?;
-    let has_it = result.into_return_value().unwrap();
-    assert_eq!(has_it, Value::Bool(true));
+    let has_it = result.into_typed::<bool>()?;
+    assert!(has_it);
 
     let oplog = executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
     let has_set = oplog
@@ -84,11 +85,8 @@ async fn set_retry_policy_is_persisted_to_oplog(
             data_value!(),
         )
         .await?;
-    let count = result.into_return_value().unwrap();
-    match &count {
-        Value::U64(n) => assert!(*n >= 1, "Expected at least 1 retry policy, got {n}"),
-        other => panic!("Expected U64 return value, got {other:?}"),
-    }
+    let count = result.into_typed::<u64>()?;
+    assert!(count >= 1, "Expected at least 1 retry policy, got {count}");
 
     executor.check_oplog_is_queryable(&agent_id).await?;
 
@@ -133,7 +131,7 @@ async fn remove_retry_policy_is_persisted_to_oplog(
             data_value!("removable".to_string()),
         )
         .await?;
-    assert_eq!(result.into_return_value().unwrap(), Value::Bool(true));
+    assert!(result.into_typed::<bool>()?);
 
     executor
         .invoke_and_await_agent(
@@ -152,7 +150,7 @@ async fn remove_retry_policy_is_persisted_to_oplog(
             data_value!("removable".to_string()),
         )
         .await?;
-    assert_eq!(result.into_return_value().unwrap(), Value::Bool(false));
+    assert!(!result.into_typed::<bool>()?);
 
     let oplog = executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
     let has_remove = oplog
@@ -205,7 +203,7 @@ async fn retry_policy_survives_restart(
             data_value!("persistent".to_string()),
         )
         .await?;
-    assert_eq!(result.into_return_value().unwrap(), Value::Bool(true));
+    assert!(result.into_typed::<bool>()?);
 
     drop(executor);
 
@@ -220,9 +218,8 @@ async fn retry_policy_survives_restart(
             data_value!("persistent".to_string()),
         )
         .await?;
-    assert_eq!(
-        result.into_return_value().unwrap(),
-        Value::Bool(true),
+    assert!(
+        result.into_typed::<bool>()?,
         "Retry policy should survive restart via oplog replay"
     );
 
@@ -236,11 +233,11 @@ async fn retry_policy_survives_restart(
         .await?;
     let names = result.into_return_value().unwrap();
     match &names {
-        Value::List(items) => {
+        SchemaValue::List { elements: items } => {
             let name_strings: Vec<&str> = items
                 .iter()
                 .filter_map(|v| match v {
-                    Value::String(s) => Some(s.as_str()),
+                    SchemaValue::String(s) => Some(s.as_str()),
                     _ => None,
                 })
                 .collect();
@@ -286,7 +283,7 @@ async fn get_missing_retry_policy_returns_false(
             data_value!("nonexistent".to_string()),
         )
         .await?;
-    assert_eq!(result.into_return_value().unwrap(), Value::Bool(false));
+    assert!(!result.into_typed::<bool>()?);
 
     executor.check_oplog_is_queryable(&agent_id).await?;
 
@@ -336,11 +333,11 @@ async fn list_retry_policy_names_returns_all(
         .await?;
     let names = result.into_return_value().unwrap();
     match &names {
-        Value::List(items) => {
+        SchemaValue::List { elements: items } => {
             let name_strings: Vec<&str> = items
                 .iter()
                 .filter_map(|v| match v {
-                    Value::String(s) => Some(s.as_str()),
+                    SchemaValue::String(s) => Some(s.as_str()),
                     _ => None,
                 })
                 .collect();
@@ -363,5 +360,70 @@ async fn list_retry_policy_names_returns_all(
     executor.check_oplog_is_queryable(&agent_id).await?;
 
     drop(executor);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn golem_rust_set_retry_policy(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("GolemHostApi", "set-retry-policy-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
+
+    let start = SystemTime::now();
+    let result1 = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "fail_with_custom_max_retries",
+            data_value!(2u64),
+        )
+        .await;
+    let elapsed = start.elapsed().unwrap();
+
+    let result2 = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "fail_with_custom_max_retries",
+            data_value!(1u64),
+        )
+        .await;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    assert!(elapsed < Duration::from_secs(3)); // 2 retry attempts, 1s delay
+    assert!(result1.is_err());
+    assert!(result2.is_err());
+    let result1_err = format!("{}", result1.unwrap_err());
+    assert!(
+        result1_err.contains("error while executing at wasm backtrace:")
+            || result1_err.contains("Invocation failed"),
+        "Unexpected error: {result1_err}"
+    );
+    let result2_err = format!("{}", result2.unwrap_err());
+    assert!(
+        result2_err.contains("Previous invocation failed")
+            || result2_err.contains("error while executing at wasm backtrace:"),
+        "Unexpected error: {result2_err}"
+    );
+
     Ok(())
 }

@@ -17,8 +17,12 @@ use crate::schema::graph::SchemaGraph;
 use crate::schema::render::cli_text::{
     type_to_cli_text, value_to_cli_text, value_to_cli_text_unredacted,
 };
-use crate::schema::schema_type::{NamedFieldType, SchemaType, SecretSpec, TextRestrictions};
-use crate::schema::schema_value::{SchemaValue, SecretValuePayload, TextValuePayload};
+use crate::schema::schema_type::{
+    NamedFieldType, QuotaTokenSpec, SchemaType, SecretSpec, TextRestrictions,
+};
+use crate::schema::schema_value::{
+    QuotaTokenValuePayload, SchemaValue, SecretValuePayload, TextValuePayload,
+};
 use chrono::{TimeZone, Utc};
 use proptest::prelude::*;
 use test_r::test;
@@ -104,13 +108,72 @@ fn secret_value_is_redacted_by_default() {
     let ty = SchemaType::secret(SecretSpec::default());
     let graph = SchemaGraph::anonymous(ty.clone());
     let value = SchemaValue::Secret(SecretValuePayload {
-        secret_ref: "shhh".to_string(),
+        secret_id: uuid::Uuid::nil(),
+        config_key: None,
+        version: 0,
+        resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+        category: None,
     });
     let text = value_to_cli_text(&graph, &ty, &value).expect("value_to_cli_text");
-    assert_eq!(text, "<redacted>");
+    assert_eq!(text, "<redacted: secret>");
     let unredacted =
         value_to_cli_text_unredacted(&graph, &ty, &value).expect("value_to_cli_text_unredacted");
     assert!(unredacted.starts_with("secret:"));
+}
+
+#[test]
+fn quota_token_value_is_redacted_by_default() {
+    let ty = SchemaType::quota_token(QuotaTokenSpec {
+        resource_name: Some("gpu".to_string()),
+    });
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let value = SchemaValue::QuotaToken(QuotaTokenValuePayload {
+        environment_id: golem_schema::model::EnvironmentId::new(uuid::Uuid::nil()),
+        resource_name: "gpu".to_string(),
+        expected_use: 1,
+        last_credit: 0,
+        last_credit_at: Utc.timestamp_opt(0, 0).unwrap(),
+    });
+    let text = value_to_cli_text(&graph, &ty, &value).expect("value_to_cli_text");
+    assert_eq!(text, "<redacted: quota-token>");
+}
+
+#[test]
+fn capability_value_is_redacted_inside_record() {
+    let ty = SchemaType::record(vec![
+        NamedFieldType {
+            name: "name".to_string(),
+            body: SchemaType::string(),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "api_key".to_string(),
+            body: SchemaType::secret(SecretSpec::default()),
+            metadata: Default::default(),
+        },
+    ]);
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let value = SchemaValue::Record {
+        fields: vec![
+            SchemaValue::String("svc".to_string()),
+            SchemaValue::Secret(SecretValuePayload {
+                secret_id: uuid::Uuid::nil(),
+                config_key: None,
+                version: 0,
+                resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+                category: None,
+            }),
+        ],
+    };
+    let text = value_to_cli_text(&graph, &ty, &value).expect("value_to_cli_text");
+    assert!(
+        text.contains("<redacted: secret>"),
+        "expected nested secret to be redacted, got: {text:?}"
+    );
+    assert!(
+        !text.contains("shhh"),
+        "secret material leaked into rendering: {text:?}"
+    );
 }
 
 #[test]

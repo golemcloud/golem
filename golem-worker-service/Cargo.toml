@@ -30,12 +30,14 @@ harness = false
 # name = "tree"
 # harness = false
 
+[[bench]]
+name = "agent_resolution_cache"
+harness = false
+
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
 golem-service-base = { workspace = true }
-golem-wasm = { workspace = true, default-features = true }
-golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
 base64 = { workspace = true }

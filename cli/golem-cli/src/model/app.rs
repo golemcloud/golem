@@ -13,10 +13,12 @@
 // limitations under the License.
 
 use super::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
-use crate::bridge_gen::bridge_client_directory_name;
+use crate::bridge_gen::{
+    BridgeMode, bridge_client_directory_name, tool_bridge_client_directory_name,
+};
 use crate::fs;
 use crate::log::LogColorize;
-use crate::model::app::app_builder::{build_application, build_environments};
+use crate::model::app::app_builder::{build_application, build_application_preload};
 use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::Property;
 use crate::model::cascade::property::json::JsonProperty;
@@ -29,7 +31,7 @@ use crate::model::template::Template;
 use crate::model::{GuestLanguage, app_raw};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::{Context, anyhow};
-use golem_common::model::agent::{AgentType, AgentTypeName};
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
 use golem_common::model::deployment::DeploymentRetryPolicyDefault;
@@ -37,6 +39,8 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::quota::{ResourceDefinitionCreation, ResourceName};
 use golem_common::model::validate_lower_kebab_case_identifier;
+use golem_common::schema::AgentTypeSchema;
+use golem_common::schema::tool::Tool;
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
     ToTitleCase, ToTrainCase, ToUpperCamelCase,
@@ -271,12 +275,84 @@ pub enum AppBuildStep {
     GenBridge,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct ToolName(String);
+
+impl ToolName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Display for ToolName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl TryFrom<&str> for ToolName {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        if value.is_empty() {
+            Err("Tool dependency name must not be empty".to_string())
+        } else {
+            Ok(Self(value.to_string()))
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub enum ComponentDependency {
+    Agent {
+        component_name: ComponentName,
+        agent_type_name: AgentTypeName,
+    },
+    Tool {
+        component_name: ComponentName,
+        tool_name: ToolName,
+    },
+}
+
+impl ComponentDependency {
+    pub fn component_name(&self) -> &ComponentName {
+        match self {
+            ComponentDependency::Agent { component_name, .. }
+            | ComponentDependency::Tool { component_name, .. } => component_name,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BridgeSdkTarget {
     pub component_name: ComponentName,
-    pub agent_type: AgentType,
+    pub kind: BridgeSdkTargetKind,
     pub target_language: GuestLanguage,
+    pub bridge_mode: BridgeMode,
     pub output_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+pub enum BridgeSdkTargetKind {
+    Agent(AgentTypeSchema),
+    Tool(Tool),
+}
+
+impl BridgeSdkTargetKind {
+    pub fn display_name(&self) -> &str {
+        match self {
+            BridgeSdkTargetKind::Agent(agent_type) => agent_type.type_name.as_str(),
+            BridgeSdkTargetKind::Tool(tool) => tool.name().unwrap_or_default(),
+        }
+    }
+
+    pub fn as_agent(&self) -> Option<&AgentTypeSchema> {
+        match self {
+            BridgeSdkTargetKind::Agent(agent_type) => Some(agent_type),
+            BridgeSdkTargetKind::Tool(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -319,9 +395,53 @@ impl<T: Default> Default for WithSource<T> {
 }
 
 #[derive(Clone, Debug)]
-pub struct ApplicationNameAndEnvironments {
+pub struct ApplicationPreload {
     pub application_name: WithSource<ApplicationName>,
     pub environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+    pub local_server: Option<WithSource<app_raw::LocalServer>>,
+    pub version: Option<WithSource<app_raw::AppVersionSource>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResolvedLocalServer {
+    pub router_addr: Option<String>,
+    pub router_port: Option<u16>,
+    pub custom_request_port: Option<u16>,
+    pub mcp_port: Option<u16>,
+    pub ports_file: Option<PathBuf>,
+    pub data_dir: Option<PathBuf>,
+    pub agent_filesystem_root: Option<PathBuf>,
+}
+
+impl ResolvedLocalServer {
+    pub fn from_raw_with_source(
+        local_server: &WithSource<app_raw::LocalServer>,
+        app_root_dir: &Path,
+    ) -> Self {
+        let base_dir = local_server.source.parent().unwrap_or(app_root_dir);
+        Self::from_raw_with_base_dir(&local_server.value, base_dir)
+    }
+
+    pub fn from_raw_with_base_dir(local_server: &app_raw::LocalServer, base_dir: &Path) -> Self {
+        Self {
+            router_addr: local_server.router_addr.clone(),
+            router_port: local_server.router_port,
+            custom_request_port: local_server.custom_request_port,
+            mcp_port: local_server.mcp_port,
+            ports_file: local_server
+                .ports_file
+                .as_ref()
+                .map(|path| fs::absolute_lexical_path_from_base_dir(path, base_dir)),
+            data_dir: local_server
+                .data_dir
+                .as_ref()
+                .map(|path| fs::absolute_lexical_path_from_base_dir(path, base_dir)),
+            agent_filesystem_root: local_server
+                .agent_filesystem_root
+                .as_ref()
+                .map(|path| fs::absolute_lexical_path_from_base_dir(path, base_dir)),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -355,11 +475,87 @@ pub struct Application {
     bridge_sdks: WithSource<app_raw::BridgeSdks>,
 }
 
+/// Resolves the cargo target directory for the cargo project rooted at `manifest_dir`.
+///
+/// The result is the value used for the `cargoTarget` template variable. Instead of
+/// assuming `<manifest_dir>/target`, this asks cargo itself via `cargo metadata`, so it
+/// honors `CARGO_TARGET_DIR`, `build.target-dir` in cargo config, and cargo wrapper
+/// scripts that redirect the target directory. If cargo cannot be queried (no manifest,
+/// cargo not installed, etc.) it falls back to the legacy `<manifest_dir>/target` location.
+///
+/// Results are memoized per `manifest_dir` for the lifetime of the process, since the
+/// resolved target directory is stable for a given manifest.
+fn resolve_cargo_target_dir(manifest_dir: &str) -> String {
+    use std::sync::{Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    if let Some(cached) = cache.lock().unwrap().get(manifest_dir) {
+        return cached.clone();
+    }
+
+    let resolved = resolve_cargo_target_dir_uncached(manifest_dir);
+    cache
+        .lock()
+        .unwrap()
+        .insert(manifest_dir.to_string(), resolved.clone());
+    resolved
+}
+
+fn resolve_cargo_target_dir_uncached(manifest_dir: &str) -> String {
+    let fallback = || format!("{manifest_dir}/target");
+
+    let manifest_path = Path::new(manifest_dir).join("Cargo.toml");
+    if !manifest_path.exists() {
+        return fallback();
+    }
+
+    // Run cargo through whatever `cargo` is on PATH (including wrapper scripts) with the
+    // manifest's directory as the working directory, so wrappers that derive the target
+    // directory from the current directory resolve it correctly.
+    let output = std::process::Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .arg("--manifest-path")
+        .arg(&manifest_path)
+        .current_dir(manifest_dir)
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => {
+            match serde_json::from_slice::<JsonValue>(&output.stdout) {
+                Ok(metadata) => metadata
+                    .get("target_directory")
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(fallback),
+                Err(_) => fallback(),
+            }
+        }
+        _ => fallback(),
+    }
+}
+
 impl Application {
-    pub fn environments_from_raw_apps(
+    /// Returns the cargo manifest directory used to resolve the `cargoTarget` template
+    /// variable for a component located at `component_dir`.
+    ///
+    /// In a cargo workspace the target directory is shared at the application root; otherwise
+    /// it is resolved relative to the component directory. The directory is only used to query
+    /// cargo (see [`resolve_cargo_target_dir`]) lazily, when a template actually references
+    /// `cargoTarget`.
+    fn cargo_manifest_dir_for(&self, component_dir: &str) -> String {
+        if self.cargo_workspace_mode {
+            self.app_root_dir_str.clone()
+        } else {
+            component_dir.to_string()
+        }
+    }
+
+    pub fn preload_from_raw_apps(
         apps: &[app_raw::ApplicationWithSource],
-    ) -> ValidatedResult<ApplicationNameAndEnvironments> {
-        build_environments(apps)
+    ) -> ValidatedResult<ApplicationPreload> {
+        build_application_preload(apps)
     }
 
     pub fn language_templates_from_raw_apps(
@@ -403,6 +599,7 @@ impl Application {
         root_dir: PathBuf,
         application_name: WithSource<ApplicationName>,
         environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+        local_server: Option<WithSource<app_raw::LocalServer>>,
         component_presets: ComponentPresetSelector,
         apps: Vec<app_raw::ApplicationWithSource>,
     ) -> ValidatedResult<Self> {
@@ -410,6 +607,7 @@ impl Application {
             root_dir,
             application_name,
             environments,
+            local_server,
             component_presets,
             apps,
         )
@@ -509,13 +707,7 @@ impl Application {
                         .map(|s| s.to_string()),
                     fs::path_to_str(component.component_dir())
                         .ok()
-                        .map(|component_dir| {
-                            if self.cargo_workspace_mode {
-                                format!("{}/target", self.app_root_dir_str)
-                            } else {
-                                format!("{}/target", component_dir)
-                            }
-                        }),
+                        .map(|component_dir| self.cargo_manifest_dir_for(component_dir)),
                 );
 
                 let mut latest_parent_id = base_component_id.clone();
@@ -539,6 +731,7 @@ impl Application {
 
                     let template_agent_props = app_raw::AgentLayerProperties {
                         config: template_layer_props.config.value().clone(),
+                        initial_card: template_layer_props.initial_card.value().clone(),
                         env_merge_mode: None,
                         env: Some(template_layer_props.env.value().clone()),
                         plugins_merge_mode: None,
@@ -716,24 +909,95 @@ impl Application {
         &self.bridge_sdks.value
     }
 
+    pub fn bridge_sdks_source(&self) -> &Path {
+        &self.bridge_sdks.source
+    }
+
     pub fn bridge_sdk_dir(
         &self,
         agent_type_name: &AgentTypeName,
         language: GuestLanguage,
+        mode: BridgeMode,
     ) -> PathBuf {
-        match self
+        let output_dir = match mode {
+            BridgeMode::External => self
+                .bridge_sdks
+                .value
+                .for_language(language)
+                .and_then(|sdk| sdk.external.as_ref())
+                .and_then(|sdk| sdk.output_dir.as_ref()),
+            BridgeMode::Guest => self
+                .bridge_sdks
+                .value
+                .for_language(language)
+                .and_then(|sdk| sdk.internal.as_ref())
+                .and_then(|sdk| sdk.output_dir.as_ref()),
+        };
+
+        match output_dir {
+            Some(output_dir) => self
+                .bridge_sdks
+                .source
+                .join(output_dir)
+                .join(bridge_client_directory_name(agent_type_name, mode)),
+            None => match mode {
+                BridgeMode::External => {
+                    self.temp_dir().join("bridge-sdk").join(language.id()).join(
+                        bridge_client_directory_name(agent_type_name, BridgeMode::External),
+                    )
+                }
+                BridgeMode::Guest => self.dependency_bridge_sdk_dir(agent_type_name, language),
+            },
+        }
+    }
+
+    pub fn dependency_bridge_sdk_dir(
+        &self,
+        agent_type_name: &AgentTypeName,
+        language: GuestLanguage,
+    ) -> PathBuf {
+        self.temp_dir()
+            .join("bridge-sdk")
+            .join(language.id())
+            .join(BridgeMode::Guest.id())
+            .join(bridge_client_directory_name(
+                agent_type_name,
+                BridgeMode::Guest,
+            ))
+    }
+
+    fn dependency_tool_bridge_sdk_dir_base(&self, language: GuestLanguage) -> PathBuf {
+        self.temp_dir()
+            .join("bridge-sdk")
+            .join(language.id())
+            .join(BridgeMode::Guest.id())
+    }
+
+    pub fn tool_bridge_sdk_dir(&self, tool_name: &str, language: GuestLanguage) -> PathBuf {
+        let output_dir = self
             .bridge_sdks
             .value
             .for_language(language)
-            .and_then(|sdk| sdk.output_dir.as_ref())
-        {
-            Some(output_dir) => self.bridge_sdks.source.join(output_dir),
-            None => self
-                .temp_dir()
-                .join("bridge-sdk")
-                .join(language.id())
-                .join(bridge_client_directory_name(agent_type_name)),
+            .and_then(|sdk| sdk.internal.as_ref())
+            .and_then(|sdk| sdk.output_dir.as_ref());
+
+        match output_dir {
+            Some(output_dir) => self
+                .bridge_sdks
+                .source
+                .join(output_dir)
+                .join(tool_bridge_client_directory_name(tool_name)),
+            None => self.dependency_tool_bridge_sdk_dir(tool_name, language),
         }
+    }
+
+    pub fn dependency_tool_bridge_sdk_dir(
+        &self,
+        tool_name: &str,
+        language: GuestLanguage,
+    ) -> PathBuf {
+        self.dependency_tool_bridge_sdk_dir_base(language)
+            .join(tool_bridge_client_directory_name(tool_name))
     }
 
     pub fn repl_root_dir(&self, language: GuestLanguage) -> PathBuf {
@@ -1012,7 +1276,7 @@ pub struct ComponentLayerApplyContext {
     golem_temp_dir: Option<String>,
     component_dir: Option<String>,
     component_dir_rel: Option<String>,
-    cargo_target: Option<String>,
+    cargo_manifest_dir: Option<String>,
     moonbit_build_package_path: Option<String>,
 }
 
@@ -1022,7 +1286,7 @@ impl ComponentLayerApplyContext {
         app_root_dir: Option<String>,
         golem_temp_dir: Option<String>,
         component_dir: Option<String>,
-        cargo_target: Option<String>,
+        cargo_manifest_dir: Option<String>,
     ) -> Self {
         // Compute the component directory path relative to the app root, normalized
         // for portability (uses unix-style separators on Windows, avoids
@@ -1069,7 +1333,7 @@ impl ComponentLayerApplyContext {
             golem_temp_dir,
             component_dir,
             component_dir_rel,
-            cargo_target,
+            cargo_manifest_dir,
             moonbit_build_package_path,
         }
     }
@@ -1100,18 +1364,73 @@ impl ComponentLayerApplyContext {
         &self.env
     }
 
-    fn template_context(&self) -> impl Serialize {
-        let component_name = self.component_name.as_ref().map(|name| name.0.as_str());
-        Some(minijinja::context! {
-            componentName => component_name,
-            component_name => component_name,
-            appRootDir => self.app_root_dir.as_deref().unwrap_or(EMPTY_STR),
-            golemTempDir => self.golem_temp_dir.as_deref().unwrap_or(EMPTY_STR),
-            componentDir => self.component_dir.as_deref().unwrap_or(EMPTY_STR),
-            componentDirRel => self.component_dir_rel.as_deref().unwrap_or(EMPTY_STR),
-            cargoTarget => self.cargo_target.as_deref().unwrap_or(EMPTY_STR),
-            moonbitBuildPackagePath => self.moonbit_build_package_path.as_deref().unwrap_or(EMPTY_STR),
+    fn template_context(&self) -> minijinja::Value {
+        minijinja::Value::from_object(ComponentLayerTemplateContext {
+            component_name: self.component_name.as_ref().map(|name| name.0.clone()),
+            app_root_dir: self.app_root_dir.clone().unwrap_or_default(),
+            golem_temp_dir: self.golem_temp_dir.clone().unwrap_or_default(),
+            component_dir: self.component_dir.clone().unwrap_or_default(),
+            component_dir_rel: self.component_dir_rel.clone().unwrap_or_default(),
+            cargo_manifest_dir: self.cargo_manifest_dir.clone(),
+            moonbit_build_package_path: self.moonbit_build_package_path.clone().unwrap_or_default(),
         })
+    }
+}
+
+/// Lazy template context for [`ComponentLayerApplyContext`].
+///
+/// All values are resolved up-front except `cargoTarget`, which is only resolved
+/// (by querying cargo, see [`resolve_cargo_target_dir`]) when a template actually
+/// references it. This keeps cargo-free projects (e.g. TypeScript components whose
+/// manifests never use `cargoTarget`) from requiring cargo to be installed.
+#[derive(Debug)]
+struct ComponentLayerTemplateContext {
+    component_name: Option<String>,
+    app_root_dir: String,
+    golem_temp_dir: String,
+    component_dir: String,
+    component_dir_rel: String,
+    cargo_manifest_dir: Option<String>,
+    moonbit_build_package_path: String,
+}
+
+impl minijinja::value::Object for ComponentLayerTemplateContext {
+    fn get_value(self: &std::sync::Arc<Self>, key: &minijinja::Value) -> Option<minijinja::Value> {
+        match key.as_str()? {
+            "componentName" | "component_name" => Some(
+                self.component_name
+                    .as_deref()
+                    .map(minijinja::Value::from)
+                    .unwrap_or_else(|| minijinja::Value::from(())),
+            ),
+            "appRootDir" => Some(minijinja::Value::from(self.app_root_dir.as_str())),
+            "golemTempDir" => Some(minijinja::Value::from(self.golem_temp_dir.as_str())),
+            "componentDir" => Some(minijinja::Value::from(self.component_dir.as_str())),
+            "componentDirRel" => Some(minijinja::Value::from(self.component_dir_rel.as_str())),
+            "cargoTarget" => Some(minijinja::Value::from(
+                self.cargo_manifest_dir
+                    .as_deref()
+                    .map(resolve_cargo_target_dir)
+                    .unwrap_or_default(),
+            )),
+            "moonbitBuildPackagePath" => Some(minijinja::Value::from(
+                self.moonbit_build_package_path.as_str(),
+            )),
+            _ => None,
+        }
+    }
+
+    fn enumerate(self: &std::sync::Arc<Self>) -> minijinja::value::Enumerator {
+        minijinja::value::Enumerator::Str(&[
+            "componentName",
+            "component_name",
+            "appRootDir",
+            "golemTempDir",
+            "componentDir",
+            "componentDirRel",
+            "cargoTarget",
+            "moonbitBuildPackagePath",
+        ])
     }
 }
 
@@ -1221,6 +1540,32 @@ impl Layer for ComponentLayer {
                     .value()
                     .render_or_clone(template_env, template_ctx)
                     .map_err(|err| format!("Failed to render outputWasm: {}", err))?,
+            );
+
+            value.dependency_agents.apply_layer(
+                id,
+                selection,
+                (
+                    VecMergeMode::Append,
+                    properties
+                        .dependency_agents
+                        .value()
+                        .render_or_clone(template_env, template_ctx)
+                        .map_err(|err| format!("Failed to render dependencies: {}", err))?,
+                ),
+            );
+
+            value.dependency_tools.apply_layer(
+                id,
+                selection,
+                (
+                    VecMergeMode::Append,
+                    properties
+                        .dependency_tools
+                        .value()
+                        .render_or_clone(template_env, template_ctx)
+                        .map_err(|err| format!("Failed to render dependencies: {}", err))?,
+                ),
             );
 
             value.build.apply_layer(
@@ -1339,6 +1684,10 @@ impl<'a> Agent<'a> {
 
     pub fn config(&self) -> Option<&JsonValue> {
         self.resolved.properties.config.as_ref()
+    }
+
+    pub fn initial_card(&self) -> Option<&app_raw::ManifestInitialCard> {
+        self.resolved.properties.initial_card.as_ref()
     }
 
     pub fn env(&self) -> &BTreeMap<String, String> {
@@ -1467,13 +1816,9 @@ impl<'a> Component<'a> {
         self.final_wasm()
     }
 
-    /// File for storing extracted agent types
-    pub fn extracted_agent_types(&self, source_wasm_path: &Path) -> PathBuf {
-        self.temp_dir.join("extracted-agent-types").join(format!(
-            "{}-{}.json",
-            self.component_name.as_str(),
-            blake3::hash(source_wasm_path.display().to_string().as_bytes()).to_hex()
-        ))
+    /// File for storing extracted component metadata (agent types and tools)
+    pub fn extracted_component_metadata(&self, source_wasm_path: &Path) -> PathBuf {
+        extracted_component_metadata_path(self.temp_dir, self.component_name, source_wasm_path)
     }
 
     pub fn env(&self) -> &BTreeMap<String, String> {
@@ -1507,6 +1852,7 @@ impl<'a> Component<'a> {
     pub fn agent_base_properties(&self) -> app_raw::AgentLayerProperties {
         app_raw::AgentLayerProperties {
             config: self.layer_properties().config.value().clone(),
+            initial_card: self.layer_properties().initial_card.value().clone(),
             env_merge_mode: None,
             env: Some(self.layer_properties().env.value().clone()),
             plugins_merge_mode: None,
@@ -1515,6 +1861,18 @@ impl<'a> Component<'a> {
             files: Some(self.layer_properties().files.value().clone()),
         }
     }
+}
+
+pub fn extracted_component_metadata_path(
+    temp_dir: &Path,
+    component_name: &ComponentName,
+    source_wasm_path: &Path,
+) -> PathBuf {
+    temp_dir.join("extracted-component-metadata").join(format!(
+        "{}-{}.json",
+        component_name.as_str(),
+        blake3::hash(source_wasm_path.display().to_string().as_bytes()).to_hex()
+    ))
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -1528,12 +1886,15 @@ pub struct ComponentLayerProperties {
 
     pub component_wasm: OptionalProperty<ComponentLayer, String>,
     pub output_wasm: OptionalProperty<ComponentLayer, String>,
+    pub dependency_agents: VecProperty<ComponentLayer, app_raw::ComponentDependencyReference>,
+    pub dependency_tools: VecProperty<ComponentLayer, app_raw::ComponentDependencyReference>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     pub build: VecProperty<ComponentLayer, app_raw::BuildCommand>,
     pub custom_commands: MapProperty<ComponentLayer, String, Vec<app_raw::ExternalCommand>>,
     pub clean: VecProperty<ComponentLayer, String>,
     pub config: JsonProperty<ComponentLayer>,
+    pub initial_card: OptionalProperty<ComponentLayer, app_raw::ManifestInitialCard>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     pub env: MapProperty<ComponentLayer, String, String>,
@@ -1551,11 +1912,14 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             applied_layers: vec![],
             component_wasm: value.component_wasm.into(),
             output_wasm: value.output_wasm.into(),
+            dependency_agents: value.dependencies.agents.into(),
+            dependency_tools: value.dependencies.tools.into(),
             build_merge_mode: value.build_merge_mode,
             build: value.build.into(),
             custom_commands: value.custom_commands.into(),
             clean: value.clean.into(),
             config: value.agent_properties.config.into(),
+            initial_card: value.agent_properties.initial_card.into(),
             env_merge_mode: value.agent_properties.env_merge_mode,
             env: value.agent_properties.env.unwrap_or_default().into(),
             plugins_merge_mode: value.agent_properties.plugins_merge_mode,
@@ -1570,10 +1934,13 @@ impl ComponentLayerProperties {
     pub fn compact_traces(&mut self) {
         self.component_wasm.compact_trace();
         self.output_wasm.compact_trace();
+        self.dependency_agents.compact_trace();
+        self.dependency_tools.compact_trace();
         self.build.compact_trace();
         self.custom_commands.compact_trace();
         self.clean.compact_trace();
         self.config.compact_trace();
+        self.initial_card.compact_trace();
         self.env.compact_trace();
         self.plugins.compact_trace();
         self.files.compact_trace();
@@ -1740,6 +2107,9 @@ impl Layer for AgentLayer {
             value
                 .config
                 .apply_layer(id, selection, properties.config.clone());
+            value
+                .initial_card
+                .apply_layer(id, selection, properties.initial_card.clone());
             value.env.apply_layer(
                 id,
                 selection,
@@ -1778,6 +2148,7 @@ pub struct AgentLayerProperties {
     )]
     pub applied_layers: Vec<(AgentLayerId, Option<String>)>,
     config: JsonProperty<AgentLayer>,
+    initial_card: OptionalProperty<AgentLayer, app_raw::ManifestInitialCard>,
     env: MapProperty<AgentLayer, String, String>,
     plugins: VecProperty<AgentLayer, app_raw::PluginInstallation>,
     files: VecProperty<AgentLayer, app_raw::InitialComponentFile>,
@@ -1796,6 +2167,7 @@ impl AgentLayerProperties {
 
     pub fn compact_traces(&mut self) {
         self.config.compact_trace();
+        self.initial_card.compact_trace();
         self.env.compact_trace();
         self.plugins.compact_trace();
         self.files.compact_trace();
@@ -1830,6 +2202,7 @@ impl AgentLayerProperties {
 #[derive(Clone, Debug)]
 pub struct AgentProperties {
     pub config: Option<JsonValue>,
+    pub initial_card: Option<app_raw::ManifestInitialCard>,
     pub env: BTreeMap<String, String>,
     pub plugins: Vec<app_raw::PluginInstallation>,
     pub files: Vec<app_raw::InitialComponentFile>,
@@ -1839,6 +2212,7 @@ impl AgentProperties {
     fn from_resolved(layer_properties: &AgentLayerProperties) -> Self {
         Self {
             config: layer_properties.config.value().clone(),
+            initial_card: layer_properties.initial_card.value().clone(),
             env: layer_properties
                 .env
                 .value()
@@ -1857,6 +2231,7 @@ pub struct ComponentProperties {
     pub component_dir: PathBuf, // Resolved canonical component path
     pub component_wasm: String,
     pub output_wasm: Option<String>,
+    pub dependencies: Vec<ComponentDependency>,
     pub build: Vec<app_raw::BuildCommand>,
     pub custom_commands: BTreeMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
@@ -1864,6 +2239,7 @@ pub struct ComponentProperties {
     pub plugins: Vec<PluginInstallation>,
     pub env: BTreeMap<String, String>,
     pub config: Option<JsonValue>,
+    pub initial_card: Option<app_raw::ManifestInitialCard>,
 }
 
 impl ComponentProperties {
@@ -1884,6 +2260,11 @@ impl ComponentProperties {
             component_dir,
             component_wasm: merged.component_wasm.value().clone().unwrap_or_default(),
             output_wasm: merged.output_wasm.value().clone(),
+            dependencies: Self::validate_dependencies(
+                validation,
+                merged.dependency_agents.value(),
+                merged.dependency_tools.value(),
+            ),
             build: merged.build.value().clone(),
             custom_commands: merged
                 .custom_commands
@@ -1896,6 +2277,7 @@ impl ComponentProperties {
             plugins,
             env: Self::validate_and_normalize_env(validation, merged.env.value().iter()),
             config: merged.config.value().clone(),
+            initial_card: merged.initial_card.value().clone(),
         };
 
         for (name, value) in [("componentWasm", &properties.component_wasm)] {
@@ -1908,6 +2290,44 @@ impl ComponentProperties {
         }
 
         properties
+    }
+
+    fn validate_dependencies(
+        validation: &mut ValidationBuilder,
+        agent_dependencies: &[app_raw::ComponentDependencyReference],
+        tool_dependencies: &[app_raw::ComponentDependencyReference],
+    ) -> Vec<ComponentDependency> {
+        let agents = agent_dependencies
+            .iter()
+            .filter_map(|dependency| {
+                parse_component_dependency_reference(validation, "agent", dependency).map(
+                    |(component_name, name)| ComponentDependency::Agent {
+                        component_name,
+                        agent_type_name: AgentTypeName(name),
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        let tools = tool_dependencies.iter().filter_map(|dependency| {
+            parse_component_dependency_reference(validation, "tool", dependency).map(
+                |(component_name, name)| ComponentDependency::Tool {
+                    component_name,
+                    tool_name: match ToolName::try_from(name.as_str()) {
+                        Ok(tool_name) => tool_name,
+                        Err(err) => {
+                            validation.add_error(format!(
+                                "Invalid tool dependency name: {}. {}",
+                                name.log_color_error_highlight(),
+                                err
+                            ));
+                            ToolName(name)
+                        }
+                    },
+                },
+            )
+        });
+
+        agents.into_iter().chain(tools).collect()
     }
 
     fn validate_and_normalize_env(
@@ -1938,6 +2358,48 @@ impl ComponentProperties {
                 (upper_case_key, value.to_string())
             })
             .collect()
+    }
+}
+
+fn parse_component_dependency_reference(
+    validation: &mut ValidationBuilder,
+    kind: &str,
+    dependency: &app_raw::ComponentDependencyReference,
+) -> Option<(ComponentName, String)> {
+    let (component, name) = match dependency {
+        app_raw::ComponentDependencyReference::Shortcut(shortcut) => {
+            let Some((component, name)) = shortcut.split_once('/') else {
+                validation.add_error(format!(
+                    "Invalid {kind} dependency {}. Expected 'component/name' or an object with 'component' and 'name' fields",
+                    shortcut.log_color_error_highlight(),
+                ));
+                return None;
+            };
+            (component.to_string(), name.to_string())
+        }
+        app_raw::ComponentDependencyReference::Structured(structured) => {
+            (structured.component.clone(), structured.name.clone())
+        }
+    };
+
+    if name.is_empty() {
+        validation.add_error(format!(
+            "Invalid {kind} dependency for component {}. Dependency name must not be empty",
+            component.log_color_error_highlight(),
+        ));
+        return None;
+    }
+
+    match ComponentName::try_from(component.as_str()) {
+        Ok(component_name) => Some((component_name, name)),
+        Err(err) => {
+            validation.add_error(format!(
+                "Invalid {kind} dependency component {}. {}",
+                component.log_color_error_highlight(),
+                err,
+            ));
+            None
+        }
     }
 }
 
@@ -2089,10 +2551,10 @@ mod app_builder {
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
-        Application, ApplicationNameAndEnvironments, ComponentLayer, ComponentLayerApplyContext,
-        ComponentLayerId, ComponentLayerProperties, ComponentLayerPropertiesKind,
-        ComponentPresetName, ComponentPresetSelector, ComponentProperties,
-        PartitionedComponentPresets, TEMP_DIR, WithSource,
+        Application, ApplicationPreload, ComponentDependency, ComponentLayer,
+        ComponentLayerApplyContext, ComponentLayerId, ComponentLayerProperties,
+        ComponentLayerPropertiesKind, ComponentPresetName, ComponentPresetSelector,
+        ComponentProperties, PartitionedComponentPresets, TEMP_DIR, WithSource,
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
@@ -2123,6 +2585,7 @@ mod app_builder {
         root_dir: PathBuf,
         application_name: WithSource<ApplicationName>,
         environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+        local_server: Option<WithSource<app_raw::LocalServer>>,
         component_presets: ComponentPresetSelector,
         apps: Vec<app_raw::ApplicationWithSource>,
     ) -> ValidatedResult<Application> {
@@ -2130,16 +2593,17 @@ mod app_builder {
             root_dir,
             application_name,
             environments,
+            local_server,
             component_presets,
             apps,
         )
     }
 
-    // Load only environments
-    pub fn build_environments(
+    // Load manifest fields needed before full application loading.
+    pub fn build_application_preload(
         apps: &[app_raw::ApplicationWithSource],
-    ) -> ValidatedResult<ApplicationNameAndEnvironments> {
-        AppBuilder::build_environments(apps)
+    ) -> ValidatedResult<ApplicationPreload> {
+        AppBuilder::build_application_preload(apps)
     }
 
     #[derive(Debug, PartialEq, Eq, Hash)]
@@ -2155,6 +2619,8 @@ mod app_builder {
         RetryPolicyDefaults(EnvironmentName),
         ResourceDefaults(EnvironmentName),
         Bridge,
+        LocalServer,
+        Version,
     }
 
     impl UniqueSourceCheckedEntityKey {
@@ -2172,6 +2638,8 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::RetryPolicyDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::ResourceDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::Bridge => "Bridge",
+                UniqueSourceCheckedEntityKey::LocalServer => property,
+                UniqueSourceCheckedEntityKey::Version => property,
             }
         }
 
@@ -2218,8 +2686,172 @@ mod app_builder {
                     )
                 }
                 UniqueSourceCheckedEntityKey::Bridge => "bridge".log_color_highlight().to_string(),
+                UniqueSourceCheckedEntityKey::LocalServer => {
+                    "localServer".log_color_highlight().to_string()
+                }
+                UniqueSourceCheckedEntityKey::Version => {
+                    "version".log_color_highlight().to_string()
+                }
             }
         }
+    }
+
+    fn resolve_http_api_domain(
+        validation: &mut ValidationBuilder,
+        deployment: &app_raw::HttpApiDeployment,
+        environment_name: &EnvironmentName,
+        environment: Option<&app_raw::Environment>,
+        local_server: Option<&WithSource<app_raw::LocalServer>>,
+        source: &Path,
+    ) -> Option<Domain> {
+        resolve_deployment_domain(
+            validation,
+            deployment.domain.as_ref(),
+            deployment.subdomain.as_ref(),
+            environment_name,
+            environment,
+            local_server.map(|local_server| &local_server.value),
+            |local_server| local_server.and_then(|local_server| local_server.custom_request_port),
+            crate::config::DEFAULT_LOCAL_CUSTOM_REQUEST_PORT,
+            crate::config::CLOUD_HTTP_API_DOMAIN,
+            "HTTP API",
+            source,
+        )
+    }
+
+    fn resolve_mcp_domain(
+        validation: &mut ValidationBuilder,
+        deployment: &app_raw::McpDeployment,
+        environment_name: &EnvironmentName,
+        environment: Option<&app_raw::Environment>,
+        local_server: Option<&WithSource<app_raw::LocalServer>>,
+        source: &Path,
+    ) -> Option<Domain> {
+        resolve_deployment_domain(
+            validation,
+            deployment.domain.as_ref(),
+            deployment.subdomain.as_ref(),
+            environment_name,
+            environment,
+            local_server.map(|local_server| &local_server.value),
+            |local_server| local_server.and_then(|local_server| local_server.mcp_port),
+            crate::config::DEFAULT_LOCAL_MCP_PORT,
+            crate::config::CLOUD_MCP_DOMAIN,
+            "MCP",
+            source,
+        )
+    }
+
+    fn resolve_deployment_domain(
+        validation: &mut ValidationBuilder,
+        domain: Option<&app_raw::DeploymentDomain>,
+        subdomain: Option<&app_raw::DeploymentSubdomain>,
+        environment_name: &EnvironmentName,
+        environment: Option<&app_raw::Environment>,
+        local_server: Option<&app_raw::LocalServer>,
+        local_port: impl Fn(Option<&app_raw::LocalServer>) -> Option<u16>,
+        default_local_port: u16,
+        cloud_domain: &str,
+        deployment_kind: &str,
+        source: &Path,
+    ) -> Option<Domain> {
+        match (domain, subdomain) {
+            (Some(domain), None) => {
+                let raw = domain.as_str();
+                Some(Domain(raw.to_string()))
+            }
+            (None, Some(subdomain)) => {
+                let label = subdomain.as_str();
+                if !is_valid_deployment_subdomain(label) {
+                    validation.add_error(invalid_deployment_subdomain_error(label, source));
+                    return None;
+                }
+
+                let Some(environment) = environment else {
+                    validation.add_error(format!(
+                        "Cannot resolve {} deployment subdomain {} in {} because environment {} is not defined.",
+                        deployment_kind,
+                        label.log_color_highlight(),
+                        source.display().to_string().log_color_highlight(),
+                        environment_name.0.log_color_highlight(),
+                    ));
+                    return None;
+                };
+
+                let resolved_domain = match environment.server.as_ref() {
+                    Some(app_raw::Server::Custom(_)) => {
+                        validation.add_error(format!(
+                            "Cannot use {} deployment subdomain {} in {} for custom server environment {}. Use the {} field with a full domain instead.",
+                            deployment_kind,
+                            label.log_color_highlight(),
+                            source.display().to_string().log_color_highlight(),
+                            environment_name.0.log_color_highlight(),
+                            "domain".log_color_highlight(),
+                        ));
+                        return None;
+                    }
+                    Some(app_raw::Server::Builtin(app_raw::BuiltinServer::Cloud)) => {
+                        Domain(format!("{label}.{cloud_domain}"))
+                    }
+                    Some(app_raw::Server::Builtin(app_raw::BuiltinServer::Local)) | None => {
+                        let local_port = local_port(local_server).unwrap_or(default_local_port);
+                        Domain(format!("{label}.localhost:{}", local_port))
+                    }
+                };
+
+                Some(resolved_domain)
+            }
+            (Some(_), Some(subdomain)) => {
+                validation.add_error(format!(
+                    "Deployment in {} cannot define both {} and {}. Use {} for a full domain, or {} for a built-in local/cloud server subdomain.",
+                    source.display().to_string().log_color_highlight(),
+                    "domain".log_color_highlight(),
+                    "subdomain".log_color_highlight(),
+                    "domain".log_color_highlight(),
+                    "subdomain".log_color_highlight(),
+                ));
+                if !is_valid_deployment_subdomain(subdomain.as_str()) {
+                    validation.add_error(invalid_deployment_subdomain_error(
+                        subdomain.as_str(),
+                        source,
+                    ));
+                }
+                None
+            }
+            (None, None) => {
+                validation.add_error(format!(
+                    "Deployment in {} must define either {} or {}.",
+                    source.display().to_string().log_color_highlight(),
+                    "domain".log_color_highlight(),
+                    "subdomain".log_color_highlight(),
+                ));
+                None
+            }
+        }
+    }
+
+    fn is_valid_deployment_subdomain(label: &str) -> bool {
+        !label.is_empty()
+            && label.len() <= 63
+            && label
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+            && label
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+            && label
+                .chars()
+                .last()
+                .is_some_and(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+    }
+
+    fn invalid_deployment_subdomain_error(label: &str, source: &Path) -> String {
+        format!(
+            "Invalid deployment subdomain {} in {}. Use a single lowercase DNS label without dots, ports, or URL schemes.",
+            label.log_color_highlight(),
+            source.display().to_string().log_color_highlight(),
+        )
     }
 
     #[derive(Default)]
@@ -2228,6 +2860,9 @@ mod app_builder {
         app: Option<WithSource<ApplicationName>>,
         default_environment_names: BTreeSet<EnvironmentName>,
         environments: IndexMap<EnvironmentName, app_raw::Environment>,
+        local_server: Option<WithSource<app_raw::LocalServer>>,
+        deployment_domain_local_server: Option<WithSource<app_raw::LocalServer>>,
+        version: Option<WithSource<app_raw::AppVersionSource>>,
 
         // "Consts" for component templating
         app_root_dir_str: String,
@@ -2273,18 +2908,23 @@ mod app_builder {
     }
 
     impl AppBuilder {
-        // NOTE: build_app DOES NOT include environments, those are preloaded with build_environments, so
-        //       flows that do not use manifest otherwise won't get blocked by high-level validation errors,
+        // NOTE: build_app receives preloaded application fields, so flows that do not otherwise
+        //       need the full manifest are not blocked by high-level validation errors,
         //       and we do not "steal" manifest loading logs from those which do use the manifest fully.
         fn build_app(
             app_root_dir: PathBuf,
             application_name: WithSource<ApplicationName>,
             environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+            local_server: Option<WithSource<app_raw::LocalServer>>,
             component_presets: ComponentPresetSelector,
             apps: Vec<app_raw::ApplicationWithSource>,
         ) -> ValidatedResult<Application> {
             let mut validation = ValidationBuilder::default();
-            let mut builder = Self::default();
+            let mut builder = Self {
+                environments: environments.clone().into_iter().collect(),
+                deployment_domain_local_server: local_server,
+                ..Self::default()
+            };
 
             match Ok::<&PathBuf, anyhow::Error>(&app_root_dir).and_then(|app_root_dir| {
                 Ok((
@@ -2344,14 +2984,14 @@ mod app_builder {
 
         // NOTE: Unlike build_app, here we do not consume the source apps, so they can be
         //       used for build_app. For more info on this separation, see build_app.
-        fn build_environments(
+        fn build_application_preload(
             apps: &[app_raw::ApplicationWithSource],
-        ) -> ValidatedResult<ApplicationNameAndEnvironments> {
+        ) -> ValidatedResult<ApplicationPreload> {
             let mut builder = Self::default();
             let mut validation = ValidationBuilder::default();
 
             for app in apps {
-                builder.add_raw_app_environments_only(&mut validation, app);
+                builder.add_raw_app_preload_only(&mut validation, app);
             }
 
             if builder.default_environment_names.len() > 1 {
@@ -2392,9 +3032,11 @@ mod app_builder {
                 }
             };
 
-            validation.build(ApplicationNameAndEnvironments {
+            validation.build(ApplicationPreload {
                 application_name,
                 environments: builder.environments.into_iter().collect(),
+                local_server: builder.local_server,
+                version: builder.version,
             })
         }
 
@@ -2489,6 +3131,19 @@ mod app_builder {
                     if let Some(http_api) = app.application.http_api {
                         for (environment, deployments) in http_api.deployments {
                             for api_deployment in deployments {
+                                let Some(domain) = resolve_http_api_domain(
+                                    validation,
+                                    &api_deployment,
+                                    &environment,
+                                    self.environments.get(&environment),
+                                    self.deployment_domain_local_server
+                                        .as_ref()
+                                        .or(self.local_server.as_ref()),
+                                    &app.source,
+                                ) else {
+                                    continue;
+                                };
+
                                 let deployments =
                                     self.http_api_deployments.entry(environment.clone()).or_default();
 
@@ -2504,7 +3159,7 @@ mod app_builder {
                                     )
                                     .collect();
 
-                                deployments.entry(api_deployment.domain).or_insert(WithSource::new(
+                                deployments.entry(domain).or_insert(WithSource::new(
                                     app.source.to_path_buf(),
                                     HttpApiDeploymentDeployProperties {
                                         webhooks_prefix: HttpApiDeploymentCreation::normalize_webhooks_prefix(
@@ -2523,6 +3178,19 @@ mod app_builder {
                     if let Some(mcp) = app.application.mcp {
                         for (environment, deployments) in mcp.deployments {
                             for mcp_deployment in deployments {
+                                let Some(domain) = resolve_mcp_domain(
+                                    validation,
+                                    &mcp_deployment,
+                                    &environment,
+                                    self.environments.get(&environment),
+                                    self.deployment_domain_local_server
+                                        .as_ref()
+                                        .or(self.local_server.as_ref()),
+                                    &app.source,
+                                ) else {
+                                    continue;
+                                };
+
                                 let mcp_deployments =
                                     self.mcp_deployments.entry(environment.clone()).or_default();
 
@@ -2533,7 +3201,7 @@ mod app_builder {
                                     }))
                                     .collect();
 
-                                mcp_deployments.entry(mcp_deployment.domain.clone()).or_insert(WithSource::new(
+                                mcp_deployments.entry(domain).or_insert(WithSource::new(
                                     app.source.to_path_buf(),
                                     McpDeploymentDeployProperties { agents },
                                 ));
@@ -2613,13 +3281,10 @@ mod app_builder {
                             self.bridge_sdks =
                                 WithSource::new(app_source_dir.to_path_buf(), bridge);
 
-                            for (target_language, sdk_targets) in
-                                self.bridge_sdks.value.for_all_used_languages()
+                            for (target_language, bridge_mode, sdk_targets) in
+                                self.bridge_sdks.value.for_all_used_modes()
                             {
-                                let sdk_targets = sdk_targets
-                                    .agents
-                                    .clone()
-                                    .into_vec();
+                                let sdk_targets = sdk_targets.agents.clone().into_vec();
                                 let non_unique_targets = sdk_targets.iter()
                                     .counts()
                                     .into_iter()
@@ -2627,7 +3292,10 @@ mod app_builder {
                                     .collect::<Vec<_>>();
 
                                 validation.with_context(
-                                    vec![("bridge SDK language", target_language.to_string())],
+                                    vec![
+                                        ("bridge SDK language", target_language.to_string()),
+                                        ("bridge SDK mode", bridge_mode.to_string()),
+                                    ],
                                     |validation| {
                                         if !non_unique_targets.is_empty() {
                                             validation.add_error(format!(
@@ -2652,11 +3320,34 @@ mod app_builder {
                                     },
                                 );
                             }
+
+                            for (target_language, sdk_targets) in
+                                self.bridge_sdks.value.for_all_languages()
+                            {
+                                if !matches!(
+                                    target_language,
+                                    crate::model::GuestLanguage::Rust
+                                        | crate::model::GuestLanguage::Scala
+                                        | crate::model::GuestLanguage::MoonBit
+                                )
+                                    && sdk_targets.is_some_and(|targets| targets.internal.is_some())
+                                {
+                                    validation.with_context(
+                                        vec![("bridge SDK language", target_language.to_string())],
+                                        |validation| {
+                                            validation.add_error(format!(
+                                                "internal bridge mode is not supported for {} yet",
+                                                target_language.to_string().log_color_error_highlight()
+                                            ));
+                                        },
+                                    );
+                                }
+                            }
                         }
                 });
         }
 
-        fn add_raw_app_environments_only(
+        fn add_raw_app_preload_only(
             &mut self,
             validation: &mut ValidationBuilder,
             app: &app_raw::ApplicationWithSource,
@@ -2714,7 +3405,90 @@ mod app_builder {
                             );
                         }
                     }
+
+                    if let Some(local_server) = &app.application.local_server {
+                        match &self.local_server {
+                            Some(existing) => validation.add_error(format!(
+                                "{} {} is defined in multiple sources: {}, {}",
+                                UniqueSourceCheckedEntityKey::LocalServer.entity_kind(),
+                                UniqueSourceCheckedEntityKey::LocalServer.entity_name(),
+                                existing.source.log_color_highlight(),
+                                app.source.log_color_highlight()
+                            )),
+                            None => {
+                                Self::validate_local_server_ports(
+                                    validation,
+                                    local_server,
+                                    &app.source,
+                                );
+                                self.local_server =
+                                    Some(WithSource::new(app.source.clone(), local_server.clone()));
+                            }
+                        }
+                    }
+
+                    if let Some(version) = &app.application.version {
+                        match &self.version {
+                            Some(existing) => validation.add_error(format!(
+                                "{} {} is defined in multiple sources: {}, {}",
+                                UniqueSourceCheckedEntityKey::Version.entity_kind(),
+                                UniqueSourceCheckedEntityKey::Version.entity_name(),
+                                existing.source.log_color_highlight(),
+                                app.source.log_color_highlight()
+                            )),
+                            None => {
+                                self.version =
+                                    Some(WithSource::new(app.source.clone(), version.clone()));
+                            }
+                        }
+                    }
                 },
+            );
+        }
+
+        fn validate_local_server_ports(
+            validation: &mut ValidationBuilder,
+            local_server: &app_raw::LocalServer,
+            source: &Path,
+        ) {
+            fn validate_port(
+                validation: &mut ValidationBuilder,
+                value: Option<u16>,
+                manifest_field_name: &str,
+                cli_flag_name: &str,
+                source: &Path,
+            ) {
+                if value == Some(0) {
+                    validation.add_error(format!(
+                        "{} in {} must be nonzero. Port 0 is only allowed when passed directly as {} to {}.",
+                        manifest_field_name.log_color_highlight(),
+                        source.display().to_string().log_color_highlight(),
+                        format!("{cli_flag_name} 0").log_color_highlight(),
+                        "golem server run".log_color_highlight(),
+                    ));
+                }
+            }
+
+            validate_port(
+                validation,
+                local_server.router_port,
+                "localServer.routerPort",
+                "--router-port",
+                source,
+            );
+            validate_port(
+                validation,
+                local_server.custom_request_port,
+                "localServer.customRequestPort",
+                "--custom-request-port",
+                source,
+            );
+            validate_port(
+                validation,
+                local_server.mcp_port,
+                "localServer.mcpPort",
+                "--mcp-port",
+                source,
             );
         }
 
@@ -2955,9 +3729,9 @@ mod app_builder {
                 Some(self.golem_temp_dir_str.clone()),
                 Some(component_dir_str.clone()),
                 Some(if self.cargo_workspace_mode {
-                    format!("{}/target", self.app_root_dir_str)
+                    self.app_root_dir_str.clone()
                 } else {
-                    format!("{}/target", component_dir_str)
+                    component_dir_str.clone()
                 }),
             );
 
@@ -2974,12 +3748,46 @@ mod app_builder {
                         component_dir,
                         &component_layer_properties,
                     );
+                    self.validate_component_dependencies(
+                        validation,
+                        &component_name,
+                        &component_properties.dependencies,
+                    );
                     self.components.insert(
                         component_name,
                         WithSource::new(source, (component_properties, component_layer_properties)),
                     );
                 }
                 Err(err) => validation.add_error(format!("Failed to resolve component: {err}")),
+            }
+        }
+
+        fn validate_component_dependencies(
+            &self,
+            validation: &mut ValidationBuilder,
+            component_name: &ComponentName,
+            dependencies: &[ComponentDependency],
+        ) {
+            for dependency in dependencies {
+                if dependency.component_name() == component_name {
+                    validation.add_error(format!(
+                        "Component {} cannot depend on its own guest bridge SDK",
+                        component_name.as_str().log_color_highlight(),
+                    ));
+                }
+                if !self
+                    .component_names_to_source_and_dir
+                    .contains_key(dependency.component_name())
+                {
+                    validation.add_error(format!(
+                        "Component {} depends on unknown component {}",
+                        component_name.as_str().log_color_highlight(),
+                        dependency
+                            .component_name()
+                            .as_str()
+                            .log_color_error_highlight(),
+                    ));
+                }
             }
         }
 
@@ -3128,14 +3936,17 @@ mod app_builder {
 
 #[cfg(test)]
 mod test {
+    use crate::bridge_gen::{BridgeMode, bridge_client_directory_name};
     use crate::fs;
     use crate::model::app::{
-        Application, ApplicationNameAndEnvironments, ComponentPresetSelector,
+        Application, ApplicationPreload, ComponentDependency, ComponentPresetSelector, ToolName,
         includes_from_yaml_file,
     };
     use crate::model::app_raw;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::ComponentName;
+    use golem_common::model::domain_registration::Domain;
+    use golem_common::model::environment::EnvironmentName;
     use indoc::indoc;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -3462,6 +4273,505 @@ mod test {
 
         let result = app_raw::Application::from_yaml_str(source);
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn bridge_sdk_output_dir_is_base_for_per_agent_external_targets() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              rust:
+                external:
+                  agents:
+                    - AlphaAgent
+                    - BetaAgent
+                  outputDir: bridge-sdk/rust
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
+        let alpha_agent = parse_agent_type_name("AlphaAgent");
+        let beta_agent = parse_agent_type_name("BetaAgent");
+
+        assert_eq!(
+            app.bridge_sdk_dir(
+                &alpha_agent,
+                crate::model::GuestLanguage::Rust,
+                BridgeMode::External
+            ),
+            app_tmp_dir
+                .path()
+                .join("bridge-sdk/rust")
+                .join(bridge_client_directory_name(
+                    &alpha_agent,
+                    BridgeMode::External
+                ))
+        );
+        assert_eq!(
+            app.bridge_sdk_dir(
+                &beta_agent,
+                crate::model::GuestLanguage::Rust,
+                BridgeMode::External
+            ),
+            app_tmp_dir
+                .path()
+                .join("bridge-sdk/rust")
+                .join(bridge_client_directory_name(
+                    &beta_agent,
+                    BridgeMode::External
+                ))
+        );
+    }
+
+    #[test]
+    fn bridge_sdk_output_dir_is_mode_separated_for_guest_targets() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              rust:
+                external:
+                  agents:
+                    - AlphaAgent
+                internal:
+                  agents:
+                    - AlphaAgent
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+        let alpha_agent = parse_agent_type_name("AlphaAgent");
+
+        assert_eq!(
+            app.bridge_sdk_dir(
+                &alpha_agent,
+                crate::model::GuestLanguage::Rust,
+                BridgeMode::External
+            ),
+            app.temp_dir()
+                .join("bridge-sdk")
+                .join("rust")
+                .join(bridge_client_directory_name(
+                    &alpha_agent,
+                    BridgeMode::External
+                ))
+        );
+        assert_eq!(
+            app.bridge_sdk_dir(
+                &alpha_agent,
+                crate::model::GuestLanguage::Rust,
+                BridgeMode::Guest
+            ),
+            app.temp_dir()
+                .join("bridge-sdk")
+                .join("rust")
+                .join("internal")
+                .join(bridge_client_directory_name(
+                    &alpha_agent,
+                    BridgeMode::Guest
+                ))
+        );
+    }
+
+    #[test]
+    fn bridge_sdk_output_dir_uses_guest_output_dir_as_per_agent_base() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              rust:
+                internal:
+                  agents:
+                    - AlphaAgent
+                  outputDir: bridge-sdk/rust-guest
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
+        let alpha_agent = parse_agent_type_name("AlphaAgent");
+
+        assert_eq!(
+            app.bridge_sdk_dir(
+                &alpha_agent,
+                crate::model::GuestLanguage::Rust,
+                BridgeMode::Guest
+            ),
+            app_tmp_dir
+                .path()
+                .join("bridge-sdk/rust-guest")
+                .join(bridge_client_directory_name(
+                    &alpha_agent,
+                    BridgeMode::Guest
+                ))
+        );
+    }
+
+    #[test]
+    fn bridge_sdk_guest_tools_are_accepted_and_use_tool_bridge_dir() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              rust:
+                internal:
+                  tools:
+                    - MyTool
+                  outputDir: bridge-sdk/rust-guest
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        assert_eq!(
+            app.tool_bridge_sdk_dir("MyTool", crate::model::GuestLanguage::Rust),
+            app_tmp_dir.path().join("bridge-sdk/rust-guest").join(
+                crate::bridge_gen::tool_bridge_client_directory_name("MyTool")
+            )
+        );
+
+        let used_modes = app.bridge_sdks().for_all_used_modes();
+        assert_eq!(used_modes.len(), 1);
+        assert_eq!(used_modes[0].0, crate::model::GuestLanguage::Rust);
+        assert_eq!(used_modes[0].1, BridgeMode::Guest);
+    }
+
+    #[test]
+    fn moonbit_bridge_sdk_guest_tools_are_accepted_and_use_tool_bridge_dir() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              moonbit:
+                internal:
+                  tools:
+                    - MyTool
+                  outputDir: bridge-sdk/moonbit-guest
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        assert_eq!(
+            app.tool_bridge_sdk_dir("MyTool", crate::model::GuestLanguage::MoonBit),
+            app_tmp_dir.path().join("bridge-sdk/moonbit-guest").join(
+                crate::bridge_gen::tool_bridge_client_directory_name("MyTool")
+            )
+        );
+
+        let used_modes = app.bridge_sdks().for_all_used_modes();
+        assert_eq!(used_modes.len(), 1);
+        assert_eq!(used_modes[0].0, crate::model::GuestLanguage::MoonBit);
+        assert_eq!(used_modes[0].1, BridgeMode::Guest);
+    }
+
+    #[test]
+    fn component_dependencies_are_agent_and_tool_guest_bridge_targets() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:provider:
+                componentWasm: provider.wasm
+
+              app:main:
+                componentWasm: dummy-component.wasm
+                dependencies:
+                  agents:
+                    - app:provider/ShoppingCart
+                  tools:
+                    - component: app:provider
+                      name: grep
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+        let component_name = parse_component_name("app:main");
+        let component = app.component(&component_name);
+        let dependencies = &component.properties().dependencies;
+
+        assert_eq!(
+            dependencies,
+            &vec![
+                ComponentDependency::Agent {
+                    component_name: parse_component_name("app:provider"),
+                    agent_type_name: parse_agent_type_name("ShoppingCart"),
+                },
+                ComponentDependency::Tool {
+                    component_name: parse_component_name("app:provider"),
+                    tool_name: ToolName::try_from("grep").unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn component_dependencies_reject_malformed_shortcut() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:provider:
+                componentWasm: provider.wasm
+
+              app:main:
+                componentWasm: dummy-component.wasm
+                dependencies:
+                  agents:
+                    - ShoppingCart
+        "# });
+
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("Expected 'component/name'"),
+            "unexpected error: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn component_dependencies_reject_self_dependency() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                dependencies:
+                  agents:
+                    - app:main/ShoppingCart
+        "# });
+
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("cannot depend on its own guest bridge SDK"),
+            "unexpected error: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn component_dependencies_reject_unknown_provider_component() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                dependencies:
+                  agents:
+                    - app:missing/ShoppingCart
+        "# });
+
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("depends on unknown component app:missing"),
+            "unexpected error: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn non_rust_guest_bridge_mode_is_rejected() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              ts:
+                internal:
+                  agents: SomeAgent
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps =
+            vec![app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path).unwrap()];
+        let (preload, warns, errors) = Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let Some(ApplicationPreload {
+            application_name,
+            environments,
+            local_server,
+            version: _,
+        }) = preload
+        else {
+            panic!("expected Some(ApplicationPreload)")
+        };
+
+        let (_app, _warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            application_name,
+            environments,
+            local_server,
+            selector("local", &[]),
+            raw_apps,
+        )
+        .into_product();
+
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("internal bridge mode is not supported for TypeScript yet"),
+            "unexpected error: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn scala_guest_bridge_mode_is_accepted() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              scala:
+                internal:
+                  agents: SomeAgent
+                  outputDir: bridge/scala-guest
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        let agent_type_name = parse_agent_type_name("SomeAgent");
+        assert_eq!(
+            app.bridge_sdk_dir(
+                &agent_type_name,
+                crate::model::GuestLanguage::Scala,
+                BridgeMode::Guest
+            ),
+            app_tmp_dir
+                .path()
+                .join("bridge/scala-guest")
+                .join(bridge_client_directory_name(
+                    &agent_type_name,
+                    BridgeMode::Guest
+                ))
+        );
+    }
+
+    #[test]
+    fn non_rust_guest_bridge_config_without_agents_is_rejected() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              ts:
+                external:
+                  agents: ExternalAgent
+                  outputDir: bridge/ts
+                internal:
+                  outputDir: bridge/ts-guest
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps =
+            vec![app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path).unwrap()];
+        let (preload, warns, errors) = Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let Some(ApplicationPreload {
+            application_name,
+            environments,
+            local_server,
+            version: _,
+        }) = preload
+        else {
+            panic!("expected Some(ApplicationPreload)")
+        };
+
+        let (_app, warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            application_name,
+            environments,
+            local_server,
+            selector("local", &[]),
+            raw_apps,
+        )
+        .into_product();
+
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("internal bridge mode is not supported for TypeScript yet"),
+            "unexpected error: {}",
+            errors[0]
+        );
     }
 
     #[test]
@@ -3928,6 +5238,380 @@ mod test {
         );
     }
 
+    #[test]
+    fn deployment_subdomains_resolve_for_local_and_cloud() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            localServer:
+              customRequestPort: 9016
+              mcpPort: 9017
+
+            environments:
+              local:
+                server: local
+              implicit:
+                default: true
+              cloud:
+                server: cloud
+
+            httpApi:
+              deployments:
+                local:
+                  - subdomain: hello-api
+                implicit:
+                  - subdomain: implicit-api
+                cloud:
+                  - subdomain: hello-api
+
+            mcp:
+              deployments:
+                local:
+                  - subdomain: hello-mcp
+                implicit:
+                  - subdomain: implicit-mcp
+                cloud:
+                  - subdomain: hello-mcp
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        assert!(
+            app.http_api_deployments(&EnvironmentName("local".to_string()))
+                .unwrap()
+                .contains_key(&Domain("hello-api.localhost:9016".to_string()))
+        );
+        assert!(
+            app.http_api_deployments(&EnvironmentName("cloud".to_string()))
+                .unwrap()
+                .contains_key(&Domain("hello-api.apps.golem.cloud".to_string()))
+        );
+        assert!(
+            app.http_api_deployments(&EnvironmentName("implicit".to_string()))
+                .unwrap()
+                .contains_key(&Domain("implicit-api.localhost:9016".to_string()))
+        );
+        assert!(
+            app.mcp_deployments(&EnvironmentName("local".to_string()))
+                .unwrap()
+                .contains_key(&Domain("hello-mcp.localhost:9017".to_string()))
+        );
+        assert!(
+            app.mcp_deployments(&EnvironmentName("cloud".to_string()))
+                .unwrap()
+                .contains_key(&Domain("hello-mcp.mcps.golem.cloud".to_string()))
+        );
+        assert!(
+            app.mcp_deployments(&EnvironmentName("implicit".to_string()))
+                .unwrap()
+                .contains_key(&Domain("implicit-mcp.localhost:9017".to_string()))
+        );
+    }
+
+    #[test]
+    fn deployment_domains_keep_full_domains_unchanged() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            httpApi:
+              deployments:
+                local:
+                  - domain: api.example.com
+
+            mcp:
+              deployments:
+                local:
+                  - domain: mcp.example.com
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        assert!(
+            app.http_api_deployments(&EnvironmentName("local".to_string()))
+                .unwrap()
+                .contains_key(&Domain("api.example.com".to_string()))
+        );
+        assert!(
+            app.mcp_deployments(&EnvironmentName("local".to_string()))
+                .unwrap()
+                .contains_key(&Domain("mcp.example.com".to_string()))
+        );
+    }
+
+    #[test]
+    fn deployment_subdomains_use_default_local_ports_without_local_server() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            httpApi:
+              deployments:
+                local:
+                  - subdomain: hello-api
+
+            mcp:
+              deployments:
+                local:
+                  - subdomain: hello-mcp
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        assert!(
+            app.http_api_deployments(&EnvironmentName("local".to_string()))
+                .unwrap()
+                .contains_key(&Domain("hello-api.localhost:9006".to_string()))
+        );
+        assert!(
+            app.mcp_deployments(&EnvironmentName("local".to_string()))
+                .unwrap()
+                .contains_key(&Domain("hello-mcp.localhost:9007".to_string()))
+        );
+    }
+
+    #[test]
+    fn local_server_rejects_zero_manifest_ports() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            localServer:
+              routerPort: 0
+              customRequestPort: 0
+              mcpPort: 0
+              portsFile: .golem/ports.json
+
+            environments:
+              local:
+                server: local
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path)
+                .expect("raw manifest should parse"),
+        ];
+
+        let (app_name_and_envs, warns, errors) =
+            Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(app_name_and_envs.is_none());
+        assert_eq!(errors.len(), 3, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("localServer.routerPort")
+                    && error.contains("--router-port 0")),
+            "\n{}",
+            errors.join("\n\n")
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("localServer.customRequestPort")
+                    && error.contains("--custom-request-port 0")),
+            "\n{}",
+            errors.join("\n\n")
+        );
+        assert!(
+            errors.iter().any(
+                |error| error.contains("localServer.mcpPort") && error.contains("--mcp-port 0")
+            ),
+            "\n{}",
+            errors.join("\n\n")
+        );
+    }
+
+    #[test]
+    fn deployment_subdomains_reject_invalid_values() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            httpApi:
+              deployments:
+                local:
+                  - subdomain: hello.api
+                  - subdomain: Hello
+                  - subdomain: http://hello
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path)
+                .expect("raw manifest should parse"),
+        ];
+
+        let (app_name_and_envs, warns, errors) =
+            Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let Some(ApplicationPreload {
+            application_name,
+            environments,
+            local_server,
+            version: _,
+        }) = app_name_and_envs
+        else {
+            panic!("expected Some(ApplicationPreload)")
+        };
+
+        let (_app, warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            application_name,
+            environments,
+            local_server,
+            selector("local", &[]),
+            raw_apps,
+        )
+        .into_product();
+
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert_eq!(errors.len(), 3, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors
+                .iter()
+                .all(|error| error.contains("Invalid deployment subdomain"))
+        );
+    }
+
+    #[test]
+    fn deployment_subdomains_reject_custom_server_environments() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              custom:
+                server:
+                  url: http://localhost:9881
+                  workerUrl: http://localhost:9881
+                  allowInsecure: true
+                  auth:
+                    staticToken: token
+
+            httpApi:
+              deployments:
+                custom:
+                  - subdomain: hello-api
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path)
+                .expect("raw manifest should parse"),
+        ];
+
+        let (app_name_and_envs, warns, errors) =
+            Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let Some(ApplicationPreload {
+            application_name,
+            environments,
+            local_server,
+            version: _,
+        }) = app_name_and_envs
+        else {
+            panic!("expected Some(ApplicationPreload)")
+        };
+
+        let (_app, warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            application_name,
+            environments,
+            local_server,
+            selector("custom", &[]),
+            raw_apps,
+        )
+        .into_product();
+
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert_eq!(errors.len(), 1, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors[0].contains("Cannot use HTTP API deployment subdomain"),
+            "\n{}",
+            errors.join("\n\n")
+        );
+    }
+
+    #[test]
+    fn deployment_entries_require_exactly_one_domain_field() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            httpApi:
+              deployments:
+                local:
+                  - domain: api.example.com
+                    subdomain: hello-api
+                  - agents: {}
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path)
+                .expect("raw manifest should parse"),
+        ];
+
+        let (app_name_and_envs, warns, errors) =
+            Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let Some(ApplicationPreload {
+            application_name,
+            environments,
+            local_server,
+            version: _,
+        }) = app_name_and_envs
+        else {
+            panic!("expected Some(ApplicationPreload)")
+        };
+
+        let (_app, warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            application_name,
+            environments,
+            local_server,
+            selector("local", &[]),
+            raw_apps,
+        )
+        .into_product();
+
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert_eq!(errors.len(), 2, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("cannot define both"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("must define either"))
+        );
+    }
+
     fn component_applied_layers_trace(component: &crate::model::app::Component<'_>) -> Vec<String> {
         component
             .applied_layers()
@@ -3976,6 +5660,42 @@ mod test {
         load_app(source, &selector(environment, presets))
     }
 
+    fn load_app_errors(source: &str) -> Vec<String> {
+        let tmp_dir = tempfile::tempdir().unwrap();
+
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+
+        let raw_app = app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path).unwrap();
+        let raw_apps = vec![raw_app];
+
+        let (app_name_and_envs, warns, errors) =
+            Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let Some(ApplicationPreload {
+            application_name,
+            environments,
+            local_server,
+            version: _,
+        }) = app_name_and_envs
+        else {
+            panic!("expected Some(ApplicationPreload)")
+        };
+
+        let (_app, warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            application_name,
+            environments,
+            local_server,
+            selector("local", &[]),
+            raw_apps,
+        )
+        .into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        errors
+    }
+
     fn with_resolved_agent<T>(
         app: &Application,
         component_name_str: &str,
@@ -4012,21 +5732,24 @@ mod test {
         let raw_apps = vec![raw_app];
 
         let (app_name_and_envs, warns, errors) =
-            Application::environments_from_raw_apps(&raw_apps).into_product();
+            Application::preload_from_raw_apps(&raw_apps).into_product();
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
         assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
-        let Some(ApplicationNameAndEnvironments {
+        let Some(ApplicationPreload {
             application_name,
             environments,
+            local_server,
+            version: _,
         }) = app_name_and_envs
         else {
-            panic!("expected Some(ApplicationNameAndEnvironments)")
+            panic!("expected Some(ApplicationPreload)")
         };
 
         let (app, warns, errors) = Application::from_raw_apps(
             std::env::current_dir().unwrap(),
             application_name,
             environments,
+            local_server,
             selector.clone(),
             raw_apps,
         )
@@ -4034,6 +5757,50 @@ mod test {
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
         assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
         (app.unwrap(), tmp_dir)
+    }
+
+    #[test]
+    fn local_server_is_singleton_across_manifest_sources() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let root = tmp_dir.path().join("golem.yaml");
+        let included = tmp_dir.path().join("included.yaml");
+
+        fs::write(
+            &root,
+            indoc! {r#"
+                app: test-app
+                localServer:
+                  routerPort: 9882
+                environments:
+                  local:
+                    server: local
+            "#},
+        )
+        .unwrap();
+        fs::write(
+            &included,
+            indoc! {r#"
+                localServer:
+                  routerPort: 9883
+            "#},
+        )
+        .unwrap();
+
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&root).unwrap(),
+            app_raw::ApplicationWithSource::from_yaml_file(&included).unwrap(),
+        ];
+
+        let (_app_name_and_envs, warns, errors) =
+            Application::preload_from_raw_apps(&raw_apps).into_product();
+
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("localServer"),
+            "unexpected error: {}",
+            errors[0]
+        );
     }
 
     #[test]

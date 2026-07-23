@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,16 +17,21 @@
 package golem.runtime.macros
 
 import golem.config.{AgentConfigDeclaration, ConfigSchema}
-import golem.data.{ElementSchema, GolemSchema, NamedElementSchema, StructuredSchema}
 import golem.runtime.annotations.{description, prompt, readOnly}
 import golem.runtime.{
   AgentMetadata,
   CachePolicy,
+  ConstructorMetadata,
+  FieldSource,
+  InputMetadata,
   MethodMetadata,
+  OutputMetadata,
+  ParameterMetadata,
   ReadOnlyConfig,
   Snapshotting,
   SnapshottingConfig
 }
+import golem.schema.{IntoSchema, SchemaGraph}
 import golem.runtime.http.{
   HeaderVariable,
   HttpEndpointDetails,
@@ -42,10 +47,9 @@ import scala.quoted.*
 
 object AgentDefinitionMacro {
   private val schemaHint: String =
-    "\nHint: GolemSchema is derived from zio.blocks.schema.Schema.\n" +
+    "\nHint: IntoSchema is derived from zio.blocks.schema.Schema.\n" +
       "Define or import an implicit Schema[T] for your type.\n" +
-      "Scala 3: `final case class T(...) derives zio.blocks.schema.Schema` (or `given Schema[T] = Schema.derived`).\n" +
-      "Scala 2: `implicit val schema: zio.blocks.schema.Schema[T] = zio.blocks.schema.Schema.derived`.\n"
+      "Use `final case class T(...) derives zio.blocks.schema.Schema` (or `given Schema[T] = Schema.derived`).\n"
   inline def generate[T]: AgentMetadata = ${ impl[T] }
 
   private def impl[T: Type](using Quotes): Expr[AgentMetadata] = {
@@ -75,7 +79,7 @@ object AgentDefinitionMacro {
         defaultTypeNameFromTrait(typeSymbol)
       }
 
-    val traitDescription = annotationString(typeSymbol, TypeRepr.of[description])
+    val traitDescription = annotationString(typeSymbol, TypeRepr.of[description]).orElse(docstringText(typeSymbol))
     // Note: `@agentDefinition` has a default `mode = Durable`. We omit that default in metadata via
     // `agentDefinitionMode`.
     val traitMode = agentDefinitionMode(typeSymbol)
@@ -103,7 +107,8 @@ object AgentDefinitionMacro {
         methodMetadata(method, agentTypeName, hasMount)
     }
 
-    val idSchema = inferIdSchema(typeRepr)
+    val ctorDescription = traitDescription.getOrElse(agentTypeName)
+    val idSchema        = inferIdSchema(typeRepr, Expr(ctorDescription))
 
     // --- Mount-level Principal validation ---
     if (hasMount) {
@@ -256,7 +261,7 @@ object AgentDefinitionMacro {
     import quotes.reflect.*
 
     val methodName   = method.name
-    val descExpr     = optionalString(annotationString(method, TypeRepr.of[description]))
+    val descExpr     = optionalString(annotationString(method, TypeRepr.of[description]).orElse(docstringText(method)))
     val promptExpr   = optionalString(annotationString(method, TypeRepr.of[prompt]))
     val inputSchema  = methodInputSchema(method)
     val outputSchema = methodOutputSchema(method)
@@ -302,7 +307,8 @@ object AgentDefinitionMacro {
   /**
    * Extract the optional `@readOnly(cache = ...)` annotation from a method and
    * build an `Expr[Option[ReadOnlyConfig]]`. `usesPrincipal` is derived from
-   * whether the method has a Principal parameter (it is *not* user-configurable).
+   * whether the method has a Principal parameter (it is *not*
+   * user-configurable).
    */
   private def extractReadOnly(using
     Quotes
@@ -328,7 +334,7 @@ object AgentDefinitionMacro {
       val policyExpr: Expr[CachePolicy] = CachePolicy.parse(cacheStr) match {
         case Left(err) =>
           report.errorAndAbort(s"@readOnly on method '${method.name}': $err")
-        case Right(CachePolicy.NoCache) => '{ CachePolicy.NoCache }
+        case Right(CachePolicy.NoCache)    => '{ CachePolicy.NoCache }
         case Right(CachePolicy.UntilWrite) => '{ CachePolicy.UntilWrite }
         case Right(CachePolicy.Ttl(nanos)) =>
           val n = Expr(nanos)
@@ -341,7 +347,7 @@ object AgentDefinitionMacro {
     }
   }
 
-  private def methodInputSchema(using Quotes)(method: quotes.reflect.Symbol): Expr[StructuredSchema] = {
+  private def methodInputSchema(using Quotes)(method: quotes.reflect.Symbol): Expr[InputMetadata] = {
     import quotes.reflect.*
 
     val params = method.paramSymss.flatten.collect {
@@ -352,65 +358,59 @@ object AgentDefinitionMacro {
         }
     }.filter { case (_, tpe) => tpe.dealias.typeSymbol.fullName != "golem.Principal" }
 
-    if params.isEmpty then
-      '{
-        StructuredSchema.Tuple(Nil)
-      }
-    else {
-      val elements = params.map { case (name, tpe) =>
-        val elementExpr = elementSchemaExpr(name, tpe)
-        '{
-          NamedElementSchema(
-            ${
-              Expr(name)
-            },
-            $elementExpr
-          )
-        }
-      }
-      val listExpr = Expr.ofList(elements)
-      '{
-        StructuredSchema.Tuple($listExpr)
-      }
-    }
+    inputMetadataExpr(params)
   }
 
-  private def methodOutputSchema(using Quotes)(method: quotes.reflect.Symbol): Expr[StructuredSchema] = {
+  /**
+   * Build an `InputMetadata` from a list of user-supplied `(name, type)`
+   * parameters: one `ParameterMetadata` per parameter carrying its
+   * self-contained schema graph (the v2 `input-schema = parameters`).
+   */
+  private def inputMetadataExpr(using
+    Quotes
+  )(params: List[(String, quotes.reflect.TypeRepr)]): Expr[InputMetadata] = {
+    val elements = params.map { case (name, tpe) =>
+      val graphExpr = paramGraphExpr(tpe)
+      '{ ParameterMetadata(${ Expr(name) }, FieldSource.UserSupplied, $graphExpr) }
+    }
+    '{ InputMetadata(${ Expr.ofList(elements) }) }
+  }
+
+  private def methodOutputSchema(using Quotes)(method: quotes.reflect.Symbol): Expr[OutputMetadata] = {
     import quotes.reflect.*
 
     method.tree match {
       case d: DefDef =>
         val outputType = unwrapAsyncType(d.returnTpt.tpe)
-        structuredSchemaExpr(outputType)
+        outputMetadataExpr(outputType)
       case other =>
         report.errorAndAbort(s"Unable to read return type for ${method.name}: $other")
     }
   }
 
-  private def structuredSchemaExpr(using Quotes)(tpe: quotes.reflect.TypeRepr): Expr[StructuredSchema] = {
+  /**
+   * `Unit` output => `OutputMetadata.Unit` (the host returns `none`); any other
+   * type => `OutputMetadata.Single` carrying its schema graph.
+   */
+  private def outputMetadataExpr(using Quotes)(tpe: quotes.reflect.TypeRepr): Expr[OutputMetadata] = {
     import quotes.reflect.*
 
-    tpe.asType match {
-      case '[t] =>
-        Expr.summon[GolemSchema[t]] match {
-          case Some(codecExpr) => '{ $codecExpr.schema }
-          case None            => report.errorAndAbort(s"No implicit GolemSchema available for type ${Type.show[t]}.$schemaHint")
-        }
+    if (tpe =:= TypeRepr.of[Unit]) '{ OutputMetadata.Unit }
+    else {
+      val graphExpr = paramGraphExpr(tpe)
+      '{ OutputMetadata.Single($graphExpr) }
     }
   }
 
-  private def elementSchemaExpr(using
-    Quotes
-  )(@scala.annotation.unused paramName: String, tpe: quotes.reflect.TypeRepr): Expr[golem.data.ElementSchema] = {
+  /** Summon `IntoSchema[t]` for `tpe` and produce its self-contained graph. */
+  private def paramGraphExpr(using Quotes)(tpe: quotes.reflect.TypeRepr): Expr[SchemaGraph] = {
     import quotes.reflect.*
 
     tpe.asType match {
       case '[t] =>
-        Expr.summon[GolemSchema[t]] match {
-          case Some(codecExpr) =>
-            '{ $codecExpr.elementSchema }
-          case None =>
-            report.errorAndAbort(s"No implicit GolemSchema available for type ${Type.show[t]}.$schemaHint")
+        Expr.summon[IntoSchema[t]] match {
+          case Some(into) => '{ $into.graph }
+          case None       => report.errorAndAbort(s"No implicit IntoSchema available for type ${Type.show[t]}.$schemaHint")
         }
     }
   }
@@ -454,8 +454,9 @@ object AgentDefinitionMacro {
   private def inferIdSchema(using
     Quotes
   )(
-    traitRepr: quotes.reflect.TypeRepr
-  ): Expr[StructuredSchema] = {
+    traitRepr: quotes.reflect.TypeRepr,
+    descriptionExpr: Expr[String]
+  ): Expr[ConstructorMetadata] = {
     import quotes.reflect.*
 
     val typeSymbol = traitRepr.typeSymbol
@@ -490,22 +491,15 @@ object AgentDefinitionMacro {
               case v: ValDef => (sym.name, v.tpt.tpe)
               case other     => report.errorAndAbort(s"Unsupported parameter declaration in Constructor: $other")
             }
-        }
+        }.filter { case (_, tpe) => tpe.dealias.typeSymbol.fullName != "golem.Principal" }
 
-        if params.isEmpty then '{ StructuredSchema.Tuple(Nil) }
-        else {
-          val elements = params.map { case (name, tpe) =>
-            val elementExpr = elementSchemaExpr(name, tpe)
-            '{
-              NamedElementSchema(
-                ${ Expr(name) },
-                $elementExpr
-              )
-            }
+        val inputMeta           = inputMetadataExpr(params)
+        val ctorDescriptionExpr =
+          docstringText(classSym) match {
+            case Some(doc) => Expr(doc)
+            case None      => descriptionExpr
           }
-          val listExpr = Expr.ofList(elements)
-          '{ StructuredSchema.Tuple($listExpr) }
-        }
+        '{ ConstructorMetadata(name = None, description = $ctorDescriptionExpr, promptHint = None, input = $inputMeta) }
     }
   }
 
@@ -548,6 +542,17 @@ object AgentDefinitionMacro {
         }.filter(_ != null).toSet
     }
   }
+
+  /**
+   * Cleaned Scaladoc text of a symbol, used as description fallback when no
+   * `@description` annotation is present. Docstrings of symbols from other
+   * compilation units are only visible when the compiler reads docs from TASTy
+   * (`-Xread-docs` / `-Yread-docs`), which the Golem build plugins enable.
+   */
+  private def docstringText(using
+    Quotes
+  )(symbol: quotes.reflect.Symbol): Option[String] =
+    symbol.docstring.flatMap(Scaladoc.clean)
 
   private def annotationString(using
     Quotes

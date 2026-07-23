@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::StructuredOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 use golem_client::model::{Account, PermissionShare};
-use golem_common::model::permission_share::PermissionShareData;
+use golem_common::model::account::AccountId;
+use golem_common::model::permission_share::{PermissionShareData, PermissionShareId};
 use serde::{Deserialize, Serialize};
 
 fn account_fields(account: &Account) -> Vec<(String, String)> {
@@ -31,6 +34,8 @@ fn account_fields(account: &Account) -> Vec<(String, String)> {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AccountGetView(pub Account);
 
+impl Masked for AccountGetView {}
+
 impl MessageWithFields for AccountGetView {
     fn message(&self) -> String {
         format!(
@@ -44,8 +49,14 @@ impl MessageWithFields for AccountGetView {
     }
 }
 
+impl StructuredOutput for AccountGetView {
+    const KIND: &'static str = "account.get";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountNewView(pub Account);
+
+impl Masked for AccountNewView {}
 
 impl MessageWithFields for AccountNewView {
     fn message(&self) -> String {
@@ -60,8 +71,14 @@ impl MessageWithFields for AccountNewView {
     }
 }
 
+impl StructuredOutput for AccountNewView {
+    const KIND: &'static str = "account.new";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountUpdateView(pub Account);
+
+impl Masked for AccountUpdateView {}
 
 impl MessageWithFields for AccountUpdateView {
     fn message(&self) -> String {
@@ -71,6 +88,24 @@ impl MessageWithFields for AccountUpdateView {
     fn fields(&self) -> Vec<(String, String)> {
         account_fields(&self.0)
     }
+}
+
+impl StructuredOutput for AccountUpdateView {
+    const KIND: &'static str = "account.update";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountDeleteResult {
+    pub deleted: bool,
+    pub account_id: AccountId,
+}
+
+impl NoTextOutput for AccountDeleteResult {}
+impl TextOutput for AccountDeleteResult {}
+
+impl StructuredOutput for AccountDeleteResult {
+    const KIND: &'static str = "account.delete";
 }
 
 fn permission_share_fields(share: &PermissionShare) -> Vec<(String, String)> {
@@ -103,6 +138,8 @@ fn grant_count(data: &PermissionShareData) -> usize {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionShareGetView(pub PermissionShare);
 
+impl Masked for PermissionShareGetView {}
+
 impl MessageWithFields for PermissionShareGetView {
     fn message(&self) -> String {
         format!(
@@ -116,10 +153,75 @@ impl MessageWithFields for PermissionShareGetView {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PermissionShareListView(pub Vec<PermissionShare>);
+impl StructuredOutput for PermissionShareGetView {
+    const KIND: &'static str = "account.permission-share.get";
+}
 
-impl TextView for PermissionShareListView {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionShareNewView(pub PermissionShare);
+
+impl Masked for PermissionShareNewView {}
+
+impl MessageWithFields for PermissionShareNewView {
+    fn message(&self) -> String {
+        format!(
+            "Created permission share {}",
+            format_message_highlight(&self.0.id)
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        permission_share_fields(&self.0)
+    }
+}
+
+impl StructuredOutput for PermissionShareNewView {
+    const KIND: &'static str = "account.permission-share.new";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionShareUpdateView(pub PermissionShare);
+
+impl Masked for PermissionShareUpdateView {}
+
+impl MessageWithFields for PermissionShareUpdateView {
+    fn message(&self) -> String {
+        format!(
+            "Updated permission share {}",
+            format_message_highlight(&self.0.id)
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        permission_share_fields(&self.0)
+    }
+}
+
+impl StructuredOutput for PermissionShareUpdateView {
+    const KIND: &'static str = "account.permission-share.update";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionShareDeleteResult {
+    pub deleted: bool,
+    pub permission_share_id: PermissionShareId,
+}
+
+impl NoTextOutput for PermissionShareDeleteResult {}
+impl TextOutput for PermissionShareDeleteResult {}
+
+impl StructuredOutput for PermissionShareDeleteResult {
+    const KIND: &'static str = "account.permission-share.delete";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionShareListView {
+    pub permission_shares: Vec<PermissionShare>,
+}
+
+impl TextOutput for PermissionShareListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("ID"),
@@ -129,7 +231,7 @@ impl TextView for PermissionShareListView {
             Column::new("Grants").fixed(),
         ]);
 
-        for share in &self.0 {
+        for share in &self.permission_shares {
             table.add_row(vec![
                 share.id.to_string(),
                 share.name.to_string(),
@@ -143,12 +245,16 @@ impl TextView for PermissionShareListView {
     }
 }
 
+impl StructuredOutput for PermissionShareListView {
+    const KIND: &'static str = "account.permission-share.list";
+}
+
 // TODO: atomic
 /*
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct GrantGetView(pub Vec<Role>);
 
-impl TextView for GrantGetView {
+impl TextRender for GrantGetView {
     fn log(&self) {
         if self.0.is_empty() {
             logln("No roles granted")

@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,6 +15,8 @@
  */
 
 package golem.host.js
+
+import golem.host.js.schema.JsTypedSchemaValue
 
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSName
@@ -35,8 +37,8 @@ sealed trait JsEnvironmentPluginGrantId extends js.Object {
 
 @js.native
 sealed trait JsLocalAgentConfigEntry extends js.Object {
-  def path: js.Array[String] = js.native
-  def value: JsValueAndType  = js.native
+  def path: js.Array[String]    = js.native
+  def value: JsTypedSchemaValue = js.native
 }
 
 // --- PluginInstallationDescription ---
@@ -73,8 +75,8 @@ sealed trait JsCreateParameters extends js.Object {
 sealed trait JsHostCallParameters extends js.Object {
   def timestamp: JsDatetime                      = js.native
   def functionName: String                       = js.native
-  def request: JsValueAndType                    = js.native
-  def response: JsValueAndType                   = js.native
+  def request: JsTypedSchemaValue                = js.native
+  def response: JsTypedSchemaValue               = js.native
   def durableFunctionType: JsWrappedFunctionType = js.native
 }
 
@@ -85,23 +87,23 @@ sealed trait JsStartParameters extends js.Object {
   def timestamp: JsDatetime                      = js.native
   def parentStartIndex: js.UndefOr[js.BigInt]    = js.native
   def functionName: String                       = js.native
-  def request: js.UndefOr[JsValueAndType]        = js.native
+  def request: js.UndefOr[JsTypedSchemaValue]    = js.native
   def durableFunctionType: JsWrappedFunctionType = js.native
 }
 
 @js.native
 sealed trait JsEndParameters extends js.Object {
-  def timestamp: JsDatetime                = js.native
-  def startIndex: js.BigInt                = js.native
-  def response: js.UndefOr[JsValueAndType] = js.native
-  def forcedCommit: Boolean                = js.native
+  def timestamp: JsDatetime                    = js.native
+  def startIndex: js.BigInt                    = js.native
+  def response: js.UndefOr[JsTypedSchemaValue] = js.native
+  def forcedCommit: Boolean                    = js.native
 }
 
 @js.native
 sealed trait JsCancelledParameters extends js.Object {
-  def timestamp: JsDatetime               = js.native
-  def startIndex: js.BigInt               = js.native
-  def partial: js.UndefOr[JsValueAndType] = js.native
+  def timestamp: JsDatetime                   = js.native
+  def startIndex: js.BigInt                   = js.native
+  def partial: js.UndefOr[JsTypedSchemaValue] = js.native
 }
 
 // --- SpanData  –  tagged union ---
@@ -213,20 +215,12 @@ sealed trait JsEndRemoteWriteParameters extends js.Object {
   def beginIndex: js.BigInt = js.native
 }
 
-// --- TypedDataValue ---
-
-@js.native
-sealed trait JsTypedDataValue extends js.Object {
-  def value: JsDataValue   = js.native
-  def schema: JsDataSchema = js.native
-}
-
 // --- AgentInitializationParameters ---
 
 @js.native
 sealed trait JsAgentInitializationParameters extends js.Object {
   def idempotencyKey: String                            = js.native
-  def constructorParameters: JsTypedDataValue           = js.native
+  def constructorParameters: JsTypedSchemaValue         = js.native
   def traceId: String                                   = js.native
   def traceStates: js.Array[String]                     = js.native
   def invocationContext: js.Array[js.Array[JsSpanData]] = js.native
@@ -238,7 +232,7 @@ sealed trait JsAgentInitializationParameters extends js.Object {
 sealed trait JsAgentMethodInvocationParameters extends js.Object {
   def idempotencyKey: String                            = js.native
   def methodName: String                                = js.native
-  def functionInput: JsTypedDataValue                   = js.native
+  def functionInput: JsTypedSchemaValue                 = js.native
   def traceId: String                                   = js.native
   def traceStates: js.Array[String]                     = js.native
   def invocationContext: js.Array[js.Array[JsSpanData]] = js.native
@@ -301,7 +295,7 @@ object JsAgentInvocation {
 
 @js.native
 sealed trait JsAgentInvocationOutputParameters extends js.Object {
-  def output: JsTypedDataValue = js.native
+  def output: JsTypedSchemaValue = js.native
 }
 
 // --- FallibleResultParameters ---

@@ -1,0 +1,249 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/golem/tool/common"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/interface/wasi/io/streams",
+}
+
+// Values
+
+// Errors
+pub(all) suberror ErrorKind {
+  USAGE_ERROR
+  RUNTIME_ERROR
+} derive(Eq, Show)
+pub fn ErrorKind::from(Int) -> Self
+pub fn ErrorKind::ordinal(Self) -> Int
+
+pub(all) suberror ToolError {
+  InvalidToolName(String)
+  InvalidCommandPath(Array[String])
+  InvalidInput(String)
+  ConstraintViolation(String)
+  InvalidResult(String)
+  CustomError(@types.TypedSchemaValue)
+} derive(Eq, Show)
+
+// Types and methods
+pub(all) struct BoolFlagShape {
+  default : Bool
+  negatable : Bool
+} derive(Eq, Show)
+
+pub(all) struct CommandAnnotations {
+  read_only : Bool
+  destructive : Bool
+  idempotent : Bool
+  open_world : Bool
+} derive(Eq, Show)
+
+pub(all) struct CommandBody {
+  positionals : Positionals
+  options : Array[OptionSpec]
+  flags : Array[FlagSpec]
+  constraints : Array[Constraint]
+  stdin : StreamSpec?
+  stdout : StreamSpec?
+  result : ResultSpec?
+  errors : Array[ErrorCase]
+  annotations : CommandAnnotations?
+} derive(Eq, Show)
+
+pub(all) struct CommandNode {
+  name : String
+  aliases : Array[String]
+  doc : Doc
+  globals : Globals
+  subcommands : Array[Int]
+  body : CommandBody?
+} derive(Eq, Show)
+
+pub(all) struct CommandTree {
+  nodes : Array[CommandNode]
+} derive(Eq, Show)
+
+pub(all) enum Constraint {
+  RequiresAll(Array[Ref])
+  AllOrNone(Array[Ref])
+  RequiresAny(Array[Ref])
+  MutexGroups(Array[RefGroup])
+  Implies(ImpliesC)
+  Forbids(ForbidsC)
+} derive(Eq, Show)
+
+pub(all) struct Doc {
+  summary : String
+  description : String
+  examples : Array[Example]
+} derive(Eq, Show)
+
+pub(all) enum DuplicateKeyPolicy {
+  REJECT
+  LAST_WINS
+} derive(Eq, Show)
+pub fn DuplicateKeyPolicy::from(Int) -> Self
+pub fn DuplicateKeyPolicy::ordinal(Self) -> Int
+
+pub(all) struct ErrorCase {
+  name : String
+  doc : Doc
+  kind : ErrorKind
+  exit_code : Byte
+  payload : Int?
+} derive(Eq, Show)
+
+pub(all) struct Example {
+  title : String
+  body : String
+} derive(Eq, Show)
+
+pub(all) enum FlagShape {
+  BoolFlag(BoolFlagShape)
+  CountFlag(UInt?)
+} derive(Eq, Show)
+
+pub(all) struct FlagSpec {
+  long : String
+  short : Char?
+  aliases : Array[String]
+  doc : Doc
+  shape : FlagShape
+  env_var : String?
+} derive(Eq, Show)
+
+pub(all) struct ForbidsC {
+  lhs_quant : Quantifier
+  lhs : Array[Ref]
+  rhs : Array[Ref]
+} derive(Eq, Show)
+
+pub(all) struct Formatter {
+  name : String
+  doc : Doc
+} derive(Eq, Show)
+
+pub(all) struct Globals {
+  options : Array[OptionSpec]
+  flags : Array[FlagSpec]
+} derive(Eq, Show)
+
+pub(all) struct ImpliesC {
+  lhs_quant : Quantifier
+  lhs : Array[Ref]
+  rhs_quant : Quantifier
+  rhs : Array[Ref]
+} derive(Eq, Show)
+
+pub(all) struct InvocationResult {
+  result : @types.TypedSchemaValue?
+  stdout : @streams.OutputStream?
+} derive(Eq, Show)
+
+pub(all) enum OptionShape {
+  Scalar(Int)
+  OptionalScalar(Int)
+  RepeatableList(RepeatableListShape)
+  RepeatableMap(RepeatableMapShape)
+} derive(Eq, Show)
+
+pub(all) struct OptionSpec {
+  long : String
+  short : Char?
+  aliases : Array[String]
+  doc : Doc
+  value_name : String?
+  shape : OptionShape
+  default : @types.SchemaValueTree?
+  required : Bool
+  env_var : String?
+} derive(Eq, Show)
+
+pub(all) struct Positional {
+  name : String
+  doc : Doc
+  value_name : String?
+  type_ : Int
+  default : @types.SchemaValueTree?
+  required : Bool
+  accepts_stdio : Bool
+} derive(Eq, Show)
+
+pub(all) struct Positionals {
+  fixed : Array[Positional]
+  tail : TailPositional?
+} derive(Eq, Show)
+
+pub(all) enum Quantifier {
+  ALL
+  ANY
+} derive(Eq, Show)
+pub fn Quantifier::from(Int) -> Self
+pub fn Quantifier::ordinal(Self) -> Int
+
+pub(all) enum Ref {
+  Present(String)
+  ValueIs(ValueIsRef)
+} derive(Eq, Show)
+
+pub(all) struct RefGroup {
+  refs : Array[Ref]
+} derive(Eq, Show)
+
+pub(all) struct RepeatableListShape {
+  repetition : Repetition
+  item_type : Int
+} derive(Eq, Show)
+
+pub(all) struct RepeatableMapShape {
+  repetition : Repetition
+  map_type : Int
+  duplicate_key_policy : DuplicateKeyPolicy
+} derive(Eq, Show)
+
+pub(all) enum Repetition {
+  Repeated
+  Delimited(Char)
+  Either(Char)
+} derive(Eq, Show)
+
+pub(all) struct ResultSpec {
+  type_ : Int
+  doc : Doc
+  formatters : Array[Formatter]
+  default_formatter : String
+} derive(Eq, Show)
+
+pub(all) struct StreamSpec {
+  doc : Doc
+  mime : Array[String]
+  required : Bool
+} derive(Eq, Show)
+
+pub(all) struct TailPositional {
+  name : String
+  doc : Doc
+  value_name : String?
+  item_type : Int
+  min : UInt
+  max : UInt?
+  separator : String?
+  verbatim : Bool
+  accepts_stdio : Bool
+} derive(Eq, Show)
+
+pub(all) struct Tool {
+  version : String
+  commands : CommandTree
+  schema : @types.SchemaGraph
+} derive(Eq, Show)
+
+pub(all) struct ValueIsRef {
+  name : String
+  value : @types.SchemaValueTree
+} derive(Eq, Show)
+
+// Type aliases
+
+// Traits
+

@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
+use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace, retry_on_pool_timeout};
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::metrics::db::record_db_serialized_size;
+use golem_common::model::RetryConfig;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{DBValue, LabelledPoolApi, LabelledPoolTransaction, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
@@ -31,17 +31,21 @@ static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/mi
 #[derive(Debug, Clone)]
 pub struct SqliteKeyValueStorage {
     pool: SqlitePool,
+    retry_config: RetryConfig,
 }
 
 impl SqliteKeyValueStorage {
-    pub async fn configured(config: &DbSqliteConfig) -> Result<Self, String> {
+    pub async fn configured(
+        config: &DbSqliteConfig,
+        retry_config: RetryConfig,
+    ) -> Result<Self, String> {
         Self::migrate(config).await?;
 
         let pool = SqlitePool::configured(config).await.map_err(|err| {
             format!("Sqlite key-value storage pool initialization failed: {err:?}")
         })?;
 
-        Ok(Self { pool })
+        Ok(Self { pool, retry_config })
     }
 
     /// Apply the key-value storage migrations on the given sqlite config without
@@ -53,8 +57,8 @@ impl SqliteKeyValueStorage {
             .map_err(|err| format!("Sqlite key-value storage migration failed: {err:?}"))
     }
 
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(pool: SqlitePool, retry_config: RetryConfig) -> Self {
+        Self { pool, retry_config }
     }
 
     pub fn pool(&self) -> SqlitePool {
@@ -97,19 +101,24 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         value: &[u8],
     ) -> Result<(), String> {
         record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
-        let query = sqlx::query(
-            "INSERT OR REPLACE INTO kv_storage (key, value, namespace) VALUES (?, ?, ?);",
-        )
-        .bind(key)
-        .bind(value)
-        .bind(Self::namespace(namespace));
-
-        self.pool
-            .with_rw(svc_name, api_name)
-            .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "set", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query(
+                    "INSERT OR REPLACE INTO kv_storage (key, value, namespace) VALUES (?, ?, ?);",
+                )
+                .bind(key)
+                .bind(value)
+                .bind(namespace);
+                self.pool
+                    .with_rw(svc_name, api_name)
+                    .execute(query)
+                    .await
+                    .map(|_| ())
+            }
+        })
+        .await
     }
 
     async fn set_many(
@@ -120,23 +129,31 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &[u8])],
     ) -> Result<(), String> {
-        let api = self.pool.with_rw(svc_name, api_name);
-        let mut tx = api.begin().await.map_err(|err| err.to_safe_string())?;
-
-        for (field_key, field_value) in pairs {
+        for (_, field_value) in pairs {
             record_db_serialized_size(DB_TYPE, svc_name, entity_name, field_value.len());
-            tx.execute(
-                sqlx::query(
-                    "INSERT OR REPLACE INTO kv_storage (key, value, namespace) VALUES (?, ?, ?);",
-                )
-                .bind(field_key)
-                .bind(field_value)
-                .bind(Self::namespace(namespace.clone())),
-            )
-            .await
-            .map_err(|err| err.to_safe_string())?;
         }
-        tx.commit().await.map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "set_many", || {
+            let namespace = &namespace;
+            async move {
+                let api = self.pool.with_rw(svc_name, api_name);
+                let mut tx = api.begin().await?;
+
+                for (field_key, field_value) in pairs {
+                    tx.execute(
+                        sqlx::query(
+                            "INSERT OR REPLACE INTO kv_storage (key, value, namespace) VALUES (?, ?, ?);",
+                        )
+                        .bind(field_key)
+                        .bind(field_value)
+                        .bind(namespace.clone()),
+                    )
+                    .await?;
+                }
+                tx.commit().await
+            }
+        })
+        .await
     }
 
     async fn set_if_not_exists(
@@ -148,30 +165,33 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         key: &str,
         value: &[u8],
     ) -> Result<bool, String> {
-        let mut api = self.pool.with_rw(svc_name, api_name);
-        let existing: Option<(i32,)> = api
-            .fetch_optional_as(
-                sqlx::query_as::<_, (i32,)>(
-                    "SELECT 1 FROM kv_storage WHERE key = ? AND namespace = ?",
+        record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "set_if_not_exists", || {
+            let namespace = namespace.clone();
+            async move {
+                let mut api = self.pool.with_rw(svc_name, api_name);
+                let existing: Option<(i32,)> = api
+                    .fetch_optional_as(
+                        sqlx::query_as::<_, (i32,)>(
+                            "SELECT 1 FROM kv_storage WHERE key = ? AND namespace = ?",
+                        )
+                        .bind(key)
+                        .bind(namespace.clone()),
+                    )
+                    .await?;
+
+                let query = sqlx::query(
+                    "INSERT OR IGNORE INTO kv_storage (key, value, namespace) VALUES (?, ?, ?);",
                 )
                 .bind(key)
-                .bind(Self::namespace(namespace.clone())),
-            )
-            .await
-            .map_err(|err| err.to_safe_string())?;
+                .bind(value)
+                .bind(namespace);
 
-        record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
-        let query = sqlx::query(
-            "INSERT OR IGNORE INTO kv_storage (key, value, namespace) VALUES (?, ?, ?);",
-        )
-        .bind(key)
-        .bind(value)
-        .bind(Self::namespace(namespace));
-
-        api.execute(query)
-            .await
-            .map(|_| existing.is_none())
-            .map_err(|err| err.to_safe_string())
+                api.execute(query).await.map(|_| existing.is_none())
+            }
+        })
+        .await
     }
 
     async fn get(
@@ -182,16 +202,22 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Option<Bytes>, String> {
-        let query = sqlx::query_as("SELECT value FROM kv_storage WHERE key = ? AND namespace = ?;")
-            .bind(key)
-            .bind(Self::namespace(namespace));
-
-        self.pool
-            .with_ro(svc_name, api_name)
-            .fetch_optional_as::<DBValue, _>(query)
-            .await
-            .map(|r| r.map(|op| op.into_bytes()))
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "get", || {
+            let namespace = namespace.clone();
+            async move {
+                let query =
+                    sqlx::query_as("SELECT value FROM kv_storage WHERE key = ? AND namespace = ?;")
+                        .bind(key)
+                        .bind(namespace);
+                self.pool
+                    .with_ro(svc_name, api_name)
+                    .fetch_optional_as::<DBValue, _>(query)
+                    .await
+                    .map(|r| r.map(|op| op.into_bytes()))
+            }
+        })
+        .await
     }
 
     async fn get_many(
@@ -207,19 +233,26 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         let statement = format!(
             "SELECT key, value FROM kv_storage WHERE key IN ({placeholders}) AND namespace = ?;"
         );
-        let mut query = sqlx::query_as(&statement);
+        let namespace = Self::namespace(namespace);
 
-        for key in &keys {
-            query = query.bind(key);
-        }
-        query = query.bind(Self::namespace(namespace));
-
-        let results: Vec<DBKeyValue> = self
-            .pool
-            .with_ro(svc_name, api_name)
-            .fetch_all_as(query)
-            .await
-            .map_err(|err| err.to_safe_string())?;
+        let results: Vec<DBKeyValue> =
+            retry_on_pool_timeout(&self.retry_config, "get_many", || {
+                let namespace = namespace.clone();
+                let statement = statement.as_str();
+                let keys = &keys;
+                async move {
+                    let mut query = sqlx::query_as(statement);
+                    for key in keys {
+                        query = query.bind(key);
+                    }
+                    query = query.bind(namespace);
+                    self.pool
+                        .with_ro(svc_name, api_name)
+                        .fetch_all_as(query)
+                        .await
+                }
+            })
+            .await?;
 
         let mut result_map = results
             .into_iter()
@@ -241,15 +274,20 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
     ) -> Result<Vec<(String, Bytes)>, String> {
-        let query = sqlx::query_as("SELECT key, value FROM kv_storage WHERE namespace = ?;")
-            .bind(Self::namespace(namespace));
-
-        let results: Vec<DBKeyValue> = self
-            .pool
-            .with_ro(svc_name, api_name)
-            .fetch_all_as(query)
-            .await
-            .map_err(|err| err.to_safe_string())?;
+        let namespace = Self::namespace(namespace);
+        let results: Vec<DBKeyValue> = retry_on_pool_timeout(&self.retry_config, "get_all", || {
+            let namespace = namespace.clone();
+            async move {
+                let query =
+                    sqlx::query_as("SELECT key, value FROM kv_storage WHERE namespace = ?;")
+                        .bind(namespace);
+                self.pool
+                    .with_ro(svc_name, api_name)
+                    .fetch_all_as(query)
+                    .await
+            }
+        })
+        .await?;
 
         Ok(results.into_iter().map(|kv| kv.into_pair()).collect())
     }
@@ -261,15 +299,21 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<(), String> {
-        let query = sqlx::query("DELETE FROM kv_storage WHERE key = ? AND namespace = ?;")
-            .bind(key)
-            .bind(Self::namespace(namespace));
-        self.pool
-            .with_rw(svc_name, api_name)
-            .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "del", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query("DELETE FROM kv_storage WHERE key = ? AND namespace = ?;")
+                    .bind(key)
+                    .bind(namespace);
+                self.pool
+                    .with_rw(svc_name, api_name)
+                    .execute(query)
+                    .await
+                    .map(|_| ())
+            }
+        })
+        .await
     }
 
     async fn del_many(
@@ -279,18 +323,25 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
     ) -> Result<(), String> {
-        let api = self.pool.with_rw(svc_name, api_name);
-        let mut tx = api.begin().await.map_err(|err| err.to_safe_string())?;
-        for key in keys {
-            tx.execute(
-                sqlx::query("DELETE FROM kv_storage WHERE key = ? AND namespace = ?;")
-                    .bind(key)
-                    .bind(Self::namespace(namespace.clone())),
-            )
-            .await
-            .map_err(|err| err.to_safe_string())?;
-        }
-        tx.commit().await.map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "del_many", || {
+            let namespace = &namespace;
+            let keys = &keys;
+            async move {
+                let api = self.pool.with_rw(svc_name, api_name);
+                let mut tx = api.begin().await?;
+                for key in keys {
+                    tx.execute(
+                        sqlx::query("DELETE FROM kv_storage WHERE key = ? AND namespace = ?;")
+                            .bind(key)
+                            .bind(namespace.clone()),
+                    )
+                    .await?;
+                }
+                tx.commit().await
+            }
+        })
+        .await
     }
 
     async fn exists(
@@ -300,16 +351,21 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<bool, String> {
-        let query = sqlx::query("SELECT 1 FROM kv_storage WHERE key = ? AND namespace = ?")
-            .bind(key)
-            .bind(Self::namespace(namespace));
-
-        self.pool
-            .with_ro(svc_name, api_name)
-            .fetch_optional(query)
-            .await
-            .map(|row| row.is_some())
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "exists", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query("SELECT 1 FROM kv_storage WHERE key = ? AND namespace = ?")
+                    .bind(key)
+                    .bind(namespace);
+                self.pool
+                    .with_ro(svc_name, api_name)
+                    .fetch_optional(query)
+                    .await
+                    .map(|row| row.is_some())
+            }
+        })
+        .await
     }
 
     async fn keys(
@@ -318,15 +374,20 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
     ) -> Result<Vec<String>, String> {
-        let query = sqlx::query_as("SELECT key FROM kv_storage WHERE namespace = ?;")
-            .bind(Self::namespace(namespace));
-
-        self.pool
-            .with_ro(svc_name, api_name)
-            .fetch_all_as::<(String,), _>(query)
-            .await
-            .map(|vec| vec.into_iter().map(|k| k.0).collect::<Vec<String>>())
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "keys", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query_as("SELECT key FROM kv_storage WHERE namespace = ?;")
+                    .bind(namespace);
+                self.pool
+                    .with_ro(svc_name, api_name)
+                    .fetch_all_as::<(String,), _>(query)
+                    .await
+                    .map(|vec| vec.into_iter().map(|k| k.0).collect::<Vec<String>>())
+            }
+        })
+        .await
     }
 
     async fn add_to_set(
@@ -338,19 +399,24 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
-        let query = sqlx::query(
-            "INSERT OR REPLACE INTO set_storage (namespace, key, value) VALUES (?, ?, ?);",
-        )
-        .bind(Self::namespace(namespace))
-        .bind(key)
-        .bind(value);
-
-        self.pool
-            .with_rw(svc_name, api_name)
-            .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "add_to_set", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query(
+                    "INSERT OR REPLACE INTO set_storage (namespace, key, value) VALUES (?, ?, ?);",
+                )
+                .bind(namespace)
+                .bind(key)
+                .bind(value);
+                self.pool
+                    .with_rw(svc_name, api_name)
+                    .execute(query)
+                    .await
+                    .map(|_| ())
+            }
+        })
+        .await
     }
 
     async fn remove_from_set(
@@ -362,18 +428,24 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
-        let query =
-            sqlx::query("DELETE FROM set_storage WHERE key = ? AND value = ? AND namespace = ?;")
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "remove_from_set", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query(
+                    "DELETE FROM set_storage WHERE key = ? AND value = ? AND namespace = ?;",
+                )
                 .bind(key)
                 .bind(value)
-                .bind(Self::namespace(namespace));
-
-        self.pool
-            .with_rw(svc_name, api_name)
-            .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+                .bind(namespace);
+                self.pool
+                    .with_rw(svc_name, api_name)
+                    .execute(query)
+                    .await
+                    .map(|_| ())
+            }
+        })
+        .await
     }
 
     async fn members_of_set(
@@ -384,21 +456,27 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Vec<Bytes>, String> {
-        let query =
-            sqlx::query_as("SELECT value FROM set_storage WHERE key = ? AND namespace = ?;")
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "members_of_set", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query_as(
+                    "SELECT value FROM set_storage WHERE key = ? AND namespace = ?;",
+                )
                 .bind(key)
-                .bind(Self::namespace(namespace));
-
-        self.pool
-            .with_ro(svc_name, api_name)
-            .fetch_all_as::<DBValue, _>(query)
-            .await
-            .map(|vec| {
-                vec.into_iter()
-                    .map(|k| k.into_bytes())
-                    .collect::<Vec<Bytes>>()
-            })
-            .map_err(|err| err.to_safe_string())
+                .bind(namespace);
+                self.pool
+                    .with_ro(svc_name, api_name)
+                    .fetch_all_as::<DBValue, _>(query)
+                    .await
+                    .map(|vec| {
+                        vec.into_iter()
+                            .map(|k| k.into_bytes())
+                            .collect::<Vec<Bytes>>()
+                    })
+            }
+        })
+        .await
     }
 
     async fn add_to_sorted_set(
@@ -411,7 +489,11 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         score: f64,
         value: &[u8],
     ) -> Result<(), String> {
-        let query = sqlx::query(
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "add_to_sorted_set", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query(
                     r#"
                     INSERT INTO sorted_set_storage (key, value, namespace, score) VALUES (?, ?, ?, ?)
                     ON CONFLICT(key, value, namespace) DO UPDATE SET score = excluded.score;
@@ -419,15 +501,16 @@ impl KeyValueStorage for SqliteKeyValueStorage {
                 )
                 .bind(key)
                 .bind(value)
-                .bind(Self::namespace(namespace))
+                .bind(namespace)
                 .bind(score);
-
-        self.pool
-            .with_rw(svc_name, api_name)
-            .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+                self.pool
+                    .with_rw(svc_name, api_name)
+                    .execute(query)
+                    .await
+                    .map(|_| ())
+            }
+        })
+        .await
     }
 
     async fn remove_from_sorted_set(
@@ -439,19 +522,24 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
-        let query = sqlx::query(
-            "DELETE FROM sorted_set_storage WHERE key = ? AND value = ? AND namespace = ?;",
-        )
-        .bind(key)
-        .bind(value)
-        .bind(Self::namespace(namespace));
-
-        self.pool
-            .with_rw(svc_name, api_name)
-            .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "remove_from_sorted_set", || {
+            let namespace = namespace.clone();
+            async move {
+                let query = sqlx::query(
+                    "DELETE FROM sorted_set_storage WHERE key = ? AND value = ? AND namespace = ?;",
+                )
+                .bind(key)
+                .bind(value)
+                .bind(namespace);
+                self.pool
+                    .with_rw(svc_name, api_name)
+                    .execute(query)
+                    .await
+                    .map(|_| ())
+            }
+        })
+        .await
     }
 
     async fn get_sorted_set(
@@ -462,21 +550,26 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Vec<(f64, Bytes)>, String> {
-        let query =
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "get_sorted_set", || {
+            let namespace = namespace.clone();
+            async move {
+                let query =
                     sqlx::query_as("SELECT score, value FROM sorted_set_storage WHERE key = ? AND namespace = ? ORDER BY score ASC;")
                         .bind(key)
-                        .bind(Self::namespace(namespace));
-
-        self.pool
-            .with_ro(svc_name, api_name)
-            .fetch_all_as::<DBScoreValue, _>(query)
-            .await
-            .map(|vec| {
-                vec.into_iter()
-                    .map(|k| k.into_pair())
-                    .collect::<Vec<(f64, Bytes)>>()
-            })
-            .map_err(|err| err.to_safe_string())
+                        .bind(namespace);
+                self.pool
+                    .with_ro(svc_name, api_name)
+                    .fetch_all_as::<DBScoreValue, _>(query)
+                    .await
+                    .map(|vec| {
+                        vec.into_iter()
+                            .map(|k| k.into_pair())
+                            .collect::<Vec<(f64, Bytes)>>()
+                    })
+            }
+        })
+        .await
     }
 
     async fn query_sorted_set(
@@ -489,23 +582,28 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         min: f64,
         max: f64,
     ) -> Result<Vec<(f64, Bytes)>, String> {
-        let query =
-            sqlx::query_as("SELECT value, score FROM sorted_set_storage WHERE key = ? AND namespace = ? AND score BETWEEN ? AND ? ORDER BY score ASC;")
-                .bind(key)
-                .bind(Self::namespace(namespace))
-                .bind(min)
-                .bind(max);
-
-        self.pool
-            .with_ro(svc_name, api_name)
-            .fetch_all_as::<DBScoreValue, _>(query)
-            .await
-            .map(|vec| {
-                vec.into_iter()
-                    .map(|k| k.into_pair())
-                    .collect::<Vec<(f64, Bytes)>>()
-            })
-            .map_err(|err| err.to_safe_string())
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "query_sorted_set", || {
+            let namespace = namespace.clone();
+            async move {
+                let query =
+                    sqlx::query_as("SELECT value, score FROM sorted_set_storage WHERE key = ? AND namespace = ? AND score BETWEEN ? AND ? ORDER BY score ASC;")
+                        .bind(key)
+                        .bind(namespace)
+                        .bind(min)
+                        .bind(max);
+                self.pool
+                    .with_ro(svc_name, api_name)
+                    .fetch_all_as::<DBScoreValue, _>(query)
+                    .await
+                    .map(|vec| {
+                        vec.into_iter()
+                            .map(|k| k.into_pair())
+                            .collect::<Vec<(f64, Bytes)>>()
+                    })
+            }
+        })
+        .await
     }
 }
 

@@ -40,7 +40,6 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use golem_wasm::{FromValue, IntoValueAndType};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Display};
 use std::future::Future;
@@ -237,17 +236,20 @@ pub trait InFunctionRetryHost {
 }
 
 pub(crate) fn collect_named_retry_policies(
-    config: &HashMap<Vec<String>, golem_wasm::ValueAndType>,
+    config: &HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
 ) -> Vec<NamedRetryPolicy> {
+    use golem_common::schema::FromSchema;
+
     let mut policies = Vec::new();
 
-    for value_and_type in config.values() {
-        if let Ok(mut parsed) = Vec::<NamedRetryPolicy>::from_value(value_and_type.value.clone()) {
+    for typed in config.values() {
+        let value = typed.value();
+        if let Ok(mut parsed) = Vec::<NamedRetryPolicy>::from_value(value) {
             policies.append(&mut parsed);
             continue;
         }
 
-        if let Ok(parsed) = NamedRetryPolicy::from_value(value_and_type.value.clone()) {
+        if let Ok(parsed) = NamedRetryPolicy::from_value(value) {
             policies.push(parsed);
         }
     }
@@ -641,15 +643,25 @@ impl From<OplogEntryVersion> for durability::OplogEntryVersion {
     }
 }
 
-impl From<PersistedDurableFunctionInvocation> for durability::PersistedDurableFunctionInvocation {
-    fn from(value: PersistedDurableFunctionInvocation) -> Self {
-        durability::PersistedDurableFunctionInvocation {
+impl TryFrom<PersistedDurableFunctionInvocation>
+    for durability::PersistedDurableFunctionInvocation
+{
+    type Error = anyhow::Error;
+
+    fn try_from(value: PersistedDurableFunctionInvocation) -> Result<Self, Self::Error> {
+        let response = value.response.into_typed_schema_value().map_err(|e| {
+            anyhow::anyhow!("Failed to render persisted durable function response: {e}")
+        })?;
+        let response = golem_common::schema::wit::encode_typed(&response).map_err(|e| {
+            anyhow::anyhow!("Failed to encode persisted durable function response: {e}")
+        })?;
+        Ok(durability::PersistedDurableFunctionInvocation {
             timestamp: value.timestamp.into(),
             function_name: value.function_name,
-            response: value.response.into_value_and_type().into(),
+            response,
             function_type: value.function_type.into(),
             entry_version: value.oplog_entry_version.into(),
-        }
+        })
     }
 }
 
@@ -760,15 +772,30 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
     async fn persist_durable_function_invocation(
         &mut self,
         function_name: String,
-        request: durability::ValueAndType,
-        response: durability::ValueAndType,
+        request: golem_common::schema::wit::wire::TypedSchemaValue,
+        response: golem_common::schema::wit::wire::TypedSchemaValue,
         function_type: durability::DurableFunctionType,
     ) -> anyhow::Result<()> {
+        // The request/response values are guest-owned and never legally carry a
+        // quota token. Decode both through the rejecting path so any owned
+        // `quota-token` handle is deleted from the resource table rather than
+        // leaked. Both are drained before the first error is surfaced, so a
+        // handle in `response` cannot leak when `request` is rejected.
+        let request_typed =
+            golem_common::schema::wit::decode_typed_rejecting_quota_with(request, self);
+        let response_typed =
+            golem_common::schema::wit::decode_typed_rejecting_quota_with(response, self);
+        let request_typed = request_typed.map_err(|e| {
+            anyhow::anyhow!("Failed to decode durable function request schema value: {e}")
+        })?;
+        let response_typed = response_typed.map_err(|e| {
+            anyhow::anyhow!("Failed to decode durable function response schema value: {e}")
+        })?;
         DurabilityHost::persist_durable_function_invocation(
             self,
             HostFunctionName::Custom(function_name),
-            &HostRequest::Custom(request.into()),
-            &HostResponse::Custom(response.into()),
+            &HostRequest::Custom(request_typed),
+            &HostResponse::Custom(response_typed),
             function_type.into(),
         )
         .await;
@@ -779,7 +806,7 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
         &mut self,
     ) -> anyhow::Result<durability::PersistedDurableFunctionInvocation> {
         let invocation = DurabilityHost::read_persisted_durable_function_invocation(self).await?;
-        Ok(invocation.into())
+        invocation.try_into()
     }
 }
 
@@ -808,7 +835,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
 
     fn durable_execution_state(&self) -> DurableExecutionState {
         DurableExecutionState {
-            is_live: self.state.is_live(),
+            is_live: self.state.is_live() || self.state.snapshotting_mode.is_some(),
             persistence_level: self.state.persistence_level,
             snapshotting_mode: self.state.snapshotting_mode,
             assume_idempotence: self.state.assume_idempotence,
@@ -821,6 +848,10 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         retry_from: OplogIndex,
         retry_policy_state: Option<RetryPolicyState>,
     ) {
+        if self.state.snapshotting_mode.is_some() {
+            return;
+        }
+
         use golem_common::model::oplog::AgentError;
         let inside_atomic_region = self.state.outermost_atomic_region_has_side_effects();
         let entry = OplogEntry::error(
@@ -867,6 +898,8 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         }
 
         self.process_pending_replay_events().await?;
+        self.drain_card_events_at_boundary().await?;
+
         let oplog_index = self.begin_function(function_type).await?;
         Ok(oplog_index)
     }
@@ -878,13 +911,14 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         forced_commit: bool,
     ) -> Result<(), WorkerExecutorError> {
         self.end_function(function_type, begin_index).await?;
-        if function_type == &DurableFunctionType::WriteRemote
-            || matches!(function_type, DurableFunctionType::WriteRemoteBatched(_))
-            || matches!(
-                function_type,
-                DurableFunctionType::WriteRemoteTransaction(_)
-            )
-            || forced_commit
+        if self.state.snapshotting_mode.is_none()
+            && (function_type == &DurableFunctionType::WriteRemote
+                || matches!(function_type, DurableFunctionType::WriteRemoteBatched(_))
+                || matches!(
+                    function_type,
+                    DurableFunctionType::WriteRemoteTransaction(_)
+                )
+                || forced_commit)
         {
             self.public_state
                 .worker()

@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::StructuredOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::{
-    Column, FieldsBuilder, MessageWithFields, TextView, format_id, format_main_id, log_table,
+    Column, FieldsBuilder, MessageWithFields, TextOutput, format_id, format_main_id, log_table,
     new_table_full_condensed,
 };
 use golem_client::model::Deployment;
@@ -22,12 +24,15 @@ use golem_common::model::deployment::CurrentDeployment;
 use golem_common::model::environment::EnvironmentName;
 use serde_derive::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeploymentNewView {
     pub application_name: ApplicationName,
     pub environment_name: EnvironmentName,
     pub deployment: CurrentDeployment,
 }
+
+impl Masked for DeploymentNewView {}
 
 impl MessageWithFields for DeploymentNewView {
     fn message(&self) -> String {
@@ -49,7 +54,16 @@ impl MessageWithFields for DeploymentNewView {
                 "Deployment Revision",
                 &self.deployment.revision,
                 format_main_id,
-            )
+            );
+
+        fields.fmt_field_optional(
+            "Deployment Version",
+            &self.deployment.version.0,
+            !self.deployment.version.0.is_empty(),
+            format_id,
+        );
+
+        fields
             .fmt_field("Hash", &self.deployment.deployment_hash, format_id)
             .field("Deploy Revision", &self.deployment.current_revision);
 
@@ -57,14 +71,28 @@ impl MessageWithFields for DeploymentNewView {
     }
 }
 
-impl TextView for Vec<Deployment> {
+impl StructuredOutput for DeploymentNewView {
+    const KIND: &'static str = "deploy.deployment";
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentListView {
+    pub deployments: Vec<Deployment>,
+}
+
+impl StructuredOutput for DeploymentListView {
+    const KIND: &'static str = "deploy.deployments";
+}
+
+impl TextOutput for DeploymentListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Deployment Revision").fixed_right(),
             Column::new("Deployment Version").fixed_right(),
             Column::new("Hash"),
         ]);
-        for dep in self {
+        for dep in &self.deployments {
             table.add_row(vec![
                 dep.revision.get().to_string(),
                 dep.version.0.clone(),

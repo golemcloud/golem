@@ -27,14 +27,15 @@ use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
-    HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig,
-    HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService,
-    HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService, HasPromiseService, HasQuotaService,
-    HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
-    HasShardManagerService, HasShardService, HasShutdownToken, HasWasmtimeEngine,
-    HasWebSocketConnectionPool, HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy,
-    HasWorkerService, active_workers, agent_types, blob_store, component, golem_config, key_value,
-    oplog, promise, scheduler, shard_manager, worker, worker_activator, worker_enumeration,
+    HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasCardService,
+    HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
+    HasKeyValueService, HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService,
+    HasPromiseService, HasQuotaService, HasResourceLimits, HasRpc,
+    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
+    HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWebSocketConnectionPool,
+    HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
+    active_workers, agent_types, blob_store, card, component, golem_config, key_value, oplog,
+    promise, scheduler, shard_manager, worker, worker_activator, worker_enumeration,
 };
 use crate::services::{HasOplog, HasRdbmsService, HasWorkerForkService, rdbms};
 use crate::worker::Worker;
@@ -42,7 +43,7 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::base_model::component::ComponentRevision;
 use golem_common::base_model::regions::DeletedRegionsBuilder;
-use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -55,6 +56,7 @@ use golem_common::model::{AgentFingerprint, AgentMetadata, Timestamp};
 use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::auth::AuthCtx;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use uuid::Uuid;
@@ -66,22 +68,22 @@ pub trait WorkerForkService: Send + Sync {
     async fn fork(
         &self,
         fork_account_id: AccountId,
-        fork_account_email: &AccountEmail,
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerExecutorError>;
 
     // TODO: this should be restricted to targets within the same component
     async fn fork_and_write_fork_result(
         &self,
         fork_account_id: AccountId,
-        fork_account_email: &AccountEmail,
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
         copied_scope_start: Option<OplogIndex>,
         forked_phantom_id: Uuid,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerExecutorError>;
 }
 
@@ -93,6 +95,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub engine: Arc<wasmtime::Engine>,
     pub linker: Arc<wasmtime::component::Linker<Ctx>>,
     pub runtime: Handle,
+    pub card_service: Arc<dyn card::CardService>,
     pub component_service: Arc<dyn component::ComponentService>,
     pub shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
     pub quota_service: Arc<dyn crate::services::quota::QuotaService>,
@@ -149,6 +152,12 @@ impl<Ctx: WorkerCtx> HasAgentWebhooksService for DefaultWorkerFork<Ctx> {
 impl<Ctx: WorkerCtx> HasComponentService for DefaultWorkerFork<Ctx> {
     fn component_service(&self) -> Arc<dyn component::ComponentService> {
         self.component_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasCardService for DefaultWorkerFork<Ctx> {
+    fn card_service(&self) -> Arc<dyn card::CardService> {
+        self.card_service.clone()
     }
 }
 
@@ -334,6 +343,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             engine: self.engine.clone(),
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
+            card_service: self.card_service.clone(),
             component_service: self.component_service.clone(),
             shard_manager_service: self.shard_manager_service.clone(),
             quota_service: self.quota_service.clone(),
@@ -372,6 +382,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
+        card_service: Arc<dyn card::CardService>,
         component_service: Arc<dyn component::ComponentService>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
         quota_service: Arc<dyn crate::services::quota::QuotaService>,
@@ -411,6 +422,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             engine,
             linker,
             runtime,
+            card_service,
             component_service,
             shard_manager_service,
             quota_service,
@@ -709,10 +721,10 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
     async fn fork(
         &self,
         fork_account_id: AccountId,
-        fork_account_email: &AccountEmail,
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerExecutorError> {
         let new_oplog = self
             .copy_source_oplog(
@@ -730,7 +742,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // depending on sharding.
         // This will replay until the fork point in the forked worker
         self.worker_proxy
-            .resume(target_agent_id, true, fork_account_id, fork_account_email)
+            .resume(target_agent_id, true, auth_ctx)
             .await
             .map_err(|err| {
                 WorkerExecutorError::failed_to_resume_worker(target_agent_id.clone(), err.into())
@@ -742,12 +754,12 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
     async fn fork_and_write_fork_result(
         &self,
         fork_account_id: AccountId,
-        fork_account_email: &AccountEmail,
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
         copied_scope_start: Option<OplogIndex>,
         forked_phantom_id: Uuid,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerExecutorError> {
         let new_oplog = self
             .copy_source_oplog(
@@ -818,7 +830,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // depending on sharding.
         // This will replay until the fork point in the forked worker
         self.worker_proxy
-            .resume(target_agent_id, true, fork_account_id, fork_account_email)
+            .resume(target_agent_id, true, auth_ctx)
             .await
             .map_err(|err| {
                 WorkerExecutorError::failed_to_resume_worker(target_agent_id.clone(), err.into())

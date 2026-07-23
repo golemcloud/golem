@@ -2,8 +2,9 @@ use crate::Tracing;
 use crate::app::{TestContext, cmd, flag};
 
 use golem_cli::fs;
-use golem_cli::model::{GuestLanguage, TemplateDescription};
-use golem_common::base_model::agent::DeployedRegisteredAgentType;
+use golem_cli::model::GuestLanguage;
+use golem_cli::model::text::agent::AgentTypeListView;
+use golem_cli::model::text::template::TemplateListView;
 use strum::IntoEnumIterator;
 use test_r::{inherit_test_dep, test};
 
@@ -33,9 +34,9 @@ async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
     assert!(outputs.success_or_dump());
 
     let templates = outputs
-        .stdout_json::<Vec<TemplateDescription>>()
+        .stdout_json::<TemplateListView>()
         .into_iter()
-        .flatten()
+        .flat_map(|view| view.templates)
         .filter(|template| template.language == language)
         .map(|template| template.name)
         .collect::<Vec<_>>();
@@ -72,9 +73,9 @@ async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
         .cli([cmd::AGENT_TYPE, cmd::LIST, flag::FORMAT, "json"])
         .await;
     let deployed_agent_types = outputs
-        .stdout_json::<Vec<DeployedRegisteredAgentType>>()
+        .stdout_json::<AgentTypeListView>()
         .into_iter()
-        .flatten()
+        .flat_map(|view| view.agent_types)
         .collect::<Vec<_>>();
 
     // Checking bridge SDK generation for all agents and languages, one by one

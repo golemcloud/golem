@@ -18,6 +18,7 @@ use crate::command::agent_type::AgentTypeSubcommand;
 use crate::command::api::ApiSubcommand;
 use crate::command::api::secret::SecretSubcommand;
 use crate::command::api_token::ApiTokenSubcommand;
+use crate::command::card::CardSubcommand;
 use crate::command::component::ComponentSubcommand;
 use crate::command::environment::EnvironmentSubcommand;
 use crate::command::exec::ExecSubcommand;
@@ -88,6 +89,7 @@ impl GolemCliCommand {
                     vec!["completion"],
                     vec!["generate-bridge"],
                     vec!["new"],
+                    vec!["output-schema"],
                     vec!["plugin"],
                     vec!["profile"],
                     vec!["repl"],
@@ -103,7 +105,7 @@ impl GolemCliCommand {
                     "local",
                     "preset",
                     "profile",
-                    "show_sensitive",
+                    "show_secrets",
                 ],
                 exclude_hidden: true,
             },
@@ -199,9 +201,9 @@ pub struct GolemCliGlobalFlags {
     #[arg(long, short = 'Y', global = true, display_order = 110)]
     pub yes: bool,
 
-    /// Disables filtering of potentially sensitive user values in text mode (e.g. component environment variable values)
+    /// Show secret and sensitive values that are masked by default
     #[arg(long, global = true, display_order = 111)]
-    pub show_sensitive: bool,
+    pub show_secrets: bool,
 
     /// Enable experimental, development-only features
     #[arg(long, global = true, display_order = 112)]
@@ -741,9 +743,12 @@ pub enum GolemCliSubcommand {
         /// definitions, API objects). The text format is intended for human
         /// review and is not stable.
         ///
-        /// In `--format json/yaml/toon` the result document only carries
-        /// `{"deployed": true}` indicating that planning succeeded; the
-        /// detailed diff is not yet emitted as structured data.
+        /// In `--format json/yaml/toon`, `deploy` may emit multiple structured
+        /// documents. Depending on the plan, stdout can contain
+        /// `deploy.diff` and/or `deploy.plan`, followed by a final
+        /// `deploy` success document. Parse stdout as a sequence of
+        /// documents and branch on `$type`; do not assume every possible
+        /// document appears.
         #[arg(long, conflicts_with_all = ["stage", "approve_staging_steps"])]
         plan: bool,
         /// Only plan and stage changes, but do not apply them to the environment; used for testing
@@ -872,6 +877,11 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: ApiTokenSubcommand,
     },
+    /// Manage permission cards
+    Card {
+        #[clap(subcommand)]
+        subcommand: CardSubcommand,
+    },
     /// Manage secrets
     Secret {
         #[clap(subcommand)]
@@ -886,6 +896,16 @@ pub enum GolemCliSubcommand {
     Resource {
         #[clap(subcommand)]
         subcommand: ResourceDefinitionSubcommand,
+    },
+    /// Print the structured CLI output JSON schema to stdout
+    #[command(after_help = crate::command_examples::OUTPUT_SCHEMA)]
+    OutputSchema {
+        /// List known structured output type names as a compact JSON array
+        #[arg(long, conflicts_with = "output_type")]
+        types: bool,
+        /// Print a pruned schema for this output type. Can be repeated.
+        #[arg(long = "type", value_name = "TYPE")]
+        output_type: Vec<String>,
     },
     /// Generate shell completion. The completion script is written to stdout
     /// as plain text; the global `--format` flag is ignored. Redirect the
@@ -1378,16 +1398,14 @@ pub mod worker {
             /// Press Ctrl+C to exit watch mode.
             ///
             /// Watch mode redraws into the alternate terminal screen, so it is
-            /// intended for interactive use. It is not meaningful with
-            /// `--format json/yaml/toon`: structured output is overwritten on every
-            /// frame and the alternate-screen restore on exit will leave you with
-            /// no captured payload.
+            /// intended for interactive text output only.
             ///
             /// Mutually exclusive with `--scan-cursor`.
             #[arg(long, default_missing_value = "400", value_name = "MILLIS", num_args = 0..=1, conflicts_with = "scan_cursor")]
             refresh: Option<u64>,
         },
-        /// Connect to an agent and live stream its standard output, error and log channels
+        /// Connect to an agent and live stream its standard output, error and log channels.
+        /// Structured formats emit one output document per stream event.
         #[command(after_help = crate::command_examples::AGENT_STREAM)]
         Stream {
             #[command(flatten)]
@@ -1445,7 +1463,8 @@ pub mod worker {
             #[command(flatten)]
             agent_id: AgentIdArgs,
         },
-        /// Queries and dumps an agent's full oplog
+        /// Queries and streams an agent's full oplog.
+        /// Structured formats emit one output document per oplog entry.
         #[command(after_help = crate::command_examples::AGENT_OPLOG)]
         Oplog {
             #[command(flatten)]
@@ -1522,7 +1541,8 @@ pub mod worker {
             /// `/data/state.json`). Always starts with `/`.
             path: String,
             /// Local (host) path (including filename) to save the file contents
-            /// to. If omitted, the file contents are streamed to stdout.
+            /// to. If omitted, the file is saved in the current directory using
+            /// the guest file basename, or output.bin if no basename is available.
             #[arg(long)]
             output: Option<String>,
         },
@@ -2146,7 +2166,7 @@ pub mod api_token {
         /// List tokens
         #[command(after_help = crate::command_examples::API_TOKEN_LIST)]
         List,
-        /// Create new token
+        /// Create a new token. The token secret is intentionally printed once, including in structured output; store it securely.
         #[command(after_help = crate::command_examples::API_TOKEN_NEW)]
         New {
             /// Expiration timestamp of the generated token, in RFC 3339 format
@@ -2285,7 +2305,61 @@ pub mod account {
     }
 }
 
+pub mod card {
+    use crate::command::shared_args::AccountIdOptionalArg;
+    use crate::model::worker::RawAgentId;
+    use clap::Subcommand;
+    use golem_common::model::card::CardId;
+
+    #[derive(Debug, Subcommand)]
+    pub enum CardSubcommand {
+        /// List cards owned by an account, or cards in an agent's wallet with --agent.
+        #[command(after_help = crate::command_examples::CARD_LIST)]
+        List {
+            #[command(flatten)]
+            account_id: AccountIdOptionalArg,
+
+            /// List cards in an agent's wallet instead of account-owned cards. Activates the agent if not already active.
+            #[arg(long, conflicts_with = "account_id")]
+            agent: Option<RawAgentId>,
+
+            /// Include account root cards. If no include flags are set, all account card kinds are included.
+            #[arg(long, conflicts_with = "agent")]
+            include_root: bool,
+
+            /// Include permission-share cards. If no include flags are set, all account card kinds are included.
+            #[arg(long, conflicts_with = "agent")]
+            include_permission_shares: bool,
+
+            /// Include environment-default cards. If no include flags are set, all account card kinds are included.
+            #[arg(long, conflicts_with = "agent")]
+            include_environment_defaults: bool,
+
+            /// Include agent-initial cards. If no include flags are set, all account card kinds are included.
+            #[arg(long, conflicts_with = "agent")]
+            include_agent_initials: bool,
+        },
+
+        /// Get a card by ID.
+        #[command(after_help = crate::command_examples::CARD_GET)]
+        Get {
+            /// Card ID.
+            card_id: CardId,
+        },
+
+        /// Revoke a card and all its descendants. DESTRUCTIVE.
+        #[command(after_help = crate::command_examples::CARD_REVOKE)]
+        Revoke {
+            /// Card ID to revoke.
+            card_id: CardId,
+        },
+    }
+}
+
 pub mod server {
+    use crate::config::{
+        DEFAULT_LOCAL_CUSTOM_REQUEST_PORT, DEFAULT_LOCAL_MCP_PORT, DEFAULT_LOCAL_ROUTER_PORT,
+    };
     use clap::{Args, Subcommand};
     use std::path::PathBuf;
 
@@ -2342,14 +2416,15 @@ pub mod server {
         }
 
         pub fn router_port(&self) -> u16 {
-            self.router_port.unwrap_or(9881)
+            self.router_port.unwrap_or(DEFAULT_LOCAL_ROUTER_PORT)
         }
 
         pub fn custom_request_port(&self) -> u16 {
-            self.custom_request_port.unwrap_or(9006)
+            self.custom_request_port
+                .unwrap_or(DEFAULT_LOCAL_CUSTOM_REQUEST_PORT)
         }
         pub fn mcp_port(&self) -> u16 {
-            self.mcp_port.unwrap_or(9007)
+            self.mcp_port.unwrap_or(DEFAULT_LOCAL_MCP_PORT)
         }
     }
 

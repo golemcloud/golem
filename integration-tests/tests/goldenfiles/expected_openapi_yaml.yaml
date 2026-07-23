@@ -1,6 +1,6 @@
 components:
   schemas:
-    JsonBodyResponse:
+    golem_it_agent_sdk_rust.http.model.JsonBodyResponse:
       additionalProperties: false
       properties:
         ok:
@@ -9,7 +9,7 @@ components:
       - ok
       title: JsonBodyResponse
       type: object
-    JsonResponse:
+    golem_it_agent_sdk_rust.http.model.JsonResponse:
       additionalProperties: false
       properties:
         value:
@@ -18,7 +18,7 @@ components:
       - value
       title: JsonResponse
       type: object
-    MultiPathVarsResponse:
+    golem_it_agent_sdk_rust.http.model.MultiPathVarsResponse:
       additionalProperties: false
       properties:
         joined:
@@ -27,7 +27,7 @@ components:
       - joined
       title: MultiPathVarsResponse
       type: object
-    OkResponse:
+    golem_it_agent_sdk_rust.http.model.OkResponse:
       additionalProperties: false
       properties:
         ok:
@@ -36,7 +36,7 @@ components:
       - ok
       title: OkResponse
       type: object
-    OptionalResponse:
+    golem_it_agent_sdk_rust.http.model.OptionalResponse:
       additionalProperties: false
       properties:
         value:
@@ -45,7 +45,7 @@ components:
       - value
       title: OptionalResponse
       type: object
-    PathAndHeaderResponse:
+    golem_it_agent_sdk_rust.http.model.PathAndHeaderResponse:
       additionalProperties: false
       properties:
         request_id:
@@ -57,7 +57,7 @@ components:
       - request_id
       title: PathAndHeaderResponse
       type: object
-    PathAndQueryResponse:
+    golem_it_agent_sdk_rust.http.model.PathAndQueryResponse:
       additionalProperties: false
       properties:
         id:
@@ -71,7 +71,7 @@ components:
       - limit
       title: PathAndQueryResponse
       type: object
-    PreflightRequest:
+    golem_it_agent_sdk_rust.http.model.PreflightRequest:
       additionalProperties: false
       properties:
         name:
@@ -80,7 +80,7 @@ components:
       - name
       title: PreflightRequest
       type: object
-    PreflightResponse:
+    golem_it_agent_sdk_rust.http.model.PreflightResponse:
       additionalProperties: false
       properties:
         received:
@@ -89,7 +89,7 @@ components:
       - received
       title: PreflightResponse
       type: object
-    RemainingPathResponse:
+    golem_it_agent_sdk_rust.http.model.RemainingPathResponse:
       additionalProperties: false
       properties:
         tail:
@@ -98,7 +98,7 @@ components:
       - tail
       title: RemainingPathResponse
       type: object
-    ResourceResponse:
+    golem_it_agent_sdk_rust.http.model.ResourceResponse:
       additionalProperties: false
       properties:
         id:
@@ -113,7 +113,7 @@ components:
       - method
       title: ResourceResponse
       type: object
-    ResourceUpdate:
+    golem_it_agent_sdk_rust.http.model.ResourceUpdate:
       additionalProperties: false
       properties:
         description:
@@ -131,7 +131,7 @@ components:
       required: []
       title: ResourceUpdate
       type: object
-    ResultErrResponse:
+    golem_it_agent_sdk_rust.http.model.ResultErrResponse:
       additionalProperties: false
       properties:
         error:
@@ -140,7 +140,7 @@ components:
       - error
       title: ResultErrResponse
       type: object
-    ResultOkResponse:
+    golem_it_agent_sdk_rust.http.model.ResultOkResponse:
       additionalProperties: false
       properties:
         value:
@@ -149,7 +149,7 @@ components:
       - value
       title: ResultOkResponse
       type: object
-    StringPathVarResponse:
+    golem_it_agent_sdk_rust.http.model.StringPathVarResponse:
       additionalProperties: false
       properties:
         value:
@@ -158,7 +158,7 @@ components:
       - value
       title: StringPathVarResponse
       type: object
-    WebhookResponse:
+    golem_it_agent_sdk_rust.http.model.WebhookResponse:
       additionalProperties: false
       properties:
         payload_length:
@@ -192,7 +192,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OkResponse'
+                $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.OkResponse'
           description: Response 200
     options:
       responses:
@@ -276,7 +276,7 @@ paths:
               additionalProperties: false
               properties:
                 body:
-                  $ref: '#/components/schemas/PreflightRequest'
+                  $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.PreflightRequest'
               required:
               - body
               type: object
@@ -287,7 +287,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PreflightResponse'
+                $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.PreflightResponse'
           description: Response 200
   /cors-agents/{agent-name}/wildcard:
     get:
@@ -307,7 +307,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OkResponse'
+                $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.OkResponse'
           description: Response 200
     options:
       responses:
@@ -384,7 +384,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JsonBodyResponse'
+                $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.JsonBodyResponse'
           description: Response 200
   /http-agents/{agent-name}/multi-path-vars/{first}/{second}:
     get:
@@ -420,7 +420,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MultiPathVarsResponse'
+                $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.MultiPathVarsResponse'
           description: Response 200
   /http-agents/{agent-name}/path-and-header/{resource-id}:
     get:
@@ -456,7 +456,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PathAndHeaderResponse'
+                $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.PathAndHeaderResponse'
           description: Response 200
   /http-agents/{agent-name}/path-and-query/{item-id}:
     get:
@@ -495,7 +495,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PathAndQueryResponse'
+                $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.PathAndQueryResponse'
           description: Response 200
   /http-agents/{agent-name}/resource/{id}:
     patch:
@@ -525,7 +525,7 @@ paths:
               additionalProperties: false
               properties:
                 update:
-                  $ref: '#/components/schemas/ResourceUpdate'
+                  $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.ResourceUpdate'
               required:
               - update
               type: object
@@ -536,7 +536,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ResourceResponse'
+                $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.ResourceResponse'
           description: Response 200
   /http-agents/{agent-name}/resource/{id}/partial:
     patch:
@@ -564,7 +564,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ResourceResponse'
+                $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.ResourceResponse'
           description: Response 200
   /http-agents/{agent-name}/resp/binary:
     get:
@@ -605,7 +605,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JsonResponse'
+                $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.JsonResponse'
           description: Response 200
   /http-agents/{agent-name}/resp/no-content:
     get:
@@ -649,7 +649,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OptionalResponse'
+                $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.OptionalResponse'
           description: Response 200
         '404':
           description: Response 404
@@ -679,13 +679,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ResultOkResponse'
+                $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.ResultOkResponse'
           description: Response 200
         '500':
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ResultErrResponse'
+                $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.ResultErrResponse'
           description: Response 500
   /http-agents/{agent-name}/resp/result-json-void:
     get:
@@ -705,7 +705,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ResultOkResponse'
+                $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.ResultOkResponse'
           description: Response 200
         '500':
           description: Response 500
@@ -729,7 +729,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ResultErrResponse'
+                $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.ResultErrResponse'
           description: Response 500
   /http-agents/{agent-name}/rest/{tail}:
     get:
@@ -758,7 +758,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RemainingPathResponse'
+                $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.RemainingPathResponse'
           description: Response 200
   /http-agents/{agent-name}/restricted-unstructured-binary/{bucket}:
     post:
@@ -824,7 +824,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StringPathVarResponse'
+                $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.StringPathVarResponse'
           description: Response 200
   /http-agents/{agent-name}/unrestricted-unstructured-binary/{bucket}:
     post:
@@ -931,7 +931,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WebhookResponse'
+                $ref: '#/components/schemas/golem_it_agent_sdk_rust.http.model.WebhookResponse'
           description: Response 200
   /webhooks/cors-agent/{promise-id}:
     post:

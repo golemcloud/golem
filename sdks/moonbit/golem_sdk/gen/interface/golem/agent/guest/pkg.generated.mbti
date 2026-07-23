@@ -11,9 +11,9 @@ pub fn discover_agent_types() -> Result[Array[@common.AgentType], @common.AgentE
 
 pub fn get_definition() -> @common.AgentType
 
-pub fn initialize(String, @types.DataValue, @common.Principal) -> Result[Unit, @common.AgentError]
+pub fn initialize(String, @types.SchemaValueTree, @common.Principal) -> Result[Unit, @common.AgentError]
 
-pub fn invoke(String, @types.DataValue, @common.Principal) -> Result[@types.DataValue, @common.AgentError]
+pub fn invoke(String, @types.SchemaValueTree, @common.Principal) -> Result[@types.SchemaValueTree?, @common.AgentError]
 
 // Errors
 

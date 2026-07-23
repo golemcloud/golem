@@ -73,6 +73,8 @@ golem -C deploy                            # Shortcut: use "cloud" environment/p
 
 Environments are defined in `golem.yaml` and represent named deployment targets. They specify which server to deploy to, which presets to activate, and optional CLI/deployment behavior.
 
+For deployment `subdomain` fields, the environment's `server` controls expansion. A built-in local server resolves HTTP API subdomains to `*.localhost:9006` and MCP subdomains to `*.localhost:9007` by default; a built-in cloud server resolves them to `*.apps.golem.cloud` and `*.mcps.golem.cloud`. The environment name itself does not control the expansion.
+
 ### Basic example
 
 ```yaml
@@ -112,6 +114,7 @@ environments:
 | `componentPresets` | string or string[] | Preset name(s) to activate |
 | `cli` | object | CLI behavior overrides (see below) |
 | `deployment` | object | Deployment option overrides (see below) |
+| `version` | object or string | Per-environment version override — see `golem-deployment-version` |
 
 ### Server options
 
@@ -140,7 +143,7 @@ environments:
     server: local
     deployment:
       compatibilityCheck: false      # Skip component compatibility checks
-      versionCheck: false            # Skip version mismatch checks
+      versionCheck: false            # Enforce unique deploy versions; false = allow re-use (default)
       securityOverrides: true        # Allow security config overrides
 ```
 
@@ -170,23 +173,23 @@ Several top-level manifest sections are keyed by environment name:
 httpApi:
   deployments:
     local:                           # Only deployed to "local" environment
-      - domain: localhost:9006
+      - subdomain: my-app  # resolves to my-app.localhost:9006 by default
         agents:
           MyAgent: {}
-    prod:
-      - domain: api.example.com
+    cloud:
+      - subdomain: my-app  # resolves to my-app.apps.golem.cloud
         agents:
           MyAgent: {}
 
 mcp:
   deployments:
     local:
-      - domain: localhost:9006
+      - subdomain: my-mcp  # resolves to my-mcp.localhost:9007 by default
 
 secretDefaults:
   local:
     apiKey: "test-key"
-  prod:
+  cloud:
     apiKey: "{{ PROD_API_KEY }}"
 
 retryPolicyDefaults:
@@ -393,5 +396,6 @@ golem -L component list                    # Use built-in "local" profile
 
 - Load `golem-edit-manifest` for the complete manifest field reference
 - Load `golem-deploy` for deployment commands and flags
+- Load `golem-deployment-version` for per-environment `version:` overrides and the `versionCheck` uniqueness policy
 - Load `golem-add-env-vars` for environment variable configuration details
 - Load `golem-add-initial-files` for initial filesystem configuration

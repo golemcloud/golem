@@ -4,7 +4,7 @@
 
 This directory contains the Rust SDK for building Golem components:
 - `golem-rust` - Runtime API wrappers including the transaction API, durability, agentic framework, and value type conversions
-- `golem-rust-macro` - Procedural macros for `ValueAndType` derivation and agent definition
+- `golem-rust-macro` - Procedural macros for agent definition, multimodal schema, and config schema support
 
 ## Building
 
@@ -42,7 +42,7 @@ cargo test -p golem-rust --features export_golem_agentic  # Agent tests
 | `bindings` | WIT-generated bindings via `wit_bindgen::generate!` |
 | `transaction` | Transaction API for durable execution |
 | `durability` | Durability helpers (requires `durability` feature) |
-| `value_and_type` | Type conversion traits (`IntoValue`, `FromValueAndType`, `Schema`) |
+| `schema` | Re-exported `golem-schema` schema/value types and conversion traits (`IntoSchema`, `FromSchema`) |
 | `agentic` | Agent framework (requires `export_golem_agentic` feature) |
 | `json` | JSON serialization helpers (requires `json` feature) |
 
@@ -50,9 +50,8 @@ cargo test -p golem-rust --features export_golem_agentic  # Agent tests
 
 | Macro | Purpose |
 |-------|---------|
-| `#[derive(IntoValue)]` | Derive `IntoValue` trait for structs/enums |
-| `#[derive(FromValueAndType)]` | Derive `FromValueAndType` trait |
-| `#[derive(Schema)]` | Derive schema generation |
+| `#[derive(IntoSchema)]` | Derive schema/value encoding for structs/enums (re-exported from `golem-schema`) |
+| `#[derive(FromSchema)]` | Derive schema/value decoding for structs/enums (re-exported from `golem-schema`) |
 | `#[agent_definition]` | Define an agent trait with metadata |
 | `#[agent_implementation]` | Implement an agent trait |
 | `#[derive(AllowedLanguages)]` | Define allowed languages for unstructured text |
@@ -95,14 +94,9 @@ cargo make wit
 
 ## Adding New Type Conversions
 
-When adding `IntoValue`/`FromValueAndType` support for new types:
-
-1. Add the feature flag to `Cargo.toml` if it requires an external crate
-2. Create a new module in `src/value_and_type/` (e.g., `my_type.rs`)
-3. Implement `IntoValue`, `FromValueAndType`, and optionally `Schema` traits
-4. Add conditional compilation: `#[cfg(feature = "my_type")]`
-5. Re-export in `src/value_and_type/mod.rs`
-6. Add roundtrip tests in `src/value_and_type/tests.rs` using `roundtrip_test!` macros
+When adding schema/value support for new types, add it to `golem-schema` using
+`IntoSchema` / `FromSchema`, then enable the corresponding `golem-schema`
+feature from `golem-rust` if the type is backed by an optional dependency.
 
 ## Agent Definition Pattern
 

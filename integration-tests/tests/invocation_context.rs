@@ -22,6 +22,7 @@ use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
 };
 use golem_common::model::invocation_context::{SpanId, TraceId};
+use golem_common::schema::SchemaValue;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use reqwest::header::HeaderValue;
@@ -198,11 +199,11 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
             .as_object()
             .unwrap()
             .get("request.uri"),
-        Some(&Value::String("/vigoo/test-path-1".to_string()))
+        Some(&SchemaValue::String("/vigoo/test-path-1".to_string()))
     );
     assert_eq!(
         dump[2].as_object().unwrap().get("trace_id"),
-        Some(&Value::String(format!("{trace_id}")))
+        Some(&SchemaValue::String(format!("{trace_id}")))
     );
 
     Ok(())

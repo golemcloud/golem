@@ -27,11 +27,16 @@ use crate::{Tracing, crate_path, workspace_path};
 use anyhow::Context;
 use colored::Colorize;
 use expectrl::{Eof, Expect};
+use golem_cli::app::build::task_result_marker::{
+    ExtractComponentMetadataMarkerHash, TaskResultMarker,
+};
 use golem_cli::app::edit;
 use golem_cli::fs;
+use golem_cli::model::app::extracted_component_metadata_path;
 use golem_cli::sdk_overrides::sdk_overrides;
 use golem_client::Security;
 use golem_client::api::HealthCheckClient;
+use golem_common::model::component::ComponentName;
 use itertools::Itertools;
 use lenient_bool::LenientBool;
 use serde::Deserialize;
@@ -81,9 +86,10 @@ mod flag {
     pub static FORCE_BUILD: &str = "--force-build";
     pub static FORMAT: &str = "--format";
     pub static LANGUAGE: &str = "--language";
+    pub static OUTPUT_DIR: &str = "--output-dir";
     pub static RESET: &str = "--reset";
     pub static SCRIPT: &str = "--script";
-    pub static SHOW_SENSITIVE: &str = "--show-sensitive";
+    pub static SHOW_SECRETS: &str = "--show-secrets";
     pub static STEP: &str = "--step";
     pub static TEMPLATE: &str = "--template";
     pub static YES: &str = "--yes";
@@ -398,6 +404,21 @@ impl TestContext {
             .unwrap_or(9006)
     }
 
+    #[allow(dead_code)]
+    fn router_port(&self) -> u16 {
+        self.startup_ports
+            .as_ref()
+            .expect("start_server must be called before router_port")
+            .router_port
+    }
+
+    /// Base URL of the local worker service (the external invocation REST API),
+    /// as discovered from the test server's random router port.
+    #[allow(dead_code)]
+    fn worker_service_url(&self) -> String {
+        format!("http://localhost:{}", self.router_port())
+    }
+
     fn rewrite_local_http_domain_ports(&self) {
         let Some(startup_ports) = self.startup_ports.as_ref() else {
             return;
@@ -696,6 +717,108 @@ impl TestContext {
     fn test_data_path_join<P: AsRef<Path>>(&self, path: P) -> PathBuf {
         crate_path().join("test-data").join(path)
     }
+}
+
+/// Returns a minimal component file for app planner tests that seed extracted metadata separately.
+///
+/// These tests intentionally pair the placeholder bytes with goldenfile metadata for agent types
+/// that are not present in the component. A future content-based cache key or metadata-vs-wasm
+/// consistency check should update this helper and all callers together.
+///
+/// The file's modification time is backdated so that metadata files seeded afterwards are
+/// strictly newer than any wasm copied from the placeholder (copies must preserve the
+/// timestamp: use [`copy_placeholder_wasm`] or `cp -p`). The extraction up-to-date check
+/// compares timestamps strictly, so equal timestamps (possible on filesystems with coarse
+/// timestamp granularity) would re-run extraction against the placeholder, which fails
+/// because it exports no agent guest interface.
+fn placeholder_component_wasm(ctx: &TestContext) -> PathBuf {
+    let path = ctx.cwd_path_join("placeholder-component.wasm");
+    if !path.exists() {
+        std::fs::write(&path, wat::parse_str("(component)").unwrap()).unwrap();
+        backdate_mtime(&path);
+    }
+    path
+}
+
+/// Sets the file's modification time into the past, see [`placeholder_component_wasm`].
+fn backdate_mtime(path: &Path) {
+    let backdated = std::time::SystemTime::now() - Duration::from_secs(24 * 60 * 60);
+    std::fs::File::options()
+        .append(true)
+        .open(path)
+        .unwrap()
+        .set_modified(backdated)
+        .unwrap();
+}
+
+/// Copies the placeholder component wasm keeping its backdated modification time,
+/// see [`placeholder_component_wasm`].
+fn copy_placeholder_wasm(src: impl AsRef<Path>, dst: impl AsRef<Path>) {
+    std::fs::copy(src.as_ref(), dst.as_ref()).unwrap();
+    backdate_mtime(dst.as_ref());
+}
+
+fn extracted_component_metadata_relative_path(
+    ctx: &TestContext,
+    component_name: &str,
+    source_wasm_path: &Path,
+) -> PathBuf {
+    let temp_dir = ctx.cwd_path_join("golem-temp");
+    let component_name = ComponentName(component_name.to_string());
+    extracted_component_metadata_path(&temp_dir, &component_name, source_wasm_path)
+        .strip_prefix(ctx.cwd_path())
+        .unwrap()
+        .to_path_buf()
+}
+
+fn extracted_component_metadata_path_hash(
+    ctx: &TestContext,
+    component_name: &str,
+    source_wasm_path: &Path,
+) -> String {
+    extracted_component_metadata_relative_path(ctx, component_name, source_wasm_path)
+        .file_stem()
+        .unwrap()
+        .to_string_lossy()
+        .strip_prefix(&format!("{component_name}-"))
+        .unwrap()
+        .to_string()
+}
+
+/// Seeds extracted metadata through the same path helper the app build uses.
+///
+/// Planner tests intentionally pair placeholder wasm bytes with goldenfile metadata for agent
+/// types that are not present in the component. A future content-based cache key or
+/// metadata-vs-wasm consistency check should update this helper and all callers together.
+fn seed_extracted_metadata(
+    ctx: &TestContext,
+    component_name: &str,
+    source_wasm_path: &Path,
+    json: &str,
+) -> PathBuf {
+    let path = ctx.cwd_path_join(extracted_component_metadata_relative_path(
+        ctx,
+        component_name,
+        source_wasm_path,
+    ));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write_str(&path, json).unwrap();
+    path
+}
+
+fn seed_extraction_marker(ctx: &TestContext, component_name: &str) {
+    let marker_dir = ctx.cwd_path_join("golem-temp/task-results");
+    fs::create_dir_all(&marker_dir).unwrap();
+    let component_name = ComponentName(component_name.to_string());
+    TaskResultMarker::new(
+        &marker_dir,
+        ExtractComponentMetadataMarkerHash {
+            component_name: &component_name,
+        },
+    )
+    .unwrap()
+    .success()
+    .unwrap();
 }
 
 fn check_component_metadata(
@@ -1085,6 +1208,37 @@ fn test_binary_profile() -> String {
 }
 
 fn test_binary_path(profile: &str, binary_name: &str) -> PathBuf {
+    if let Ok(current_exe) = std::env::current_exe()
+        && let Some(dir) = current_exe.parent()
+    {
+        let current_profile_dir = if dir.file_name() == Some(OsStr::new("deps")) {
+            dir.parent()
+        } else {
+            Some(dir)
+        };
+        if let Some(target_dir) = current_profile_dir.and_then(Path::parent) {
+            let profile_dir = target_dir.join(profile);
+            let path = profile_dir.join(format!("{binary_name}{}", std::env::consts::EXE_SUFFIX));
+            if path.exists() {
+                return path;
+            }
+        }
+    }
+
+    if let Some(path) = std::env::var_os("CARGO_MAKE_CRATE_TARGET_DIRECTORY")
+        .or_else(|| std::env::var_os("CARGO_TARGET_DIR"))
+        .map(PathBuf::from)
+        .map(|target_dir| {
+            target_dir.join(format!(
+                "{profile}/{binary_name}{}",
+                std::env::consts::EXE_SUFFIX
+            ))
+        })
+        .filter(|path| path.exists())
+    {
+        return path;
+    }
+
     let path = workspace_path().join(format!(
         "target/{profile}/{binary_name}{}",
         std::env::consts::EXE_SUFFIX

@@ -124,8 +124,20 @@ You can customize the webhook URL suffix using the `webhookSuffix` annotation on
 
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
     <Tabs.Tab>
+        In the fluent SDK the suffix is passed as the `webhookSuffix` option of `http.mount(...)` on `defineAgent(...)`:
+
         ```typescript
-        @agent({ mount: "/workflow/{id}", webhookSuffix: "/workflow-hooks" })
+        import { z } from "zod"
+        import { defineAgent, method, http } from "@golemcloud/golem-ts-sdk"
+
+        export const WorkflowAgent = defineAgent({
+          name: "WorkflowAgent",
+          id: { id: z.string() },
+          http: http.mount("/workflow/{id}", { webhookSuffix: "/workflow-hooks" }),
+          methods: {
+            // ...
+          },
+        })
         ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -164,10 +176,10 @@ To configure the base URL for webhooks and deploy agents with webhook support, u
 httpApi:
   deployments:
     local:
-    - domain: my-app.localhost:9006
-      webhookUrl: http://my-app.localhost:9006
+    - subdomain: my-app  # resolves to my-app.localhost:9006 by default
+      webhookUrl: "/my-custom-webhooks/"  # optional path prefix; defaults to /webhooks
       agents:
         WebhookAgent: {}
 ```
 
-The `webhookUrl` field sets the base URL that Golem uses when generating webhook URLs. This should match the publicly accessible address of your deployment so that external systems can reach the webhook endpoints.
+The `webhookUrl` field sets the path prefix that Golem uses when generating webhook URLs (defaults to `/webhooks`). It is combined with the agent's `webhookSuffix` and the generated webhook ID to form the full callback URL, for example `http://my-app.localhost:9006/my-custom-webhooks/webhook-agent/<id>`.

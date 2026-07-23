@@ -27,15 +27,16 @@ use golem_api_grpc::proto::golem::worker::v1::worker_execution_error;
 use golem_api_grpc::proto::golem::worker::{LogEvent, StdErrLog, StdOutLog, log_event};
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::base_model::{AgentId, PromiseId};
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::agent::{DataValue, LegacyParsedAgentId};
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::application::{Application, ApplicationId};
 use golem_common::model::component::{
-    AgentFilePermissions, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
-    CanonicalFilePath, ComponentDto, ComponentId, ComponentRevision, PluginInstallation,
-    PluginPriority,
+    AgentFilePermissions, AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation,
+    AgentTypeProvisionConfigUpdate, CanonicalFilePath, ComponentDto, ComponentId,
+    ComponentRevision, PluginInstallation, PluginPriority,
 };
+use golem_common::schema::{FromSchema, SchemaValue, TypedSchemaValue};
 
 use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentRevision};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
@@ -68,6 +69,22 @@ pub struct PrecompiledComponent {
     pub wasm_name: String,
     /// The WIT package name used as the component name (passed to `.name()`)
     pub package_name: String,
+}
+
+pub(crate) fn default_agent_type_provision_config_creation_for_account(
+    account_email: AccountEmail,
+) -> AgentTypeProvisionConfigCreation {
+    AgentTypeProvisionConfigCreation {
+        initial_permissions: AgentTypeInitialPermissions::default_for_recipient(
+            golem_common::model::card::recipient::RecipientPattern::Account {
+                account: account_email,
+            },
+        ),
+        env: BTreeMap::new(),
+        config: Vec::new(),
+        plugin_installations: Vec::new(),
+        files: BTreeMap::new(),
+    }
 }
 
 impl PrecompiledComponent {
@@ -105,12 +122,60 @@ impl Drop for LogOutputGuard {
     }
 }
 
+/// Schema-native result of an agent invocation.
+///
+/// Wraps the decoded output [`SchemaValue`], which is absent for
+/// [`OutputSchema::Unit`](golem_common::schema::OutputSchema::Unit) methods.
+/// Prefer the typed [`into_typed`](AgentResult::into_typed) accessor; fall back
+/// to the raw [`into_return_value`](AgentResult::into_return_value) /
+/// [`value`](AgentResult::value) only where a value cannot be decoded into a
+/// Rust type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentResult {
+    value: Option<SchemaValue>,
+}
+
+impl AgentResult {
+    pub fn new(value: Option<SchemaValue>) -> Self {
+        Self { value }
+    }
+
+    /// The raw decoded output value, if the method returned one.
+    pub fn value(&self) -> Option<&SchemaValue> {
+        self.value.as_ref()
+    }
+
+    /// `true` when the method returned no value (unit-returning method).
+    pub fn is_empty(&self) -> bool {
+        self.value.is_none()
+    }
+
+    /// Consume the result, returning the raw output [`SchemaValue`] if present.
+    ///
+    /// Schema-native replacement for the legacy `DataValue::into_return_value`.
+    pub fn into_return_value(self) -> Option<SchemaValue> {
+        self.value
+    }
+
+    /// Decode the output value into a Rust type via [`FromSchema`].
+    ///
+    /// Errors if the method returned no value or the value does not match `T`.
+    pub fn into_typed<T: FromSchema>(self) -> anyhow::Result<T> {
+        let value = self
+            .value
+            .ok_or_else(|| anyhow!("agent method returned no value to decode"))?;
+        T::from_value(&value).map_err(|err| anyhow!("failed to decode agent result: {err}"))
+    }
+}
+
 #[async_trait]
 // TestDsl for everything needed by the worker-executor tests
 pub trait TestDsl {
     type WorkerError: std::error::Error + Sync + Send + 'static;
 
     fn redis(&self) -> Arc<dyn Redis>;
+
+    fn account_email(&self) -> AccountEmail;
 
     fn component(
         &self,
@@ -253,7 +318,7 @@ pub trait TestDsl {
     async fn try_start_agent(
         &self,
         component_id: &ComponentId,
-        id: LegacyParsedAgentId,
+        id: ParsedAgentId,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
         self.try_start_agent_with(
             component_id,
@@ -267,7 +332,7 @@ pub trait TestDsl {
     async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: LegacyParsedAgentId,
+        id: ParsedAgentId,
         env: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>>;
@@ -275,7 +340,7 @@ pub trait TestDsl {
     async fn start_agent(
         &self,
         component_id: &ComponentId,
-        id: LegacyParsedAgentId,
+        id: ParsedAgentId,
     ) -> anyhow::Result<AgentId> {
         self.start_agent_with(
             component_id,
@@ -289,7 +354,7 @@ pub trait TestDsl {
     async fn start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: LegacyParsedAgentId,
+        id: ParsedAgentId,
         env: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<AgentId> {
@@ -302,9 +367,9 @@ pub trait TestDsl {
     async fn invoke_agent(
         &self,
         component: &ComponentDto,
-        agent_id: &LegacyParsedAgentId,
+        agent_id: &ParsedAgentId,
         method_name: &str,
-        params: DataValue,
+        params: TypedSchemaValue,
     ) -> anyhow::Result<()> {
         self.invoke_agent_with_key(
             component,
@@ -319,19 +384,19 @@ pub trait TestDsl {
     async fn invoke_agent_with_key(
         &self,
         component: &ComponentDto,
-        agent_id: &LegacyParsedAgentId,
+        agent_id: &ParsedAgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
-        params: DataValue,
+        params: TypedSchemaValue,
     ) -> anyhow::Result<()>;
 
     async fn invoke_and_await_agent(
         &self,
         component: &ComponentDto,
-        agent_id: &LegacyParsedAgentId,
+        agent_id: &ParsedAgentId,
         method_name: &str,
-        params: DataValue,
-    ) -> anyhow::Result<DataValue> {
+        params: TypedSchemaValue,
+    ) -> anyhow::Result<AgentResult> {
         self.invoke_and_await_agent_impl(component, agent_id, None, None, None, method_name, params)
             .await
     }
@@ -339,11 +404,11 @@ pub trait TestDsl {
     async fn invoke_and_await_agent_at_deployment(
         &self,
         component: &ComponentDto,
-        agent_id: &LegacyParsedAgentId,
+        agent_id: &ParsedAgentId,
         deployment_revision: DeploymentRevision,
         method_name: &str,
-        params: DataValue,
-    ) -> anyhow::Result<DataValue> {
+        params: TypedSchemaValue,
+    ) -> anyhow::Result<AgentResult> {
         self.invoke_and_await_agent_impl(
             component,
             agent_id,
@@ -359,11 +424,11 @@ pub trait TestDsl {
     async fn invoke_and_await_agent_with_key(
         &self,
         component: &ComponentDto,
-        agent_id: &LegacyParsedAgentId,
+        agent_id: &ParsedAgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
-        params: DataValue,
-    ) -> anyhow::Result<DataValue> {
+        params: TypedSchemaValue,
+    ) -> anyhow::Result<AgentResult> {
         self.invoke_and_await_agent_impl(
             component,
             agent_id,
@@ -385,11 +450,11 @@ pub trait TestDsl {
     async fn invoke_and_await_agent_as_principal(
         &self,
         component: &ComponentDto,
-        agent_id: &LegacyParsedAgentId,
+        agent_id: &ParsedAgentId,
         principal: golem_common::model::agent::Principal,
         method_name: &str,
-        params: DataValue,
-    ) -> anyhow::Result<DataValue> {
+        params: TypedSchemaValue,
+    ) -> anyhow::Result<AgentResult> {
         self.invoke_and_await_agent_impl(
             component,
             agent_id,
@@ -405,13 +470,13 @@ pub trait TestDsl {
     async fn invoke_and_await_agent_impl(
         &self,
         component: &ComponentDto,
-        agent_id: &LegacyParsedAgentId,
+        agent_id: &ParsedAgentId,
         idempotency_key: Option<&IdempotencyKey>,
         deployment_revision: Option<DeploymentRevision>,
         principal: Option<golem_common::model::agent::Principal>,
         method_name: &str,
-        params: DataValue,
-    ) -> anyhow::Result<DataValue>;
+        params: TypedSchemaValue,
+    ) -> anyhow::Result<AgentResult>;
 
     async fn revert(&self, agent_id: &AgentId, target: RevertWorkerTarget) -> anyhow::Result<()>;
 
@@ -829,9 +894,12 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         &mut self,
         agent_type: &str,
     ) -> &mut AgentTypeProvisionConfigCreation {
+        let account_email = self.dsl.account_email();
         self.agent_type_provision_configs
             .entry(AgentTypeName(agent_type.to_string()))
-            .or_default()
+            .or_insert_with(|| {
+                default_agent_type_provision_config_creation_for_account(account_email)
+            })
     }
 
     /// Set the initial files for an agent type.
@@ -1035,6 +1103,15 @@ pub fn log_event_to_string(event: &LogEvent) -> String {
         Some(log_event::Event::InvocationStarted(_)) => "".to_string(),
         Some(log_event::Event::ClientLagged { .. }) => "".to_string(),
         Some(log_event::Event::PluginError(err)) => err.message.clone(),
+        Some(log_event::Event::SnapshotRecoverySucceeded(event)) => {
+            format!("snapshot recovery loaded {}", event.snapshot_index)
+        }
+        Some(log_event::Event::SnapshotRecoveryFailed(event)) => {
+            format!(
+                "snapshot recovery failed {}: {}",
+                event.snapshot_index, event.error
+            )
+        }
         None => std::panic!("Unexpected event type"),
     }
 }

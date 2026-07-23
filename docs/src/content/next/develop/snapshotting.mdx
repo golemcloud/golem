@@ -16,7 +16,7 @@ Each language SDK provides a built-in snapshotting implementation that requires 
 
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
     <Tabs.Tab>
-        Simply **do not** define `loadSnapshot` and `saveSnapshot` on your agent class. The SDK will automatically serialize the agent instance as JSON.
+        Simply **do not** provide a `snapshot: { save, load }` block on `.implement(...)`. The SDK will automatically serialize the agent's state as JSON.
     </Tabs.Tab>
     <Tabs.Tab>
         If your agent struct derives `Serialize` and `Deserialize` (from [serde](https://serde.rs/)), **do not** override the `save_snapshot` and `load_snapshot` methods. The SDK will use a default JSON-based implementation.
@@ -35,20 +35,39 @@ You can implement custom `save`/`load` logic to control exactly how agent state 
 
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
     <Tabs.Tab>
-        Override `saveSnapshot` and `loadSnapshot` on your agent class:
+        Provide a `snapshot: { save, load }` block on `.implement(...)`. `save()` returns the raw snapshot bytes and `load(bytes)` restores from them (`this` is the agent state):
 
         ```typescript
-        override async saveSnapshot(): Promise<Uint8Array> {
-            const snapshot = new Uint8Array(4);
-            const view = new DataView(snapshot.buffer);
-            view.setUint32(0, this.value);
-            return snapshot;
-        }
+        import { z } from 'zod';
+        import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
-        override async loadSnapshot(bytes: Uint8Array): Promise<void> {
-            let view = new DataView(bytes.buffer);
-            this.value = view.getUint32(0);
-        }
+        export const Counter = defineAgent({
+            name: 'Counter',
+            id: { name: z.string() },
+            methods: {
+                increment: method({ input: {}, returns: z.number() }),
+            },
+        });
+
+        export const CounterImpl = Counter.implement({
+            init: () => ({ value: 0 }),
+            methods: {
+                increment() {
+                    this.value += 1;
+                    return this.value;
+                },
+            },
+            snapshot: {
+                save() {
+                    const snapshot = new Uint8Array(4);
+                    new DataView(snapshot.buffer).setUint32(0, this.value);
+                    return snapshot;
+                },
+                load(bytes) {
+                    this.value = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0);
+                },
+            },
+        });
         ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -112,12 +131,21 @@ You can implement custom `save`/`load` logic to control exactly how agent state 
 
 ## Configuring snapshot-based recovery
 
-To enable snapshotting, add a `snapshotting` configuration to your agent definition annotation:
+To enable snapshotting, add a `snapshotting` option to your agent definition:
 
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
     <Tabs.Tab>
+        Pass the `snapshotting` option to `defineAgent(...)`:
+
         ```typescript
-        @agent({ snapshotting: { periodic: '5s' } })
+        export const Counter = defineAgent({
+            name: 'Counter',
+            id: { name: z.string() },
+            snapshotting: { periodicSeconds: 5 },
+            methods: {
+                increment: method({ input: {}, returns: z.number() }),
+            },
+        });
         ```
     </Tabs.Tab>
     <Tabs.Tab>

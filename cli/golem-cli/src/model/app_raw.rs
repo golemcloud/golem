@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::bridge_gen::BridgeMode;
 use crate::log::LogColorize;
 use crate::model::GuestLanguage;
 use crate::model::cascade::property::map::MapMergeMode;
@@ -116,8 +117,12 @@ pub struct Application {
     pub http_api: Option<HttpApi>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<Mcp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_server: Option<LocalServer>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub environments: IndexMap<String, Environment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<AppVersionSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bridge: Option<BridgeSdks>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
@@ -246,7 +251,36 @@ impl Application {
     }
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComponentDependencies {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<ComponentDependencyReference>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ComponentDependencyReference>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ComponentDependencyReference {
+    Shortcut(String),
+    Structured(ComponentDependencyReferenceStruct),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComponentDependencyReferenceStruct {
+    pub component: String,
+    pub name: String,
+}
+
+impl ComponentDependencies {
+    pub fn is_empty(&self) -> bool {
+        self.agents.is_empty() && self.tools.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComponentTemplate {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
@@ -255,6 +289,8 @@ pub struct ComponentTemplate {
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_wasm: Option<String>,
+    #[serde(default, skip_serializing_if = "ComponentDependencies::is_empty")]
+    pub dependencies: ComponentDependencies,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -265,6 +301,8 @@ pub struct ComponentTemplate {
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_card: Option<ManifestInitialCard>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -286,12 +324,14 @@ impl ComponentTemplate {
         ComponentLayerProperties {
             component_wasm: self.component_wasm.clone(),
             output_wasm: self.output_wasm.clone(),
+            dependencies: self.dependencies.clone(),
             build_merge_mode: self.build_merge_mode,
             build: self.build.clone(),
             custom_commands: self.custom_commands.clone(),
             clean: self.clean.clone(),
             agent_properties: AgentLayerProperties {
                 config: self.config.clone(),
+                initial_card: self.initial_card.clone(),
                 env_merge_mode: self.env_merge_mode,
                 env: self.env.clone(),
                 plugins_merge_mode: self.plugins_merge_mode,
@@ -314,6 +354,8 @@ pub struct Component {
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_wasm: Option<String>,
+    #[serde(default, skip_serializing_if = "ComponentDependencies::is_empty")]
+    pub dependencies: ComponentDependencies,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -324,6 +366,8 @@ pub struct Component {
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_card: Option<ManifestInitialCard>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -345,12 +389,14 @@ impl Component {
         ComponentLayerProperties {
             component_wasm: self.component_wasm.clone(),
             output_wasm: self.output_wasm.clone(),
+            dependencies: self.dependencies.clone(),
             build_merge_mode: self.build_merge_mode,
             build: self.build.clone(),
             custom_commands: self.custom_commands.clone(),
             clean: self.clean.clone(),
             agent_properties: AgentLayerProperties {
                 config: self.config.clone(),
+                initial_card: self.initial_card.clone(),
                 env_merge_mode: self.env_merge_mode,
                 env: self.env.clone(),
                 plugins_merge_mode: self.plugins_merge_mode,
@@ -371,6 +417,8 @@ pub struct ComponentPreset {
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_wasm: Option<String>,
+    #[serde(default, skip_serializing_if = "ComponentDependencies::is_empty")]
+    pub dependencies: ComponentDependencies,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -381,6 +429,8 @@ pub struct ComponentPreset {
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_card: Option<ManifestInitialCard>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -400,12 +450,14 @@ impl ComponentPreset {
         ComponentLayerProperties {
             component_wasm: self.component_wasm,
             output_wasm: self.output_wasm,
+            dependencies: self.dependencies,
             build_merge_mode: self.build_merge_mode,
             build: self.build,
             custom_commands: self.custom_commands,
             clean: self.clean,
             agent_properties: AgentLayerProperties {
                 config: self.config,
+                initial_card: self.initial_card,
                 env_merge_mode: self.env_merge_mode,
                 env: self.env,
                 plugins_merge_mode: self.plugins_merge_mode,
@@ -424,6 +476,8 @@ pub struct Agent {
     pub templates: LenientTokenList,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_card: Option<ManifestInitialCard>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -444,6 +498,7 @@ impl Agent {
     pub fn agent_layer_properties(&self) -> AgentLayerProperties {
         AgentLayerProperties {
             config: self.config.clone(),
+            initial_card: self.initial_card.clone(),
             env_merge_mode: self.env_merge_mode,
             env: self.env.clone(),
             plugins_merge_mode: self.plugins_merge_mode,
@@ -462,6 +517,8 @@ pub struct AgentPreset {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_card: Option<ManifestInitialCard>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<IndexMap<String, String>>,
@@ -479,6 +536,7 @@ impl AgentPreset {
     pub fn into_agent_layer_properties(self) -> AgentLayerProperties {
         AgentLayerProperties {
             config: self.config,
+            initial_card: self.initial_card,
             env_merge_mode: self.env_merge_mode,
             env: self.env,
             plugins_merge_mode: self.plugins_merge_mode,
@@ -516,7 +574,10 @@ pub struct HttpApi {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpApiDeployment {
-    pub domain: Domain,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<DeploymentDomain>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subdomain: Option<DeploymentSubdomain>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -535,7 +596,10 @@ pub struct Mcp {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpDeployment {
-    pub domain: Domain,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<DeploymentDomain>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subdomain: Option<DeploymentSubdomain>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub agents: IndexMap<AgentTypeName, McpDeploymentAgentOptions>,
 }
@@ -545,6 +609,51 @@ pub struct McpDeployment {
 pub struct McpDeploymentAgentOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub security_scheme: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DeploymentDomain(pub String);
+
+impl From<Domain> for DeploymentDomain {
+    fn from(value: Domain) -> Self {
+        Self(value.0)
+    }
+}
+
+impl DeploymentDomain {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DeploymentSubdomain(pub String);
+
+impl DeploymentSubdomain {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalServer {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub router_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub router_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub custom_request_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub mcp_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub ports_file: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub data_dir: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub agent_filesystem_root: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -562,6 +671,8 @@ pub struct Environment {
     pub cli: Option<CliOptions>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub deployment: Option<DeploymentOptions>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub version: Option<AppVersionSourceOverride>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -655,7 +766,6 @@ impl DeploymentOptions {
     }
 
     pub fn version_check(&self) -> bool {
-        // TODO: atomic: switch to true, once versioning is implemented
         self.version_check.unwrap_or(false)
     }
 
@@ -672,12 +782,178 @@ impl DeploymentOptions {
     }
 }
 
+/// How the logical version attached to a deployment is computed. Orthogonal to
+/// [`DeploymentOptions::version_check`], which governs uniqueness of that string.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AppVersionSource {
+    Static(String),
+    Git { git: GitVersionSource },
+    Env { env: String },
+}
+
+/// Hash mode (`hashOnly`) or tag mode (`tagPattern`); mutually exclusive by shape.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GitVersionSource {
+    Hash(GitHashVersionSource),
+    Tag(GitTagVersionSource),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitHashVersionSource {
+    pub hash_only: Marker,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub allow_dirty: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub static_fallback: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitTagVersionSource {
+    pub tag_pattern: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub commit_info: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub hash_fallback: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub allow_dirty: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub static_fallback: Option<String>,
+}
+
+/// Partial per-environment override, layered over the application-wide `version`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AppVersionSourceOverride {
+    Static(String),
+    Git { git: GitVersionSourceOverride },
+    Env { env: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GitVersionSourceOverride {
+    Hash(GitHashVersionSource),
+    Tag(GitTagVersionSourceOverride),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitTagVersionSourceOverride {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tag_pattern: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub commit_info: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub hash_fallback: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub allow_dirty: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub static_fallback: Option<String>,
+}
+
+const TAG_PATTERN_REQUIRED: &str = "`tagPattern` is required for git tag mode; set it on the environment override or the application-wide `version`";
+
+impl AppVersionSourceOverride {
+    /// Resolve this override against the optional application-wide root.
+    pub fn resolve_over(self, root: Option<AppVersionSource>) -> Result<AppVersionSource, String> {
+        match root {
+            Some(root) => self.merge_over(root),
+            None => self.into_source(),
+        }
+    }
+
+    fn merge_over(self, root: AppVersionSource) -> Result<AppVersionSource, String> {
+        match (self, root) {
+            (AppVersionSourceOverride::Git { git: over }, AppVersionSource::Git { git: root }) => {
+                Ok(AppVersionSource::Git {
+                    git: over.merge_over(root)?,
+                })
+            }
+            // The override selects a different top-level source: it replaces.
+            (over, _) => over.into_source(),
+        }
+    }
+
+    fn into_source(self) -> Result<AppVersionSource, String> {
+        match self {
+            AppVersionSourceOverride::Git { git } => Ok(AppVersionSource::Git {
+                git: git.into_source()?,
+            }),
+            AppVersionSourceOverride::Static(value) => Ok(AppVersionSource::Static(value)),
+            AppVersionSourceOverride::Env { env } => Ok(AppVersionSource::Env { env }),
+        }
+    }
+}
+
+impl GitVersionSourceOverride {
+    fn merge_over(self, root: GitVersionSource) -> Result<GitVersionSource, String> {
+        match (self, root) {
+            (GitVersionSourceOverride::Tag(over), GitVersionSource::Tag(root)) => {
+                Ok(GitVersionSource::Tag(GitTagVersionSource {
+                    tag_pattern: over.tag_pattern.unwrap_or(root.tag_pattern),
+                    commit_info: over.commit_info.or(root.commit_info),
+                    hash_fallback: over.hash_fallback.or(root.hash_fallback),
+                    allow_dirty: over.allow_dirty.or(root.allow_dirty),
+                    static_fallback: over.static_fallback.or(root.static_fallback),
+                }))
+            }
+            (GitVersionSourceOverride::Hash(over), GitVersionSource::Hash(root)) => {
+                Ok(GitVersionSource::Hash(GitHashVersionSource {
+                    hash_only: Marker,
+                    allow_dirty: over.allow_dirty.or(root.allow_dirty),
+                    static_fallback: over.static_fallback.or(root.static_fallback),
+                }))
+            }
+            // Mode switch: the override must stand on its own.
+            (over, _) => over.into_source(),
+        }
+    }
+
+    fn into_source(self) -> Result<GitVersionSource, String> {
+        match self {
+            GitVersionSourceOverride::Hash(hash) => Ok(GitVersionSource::Hash(hash)),
+            GitVersionSourceOverride::Tag(tag) => match tag.tag_pattern {
+                Some(tag_pattern) => Ok(GitVersionSource::Tag(GitTagVersionSource {
+                    tag_pattern,
+                    commit_info: tag.commit_info,
+                    hash_fallback: tag.hash_fallback,
+                    allow_dirty: tag.allow_dirty,
+                    static_fallback: tag.static_fallback,
+                })),
+                None => Err(TAG_PATTERN_REQUIRED.to_string()),
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InitialComponentFile {
     pub source_path: String,
     pub target_path: CanonicalFilePath,
     pub permissions: Option<AgentFilePermissions>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManifestInitialCard {
+    #[serde(default)]
+    pub lower_bound: ManifestInitialCardBound,
+    #[serde(default)]
+    pub upper_bound: ManifestInitialCardBound,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManifestInitialCardBound {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub positive: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub negative: Vec<String>,
 }
 
 // Common component-level fields merged from templates/components/presets.
@@ -687,6 +963,7 @@ pub struct InitialComponentFile {
 pub struct ComponentLayerProperties {
     pub component_wasm: Option<String>,
     pub output_wasm: Option<String>,
+    pub dependencies: ComponentDependencies,
     pub build_merge_mode: Option<VecMergeMode>,
     pub build: Vec<BuildCommand>,
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
@@ -702,6 +979,8 @@ pub struct ComponentLayerProperties {
 pub struct AgentLayerProperties {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_card: Option<ManifestInitialCard>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -832,6 +1111,10 @@ pub struct BridgeSdks {
     pub ts: Option<BridgeSdkLanguageTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rust: Option<BridgeSdkLanguageTargets>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scala: Option<BridgeSdkLanguageTargets>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moonbit: Option<BridgeSdkLanguageTargets>,
 }
 
 impl BridgeSdks {
@@ -839,7 +1122,8 @@ impl BridgeSdks {
         match language {
             GuestLanguage::Rust => self.rust.as_ref(),
             GuestLanguage::TypeScript => self.ts.as_ref(),
-            GuestLanguage::Scala | GuestLanguage::MoonBit => None,
+            GuestLanguage::Scala => self.scala.as_ref(),
+            GuestLanguage::MoonBit => self.moonbit.as_ref(),
         }
     }
 
@@ -853,18 +1137,92 @@ impl BridgeSdks {
         &self,
     ) -> impl Iterator<Item = (GuestLanguage, &BridgeSdkLanguageTargets)> {
         self.for_all_languages().filter_map(|(lang, targets)| {
-            targets.and_then(|targets| (!targets.agents.is_empty()).then_some((lang, targets)))
+            targets.and_then(|targets| {
+                (targets
+                    .external
+                    .as_ref()
+                    .is_some_and(|external| !external.agents.is_empty())
+                    || targets
+                        .internal
+                        .as_ref()
+                        .is_some_and(|guest| !guest.agents.is_empty() || !guest.tools.is_empty()))
+                .then_some((lang, targets))
+            })
         })
+    }
+
+    pub fn for_all_used_modes(
+        &self,
+    ) -> Vec<(GuestLanguage, BridgeMode, BridgeSdkInternalTargetsRef<'_>)> {
+        let mut result = Vec::new();
+        for (language, targets) in self.for_all_languages() {
+            if let Some(targets) = targets {
+                if let Some(external) = &targets.external
+                    && !external.agents.is_empty()
+                {
+                    result.push((
+                        language,
+                        BridgeMode::External,
+                        BridgeSdkInternalTargetsRef {
+                            agents: &external.agents,
+                            tools: None,
+                            output_dir: external.output_dir.as_ref(),
+                        },
+                    ));
+                }
+                if let Some(guest) = &targets.internal
+                    && (!guest.agents.is_empty() || !guest.tools.is_empty())
+                {
+                    result.push((
+                        language,
+                        BridgeMode::Guest,
+                        BridgeSdkInternalTargetsRef {
+                            agents: &guest.agents,
+                            tools: Some(&guest.tools),
+                            output_dir: guest.output_dir.as_ref(),
+                        },
+                    ));
+                }
+            }
+        }
+        result
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BridgeSdkLanguageTargets {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<BridgeSdkExternalTargets>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub internal: Option<BridgeSdkInternalTargets>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeSdkExternalTargets {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub agents: LenientTokenList,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_dir: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeSdkInternalTargets {
+    #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
+    pub agents: LenientTokenList,
+    #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
+    pub tools: LenientTokenList,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_dir: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BridgeSdkInternalTargetsRef<'a> {
+    pub agents: &'a LenientTokenList,
+    pub tools: Option<&'a LenientTokenList>,
+    pub output_dir: Option<&'a String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1180,11 +1538,13 @@ mod test {
                     default: is_default.then_some(Marker),
                     component_wasm,
                     output_wasm,
+                    dependencies: ComponentDependencies::default(),
                     build_merge_mode,
                     build,
                     custom_commands,
                     clean,
                     config,
+                    initial_card: None,
                     env_merge_mode,
                     env,
                     plugins_merge_mode,
@@ -1241,11 +1601,13 @@ mod test {
                     templates,
                     component_wasm,
                     output_wasm,
+                    dependencies: ComponentDependencies::default(),
                     build_merge_mode,
                     build,
                     custom_commands,
                     clean,
                     config,
+                    initial_card: None,
                     env_merge_mode,
                     env,
                     plugins_merge_mode,
@@ -1306,11 +1668,13 @@ mod test {
                     dir,
                     component_wasm,
                     output_wasm,
+                    dependencies: ComponentDependencies::default(),
                     build_merge_mode,
                     build,
                     custom_commands,
                     clean,
                     config,
+                    initial_card: None,
                     env_merge_mode,
                     env,
                     plugins_merge_mode,
@@ -1347,6 +1711,7 @@ mod test {
                 )| AgentPreset {
                     default: is_default.then_some(Marker),
                     config,
+                    initial_card: None,
                     env_merge_mode,
                     env,
                     plugins_merge_mode,
@@ -1385,6 +1750,7 @@ mod test {
                 )| Agent {
                     templates,
                     config,
+                    initial_card: None,
                     env_merge_mode,
                     env,
                     plugins_merge_mode,
@@ -1460,6 +1826,72 @@ mod test {
             .boxed()
     }
 
+    fn arb_git_hash_model() -> BoxedStrategy<GitHashVersionSource> {
+        (arb_opt(any::<bool>().boxed()), arb_opt(arb_ident().boxed()))
+            .prop_map(|(allow_dirty, static_fallback)| GitHashVersionSource {
+                hash_only: Marker,
+                allow_dirty,
+                static_fallback,
+            })
+            .boxed()
+    }
+
+    fn arb_app_version_source_model() -> BoxedStrategy<AppVersionSource> {
+        let git_tag = (
+            arb_ident(),
+            arb_opt(any::<bool>().boxed()),
+            arb_opt(any::<bool>().boxed()),
+            arb_opt(any::<bool>().boxed()),
+            arb_opt(arb_ident().boxed()),
+        )
+            .prop_map(
+                |(tag_pattern, commit_info, hash_fallback, allow_dirty, static_fallback)| {
+                    GitVersionSource::Tag(GitTagVersionSource {
+                        tag_pattern,
+                        commit_info,
+                        hash_fallback,
+                        allow_dirty,
+                        static_fallback,
+                    })
+                },
+            );
+        let git_hash = arb_git_hash_model().prop_map(GitVersionSource::Hash);
+        prop_oneof![
+            prop_oneof![git_tag, git_hash].prop_map(|git| AppVersionSource::Git { git }),
+            arb_ident().prop_map(AppVersionSource::Static),
+            arb_ident().prop_map(|env| AppVersionSource::Env { env }),
+        ]
+        .boxed()
+    }
+
+    fn arb_app_version_source_override_model() -> BoxedStrategy<AppVersionSourceOverride> {
+        let git_tag = (
+            arb_opt(arb_ident().boxed()),
+            arb_opt(any::<bool>().boxed()),
+            arb_opt(any::<bool>().boxed()),
+            arb_opt(any::<bool>().boxed()),
+            arb_opt(arb_ident().boxed()),
+        )
+            .prop_map(
+                |(tag_pattern, commit_info, hash_fallback, allow_dirty, static_fallback)| {
+                    GitVersionSourceOverride::Tag(GitTagVersionSourceOverride {
+                        tag_pattern,
+                        commit_info,
+                        hash_fallback,
+                        allow_dirty,
+                        static_fallback,
+                    })
+                },
+            );
+        let git_hash = arb_git_hash_model().prop_map(GitVersionSourceOverride::Hash);
+        prop_oneof![
+            prop_oneof![git_tag, git_hash].prop_map(|git| AppVersionSourceOverride::Git { git }),
+            arb_ident().prop_map(AppVersionSourceOverride::Static),
+            arb_ident().prop_map(|env| AppVersionSourceOverride::Env { env }),
+        ]
+        .boxed()
+    }
+
     fn arb_environment_model() -> BoxedStrategy<Environment> {
         (
             any::<bool>(),
@@ -1468,15 +1900,56 @@ mod test {
             arb_token_list_model(),
             arb_opt(arb_cli_options_model()),
             arb_opt(arb_deployment_options_model()),
+            arb_opt(arb_app_version_source_override_model()),
         )
             .prop_map(
-                |(is_default, account, server, component_presets, cli, deployment)| Environment {
-                    default: is_default.then_some(Marker),
-                    account,
-                    server,
-                    component_presets,
-                    cli,
-                    deployment,
+                |(is_default, account, server, component_presets, cli, deployment, version)| {
+                    Environment {
+                        default: is_default.then_some(Marker),
+                        account,
+                        server,
+                        component_presets,
+                        cli,
+                        deployment,
+                        version,
+                    }
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_path_buf_model() -> BoxedStrategy<PathBuf> {
+        arb_ident().prop_map(PathBuf::from).boxed()
+    }
+
+    fn arb_local_server_model() -> BoxedStrategy<LocalServer> {
+        // Ports must be nonzero to satisfy the manifest schema (min 1).
+        (
+            arb_opt(arb_ident()),
+            arb_opt((1..=u16::MAX).boxed()),
+            arb_opt((1..=u16::MAX).boxed()),
+            arb_opt((1..=u16::MAX).boxed()),
+            arb_opt(arb_path_buf_model()),
+            arb_opt(arb_path_buf_model()),
+            arb_opt(arb_path_buf_model()),
+        )
+            .prop_map(
+                |(
+                    router_addr,
+                    router_port,
+                    custom_request_port,
+                    mcp_port,
+                    ports_file,
+                    data_dir,
+                    agent_filesystem_root,
+                )| LocalServer {
+                    router_addr,
+                    router_port,
+                    custom_request_port,
+                    mcp_port,
+                    ports_file,
+                    data_dir,
+                    agent_filesystem_root,
                 },
             )
             .boxed()
@@ -1509,7 +1982,8 @@ mod test {
         )
             .prop_map(
                 |(domain, webhook_url, openapi_endpoint, agents)| HttpApiDeployment {
-                    domain: Domain(format!("{domain}.example.com")),
+                    domain: Some(Domain(format!("{domain}.example.com")).into()),
+                    subdomain: None,
                     webhook_url,
                     openapi_endpoint,
                     agents,
@@ -1546,7 +2020,8 @@ mod test {
             .prop_map(IndexMap::from_iter),
         )
             .prop_map(|(domain, agents)| McpDeployment {
-                domain: Domain(format!("{domain}.example.com")),
+                domain: Some(Domain(format!("{domain}.example.com")).into()),
+                subdomain: None,
                 agents,
             })
             .boxed()
@@ -1567,8 +2042,31 @@ mod test {
     }
 
     fn arb_bridge_sdk_language_targets() -> BoxedStrategy<BridgeSdkLanguageTargets> {
+        (
+            arb_opt(arb_bridge_sdk_external_targets()),
+            arb_opt(arb_bridge_sdk_internal_targets()),
+        )
+            .prop_map(|(external, internal)| BridgeSdkLanguageTargets { external, internal })
+            .boxed()
+    }
+
+    fn arb_bridge_sdk_external_targets() -> BoxedStrategy<BridgeSdkExternalTargets> {
         (arb_token_list_model(), arb_opt(arb_ident()))
-            .prop_map(|(agents, output_dir)| BridgeSdkLanguageTargets { agents, output_dir })
+            .prop_map(|(agents, output_dir)| BridgeSdkExternalTargets { agents, output_dir })
+            .boxed()
+    }
+
+    fn arb_bridge_sdk_internal_targets() -> BoxedStrategy<BridgeSdkInternalTargets> {
+        (
+            arb_token_list_model(),
+            arb_token_list_model(),
+            arb_opt(arb_ident()),
+        )
+            .prop_map(|(agents, tools, output_dir)| BridgeSdkInternalTargets {
+                agents,
+                tools,
+                output_dir,
+            })
             .boxed()
     }
 
@@ -1576,8 +2074,15 @@ mod test {
         (
             arb_opt(arb_bridge_sdk_language_targets()),
             arb_opt(arb_bridge_sdk_language_targets()),
+            arb_opt(arb_bridge_sdk_language_targets()),
+            arb_opt(arb_bridge_sdk_language_targets()),
         )
-            .prop_map(|(ts, rust)| BridgeSdks { ts, rust })
+            .prop_map(|(ts, rust, scala, moonbit)| BridgeSdks {
+                ts,
+                rust,
+                scala,
+                moonbit,
+            })
             .boxed()
     }
 
@@ -1868,8 +2373,10 @@ mod test {
             (
                 arb_opt(arb_http_api_model()),
                 arb_opt(arb_mcp_model()),
+                arb_opt(arb_local_server_model()),
                 prop::collection::vec((arb_ident(), arb_environment_model()), 0..=3)
                     .prop_map(IndexMap::from_iter),
+                arb_opt(arb_app_version_source_model()),
                 arb_opt(arb_bridge_sdks_model()),
                 arb_secret_defaults_model(),
                 arb_retry_policy_defaults_model(),
@@ -1885,7 +2392,9 @@ mod test {
                     (
                         http_api,
                         mcp,
+                        local_server,
                         environments,
+                        version,
                         bridge,
                         secret_defaults,
                         retry_policy_defaults,
@@ -1902,7 +2411,9 @@ mod test {
                     clean,
                     http_api,
                     mcp,
+                    local_server,
                     environments,
+                    version,
                     bridge,
                     secret_defaults,
                     retry_policy_defaults,
@@ -1929,6 +2440,122 @@ mod test {
     }
 
     #[test]
+    fn bridge_rust_agents_keeps_parsing_as_external_bridge_targets() {
+        let source = indoc::indoc! { r#"
+            app: test-app
+
+            bridge:
+              rust:
+                external:
+                  agents: CounterAgent
+                  outputDir: bridge/rust
+        "# };
+
+        let app = Application::from_yaml_str(source).unwrap();
+        let rust = app.bridge.unwrap().rust.unwrap();
+        let external = rust.external.unwrap();
+
+        assert_eq!(external.agents.into_vec(), vec!["CounterAgent".to_string()]);
+        assert_eq!(external.output_dir.as_deref(), Some("bridge/rust"));
+        assert!(rust.internal.is_none());
+    }
+
+    #[test]
+    fn bridge_rust_guest_parses_as_guest_bridge_targets() {
+        let source = indoc::indoc! { r#"
+            app: test-app
+
+            bridge:
+              rust:
+                external:
+                  agents: ExternalAgent
+                  outputDir: bridge/rust
+                internal:
+                  agents:
+                    - GuestAgent
+                  outputDir: bridge/rust-guest
+        "# };
+
+        let app = Application::from_yaml_str(source).unwrap();
+        let rust = app.bridge.unwrap().rust.unwrap();
+        let external = rust.external.unwrap();
+        let guest = rust.internal.unwrap();
+
+        assert_eq!(
+            external.agents.into_vec(),
+            vec!["ExternalAgent".to_string()]
+        );
+        assert_eq!(external.output_dir.as_deref(), Some("bridge/rust"));
+        assert_eq!(guest.agents.into_vec(), vec!["GuestAgent".to_string()]);
+        assert_eq!(guest.output_dir.as_deref(), Some("bridge/rust-guest"));
+    }
+
+    #[test]
+    fn root_version_source_shape_rules() {
+        fn parse(yaml: &str) -> Result<AppVersionSource, serde_yaml::Error> {
+            serde_yaml::from_str(yaml)
+        }
+        // bare string is a literal version, and env is a map variant
+        assert!(matches!(parse("\"1.2.3\"").unwrap(), AppVersionSource::Static(v) if v == "1.2.3"));
+        assert!(matches!(
+            parse("env: MY_VERSION").unwrap(),
+            AppVersionSource::Env { .. }
+        ));
+        assert!(matches!(
+            parse("git:\n  hashOnly: true").unwrap(),
+            AppVersionSource::Git {
+                git: GitVersionSource::Hash(_)
+            }
+        ));
+        // tag mode requires an explicit tagPattern
+        assert!(matches!(
+            parse("git:\n  tagPattern: \"v*\"").unwrap(),
+            AppVersionSource::Git {
+                git: GitVersionSource::Tag(_)
+            }
+        ));
+        // root tag mode without tagPattern is rejected (no default), as is empty git
+        assert!(parse("git:\n  hashFallback: true").is_err());
+        assert!(parse("git: {}").is_err());
+        // mixing hash and tag options is rejected
+        assert!(parse("git:\n  hashOnly: true\n  tagPattern: \"v*\"").is_err());
+        // hashOnly must be true; unknown fields rejected
+        assert!(parse("git:\n  hashOnly: false").is_err());
+        assert!(parse("git:\n  tagPattern: \"v*\"\n  bogus: 1").is_err());
+    }
+
+    #[test]
+    fn override_version_source_shape_rules() {
+        fn parse(yaml: &str) -> Result<AppVersionSourceOverride, serde_yaml::Error> {
+            serde_yaml::from_str(yaml)
+        }
+        assert!(
+            matches!(parse("\"9.9.9\"").unwrap(), AppVersionSourceOverride::Static(v) if v == "9.9.9")
+        );
+        // partial tag override without tagPattern is allowed
+        assert!(matches!(
+            parse("git:\n  allowDirty: true").unwrap(),
+            AppVersionSourceOverride::Git {
+                git: GitVersionSourceOverride::Tag(_)
+            }
+        ));
+        assert!(matches!(
+            parse("git: {}").unwrap(),
+            AppVersionSourceOverride::Git {
+                git: GitVersionSourceOverride::Tag(_)
+            }
+        ));
+        assert!(matches!(
+            parse("git:\n  hashOnly: true").unwrap(),
+            AppVersionSourceOverride::Git {
+                git: GitVersionSourceOverride::Hash(_)
+            }
+        ));
+        // mixing hash and tag options is still rejected
+        assert!(parse("git:\n  hashOnly: true\n  tagPattern: \"v*\"").is_err());
+    }
+
+    #[test]
     fn secret_defaults_accepts_object_per_environment() {
         let source = indoc::indoc! { r#"
             app: test-app
@@ -1942,6 +2569,33 @@ mod test {
         let result = Application::from_yaml_str(source);
 
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn agents_accept_initial_card() {
+        let source = indoc::indoc! { r#"
+            app: test-app
+
+            agents:
+              Cart:
+                initialCard:
+                  lowerBound:
+                    positive:
+                      - 'filesystem(?self) @ account@example.com/app/env/component/Cart : read : /data/**'
+                    negative: []
+                  upperBound:
+                    positive: []
+                    negative: []
+        "# };
+
+        let app = Application::from_yaml_str(source).expect("initialCard should parse");
+        let initial_card = app
+            .agents
+            .get(&AgentTypeName("Cart".to_string()))
+            .and_then(|agent| agent.initial_card.as_ref())
+            .expect("agent initialCard should be present");
+
+        assert_eq!(initial_card.lower_bound.positive.len(), 1);
     }
 
     #[test]
@@ -1980,6 +2634,42 @@ mod test {
         assert!(
             err.contains("secretDefaults.local") || err.contains("secret_defaults.local"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn local_server_accepts_server_run_defaults() {
+        let source = indoc::indoc! { r#"
+            app: test-app
+
+            localServer:
+              routerAddr: 127.0.0.1
+              routerPort: 9882
+              customRequestPort: 9008
+              mcpPort: 9009
+              portsFile: .golem/ports.json
+              dataDir: .golem/server-data
+              agentFilesystemRoot: .golem/agents
+        "# };
+
+        let app = Application::from_yaml_str(source).unwrap();
+        let local_server = app.local_server.expect("localServer should be parsed");
+
+        assert_eq!(local_server.router_addr.as_deref(), Some("127.0.0.1"));
+        assert_eq!(local_server.router_port, Some(9882));
+        assert_eq!(local_server.custom_request_port, Some(9008));
+        assert_eq!(local_server.mcp_port, Some(9009));
+        assert_eq!(
+            local_server.ports_file,
+            Some(PathBuf::from(".golem/ports.json"))
+        );
+        assert_eq!(
+            local_server.data_dir,
+            Some(PathBuf::from(".golem/server-data"))
+        );
+        assert_eq!(
+            local_server.agent_filesystem_root,
+            Some(PathBuf::from(".golem/agents"))
         );
     }
 

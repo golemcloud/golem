@@ -14,8 +14,6 @@
 
 use crate::base_model::json::NormalizedJsonValue;
 use crate::model::diff;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
-use uuid::Uuid;
 
 pub use crate::base_model::component::*;
 pub use crate::base_model::path::{AgentFilePath, ArchiveFilePath, CanonicalFilePath};
@@ -37,14 +35,21 @@ impl ComponentDto {
                                 .map(|e| {
                                     Ok((
                                         e.path.join("."),
-                                        NormalizedJsonValue::new(e.value.to_json_value().map_err(
-                                            |reason| diff::DiffError::TypedConfigJsonConversion {
-                                                operation:
-                                                    "component dto to_diffable config entry conversion",
-                                                path: e.path.join("."),
-                                                reason,
-                                            },
-                                        )?),
+                                        NormalizedJsonValue::new(
+                                            crate::schema::render::to_json_value(
+                                                e.value.graph(),
+                                                e.value.root_type(),
+                                                e.value.value(),
+                                            )
+                                            .map_err(|reason| {
+                                                diff::DiffError::TypedConfigJsonConversion {
+                                                    operation:
+                                                        "component dto to_diffable config entry conversion",
+                                                    path: e.path.join("."),
+                                                    reason: reason.to_string(),
+                                                }
+                                            })?,
+                                        ),
                                     ))
                                 })
                                 .collect::<Result<_, _>>()?,
@@ -78,6 +83,21 @@ impl ComponentDto {
                                     )
                                 })
                                 .collect(),
+                            initial_permissions: self
+                                .metadata
+                                .agent_type_initial_permission_card(name)
+                                .map(|card| diff::AgentTypeInitialPermission {
+                                    lower_positive: card.lower_positive.clone(),
+                                    lower_negative: card.lower_negative.clone(),
+                                    upper_positive: card.upper_positive.clone(),
+                                    upper_negative: card.upper_negative.clone(),
+                                })
+                                .unwrap_or_else(|| diff::AgentTypeInitialPermission {
+                                    lower_positive: Vec::new(),
+                                    lower_negative: Vec::new(),
+                                    upper_positive: Vec::new(),
+                                    upper_negative: Vec::new(),
+                                }),
                         };
                     Ok((name.0.clone(), state.into()))
                 })
@@ -93,28 +113,6 @@ impl ComponentDto {
 impl InitialAgentFile {
     pub fn is_read_only(&self) -> bool {
         self.permissions == AgentFilePermissions::ReadOnly
-    }
-}
-
-impl From<golem_wasm::ComponentId> for ComponentId {
-    fn from(host: golem_wasm::ComponentId) -> Self {
-        let high_bits = host.uuid.high_bits;
-        let low_bits = host.uuid.low_bits;
-
-        Self(Uuid::from_u64_pair(high_bits, low_bits))
-    }
-}
-
-impl From<ComponentId> for golem_wasm::ComponentId {
-    fn from(component_id: ComponentId) -> Self {
-        let (high_bits, low_bits) = component_id.0.as_u64_pair();
-
-        golem_wasm::ComponentId {
-            uuid: golem_wasm::Uuid {
-                high_bits,
-                low_bits,
-            },
-        }
     }
 }
 

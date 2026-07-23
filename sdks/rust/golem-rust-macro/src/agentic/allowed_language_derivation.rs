@@ -66,10 +66,10 @@ pub fn derive_allowed_languages(input: TokenStream, golem_rust_crate_ident: &Ide
                 }
             }
 
-            fn to_language_code(&self) -> &'static str {
+            fn to_language_code(&self) -> String {
                 match self {
                     #(
-                        Self::#variant_idents => #code_strs,
+                        Self::#variant_idents => #code_strs.to_string(),
                     )*
                 }
             }

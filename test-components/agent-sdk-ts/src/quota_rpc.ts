@@ -12,63 +12,103 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { BaseAgent, agent, acquireQuotaToken, QuotaToken } from '@golemcloud/golem-ts-sdk';
+// NOTE (fluent port): the fluent `s.quotaToken()` marker encodes/decodes the RAW
+// `golem:core/types` quota-token resource handle, and the SDK `QuotaToken`
+// wrapper class (`acquireQuotaToken` / `token.reserve()`) does NOT interoperate
+// with that marker through the public API. So this file uses the raw
+// `golem:quota/types@1.5.0` host functions directly — which are exactly the
+// handles `s.quotaToken()` carries — to keep the RPC-passing behavior faithful.
 
-@agent()
-class QuotaRpcReceiver extends BaseAgent {
-  constructor(private readonly _name: string) {
-    super();
-  }
+import { z } from 'zod';
+import { defineAgent, method, s, clientFor } from '@golemcloud/golem-ts-sdk';
+import {
+  newToken,
+  reserve,
+  split,
+  Reservation,
+  QuotaToken as RawQuotaToken,
+} from 'golem:quota/types@1.5.0';
 
-  async reserveAndCallInLoop(
-    childToken: QuotaToken,
-    host: string,
-    port: number,
-    maxIterations: number,
-  ): Promise<void> {
-    for (let i = 0; i < maxIterations; i++) {
-      const result = childToken.reserve(1n);
-      if (result.isErr()) break;
+export const QuotaRpcReceiver = defineAgent({
+  name: 'QuotaRpcReceiver',
+  id: { _name: z.string() },
+  methods: {
+    reserveAndCallInLoop: method({
+      input: {
+        childToken: s.quotaToken(),
+        host: z.string(),
+        port: z.number(),
+        maxIterations: z.number(),
+      },
+      returns: z.void(),
+    }),
+  },
+});
 
-      const reservation = result.unwrap();
-      await fetch(`http://${host}:${port}/call`);
-      reservation.commit(1n);
-    }
-  }
-}
+export const QuotaRpcReceiverImpl = QuotaRpcReceiver.implement({
+  init: () => ({}),
+  methods: {
+    async reserveAndCallInLoop({ childToken, host, port, maxIterations }) {
+      const token = childToken as RawQuotaToken;
+      for (let i = 0; i < maxIterations; i++) {
+        let reservation;
+        try {
+          reservation = reserve(token, 1n);
+        } catch {
+          break;
+        }
+        await fetch(`http://${host}:${port}/call`);
+        Reservation.commit(reservation, 1n);
+      }
+    },
+  },
+});
 
-@agent()
-class QuotaRpcSender extends BaseAgent {
-  constructor(private readonly name: string) {
-    super();
-  }
+const receiverClient = clientFor(QuotaRpcReceiver);
 
-  async splitAndLoop(
-    resourceName: string,
-    totalExpectedUse: bigint,
-    childExpectedUse: bigint,
-    host: string,
-    port: number,
-    maxIterations: number,
-  ): Promise<void> {
-    const token = acquireQuotaToken(resourceName, totalExpectedUse);
-    const childToken = token.split(childExpectedUse);
+export const QuotaRpcSender = defineAgent({
+  name: 'QuotaRpcSender',
+  id: { name: z.string() },
+  methods: {
+    splitAndLoop: method({
+      input: {
+        resourceName: z.string(),
+        totalExpectedUse: s.u64(),
+        childExpectedUse: s.u64(),
+        host: z.string(),
+        port: z.number(),
+        maxIterations: z.number(),
+      },
+      returns: z.void(),
+    }),
+  },
+});
 
-    const receiverName = `${this.name}-receiver`;
-    QuotaRpcReceiver.get(receiverName).reserveAndCallInLoop.trigger(
-      childToken,
-      host,
-      port,
-      maxIterations,
-    );
+export const QuotaRpcSenderImpl = QuotaRpcSender.implement({
+  init: ({ id }) => ({ name: id.name }),
+  methods: {
+    async splitAndLoop({ resourceName, totalExpectedUse, childExpectedUse, host, port, maxIterations }) {
+      const token = newToken(resourceName, BigInt(totalExpectedUse));
+      const childToken = split(token, BigInt(childExpectedUse));
 
-    for (let i = 0; i < maxIterations; i++) {
-      const result = token.reserve(1n);
-      if (result.isErr()) break;
+      const receiverName = `${this.name}-receiver`;
+      receiverClient({ _name: receiverName }).reserveAndCallInLoop.trigger({
+        childToken,
+        host,
+        port,
+        maxIterations,
+      });
 
-      const reservation = result.unwrap();
-      await fetch(`http://${host}:${port}/call`);
-      reservation.commit(1n);
-    }
-  }
-}
+      for (let i = 0; i < maxIterations; i++) {
+        let reservation;
+        try {
+          reservation = reserve(token, 1n);
+        } catch {
+          break;
+        }
+        await fetch(`http://${host}:${port}/call`);
+        Reservation.commit(reservation, 1n);
+      }
+    },
+  },
+});

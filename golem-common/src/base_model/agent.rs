@@ -20,13 +20,8 @@ use crate::base_model::deployment::{CurrentDeploymentRevision, DeploymentRevisio
 use crate::base_model::diff::Hash as DiffHash;
 use crate::base_model::environment::EnvironmentId;
 use crate::model::Empty;
-use async_trait::async_trait;
-use golem_wasm::agentic::unstructured_binary::{AllowedMimeTypes, UnstructuredBinary};
-use golem_wasm::agentic::unstructured_text::{AllowedLanguages, UnstructuredText};
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
-use golem_wasm::{Value, ValueAndType};
-use golem_wasm_derive::{FromValue, IntoValue};
+use crate::schema::AgentTypeSchema;
+use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -65,39 +60,7 @@ impl desert_rust::BinaryDeserializer for AgentFileContentHash {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct BinaryReferenceValue {
-    pub value: BinaryReference,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct TextReferenceValue {
-    pub value: TextReference,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct JsonComponentModelValue {
-    pub value: serde_json::Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -116,13 +79,13 @@ pub struct RegisteredAgentTypeImplementer {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue,)
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
 )]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct RegisteredAgentType {
-    pub agent_type: AgentType,
+    pub agent_type: AgentTypeSchema,
     pub implemented_by: RegisteredAgentTypeImplementer,
 }
 
@@ -133,7 +96,7 @@ pub struct RegisteredAgentType {
 /// RegisteredAgentType with deployment specific information
 /// Deployment related information can only be safely used if it is information of the _currently deployed_ component revision.
 pub struct DeployedRegisteredAgentType {
-    pub agent_type: AgentType,
+    pub agent_type: AgentTypeSchema,
     pub implemented_by: RegisteredAgentTypeImplementer,
     pub webhook_prefix_authority_and_path: Option<String>,
 }
@@ -268,12 +231,11 @@ impl RegistryInvalidationEvent {
     Hash,
     Serialize,
     Deserialize,
-    IntoValue,
-    FromValue,
+    IntoSchema,
+    FromSchema,
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[repr(i32)]
-#[wit(name = "agent-mode", owner = "golem:api@1.5.0/oplog")]
 pub enum AgentMode {
     Durable = 0,
     Ephemeral = 1,
@@ -307,9 +269,7 @@ pub enum AgentInvocationMode {
     Lookup,
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, IntoValue, FromValue,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -317,27 +277,11 @@ pub enum AgentInvocationMode {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[wit(name = "binary-type", owner = "golem:core@1.5.0/types")]
 pub struct BinaryType {
     pub mime_type: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", wit_transparent)]
-pub struct ComponentModelElementSchema {
-    pub element_type: AnalysedType,
-}
-
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue,
-)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -345,14 +289,11 @@ pub struct ComponentModelElementSchema {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[wit(name = "text-descriptor", owner = "golem:core@1.5.0/types")]
 pub struct TextDescriptor {
     pub restrictions: Option<Vec<TextType>>,
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, IntoValue, FromValue,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -360,12 +301,11 @@ pub struct TextDescriptor {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[wit(name = "text-type", owner = "golem:core@1.5.0/types")]
 pub struct TextType {
     pub language_code: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -373,12 +313,11 @@ pub struct TextType {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(transparent))]
-#[cfg_attr(feature = "full", wit_transparent)]
 pub struct Url {
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -386,13 +325,12 @@ pub struct Url {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[wit(name = "text-source", owner = "golem:core@1.5.0/types")]
 pub struct TextSource {
     pub data: String,
     pub text_type: Option<TextType>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Union)
@@ -400,15 +338,12 @@ pub struct TextSource {
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
-#[wit(name = "text-reference", owner = "golem:core@1.5.0/types")]
 pub enum TextReference {
     Url(Url),
     Inline(TextSource),
 }
 
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue,
-)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -416,12 +351,11 @@ pub enum TextReference {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[wit(name = "binary-descriptor", owner = "golem:core@1.5.0/types")]
 pub struct BinaryDescriptor {
     pub restrictions: Option<Vec<BinaryType>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -429,13 +363,12 @@ pub struct BinaryDescriptor {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[wit(name = "binary-source", owner = "golem:core@1.5.0/types")]
 pub struct BinarySource {
     pub data: Vec<u8>,
     pub binary_type: BinaryType,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Union)
@@ -443,112 +376,15 @@ pub struct BinarySource {
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
-#[wit(name = "binary-reference", owner = "golem:core@1.5.0/types")]
 pub enum BinaryReference {
     Url(Url),
     Inline(BinarySource),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Union, IntoValue, FromValue)
-)]
-#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type")]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(
-    feature = "full",
-    wit(name = "element-schema", owner = "golem:core@1.5.0/types")
-)]
-pub enum ElementSchema {
-    ComponentModel(ComponentModelElementSchema),
-    UnstructuredText(TextDescriptor),
-    UnstructuredBinary(BinaryDescriptor),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", wit(as_tuple))]
-pub struct NamedElementSchema {
-    pub name: String,
-    pub schema: ElementSchema,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", wit_transparent)]
-pub struct NamedElementSchemas {
-    pub elements: Vec<NamedElementSchema>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Union, IntoValue, FromValue)
-)]
-#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type")]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(
-    feature = "full",
-    wit(name = "data-schema", owner = "golem:core@1.5.0/types")
-)]
-pub enum DataSchema {
-    Tuple(NamedElementSchemas),
-    Multimodal(NamedElementSchemas),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct AgentConstructor {
-    pub name: Option<String>,
-    pub description: String,
-    pub prompt_hint: Option<String>,
-    pub input_schema: DataSchema,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct AgentMethod {
-    pub name: String,
-    pub description: String,
-    pub prompt_hint: Option<String>,
-    pub input_schema: DataSchema,
-    pub output_schema: DataSchema,
-    pub http_endpoint: Vec<HttpEndpointDetails>,
-    #[serde(default)]
-    pub read_only: Option<ReadOnlyConfig>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
 )]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
@@ -558,7 +394,7 @@ pub struct ReadOnlyConfig {
     pub uses_principal: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Union)
@@ -567,14 +403,12 @@ pub struct ReadOnlyConfig {
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub enum CachePolicy {
-    #[unit_case]
     NoCache(Empty),
-    #[unit_case]
     UntilWrite(Empty),
     Ttl(CachePolicyTtl),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -586,116 +420,18 @@ pub struct CachePolicyTtl {
     pub duration_nanos: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct AgentDependency {
-    pub type_name: String,
-    pub description: Option<String>,
-    pub constructor: AgentConstructor,
-    pub methods: Vec<AgentMethod>,
-}
-
-impl AgentDependency {
-    pub fn normalized(mut self) -> Self {
-        self.methods.sort_by(|a, b| a.name.cmp(&b.name));
-        Self {
-            type_name: self.type_name,
-            description: self.description,
-            constructor: self.constructor,
-            methods: self.methods,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct AgentType {
-    pub type_name: AgentTypeName,
-    pub description: String,
-    #[serde(default)]
-    pub source_language: String,
-    pub constructor: AgentConstructor,
-    pub methods: Vec<AgentMethod>,
-    pub dependencies: Vec<AgentDependency>,
-    pub mode: AgentMode,
-    pub http_mount: Option<HttpMountDetails>,
-    pub snapshotting: Snapshotting,
-    pub config: Vec<AgentConfigDeclaration>,
-}
-
-impl AgentType {
-    pub fn normalized(mut self) -> Self {
-        self.methods.sort_by(|a, b| a.name.cmp(&b.name));
-        self.dependencies
-            .sort_by(|a, b| a.type_name.cmp(&b.type_name));
-        self.config.sort_by(|a, b| a.path.cmp(&b.path));
-
-        Self {
-            type_name: self.type_name,
-            description: self.description,
-            source_language: self.source_language,
-            constructor: self.constructor,
-            methods: self.methods,
-            dependencies: self
-                .dependencies
-                .into_iter()
-                .map(AgentDependency::normalized)
-                .collect(),
-            mode: self.mode,
-            http_mount: self.http_mount,
-            snapshotting: self.snapshotting,
-            config: self.config,
-        }
-    }
-
-    pub fn normalized_vec(mut agent_types: Vec<Self>) -> Vec<Self> {
-        agent_types.sort_by(|a, b| a.type_name.cmp(&b.type_name));
-        agent_types.into_iter().map(Self::normalized).collect()
-    }
-
-    /// Defensive validation that the agent type respects platform-level invariants
-    /// the SDKs are expected to enforce at build time.
-    ///
-    /// Currently this rejects the combination of `mode = Ephemeral` and any method
-    /// carrying a `read_only` marker: read-only methods only make sense on agents
-    /// with persistent state, so allowing them on ephemeral agents indicates a
-    /// build-time misconfiguration that should be caught at registration.
-    pub fn validate(&self) -> Result<(), String> {
-        if self.mode == AgentMode::Ephemeral {
-            for method in &self.methods {
-                if method.read_only.is_some() {
-                    return Err(format!(
-                        "Agent type '{}' is ephemeral but method '{}' is marked as read-only. \
-                         Read-only methods have no benefit on ephemeral agents (no shared state to read from). \
-                         Remove the read-only marker or make the agent durable.",
-                        self.type_name, method.name
-                    ));
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-#[async_trait]
-pub trait AgentTypeResolver {
-    fn resolve_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Result<AgentType, String>;
-}
-
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize, IntoValue, FromValue,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Deserialize,
+    Serialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
 )]
 #[cfg_attr(
     feature = "full",
@@ -725,443 +461,7 @@ impl AgentTypeName {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(poem_openapi::Union, desert_rust::BinaryCodec)
-)]
-#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type")]
-#[cfg_attr(feature = "full", desert(evolution()))]
-pub enum DataValue {
-    Tuple(ElementValues),
-    Multimodal(NamedElementValues),
-}
-
-impl DataValue {
-    pub fn try_from_untyped_json(
-        value: UntypedJsonDataValue,
-        schema: DataSchema,
-    ) -> Result<Self, String> {
-        match (value, schema) {
-            (UntypedJsonDataValue::Tuple(tuple), DataSchema::Tuple(schema)) => {
-                if tuple.elements.len() != schema.elements.len() {
-                    return Err("Tuple length mismatch".to_string());
-                }
-                Ok(DataValue::Tuple(ElementValues {
-                    elements: tuple
-                        .elements
-                        .into_iter()
-                        .zip(schema.elements)
-                        .map(|(value, schema)| {
-                            ElementValue::try_from_untyped_json(value, schema.schema)
-                        })
-                        .collect::<Result<Vec<_>, _>>()?,
-                }))
-            }
-            (UntypedJsonDataValue::Multimodal(multimodal), DataSchema::Multimodal(schema)) => {
-                Ok(DataValue::Multimodal(NamedElementValues {
-                    elements: multimodal
-                        .elements
-                        .into_iter()
-                        .zip(schema.elements)
-                        .enumerate()
-                        .map(|(idx, (value, schema))| {
-                            ElementValue::try_from_untyped_json(value.value, schema.schema).map(
-                                |v| NamedElementValue {
-                                    name: value.name,
-                                    value: v,
-                                    schema_index: idx as u32,
-                                },
-                            )
-                        })
-                        .collect::<Result<Vec<_>, _>>()?,
-                }))
-            }
-            _ => Err("Data value does not match schema".to_string()),
-        }
-    }
-
-    /// Returns the DataValue as a single ComponentModel Value if possible
-    ///
-    /// Note that this conversion does not support unstructured binary/text and multimodal return values
-    pub fn into_return_value(self) -> Option<Value> {
-        self.into_return_value_and_type().map(|vat| vat.value)
-    }
-
-    /// Returns the DataValue as a single ComponentModel ValueAndType if possible
-    ///
-    /// Note that this conversion does not support unstructured binary/text and multimodal return values
-    pub fn into_return_value_and_type(self) -> Option<ValueAndType> {
-        match self {
-            DataValue::Tuple(mut elements) if elements.elements.len() == 1 => {
-                match elements.elements.remove(0) {
-                    ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
-                        Some(value)
-                    }
-                    _ => None,
-                }
-            }
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(
-    feature = "full",
-    derive(IntoValue, FromValue, desert_rust::BinaryCodec)
-)]
-#[cfg_attr(
-    feature = "full",
-    wit(name = "data-value", owner = "golem:core@1.5.0/types")
-)]
-pub enum UntypedDataValue {
-    Tuple(Vec<UntypedElementValue>),
-    Multimodal(Vec<UntypedNamedElementValue>),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub struct UntypedNamedElementValue {
-    pub name: String,
-    pub value: UntypedElementValue,
-}
-
-#[cfg(feature = "full")]
-impl golem_wasm::FromValue for UntypedNamedElementValue {
-    fn from_value(value: Value) -> Result<Self, String> {
-        match value {
-            Value::Tuple(fields) if fields.len() == 2 => {
-                let mut iter = fields.into_iter();
-                let name = String::from_value(iter.next().unwrap())?;
-                let value = UntypedElementValue::from_value(iter.next().unwrap())?;
-                Ok(UntypedNamedElementValue { name, value })
-            }
-            _ => Err(format!(
-                "Expected Tuple with 2 fields for UntypedNamedElementValue, got {:?}",
-                value
-            )),
-        }
-    }
-}
-
-#[cfg(feature = "full")]
-impl golem_wasm::IntoValue for UntypedNamedElementValue {
-    fn into_value(self) -> Value {
-        Value::Tuple(vec![self.name.into_value(), self.value.into_value()])
-    }
-
-    fn get_type() -> AnalysedType {
-        AnalysedType::Tuple(golem_wasm::analysis::TypeTuple {
-            name: None,
-            owner: None,
-            items: vec![String::get_type(), UntypedElementValue::get_type()],
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(
-    feature = "full",
-    derive(IntoValue, FromValue, desert_rust::BinaryCodec)
-)]
-#[cfg_attr(
-    feature = "full",
-    wit(name = "element-value", owner = "golem:core@1.5.0/types")
-)]
-pub enum UntypedElementValue {
-    ComponentModel(Value),
-    UnstructuredText(TextReferenceValue),
-    UnstructuredBinary(BinaryReferenceValue),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct UntypedJsonNamedElementValue {
-    pub name: String,
-    pub value: UntypedJsonElementValue,
-}
-
-impl From<NamedElementValue> for UntypedJsonNamedElementValue {
-    fn from(value: NamedElementValue) -> Self {
-        Self {
-            name: value.name,
-            value: value.value.into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct UntypedJsonElementValues {
-    pub elements: Vec<UntypedJsonElementValue>,
-}
-
-impl From<ElementValues> for UntypedJsonElementValues {
-    fn from(value: ElementValues) -> Self {
-        Self {
-            elements: value
-                .elements
-                .into_iter()
-                .map(UntypedJsonElementValue::from)
-                .collect(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct UntypedJsonNamedElementValues {
-    pub elements: Vec<UntypedJsonNamedElementValue>,
-}
-
-impl From<NamedElementValues> for UntypedJsonNamedElementValues {
-    fn from(value: NamedElementValues) -> Self {
-        Self {
-            elements: value
-                .elements
-                .into_iter()
-                .map(UntypedJsonNamedElementValue::from)
-                .collect(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type")]
-pub enum UntypedJsonDataValue {
-    Tuple(UntypedJsonElementValues),
-    Multimodal(UntypedJsonNamedElementValues),
-}
-
-impl From<DataValue> for UntypedJsonDataValue {
-    fn from(value: DataValue) -> Self {
-        match value {
-            DataValue::Tuple(elements) => UntypedJsonDataValue::Tuple(elements.into()),
-            DataValue::Multimodal(elements) => UntypedJsonDataValue::Multimodal(elements.into()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type")]
-pub enum UntypedJsonElementValue {
-    ComponentModel(JsonComponentModelValue),
-    UnstructuredText(TextReferenceValue),
-    UnstructuredBinary(BinaryReferenceValue),
-}
-
-impl From<ElementValue> for UntypedJsonElementValue {
-    fn from(value: ElementValue) -> Self {
-        match value {
-            ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
-                UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
-                    value: value
-                        .to_json_value()
-                        .expect("Invalid ValueAndType in ElementValue"), // TODO: convert to TryFrom and propagate this
-                })
-            }
-            ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => {
-                UntypedJsonElementValue::UnstructuredText(TextReferenceValue { value })
-            }
-            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
-                UntypedJsonElementValue::UnstructuredBinary(BinaryReferenceValue { value })
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", wit_transparent)]
-pub struct ElementValues {
-    pub elements: Vec<ElementValue>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", wit_transparent)]
-pub struct NamedElementValues {
-    pub elements: Vec<NamedElementValue>,
-}
-
-/// Identifies a deployed, instantiated agent.
-///
-/// LegacyParsedAgentId is convertible to and from string, and is used as _agent ids_.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LegacyParsedAgentId {
-    pub agent_type: AgentTypeName,
-    pub parameters: DataValue,
-    pub phantom_id: Option<Uuid>,
-    pub(crate) as_string: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct NamedElementValue {
-    pub name: String,
-    pub value: ElementValue,
-    #[serde(default)]
-    pub schema_index: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(
-    feature = "full",
-    wit(
-        name = "component-model-element-value",
-        owner = "golem:core@1.5.0/types"
-    )
-)]
-pub struct ComponentModelElementValue {
-    #[cfg_attr(feature = "full", wit_field(convert = golem_wasm::WitValue))]
-    pub value: ValueAndType,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(
-    feature = "full",
-    wit(
-        name = "unstructured-text-element-value",
-        owner = "golem:core@1.5.0/types"
-    )
-)]
-pub struct UnstructuredTextElementValue {
-    pub value: TextReference,
-    #[cfg_attr(feature = "full", wit_field(skip))]
-    #[serde(default)]
-    pub descriptor: TextDescriptor,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(
-    feature = "full",
-    wit(
-        name = "unstructured-binary-element-value",
-        owner = "golem:core@1.5.0/types"
-    )
-)]
-pub struct UnstructuredBinaryElementValue {
-    pub value: BinaryReference,
-    #[cfg_attr(feature = "full", wit_field(skip))]
-    #[serde(default)]
-    pub descriptor: BinaryDescriptor,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Union, IntoValue)
-)]
-#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type")]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(
-    feature = "full",
-    wit(name = "element-value", owner = "golem:core@1.5.0/types")
-)]
-pub enum ElementValue {
-    ComponentModel(ComponentModelElementValue),
-    UnstructuredText(UnstructuredTextElementValue),
-    UnstructuredBinary(UnstructuredBinaryElementValue),
-}
-
-impl ElementValue {
-    pub fn try_from_untyped_json(
-        value: UntypedJsonElementValue,
-        schema: ElementSchema,
-    ) -> Result<Self, String> {
-        match (value, schema) {
-            (
-                UntypedJsonElementValue::ComponentModel(json_value),
-                ElementSchema::ComponentModel(component_model_schema),
-            ) => {
-                let typ: AnalysedType = component_model_schema.element_type;
-                let value_and_type = ValueAndType::parse_with_type(&json_value.value, &typ)
-                    .map_err(|errors: Vec<String>| {
-                        format!(
-                            "Failed to parse JSON as ComponentModel value: {}",
-                            errors.join(", ")
-                        )
-                    })?;
-                Ok(ElementValue::ComponentModel(ComponentModelElementValue {
-                    value: value_and_type,
-                }))
-            }
-            (
-                UntypedJsonElementValue::UnstructuredText(text),
-                ElementSchema::UnstructuredText(descriptor),
-            ) => Ok(ElementValue::UnstructuredText(
-                UnstructuredTextElementValue {
-                    value: text.value,
-                    descriptor,
-                },
-            )),
-            (
-                UntypedJsonElementValue::UnstructuredBinary(binary),
-                ElementSchema::UnstructuredBinary(descriptor),
-            ) => Ok(ElementValue::UnstructuredBinary(
-                UnstructuredBinaryElementValue {
-                    value: binary.value,
-                    descriptor,
-                },
-            )),
-            _ => Err("Element value does not match schema".to_string()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1177,7 +477,7 @@ pub struct HttpMountDetails {
     pub webhook_suffix: Vec<PathSegment>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1195,7 +495,17 @@ pub struct HttpEndpointDetails {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, IntoValue, FromValue,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    IntoSchema,
+    FromSchema,
 )]
 #[cfg_attr(
     feature = "full",
@@ -1205,23 +515,14 @@ pub struct HttpEndpointDetails {
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum HttpMethod {
-    #[unit_case]
     Get(Empty),
-    #[unit_case]
     Head(Empty),
-    #[unit_case]
     Post(Empty),
-    #[unit_case]
     Put(Empty),
-    #[unit_case]
     Delete(Empty),
-    #[unit_case]
     Connect(Empty),
-    #[unit_case]
     Options(Empty),
-    #[unit_case]
     Trace(Empty),
-    #[unit_case]
     Patch(Empty),
     Custom(CustomHttpMethod),
 }
@@ -1250,7 +551,17 @@ impl TryFrom<HttpMethod> for http::Method {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, IntoValue, FromValue,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    IntoSchema,
+    FromSchema,
 )]
 #[cfg_attr(
     feature = "full",
@@ -1259,12 +570,11 @@ impl TryFrom<HttpMethod> for http::Method {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(transparent))]
-#[cfg_attr(feature = "full", wit_transparent)]
 pub struct CustomHttpMethod {
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1276,7 +586,7 @@ pub struct CorsOptions {
     pub allowed_patterns: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Union)
@@ -1291,7 +601,7 @@ pub enum PathSegment {
     RemainingPathVariable(PathVariable),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1299,12 +609,11 @@ pub enum PathSegment {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(transparent))]
-#[cfg_attr(feature = "full", wit_transparent)]
 pub struct LiteralSegment {
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1312,12 +621,13 @@ pub struct LiteralSegment {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(transparent))]
-#[cfg_attr(feature = "full", wit_transparent)]
 pub struct SystemVariableSegment {
     pub value: SystemVariable,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema,
+)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 pub enum SystemVariable {
     AgentType,
@@ -1334,7 +644,7 @@ impl Display for SystemVariable {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1346,7 +656,7 @@ pub struct PathVariable {
     pub variable_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1359,7 +669,7 @@ pub struct HeaderVariable {
     pub variable_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1372,7 +682,7 @@ pub struct QueryVariable {
     pub variable_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Union)
@@ -1381,12 +691,11 @@ pub struct QueryVariable {
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub enum Snapshotting {
-    #[unit_case]
     Disabled(Empty),
     Enabled(SnapshottingConfig),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Union)
@@ -1398,13 +707,12 @@ pub enum Snapshotting {
 #[serde(tag = "configType")]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub enum SnapshottingConfig {
-    #[unit_case]
     Default(Empty),
     Periodic(SnapshottingPeriodic),
     EveryNInvocation(SnapshottingEveryNInvocation),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1416,7 +724,7 @@ pub struct SnapshottingPeriodic {
     pub duration_nanos: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1428,37 +736,17 @@ pub struct SnapshottingEveryNInvocation {
     pub count: u16,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
-#[cfg_attr(
-    feature = "full",
-    wit(name = "agent-config-source", owner = "golem:agent@1.5.0/common")
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema,
 )]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[repr(i32)]
 pub enum AgentConfigSource {
     Local = 0,
     Secret = 1,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[cfg_attr(
-    feature = "full",
-    wit(name = "agent-config-declaration", owner = "golem:agent@1.5.0/common")
-)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentConfigDeclaration {
-    pub source: AgentConfigSource,
-    pub path: Vec<String>,
-    pub value_type: AnalysedType,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1470,7 +758,7 @@ pub struct AgentHttpAuthDetails {
     pub required: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Union)
@@ -1481,7 +769,6 @@ pub enum Principal {
     Oidc(OidcPrincipal),
     Agent(AgentPrincipal),
     GolemUser(GolemUserPrincipal),
-    #[unit_case]
     Anonymous(Empty),
 }
 
@@ -1491,7 +778,7 @@ impl Principal {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1513,7 +800,7 @@ pub struct OidcPrincipal {
     pub claims: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1525,7 +812,7 @@ pub struct AgentPrincipal {
     pub agent_id: AgentId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -1537,119 +824,39 @@ pub struct GolemUserPrincipal {
     pub account_id: AccountId,
 }
 
-pub trait UnstructuredTextExtensions {
-    fn into_text_reference(self) -> TextReference;
-    fn from_text_reference(text_ref: TextReference) -> Result<Self, String>
-    where
-        Self: Sized;
-}
-
-pub trait UnstructuredBinaryExtensions {
-    fn into_binary_reference(self) -> BinaryReference;
-    fn from_binary_reference(binary_ref: BinaryReference) -> Result<Self, String>
-    where
-        Self: Sized;
-}
-
-impl<LC: AllowedLanguages> UnstructuredTextExtensions for UnstructuredText<LC> {
-    fn into_text_reference(self) -> TextReference {
-        match self {
-            UnstructuredText::Url(url) => TextReference::Url(Url { value: url }),
-            UnstructuredText::Text {
-                text,
-                language_code,
-            } => TextReference::Inline(TextSource {
-                data: text,
-                text_type: language_code.map(|lc| TextType {
-                    language_code: lc.to_language_code().to_string(),
-                }),
-            }),
-        }
-    }
-
-    fn from_text_reference(text_ref: TextReference) -> Result<Self, String> {
-        match text_ref {
-            TextReference::Url(url) => Ok(UnstructuredText::Url(url.value)),
-            TextReference::Inline(source) => {
-                let language_code =
-                    if let Some(tt) = &source.text_type {
-                        Some(LC::from_language_code(&tt.language_code).ok_or_else(|| {
-                            format!("Invalid language code: {}", tt.language_code)
-                        })?)
-                    } else {
-                        None
-                    };
-                Ok(UnstructuredText::Text {
-                    text: source.data,
-                    language_code,
-                })
-            }
-        }
-    }
-}
-
-impl<MT: AllowedMimeTypes> UnstructuredBinaryExtensions for UnstructuredBinary<MT> {
-    fn into_binary_reference(self) -> BinaryReference {
-        match self {
-            UnstructuredBinary::Url(url) => BinaryReference::Url(Url { value: url }),
-            UnstructuredBinary::Inline { data, mime_type } => {
-                BinaryReference::Inline(BinarySource {
-                    data,
-                    binary_type: BinaryType {
-                        mime_type: mime_type.to_string(),
-                    },
-                })
-            }
-        }
-    }
-
-    fn from_binary_reference(binary_ref: BinaryReference) -> Result<Self, String> {
-        match binary_ref {
-            BinaryReference::Url(url) => Ok(UnstructuredBinary::Url(url.value)),
-            BinaryReference::Inline(source) => MT::from_string(&source.binary_type.mime_type)
-                .ok_or_else(|| format!("Invalid mime type: {}", source.binary_type.mime_type))
-                .map(|mime_type| UnstructuredBinary::Inline {
-                    data: source.data,
-                    mime_type,
-                }),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use test_r::test;
 
     use super::*;
+    use crate::schema::agent::{
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
+    };
+    use crate::schema::graph::SchemaGraph;
 
-    fn mock_method(name: &str, read_only: Option<ReadOnlyConfig>) -> AgentMethod {
-        AgentMethod {
+    fn mock_method(name: &str, read_only: Option<ReadOnlyConfig>) -> AgentMethodSchema {
+        AgentMethodSchema {
             name: name.to_string(),
             description: String::new(),
             prompt_hint: None,
-            input_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: Vec::new(),
-            }),
-            output_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: Vec::new(),
-            }),
+            input_schema: InputSchema::Parameters(Vec::new()),
+            output_schema: OutputSchema::Unit,
             http_endpoint: Vec::new(),
             read_only,
         }
     }
 
-    fn mock_agent_type(mode: AgentMode, methods: Vec<AgentMethod>) -> AgentType {
-        AgentType {
+    fn mock_agent_type(mode: AgentMode, methods: Vec<AgentMethodSchema>) -> AgentTypeSchema {
+        AgentTypeSchema {
             type_name: AgentTypeName("Test".to_string()),
             description: String::new(),
             source_language: String::new(),
-            constructor: AgentConstructor {
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
                 name: None,
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas {
-                    elements: Vec::new(),
-                }),
+                input_schema: InputSchema::Parameters(Vec::new()),
             },
             methods,
             dependencies: Vec::new(),
@@ -1705,13 +912,13 @@ mod tests {
     // -----------------------------------------------------------------------
     // Read-only / cache-policy codec round-trip (issue #3393)
     //
-    // Read-only metadata is carried inside `AgentMethod.read_only` and uses
-    // every cache-policy variant. The same `AgentMethod` value must travel
-    // unchanged through every codec we expose: `serde`, `desert_rust`
-    // (BinaryCodec), `poem_openapi`, and `golem_wasm::{IntoValue, FromValue}`.
+    // Read-only metadata is carried inside `AgentMethodSchema.read_only` and
+    // uses every cache-policy variant. The same `AgentMethodSchema` value must
+    // travel unchanged through every codec we expose: `serde`, `desert_rust`
+    // (BinaryCodec), and `poem_openapi`.
     //
-    // Also covers the schema-migration case: a legacy payload without the
-    // `read_only` field must deserialize with `read_only == None`.
+    // Also covers the schema-migration case: a payload without the `read_only`
+    // field must deserialize with `read_only == None`.
     // -----------------------------------------------------------------------
 
     fn all_cache_policies() -> Vec<CachePolicy> {
@@ -1724,7 +931,7 @@ mod tests {
         ]
     }
 
-    fn all_read_only_methods() -> Vec<AgentMethod> {
+    fn all_read_only_methods() -> Vec<AgentMethodSchema> {
         let mut out = vec![mock_method("not-read-only", None)];
         for policy in all_cache_policies() {
             for uses_principal in [false, true] {
@@ -1744,7 +951,8 @@ mod tests {
     fn agent_method_read_only_roundtrips_through_serde_json() {
         for method in all_read_only_methods() {
             let json = serde_json::to_string(&method).expect("serde_json::to_string");
-            let back: AgentMethod = serde_json::from_str(&json).expect("serde_json::from_str");
+            let back: AgentMethodSchema =
+                serde_json::from_str(&json).expect("serde_json::from_str");
             assert_eq!(back, method, "serde JSON round-trip mismatch");
         }
     }
@@ -1754,7 +962,7 @@ mod tests {
         for method in all_read_only_methods() {
             let bytes =
                 desert_rust::serialize_to_byte_vec(&method).expect("desert_rust serialization");
-            let back: AgentMethod =
+            let back: AgentMethodSchema =
                 desert_rust::deserialize(&bytes).expect("desert_rust deserialization");
             assert_eq!(back, method, "desert (BinaryCodec) round-trip mismatch");
         }
@@ -1766,44 +974,26 @@ mod tests {
 
         for method in all_read_only_methods() {
             let json = ToJSON::to_json(&method);
-            let back = <AgentMethod as ParseFromJSON>::parse_from_json(json)
+            let back = <AgentMethodSchema as ParseFromJSON>::parse_from_json(json)
                 .expect("poem_openapi parse_from_json");
             assert_eq!(back, method, "poem_openapi round-trip mismatch");
         }
     }
 
-    #[test]
-    fn agent_method_read_only_roundtrips_through_into_from_value() {
-        use golem_wasm::{FromValue, IntoValue};
-
-        for method in all_read_only_methods() {
-            let value = method.clone().into_value();
-            let back =
-                <AgentMethod as FromValue>::from_value(value).expect("FromValue::from_value");
-            assert_eq!(back, method, "IntoValue/FromValue round-trip mismatch");
-        }
-    }
-
-    /// Legacy payload (`AgentMethod` without `read_only`) must deserialize
-    /// with `read_only == None`. We don't have a previously-shipped binary
-    /// to replay, so we verify the `#[serde(default)]` and `desert(evolution)`
-    /// contracts in the simplest possible way: feed both codecs a payload
-    /// missing the `read_only` field and assert the field defaults to `None`.
+    /// A payload missing the `read_only` field must deserialize with
+    /// `read_only == None`, verifying the `#[serde(default)]` and
+    /// `desert(evolution)` contracts.
     #[test]
     fn agent_method_without_read_only_field_defaults_to_none_via_serde() {
-        let legacy_json = serde_json::json!({
-            "name": "legacy",
-            "description": "",
-            "promptHint": null,
-            "inputSchema": { "type": "Tuple", "elements": [] },
-            "outputSchema": { "type": "Tuple", "elements": [] },
-            "httpEndpoint": [],
-        });
-        let method: AgentMethod =
-            serde_json::from_value(legacy_json).expect("legacy serde JSON must deserialize");
-        assert_eq!(method.name, "legacy");
+        let method = mock_method("legacy", None);
+        let mut json = serde_json::to_value(&method).expect("to_value");
+        json.as_object_mut().unwrap().remove("read_only");
+        json.as_object_mut().unwrap().remove("readOnly");
+        let back: AgentMethodSchema =
+            serde_json::from_value(json).expect("payload without read_only must deserialize");
+        assert_eq!(back.name, "legacy");
         assert!(
-            method.read_only.is_none(),
+            back.read_only.is_none(),
             "missing read_only field must default to None"
         );
     }

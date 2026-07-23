@@ -56,7 +56,7 @@ impl GolemWasiHttp for GolemWasiHttpImpl {
         println!("Sending {:?}", request_body);
 
         let response: Response = client
-            .post(&format!("http://localhost:{port}/post-example"))
+            .post(format!("http://localhost:{port}/post-example"))
             .json(&request_body)
             .header("X-Test", "Golem")
             .basic_auth("some", Some("body"))
@@ -116,7 +116,7 @@ impl GolemWasiHttp for GolemWasiHttpImpl {
         let client = Client::builder().build().unwrap();
 
         let response: Response = client
-            .get(&format!("http://localhost:{port}/big-byte-array"))
+            .get(format!("http://localhost:{port}/big-byte-array"))
             .send()
             .expect("Request failed");
 

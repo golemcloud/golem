@@ -17,21 +17,27 @@
 
 use super::HttpApiOpenApiSpec;
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour, RichRouteSecurity};
-use golem_common::base_model::agent::{
-    BinaryDescriptor, BinaryType, ComponentModelElementSchema, DataSchema, ElementSchema,
-    NamedElementSchema, NamedElementSchemas, TextDescriptor, TextType,
-};
+use golem_common::base_model::agent::{BinaryType, TextType};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::schema::metadata::{MetadataEnvelope, TypeId};
+use golem_common::schema::schema_type::{
+    BinaryRestrictions, NamedFieldType, ResultSpec, TextRestrictions,
+};
+use golem_common::schema::unstructured::{
+    unstructured_binary_schema_type, unstructured_text_schema_type,
+};
+use golem_common::schema::{
+    InputSchema, OutputSchema, Role, SchemaGraph, SchemaType, SchemaTypeDef,
+};
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, CorsOptions, MethodParameter, OpenApiSpecBehaviour, OpenApiSpecFormat,
-    PathSegment, PathSegmentType, QueryOrHeaderType, RequestBodySchema, WebhookCallbackBehaviour,
+    CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledSchema, CorsOptions,
+    MethodParameter, OpenApiSpecBehaviour, OpenApiSpecFormat, PathSegment, PathSegmentType,
+    QueryOrHeaderType, RequestBodySchema, WebhookCallbackBehaviour,
 };
 use golem_service_base::model::SafeIndex;
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::analysis::analysed_type::{field, option, record, result, result_err, str};
 use http::Method;
 use serde_json::{Value, json};
 use test_r::test;
@@ -44,40 +50,211 @@ fn agent_type_name(name: &str) -> golem_common::model::agent::AgentTypeName {
     golem_common::model::agent::AgentTypeName(name.to_string())
 }
 
-/// A single-element tuple response carrying a component-model type.
-fn cm_response(ty: AnalysedType) -> DataSchema {
-    DataSchema::Tuple(NamedElementSchemas {
-        elements: vec![NamedElementSchema {
-            name: "body".to_string(),
-            schema: ElementSchema::ComponentModel(ComponentModelElementSchema { element_type: ty }),
-        }],
+/// A single response carrying a component-model type. Named composites become
+/// `defs` + a `Ref` root, so the emitter renders them via `$ref`.
+fn cm_response(ty: SchemaType) -> CompiledOutputSchema {
+    let graph = SchemaGraph::anonymous(ty);
+    cm_response_graph(graph)
+}
+
+fn cm_response_graph(graph: SchemaGraph) -> CompiledOutputSchema {
+    let root = graph.root.clone();
+    CompiledOutputSchema {
+        graph,
+        output_schema: OutputSchema::Single(Box::new(root)),
+    }
+}
+
+fn field(name: &str, body: SchemaType) -> NamedFieldType {
+    NamedFieldType {
+        name: name.to_string(),
+        body,
+        metadata: MetadataEnvelope::default(),
+    }
+}
+
+fn record(fields: Vec<NamedFieldType>) -> SchemaType {
+    SchemaType::record(fields)
+}
+
+fn str() -> SchemaType {
+    SchemaType::string()
+}
+
+fn option(inner: SchemaType) -> SchemaType {
+    SchemaType::option(inner)
+}
+
+fn result(ok: SchemaType, err: SchemaType) -> SchemaType {
+    SchemaType::result(ResultSpec {
+        ok: Some(Box::new(ok)),
+        err: Some(Box::new(err)),
     })
 }
 
-fn unit_response() -> DataSchema {
-    DataSchema::Tuple(NamedElementSchemas { elements: vec![] })
-}
-
-fn text_response(restrictions: Option<Vec<TextType>>) -> DataSchema {
-    DataSchema::Tuple(NamedElementSchemas {
-        elements: vec![NamedElementSchema {
-            name: "body".to_string(),
-            schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions }),
-        }],
+fn result_ok(ok: SchemaType) -> SchemaType {
+    SchemaType::result(ResultSpec {
+        ok: Some(Box::new(ok)),
+        err: None,
     })
 }
 
-fn binary_response(restrictions: Option<Vec<BinaryType>>) -> DataSchema {
-    DataSchema::Tuple(NamedElementSchemas {
-        elements: vec![NamedElementSchema {
-            name: "body".to_string(),
-            schema: ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions }),
-        }],
+fn result_err(err: SchemaType) -> SchemaType {
+    SchemaType::result(ResultSpec {
+        ok: None,
+        err: Some(Box::new(err)),
     })
 }
 
-fn multimodal_response() -> DataSchema {
-    DataSchema::Multimodal(NamedElementSchemas { elements: vec![] })
+fn unit_response() -> CompiledOutputSchema {
+    CompiledOutputSchema {
+        graph: SchemaGraph::empty(),
+        output_schema: OutputSchema::Unit,
+    }
+}
+
+fn text_response(restrictions: Option<Vec<TextType>>) -> CompiledOutputSchema {
+    let languages = restrictions.map(|r| r.into_iter().map(|t| t.language_code).collect());
+    let ty = SchemaType::text(TextRestrictions {
+        languages,
+        ..Default::default()
+    });
+    CompiledOutputSchema {
+        graph: SchemaGraph::anonymous(ty.clone()),
+        output_schema: OutputSchema::Single(Box::new(ty)),
+    }
+}
+
+fn binary_response(restrictions: Option<Vec<BinaryType>>) -> CompiledOutputSchema {
+    let mime_types = restrictions.map(|r| r.into_iter().map(|t| t.mime_type).collect());
+    let ty = SchemaType::binary(BinaryRestrictions {
+        mime_types,
+        ..Default::default()
+    });
+    CompiledOutputSchema {
+        graph: SchemaGraph::anonymous(ty.clone()),
+        output_schema: OutputSchema::Single(Box::new(ty)),
+    }
+}
+
+/// Like [`text_response`], but the output schema is the canonical
+/// unstructured-text `variant { inline, url }` wrapper (which the guest SDKs
+/// publish) rather than a bare `Text` rich scalar.
+fn wrapper_text_response(restrictions: Option<Vec<TextType>>) -> CompiledOutputSchema {
+    let languages = restrictions.map(|r| r.into_iter().map(|t| t.language_code).collect());
+    let ty = unstructured_text_schema_type(TextRestrictions {
+        languages,
+        ..Default::default()
+    });
+    CompiledOutputSchema {
+        graph: SchemaGraph::anonymous(ty.clone()),
+        output_schema: OutputSchema::Single(Box::new(ty)),
+    }
+}
+
+/// Like [`binary_response`], but the output schema is the canonical
+/// unstructured-binary `variant { inline, url }` wrapper.
+fn wrapper_binary_response(restrictions: Option<Vec<BinaryType>>) -> CompiledOutputSchema {
+    let mime_types = restrictions.map(|r| r.into_iter().map(|t| t.mime_type).collect());
+    let ty = unstructured_binary_schema_type(BinaryRestrictions {
+        mime_types,
+        ..Default::default()
+    });
+    CompiledOutputSchema {
+        graph: SchemaGraph::anonymous(ty.clone()),
+        output_schema: OutputSchema::Single(Box::new(ty)),
+    }
+}
+
+/// The structural multimodal form `list<variant<…>>` whose list node carries
+/// `Role::Multimodal`, which the emitter renders as an opaque binary response.
+fn multimodal_response() -> CompiledOutputSchema {
+    let mut ty = SchemaType::list(SchemaType::variant(vec![]));
+    ty.metadata_mut().role = Some(Role::Multimodal);
+    CompiledOutputSchema {
+        graph: SchemaGraph::anonymous(ty.clone()),
+        output_schema: OutputSchema::Single(Box::new(ty)),
+    }
+}
+
+fn json_body(ty: SchemaType) -> RequestBodySchema {
+    RequestBodySchema::JsonBody {
+        expected: CompiledSchema {
+            graph: SchemaGraph::anonymous(ty),
+        },
+    }
+}
+
+fn json_body_graph(graph: SchemaGraph) -> RequestBodySchema {
+    RequestBodySchema::JsonBody {
+        expected: CompiledSchema { graph },
+    }
+}
+
+fn unrestricted_binary() -> RequestBodySchema {
+    RequestBodySchema::BinaryBody {
+        expected: CompiledSchema {
+            graph: SchemaGraph::anonymous(SchemaType::binary(BinaryRestrictions::default())),
+        },
+    }
+}
+
+fn restricted_binary(mime_types: Vec<String>) -> RequestBodySchema {
+    RequestBodySchema::BinaryBody {
+        expected: CompiledSchema {
+            graph: SchemaGraph::anonymous(SchemaType::binary(BinaryRestrictions {
+                mime_types: Some(mime_types),
+                ..Default::default()
+            })),
+        },
+    }
+}
+
+fn unrestricted_text() -> RequestBodySchema {
+    RequestBodySchema::TextBody {
+        expected: CompiledSchema {
+            graph: SchemaGraph::anonymous(SchemaType::text(TextRestrictions::default())),
+        },
+    }
+}
+
+fn restricted_text(languages: Vec<String>) -> RequestBodySchema {
+    RequestBodySchema::TextBody {
+        expected: CompiledSchema {
+            graph: SchemaGraph::anonymous(SchemaType::text(TextRestrictions {
+                languages: Some(languages),
+                ..Default::default()
+            })),
+        },
+    }
+}
+
+/// Like [`restricted_binary`], but the body root is the canonical
+/// unstructured-binary `variant { inline, url }` wrapper rather than a bare
+/// `Binary` rich scalar.
+fn wrapper_restricted_binary(mime_types: Vec<String>) -> RequestBodySchema {
+    RequestBodySchema::BinaryBody {
+        expected: CompiledSchema {
+            graph: SchemaGraph::anonymous(unstructured_binary_schema_type(BinaryRestrictions {
+                mime_types: Some(mime_types),
+                ..Default::default()
+            })),
+        },
+    }
+}
+
+/// Like [`restricted_text`], but the body root is the canonical
+/// unstructured-text `variant { inline, url }` wrapper rather than a bare
+/// `Text` rich scalar.
+fn wrapper_restricted_text(languages: Vec<String>) -> RequestBodySchema {
+    RequestBodySchema::TextBody {
+        expected: CompiledSchema {
+            graph: SchemaGraph::anonymous(unstructured_text_schema_type(TextRestrictions {
+                languages: Some(languages),
+                ..Default::default()
+            })),
+        },
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -86,7 +263,7 @@ fn call_agent_route(
     path: Vec<PathSegment>,
     body: RequestBodySchema,
     method_parameters: Vec<MethodParameter>,
-    response: DataSchema,
+    response: CompiledOutputSchema,
     method_description: Option<String>,
 ) -> RichCompiledRoute {
     RichCompiledRoute {
@@ -101,9 +278,17 @@ fn call_agent_route(
             component_id: ComponentId::new(),
             component_revision: ComponentRevision::INITIAL,
             agent_type: agent_type_name("TestAgent"),
+            constructor_input: CompiledInputSchema {
+                graph: SchemaGraph::empty(),
+                input_schema: InputSchema::Parameters(vec![]),
+            },
             constructor_parameters: vec![],
             phantom: false,
             method_name: "test_method".to_string(),
+            method_input: CompiledInputSchema {
+                graph: SchemaGraph::empty(),
+                input_schema: InputSchema::Parameters(vec![]),
+            },
             method_parameters,
             expected_agent_response: response,
             method_description,
@@ -249,9 +434,7 @@ fn result_void_err_maps_500_to_no_content() {
             }],
             RequestBodySchema::Unused,
             vec![],
-            cm_response(golem_wasm::analysis::analysed_type::result_ok(record(
-                vec![field("value", str())],
-            ))),
+            cm_response(result_ok(record(vec![field("value", str())]))),
             None,
         ),
         "/rok",
@@ -361,6 +544,76 @@ fn binary_response_uses_restricted_mime_or_octet_stream() {
 }
 
 #[test]
+fn unstructured_text_wrapper_response_matches_bare_text_response() {
+    let op = operation_for(
+        call_agent_route(
+            Method::GET,
+            vec![PathSegment::Literal {
+                value: "txt".to_string(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            wrapper_text_response(Some(vec![TextType {
+                language_code: "en".to_string(),
+            }])),
+            None,
+        ),
+        "/txt",
+        "get",
+    );
+    assert_eq!(
+        op["responses"]["200"]["content"]["text/plain"]["schema"],
+        json!({ "type": "string" })
+    );
+    let header = &op["responses"]["200"]["headers"]["Content-Language"];
+    assert_eq!(header["required"], json!(false));
+    assert_eq!(header["schema"]["enum"], json!(["en"]));
+}
+
+#[test]
+fn unstructured_binary_wrapper_response_matches_bare_binary_response() {
+    let restricted = operation_for(
+        call_agent_route(
+            Method::GET,
+            vec![PathSegment::Literal {
+                value: "bin".to_string(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            wrapper_binary_response(Some(vec![BinaryType {
+                mime_type: "image/png".to_string(),
+            }])),
+            None,
+        ),
+        "/bin",
+        "get",
+    );
+    assert_eq!(
+        restricted["responses"]["200"]["content"]["image/png"]["schema"],
+        json!({ "type": "string", "format": "binary" })
+    );
+
+    let unrestricted = operation_for(
+        call_agent_route(
+            Method::GET,
+            vec![PathSegment::Literal {
+                value: "bin".to_string(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            wrapper_binary_response(None),
+            None,
+        ),
+        "/bin",
+        "get",
+    );
+    assert!(
+        unrestricted["responses"]["200"]["content"]["application/octet-stream"]["schema"]
+            .is_object()
+    );
+}
+
+#[test]
 fn multimodal_response_maps_to_unknown_binary() {
     let op = operation_for(
         call_agent_route(
@@ -394,9 +647,7 @@ fn json_request_body_renders_application_json() {
             vec![PathSegment::Literal {
                 value: "json".to_string(),
             }],
-            RequestBodySchema::JsonBody {
-                expected_type: record(vec![field("name", str())]),
-            },
+            json_body(record(vec![field("name", str())])),
             vec![],
             unit_response(),
             None,
@@ -421,7 +672,7 @@ fn unrestricted_text_body_adds_content_language_parameter() {
             vec![PathSegment::Literal {
                 value: "txtbody".to_string(),
             }],
-            RequestBodySchema::UnrestrictedText,
+            unrestricted_text(),
             vec![],
             unit_response(),
             None,
@@ -450,9 +701,7 @@ fn restricted_binary_body_lists_each_mime_type() {
             vec![PathSegment::Literal {
                 value: "binbody".to_string(),
             }],
-            RequestBodySchema::RestrictedBinary {
-                allowed_mime_types: vec!["image/gif".to_string()],
-            },
+            restricted_binary(vec!["image/gif".to_string()]),
             vec![],
             unit_response(),
             None,
@@ -469,6 +718,62 @@ fn restricted_binary_body_lists_each_mime_type() {
             .as_object()
             .is_some()
     );
+}
+
+#[test]
+fn unstructured_binary_wrapper_request_body_lists_each_mime_type() {
+    let op = operation_for(
+        call_agent_route(
+            Method::POST,
+            vec![PathSegment::Literal {
+                value: "binbody".to_string(),
+            }],
+            wrapper_restricted_binary(vec!["image/gif".to_string()]),
+            vec![],
+            unit_response(),
+            None,
+        ),
+        "/binbody",
+        "post",
+    );
+    assert_eq!(
+        op["requestBody"]["description"],
+        json!("Restricted binary body")
+    );
+    assert!(
+        op["requestBody"]["content"]["image/gif"]["schema"]
+            .as_object()
+            .is_some()
+    );
+}
+
+#[test]
+fn unstructured_text_wrapper_request_body_lists_languages() {
+    let op = operation_for(
+        call_agent_route(
+            Method::POST,
+            vec![PathSegment::Literal {
+                value: "txtbody".to_string(),
+            }],
+            wrapper_restricted_text(vec!["en".to_string(), "de".to_string()]),
+            vec![],
+            unit_response(),
+            None,
+        ),
+        "/txtbody",
+        "post",
+    );
+    assert_eq!(
+        op["requestBody"]["content"]["text/plain"]["schema"],
+        json!({ "type": "string" })
+    );
+    let params = op["parameters"].as_array().expect("parameters");
+    let content_language = params
+        .iter()
+        .find(|p| p["name"] == json!("Content-Language"))
+        .expect("Content-Language header parameter present");
+    assert_eq!(content_language["in"], json!("header"));
+    assert_eq!(content_language["schema"]["enum"], json!(["en", "de"]));
 }
 
 // --------------------------------------------------------------------------
@@ -644,7 +949,7 @@ fn webhook_route_emits_204_404_and_promise_id_param() {
                     display_name: "promise-id".to_string(),
                 },
             ],
-            RequestBodySchema::UnrestrictedBinary,
+            unrestricted_binary(),
             RichRouteBehaviour::WebhookCallback(WebhookCallbackBehaviour {
                 component_id: ComponentId::new(),
             }),
@@ -695,20 +1000,21 @@ fn openapi_spec_route_returns_object_with_additional_properties() {
 fn named_type_shared_across_routes_appears_once_in_components() {
     // A named record used as both a request body and a response should appear
     // exactly once in components/schemas, referenced by `$ref`.
-    let named = AnalysedType::Record(golem_wasm::analysis::TypeRecord {
-        name: Some("User".to_string()),
-        owner: None,
-        fields: vec![field("id", str())],
-    });
+    let named = SchemaGraph {
+        defs: vec![SchemaTypeDef {
+            id: TypeId("User".to_string()),
+            name: Some("User".to_string()),
+            body: record(vec![field("id", str())]),
+        }],
+        root: SchemaType::ref_to(TypeId("User".to_string())),
+    };
 
     let route_a = call_agent_route(
         Method::POST,
         vec![PathSegment::Literal {
             value: "a".to_string(),
         }],
-        RequestBodySchema::JsonBody {
-            expected_type: named.clone(),
-        },
+        json_body_graph(named.clone()),
         vec![],
         unit_response(),
         None,
@@ -720,7 +1026,7 @@ fn named_type_shared_across_routes_appears_once_in_components() {
         }],
         RequestBodySchema::Unused,
         vec![],
-        cm_response(named),
+        cm_response_graph(named),
         None,
     );
 
@@ -764,9 +1070,7 @@ fn restricted_text_body_content_language_lists_languages() {
             vec![PathSegment::Literal {
                 value: "rtxt".to_string(),
             }],
-            RequestBodySchema::RestrictedText {
-                allowed_language_codes: vec!["en".to_string(), "hu".to_string()],
-            },
+            restricted_text(vec!["en".to_string(), "hu".to_string()]),
             vec![],
             unit_response(),
             None,
@@ -795,7 +1099,7 @@ fn unrestricted_binary_body_uses_wildcard_media_type() {
             vec![PathSegment::Literal {
                 value: "ubin".to_string(),
             }],
-            RequestBodySchema::UnrestrictedBinary,
+            unrestricted_binary(),
             vec![],
             unit_response(),
             None,

@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { TextReference } from 'golem:agent/common@1.5.0';
-
 type LanguageCode = string;
 
 /**
@@ -48,42 +46,6 @@ export type UnstructuredText<LC extends LanguageCode[] = []> =
     };
 
 export const UnstructuredText = {
-  fromDataValue<LC extends string[] = []>(
-    parameterName: string,
-    dataValue: TextReference,
-    allowedCodes: string[],
-  ): UnstructuredText<LC> {
-    if (dataValue.tag === 'url') {
-      return {
-        tag: 'url',
-        val: dataValue.val,
-      };
-    }
-
-    if (allowedCodes.length > 0) {
-      if (!dataValue.val.textType) {
-        throw new Error(`Language code is required. Allowed codes: ${allowedCodes.join(', ')}`);
-      }
-
-      if (!allowedCodes.includes(dataValue.val.textType.languageCode)) {
-        throw new Error(
-          `Invalid value for parameter ${parameterName}. Language code \`${dataValue.val.textType.languageCode}\` is not allowed. Allowed codes: ${allowedCodes.join(', ')}`,
-        );
-      }
-
-      return {
-        tag: 'inline',
-        val: dataValue.val.data,
-        languageCode: dataValue.val.textType.languageCode,
-      };
-    }
-
-    return {
-      tag: 'inline',
-      val: dataValue.val.data,
-    };
-  },
-
   /**
    * Creates `UnstructuredText` from a URL.
    *

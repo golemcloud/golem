@@ -122,10 +122,14 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
                 unit: "kg".to_string(),
             }),
         )),
-        "[a-z][a-z0-9-]{0,8}".prop_map(|r: String| (
+        Just((
             SchemaType::secret(SecretSpec::default()),
             SchemaValue::Secret(SecretValuePayload {
-                secret_ref: if r.is_empty() { "x".to_string() } else { r },
+                secret_id: uuid::Uuid::nil(),
+                config_key: None,
+                version: 0,
+                resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+                category: None,
             }),
         )),
         "[a-z][a-z0-9-]{0,4}".prop_map(|r: String| {
@@ -135,7 +139,7 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
                     resource_name: Some(resource.clone()),
                 }),
                 SchemaValue::QuotaToken(QuotaTokenValuePayload {
-                    environment_id: uuid::Uuid::nil(),
+                    environment_id: golem_schema::model::EnvironmentId::new(uuid::Uuid::nil()),
                     resource_name: resource,
                     expected_use: 1,
                     last_credit: 0,

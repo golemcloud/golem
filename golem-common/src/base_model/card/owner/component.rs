@@ -122,9 +122,32 @@ impl ComponentOwnerPattern {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicComponentOwnerPattern {
     Concrete(ComponentOwnerPattern),
+    AccountComponents,
+    AccountApplicationComponents {
+        application: ApplicationName,
+    },
+    AccountEnvironmentComponents {
+        application: ApplicationName,
+        environment: EnvironmentName,
+    },
+    AccountComponent {
+        application: ApplicationName,
+        environment: EnvironmentName,
+        component: ComponentName,
+    },
+    ApplicationComponents,
+    ApplicationEnvironmentComponents {
+        environment: EnvironmentName,
+    },
+    ApplicationComponent {
+        environment: EnvironmentName,
+        component: ComponentName,
+    },
     EnvComponents,
-    EnvComponent { component: String },
-    Self_,
+    EnvComponent {
+        component: ComponentName,
+    },
+    Component,
 }
 
 impl OwnerPattern for ComponentOwnerPattern {
@@ -136,15 +159,52 @@ impl OwnerPattern for ComponentOwnerPattern {
 
     fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String> {
         match split_leftmost_owner_slot(value)? {
+            Some(("?account", rest)) if rest.as_slice() == ["*", "*", "*"] => {
+                Ok(PolymorphicComponentOwnerPattern::AccountComponents)
+            }
+            Some(("?account", rest)) if rest.len() == 3 && rest[1] == "*" && rest[2] == "*" => Ok(
+                PolymorphicComponentOwnerPattern::AccountApplicationComponents {
+                    application: ApplicationName::try_from(parse_concrete_segment(rest[0])?)?,
+                },
+            ),
+            Some(("?account", rest)) if rest.len() == 3 && rest[2] == "*" => Ok(
+                PolymorphicComponentOwnerPattern::AccountEnvironmentComponents {
+                    application: ApplicationName::try_from(parse_concrete_segment(rest[0])?)?,
+                    environment: EnvironmentName::try_from(parse_concrete_segment(rest[1])?)?,
+                },
+            ),
+            Some(("?account", rest)) if rest.len() == 3 => {
+                Ok(PolymorphicComponentOwnerPattern::AccountComponent {
+                    application: ApplicationName::try_from(parse_concrete_segment(rest[0])?)?,
+                    environment: EnvironmentName::try_from(parse_concrete_segment(rest[1])?)?,
+                    component: ComponentName(parse_concrete_segment(rest[2])?.to_string()),
+                })
+            }
+            Some(("?app", rest)) if rest.as_slice() == ["*", "*"] => {
+                Ok(PolymorphicComponentOwnerPattern::ApplicationComponents)
+            }
+            Some(("?app", rest)) if rest.len() == 2 && rest[1] == "*" => Ok(
+                PolymorphicComponentOwnerPattern::ApplicationEnvironmentComponents {
+                    environment: EnvironmentName::try_from(parse_concrete_segment(rest[0])?)?,
+                },
+            ),
+            Some(("?app", rest)) if rest.len() == 2 => {
+                Ok(PolymorphicComponentOwnerPattern::ApplicationComponent {
+                    environment: EnvironmentName::try_from(parse_concrete_segment(rest[0])?)?,
+                    component: ComponentName(parse_concrete_segment(rest[1])?.to_string()),
+                })
+            }
             Some(("?env", rest)) if rest.as_slice() == ["*"] => {
                 Ok(PolymorphicComponentOwnerPattern::EnvComponents)
             }
             Some(("?env", rest)) if rest.len() == 1 => {
                 Ok(PolymorphicComponentOwnerPattern::EnvComponent {
-                    component: parse_concrete_segment(rest[0])?.to_string(),
+                    component: ComponentName(parse_concrete_segment(rest[0])?.to_string()),
                 })
             }
-            Some(("?self", rest)) if rest.is_empty() => Ok(PolymorphicComponentOwnerPattern::Self_),
+            Some(("?component", rest)) if rest.is_empty() => {
+                Ok(PolymorphicComponentOwnerPattern::Component)
+            }
             Some(_) => Err(value.to_string()),
             None => Self::parse(value).map(PolymorphicComponentOwnerPattern::Concrete),
         }

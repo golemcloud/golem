@@ -16,16 +16,18 @@ pub mod multipart;
 mod oplog_macro;
 pub(crate) mod public_types;
 
-use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentMode;
 use crate::base_model::component::ComponentRevision;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::invocation_context::SpanId;
 use crate::base_model::regions::OplogRegion;
 use crate::base_model::{AgentId, IdempotencyKey, OplogIndex, Timestamp, TransactionId};
-use crate::model::worker::TypedAgentConfigEntry;
+use crate::model::account::AccountId;
+use crate::model::card::CardId;
+#[cfg(feature = "full")]
+use crate::model::card::StoredCard;
 use crate::oplog_entry;
-use golem_wasm::ValueAndType;
+use crate::schema::TypedSchemaValue;
 pub use public_types::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -43,7 +45,7 @@ mod raw_imports {
     pub use crate::model::retry_policy::{NamedRetryPolicy, RetryPolicyState};
     pub use crate::model::worker::UntypedAgentConfigEntry;
     pub use crate::model::{AgentInvocationPayload, AgentInvocationResult};
-    pub use golem_wasm::wasmtime::ResourceTypeId;
+    pub use crate::resource_runtime::ResourceTypeId;
 
     pub use std::collections::HashSet;
 }
@@ -60,7 +62,7 @@ use raw_imports::*;
 // - PublicOplogEntry
 //
 // the oplog representation presented to users through queries, with enriched information
-// with JSON and poem codecs, convertible to/from golem_wasm::Value and (hand-written) lucene query matching
+// with JSON and poem codecs and (hand-written) lucene query matching
 //
 // The macro's DSL requires the following items for each oplog entry to be specified:
 // - hint: false|true
@@ -99,7 +101,7 @@ oplog_entry! {
             component_size: u64,
             initial_total_linear_memory_size: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
-            local_agent_config: Vec<TypedAgentConfigEntry>,
+            local_agent_config: Vec<PublicTypedAgentConfigEntry>,
             original_phantom_id: Option<Uuid>,
             instance_id: Uuid
         }
@@ -126,7 +128,7 @@ oplog_entry! {
         public {
             parent_start_index: Option<OplogIndex>,
             function_name: String,
-            request: Option<ValueAndType>,
+            request: Option<TypedSchemaValue>,
             durable_function_type: PublicDurableFunctionType,
         }
     },
@@ -148,7 +150,7 @@ oplog_entry! {
         }
         public {
             start_index: OplogIndex,
-            response: Option<ValueAndType>,
+            response: Option<TypedSchemaValue>,
             forced_commit: bool,
         }
     },
@@ -167,7 +169,7 @@ oplog_entry! {
         }
         public {
             start_index: OplogIndex,
-            partial: Option<ValueAndType>,
+            partial: Option<TypedSchemaValue>,
         }
     },
     /// The agent has been invoked
@@ -193,11 +195,13 @@ oplog_entry! {
         wit_public_type: "agent-invocation-finished-parameters"
         raw {
             result: payload::OplogPayload<AgentInvocationResult>,
+            method_name: Option<String>,
             consumed_fuel: i64,
             component_revision: ComponentRevision,
         }
         public {
             result: PublicAgentInvocationResult,
+            method_name: Option<String>,
             consumed_fuel: i64,
             component_revision: ComponentRevision,
         }
@@ -501,9 +505,7 @@ oplog_entry! {
         }
         public {
             span_id: SpanId,
-            #[cfg_attr(feature = "full", wit_field(rename = "parent"))]
             parent_id: Option<SpanId>,
-            #[cfg_attr(feature = "full", wit_field(rename = "linked-context-id"))]
             linked_context: Option<SpanId>,
             attributes: Vec<PublicAttribute>,
         }
@@ -620,6 +622,7 @@ oplog_entry! {
         raw {
             data: payload::OplogPayload<Vec<u8>>,
             mime_type: String,
+            active_cards: Vec<StoredCard>,
         }
         public {
             data: PublicSnapshotData
@@ -667,6 +670,74 @@ oplog_entry! {
         }
         public {
             name: String,
+        }
+    },
+    /// Durable queue entry for pending permission-card work.
+    CardEventQueued {
+        hint: true
+        wit_raw_type: "raw-card-event-queued-parameters"
+        wit_public_type: "card-event-queued-parameters"
+        raw {
+            event: QueuedCardEvent,
+        }
+        public {
+            event: PublicQueuedCardEvent,
+        }
+    },
+    /// Records successful installation of a permission card into the agent wallet.
+    CardInstalled {
+        hint: true
+        wit_raw_type: "raw-card-installed-parameters"
+        wit_public_type: "card-installed-parameters"
+        raw {
+            queued_event_index: Option<OplogIndex>,
+            card: StoredCard,
+        }
+        public {
+            queued_event_index: Option<OplogIndex>,
+            card_id: CardId,
+        }
+    },
+    /// Records failed installation of a permission card into the agent wallet.
+    CardInstallFailed {
+        hint: true
+        wit_raw_type: "card-install-failed-parameters"
+        wit_public_type: "card-install-failed-parameters"
+        raw {
+            queued_event_index: OplogIndex,
+            card_id: CardId,
+            reason: CardInstallFailure,
+        }
+        public {
+            queued_event_index: OplogIndex,
+            card_id: CardId,
+            reason: CardInstallFailure,
+        }
+    },
+    /// Records that a permission card used by the agent has been revoked.
+    CardRevoked {
+        hint: true
+        wit_raw_type: "card-revoked-parameters"
+        wit_public_type: "card-revoked-parameters"
+        raw {
+            queued_event_index: OplogIndex,
+            card_id: CardId,
+        }
+        public {
+            queued_event_index: OplogIndex,
+            card_id: CardId,
+        }
+    },
+    /// Records that a permission card used by the agent has expired.
+    CardExpired {
+        hint: true
+        wit_raw_type: "card-expired-parameters"
+        wit_public_type: "card-expired-parameters"
+        raw {
+            card_id: CardId,
+        }
+        public {
+            card_id: CardId,
         }
     }
 }

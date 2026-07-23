@@ -1,6 +1,6 @@
 use crate::*;
 use golem_common::base_model::component::ComponentRevision;
-use golem_common::model::agent::LegacyParsedAgentId;
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationFinishedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
@@ -9,7 +9,7 @@ use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_debugging_service::model::params::PlaybackOverride;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{LastUniqueId, TestContext, TestWorkerExecutor};
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -382,6 +382,7 @@ async fn test_playback_and_rewind(
 }
 
 #[test]
+#[timeout("30s")]
 #[tracing::instrument]
 async fn test_playback_and_fork(
     last_unique_id: &LastUniqueId,
@@ -512,6 +513,7 @@ async fn test_playback_with_overrides(
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: Timestamp::now_utc(),
             result: original_result.clone(),
+            method_name: None,
             consumed_fuel: 0,
             component_revision: ComponentRevision::INITIAL,
         });
@@ -584,7 +586,7 @@ fn previous_index(index: OplogIndex) -> OplogIndex {
 async fn run_repo_add_two(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    repo_id: &LegacyParsedAgentId,
+    repo_id: &ParsedAgentId,
 ) -> anyhow::Result<()> {
     executor
         .invoke_and_await_agent(
@@ -610,7 +612,7 @@ async fn run_repo_add_two(
 async fn run_repo_workflow(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    repo_id: &LegacyParsedAgentId,
+    repo_id: &ParsedAgentId,
 ) -> anyhow::Result<RepoWorkflowResult> {
     // Add two items
     run_repo_add_two(executor, component, repo_id).await?;

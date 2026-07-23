@@ -23,7 +23,6 @@ use desert_rust::BinaryCodec;
 use goldenfile::Mint;
 use goldenfile::differs::Differ;
 use golem_common::serialization::{deserialize, serialize};
-use golem_wasm::{Value, WitValue};
 use std::fmt::Debug;
 use std::io::Write;
 use std::path::Path;
@@ -63,27 +62,4 @@ pub(crate) fn backward_compatible<T: BinaryCodec + PartialEq + Debug + 'static>(
     value: T,
 ) {
     backward_compatible_custom(name, mint, value, Box::new(is_deserializable::<T>))
-}
-
-#[allow(unused)]
-fn is_deserializable_wit_value(old: &Path, new: &Path) {
-    let old = std::fs::read(old).unwrap();
-    let new = std::fs::read(new).unwrap();
-
-    // Both the old and the latest binary can be deserialized
-    let old_decoded: WitValue = deserialize(&old).unwrap();
-    let new_decoded: WitValue = deserialize(&new).unwrap();
-
-    let old_value: Value = old_decoded.into();
-    let new_value: Value = new_decoded.into();
-
-    // And they represent the same value
-    assert_eq!(old_value, new_value);
-}
-
-/// Special case for WitValue which does not implement PartialEq at the moment but can be converted
-/// to Value for comparison.
-#[allow(unused)]
-fn backward_compatible_wit_value(name: impl AsRef<str>, mint: &mut Mint, value: WitValue) {
-    backward_compatible_custom(name, mint, value, Box::new(is_deserializable_wit_value))
 }

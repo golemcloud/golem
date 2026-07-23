@@ -3,7 +3,7 @@
 httpApi:
   deployments:
     local:
-    - domain: app-name.localhost:9006
+    - subdomain: app-name  # resolves to app-name.localhost:9006 by default
       agents:
         ResearchAgent: {}
 

@@ -461,7 +461,7 @@ Concepts:
     `golem.yaml`).
 
     Commands that do not require an application (e.g. `profile`,
-    `account`, `server`, `completion`) ignore manifest discovery.
+    `account`, `server`, `completion`, `output-schema`) ignore manifest discovery.
 
   Non-interactive use (for agents and CI)
     Pass `-Y`/`--yes` to auto-confirm destructive prompts and

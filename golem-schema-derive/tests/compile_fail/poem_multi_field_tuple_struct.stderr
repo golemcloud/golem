@@ -1,0 +1,5 @@
+error: PoemSchema only supports single-field tuple structs (transparent newtypes); multi-field tuple structs serialize as arrays and are not modelled
+  --> tests/compile_fail/poem_multi_field_tuple_struct.rs:18:8
+   |
+18 | struct Bad(u32, String);
+   |        ^^^

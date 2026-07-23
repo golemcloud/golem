@@ -14,24 +14,55 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::model::account::AccountEmail;
+use crate::model::agent::AgentTypeName;
+use crate::model::application::ApplicationName;
+use crate::model::component::ComponentName;
+use crate::model::environment::EnvironmentName;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum RecipientPattern {
     Any,
     Account {
-        account: String,
+        account: AccountEmail,
+    },
+    AccountEnvironments {
+        account: AccountEmail,
+    },
+    ApplicationEnvironments {
+        account: AccountEmail,
+        application: ApplicationName,
     },
     Environment {
-        account: String,
-        application: String,
-        environment: String,
+        account: AccountEmail,
+        application: ApplicationName,
+        environment: EnvironmentName,
+    },
+    AccountAgents {
+        account: AccountEmail,
+    },
+    ApplicationAgents {
+        account: AccountEmail,
+        application: ApplicationName,
+    },
+    EnvironmentAgents {
+        account: AccountEmail,
+        application: ApplicationName,
+        environment: EnvironmentName,
+    },
+    ComponentAgents {
+        account: AccountEmail,
+        application: ApplicationName,
+        environment: EnvironmentName,
+        component: ComponentName,
     },
     Agent {
-        account: String,
-        application: String,
-        environment: String,
-        component: String,
-        agent: String,
+        account: AccountEmail,
+        application: ApplicationName,
+        environment: EnvironmentName,
+        component: ComponentName,
+        agent_type: AgentTypeName,
     },
 }
 
@@ -58,10 +89,24 @@ pub enum PolymorphicAgentRecipientPattern {
     AccountAgents,
     ApplicationAgents,
     EnvironmentAgents,
-    EnvironmentAgent { component: String, agent: String },
+    EnvironmentAgent {
+        component: ComponentName,
+        agent_type: AgentTypeName,
+    },
     ComponentAgents,
-    ComponentAgent { agent: String },
-    Self_,
+    ComponentAgent {
+        agent_type: AgentTypeName,
+    },
+    Agent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecipientMonomorphizationContext {
+    pub account: AccountEmail,
+    pub application: ApplicationName,
+    pub environment: EnvironmentName,
+    pub component: ComponentName,
+    pub agent_type: AgentTypeName,
 }
 
 impl RecipientPattern {
@@ -72,21 +117,104 @@ impl RecipientPattern {
 
         match parse_anchored_segments(value)?.as_slice() {
             [account] => Ok(Self::Account {
-                account: concrete_segment(account)?.to_string(),
+                account: AccountEmail::new(concrete_segment(account)?),
+            }),
+            [account, "*", "*"] => Ok(Self::AccountEnvironments {
+                account: AccountEmail::new(concrete_segment(account)?),
+            }),
+            [account, application, "*"] => Ok(Self::ApplicationEnvironments {
+                account: AccountEmail::new(concrete_segment(account)?),
+                application: ApplicationName::try_from(concrete_segment(application)?)?,
             }),
             [account, application, environment] => Ok(Self::Environment {
-                account: concrete_segment(account)?.to_string(),
-                application: application_segment(application)?.to_string(),
-                environment: application_segment(environment)?.to_string(),
+                account: AccountEmail::new(concrete_segment(account)?),
+                application: ApplicationName::try_from(concrete_segment(application)?)?,
+                environment: EnvironmentName::try_from(concrete_segment(environment)?)?,
             }),
-            [account, application, environment, component, agent] => Ok(Self::Agent {
-                account: concrete_segment(account)?.to_string(),
-                application: application_segment(application)?.to_string(),
-                environment: application_segment(environment)?.to_string(),
-                component: application_segment(component)?.to_string(),
-                agent: agent_segment(agent)?.to_string(),
+            [account, "*", "*", "*", "*"] => Ok(Self::AccountAgents {
+                account: AccountEmail::new(concrete_segment(account)?),
+            }),
+            [account, application, "*", "*", "*"] => Ok(Self::ApplicationAgents {
+                account: AccountEmail::new(concrete_segment(account)?),
+                application: ApplicationName::try_from(concrete_segment(application)?)?,
+            }),
+            [account, application, environment, "*", "*"] => Ok(Self::EnvironmentAgents {
+                account: AccountEmail::new(concrete_segment(account)?),
+                application: ApplicationName::try_from(concrete_segment(application)?)?,
+                environment: EnvironmentName::try_from(concrete_segment(environment)?)?,
+            }),
+            [account, application, environment, component, "*"] => Ok(Self::ComponentAgents {
+                account: AccountEmail::new(concrete_segment(account)?),
+                application: ApplicationName::try_from(concrete_segment(application)?)?,
+                environment: EnvironmentName::try_from(concrete_segment(environment)?)?,
+                component: ComponentName(concrete_segment(component)?.to_string()),
+            }),
+            [account, application, environment, component, agent_type] => Ok(Self::Agent {
+                account: AccountEmail::new(concrete_segment(account)?),
+                application: ApplicationName::try_from(concrete_segment(application)?)?,
+                environment: EnvironmentName::try_from(concrete_segment(environment)?)?,
+                component: ComponentName(concrete_segment(component)?.to_string()),
+                agent_type: AgentTypeName(concrete_segment(agent_type)?.to_string()),
             }),
             _ => Err(value.to_string()),
+        }
+    }
+
+    pub fn render(&self) -> String {
+        match self {
+            Self::Any => "*".to_string(),
+            Self::Account { account } => account.as_str().to_string(),
+            Self::AccountEnvironments { account } => format!("{}/*/*", account.as_str()),
+            Self::ApplicationEnvironments {
+                account,
+                application,
+            } => format!("{}/{}/*", account.as_str(), application.0),
+            Self::Environment {
+                account,
+                application,
+                environment,
+            } => format!("{}/{}/{}", account.as_str(), application.0, environment.0),
+            Self::AccountAgents { account } => format!("{}/*/*/*/*", account.as_str()),
+            Self::ApplicationAgents {
+                account,
+                application,
+            } => format!("{}/{}/*/*/*", account.as_str(), application.0),
+            Self::EnvironmentAgents {
+                account,
+                application,
+                environment,
+            } => format!(
+                "{}/{}/{}/*/*",
+                account.as_str(),
+                application.0,
+                environment.0
+            ),
+            Self::ComponentAgents {
+                account,
+                application,
+                environment,
+                component,
+            } => format!(
+                "{}/{}/{}/{}/*",
+                account.as_str(),
+                application.0,
+                environment.0,
+                component.0
+            ),
+            Self::Agent {
+                account,
+                application,
+                environment,
+                component,
+                agent_type,
+            } => format!(
+                "{}/{}/{}/{}/{}",
+                account.as_str(),
+                application.0,
+                environment.0,
+                component.0,
+                agent_type.0
+            ),
         }
     }
 
@@ -96,6 +224,18 @@ impl RecipientPattern {
             (Self::Account { account: a }, other) => {
                 other.account_part().is_some_and(|account| a == account)
             }
+            (Self::AccountEnvironments { account: a }, other) => other
+                .environment_scope_part()
+                .is_some_and(|(account, _, _)| a == account),
+            (
+                Self::ApplicationEnvironments {
+                    account: aa,
+                    application: ap,
+                },
+                other,
+            ) => other
+                .environment_scope_part()
+                .is_some_and(|(ba, bp, _)| aa == ba && bp == Some(ap)),
             (
                 Self::Environment {
                     account: aa,
@@ -103,8 +243,41 @@ impl RecipientPattern {
                     environment: ae,
                 },
                 other,
-            ) => other.environment_part().is_some_and(|(ba, bp, be)| {
-                aa == ba && segment_subsumes(ap, bp) && segment_subsumes(ae, be)
+            ) => other
+                .environment_scope_part()
+                .is_some_and(|(ba, bp, be)| aa == ba && bp == Some(ap) && be == Some(ae)),
+            (Self::AccountAgents { account: a }, other) => other
+                .agent_scope_part()
+                .is_some_and(|(account, _, _, _, _)| a == account),
+            (
+                Self::ApplicationAgents {
+                    account: aa,
+                    application: ap,
+                },
+                other,
+            ) => other
+                .agent_scope_part()
+                .is_some_and(|(ba, bp, _, _, _)| aa == ba && bp == Some(ap)),
+            (
+                Self::EnvironmentAgents {
+                    account: aa,
+                    application: ap,
+                    environment: ae,
+                },
+                other,
+            ) => other
+                .agent_scope_part()
+                .is_some_and(|(ba, bp, be, _, _)| aa == ba && bp == Some(ap) && be == Some(ae)),
+            (
+                Self::ComponentAgents {
+                    account: aa,
+                    application: ap,
+                    environment: ae,
+                    component: ac,
+                },
+                other,
+            ) => other.agent_scope_part().is_some_and(|(ba, bp, be, bc, _)| {
+                aa == ba && bp == Some(ap) && be == Some(ae) && bc == Some(ac)
             }),
             (
                 Self::Agent {
@@ -112,49 +285,127 @@ impl RecipientPattern {
                     application: ap,
                     environment: ae,
                     component: ac,
-                    agent: ag,
+                    agent_type: at,
                 },
-                Self::Agent {
-                    account: ba,
-                    application: bp,
-                    environment: be,
-                    component: bc,
-                    agent: bg,
-                },
-            ) => {
-                aa == ba
-                    && segment_subsumes(ap, bp)
-                    && segment_subsumes(ae, be)
-                    && segment_subsumes(ac, bc)
-                    && agent_segment_subsumes(ag, bg)
-            }
-            (Self::Agent { .. }, _) => false,
+                other,
+            ) => other
+                .agent_scope_part()
+                .is_some_and(|(ba, bp, be, bc, bt)| {
+                    aa == ba && bp == Some(ap) && be == Some(ae) && bc == Some(ac) && bt == Some(at)
+                }),
         }
     }
 
-    fn account_part(&self) -> Option<&str> {
+    fn account_part(&self) -> Option<&AccountEmail> {
         match self {
-            Self::Any => None,
             Self::Account { account }
+            | Self::AccountEnvironments { account }
+            | Self::ApplicationEnvironments { account, .. }
             | Self::Environment { account, .. }
+            | Self::AccountAgents { account }
+            | Self::ApplicationAgents { account, .. }
+            | Self::EnvironmentAgents { account, .. }
+            | Self::ComponentAgents { account, .. }
             | Self::Agent { account, .. } => Some(account),
+            Self::Any => None,
         }
     }
 
-    fn environment_part(&self) -> Option<(&str, &str, &str)> {
+    fn environment_scope_part(
+        &self,
+    ) -> Option<(
+        &AccountEmail,
+        Option<&ApplicationName>,
+        Option<&EnvironmentName>,
+    )> {
         match self {
+            Self::AccountEnvironments { account } => Some((account, None, None)),
+            Self::ApplicationEnvironments {
+                account,
+                application,
+            } => Some((account, Some(application), None)),
             Self::Environment {
                 account,
                 application,
                 environment,
+            } => Some((account, Some(application), Some(environment))),
+            Self::AccountAgents { account } => Some((account, None, None)),
+            Self::ApplicationAgents {
+                account,
+                application,
+            } => Some((account, Some(application), None)),
+            Self::EnvironmentAgents {
+                account,
+                application,
+                environment,
+            }
+            | Self::ComponentAgents {
+                account,
+                application,
+                environment,
+                ..
             }
             | Self::Agent {
                 account,
                 application,
                 environment,
                 ..
-            } => Some((account, application, environment)),
+            } => Some((account, Some(application), Some(environment))),
             Self::Any | Self::Account { .. } => None,
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn agent_scope_part(
+        &self,
+    ) -> Option<(
+        &AccountEmail,
+        Option<&ApplicationName>,
+        Option<&EnvironmentName>,
+        Option<&ComponentName>,
+        Option<&AgentTypeName>,
+    )> {
+        match self {
+            Self::AccountAgents { account } => Some((account, None, None, None, None)),
+            Self::ApplicationAgents {
+                account,
+                application,
+            } => Some((account, Some(application), None, None, None)),
+            Self::EnvironmentAgents {
+                account,
+                application,
+                environment,
+            } => Some((account, Some(application), Some(environment), None, None)),
+            Self::ComponentAgents {
+                account,
+                application,
+                environment,
+                component,
+            } => Some((
+                account,
+                Some(application),
+                Some(environment),
+                Some(component),
+                None,
+            )),
+            Self::Agent {
+                account,
+                application,
+                environment,
+                component,
+                agent_type,
+            } => Some((
+                account,
+                Some(application),
+                Some(environment),
+                Some(component),
+                Some(agent_type),
+            )),
+            Self::Any
+            | Self::Account { .. }
+            | Self::AccountEnvironments { .. }
+            | Self::ApplicationEnvironments { .. }
+            | Self::Environment { .. } => None,
         }
     }
 }
@@ -188,8 +439,8 @@ impl PolymorphicRecipientPattern {
             {
                 Ok(Self::Agent(
                     PolymorphicAgentRecipientPattern::EnvironmentAgent {
-                        component: rest[0].to_string(),
-                        agent: rest[1].to_string(),
+                        component: ComponentName(rest[0].to_string()),
+                        agent_type: AgentTypeName(rest[1].to_string()),
                     },
                 ))
             }
@@ -198,14 +449,127 @@ impl PolymorphicRecipientPattern {
             )),
             Some(("?component", rest)) if rest.len() == 1 && valid_suffix_segment(rest[0]) => Ok(
                 Self::Agent(PolymorphicAgentRecipientPattern::ComponentAgent {
-                    agent: rest[0].to_string(),
+                    agent_type: AgentTypeName(rest[0].to_string()),
                 }),
             ),
-            Some(("?self", rest)) if rest.is_empty() => {
-                Ok(Self::Agent(PolymorphicAgentRecipientPattern::Self_))
+            Some(("?agent", rest)) if rest.is_empty() => {
+                Ok(Self::Agent(PolymorphicAgentRecipientPattern::Agent))
             }
             Some(_) => Err(value.to_string()),
             None => RecipientPattern::parse(value).map(Self::Concrete),
+        }
+    }
+
+    pub fn monomorphize(&self, context: &RecipientMonomorphizationContext) -> RecipientPattern {
+        match self {
+            Self::Concrete(recipient) => recipient.clone(),
+            Self::Account => RecipientPattern::Account {
+                account: context.account.clone(),
+            },
+            Self::Environment(pattern) => match pattern {
+                PolymorphicEnvironmentRecipientPattern::AccountEnvironments => {
+                    RecipientPattern::AccountEnvironments {
+                        account: context.account.clone(),
+                    }
+                }
+                PolymorphicEnvironmentRecipientPattern::ApplicationEnvironments => {
+                    RecipientPattern::ApplicationEnvironments {
+                        account: context.account.clone(),
+                        application: context.application.clone(),
+                    }
+                }
+                PolymorphicEnvironmentRecipientPattern::Environment => {
+                    RecipientPattern::Environment {
+                        account: context.account.clone(),
+                        application: context.application.clone(),
+                        environment: context.environment.clone(),
+                    }
+                }
+            },
+            Self::Agent(pattern) => match pattern {
+                PolymorphicAgentRecipientPattern::AccountAgents => {
+                    RecipientPattern::AccountAgents {
+                        account: context.account.clone(),
+                    }
+                }
+                PolymorphicAgentRecipientPattern::ApplicationAgents => {
+                    RecipientPattern::ApplicationAgents {
+                        account: context.account.clone(),
+                        application: context.application.clone(),
+                    }
+                }
+                PolymorphicAgentRecipientPattern::EnvironmentAgents => {
+                    RecipientPattern::EnvironmentAgents {
+                        account: context.account.clone(),
+                        application: context.application.clone(),
+                        environment: context.environment.clone(),
+                    }
+                }
+                PolymorphicAgentRecipientPattern::EnvironmentAgent {
+                    component,
+                    agent_type,
+                } => RecipientPattern::Agent {
+                    account: context.account.clone(),
+                    application: context.application.clone(),
+                    environment: context.environment.clone(),
+                    component: component.clone(),
+                    agent_type: agent_type.clone(),
+                },
+                PolymorphicAgentRecipientPattern::ComponentAgents => {
+                    RecipientPattern::ComponentAgents {
+                        account: context.account.clone(),
+                        application: context.application.clone(),
+                        environment: context.environment.clone(),
+                        component: context.component.clone(),
+                    }
+                }
+                PolymorphicAgentRecipientPattern::ComponentAgent { agent_type } => {
+                    RecipientPattern::Agent {
+                        account: context.account.clone(),
+                        application: context.application.clone(),
+                        environment: context.environment.clone(),
+                        component: context.component.clone(),
+                        agent_type: agent_type.clone(),
+                    }
+                }
+                PolymorphicAgentRecipientPattern::Agent => RecipientPattern::Agent {
+                    account: context.account.clone(),
+                    application: context.application.clone(),
+                    environment: context.environment.clone(),
+                    component: context.component.clone(),
+                    agent_type: context.agent_type.clone(),
+                },
+            },
+        }
+    }
+
+    pub fn render(&self) -> String {
+        match self {
+            Self::Concrete(recipient) => recipient.render(),
+            Self::Account => "?account".to_string(),
+            Self::Environment(pattern) => match pattern {
+                PolymorphicEnvironmentRecipientPattern::AccountEnvironments => {
+                    "?account/*/*".to_string()
+                }
+                PolymorphicEnvironmentRecipientPattern::ApplicationEnvironments => {
+                    "?app/*".to_string()
+                }
+                PolymorphicEnvironmentRecipientPattern::Environment => "?env".to_string(),
+            },
+            Self::Agent(pattern) => match pattern {
+                PolymorphicAgentRecipientPattern::AccountAgents => "?account/*/*/*/*".to_string(),
+                PolymorphicAgentRecipientPattern::ApplicationAgents => "?app/*/*/*".to_string(),
+                PolymorphicAgentRecipientPattern::EnvironmentAgents => "?env/*/*".to_string(),
+                PolymorphicAgentRecipientPattern::EnvironmentAgent {
+                    component,
+                    agent_type,
+                } => format!("?env/{}/{}", component.0, agent_type.0),
+                PolymorphicAgentRecipientPattern::ComponentAgents => "?component/*".to_string(),
+                PolymorphicAgentRecipientPattern::ComponentAgent { agent_type } => {
+                    format!("?component/{}", agent_type.0)
+                }
+                PolymorphicAgentRecipientPattern::Agent => "?agent".to_string(),
+            },
         }
     }
 }
@@ -275,40 +639,6 @@ fn concrete_segment(segment: &str) -> Result<&str, String> {
     }
 }
 
-fn application_segment(segment: &str) -> Result<&str, String> {
-    if segment.is_empty() || segment.contains('?') {
-        Err(segment.to_string())
-    } else {
-        Ok(segment)
-    }
-}
-
-fn agent_segment(segment: &str) -> Result<&str, String> {
-    if segment.is_empty() || segment.contains('?') {
-        Err(segment.to_string())
-    } else {
-        Ok(segment)
-    }
-}
-
 fn contains_slot_reference(value: &str) -> bool {
-    value
-        .split('/')
-        .any(|segment| segment.starts_with('?') || segment.contains("/?"))
-}
-
-fn segment_subsumes(left: &str, right: &str) -> bool {
-    left == "*" || left == right
-}
-
-fn agent_segment_subsumes(left: &str, right: &str) -> bool {
-    if left == right || left == "*" {
-        return true;
-    }
-    let Some(agent_type) = left.strip_suffix("(*)") else {
-        return false;
-    };
-    right
-        .strip_prefix(agent_type)
-        .is_some_and(|suffix| suffix.starts_with('(') && suffix.ends_with(')'))
+    value.split('/').any(|segment| segment.starts_with('?'))
 }

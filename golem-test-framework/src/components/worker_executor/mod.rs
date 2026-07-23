@@ -75,6 +75,7 @@ async fn env_vars(
     environment_state_cache_capacity: Option<usize>,
     oplog_archive_interval: Option<Duration>,
     verbosity: Level,
+    enable_fs_cache: bool,
     otlp: bool,
 ) -> HashMap<String, String> {
     let mut env = EnvVarBuilder::golem_service(verbosity)
@@ -121,6 +122,10 @@ async fn env_vars(
         .with_str("GOLEM__QUOTA_SERVICE__RENEWAL_THRESHOLD", "55s") // shard manager sets 60s lease duration -> renew every 5s
         .with("GOLEM__GRPC__PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
+        .with(
+            "GOLEM__ENGINE__ENABLE_FS_CACHE",
+            enable_fs_cache.to_string(),
+        )
         .with_optional_otlp("worker_executor", otlp)
         .build();
 

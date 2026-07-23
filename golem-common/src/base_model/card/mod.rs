@@ -14,14 +14,21 @@
 
 mod algebra;
 mod class;
+mod defaults;
+mod envelope;
+mod monomorphization;
 pub mod owner;
 mod parsing;
 mod pattern;
 pub mod recipient;
+mod rendering;
 mod types;
 
 #[cfg(test)]
 mod parsing_tests;
+
+#[cfg(test)]
+mod rendering_tests;
 
 #[cfg(test)]
 mod subsumption_tests;
@@ -31,6 +38,9 @@ mod tests;
 
 pub use algebra::*;
 pub use class::*;
+pub use defaults::*;
+pub use envelope::*;
+pub use monomorphization::*;
 pub use parsing::*;
 pub use pattern::*;
 pub use types::*;

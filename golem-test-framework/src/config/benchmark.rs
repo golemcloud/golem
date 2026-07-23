@@ -481,6 +481,7 @@ impl BenchmarkTestDependencies {
                 registry_service.clone(),
                 environment_state_cache_capacity,
                 None,
+                false,
                 otlp,
             )
             .await,
@@ -861,7 +862,7 @@ impl CliTestService {
                 Self { service }
             }
             _ => {
-                panic!("Test mode {:?} not supported", &mode)
+                panic!("Test mode {:?} not supported", mode)
             }
         }
     }

@@ -18,18 +18,19 @@ use crate::model::component::ComponentNameMatchKind;
 use crate::model::environment::{
     EnvironmentReference, ResolvedEnvironmentIdentity, ResolvedEnvironmentIdentitySource,
 };
+use crate::model::masking::{Masked, MaskingConfig, mask_agent_config_entries, mask_sensitive_map};
 use clap::ValueEnum;
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentTypeName, LegacyParsedAgentId};
+use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::worker::{AgentConfigEntryDto, UpdateRecord};
 use golem_common::model::{AgentId, AgentResourceDescription, AgentStatus, Timestamp};
 use serde_derive::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 // TODO: move things to model/agent
@@ -138,6 +139,8 @@ pub struct AgentMetadataView {
     pub exported_resource_instances: HashMap<String, AgentResourceDescription>,
     #[serde(skip)]
     pub source_language: SourceLanguage,
+    #[serde(skip)]
+    pub secret_config_paths: BTreeSet<String>,
 }
 
 impl From<AgentMetadata> for AgentMetadataView {
@@ -162,20 +165,39 @@ impl From<AgentMetadata> for AgentMetadataView {
             total_linear_memory_size: value.total_linear_memory_size,
             exported_resource_instances: value.exported_resource_instances,
             source_language: SourceLanguage::default(),
+            secret_config_paths: BTreeSet::new(),
         }
     }
 }
 
 impl AgentMetadataView {
-    pub fn with_defaults(mut self, defaults: AgentTypeProvisionConfig) -> Self {
-        self.default_env = defaults.env.into_iter().collect();
-        self.default_config = defaults.config.into_iter().map(Into::into).collect();
+    pub fn with_defaults(mut self, defaults: Option<AgentTypeProvisionConfig>) -> Self {
+        if let Some(defaults) = defaults {
+            self.default_env = defaults.env.into_iter().collect();
+            self.default_config = defaults.config.into_iter().map(Into::into).collect();
+        }
         self
     }
 
     pub fn with_source_language(mut self, source_language: SourceLanguage) -> Self {
         self.source_language = source_language;
         self
+    }
+
+    pub fn with_secret_config_paths(mut self, secret_config_paths: BTreeSet<String>) -> Self {
+        self.secret_config_paths = secret_config_paths;
+        self
+    }
+}
+
+impl Masked for AgentMetadataView {
+    fn masked(mut self, config: MaskingConfig) -> anyhow::Result<Self> {
+        self.env = mask_sensitive_map(config, &self.env);
+        self.default_env = mask_sensitive_map(config, &self.default_env);
+        self.config = mask_agent_config_entries(config, &self.config, &self.secret_config_paths);
+        self.default_config =
+            mask_agent_config_entries(config, &self.default_config, &self.secret_config_paths);
+        Ok(self)
     }
 }
 
@@ -231,9 +253,21 @@ impl AgentMetadata {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentsMetadataResponseView {
     pub agents: Vec<AgentMetadataView>,
     pub cursors: BTreeMap<String, String>,
+}
+
+impl Masked for AgentsMetadataResponseView {
+    fn masked(mut self, config: MaskingConfig) -> anyhow::Result<Self> {
+        self.agents = self
+            .agents
+            .into_iter()
+            .map(|agent| agent.masked(config))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(self)
+    }
 }
 
 pub trait HasVerbosity {
@@ -267,7 +301,7 @@ pub struct AgentNameMatch {
     pub agent_type_name: AgentTypeName,
     pub agent_name: RawAgentId,
     pub source_language: SourceLanguage,
-    pub parsed_agent_id: Option<LegacyParsedAgentId>,
+    pub parsed_agent_id: Option<ParsedAgentId>,
 }
 
 impl AgentNameMatch {
@@ -284,7 +318,7 @@ impl AgentNameMatch {
     pub fn with_canonical_and_parsed(
         mut self,
         agent_name: RawAgentId,
-        parsed_agent_id: Option<LegacyParsedAgentId>,
+        parsed_agent_id: Option<ParsedAgentId>,
     ) -> Self {
         self.agent_name = agent_name;
         self.parsed_agent_id = parsed_agent_id;

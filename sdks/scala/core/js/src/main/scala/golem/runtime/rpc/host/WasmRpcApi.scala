@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,17 +17,49 @@
 package golem.runtime.rpc.host
 
 import golem.Datetime
-import golem.host.js._
-import golem.runtime.rpc.{CancellationToken, RawCancellationToken}
+import golem.host.js.{JsDatetime, JsResult}
+import golem.host.js.schema.{JsAgentError, JsSchemaValueTree, JsTypedAgentConfigValue, JsUuid}
+import golem.runtime.rpc.{
+  AsyncInvocation,
+  CancelableInvocationReceipt,
+  CancellationToken,
+  InvocationMetadata,
+  InvocationReceipt,
+  InvocationResult,
+  RawCancellationToken
+}
 
 import scala.annotation.unused
 import scala.scalajs.js
-import scala.scalajs.js.annotation.JSImport
+import scala.scalajs.js.annotation.{JSImport, JSName}
+
+// ---------------------------------------------------------------------------
+// `golem:agent/host@2.0.0` `rpc-error` JS facade (schema-native variant).
+//
+// The `remote-agent-error` payload carries the schema `JsAgentError` (whose
+// `custom-error` is a `JsTypedSchemaValue`); the string-carrying cases follow
+// the wasm-rquickjs `{ tag, val }` shape.
+// ---------------------------------------------------------------------------
+
+@js.native
+sealed trait JsRpcError extends js.Object {
+  def tag: String = js.native
+}
+
+@js.native
+sealed trait JsRpcErrorString extends JsRpcError {
+  @JSName("val") def value: String = js.native
+}
+
+@js.native
+sealed trait JsRpcErrorRemoteAgent extends JsRpcError {
+  @JSName("val") def value: JsAgentError = js.native
+}
 
 private[golem] object WasmRpcApi {
   def newClient(
     agentTypeName: String,
-    constructorPayload: JsDataValue,
+    constructorPayload: JsSchemaValueTree,
     phantomId: js.UndefOr[JsUuid],
     agentConfig: js.Array[JsTypedAgentConfigValue]
   ): WasmRpcClient = {
@@ -42,10 +74,17 @@ private[golem] object WasmRpcApi {
     JsDatetime(seconds, nanos)
   }
 
-  private def decodeRpcError(thrown: Any): RpcError =
-    try {
+  private[rpc] def decodeRpcError(thrown: Any): RpcError = {
+    // Read the discriminator defensively: a thrown value that is not the
+    // expected `{ tag, val }` JS object (e.g. a bare string or a foreign error)
+    // must degrade to `unknown` rather than triggering a hard cast failure.
+    val rawTag =
+      try thrown.asInstanceOf[js.Dynamic].selectDynamic("tag")
+      catch { case _: Throwable => (js.undefined: js.Any) }
+
+    if (js.typeOf(rawTag) == "string") {
       val value = thrown.asInstanceOf[JsRpcError]
-      value.tag match {
+      rawTag.asInstanceOf[String] match {
         case "protocol-error" =>
           RpcError("protocol-error", Some(value.asInstanceOf[JsRpcErrorString].value))
         case "denied" =>
@@ -59,58 +98,85 @@ private[golem] object WasmRpcApi {
         case other =>
           RpcError(other, None)
       }
-    } catch {
-      case _: Exception =>
-        RpcError("unknown", Some(String.valueOf(thrown)))
+    } else {
+      RpcError("unknown", Some(String.valueOf(thrown)))
     }
+  }
 
   final class WasmRpcClient private[host] (private val underlying: js.Object) {
-    def invokeAndAwait(functionName: String, input: JsDataValue): Either[RpcError, JsDataValue] =
-      try Right(raw.invokeAndAwait(functionName, input))
-      catch {
-        case js.JavaScriptException(e) =>
-          Left(decodeRpcError(e))
-      }
+    private def metadata(raw: RawInvocationMetadata): InvocationMetadata =
+      InvocationMetadata(raw.agentId, raw.idempotencyKey)
 
-    def invoke(functionName: String, input: JsDataValue): Either[RpcError, Unit] =
+    def invokeAndAwait(
+      functionName: String,
+      input: JsSchemaValueTree
+    ): Either[RpcError, js.UndefOr[JsSchemaValueTree]] =
+      invokeAndAwaitWithMetadata(functionName, input).map(_.value)
+
+    def invokeAndAwaitWithMetadata(
+      functionName: String,
+      input: JsSchemaValueTree
+    ): Either[RpcError, InvocationResult[js.UndefOr[JsSchemaValueTree]]] =
       try {
-        raw.invoke(functionName, input)
-        Right(())
-      } catch {
-        case js.JavaScriptException(e) =>
-          Left(decodeRpcError(e))
-      }
+        val value = raw.invokeAndAwait(functionName, input)
+        Right(InvocationResult(metadata(value.metadata), value.result))
+      } catch { case js.JavaScriptException(e) => Left(decodeRpcError(e)) }
 
-    def asyncInvokeAndAwait(functionName: String, input: JsDataValue): Either[RpcError, RawFutureInvokeResult] =
-      try Right(raw.asyncInvokeAndAwait(functionName, input))
-      catch {
-        case js.JavaScriptException(e) =>
-          Left(decodeRpcError(e))
-      }
+    def invoke(functionName: String, input: JsSchemaValueTree): Either[RpcError, Unit] =
+      invokeWithMetadata(functionName, input).map(_ => ())
+
+    def invokeWithMetadata(functionName: String, input: JsSchemaValueTree): Either[RpcError, InvocationMetadata] =
+      try Right(metadata(raw.invoke(functionName, input)))
+      catch { case js.JavaScriptException(e) => Left(decodeRpcError(e)) }
+
+    def asyncInvokeAndAwait(functionName: String, input: JsSchemaValueTree): Either[RpcError, RawFutureInvokeResult] =
+      asyncInvokeAndAwaitWithMetadata(functionName, input).map(_._2)
+
+    def asyncInvokeAndAwaitWithMetadata(
+      functionName: String,
+      input: JsSchemaValueTree
+    ): Either[RpcError, (InvocationMetadata, RawFutureInvokeResult)] =
+      try {
+        val value = raw.asyncInvokeAndAwait(functionName, input)
+        Right((metadata(value.metadata), value.future))
+      } catch { case js.JavaScriptException(e) => Left(decodeRpcError(e)) }
 
     def scheduleInvocation(
       datetime: Datetime,
       functionName: String,
-      input: JsDataValue
+      input: JsSchemaValueTree
     ): Either[RpcError, Unit] =
-      try {
-        raw.scheduleInvocation(datetimeToJs(datetime), functionName, input)
-        Right(())
-      } catch {
-        case js.JavaScriptException(e) =>
-          Left(decodeRpcError(e))
-      }
+      scheduleInvocationWithMetadata(datetime, functionName, input).map(_ => ())
+
+    def scheduleInvocationWithMetadata(
+      datetime: Datetime,
+      functionName: String,
+      input: JsSchemaValueTree
+    ): Either[RpcError, InvocationReceipt] =
+      try
+        Right(
+          InvocationReceipt(
+            metadata(raw.scheduleInvocation(datetimeToJs(datetime), functionName, input).metadata)
+          )
+        )
+      catch { case js.JavaScriptException(e) => Left(decodeRpcError(e)) }
 
     def scheduleCancelableInvocation(
       datetime: Datetime,
       functionName: String,
-      input: JsDataValue
+      input: JsSchemaValueTree
     ): Either[RpcError, CancellationToken] =
-      try Right(CancellationToken(raw.scheduleCancelableInvocation(datetimeToJs(datetime), functionName, input).asInstanceOf[RawCancellationToken]))
-      catch {
-        case js.JavaScriptException(e) =>
-          Left(decodeRpcError(e))
-      }
+      scheduleCancelableInvocationWithMetadata(datetime, functionName, input).map(_.cancellationToken)
+
+    def scheduleCancelableInvocationWithMetadata(
+      datetime: Datetime,
+      functionName: String,
+      input: JsSchemaValueTree
+    ): Either[RpcError, CancelableInvocationReceipt] =
+      try {
+        val value = raw.scheduleCancelableInvocation(datetimeToJs(datetime), functionName, input)
+        Right(CancelableInvocationReceipt(metadata(value.metadata), CancellationToken(value.cancellationToken)))
+      } catch { case js.JavaScriptException(e) => Left(decodeRpcError(e)) }
 
     private def raw: RawWasmRpc =
       underlying.asInstanceOf[RawWasmRpc]
@@ -123,32 +189,72 @@ private[golem] object WasmRpcApi {
   ) {
     override def toString: String =
       agentError match {
-        case Some(err) => s"$kind: ${js.JSON.stringify(err.asInstanceOf[js.Any])}"
-        case None      => message.fold(kind)(text => s"$kind: $text")
+        case Some(err) =>
+          val rendered =
+            try js.JSON.stringify(err.asInstanceOf[js.Any])
+            catch { case _: Throwable => String.valueOf(err) }
+          s"$kind: $rendered"
+        case None => message.fold(kind)(text => s"$kind: $text")
       }
   }
 
   @js.native
-  @JSImport("golem:agent/host@1.5.0", "FutureInvokeResult")
-  private[rpc] class RawFutureInvokeResult extends js.Object {
-    def subscribe(): AgentHostApi.Pollable                      = js.native
-    def get(): js.UndefOr[JsResult[JsDataValue, JsRpcError]]   = js.native
-    def cancel(): Unit                                          = js.native
+  private[rpc] trait RawInvocationMetadata extends js.Object {
+    def agentId: String        = js.native
+    def idempotencyKey: String = js.native
   }
 
   @js.native
-  @JSImport("golem:agent/host@1.5.0", "WasmRpc")
+  private[rpc] trait RawInvocationResultWithMetadata extends js.Object {
+    def metadata: RawInvocationMetadata       = js.native
+    def result: js.UndefOr[JsSchemaValueTree] = js.native
+  }
+
+  @js.native
+  private[rpc] trait RawAsyncInvocationWithMetadata extends js.Object {
+    def metadata: RawInvocationMetadata = js.native
+    def future: RawFutureInvokeResult   = js.native
+  }
+
+  @js.native
+  private[rpc] trait RawScheduledInvocationReceipt extends js.Object {
+    def metadata: RawInvocationMetadata = js.native
+  }
+
+  @js.native
+  private[rpc] trait RawCancelableScheduledInvocationReceipt extends js.Object {
+    def metadata: RawInvocationMetadata         = js.native
+    def cancellationToken: RawCancellationToken = js.native
+  }
+
+  @js.native
+  @JSImport("golem:agent/host@2.0.0", "FutureInvokeResult")
+  private[rpc] class RawFutureInvokeResult extends js.Object {
+    def subscribe(): AgentHostApi.Pollable                                     = js.native
+    def get(): js.UndefOr[JsResult[js.UndefOr[JsSchemaValueTree], JsRpcError]] = js.native
+    def cancel(): Unit                                                         = js.native
+  }
+
+  @js.native
+  @JSImport("golem:agent/host@2.0.0", "WasmRpc")
   private final class RawWasmRpc(
     @unused agentTypeName: String,
-    @unused constructor_ : JsDataValue,
+    @unused constructor_ : JsSchemaValueTree,
     @unused phantomId: js.Any,
     @unused agentConfig: js.Array[JsTypedAgentConfigValue]
   ) extends js.Object {
-    def invokeAndAwait(methodName: String, input: JsDataValue): JsDataValue                                     = js.native
-    def invoke(methodName: String, input: JsDataValue): Unit                                                    = js.native
-    def asyncInvokeAndAwait(methodName: String, input: JsDataValue): RawFutureInvokeResult                      = js.native
-    def scheduleInvocation(scheduledTime: JsDatetime, methodName: String, input: JsDataValue): Unit             = js.native
-    def scheduleCancelableInvocation(scheduledTime: JsDatetime, methodName: String, input: JsDataValue): js.Any =
-      js.native
+    def invokeAndAwait(methodName: String, input: JsSchemaValueTree): RawInvocationResultWithMetadata     = js.native
+    def invoke(methodName: String, input: JsSchemaValueTree): RawInvocationMetadata                       = js.native
+    def asyncInvokeAndAwait(methodName: String, input: JsSchemaValueTree): RawAsyncInvocationWithMetadata = js.native
+    def scheduleInvocation(
+      scheduledTime: JsDatetime,
+      methodName: String,
+      input: JsSchemaValueTree
+    ): RawScheduledInvocationReceipt = js.native
+    def scheduleCancelableInvocation(
+      scheduledTime: JsDatetime,
+      methodName: String,
+      input: JsSchemaValueTree
+    ): RawCancelableScheduledInvocationReceipt = js.native
   }
 }

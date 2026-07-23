@@ -79,5 +79,11 @@ message AgentTypeSchema {
   golem.component.AgentMode mode = 8;
   optional golem.component.HttpMountDetails http_mount = 9;
   golem.component.Snapshotting snapshotting = 10;
-  repeated golem.component.AgentConfigDeclaration config = 11;
+  repeated AgentConfigDeclarationSchema config = 11;
+}
+
+message AgentConfigDeclarationSchema {
+  golem.component.AgentConfigSource source = 1;
+  repeated string path = 2;
+  SchemaType value_type = 3;
 }

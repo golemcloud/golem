@@ -19,7 +19,7 @@ use golem_common::base_model::OplogIndex;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
@@ -30,11 +30,11 @@ use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey,
     OwnedAgentId, Timestamp,
 };
+use golem_common::resource_runtime::Uri;
+use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::component::Component;
-use golem_wasm::Uri;
-use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -42,13 +42,17 @@ use golem_worker_executor::model::{
     AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType,
 };
 use golem_worker_executor::preview2::golem::agent::host::{
-    CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult,
-    HostWasmRpc, RpcError, WasmRpc,
+    AsyncInvocationWithMetadata, CancelableScheduledInvocationReceipt, CancellationToken,
+    FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult, HostWasmRpc,
+    InvocationMetadata, InvocationResultWithMetadata, RpcError, ScheduledInvocationReceipt,
+    WasmRpc,
 };
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
+use golem_worker_executor::services::card::CardService;
+use golem_worker_executor::services::card_interest::CardInterestIndex;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::file_loader::FileLoader;
@@ -361,10 +365,10 @@ impl HostWasmRpc for DebugContext {
     async fn new(
         &mut self,
         agent_type_name: String,
-        constructor: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-        phantom_id: Option<golem_wasm::Uuid>,
+        constructor: golem_schema::schema::wit::wire::SchemaValueTree,
+        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
         config: Vec<
-            golem_common::model::agent::bindings::golem::agent::common::TypedAgentConfigValue,
+            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
         >,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx
@@ -376,10 +380,8 @@ impl HostWasmRpc for DebugContext {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<
-        Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
-    > {
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
+    ) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
         self.durable_ctx
             .invoke_and_await(self_, method_name, input)
             .await
@@ -389,8 +391,8 @@ impl HostWasmRpc for DebugContext {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<Result<(), RpcError>> {
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
+    ) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
         self.durable_ctx.invoke(self_, method_name, input).await
     }
 
@@ -398,8 +400,8 @@ impl HostWasmRpc for DebugContext {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<Resource<FutureInvokeResult>> {
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
+    ) -> anyhow::Result<AsyncInvocationWithMetadata> {
         self.durable_ctx
             .async_invoke_and_await(self_, method_name, input)
             .await
@@ -410,8 +412,8 @@ impl HostWasmRpc for DebugContext {
         self_: Resource<WasmRpc>,
         scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<()> {
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
+    ) -> anyhow::Result<ScheduledInvocationReceipt> {
         self.durable_ctx
             .schedule_invocation(self_, scheduled_time, method_name, input)
             .await
@@ -422,8 +424,8 @@ impl HostWasmRpc for DebugContext {
         self_: Resource<WasmRpc>,
         scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<Resource<CancellationToken>> {
+        input: golem_schema::schema::wit::wire::SchemaValueTree,
+    ) -> anyhow::Result<CancelableScheduledInvocationReceipt> {
         self.durable_ctx
             .schedule_cancelable_invocation(self_, scheduled_time, method_name, input)
             .await
@@ -438,7 +440,7 @@ impl HostFutureInvokeResult for DebugContext {
     async fn subscribe(
         &mut self,
         self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Resource<golem_wasm::DynPollable>> {
+    ) -> anyhow::Result<Resource<wasmtime_wasi::p2::DynPollable>> {
         HostFutureInvokeResult::subscribe(&mut self.durable_ctx, self_).await
     }
 
@@ -446,9 +448,7 @@ impl HostFutureInvokeResult for DebugContext {
         &mut self,
         self_: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<
-        Option<
-            Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
-        >,
+        Option<Result<Option<golem_schema::schema::wit::wire::SchemaValueTree>, RpcError>>,
     > {
         HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
     }
@@ -549,7 +549,7 @@ impl WorkerCtx for DebugContext {
     async fn create(
         _account_id: AccountId,
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<LegacyParsedAgentId>,
+        agent_id: Option<ParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -565,6 +565,8 @@ impl WorkerCtx for DebugContext {
         scheduler_service: Arc<dyn SchedulerService>,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
+        card_service: Arc<dyn CardService>,
+        card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
@@ -607,6 +609,8 @@ impl WorkerCtx for DebugContext {
             scheduler_service,
             rpc,
             worker_proxy,
+            card_service,
+            card_interest_index,
             component_service,
             account_resource_limits,
             config,
@@ -655,7 +659,7 @@ impl WorkerCtx for DebugContext {
         self.durable_ctx.owned_agent_id()
     }
 
-    fn parsed_agent_id(&self) -> Option<LegacyParsedAgentId> {
+    fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
         self.durable_ctx.parsed_agent_id()
     }
 
@@ -689,6 +693,10 @@ impl WorkerCtx for DebugContext {
 
     fn worker_proxy(&self) -> Arc<dyn WorkerProxy> {
         self.durable_ctx.worker_proxy()
+    }
+
+    fn card_service(&self) -> Arc<dyn CardService> {
+        self.durable_ctx.card_service()
     }
 
     fn component_service(&self) -> Arc<dyn ComponentService> {

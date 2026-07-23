@@ -12,12 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::StructuredOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 use golem_common::model::retry_policy::RetryPolicyDto;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryPolicyCreateView(pub RetryPolicyDto);
+
+impl Masked for RetryPolicyCreateView {}
 
 impl MessageWithFields for RetryPolicyCreateView {
     fn message(&self) -> String {
@@ -32,8 +36,14 @@ impl MessageWithFields for RetryPolicyCreateView {
     }
 }
 
+impl StructuredOutput for RetryPolicyCreateView {
+    const KIND: &'static str = "retry-policy.create";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryPolicyGetView(pub RetryPolicyDto);
+
+impl Masked for RetryPolicyGetView {}
 
 impl MessageWithFields for RetryPolicyGetView {
     fn message(&self) -> String {
@@ -45,8 +55,14 @@ impl MessageWithFields for RetryPolicyGetView {
     }
 }
 
+impl StructuredOutput for RetryPolicyGetView {
+    const KIND: &'static str = "retry-policy.get";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryPolicyUpdateView(pub RetryPolicyDto);
+
+impl Masked for RetryPolicyUpdateView {}
 
 impl MessageWithFields for RetryPolicyUpdateView {
     fn message(&self) -> String {
@@ -61,8 +77,14 @@ impl MessageWithFields for RetryPolicyUpdateView {
     }
 }
 
+impl StructuredOutput for RetryPolicyUpdateView {
+    const KIND: &'static str = "retry-policy.update";
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryPolicyDeleteView(pub RetryPolicyDto);
+
+impl Masked for RetryPolicyDeleteView {}
 
 impl MessageWithFields for RetryPolicyDeleteView {
     fn message(&self) -> String {
@@ -75,6 +97,20 @@ impl MessageWithFields for RetryPolicyDeleteView {
     fn fields(&self) -> Vec<(String, String)> {
         retry_policy_view_fields(&self.0)
     }
+}
+
+impl StructuredOutput for RetryPolicyDeleteView {
+    const KIND: &'static str = "retry-policy.delete";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryPolicyListView {
+    pub retry_policies: Vec<RetryPolicyDto>,
+}
+
+impl StructuredOutput for RetryPolicyListView {
+    const KIND: &'static str = "retry-policy.list";
 }
 
 fn retry_policy_view_fields(view: &RetryPolicyDto) -> Vec<(String, String)> {
@@ -100,7 +136,7 @@ fn retry_policy_view_fields(view: &RetryPolicyDto) -> Vec<(String, String)> {
     fields.build()
 }
 
-impl TextView for Vec<RetryPolicyDto> {
+impl TextOutput for RetryPolicyListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("Environment ID").fixed(),
@@ -110,7 +146,7 @@ impl TextView for Vec<RetryPolicyDto> {
             Column::new("Priority").fixed_right(),
         ]);
 
-        for policy in self {
+        for policy in &self.retry_policies {
             table.add_row(vec![
                 policy.environment_id.0.to_string(),
                 policy.name.clone(),

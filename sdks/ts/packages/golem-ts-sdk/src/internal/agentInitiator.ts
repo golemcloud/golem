@@ -13,8 +13,10 @@
 // limitations under the License.
 
 import { ResolvedAgent } from './resolvedAgent';
-import { Result } from 'golem:agent/host@1.5.0';
-import { AgentError, DataValue, Principal } from 'golem:agent/common@1.5.0';
+import { Result } from 'golem:agent/host@2.0.0';
+import { AgentError, Principal } from 'golem:agent/common@2.0.0';
+import type { SchemaValueTree } from 'golem:core/types@2.0.0';
+import { SchemaValue } from './schema-model';
 
 /**
  * Any agent creation in SDK across any boundaries goes through `AgentInitiator`
@@ -31,8 +33,17 @@ export type AgentInitiator = {
   /**
    * Initiates the creation of an agent.
    *
-   * @param constructorParams - Constructor arguments for the agent, encoded as `WitValue`s.
+   * @param constructorParams - Constructor arguments for the agent, encoded as a `SchemaValue` record.
    * @returns A `ResolvedAgent` containing the created agent and its internal handler.
    */
-  initiate(constructorParams: DataValue, principal: Principal): Result<ResolvedAgent, AgentError>;
+  initiate(
+    constructorParams: SchemaValue,
+    principal: Principal,
+  ): Result<ResolvedAgent, AgentError> | Promise<Result<ResolvedAgent, AgentError>>;
+
+  /** Initiates an agent from the raw WIT value tree used by the exported component. */
+  initiateFromWit?(
+    constructorParams: SchemaValueTree,
+    principal: Principal,
+  ): Result<ResolvedAgent, AgentError> | Promise<Result<ResolvedAgent, AgentError>>;
 };

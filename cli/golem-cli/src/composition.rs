@@ -90,10 +90,7 @@ fn plug(
                 source: anyhow!(
                     "multiple plugs found for export {}, only use one of them:\n{}\n",
                     plug_export_name,
-                    plugs
-                        .iter()
-                        .map(|p| format!("  - {}", &p.0.name))
-                        .join("\n")
+                    plugs.iter().map(|p| format!("  - {}", p.0.name)).join("\n")
                 ),
             });
         }

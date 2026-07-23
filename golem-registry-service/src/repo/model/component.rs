@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::card::CardRepoError;
 use super::deployment::DeployRepoError;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
@@ -30,7 +31,6 @@ use golem_service_base::model::component::Component;
 use golem_service_base::repo::Blob;
 use golem_service_base::repo::NumericU64;
 use golem_service_base::repo::RepoError;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use sqlx::FromRow;
 use std::fmt::Debug;
 use uuid::Uuid;
@@ -46,6 +46,8 @@ pub enum ComponentRepoError {
     ConcurrentModification,
     #[error("Version already exists: {version}")]
     VersionAlreadyExists { version: String },
+    #[error(transparent)]
+    CardRepoError(#[from] CardRepoError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -164,14 +166,21 @@ impl ComponentRevisionRecord {
                                 .map(|e| {
                                     Ok((
                                         e.path.join("."),
-                                        NormalizedJsonValue::new(e.value.to_json_value().map_err(
-                                            |reason| diff::DiffError::TypedConfigJsonConversion {
-                                                operation:
-                                                    "component revision to_diffable config entry conversion",
-                                                path: e.path.join("."),
-                                                reason,
-                                            },
-                                        )?),
+                                        NormalizedJsonValue::new(
+                                            golem_common::schema::render::to_json_value(
+                                                e.value.graph(),
+                                                e.value.root_type(),
+                                                e.value.value(),
+                                            )
+                                            .map_err(|reason| {
+                                                diff::DiffError::TypedConfigJsonConversion {
+                                                    operation:
+                                                        "component revision to_diffable config entry conversion",
+                                                    path: e.path.join("."),
+                                                    reason: reason.to_string(),
+                                                }
+                                            })?,
+                                        ),
                                     ))
                                 })
                                 .collect::<Result<_, _>>()?,
@@ -205,6 +214,22 @@ impl ComponentRevisionRecord {
                                     )
                                 })
                                 .collect(),
+                            initial_permissions: self
+                                .metadata
+                                .value()
+                                .agent_type_initial_permission_card(name)
+                                .map(|card| diff::AgentTypeInitialPermission {
+                                    lower_positive: card.lower_positive.clone(),
+                                    lower_negative: card.lower_negative.clone(),
+                                    upper_positive: card.upper_positive.clone(),
+                                    upper_negative: card.upper_negative.clone(),
+                                })
+                                .unwrap_or_else(|| diff::AgentTypeInitialPermission {
+                                    lower_positive: Vec::new(),
+                                    lower_negative: Vec::new(),
+                                    upper_positive: Vec::new(),
+                                    upper_negative: Vec::new(),
+                                }),
                         };
                     Ok((name.0.clone(), state.into()))
                 })

@@ -13,7 +13,11 @@
 // limitations under the License.
 
 use super::lexer::{Lexer, Token};
-use super::parse_common::{Dialect, ParseError, parse_cm_value, perr};
+use super::parse_common::{
+    Dialect, ParseError, duration_value_from_nanos, duration_value_from_text, parse_cm_value,
+    parse_quantity_constructor, parse_rich_constructor_body, parse_uint, perr,
+    quantity_value_from_text,
+};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::{NamedFieldType, ResultSpec, SchemaType, VariantCaseType};
 use golem_common::schema::schema_value::{ResultValuePayload, SchemaValue, VariantValuePayload};
@@ -248,6 +252,81 @@ impl Dialect for TsDialect {
         }
         lexer.expect(&Token::RBrace)?;
         Ok(SchemaValue::Flags { bits })
+    }
+
+    /// TypeScript quantities accept the native `Nn * unit` literal (e.g.
+    /// `5n * kg`, `-5n * kg`) in addition to the `Quantity("5kg")` constructor.
+    /// Only integer BigInt magnitudes and identifier units are recognised
+    /// natively; decimals and complex units stay constructor-only.
+    fn parse_quantity(lexer: &mut Lexer) -> Result<SchemaValue, ParseError> {
+        if matches!(lexer.peek()?, Token::IntLit(_) | Token::UintLit(_)) {
+            let (_, start, end) = lexer.next_token()?;
+            let number = lexer.slice(start, end).to_string();
+            if !matches!(lexer.peek()?, Token::Ident(id) if id == "n") {
+                return Err(perr(
+                    lexer.position(),
+                    "expected 'n' BigInt suffix in quantity literal",
+                ));
+            }
+            lexer.next_token()?;
+            lexer.expect(&Token::Star)?;
+            let (unit, _, _) = lexer.expect_ident()?;
+            quantity_value_from_text(start, &format!("{number}{unit}"))
+        } else {
+            parse_quantity_constructor(lexer)
+        }
+    }
+
+    /// TypeScript durations accept the native `Duration.<unit>(N)` family
+    /// (`nanoseconds`/`microseconds`/`milliseconds`/`seconds`/`minutes`/`hours`,
+    /// with a non-negative integer or BigInt argument) in addition to the
+    /// `Duration("PT30S")` constructor.
+    fn parse_duration(lexer: &mut Lexer) -> Result<SchemaValue, ParseError> {
+        let (name, pos, _) = lexer.expect_ident()?;
+        if name != "Duration" {
+            return Err(perr(
+                pos,
+                &format!("expected 'Duration' constructor or literal, got '{name}'"),
+            ));
+        }
+        match lexer.peek()? {
+            Token::Dot => {
+                lexer.next_token()?;
+                let (unit, upos, _) = lexer.expect_ident()?;
+                let factor: i64 = match unit.as_str() {
+                    "nanoseconds" => 1,
+                    "microseconds" => 1_000,
+                    "milliseconds" => 1_000_000,
+                    "seconds" => 1_000_000_000,
+                    "minutes" => 60 * 1_000_000_000,
+                    "hours" => 3_600 * 1_000_000_000,
+                    _ => return Err(perr(upos, &format!("unknown Duration unit '{unit}'"))),
+                };
+                lexer.expect(&Token::LParen)?;
+                let n = parse_uint(lexer)?;
+                if matches!(lexer.peek()?, Token::Ident(id) if id == "n") {
+                    lexer.next_token()?;
+                }
+                lexer.expect(&Token::RParen)?;
+                let nanos = (n as i128)
+                    .checked_mul(factor as i128)
+                    .and_then(|v| i64::try_from(v).ok())
+                    .ok_or_else(|| perr(upos, "duration literal overflows i64 nanoseconds"))?;
+                Ok(duration_value_from_nanos(nanos))
+            }
+            Token::LParen => {
+                let bpos = lexer.position();
+                let body = parse_rich_constructor_body(lexer)?;
+                duration_value_from_text(bpos, &body)
+            }
+            other => {
+                let other = other.clone();
+                Err(perr(
+                    lexer.position(),
+                    &format!("expected '.' or '(' after 'Duration', got {other:?}"),
+                ))
+            }
+        }
     }
 }
 

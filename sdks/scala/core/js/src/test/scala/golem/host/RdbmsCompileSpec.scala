@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -187,21 +187,21 @@ object RdbmsCompileSpec extends ZIOSpecDefault {
 
   @SuppressWarnings(Array("all"))
   private def describeIgnite(v: IgniteDbValue): String = v match {
-    case IgniteDbValue.DbNull        => "null"
-    case IgniteDbValue.DbBoolean(b)  => s"boolean($b)"
-    case IgniteDbValue.DbByte(n)     => s"byte($n)"
-    case IgniteDbValue.DbShort(n)    => s"short($n)"
-    case IgniteDbValue.DbInt(n)      => s"int($n)"
-    case IgniteDbValue.DbLong(n)     => s"long($n)"
-    case IgniteDbValue.DbFloat(n)    => s"float($n)"
-    case IgniteDbValue.DbDouble(n)   => s"double($n)"
-    case IgniteDbValue.DbChar(c)     => s"char($c)"
-    case IgniteDbValue.DbString(s)   => s"string($s)"
-    case IgniteDbValue.DbUuid(t)     => s"uuid($t)"
-    case IgniteDbValue.DbDate(ms)    => s"date($ms)"
+    case IgniteDbValue.DbNull         => "null"
+    case IgniteDbValue.DbBoolean(b)   => s"boolean($b)"
+    case IgniteDbValue.DbByte(n)      => s"byte($n)"
+    case IgniteDbValue.DbShort(n)     => s"short($n)"
+    case IgniteDbValue.DbInt(n)       => s"int($n)"
+    case IgniteDbValue.DbLong(n)      => s"long($n)"
+    case IgniteDbValue.DbFloat(n)     => s"float($n)"
+    case IgniteDbValue.DbDouble(n)    => s"double($n)"
+    case IgniteDbValue.DbChar(c)      => s"char($c)"
+    case IgniteDbValue.DbString(s)    => s"string($s)"
+    case IgniteDbValue.DbUuid(t)      => s"uuid($t)"
+    case IgniteDbValue.DbDate(ms)     => s"date($ms)"
     case IgniteDbValue.DbTimestamp(t) => s"timestamp($t)"
-    case IgniteDbValue.DbTime(ns)    => s"time($ns)"
-    case IgniteDbValue.DbDecimal(s)  => s"decimal($s)"
+    case IgniteDbValue.DbTime(ns)     => s"time($ns)"
+    case IgniteDbValue.DbDecimal(s)   => s"decimal($s)"
     case IgniteDbValue.DbByteArray(b) => s"byte-array(${b.length})"
   }
 

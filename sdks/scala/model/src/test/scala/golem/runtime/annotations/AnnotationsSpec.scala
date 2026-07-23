@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -33,8 +33,6 @@ object AnnotationsSpec extends ZIOSpecDefault {
         val a1 = new description("desc")
         val a2 = new prompt("prompt")
         val a3 = new agentImplementation()
-        val a4 = new languageCode("en")
-        val a5 = new mimeType("image/png")
         val a6 = new agentDefinition("MyAgent", DurabilityMode.Durable)
         val a7 = new agentDefinition()
         val a8 = new agentDefinition("Custom")
@@ -43,8 +41,6 @@ object AnnotationsSpec extends ZIOSpecDefault {
           a1.value == "desc",
           a2.value == "prompt",
           a3 != null,
-          a4.value == "en",
-          a5.value == "image/png",
           a6.typeName == "MyAgent",
           a6.mode == DurabilityMode.Durable,
           a7.typeName == "",

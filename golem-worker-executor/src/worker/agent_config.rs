@@ -12,21 +12,60 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::agent::{AgentConfigSource, AgentType, LegacyParsedAgentId};
+use golem_common::model::agent::{AgentConfigSource, ParsedAgentId};
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
-use golem_common::schema::adapters::analysed_type::schema_graph_to_analysed_type;
+use golem_common::schema::agent::typed_schema_value_with_projected_defs;
+use golem_common::schema::render::from_json_value;
+use golem_common::schema::schema_type::SecretSpec;
+use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
+use golem_common::schema::{
+    AgentTypeSchema, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
-use golem_wasm::ValueAndType;
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::collections::HashMap;
+
+/// Resolve a chain of [`SchemaType::Ref`]s into a non-`Ref` type, with a bounded
+/// loop guarding against reference cycles.
+fn resolve_type<'a>(graph: &'a SchemaGraph, ty: &'a SchemaType) -> &'a SchemaType {
+    let mut current = ty;
+    for _ in 0..256 {
+        match current {
+            SchemaType::Ref { id, .. } => match graph.lookup(id) {
+                Some(def) => current = &def.body,
+                None => break,
+            },
+            _ => break,
+        }
+    }
+    current
+}
+
+/// Whether `ty` (resolving refs in `graph`) is an `option<_>` type, i.e. a value
+/// is not required to be present.
+fn is_optional_type(graph: &SchemaGraph, ty: &SchemaType) -> bool {
+    matches!(resolve_type(graph, ty), SchemaType::Option { .. })
+}
+
+fn secret_config_payload_type<'a>(
+    graph: &'a SchemaGraph,
+    ty: &'a SchemaType,
+) -> Option<(bool, &'a SecretSpec)> {
+    match resolve_type(graph, ty) {
+        SchemaType::Option { inner, .. } => match resolve_type(graph, inner) {
+            SchemaType::Secret { spec, .. } => Some((true, spec)),
+            _ => None,
+        },
+        SchemaType::Secret { spec, .. } => Some((false, spec)),
+        _ => None,
+    }
+}
 
 pub fn ensure_required_agent_secrets_are_configured(
     agent_secrets: &HashMap<CanonicalAgentSecretPath, AgentSecret>,
-    agent_id: Option<&LegacyParsedAgentId>,
+    agent_id: Option<&ParsedAgentId>,
     component: &Component,
 ) -> Result<(), WorkerExecutorError> {
     let Some(agent_id) = agent_id else {
@@ -35,10 +74,10 @@ pub fn ensure_required_agent_secrets_are_configured(
 
     let agent_type = component
         .metadata
-        .find_agent_type_by_name(&agent_id.agent_type)
+        .find_agent_type_by_name_ref(&agent_id.agent_type)
         .expect("Agent metadata for the parsed agent type was not part of component metadata");
 
-    for config_entry in agent_type.config {
+    for config_entry in &agent_type.config {
         if config_entry.source != AgentConfigSource::Secret {
             continue;
         }
@@ -46,33 +85,55 @@ pub fn ensure_required_agent_secrets_are_configured(
         let canonical_agent_secret_path =
             CanonicalAgentSecretPath::from_path_in_unknown_casing(&config_entry.path);
 
+        // The declared type's refs resolve against the agent's shared `defs`, so
+        // pass the agent graph plus the borrowed `value_type` directly instead of
+        // materializing a per-entry graph that clones the whole `defs` registry.
+        let declared_graph = &agent_type.schema;
+        let declared_type = &config_entry.value_type;
+        let Some((declared_optional, declared_secret_spec)) =
+            secret_config_payload_type(declared_graph, declared_type)
+        else {
+            return Err(WorkerExecutorError::invalid_request(format!(
+                "Required agent secret {} has invalid declaration type",
+                config_entry.path.join(".")
+            )));
+        };
+
         match agent_secrets.get(&canonical_agent_secret_path) {
             Some(agent_secret) => {
-                let secret_type_legacy = schema_graph_to_analysed_type(&agent_secret.secret_type)
-                    .map_err(|e| {
-                    WorkerExecutorError::runtime(format!(
-                        "Required agent secret {} has a type that is not representable as AnalysedType: {e}",
-                        config_entry.path.join(".")
-                    ))
-                })?;
-                if secret_type_legacy != config_entry.value_type {
+                let secret_graph = &agent_secret.secret_type;
+                if !is_equivalent_cross_graph(
+                    secret_graph,
+                    &secret_graph.root,
+                    declared_graph,
+                    &declared_secret_spec.inner,
+                ) {
                     return Err(WorkerExecutorError::invalid_request(format!(
-                        "Required agent secret {} has invalid type. found: {:?}, expected: {:?}",
-                        config_entry.path.join("."),
-                        secret_type_legacy,
-                        config_entry.value_type
+                        "Required agent secret {} has invalid type",
+                        config_entry.path.join(".")
                     )));
                 }
-                if agent_secret.secret_value.is_none()
-                    && !matches!(secret_type_legacy, AnalysedType::Option(_))
-                {
+                if let Some(secret_value) = &agent_secret.secret_value {
+                    // Validation errors can embed fragments of the stored
+                    // plaintext (e.g. an invalid URL value), so they are never
+                    // surfaced; the message stays generic.
+                    validate_value(secret_graph, &secret_graph.root, secret_value).map_err(
+                        |_| {
+                            WorkerExecutorError::invalid_request(format!(
+                                "Required agent secret {} has invalid value",
+                                config_entry.path.join(".")
+                            ))
+                        },
+                    )?;
+                }
+                if agent_secret.secret_value.is_none() && !declared_optional {
                     return Err(WorkerExecutorError::invalid_request(format!(
                         "Required agent secret {} has no configured value",
                         config_entry.path.join(".")
                     )));
                 }
             }
-            None if matches!(config_entry.value_type, AnalysedType::Option(_)) => {}
+            None if declared_optional => {}
             None => {
                 return Err(WorkerExecutorError::invalid_request(format!(
                     "Required agent secret {} does not exist",
@@ -87,7 +148,7 @@ pub fn ensure_required_agent_secrets_are_configured(
 
 pub fn parse_worker_creation_agent_config(
     worker_agent_config: Vec<AgentConfigEntryDto>,
-    agent_id: Option<&LegacyParsedAgentId>,
+    agent_id: Option<&ParsedAgentId>,
     component: &Component,
 ) -> Result<Vec<TypedAgentConfigEntry>, WorkerExecutorError> {
     let Some(agent_id) = agent_id else {
@@ -96,7 +157,7 @@ pub fn parse_worker_creation_agent_config(
 
     let agent_type = component
         .metadata
-        .find_agent_type_by_name(&agent_id.agent_type)
+        .find_agent_type_by_name_ref(&agent_id.agent_type)
         .expect("Agent metadata for the parsed agent type was not part of component metadata");
 
     let mut initial_agent_config = Vec::new();
@@ -113,20 +174,42 @@ pub fn parse_worker_creation_agent_config(
                 ))
             })?;
 
-        let parsed_value =
-            ValueAndType::parse_with_type(&entry.value.0, &config_declaration.value_type).map_err(
-                |err| {
-                    WorkerExecutorError::invalid_request(format!(
-                        "config value for path {} does not match expected schema: [{}]",
-                        entry.path.join("."),
-                        err.join(", ")
-                    ))
-                },
-            )?;
+        // Decode + validate against the agent's shared graph and the declared
+        // `value_type` (refs resolve through the agent's `defs`).
+        let declared_type = &config_declaration.value_type;
+
+        let schema_value: SchemaValue =
+            from_json_value(&agent_type.schema, declared_type, &entry.value.0).map_err(|err| {
+                WorkerExecutorError::invalid_request(format!(
+                    "config value for path {} is not a valid schema value: {err}",
+                    entry.path.join(".")
+                ))
+            })?;
+
+        validate_value(&agent_type.schema, declared_type, &schema_value).map_err(|errors| {
+            WorkerExecutorError::invalid_request(format!(
+                "config value for path {} does not match expected schema: [{}]",
+                entry.path.join("."),
+                errors
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })?;
+
+        // The stored entry is a single-root carrier, so project the agent
+        // graph's defs to exactly those reachable from `value_type` instead of
+        // cloning the whole registry.
+        let value = typed_schema_value_with_projected_defs(
+            &agent_type.schema,
+            config_declaration.value_type.clone(),
+            schema_value,
+        );
 
         initial_agent_config.push(TypedAgentConfigEntry {
             path: entry.path,
-            value: parsed_value,
+            value,
         });
     }
 
@@ -140,9 +223,9 @@ pub fn parse_worker_creation_agent_config(
             .map(|s| s.to_vec())
             .unwrap_or_default();
 
-        let config = effective_agent_config(initial_agent_config.clone(), component_config);
+        let config = effective_agent_config(initial_agent_config.clone(), component_config)?;
 
-        validate_agent_config(&config, &agent_type)?;
+        validate_agent_config(&config, agent_type)?;
     }
 
     Ok(initial_agent_config)
@@ -150,12 +233,16 @@ pub fn parse_worker_creation_agent_config(
 
 /// Merges the component-level typed config (stored in `AgentTypeProvisionConfig`) with
 /// the worker-creation config entries, with worker entries taking precedence.
-/// Returns a map from config path to `ValueAndType`.
+///
+/// The result is the schema-native [`TypedSchemaValue`] carried by
+/// [`TypedAgentConfigEntry`] keyed by config path; it is what the executor's
+/// guest-facing config plumbing (`wasi:config/store`, named retry-policy
+/// parsing) consumes.
 pub fn effective_agent_config(
     config: Vec<TypedAgentConfigEntry>,
     default_agent_config: Vec<TypedAgentConfigEntry>,
-) -> HashMap<Vec<String>, ValueAndType> {
-    let mut result = HashMap::new();
+) -> Result<HashMap<Vec<String>, TypedSchemaValue>, WorkerExecutorError> {
+    let mut result: HashMap<Vec<String>, TypedSchemaValue> = HashMap::new();
 
     for entry in default_agent_config {
         result.insert(entry.path, entry.value);
@@ -165,31 +252,41 @@ pub fn effective_agent_config(
         result.insert(entry.path, entry.value);
     }
 
-    result
+    Ok(result)
 }
 
 pub fn validate_agent_config(
-    config: &HashMap<Vec<String>, ValueAndType>,
-    agent_type: &AgentType,
+    config: &HashMap<Vec<String>, TypedSchemaValue>,
+    agent_type: &AgentTypeSchema,
 ) -> Result<(), WorkerExecutorError> {
     for entry in &agent_type.config {
         if entry.source != AgentConfigSource::Local {
             continue;
         };
 
+        // Refs in the declared `value_type` resolve against the agent's shared
+        // `defs`; pass the agent graph plus the borrowed type directly instead of
+        // cloning the whole `defs` registry into a per-entry graph.
+        let declared_graph = &agent_type.schema;
+        let declared_type = &entry.value_type;
+
         match config.get(&entry.path) {
             Some(config_value) => {
-                if config_value.typ != entry.value_type {
-                    // TODO: better rendering of analysed type.
-                    return Err(WorkerExecutorError::invalid_request(format!(
-                        "Type mismatch for config {}. expected: {:?}; found: {:?}",
-                        entry.path.join("."),
-                        entry.value_type,
-                        config_value.typ
-                    )));
-                }
+                validate_value(declared_graph, declared_type, config_value.value()).map_err(
+                    |errors| {
+                        WorkerExecutorError::invalid_request(format!(
+                            "Type mismatch for config {}: [{}]",
+                            entry.path.join("."),
+                            errors
+                                .iter()
+                                .map(|e| e.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ))
+                    },
+                )?;
             }
-            None if matches!(entry.value_type, AnalysedType::Option(_)) => {}
+            None if is_optional_type(declared_graph, declared_type) => {}
             None => {
                 return Err(WorkerExecutorError::invalid_request(format!(
                     "Config {} was not provided a value",
@@ -200,4 +297,303 @@ pub fn validate_agent_config(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::Empty;
+    use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId, Snapshotting};
+    use golem_common::model::agent_secret::{
+        AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+    };
+    use golem_common::model::application::{ApplicationId, ApplicationName};
+    use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
+    use golem_common::model::component_metadata::ComponentMetadata;
+    use golem_common::model::diff::Hash;
+    use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+    use golem_common::schema::agent::{
+        AgentConfigDeclarationSchema, AgentConstructorSchema, InputSchema,
+    };
+    use golem_common::schema::schema_type::{SecretSpec, UrlRestrictions};
+    use golem_service_base::model::agent_secret::AgentSecret;
+    use golem_service_base::model::component::Component;
+    use std::collections::{BTreeMap, HashMap};
+    use test_r::test;
+
+    #[test]
+    fn secret_backed_config_accepts_plaintext_payload_type_for_secret_declaration() {
+        let agent_type_name = AgentTypeName("vault".to_string());
+        let config_path = vec!["apiKey".to_string()];
+        let secret_type = SchemaGraph::anonymous(SchemaType::string());
+        let agent_type = AgentTypeSchema {
+            type_name: agent_type_name.clone(),
+            description: String::new(),
+            source_language: String::new(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters([]),
+            },
+            methods: Vec::new(),
+            dependencies: Vec::new(),
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![AgentConfigDeclarationSchema {
+                source: AgentConfigSource::Secret,
+                path: config_path.clone(),
+                value_type: SchemaType::secret(SecretSpec {
+                    inner: Box::new(SchemaType::string()),
+                    category: None,
+                }),
+            }],
+        };
+
+        let metadata = ComponentMetadata::from_parts(
+            Default::default(),
+            Vec::new(),
+            None,
+            None,
+            vec![agent_type],
+            BTreeMap::new(),
+        );
+        let component = Component {
+            id: ComponentId::new(),
+            revision: ComponentRevision::INITIAL,
+            environment_id: EnvironmentId::new(),
+            component_name: ComponentName("component".to_string()),
+            hash: Hash::empty(),
+            application_id: ApplicationId::new(),
+            account_id: AccountId::new(),
+            account_email: AccountEmail::new("owner@example.com"),
+            application_name: ApplicationName("app".to_string()),
+            environment_name: EnvironmentName::try_from("dev").unwrap(),
+            component_size: 0,
+            metadata,
+            created_at: chrono::Utc::now(),
+            wasm_hash: Hash::empty(),
+            object_store_key: String::new(),
+        };
+        let agent_id = ParsedAgentId::new(
+            agent_type_name,
+            TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::record(Vec::new())),
+                SchemaValue::Record { fields: vec![] },
+            ),
+            None,
+        );
+        let mut agent_secrets = HashMap::new();
+        agent_secrets.insert(
+            CanonicalAgentSecretPath::from_path_in_unknown_casing(&config_path),
+            AgentSecret {
+                id: AgentSecretId::new(),
+                environment_id: EnvironmentId::new(),
+                path: CanonicalAgentSecretPath::from_path_in_unknown_casing(&config_path),
+                revision: AgentSecretRevision::INITIAL,
+                secret_type,
+                secret_value: Some(SchemaValue::String("present".to_string())),
+            },
+        );
+
+        ensure_required_agent_secrets_are_configured(&agent_secrets, Some(&agent_id), &component)
+            .expect("secret<T> config should accept a matching stored plaintext T");
+    }
+
+    #[test]
+    fn secret_backed_config_rejects_invalid_stored_secret_value() {
+        let agent_type_name = AgentTypeName("vault".to_string());
+        let config_path = vec!["apiKey".to_string()];
+        let secret_type = SchemaGraph::anonymous(SchemaType::string());
+        let agent_type = AgentTypeSchema {
+            type_name: agent_type_name.clone(),
+            description: String::new(),
+            source_language: String::new(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters([]),
+            },
+            methods: Vec::new(),
+            dependencies: Vec::new(),
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![AgentConfigDeclarationSchema {
+                source: AgentConfigSource::Secret,
+                path: config_path.clone(),
+                value_type: SchemaType::secret(SecretSpec {
+                    inner: Box::new(SchemaType::string()),
+                    category: None,
+                }),
+            }],
+        };
+
+        let metadata = ComponentMetadata::from_parts(
+            Default::default(),
+            Vec::new(),
+            None,
+            None,
+            vec![agent_type],
+            BTreeMap::new(),
+        );
+        let component = Component {
+            id: ComponentId::new(),
+            revision: ComponentRevision::INITIAL,
+            environment_id: EnvironmentId::new(),
+            component_name: ComponentName("component".to_string()),
+            hash: Hash::empty(),
+            application_id: ApplicationId::new(),
+            account_id: AccountId::new(),
+            account_email: AccountEmail::new("owner@example.com"),
+            application_name: ApplicationName("app".to_string()),
+            environment_name: EnvironmentName::try_from("dev").unwrap(),
+            component_size: 0,
+            metadata,
+            created_at: chrono::Utc::now(),
+            wasm_hash: Hash::empty(),
+            object_store_key: String::new(),
+        };
+        let agent_id = ParsedAgentId::new(
+            agent_type_name,
+            TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::record(Vec::new())),
+                SchemaValue::Record { fields: vec![] },
+            ),
+            None,
+        );
+        let mut agent_secrets = HashMap::new();
+        agent_secrets.insert(
+            CanonicalAgentSecretPath::from_path_in_unknown_casing(&config_path),
+            AgentSecret {
+                id: AgentSecretId::new(),
+                environment_id: EnvironmentId::new(),
+                path: CanonicalAgentSecretPath::from_path_in_unknown_casing(&config_path),
+                revision: AgentSecretRevision::INITIAL,
+                secret_type,
+                secret_value: Some(SchemaValue::Bool(true)),
+            },
+        );
+
+        let result = ensure_required_agent_secrets_are_configured(
+            &agent_secrets,
+            Some(&agent_id),
+            &component,
+        );
+        assert!(
+            result
+                .expect_err(
+                    "invalid stored plaintext must be rejected before minting a secret handle"
+                )
+                .to_string()
+                .contains("invalid value")
+        );
+    }
+
+    #[test]
+    fn secret_validation_error_never_echoes_stored_plaintext() {
+        const SECRET_PLAINTEXT: &str = "super-secret-plaintext-not-a-url";
+
+        let agent_type_name = AgentTypeName("vault".to_string());
+        let config_path = vec!["apiKey".to_string()];
+        // A `Secret<Url>` whose stored plaintext is not a valid URL: the
+        // underlying `ValueError` would embed the raw URL string, so the
+        // mapped error must not.
+        let secret_type = SchemaGraph::anonymous(SchemaType::url(UrlRestrictions::default()));
+        let agent_type = AgentTypeSchema {
+            type_name: agent_type_name.clone(),
+            description: String::new(),
+            source_language: String::new(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters([]),
+            },
+            methods: Vec::new(),
+            dependencies: Vec::new(),
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![AgentConfigDeclarationSchema {
+                source: AgentConfigSource::Secret,
+                path: config_path.clone(),
+                value_type: SchemaType::secret(SecretSpec {
+                    inner: Box::new(SchemaType::url(UrlRestrictions::default())),
+                    category: None,
+                }),
+            }],
+        };
+
+        let metadata = ComponentMetadata::from_parts(
+            Default::default(),
+            Vec::new(),
+            None,
+            None,
+            vec![agent_type],
+            BTreeMap::new(),
+        );
+        let component = Component {
+            id: ComponentId::new(),
+            revision: ComponentRevision::INITIAL,
+            environment_id: EnvironmentId::new(),
+            component_name: ComponentName("component".to_string()),
+            hash: Hash::empty(),
+            application_id: ApplicationId::new(),
+            account_id: AccountId::new(),
+            account_email: AccountEmail::new("owner@example.com"),
+            application_name: ApplicationName("app".to_string()),
+            environment_name: EnvironmentName::try_from("dev").unwrap(),
+            component_size: 0,
+            metadata,
+            created_at: chrono::Utc::now(),
+            wasm_hash: Hash::empty(),
+            object_store_key: String::new(),
+        };
+        let agent_id = ParsedAgentId::new(
+            agent_type_name,
+            TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::record(Vec::new())),
+                SchemaValue::Record { fields: vec![] },
+            ),
+            None,
+        );
+        let mut agent_secrets = HashMap::new();
+        agent_secrets.insert(
+            CanonicalAgentSecretPath::from_path_in_unknown_casing(&config_path),
+            AgentSecret {
+                id: AgentSecretId::new(),
+                environment_id: EnvironmentId::new(),
+                path: CanonicalAgentSecretPath::from_path_in_unknown_casing(&config_path),
+                revision: AgentSecretRevision::INITIAL,
+                secret_type,
+                secret_value: Some(SchemaValue::Url {
+                    url: SECRET_PLAINTEXT.to_string(),
+                }),
+            },
+        );
+
+        let message = ensure_required_agent_secrets_are_configured(
+            &agent_secrets,
+            Some(&agent_id),
+            &component,
+        )
+        .expect_err("invalid stored plaintext must be rejected")
+        .to_string();
+
+        assert!(
+            message.contains("invalid value"),
+            "expected a generic invalid-value error, got: {message}"
+        );
+        assert!(
+            !message.contains(SECRET_PLAINTEXT),
+            "secret plaintext leaked into the validation error: {message}"
+        );
+    }
 }

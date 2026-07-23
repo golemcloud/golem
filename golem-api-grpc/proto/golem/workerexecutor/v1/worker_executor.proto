@@ -10,6 +10,7 @@ import "golem/common/revert_worker_response.proto";
 import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
 import "golem/component/component_id.proto";
+import "golem/schema/schema.proto";
 import "golem/shardmanager/shard_id.proto";
 import "golem/worker/agent_config.proto";
 import "golem/worker/cursor.proto";
@@ -52,6 +53,7 @@ service WorkerExecutor {
   rpc CancelInvocation(CancelInvocationRequest) returns (CancelInvocationResponse);
 
   rpc GetFileSystemNode(GetFileSystemNodeRequest) returns (GetFileSystemNodeResponse);
+  rpc GetAgentWallet(GetAgentWalletRequest) returns (GetAgentWalletResponse);
   rpc GetFileContents(GetFileContentsRequest) returns (stream GetFileContentsResponse);
 
   rpc ActivatePlugin(ActivatePluginRequest) returns (ActivatePluginResponse);
@@ -355,6 +357,27 @@ message ListFileDataSuccessResponse {
   golem.worker.FileSystemNode file = 1;
 }
 
+message GetAgentWalletRequest {
+  golem.worker.AgentId agent_id = 1;
+  // Account the component belongs to
+  golem.common.AccountId component_owner_account_id = 2;
+  // Component's owner project
+  golem.common.EnvironmentId environment_id = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
+  optional golem.component.Principal principal = 5;
+}
+
+message GetAgentWalletResponse {
+  oneof result {
+    GetAgentWalletSuccess success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetAgentWalletSuccess {
+  repeated bytes wallet_cards = 1;
+}
+
 message GetFileContentsRequest {
   golem.worker.AgentId agent_id = 1;
   // Account the component belongs to
@@ -446,7 +469,7 @@ message CancelInvocationResponse {
 message InvokeAgentRequest {
   golem.worker.AgentId agent_id = 1;
   optional string method_name = 5;
-  optional golem.component.UntypedDataValue method_parameters = 6;
+  optional golem.schema.SchemaValue method_parameters = 6;
   golem.worker.AgentInvocationMode mode = 7;
   optional google.protobuf.Timestamp schedule_at = 8;
   optional golem.worker.IdempotencyKey idempotency_key = 9;
@@ -455,6 +478,13 @@ message InvokeAgentRequest {
   golem.auth.AuthCtx auth_ctx = 12;
   optional golem.worker.InvocationContext context = 13;
   golem.component.Principal principal = 14;
+  InvocationFreshnessDisposition freshness_disposition = 15;
+  repeated golem.worker.AgentConfigEntryDto config = 16;
+}
+
+enum InvocationFreshnessDisposition {
+  INVOCATION_FRESHNESS_DISPOSITION_MAY_EXIST = 0;
+  INVOCATION_FRESHNESS_DISPOSITION_KNOWN_FRESH = 1;
 }
 
 message InvokeAgentResponse {
@@ -465,7 +495,7 @@ message InvokeAgentResponse {
 }
 
 message InvokeAgentSuccess {
-  optional golem.component.UntypedDataValue result = 1;
+  optional golem.schema.SchemaValue result = 1;
   optional uint64 fuel_consumed = 2;
   optional uint64 component_revision = 3;
   optional golem.worker.InvocationStatus status = 4;
@@ -474,6 +504,12 @@ message InvokeAgentSuccess {
   // Per-instance agent fingerprint (UUID) of the agent that produced this
   // invocation result.
   optional golem.common.UUID agent_fingerprint = 6;
+  // Final invocation target. For ephemeral agents this contains the generated
+  // one-shot phantom ID and can be used by observation and control APIs.
+  optional golem.worker.AgentId agent_id = 7;
+  // Final invocation key. Together with agent_id this identifies the logical
+  // invocation across retries and asynchronous result lookup.
+  optional golem.worker.IdempotencyKey idempotency_key = 8;
 }
 
 message ProcessOplogEntriesRequest {

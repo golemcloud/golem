@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,7 +16,8 @@
 
 package golem
 
-import golem.host.js.{JsAgentMetadataRuntime, JsComponentId, JsDataValue, JsEnvironmentId}
+import golem.host.js.{JsAgentMetadataRuntime, JsComponentId, JsEnvironmentId}
+import golem.host.js.schema.JsSchemaValueTree
 import golem.runtime.rpc.host.AgentHostApi
 import golem.Uuid
 import zio.blocks.schema.Schema
@@ -53,10 +54,10 @@ object HostApi {
    * Unconditionally traps the current invocation with the given reason.
    *
    * This call never returns: it surfaces as an uncatchable wasm trap on the
-   * host side and the worker enters the standard trap-recovery flow. SDK
-   * guard helpers use this to guarantee that a failed atomic region always
-   * leads to a trap, regardless of whether the guest language could
-   * otherwise catch the failure.
+   * host side and the worker enters the standard trap-recovery flow. SDK guard
+   * helpers use this to guarantee that a failed atomic region always leads to a
+   * trap, regardless of whether the guest language could otherwise catch the
+   * failure.
    */
   def trap(reason: String): Nothing = {
     AgentHostApi.trap(reason)
@@ -186,7 +187,7 @@ object HostApi {
 
   private[golem] def makeAgentId(
     agentTypeName: String,
-    payload: JsDataValue,
+    payload: JsSchemaValueTree,
     phantom: Option[Uuid]
   ): Either[String, String] =
     AgentHostApi.makeAgentId(agentTypeName, payload, phantom)
@@ -594,11 +595,11 @@ object HostApi {
     )
 
   private def fromHostMetadata(m: AgentHostApi.AgentMetadata): AgentMetadata = {
-    val rt         = m.asInstanceOf[JsAgentMetadataRuntime]
-    val args       = if (m.args == null || js.isUndefined(m.args)) Nil else m.args.toList
-    val env        = tuplesToMap(m.env)
-    val config = tuplesToMap(m.config)
-    val compRev    =
+    val rt      = m.asInstanceOf[JsAgentMetadataRuntime]
+    val args    = if (m.args == null || js.isUndefined(m.args)) Nil else m.args.toList
+    val env     = tuplesToMap(m.env)
+    val config  = tuplesToMap(m.config)
+    val compRev =
       if (js.isUndefined(m.componentRevision.asInstanceOf[js.Any])) BigInt(0) else fromJsBigInt(m.componentRevision)
     val retry                      = if (js.isUndefined(m.retryCount.asInstanceOf[js.Any])) BigInt(0) else fromJsBigInt(m.retryCount)
     val agentType                  = rt.agentType.getOrElse("")

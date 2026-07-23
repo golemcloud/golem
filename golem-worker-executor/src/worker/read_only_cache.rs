@@ -40,9 +40,11 @@
 
 use golem_common::model::AgentInvocation;
 use golem_common::model::AgentInvocationOutput;
-use golem_common::model::agent::{AgentMethod, AgentTypeName, Principal, UntypedDataValue};
+use golem_common::model::agent::{AgentTypeName, Principal};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::schema::SchemaValue;
+use golem_common::schema::agent::AgentMethodSchema;
 use std::fmt::Debug;
 use std::hash::Hash;
 use tokio::time::Instant;
@@ -53,7 +55,7 @@ use tokio::time::Instant;
 /// component updates lazily invalidate cached entries.
 ///
 /// `principal_digest` is populated only when the method's
-/// [`AgentMethod::read_only`] has `uses_principal == true`.
+/// [`AgentMethodSchema::read_only`] has `uses_principal == true`.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ReadOnlyCacheKey {
     pub method_name: String,
@@ -112,20 +114,20 @@ impl InvocationEffect {
     }
 }
 
-/// Looks up the [`AgentMethod`] for `method_name` on `agent_type` in the
+/// Looks up the [`AgentMethodSchema`] for `method_name` on `agent_type` in the
 /// already-loaded component metadata. Returns `None` if either is missing;
 /// callers should fall back to the normal invocation path.
 pub fn resolve_read_only_method(
     metadata: &ComponentMetadata,
     agent_type: &AgentTypeName,
     method_name: &str,
-) -> Option<AgentMethod> {
-    let at = metadata.find_agent_type_by_name(agent_type)?;
-    at.methods.into_iter().find(|m| m.name == method_name)
+) -> Option<AgentMethodSchema> {
+    let at = metadata.find_agent_type_by_name_ref(agent_type)?;
+    at.methods.iter().find(|m| m.name == method_name).cloned()
 }
 
 /// Statically classifies an [`AgentInvocation`] for cache invalidation
-/// purposes. Read-only `AgentMethod`s are detected by inspecting the given
+/// purposes. Read-only agent methods are detected by inspecting the given
 /// component metadata snapshot.
 pub fn classify_invocation(
     metadata: Option<&ComponentMetadata>,
@@ -156,11 +158,11 @@ pub fn classify_invocation(
     }
 }
 
-/// Canonical byte encoding of an [`UntypedDataValue`] for the cache digest.
+/// Canonical byte encoding of a [`SchemaValue`] for the cache digest.
 /// Uses `desert_rust`'s deterministic `BinaryCodec` serialization, so equal
 /// inputs collide and tuple-order / multimodal-name differences do not.
-pub fn canonicalize_untyped_data_value(input: &UntypedDataValue) -> Vec<u8> {
-    desert_rust::serialize_to_byte_vec(input).expect("UntypedDataValue serialization is infallible")
+pub fn canonicalize_schema_value(input: &SchemaValue) -> Vec<u8> {
+    desert_rust::serialize_to_byte_vec(input).expect("SchemaValue serialization is infallible")
 }
 
 pub fn principal_bytes(principal: &Principal) -> Vec<u8> {
@@ -174,12 +176,12 @@ pub fn digest_bytes(bytes: &[u8]) -> [u8; 32] {
 /// Builds the cache key for a read-only invocation.
 pub fn build_read_only_cache_key(
     method_name: &str,
-    input: &UntypedDataValue,
+    input: &SchemaValue,
     principal: Option<&Principal>,
     component_revision: ComponentRevision,
     epoch: u64,
 ) -> ReadOnlyCacheKey {
-    let input_bytes = canonicalize_untyped_data_value(input);
+    let input_bytes = canonicalize_schema_value(input);
     let input_digest = digest_bytes(&input_bytes);
     let principal_digest = principal.map(|p| digest_bytes(&principal_bytes(p)));
     ReadOnlyCacheKey {
@@ -198,13 +200,15 @@ mod tests {
     use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::model::AgentId;
     use golem_common::model::agent::{
-        AgentConstructor, AgentMode, AgentPrincipal, AgentType, AgentTypeName, CachePolicy,
-        DataSchema, NamedElementSchemas, ReadOnlyConfig, Snapshotting, UntypedElementValue,
-        UntypedNamedElementValue,
+        AgentMode, AgentPrincipal, AgentTypeName, CachePolicy, ReadOnlyConfig, Snapshotting,
     };
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::component_metadata::ComponentMetadata;
-    use golem_wasm::Value;
+    use golem_common::schema::UnionValuePayload;
+    use golem_common::schema::agent::{
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
+    };
+    use golem_common::schema::graph::SchemaGraph;
     use std::collections::BTreeMap;
     use test_r::test;
     use uuid::Uuid;
@@ -213,17 +217,13 @@ mod tests {
         ComponentRevision::new(n).unwrap()
     }
 
-    fn empty_schema() -> DataSchema {
-        DataSchema::Tuple(NamedElementSchemas { elements: vec![] })
-    }
-
-    fn read_only_method(name: &str, ro: Option<ReadOnlyConfig>) -> AgentMethod {
-        AgentMethod {
+    fn read_only_method(name: &str, ro: Option<ReadOnlyConfig>) -> AgentMethodSchema {
+        AgentMethodSchema {
             name: name.to_string(),
             description: String::new(),
             prompt_hint: None,
-            input_schema: empty_schema(),
-            output_schema: empty_schema(),
+            input_schema: InputSchema::Parameters(vec![]),
+            output_schema: OutputSchema::Unit,
             http_endpoint: vec![],
             read_only: ro,
         }
@@ -231,17 +231,18 @@ mod tests {
 
     fn metadata_with_one_agent_type(
         agent_type: AgentTypeName,
-        methods: Vec<AgentMethod>,
+        methods: Vec<AgentMethodSchema>,
     ) -> ComponentMetadata {
-        let at = AgentType {
+        let at = AgentTypeSchema {
             type_name: agent_type,
             description: String::new(),
             source_language: String::new(),
-            constructor: AgentConstructor {
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
                 name: None,
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: empty_schema(),
+                input_schema: InputSchema::Parameters(vec![]),
             },
             methods,
             dependencies: vec![],
@@ -268,31 +269,28 @@ mod tests {
         Principal::Agent(AgentPrincipal { agent_id })
     }
 
-    fn tuple(values: Vec<Value>) -> UntypedDataValue {
-        UntypedDataValue::Tuple(
-            values
-                .into_iter()
-                .map(UntypedElementValue::ComponentModel)
-                .collect(),
-        )
+    fn tuple(values: Vec<SchemaValue>) -> SchemaValue {
+        SchemaValue::Record { fields: values }
     }
 
-    fn multimodal(values: Vec<(&str, Value)>) -> UntypedDataValue {
-        UntypedDataValue::Multimodal(
-            values
+    fn multimodal(values: Vec<(&str, SchemaValue)>) -> SchemaValue {
+        SchemaValue::List {
+            elements: values
                 .into_iter()
-                .map(|(name, value)| UntypedNamedElementValue {
-                    name: name.to_string(),
-                    value: UntypedElementValue::ComponentModel(value),
+                .map(|(name, value)| {
+                    SchemaValue::Union(UnionValuePayload {
+                        tag: name.to_string(),
+                        body: Box::new(value),
+                    })
                 })
                 .collect(),
-        )
+        }
     }
 
     #[test]
     fn equal_inputs_produce_equal_keys() {
-        let a = tuple(vec![Value::U32(1), Value::U32(2)]);
-        let b = tuple(vec![Value::U32(1), Value::U32(2)]);
+        let a = tuple(vec![SchemaValue::U32(1), SchemaValue::U32(2)]);
+        let b = tuple(vec![SchemaValue::U32(1), SchemaValue::U32(2)]);
         let ka = build_read_only_cache_key("m", &a, None, rev(7), 3);
         let kb = build_read_only_cache_key("m", &b, None, rev(7), 3);
         assert_eq!(ka, kb);
@@ -300,8 +298,8 @@ mod tests {
 
     #[test]
     fn different_inputs_produce_different_keys() {
-        let a = tuple(vec![Value::U32(1)]);
-        let b = tuple(vec![Value::U32(2)]);
+        let a = tuple(vec![SchemaValue::U32(1)]);
+        let b = tuple(vec![SchemaValue::U32(2)]);
         let ka = build_read_only_cache_key("m", &a, None, rev(7), 3);
         let kb = build_read_only_cache_key("m", &b, None, rev(7), 3);
         assert_ne!(ka, kb);
@@ -309,8 +307,8 @@ mod tests {
 
     #[test]
     fn swapped_tuple_positions_produce_different_keys() {
-        let a = tuple(vec![Value::U32(1), Value::U32(2)]);
-        let b = tuple(vec![Value::U32(2), Value::U32(1)]);
+        let a = tuple(vec![SchemaValue::U32(1), SchemaValue::U32(2)]);
+        let b = tuple(vec![SchemaValue::U32(2), SchemaValue::U32(1)]);
         let ka = build_read_only_cache_key("m", &a, None, rev(7), 3);
         let kb = build_read_only_cache_key("m", &b, None, rev(7), 3);
         assert_ne!(ka, kb);
@@ -318,8 +316,8 @@ mod tests {
 
     #[test]
     fn multimodal_field_renames_produce_different_keys() {
-        let a = multimodal(vec![("x", Value::U32(1))]);
-        let b = multimodal(vec![("y", Value::U32(1))]);
+        let a = multimodal(vec![("x", SchemaValue::U32(1))]);
+        let b = multimodal(vec![("y", SchemaValue::U32(1))]);
         let ka = build_read_only_cache_key("m", &a, None, rev(7), 3);
         let kb = build_read_only_cache_key("m", &b, None, rev(7), 3);
         assert_ne!(ka, kb);
@@ -327,7 +325,7 @@ mod tests {
 
     #[test]
     fn epoch_in_key_changes_key_when_epoch_bumps() {
-        let a = tuple(vec![Value::U32(1)]);
+        let a = tuple(vec![SchemaValue::U32(1)]);
         let k1 = build_read_only_cache_key("m", &a, None, rev(1), 1);
         let k2 = build_read_only_cache_key("m", &a, None, rev(1), 2);
         assert_ne!(k1, k2);
@@ -335,7 +333,7 @@ mod tests {
 
     #[test]
     fn component_revision_in_key_changes_key_after_update() {
-        let a = tuple(vec![Value::U32(1)]);
+        let a = tuple(vec![SchemaValue::U32(1)]);
         let k1 = build_read_only_cache_key("m", &a, None, rev(1), 1);
         let k2 = build_read_only_cache_key("m", &a, None, rev(2), 1);
         assert_ne!(k1, k2);
@@ -343,14 +341,14 @@ mod tests {
 
     #[test]
     fn principal_off_means_principal_digest_is_none() {
-        let a = tuple(vec![Value::U32(1)]);
+        let a = tuple(vec![SchemaValue::U32(1)]);
         let key = build_read_only_cache_key("m", &a, None, rev(1), 1);
         assert!(key.principal_digest.is_none());
     }
 
     #[test]
     fn principal_on_distinguishes_principals() {
-        let a = tuple(vec![Value::U32(1)]);
+        let a = tuple(vec![SchemaValue::U32(1)]);
         let p1 = principal(1);
         let p2 = principal(2);
         let k1 = build_read_only_cache_key("m", &a, Some(&p1), rev(1), 1);
@@ -361,7 +359,7 @@ mod tests {
 
     #[test]
     fn method_name_changes_the_key() {
-        let a = tuple(vec![Value::U32(1)]);
+        let a = tuple(vec![SchemaValue::U32(1)]);
         let k1 = build_read_only_cache_key("foo", &a, None, rev(1), 1);
         let k2 = build_read_only_cache_key("bar", &a, None, rev(1), 1);
         assert_ne!(k1, k2);

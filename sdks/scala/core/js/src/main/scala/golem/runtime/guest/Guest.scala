@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,14 +16,21 @@
 
 package golem.runtime.guest
 
-import golem.host.js._
-import golem.runtime.autowire.{AgentRegistry, WitValueBuilder}
+import golem.host.{SchemaWireInterop, ToolWireInterop}
+import golem.host.js.{JsSnapshot, PrincipalConverter}
+import golem.host.js.schema.{JsAgentError, JsSchemaValueTree, JsTypedSchemaValue}
+import golem.host.js.tool.{JsInvocationResult, JsTool, JsWasiInputStream}
+import golem.runtime.autowire.AgentRegistry
+import golem.runtime.rpc.SchemaRpcCodec
+import golem.runtime.tool.ToolRegistry
+import golem.tool.wire.WitToolError
 import golem.FutureInterop
 import zio.blocks.schema.json.Json
 
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import scala.scalajs.js
+import scala.scalajs.js.JSConverters._
 import scala.scalajs.js.annotation.{JSExport, JSExportTopLevel}
 import scala.scalajs.js.typedarray.Uint8Array
 
@@ -46,23 +53,8 @@ object Guest {
   private def invalidAgentId(message: String): JsAgentError =
     JsAgentError.invalidAgentId(message)
 
-  private def customError(message: String): JsAgentError = {
-    val witValue: JsWitValue = WitValueBuilder.build(
-      golem.data.DataType.StringType,
-      golem.data.DataValue.StringValue(message)
-    ) match {
-      case Left(_)  => JsWitValue(js.Array(JsWitNode.primString(message)))
-      case Right(v) => v
-    }
-
-    val witType: JsWitType = JsWitType(
-      js.Array(
-        JsNamedWitTypeNode(JsWitTypeNode.primStringType)
-      )
-    )
-
-    JsAgentError.customError(JsValueAndType(witValue, witType))
-  }
+  private def customError(message: String): JsAgentError =
+    JsAgentError.customError(SchemaRpcCodec.encodeTyped[String](message))
 
   private def asAgentError(err: Any, fallbackTag: String): JsAgentError =
     if (err == null) customError("null")
@@ -110,7 +102,7 @@ object Guest {
           val scalaPrincipal = PrincipalConverter.fromJs(principal)
           initializationPrincipal = Some(scalaPrincipal)
           // Avoid calling `.then` directly (Scala 3 scaladoc / TASTy reader can error on it during `doc`).
-          val initPromise              = defnAny.initializeAny(input.asInstanceOf[JsDataValue], scalaPrincipal)
+          val initPromise              = defnAny.initializeAny(input.asInstanceOf[JsSchemaValueTree], scalaPrincipal)
           val initFuture: Future[Unit] =
             FutureInterop
               .fromPromise(initPromise)
@@ -128,29 +120,85 @@ object Guest {
       }
     }
 
-  private def invoke(methodName: String, input: js.Dynamic, principal: js.Dynamic): js.Promise[js.Dynamic] =
+  private def invokeAgent(methodName: String, input: js.Dynamic, principal: js.Dynamic): js.Promise[js.Any] =
     if (js.isUndefined(resolved)) {
-      js.Promise.reject(invalidAgentId("Agent is not initialized")).asInstanceOf[js.Promise[js.Dynamic]]
+      js.Promise.reject(invalidAgentId("Agent is not initialized")).asInstanceOf[js.Promise[js.Any]]
     } else {
-      val r                                                      = resolved.asInstanceOf[Resolved]
-      val mn                                                     = normalizeMethodName(methodName)
-      val scalaPrincipal                                         = PrincipalConverter.fromJs(principal)
-      val onRejected: js.Function1[Any, js.Thenable[js.Dynamic]] =
+      val r                                                  = resolved.asInstanceOf[Resolved]
+      val mn                                                 = normalizeMethodName(methodName)
+      val scalaPrincipal                                     = PrincipalConverter.fromJs(principal)
+      val onRejected: js.Function1[Any, js.Thenable[js.Any]] =
         js.Any.fromFunction1 { (err: Any) =>
           // Only catch SDK-level errors (JsAgentError). User code errors must propagate
           // as unhandled rejections so they become WASM traps, enabling atomic block retries.
           if (isJsAgentError(err))
-            js.Promise.reject(err).asInstanceOf[js.Thenable[js.Dynamic]]
+            js.Promise.reject(err).asInstanceOf[js.Thenable[js.Any]]
           else
             throw (err match {
               case t: Throwable => t
               case other        => js.JavaScriptException(other)
             })
         }
-      r.defn
-        .invokeAny(r.instance, mn, input.asInstanceOf[JsDataValue], scalaPrincipal)
-        .asInstanceOf[js.Promise[js.Dynamic]]
-        .`catch`[js.Dynamic](onRejected)
+      // The host expects `option<schema-value-tree>`: `Some(tree)` -> the tree,
+      // `None` (unit output) -> `js.undefined`. We bridge the Scala `Option`
+      // result to that union here, at the export boundary.
+      val resultPromise: js.Promise[js.Any] =
+        FutureInterop.toPromise(
+          FutureInterop
+            .fromPromise(r.defn.invokeAny(r.instance, mn, input.asInstanceOf[JsSchemaValueTree], scalaPrincipal))
+            .map {
+              case Some(tree) => tree.asInstanceOf[js.Any]
+              case None       => js.undefined.asInstanceOf[js.Any]
+            }
+        )
+      resultPromise.`catch`[js.Any](onRejected)
+    }
+
+  private def rejectToolError[A](error: WitToolError): js.Promise[A] =
+    js.Promise.reject(ToolWireInterop.toolErrorToJs(error)).asInstanceOf[js.Promise[A]]
+
+  private def discoverTools(): js.Promise[js.Array[JsTool]] =
+    js.Promise.resolve[js.Array[JsTool]](ToolRegistry.allTools.map(ToolWireInterop.toolToJs).toJSArray)
+
+  private def getTool(name: String): js.Promise[JsTool] =
+    ToolRegistry.getTool(name) match {
+      case Some(tool) => js.Promise.resolve[JsTool](ToolWireInterop.toolToJs(tool))
+      case None       => rejectToolError(WitToolError.InvalidToolName(name))
+    }
+
+  private def invokeTool(
+    toolName: String,
+    commandPath: js.Array[String],
+    input: JsTypedSchemaValue,
+    stdin: js.UndefOr[JsWasiInputStream],
+    principal: js.Dynamic
+  ): js.Promise[JsInvocationResult] =
+    ToolRegistry.getInvoker(toolName) match {
+      case None =>
+        rejectToolError(WitToolError.InvalidToolName(toolName))
+      case Some(invoker) =>
+        val decodedInput =
+          try Right(SchemaWireInterop.typedFromJs(input))
+          catch {
+            case t: Throwable =>
+              Left(WitToolError.InvalidInput(s"malformed invocation input: ${String.valueOf(t.getMessage)}"))
+          }
+        decodedInput match {
+          case Left(error) => rejectToolError(error)
+          case Right(in)   =>
+            val scalaPrincipal = PrincipalConverter.fromJs(principal)
+            // A `Left` (declared tool error) is surfaced as a rejection carrying
+            // the wire-encoded `tool-error`; a failed Future (user code error)
+            // propagates as an unhandled rejection so it becomes a WASM trap.
+            FutureInterop.toPromise(
+              invoker(commandPath.toList, in, stdin.toOption, scalaPrincipal).map {
+                case Right(res) =>
+                  JsInvocationResult(res.result.map(SchemaWireInterop.typedToJs).orUndefined, res.stdout.orUndefined)
+                case Left(error) =>
+                  throw js.JavaScriptException(ToolWireInterop.toolErrorToJs(error))
+              }
+            )
+        }
     }
 
   private def getDefinition(): js.Promise[js.Any] =
@@ -190,17 +238,40 @@ object Guest {
     out
   }
 
-  @JSExportTopLevel("guest")
-  val guest: js.Dynamic =
+  @JSExportTopLevel("golemAgent200Guest")
+  val golemAgent200Guest: js.Dynamic =
     js.Dynamic.literal(
       "initialize" -> ((agentTypeName: String, input: js.Dynamic, principal: js.Dynamic) =>
         initialize(agentTypeName, input, principal)
       ),
       "invoke" -> ((methodName: String, input: js.Dynamic, principal: js.Dynamic) =>
-        invoke(methodName, input, principal)
+        invokeAgent(methodName, input, principal)
       ),
       "getDefinition"      -> (() => getDefinition()),
       "discoverAgentTypes" -> (() => discoverAgentTypes())
+    )
+
+  @JSExportTopLevel("golemTool010Guest")
+  val golemTool010Guest: js.Dynamic =
+    js.Dynamic.literal(
+      "discoverTools" -> (() => discoverTools()),
+      "getTool"       -> ((name: String) => getTool(name)),
+      "invoke"        -> (
+        (
+          toolName: String,
+          commandPath: js.Array[String],
+          input: js.Dynamic,
+          stdin: js.UndefOr[js.Any],
+          principal: js.Dynamic
+        ) =>
+          invokeTool(
+            toolName,
+            commandPath,
+            input.asInstanceOf[JsTypedSchemaValue],
+            stdin.asInstanceOf[js.UndefOr[JsWasiInputStream]],
+            principal
+          )
+      )
     )
 
   @JSExportTopLevel("saveSnapshot")

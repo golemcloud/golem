@@ -86,6 +86,37 @@ When `--ports-file` is specified, the server writes a JSON file with the actual 
 }
 ```
 
+The application manifest can mirror stable local ports with `localServer.customRequestPort` and `localServer.mcpPort`. Those fields control how deployment `subdomain` values expand: HTTP API domains resolve to `<label>.localhost:<customRequestPort>` and MCP domains resolve to `<label>.localhost:<mcpPort>`. Use nonzero ports for deployments that register persistent subdomains. Load `golem-configure-api-domain` or `golem-configure-mcp-server` for the full `subdomain` versus `domain` rules.
+
+#### Manual Testing with Free Ports
+
+For manual testing in temporary apps, pass `0` directly as `golem server run` flags to let the OS assign free ports:
+
+```shell
+golem server run \
+  --router-port 0 \
+  --custom-request-port 0 \
+  --mcp-port 0 \
+  --ports-file .golem/ports.json \
+  --data-dir .golem/data
+```
+
+The `0` flag values request OS-assigned free ports. The `--ports-file` path records the actual bound ports and is also the readiness signal; wait for `.golem/ports.json` before sending requests.
+
+Do not put `0` in manifest `localServer` port fields. Manifest `localServer.customRequestPort` and `localServer.mcpPort` values are used for deployment `subdomain` expansion and must be stable nonzero ports.
+
+For persistent local deployment subdomains, use stable manifest ports or omit the port fields to use the defaults:
+
+```yaml
+localServer:
+  customRequestPort: 9006
+  mcpPort: 9007
+  portsFile: .golem/ports.json
+  dataDir: .golem/data
+```
+
+Setting only `portsFile` records the selected ports but does not request free ports. Explicit CLI flags such as `--router-port`, `--custom-request-port`, `--mcp-port`, `--ports-file`, and `--data-dir` override the manifest values.
+
 #### Warning: `--agent-filesystem-root`
 
 **Do not use `--agent-filesystem-root` unless you have a specific reason.** This option replaces the default random temporary directories with deterministic paths. Manually modifying files under this root while agents are running can break durable execution guarantees — Golem relies on controlling the agent filesystem to ensure consistency across restarts and replays. This flag is intended for advanced debugging and inspection scenarios only.

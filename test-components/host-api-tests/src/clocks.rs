@@ -1,11 +1,11 @@
-use golem_rust::{Schema, agent_definition, agent_implementation};
+use golem_rust::{FromSchema, IntoSchema, agent_definition, agent_implementation};
 use serde::{Deserialize, Serialize};
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-#[derive(Clone, Schema, Serialize, Deserialize)]
+#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
 pub struct StdTimeApisResult {
     pub elapsed1: f64,
     pub elapsed2: f64,
@@ -51,8 +51,8 @@ impl Clocks for ClocksImpl {
     fn sleep_for(&self, seconds: f64) -> f64 {
         let instant1 = Instant::now();
         sleep(Duration::from_millis((seconds * 1000.0) as u64));
-        let elapsed = instant1.elapsed().as_secs_f64();
-        elapsed
+
+        instant1.elapsed().as_secs_f64()
     }
 
     fn interruption(&self) -> String {

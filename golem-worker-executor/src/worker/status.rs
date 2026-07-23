@@ -10,8 +10,9 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
     AgentResourceDescription, AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey,
-    OplogProcessorCheckpointState, OwnedAgentId, PendingInvocationRef, PendingUpdateKind,
-    PendingUpdateRef, RetryConfig, RetryPolicyState, SuccessfulUpdateRecord, Timestamp,
+    OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
+    PendingUpdateKind, PendingUpdateRef, RetryConfig, RetryPolicyState, SuccessfulUpdateRecord,
+    Timestamp,
 };
 use golem_common::serialization::deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -270,6 +271,8 @@ pub fn update_status_with_new_entries(
 
     let pending_invocations =
         calculate_pending_invocations(last_known.pending_invocations, &new_entries);
+    let pending_card_events =
+        calculate_pending_card_events(last_known.pending_card_events, &new_entries);
     let (
         pending_updates,
         failed_updates,
@@ -318,6 +321,8 @@ pub fn update_status_with_new_entries(
 
     let active_plugins = calculate_active_plugins(active_plugins, &deleted_regions, &new_entries);
 
+    let revoked_cards = calculate_revoked_cards(last_known.revoked_cards, &new_entries);
+
     let oplog_processor_checkpoints = calculate_oplog_processor_checkpoints(
         last_known.oplog_processor_checkpoints,
         &active_plugins,
@@ -334,6 +339,7 @@ pub fn update_status_with_new_entries(
         status,
         overridden_retry_config,
         pending_invocations,
+        pending_card_events,
         skipped_regions,
         pending_updates,
         failed_updates,
@@ -347,6 +353,7 @@ pub fn update_status_with_new_entries(
         current_filesystem_storage_usage,
         active_plugins,
         oplog_processor_checkpoints,
+        revoked_cards,
         deleted_regions,
         component_revision_for_replay,
         current_retry_state,
@@ -519,12 +526,30 @@ fn calculate_latest_worker_status(
             }
             OplogEntry::Snapshot { .. } => {}
             OplogEntry::OplogProcessorCheckpoint { .. } => {}
+            OplogEntry::CardEventQueued { .. } => {}
+            OplogEntry::CardInstalled { .. } => {}
+            OplogEntry::CardInstallFailed { .. } => {}
+            OplogEntry::CardRevoked { .. } => {}
+            OplogEntry::CardExpired { .. } => {}
             OplogEntry::Error { .. } => {
                 // .. handled separately
             }
         }
     }
     (current_status, current_retry_state, current_retry_policy)
+}
+
+fn calculate_revoked_cards(
+    mut revoked_cards: HashSet<golem_common::model::card::CardId>,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> HashSet<golem_common::model::card::CardId> {
+    for entry in entries.values() {
+        if let OplogEntry::CardRevoked { card_id, .. } = entry {
+            revoked_cards.insert(*card_id);
+        }
+    }
+
+    revoked_cards
 }
 
 fn calculate_deleted_regions(
@@ -716,6 +741,42 @@ fn calculate_pending_invocations(
             _ => {}
         }
     }
+    result
+}
+
+pub(crate) fn calculate_pending_card_events(
+    initial: Vec<PendingCardEventRef>,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> Vec<PendingCardEventRef> {
+    let mut result = initial;
+
+    for (oplog_idx, entry) in entries {
+        match entry {
+            OplogEntry::CardEventQueued { timestamp, event } => {
+                result.push(PendingCardEventRef {
+                    timestamp: *timestamp,
+                    oplog_index: *oplog_idx,
+                    event: event.clone(),
+                });
+            }
+            OplogEntry::CardInstalled {
+                queued_event_index: Some(queued_event_index),
+                ..
+            } => {
+                result.retain(|event| event.oplog_index != *queued_event_index);
+            }
+            OplogEntry::CardInstallFailed {
+                queued_event_index, ..
+            }
+            | OplogEntry::CardRevoked {
+                queued_event_index, ..
+            } => {
+                result.retain(|event| event.oplog_index != *queued_event_index);
+            }
+            _ => {}
+        }
+    }
+
     result
 }
 
@@ -1159,8 +1220,9 @@ mod test {
     use async_trait::async_trait;
     use golem_common::base_model::OplogIndex;
     use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+    use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
     use golem_common::model::account::AccountId;
-    use golem_common::model::agent::{AgentMode, Principal, UntypedDataValue, UntypedElementValue};
+    use golem_common::model::agent::{AgentMode, Principal};
     use golem_common::model::application::ApplicationId;
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::environment::EnvironmentId;
@@ -1179,9 +1241,10 @@ mod test {
         Timestamp,
     };
     use golem_common::read_only_lock;
+    use golem_common::schema::IntoTypedSchemaValue;
+    use golem_common::schema::SchemaValue;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::model::component::Component;
-    use golem_wasm::{IntoValueAndType, Value};
     use pretty_assertions::assert_eq;
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::Arc;
@@ -1378,13 +1441,13 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .pending_update(&update1, |_| {})
@@ -1415,13 +1478,13 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .pending_update(&update1, |_| {})
@@ -1455,7 +1518,7 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .pending_invocation(AgentInvocation::ManualUpdate {
@@ -1464,7 +1527,7 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .agent_invocation_finished(
@@ -1501,7 +1564,7 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .pending_invocation(AgentInvocation::ManualUpdate {
@@ -1510,7 +1573,7 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .agent_invocation_finished(
@@ -1547,7 +1610,7 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .pending_invocation(AgentInvocation::ManualUpdate {
@@ -1581,13 +1644,13 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .pending_update(&update1, |_| {})
@@ -1622,7 +1685,7 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .pending_invocation(AgentInvocation::ManualUpdate {
@@ -1631,7 +1694,7 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .agent_invocation_finished(
@@ -1674,7 +1737,7 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .pending_invocation(AgentInvocation::ManualUpdate {
@@ -1683,7 +1746,7 @@ mod test {
             .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
-                HostResponse::Custom(1.into_value_and_type()),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
                 DurableFunctionType::ReadLocal,
             )
             .agent_invocation_finished(
@@ -1722,9 +1785,9 @@ mod test {
             .pending_invocation(AgentInvocation::AgentMethod {
                 idempotency_key: k2.clone(),
                 method_name: "b".to_string(),
-                input: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
-                    Value::Bool(true),
-                )]),
+                input: SchemaValue::Record {
+                    fields: vec![SchemaValue::Bool(true)],
+                },
                 invocation_context: InvocationContextStack::fresh(),
                 principal: Principal::anonymous(),
             })
@@ -1766,16 +1829,16 @@ mod test {
             .pending_invocation(AgentInvocation::AgentMethod {
                 idempotency_key: k1.clone(),
                 method_name: "a".to_string(),
-                input: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
-                    Value::Bool(true),
-                )]),
+                input: SchemaValue::Record {
+                    fields: vec![SchemaValue::Bool(true)],
+                },
                 invocation_context: InvocationContextStack::fresh(),
                 principal: Principal::anonymous(),
             })
             .pending_invocation(AgentInvocation::AgentMethod {
                 idempotency_key: k2.clone(),
                 method_name: "b".to_string(),
-                input: UntypedDataValue::Tuple(vec![]),
+                input: SchemaValue::Record { fields: vec![] },
                 invocation_context: InvocationContextStack::fresh(),
                 principal: Principal::anonymous(),
             })
@@ -2036,17 +2099,12 @@ mod test {
         pub fn agent_invocation_started(
             self,
             function_name: &str,
-            request: Vec<Value>,
+            request: Vec<SchemaValue>,
             idempotency_key: IdempotencyKey,
         ) -> Self {
             let payload = AgentInvocationPayload::AgentMethod {
                 method_name: function_name.to_string(),
-                input: UntypedDataValue::Tuple(
-                    request
-                        .into_iter()
-                        .map(UntypedElementValue::ComponentModel)
-                        .collect(),
-                ),
+                input: SchemaValue::Record { fields: request },
                 principal: Principal::anonymous(),
             };
             self.add(
@@ -2079,6 +2137,7 @@ mod test {
                 OplogEntry::AgentInvocationFinished {
                     timestamp: Timestamp::now_utc(),
                     result: OplogPayload::Inline(Box::new(result)),
+                    method_name: None,
                     consumed_fuel: 0,
                     component_revision,
                 },
@@ -2159,6 +2218,7 @@ mod test {
                     timestamp,
                     data: OplogPayload::Inline(Box::new(vec![])),
                     mime_type: "application/octet-stream".to_string(),
+                    active_cards: Vec::new(),
                 },
                 move |mut status| {
                     status.last_automatic_snapshot_index = Some(oplog_idx);
@@ -2441,6 +2501,18 @@ mod test {
     #[async_trait]
     impl OplogService for TestCase {
         async fn create(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _initial_entry: OplogEntry,
+            _initial_worker_metadata: AgentMetadata,
+            _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+            _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        ) -> Arc<dyn Oplog + 'static> {
+            unreachable!()
+        }
+
+        async fn create_fresh(
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
@@ -3122,5 +3194,308 @@ mod test {
 
         let result = super::calculate_current_filesystem_storage_usage(1024, &deleted, &entries);
         assert_eq!(result, 1536, "seed + delta");
+    }
+
+    #[test]
+    fn card_revoked_entry_is_recorded_in_status() {
+        let card_id = golem_common::model::card::CardId::new();
+        let entries = BTreeMap::from([(
+            OplogIndex::from_u64(1),
+            OplogEntry::CardRevoked {
+                timestamp: Timestamp::now_utc(),
+                queued_event_index: OplogIndex::from_u64(1),
+                card_id,
+            },
+        )]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert!(status.revoked_cards.contains(&card_id));
+    }
+
+    fn test_card(card_id: golem_common::model::card::CardId) -> golem_common::model::card::Card {
+        golem_common::model::card::Card {
+            card_id,
+            parent_ids: Vec::new(),
+            lower_positive: Vec::new(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        }
+    }
+
+    #[test]
+    fn card_event_queued_revoke_is_pending() {
+        let card_id = golem_common::model::card::CardId::new();
+        let entries = BTreeMap::from([(
+            OplogIndex::from_u64(1),
+            OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
+        )]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(status.pending_card_events.len(), 1);
+        assert_eq!(
+            status.pending_card_events[0].oplog_index,
+            OplogIndex::from_u64(1)
+        );
+        assert_eq!(
+            status.pending_card_events[0].event,
+            QueuedCardEvent::revoke(card_id)
+        );
+    }
+
+    #[test]
+    fn card_revoked_removes_pending_revoke_and_records_revoked_card() {
+        let card_id = golem_common::model::card::CardId::new();
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::card_revoked(OplogIndex::from_u64(1), card_id),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert!(status.pending_card_events.is_empty());
+        assert!(status.revoked_cards.contains(&card_id));
+    }
+
+    #[test]
+    fn card_revoked_removes_only_matching_pending_revoke_index() {
+        let card_id = golem_common::model::card::CardId::new();
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
+            ),
+            (
+                OplogIndex::from_u64(3),
+                OplogEntry::card_revoked(OplogIndex::from_u64(1), card_id),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(status.pending_card_events.len(), 1);
+        assert_eq!(
+            status.pending_card_events[0].oplog_index,
+            OplogIndex::from_u64(2)
+        );
+        assert!(status.revoked_cards.contains(&card_id));
+    }
+
+    #[test]
+    fn card_event_queued_install_is_pending() {
+        let card_id = golem_common::model::card::CardId::new();
+        let card = test_card(card_id);
+        let entries = BTreeMap::from([(
+            OplogIndex::from_u64(1),
+            OplogEntry::card_event_queued(QueuedCardEvent::install(card.clone())),
+        )]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(status.pending_card_events.len(), 1);
+        assert_eq!(
+            status.pending_card_events[0].event,
+            QueuedCardEvent::install(card)
+        );
+    }
+
+    #[test]
+    fn card_installed_removes_pending_install() {
+        let card_id = golem_common::model::card::CardId::new();
+        let card = test_card(card_id);
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(QueuedCardEvent::install(card.clone())),
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::card_installed(Some(OplogIndex::from_u64(1)), card.into()),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert!(status.pending_card_events.is_empty());
+    }
+
+    #[test]
+    fn card_install_failed_removes_pending_install() {
+        let card_id = golem_common::model::card::CardId::new();
+        let card = test_card(card_id);
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(QueuedCardEvent::install(card)),
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::card_install_failed(
+                    OplogIndex::from_u64(1),
+                    card_id,
+                    CardInstallFailure::CardRevoked,
+                ),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert!(status.pending_card_events.is_empty());
+    }
+
+    #[test]
+    fn queued_card_event_survives_deleted_region_without_terminal() {
+        let card_id = golem_common::model::card::CardId::new();
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
+            ),
+            (
+                OplogIndex::from_u64(3),
+                OplogEntry::revert(OplogRegion {
+                    start: OplogIndex::from_u64(2),
+                    end: OplogIndex::from_u64(2),
+                }),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(status.pending_card_events.len(), 1);
+    }
+
+    #[test]
+    fn terminal_card_event_in_deleted_region_cleans_pending_event() {
+        let card_id = golem_common::model::card::CardId::new();
+        let card = test_card(card_id);
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(QueuedCardEvent::install(card.clone())),
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::card_installed(Some(OplogIndex::from_u64(1)), card.into()),
+            ),
+            (
+                OplogIndex::from_u64(3),
+                OplogEntry::revert(OplogRegion {
+                    start: OplogIndex::from_u64(2),
+                    end: OplogIndex::from_u64(2),
+                }),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert!(status.pending_card_events.is_empty());
+    }
+
+    #[test]
+    fn card_revoked_entry_is_recorded_even_in_deleted_region() {
+        let card_id = golem_common::model::card::CardId::new();
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::CardRevoked {
+                    timestamp: Timestamp::now_utc(),
+                    queued_event_index: OplogIndex::from_u64(1),
+                    card_id,
+                },
+            ),
+            (
+                OplogIndex::from_u64(3),
+                OplogEntry::revert(OplogRegion {
+                    start: OplogIndex::from_u64(2),
+                    end: OplogIndex::from_u64(2),
+                }),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert!(
+            status
+                .deleted_regions
+                .is_in_deleted_region(OplogIndex::from_u64(2))
+        );
+        assert!(status.revoked_cards.contains(&card_id));
     }
 }

@@ -146,30 +146,31 @@ The default template's source code is located in the `src/counter-agent.ts` file
 Let's use the following code snippet for this example:
 
 ```typescript
-import {
-    BaseAgent,
-    agent,
-    prompt,
-    description,
-} from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
-@agent()
-class CounterAgent extends BaseAgent {
-    private readonly name: string;
-    private value: number = 0;
+export const CounterAgent = defineAgent({
+    name: 'CounterAgent',
+    id: { name: z.string() },
+    methods: {
+        increment: method({
+            input: {},
+            returns: z.number(),
+            promptHint: "Increase the count by one",
+            description: "Increases the count by one and returns the new value",
+        }),
+    },
+});
 
-    constructor(name: string) {
-        super();
-        this.name = name;
-    }
-
-    @prompt("Increase the count by one")
-    @description("Increases the count by one and returns the new value")
-    async increment(): Promise<number> {
-        this.value += 1;
-        return this.value;
-    }
-}
+export const CounterAgentImpl = CounterAgent.implement({
+    init: () => ({ value: 0 }),
+    methods: {
+        increment() {
+            this.value += 1;
+            return this.value;
+        },
+    },
+});
 ```
 
   </Tabs.Tab>
@@ -360,32 +361,33 @@ To finish the Quickstart example with an HTTP POST endpoint for tracking counts,
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
   <Tabs.Tab>
 ```typescript
-import {
-    BaseAgent,
-    agent,
-    endpoint,
-    prompt,
-    description,
-} from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
 
-@agent({ mount: '/counters/{name}' })
-class CounterAgent extends BaseAgent {
-    private readonly name: string;
-    private value: number = 0;
+export const CounterAgent = defineAgent({
+    name: 'CounterAgent',
+    id: { name: z.string() },
+    http: http.mount('/counters/{name}'),
+    methods: {
+        increment: method({
+            input: {},
+            returns: z.number(),
+            http: http.post('/increment'),
+            promptHint: "Increase the count by one",
+            description: "Increases the count by one and returns the new value",
+        }),
+    },
+});
 
-    constructor(name: string) {
-        super();
-        this.name = name;
-    }
-
-    @endpoint({ post: '/increment' })
-    @prompt("Increase the count by one")
-    @description("Increases the count by one and returns the new value")
-    async increment(): Promise<number> {
-        this.value += 1;
-        return this.value;
-    }
-}
+export const CounterAgentImpl = CounterAgent.implement({
+    init: () => ({ value: 0 }),
+    methods: {
+        increment() {
+            this.value += 1;
+            return this.value;
+        },
+    },
+});
 ```
   </Tabs.Tab>
 
@@ -488,7 +490,7 @@ Then, add a deployment section to the component's `golem.yaml` to expose the API
 httpApi:
   deployments:
     local:
-    - domain: localhost:9006
+    - subdomain: quickstart  # resolves to quickstart.localhost:9006 by default
       agents:
         CounterAgent: {}
 ```
@@ -499,10 +501,10 @@ Now rebuild and deploy:
 golem deploy
 ```
 
-After this command, the API is deployed to our locally running Golem instance and can be tried out by sending POST requests to `http://localhost:9006/counters/{name}/increment`:
+After this command, the API is deployed to our locally running Golem instance and can be tried out by sending POST requests to `http://quickstart.localhost:9006/counters/{name}/increment`:
 
 ```shell copy
-curl -X POST http://localhost:9006/counters/agent-1/increment
+curl -X POST http://quickstart.localhost:9006/counters/agent-1/increment
 ```
 
 ### Next Steps

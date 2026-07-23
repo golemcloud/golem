@@ -17,6 +17,7 @@ pub mod agent;
 pub mod application;
 pub mod auth;
 pub mod base64;
+pub mod card;
 pub mod certificate;
 pub mod component;
 pub mod component_metadata;
@@ -26,7 +27,6 @@ pub mod domain_registration;
 pub mod environment;
 pub mod environment_plugin_grant;
 pub mod error;
-pub mod exports;
 pub mod http_api_deployment;
 pub mod invocation_context;
 pub mod login;
@@ -58,24 +58,24 @@ pub use retry_policy::{
 use self::component::ComponentId;
 use self::component::{AgentFilePermissions, ComponentRevision};
 use self::environment::EnvironmentId;
-use self::worker::TypedAgentConfigEntry;
+use self::oplog::QueuedCardEvent;
+use self::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use crate::base_model::agent::AgentMode;
-use crate::base_model::agent::LegacyParsedAgentId;
 use crate::base_model::agent::Principal;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::account::{AccountEmail, AccountId};
-use crate::model::agent::{AgentTypeResolver, UntypedDataValue, UntypedElementValue};
+use crate::model::agent::{AgentTypeSchemaResolver, ParsedAgentId};
+use crate::model::card::CardId;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::types::AgentMetadataForGuests;
 use crate::model::oplog::{AgentResourceId, OplogEntry, RawSnapshotData};
 use crate::model::regions::DeletedRegions;
+use crate::schema::{ResultValuePayload, SchemaValue};
 use crate::{SafeDisplay, grpc_uri};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
 };
-use golem_wasm::Value;
-use golem_wasm_derive::{FromValue, IntoValue};
 use http::Uri;
 use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Serialize};
@@ -118,7 +118,7 @@ impl AgentId {
 
     pub fn from_agent_id(
         component_id: ComponentId,
-        agent_id: &LegacyParsedAgentId,
+        agent_id: &ParsedAgentId,
     ) -> Result<AgentId, String> {
         let agent_id = agent_id.to_string();
         Self::validate_length(&agent_id)?;
@@ -131,12 +131,9 @@ impl AgentId {
     pub fn from_agent_id_literal<S: AsRef<str>>(
         component_id: ComponentId,
         agent_id: S,
-        resolver: impl AgentTypeResolver,
+        resolver: impl AgentTypeSchemaResolver,
     ) -> Result<AgentId, String> {
-        Self::from_agent_id(
-            component_id,
-            &LegacyParsedAgentId::parse(agent_id, resolver)?,
-        )
+        Self::from_agent_id(component_id, &ParsedAgentId::parse(agent_id, resolver)?)
     }
 
     pub fn from_component_metadata_and_agent_id<S: AsRef<str>>(
@@ -176,7 +173,7 @@ impl AgentId {
     ) -> Result<AgentId, String> {
         let id = id.as_ref();
 
-        match LegacyParsedAgentId::normalize_text(id) {
+        match ParsedAgentId::normalize_text(id) {
             Ok(normalized) => {
                 if normalized.len() > Self::AGENT_ID_MAX_LENGTH {
                     return Err(format!(
@@ -362,6 +359,18 @@ pub enum ScheduledAction {
         agent_created_by: AccountId,
         owned_agent_id: OwnedAgentId,
     },
+    /// Invokes a fresh ephemeral agent without pre-creating it. The scheduler uses the checked
+    /// creation path because delivery may be retried after an ambiguous failure.
+    InvokeEphemeral {
+        account_id: AccountId,
+        owned_agent_id: OwnedAgentId,
+        invocation: Box<AgentInvocation>,
+        component_revision: ComponentRevision,
+        env: Vec<(String, String)>,
+        config: Vec<AgentConfigEntryDto>,
+        parent: Option<AgentId>,
+        creation_principal: Box<Principal>,
+    },
 }
 
 impl ScheduledAction {
@@ -373,7 +382,8 @@ impl ScheduledAction {
                 ..
             } => OwnedAgentId::new(*environment_id, &promise_id.agent_id),
             ScheduledAction::ArchiveOplog { owned_agent_id, .. } => owned_agent_id.clone(),
-            ScheduledAction::Invoke { owned_agent_id, .. } => owned_agent_id.clone(),
+            ScheduledAction::Invoke { owned_agent_id, .. }
+            | ScheduledAction::InvokeEphemeral { owned_agent_id, .. } => owned_agent_id.clone(),
             ScheduledAction::Resume { owned_agent_id, .. } => owned_agent_id.clone(),
         }
     }
@@ -388,7 +398,10 @@ impl Display for ScheduledAction {
             ScheduledAction::ArchiveOplog { owned_agent_id, .. } => {
                 write!(f, "archive[{owned_agent_id}]")
             }
-            ScheduledAction::Invoke { owned_agent_id, .. } => write!(f, "invoke[{owned_agent_id}]"),
+            ScheduledAction::Invoke { owned_agent_id, .. }
+            | ScheduledAction::InvokeEphemeral { owned_agent_id, .. } => {
+                write!(f, "invoke[{owned_agent_id}]")
+            }
             ScheduledAction::Resume { owned_agent_id, .. } => write!(f, "resume[{owned_agent_id}]"),
         }
     }
@@ -649,56 +662,6 @@ pub struct RetryConfig {
     pub max_jitter_factor: Option<f64>,
 }
 
-impl golem_wasm::IntoValue for RetryConfig {
-    fn into_value(self) -> golem_wasm::Value {
-        golem_wasm::Value::Record(vec![
-            self.max_attempts.into_value(),
-            (self.min_delay.as_nanos() as u64).into_value(),
-            (self.max_delay.as_nanos() as u64).into_value(),
-            self.multiplier.into_value(),
-            self.max_jitter_factor.into_value(),
-        ])
-    }
-
-    fn get_type() -> golem_wasm::analysis::AnalysedType {
-        use golem_wasm::analysis::analysed_type::*;
-        record(vec![
-            field("max-attempts", u32()),
-            field("min-delay", u64()),
-            field("max-delay", u64()),
-            field("multiplier", f64()),
-            field("max-jitter-factor", option(f64())),
-        ])
-        .named("retry-policy")
-        .owned("golem:api@1.5.0/host")
-    }
-}
-
-impl golem_wasm::FromValue for RetryConfig {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        match value {
-            golem_wasm::Value::Record(fields) if fields.len() == 5 => {
-                let mut iter = fields.into_iter();
-                let max_attempts = u32::from_value(iter.next().unwrap())?;
-                let min_delay_ns = u64::from_value(iter.next().unwrap())?;
-                let max_delay_ns = u64::from_value(iter.next().unwrap())?;
-                let multiplier = f64::from_value(iter.next().unwrap())?;
-                let max_jitter_factor = Option::<f64>::from_value(iter.next().unwrap())?;
-                Ok(RetryConfig {
-                    max_attempts,
-                    min_delay: Duration::from_nanos(min_delay_ns),
-                    max_delay: Duration::from_nanos(max_delay_ns),
-                    multiplier,
-                    max_jitter_factor,
-                })
-            }
-            other => Err(format!(
-                "Expected Record with 5 fields for RetryConfig, got {other:?}"
-            )),
-        }
-    }
-}
-
 impl SafeDisplay for RetryConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
@@ -727,6 +690,7 @@ pub struct AgentStatusRecord {
     pub skipped_regions: DeletedRegions,
     pub overridden_retry_config: Option<RetryConfig>,
     pub pending_invocations: Vec<PendingInvocationRef>,
+    pub pending_card_events: Vec<PendingCardEventRef>,
     pub pending_updates: VecDeque<PendingUpdateRef>,
     pub failed_updates: Vec<FailedUpdateRecord>,
     pub successful_updates: Vec<SuccessfulUpdateRecord>,
@@ -741,6 +705,7 @@ pub struct AgentStatusRecord {
     pub active_plugins: HashSet<EnvironmentPluginGrantId>,
     pub oplog_processor_checkpoints:
         HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState>,
+    pub revoked_cards: HashSet<CardId>,
     pub deleted_regions: DeletedRegions,
     /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
     /// if only automatic updates were used or the version of the latest snapshot-based update
@@ -771,6 +736,7 @@ impl Default for AgentStatusRecord {
             skipped_regions: DeletedRegions::new(),
             overridden_retry_config: None,
             pending_invocations: Vec::new(),
+            pending_card_events: Vec::new(),
             pending_updates: VecDeque::new(),
             failed_updates: Vec::new(),
             successful_updates: Vec::new(),
@@ -784,6 +750,7 @@ impl Default for AgentStatusRecord {
             oplog_idx: OplogIndex::default(),
             active_plugins: HashSet::new(),
             oplog_processor_checkpoints: HashMap::new(),
+            revoked_cards: HashSet::new(),
             deleted_regions: DeletedRegions::new(),
             component_revision_for_replay: ComponentRevision::INITIAL,
             current_retry_state: HashMap::new(),
@@ -843,14 +810,14 @@ pub enum AgentInvocation {
     },
     AgentInitialization {
         idempotency_key: IdempotencyKey,
-        input: UntypedDataValue,
+        input: SchemaValue,
         invocation_context: InvocationContextStack,
         principal: Principal,
     },
     AgentMethod {
         idempotency_key: IdempotencyKey,
         method_name: String,
-        input: UntypedDataValue,
+        input: SchemaValue,
         invocation_context: InvocationContextStack,
         principal: Principal,
     },
@@ -879,12 +846,12 @@ pub enum AgentInvocationPayload {
         target_revision: ComponentRevision,
     },
     AgentInitialization {
-        input: UntypedDataValue,
+        input: SchemaValue,
         principal: Principal,
     },
     AgentMethod {
         method_name: String,
-        input: UntypedDataValue,
+        input: SchemaValue,
         principal: Principal,
     },
     LoadSnapshot {
@@ -904,7 +871,7 @@ pub enum AgentInvocationPayload {
 #[desert(evolution())]
 pub enum AgentInvocationResult {
     AgentInitialization,
-    AgentMethod { output: UntypedDataValue },
+    AgentMethod { output: SchemaValue },
     ManualUpdate,
     LoadSnapshot { error: Option<String> },
     SaveSnapshot { snapshot: RawSnapshotData },
@@ -917,6 +884,14 @@ pub struct AgentInvocationOutput {
     pub consumed_fuel: Option<u64>,
     pub invocation_status: Option<InvocationStatus>,
     pub component_revision: Option<ComponentRevision>,
+    /// Final target of this invocation. Ephemeral invocations include their
+    /// generated one-shot phantom ID. `None` when produced by a legacy executor
+    /// or within the worker runtime before transport metadata is attached.
+    pub agent_id: Option<AgentId>,
+    /// Final idempotency key for this invocation. `None` when produced by a
+    /// legacy executor or within the worker runtime before transport metadata
+    /// is attached.
+    pub idempotency_key: Option<IdempotencyKey>,
     /// Oplog index of the agent right after this invocation completed. `None`
     /// for synthetic outputs (e.g. lookup-only status responses) or for legacy
     /// executors that did not report it.
@@ -927,78 +902,57 @@ pub struct AgentInvocationOutput {
     pub agent_fingerprint: Option<AgentFingerprint>,
 }
 
-fn value_replay_equivalent(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::F32(x), Value::F32(y)) => (x.is_nan() && y.is_nan()) || x == y,
-        (Value::F64(x), Value::F64(y)) => (x.is_nan() && y.is_nan()) || x == y,
-        (Value::List(xs), Value::List(ys))
-        | (Value::Tuple(xs), Value::Tuple(ys))
-        | (Value::Record(xs), Value::Record(ys)) => {
-            xs.len() == ys.len()
-                && xs
-                    .iter()
-                    .zip(ys.iter())
-                    .all(|(x, y)| value_replay_equivalent(x, y))
-        }
-        (
-            Value::Variant {
-                case_idx: ai,
-                case_value: av,
-            },
-            Value::Variant {
-                case_idx: bi,
-                case_value: bv,
-            },
-        ) => {
-            ai == bi
-                && match (av, bv) {
-                    (Some(a), Some(b)) => value_replay_equivalent(a, b),
-                    (None, None) => true,
-                    _ => false,
-                }
-        }
-        (Value::Option(a), Value::Option(b)) => match (a, b) {
-            (Some(a), Some(b)) => value_replay_equivalent(a, b),
+/// Compares two schema-native values for replay equivalence. This is the same
+/// as structural equality except that `NaN` floats compare equal (so that a
+/// replayed invocation result carrying a `NaN` is not spuriously reported as
+/// diverging).
+fn schema_value_replay_equivalent(a: &SchemaValue, b: &SchemaValue) -> bool {
+    fn opt_box_equiv(a: &Option<Box<SchemaValue>>, b: &Option<Box<SchemaValue>>) -> bool {
+        match (a, b) {
+            (Some(a), Some(b)) => schema_value_replay_equivalent(a, b),
             (None, None) => true,
             _ => false,
-        },
-        (Value::Result(a), Value::Result(b)) => match (a, b) {
-            (Ok(a), Ok(b)) | (Err(a), Err(b)) => match (a, b) {
-                (Some(a), Some(b)) => value_replay_equivalent(a, b),
-                (None, None) => true,
-                _ => false,
-            },
-            _ => false,
-        },
-        _ => a == b,
-    }
-}
-
-fn untyped_element_replay_equivalent(a: &UntypedElementValue, b: &UntypedElementValue) -> bool {
-    match (a, b) {
-        (UntypedElementValue::ComponentModel(a), UntypedElementValue::ComponentModel(b)) => {
-            value_replay_equivalent(a, b)
         }
-        _ => a == b,
     }
-}
 
-fn untyped_data_replay_equivalent(a: &UntypedDataValue, b: &UntypedDataValue) -> bool {
+    fn slice_equiv(xs: &[SchemaValue], ys: &[SchemaValue]) -> bool {
+        xs.len() == ys.len()
+            && xs
+                .iter()
+                .zip(ys.iter())
+                .all(|(x, y)| schema_value_replay_equivalent(x, y))
+    }
+
     match (a, b) {
-        (UntypedDataValue::Tuple(xs), UntypedDataValue::Tuple(ys)) => {
-            xs.len() == ys.len()
-                && xs
-                    .iter()
-                    .zip(ys.iter())
-                    .all(|(x, y)| untyped_element_replay_equivalent(x, y))
+        (SchemaValue::F32(x), SchemaValue::F32(y)) => (x.is_nan() && y.is_nan()) || x == y,
+        (SchemaValue::F64(x), SchemaValue::F64(y)) => (x.is_nan() && y.is_nan()) || x == y,
+        (SchemaValue::Record { fields: xs }, SchemaValue::Record { fields: ys })
+        | (SchemaValue::Tuple { elements: xs }, SchemaValue::Tuple { elements: ys })
+        | (SchemaValue::List { elements: xs }, SchemaValue::List { elements: ys })
+        | (SchemaValue::FixedList { elements: xs }, SchemaValue::FixedList { elements: ys }) => {
+            slice_equiv(xs, ys)
         }
-        (UntypedDataValue::Multimodal(xs), UntypedDataValue::Multimodal(ys)) => {
+        (SchemaValue::Map { entries: xs }, SchemaValue::Map { entries: ys }) => {
             xs.len() == ys.len()
-                && xs.iter().zip(ys.iter()).all(|(x, y)| {
-                    x.name == y.name && untyped_element_replay_equivalent(&x.value, &y.value)
+                && xs.iter().zip(ys.iter()).all(|((xk, xv), (yk, yv))| {
+                    schema_value_replay_equivalent(xk, yk) && schema_value_replay_equivalent(xv, yv)
                 })
         }
-        _ => false,
+        (SchemaValue::Variant(a), SchemaValue::Variant(b)) => {
+            a.case == b.case && opt_box_equiv(&a.payload, &b.payload)
+        }
+        (SchemaValue::Option { inner: a }, SchemaValue::Option { inner: b }) => opt_box_equiv(a, b),
+        (SchemaValue::Result(a), SchemaValue::Result(b)) => match (a, b) {
+            (ResultValuePayload::Ok { value: a }, ResultValuePayload::Ok { value: b })
+            | (ResultValuePayload::Err { value: a }, ResultValuePayload::Err { value: b }) => {
+                opt_box_equiv(a, b)
+            }
+            _ => false,
+        },
+        (SchemaValue::Union(a), SchemaValue::Union(b)) => {
+            a.tag == b.tag && schema_value_replay_equivalent(&a.body, &b.body)
+        }
+        _ => a == b,
     }
 }
 
@@ -1012,7 +966,7 @@ impl AgentInvocationResult {
             (
                 AgentInvocationResult::AgentMethod { output: a },
                 AgentInvocationResult::AgentMethod { output: b },
-            ) => untyped_data_replay_equivalent(a, b),
+            ) => schema_value_replay_equivalent(a, b),
             (AgentInvocationResult::ManualUpdate, AgentInvocationResult::ManualUpdate) => true,
             (
                 AgentInvocationResult::LoadSnapshot { error: a },
@@ -1027,6 +981,32 @@ impl AgentInvocationResult {
                 AgentInvocationResult::ProcessOplogEntries { error: b },
             ) => a == b,
             _ => false,
+        }
+    }
+
+    /// Wraps this result for `Debug` rendering that redacts any host-managed
+    /// capability material (`Secret` / `QuotaToken`) in the embedded
+    /// invocation output. Use at tracing / diagnostic / error-formatting
+    /// boundaries instead of the derived `Debug`.
+    pub fn redacted_debug(&self) -> RedactedAgentInvocationResult<'_> {
+        RedactedAgentInvocationResult(self)
+    }
+}
+
+/// `Debug` wrapper produced by [`AgentInvocationResult::redacted_debug`].
+pub struct RedactedAgentInvocationResult<'a>(&'a AgentInvocationResult);
+
+impl std::fmt::Debug for RedactedAgentInvocationResult<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            AgentInvocationResult::AgentMethod { output } => f
+                .debug_struct("AgentMethod")
+                .field(
+                    "output",
+                    &crate::schema::redacted_schema_value_debug(output),
+                )
+                .finish(),
+            other => std::fmt::Debug::fmt(other, f),
         }
     }
 }
@@ -1253,6 +1233,14 @@ impl PendingInvocationRef {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct PendingCardEventRef {
+    pub timestamp: Timestamp,
+    pub oplog_index: OplogIndex,
+    pub event: QueuedCardEvent,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
 pub enum PendingUpdateKind {
@@ -1332,6 +1320,15 @@ pub enum AgentEvent {
         plugin_name: String,
         message: String,
     },
+    SnapshotRecoverySucceeded {
+        timestamp: Timestamp,
+        snapshot_index: OplogIndex,
+    },
+    SnapshotRecoveryFailed {
+        timestamp: Timestamp,
+        snapshot_index: OplogIndex,
+        error: String,
+    },
     /// The client fell behind and the point it left of is no longer in our buffer.
     /// {number_of_skipped_messages} is the number of messages between the client left of and the point it is now at.
     ClientLagged { number_of_missed_messages: u64 },
@@ -1382,6 +1379,16 @@ impl Display for AgentEvent {
                 ..
             } => {
                 write!(f, "<plugin-error> [{plugin_name}] {message}")
+            }
+            AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. } => {
+                write!(f, "<snapshot-recovery-succeeded> {snapshot_index}")
+            }
+            AgentEvent::SnapshotRecoveryFailed {
+                snapshot_index,
+                error,
+                ..
+            } => {
+                write!(f, "<snapshot-recovery-failed> {snapshot_index}: {error}")
             }
             AgentEvent::ClientLagged {
                 number_of_missed_messages,
@@ -1441,43 +1448,18 @@ impl poem_openapi::types::ParseFromJSON for UntypedJsonBody {
     }
 }
 
-impl From<AgentId> for golem_wasm::AgentId {
-    fn from(agent_id: AgentId) -> Self {
-        golem_wasm::AgentId {
-            component_id: agent_id.component_id.into(),
-            agent_id: agent_id.agent_id,
-        }
-    }
-}
-
-impl From<golem_wasm::AgentId> for AgentId {
-    fn from(host: golem_wasm::AgentId) -> Self {
-        Self {
-            component_id: host.component_id.into(),
-            agent_id: host.agent_id,
-        }
-    }
-}
-
-impl From<PromiseId> for golem_wasm::PromiseId {
-    fn from(promise_id: PromiseId) -> Self {
-        golem_wasm::PromiseId {
-            agent_id: promise_id.agent_id.into(),
-            oplog_idx: promise_id.oplog_idx.into(),
-        }
-    }
-}
-
-impl From<golem_wasm::PromiseId> for PromiseId {
-    fn from(host: golem_wasm::PromiseId) -> Self {
-        Self {
-            agent_id: host.agent_id.into(),
-            oplog_idx: OplogIndex::from_u64(host.oplog_idx),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, IntoValue, FromValue, BinaryCodec)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 pub enum ForkResult {
     /// The original worker that called `fork`
     Original,
@@ -1485,7 +1467,16 @@ pub enum ForkResult {
     Forked,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[desert(evolution())]
 pub struct RdbmsPoolKey {
     pub address: Url,

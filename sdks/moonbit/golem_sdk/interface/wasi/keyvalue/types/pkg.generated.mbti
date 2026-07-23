@@ -4,7 +4,6 @@ package "golemcloud/golem_sdk/interface/wasi/keyvalue/types"
 import {
   "golemcloud/golem_sdk/interface/wasi/io/streams",
   "golemcloud/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError",
-  "moonbitlang/core/debug",
 }
 
 // Values
@@ -12,17 +11,17 @@ import {
 // Errors
 
 // Types and methods
-pub(all) struct Bucket(Int) derive(Eq, @debug.Debug)
+pub(all) struct Bucket(Int) derive(Eq, Show)
 pub fn Bucket::drop(Self) -> Unit
 pub fn Bucket::open_bucket(String) -> Result[Self, @wasiKeyvalueError.Error_]
 
-pub(all) struct IncomingValue(Int) derive(Eq, @debug.Debug)
+pub(all) struct IncomingValue(Int) derive(Eq, Show)
 pub fn IncomingValue::drop(Self) -> Unit
 pub fn IncomingValue::incoming_value_consume_async(Self) -> Result[@streams.InputStream, @wasiKeyvalueError.Error_]
 pub fn IncomingValue::incoming_value_consume_sync(Self) -> Result[FixedArray[Byte], @wasiKeyvalueError.Error_]
 pub fn IncomingValue::incoming_value_size(Self) -> Result[UInt64, @wasiKeyvalueError.Error_]
 
-pub(all) struct OutgoingValue(Int) derive(Eq, @debug.Debug)
+pub(all) struct OutgoingValue(Int) derive(Eq, Show)
 pub fn OutgoingValue::drop(Self) -> Unit
 pub fn OutgoingValue::new_outgoing_value() -> Self
 pub fn OutgoingValue::outgoing_value_write_body_async(Self) -> Result[@streams.OutputStream, @wasiKeyvalueError.Error_]

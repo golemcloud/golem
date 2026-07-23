@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,7 +16,7 @@
 
 package golem.config
 
-import golem.data.{DataInterop, ElementSchema}
+import golem.schema.{Derivation, SchemaGraph, SchemaType, SchemaTypeBody, SecretSpec}
 import zio.blocks.schema.{Reflect, Schema}
 import zio.blocks.schema.binding.Binding
 import zio.blocks.typeid.TypeId
@@ -48,7 +48,7 @@ private[golem] object ConfigIntrospection {
         AgentConfigDeclaration(
           AgentConfigSource.Secret,
           path,
-          ElementSchema.Component(DataInterop.reflectToDataType(inner))
+          secretGraph(Derivation.graphOf(new Schema(inner)))
         )
       )
     } else {
@@ -66,10 +66,13 @@ private[golem] object ConfigIntrospection {
                 AgentConfigDeclaration(
                   AgentConfigSource.Local,
                   path,
-                  ElementSchema.Component(DataInterop.reflectToDataType(reflect))
+                  Derivation.graphOf(new Schema(reflect))
                 )
               )
           }
       }
     }
+
+  private def secretGraph(inner: SchemaGraph): SchemaGraph =
+    SchemaGraph(inner.defs, SchemaType(SchemaTypeBody.SecretType(SecretSpec(inner.root))))
 }

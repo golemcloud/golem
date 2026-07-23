@@ -13,8 +13,6 @@ license-file = "../LICENSE"
 harness = false
 
 [dependencies]
-golem-wasm = { workspace = true, default-features = true }
-
 desert_rust = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
@@ -26,7 +24,6 @@ uuid = { workspace = true }
 test-r = { workspace = true }
 
 [build-dependencies]
-cargo_metadata = { workspace = true }
 miette = { workspace = true }
 protox = { workspace = true }
 tonic-prost-build = { workspace = true }

@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,7 +18,6 @@ package golem.runtime
 
 import golem.Principal
 import golem.config.ConfigBuilder
-import golem.data.GolemSchema
 
 import scala.concurrent.Future
 
@@ -30,7 +29,7 @@ import scala.concurrent.Future
  */
 final case class AgentImplementationType[Instance, Ctor](
   metadata: AgentMetadata,
-  idSchema: GolemSchema[Ctor],
+  ctorCodec: InputRecordCodec[Ctor],
   buildInstance: (Ctor, Principal) => Instance,
   methods: List[ImplementationMethod[Instance]],
   configBuilder: Option[ConfigBuilder[_]] = None,
@@ -45,14 +44,14 @@ sealed trait ImplementationMethod[Instance] {
 
 final case class SyncImplementationMethod[Instance, In, Out](
   metadata: MethodMetadata,
-  inputSchema: GolemSchema[In],
-  outputSchema: GolemSchema[Out],
+  inputCodec: InputRecordCodec[In],
+  outputCodec: OutputCodec[Out],
   handler: (Instance, In, Principal) => Out
 ) extends ImplementationMethod[Instance]
 
 final case class AsyncImplementationMethod[Instance, In, Out](
   metadata: MethodMetadata,
-  inputSchema: GolemSchema[In],
-  outputSchema: GolemSchema[Out],
+  inputCodec: InputRecordCodec[In],
+  outputCodec: OutputCodec[Out],
   handler: (Instance, In, Principal) => Future[Out]
 ) extends ImplementationMethod[Instance]

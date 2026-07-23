@@ -16,7 +16,7 @@ Add an `mcp` section to `golem.yaml` choosing which agents to deploy to which su
 mcp:
   deployments:
     local:
-      - domain: mcp-demo.localhost:9007
+      - subdomain: mcp-demo  # resolves to mcp-demo.localhost:9007 by default
         agents:
           CounterAgent: {}
 ```
@@ -35,21 +35,38 @@ Agent methods are automatically mapped to MCP entities based on the agent type a
 
 Singleton agents (those with no constructor parameters) expose parameterless methods as **MCP resources** — static pieces of data that can be read by the client. Non-singleton agents expose parameterless methods as **MCP resource templates**, where the constructor parameters become template variables. Any method that takes parameters is exposed as an **MCP tool** that can be invoked by the AI model.
 
-## Metadata with `@prompt` and `@description`
+## Method metadata
 
-The `@prompt` and `@description` annotations on agent methods become MCP tool and resource metadata, helping AI models understand what each tool does and how to use it.
+Method descriptions and prompt hints become MCP tool and resource metadata, helping AI models understand what each tool does and how to use it. TypeScript defines them with the `description` and `promptHint` properties of `method(...)`; other SDKs use the corresponding language-specific annotations.
 
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
 <Tabs.Tab>
 ```typescript
-@agent({})
-export class CounterAgent extends BaseAgent {
-  @prompt("Increments the counter by the given value and returns the new count")
-  @description("Add a value to the current counter")
-  incrementBy(value: number): number {
-    // ...
-  }
-}
+import { z } from 'zod';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
+
+export const CounterAgent = defineAgent({
+  name: 'CounterAgent',
+  id: { name: z.string() },
+  methods: {
+    incrementBy: method({
+      input: { value: z.number() },
+      returns: z.number(),
+      description: "Add a value to the current counter",
+      promptHint: "Increments the counter by the given value and returns the new count",
+    }),
+  },
+});
+
+export const CounterAgentImpl = CounterAgent.implement({
+  init: () => ({ count: 0 }),
+  methods: {
+    incrementBy({ value }) {
+      this.count += value;
+      return this.count;
+    },
+  },
+});
 ```
 </Tabs.Tab>
 <Tabs.Tab>

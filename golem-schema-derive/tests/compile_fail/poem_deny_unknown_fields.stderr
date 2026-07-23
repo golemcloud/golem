@@ -1,0 +1,5 @@
+error: PoemSchema does not support `#[serde(deny_unknown_fields)]` (it is not reflected in the generated schema)
+  --> tests/compile_fail/poem_deny_unknown_fields.rs:18:9
+   |
+18 | #[serde(deny_unknown_fields)]
+   |         ^^^^^^^^^^^^^^^^^^^

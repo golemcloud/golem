@@ -85,7 +85,7 @@ pub struct CompressedOplogArchiveService {
 
 impl CompressedOplogArchiveService {
     const MAX_CHUNK_SIZE: usize = 4096;
-    const CACHE_SIZE: usize = 4096;
+    const CACHE_SIZE: usize = 2048;
     const ZSTD_LEVEL: i32 = 0;
 
     pub fn new(
@@ -108,6 +108,20 @@ impl CompressedOplogArchiveService {
 #[async_trait]
 impl OplogArchiveService for CompressedOplogArchiveService {
     async fn open(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Arc<dyn OplogArchive + Send + Sync> {
+        Arc::new(CompressedOplogArchive::new(
+            owned_agent_id.agent_id(),
+            agent_mode,
+            self.indexed_storage.clone(),
+            self.level,
+            self.retry_config.clone(),
+        ))
+    }
+
+    async fn open_fresh(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,

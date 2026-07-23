@@ -12,14 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::StructuredOutput;
+use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 
 use colored::Colorize;
 use golem_client::model::{Token, TokenWithSecret};
+use golem_common::model::auth::TokenId;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenNewView(pub TokenWithSecret);
+
+impl Masked for TokenNewView {}
 
 impl MessageWithFields for TokenNewView {
     fn message(&self) -> String {
@@ -45,10 +50,17 @@ impl MessageWithFields for TokenNewView {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TokenListView(pub Vec<Token>);
+impl StructuredOutput for TokenNewView {
+    const KIND: &'static str = "api-token.new";
+}
 
-impl TextView for TokenListView {
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenListView {
+    pub tokens: Vec<Token>,
+}
+
+impl TextOutput for TokenListView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![
             Column::new("ID"),
@@ -56,7 +68,7 @@ impl TextView for TokenListView {
             Column::new("Expires at").fixed(),
             Column::new("Account").fixed(),
         ]);
-        for token in &self.0 {
+        for token in &self.tokens {
             table.add_row(vec![
                 token.id.0.to_string(),
                 token.created_at.to_string(),
@@ -66,4 +78,22 @@ impl TextView for TokenListView {
         }
         log_table(table);
     }
+}
+
+impl StructuredOutput for TokenListView {
+    const KIND: &'static str = "api-token.list";
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenDeleteResult {
+    pub deleted: bool,
+    pub token_id: TokenId,
+}
+
+impl NoTextOutput for TokenDeleteResult {}
+impl TextOutput for TokenDeleteResult {}
+
+impl StructuredOutput for TokenDeleteResult {
+    const KIND: &'static str = "api-token.delete";
 }

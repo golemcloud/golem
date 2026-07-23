@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::agent::AgentType;
 use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
 use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::model::agent::AgentTypeName;
+use crate::model::card::PolymorphicCard;
+use crate::schema::AgentTypeSchema;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -181,7 +182,7 @@ pub struct ComponentMetadataInnerData {
 
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
-    pub agent_types: Vec<AgentType>,
+    pub agent_types: Vec<AgentTypeSchema>,
 
     /// Per-agent-type provisioning configuration: env, config, plugins, files.
     /// Kept separate from agent type declarations so AgentType stays a pure declaration type.
@@ -192,7 +193,7 @@ pub struct ComponentMetadataInnerData {
 
 /// Per-agent-type provisioning configuration stored alongside AgentType declarations
 /// in ComponentMetadata. Holds runtime setup data separate from agent type declarations.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -202,16 +203,13 @@ pub struct ComponentMetadataInnerData {
 #[serde(rename_all = "camelCase")]
 #[allow(clippy::derive_partial_eq_without_eq)]
 pub struct AgentTypeProvisionConfig {
+    pub initial_permissions: PolymorphicCard,
     #[serde(default)]
-    #[cfg_attr(feature = "full", oai(default))]
     pub env: BTreeMap<String, String>,
     #[serde(default)]
-    #[cfg_attr(feature = "full", oai(default))]
     pub config: Vec<TypedAgentConfigEntry>,
     #[serde(default)]
-    #[cfg_attr(feature = "full", oai(default))]
     pub plugins: Vec<InstalledPlugin>,
     #[serde(default)]
-    #[cfg_attr(feature = "full", oai(default))]
     pub files: Vec<InitialAgentFile>,
 }

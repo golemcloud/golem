@@ -134,7 +134,7 @@ Application API definitions:
   app-component-b-api@0.0.1
 
 Application API deployments for environment local:
-  myapp.localhost:9006
+  subdomain: myapp -> myapp.localhost:9006
     app-component-a-api
     app-component-b-api
 
@@ -142,6 +142,8 @@ Application custom commands:
   cargo-clean
   ts-npm-install
 ```
+
+Deployment domains shown by the CLI include the manifest intent and the resolved concrete domain. For example, an HTTP API manifest entry such as `subdomain: myapp` is displayed as `subdomain: myapp -> myapp.localhost:9006` with the default local server port.
 
 ## Starting the local development server
 

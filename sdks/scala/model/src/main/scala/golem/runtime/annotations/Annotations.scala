@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -42,17 +42,3 @@ final class agentImplementation() extends StaticAnnotation
 @Retention(RetentionPolicy.RUNTIME)
 @Target(Array(ElementType.TYPE))
 final class id() extends StaticAnnotation
-
-/**
- * Overrides the language code used by multimodal/unstructured text derivation.
- */
-@Retention(RetentionPolicy.RUNTIME)
-@Target(Array(ElementType.TYPE, ElementType.METHOD, ElementType.FIELD, ElementType.PARAMETER))
-final class languageCode(val value: String) extends StaticAnnotation
-
-/**
- * Overrides the MIME type used by multimodal/unstructured binary derivation.
- */
-@Retention(RetentionPolicy.RUNTIME)
-@Target(Array(ElementType.TYPE, ElementType.METHOD, ElementType.FIELD, ElementType.PARAMETER))
-final class mimeType(val value: String) extends StaticAnnotation

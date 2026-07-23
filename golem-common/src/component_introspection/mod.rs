@@ -12,28 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Component introspection helpers extracted from `golem-wasm`.
+//! Component introspection helpers.
 //!
-//! This module isolates the WASM-file parsing surface (reading exports, linear
-//! memories, producers, root package metadata, and resolving WIT type
-//! references) from the rest of the value/type machinery in `golem-wasm`. It
-//! still relies on `golem-wasm`'s analysis result types (`AnalysedExport`,
-//! `AnalysedFunction`, `AnalysedType`, …) so that callers can migrate to it
-//! without changing their data model.
-//!
-//! The module may later be promoted into its own crate; for now it lives under
-//! `golem-common` to avoid adding a new workspace member.
+//! This module isolates the WASM-file parsing surface (reading exported
+//! interface/function names, linear memories, producers, and root package
+//! metadata). It does not depend on the legacy value/type machinery: it only
+//! reads the structural information needed to build [`crate::base_model::component_metadata::KnownExports`]
+//! and the rest of `ComponentMetadata`.
 
+pub mod error;
 pub mod metadata;
 pub mod wit_parser;
 
-/// Re-exports of the `golem-wasm` analysis result types consumed by
-/// [`wit_parser::WitAnalysisContext`]. Re-exported here so downstream
-/// consumers can depend solely on `component_introspection`, easing the
-/// future extraction of this module into its own crate.
-pub use golem_wasm::analysis::{
-    AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-    AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, AnalysisFailure,
-    AnalysisResult, AnalysisWarning, InterfaceCouldNotBeAnalyzedWarning, NameOptionTypePair,
-    NameTypePair, TypeHandle, analysed_type,
+pub use error::{
+    AnalysisFailure, AnalysisResult, AnalysisWarning, InterfaceCouldNotBeAnalyzedWarning,
 };
+pub use wit_parser::{ExportedInstance, TopLevelExport};

@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,11 +16,14 @@
 
 package golem.config
 
-import golem.data.{DataType, ElementSchema}
+import golem.schema.IntoSchema
+import golem.schema.{SchemaGraph, SchemaType, SchemaTypeBody, SecretSpec}
 import zio.blocks.schema.Schema
 import zio.test._
 
 object ConfigIntrospectionSpec extends ZIOSpecDefault {
+  private def secretGraph[A](implicit into: IntoSchema[A]): SchemaGraph =
+    SchemaGraph(into.graph.defs, SchemaType(SchemaTypeBody.SecretType(SecretSpec(into.graph.root))))
 
   case class SimpleConfig(name: String, count: Int)
   object SimpleConfig {
@@ -71,7 +74,7 @@ object ConfigIntrospectionSpec extends ZIOSpecDefault {
             decls.size == 1,
             decls.head.source == AgentConfigSource.Local,
             decls.head.path == Nil,
-            decls.head.valueType == ElementSchema.Component(DataType.StringType)
+            decls.head.valueType == IntoSchema[String].graph
           )
         }
       ),
@@ -82,7 +85,7 @@ object ConfigIntrospectionSpec extends ZIOSpecDefault {
             decls.size == 1,
             decls.head.source == AgentConfigSource.Secret,
             decls.head.path == Nil,
-            decls.head.valueType == ElementSchema.Component(DataType.StringType)
+            decls.head.valueType == secretGraph[String]
           )
         }
       ),
@@ -98,8 +101,8 @@ object ConfigIntrospectionSpec extends ZIOSpecDefault {
         test("field names become paths") {
           val decls = ConfigIntrospection.declarations[SimpleConfig]()
           assertTrue(
-            decls.exists(d => d.path == List("name") && d.valueType == ElementSchema.Component(DataType.StringType)),
-            decls.exists(d => d.path == List("count") && d.valueType == ElementSchema.Component(DataType.IntType))
+            decls.exists(d => d.path == List("name") && d.valueType == IntoSchema[String].graph),
+            decls.exists(d => d.path == List("count") && d.valueType == IntoSchema[Int].graph)
           )
         }
       ),
@@ -121,7 +124,7 @@ object ConfigIntrospectionSpec extends ZIOSpecDefault {
             decls.exists(d =>
               d.path == List("password") &&
                 d.source == AgentConfigSource.Secret &&
-                d.valueType == ElementSchema.Component(DataType.StringType)
+                d.valueType == secretGraph[String]
             )
           )
         }
@@ -175,11 +178,11 @@ object ConfigIntrospectionSpec extends ZIOSpecDefault {
         test("field types are correct") {
           val decls = ConfigIntrospection.declarations[AllLocalConfig]()
           assertTrue(
-            decls.exists(d => d.path == List("a") && d.valueType == ElementSchema.Component(DataType.StringType)),
-            decls.exists(d => d.path == List("b") && d.valueType == ElementSchema.Component(DataType.IntType)),
-            decls.exists(d => d.path == List("c") && d.valueType == ElementSchema.Component(DataType.BoolType)),
-            decls.exists(d => d.path == List("d") && d.valueType == ElementSchema.Component(DataType.LongType)),
-            decls.exists(d => d.path == List("e") && d.valueType == ElementSchema.Component(DataType.DoubleType))
+            decls.exists(d => d.path == List("a") && d.valueType == IntoSchema[String].graph),
+            decls.exists(d => d.path == List("b") && d.valueType == IntoSchema[Int].graph),
+            decls.exists(d => d.path == List("c") && d.valueType == IntoSchema[Boolean].graph),
+            decls.exists(d => d.path == List("d") && d.valueType == IntoSchema[Long].graph),
+            decls.exists(d => d.path == List("e") && d.valueType == IntoSchema[Double].graph)
           )
         }
       ),

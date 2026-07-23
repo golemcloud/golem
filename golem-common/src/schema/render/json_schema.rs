@@ -987,7 +987,7 @@ fn binary_schema(restrictions: &BinaryRestrictions) -> Map<String, Value> {
     );
     let mut properties = Map::new();
     properties.insert("bytes".to_string(), Value::Object(bytes_field));
-    properties.insert("mime_type".to_string(), Value::Object(mime_field));
+    properties.insert("mimeType".to_string(), Value::Object(mime_field));
     let mut m = Map::new();
     m.insert("type".to_string(), Value::String("object".to_string()));
     m.insert("properties".to_string(), Value::Object(properties));
@@ -1008,6 +1008,7 @@ fn binary_schema(restrictions: &BinaryRestrictions) -> Map<String, Value> {
 fn path_schema(spec: &PathSpec) -> Map<String, Value> {
     let mut m = Map::new();
     m.insert("type".to_string(), Value::String("string".to_string()));
+    m.insert("format".to_string(), Value::String("file-path".to_string()));
     let kind = match spec.kind {
         crate::schema::schema_type::PathKind::File => "file",
         crate::schema::schema_type::PathKind::Directory => "directory",
@@ -1041,6 +1042,7 @@ fn path_schema(spec: &PathSpec) -> Map<String, Value> {
 fn url_schema(restrictions: &UrlRestrictions) -> Map<String, Value> {
     let mut m = Map::new();
     m.insert("type".to_string(), Value::String("string".to_string()));
+    m.insert("format".to_string(), Value::String("uri".to_string()));
     m.insert("title".to_string(), Value::String("URL".to_string()));
     let mut description = Vec::new();
     if let Some(schemes) = &restrictions.allowed_schemes {
@@ -1109,18 +1111,43 @@ fn render_quantity(q: &QuantityValue) -> String {
 }
 
 fn secret_schema(_spec: &SecretSpec) -> Map<String, Value> {
-    // Canonical Secret JSON shape: `{ secret_ref: string-non-empty }`.
-    let mut secret_ref = Map::new();
-    secret_ref.insert("type".to_string(), Value::String("string".to_string()));
-    secret_ref.insert("minLength".to_string(), Value::Number(1.into()));
+    // Canonical Secret JSON shape: see canonical/secret.rs.
+    let secret_id = obj_inline([
+        ("type", Value::String("string".to_string())),
+        ("format", Value::String("uuid".to_string())),
+    ]);
+    let config_key = obj_inline([
+        ("type", Value::String("array".to_string())),
+        (
+            "items",
+            obj_inline([("type", Value::String("string".to_string()))]),
+        ),
+    ]);
+    let version = obj_inline([
+        ("type", Value::String("integer".to_string())),
+        ("minimum", Value::Number(0.into())),
+    ]);
+    let resolved_at = obj_inline([
+        ("type", Value::String("string".to_string())),
+        ("format", Value::String("date-time".to_string())),
+    ]);
+    let category = obj_inline([("type", Value::String("string".to_string()))]);
     let mut properties = Map::new();
-    properties.insert("secret_ref".to_string(), Value::Object(secret_ref));
+    properties.insert("secretId".to_string(), secret_id);
+    properties.insert("configKey".to_string(), config_key);
+    properties.insert("version".to_string(), version);
+    properties.insert("resolvedAt".to_string(), resolved_at);
+    properties.insert("category".to_string(), category);
     let mut m = Map::new();
     m.insert("type".to_string(), Value::String("object".to_string()));
     m.insert("properties".to_string(), Value::Object(properties));
     m.insert(
         "required".to_string(),
-        Value::Array(vec![Value::String("secret_ref".to_string())]),
+        Value::Array(vec![
+            Value::String("secretId".to_string()),
+            Value::String("version".to_string()),
+            Value::String("resolvedAt".to_string()),
+        ]),
     );
     m.insert("additionalProperties".to_string(), Value::Bool(false));
     m
@@ -1161,22 +1188,22 @@ fn quota_token_schema(_spec: &QuotaTokenSpec) -> Map<String, Value> {
         ("format", Value::String("date-time".to_string())),
     ]);
     let mut properties = Map::new();
-    properties.insert("environment_id".to_string(), env_id);
-    properties.insert("resource_name".to_string(), resource_name);
-    properties.insert("expected_use".to_string(), expected_use);
-    properties.insert("last_credit".to_string(), last_credit);
-    properties.insert("last_credit_at".to_string(), last_credit_at);
+    properties.insert("environmentId".to_string(), env_id);
+    properties.insert("resourceName".to_string(), resource_name);
+    properties.insert("expectedUse".to_string(), expected_use);
+    properties.insert("lastCredit".to_string(), last_credit);
+    properties.insert("lastCreditAt".to_string(), last_credit_at);
     let mut m = Map::new();
     m.insert("type".to_string(), Value::String("object".to_string()));
     m.insert("properties".to_string(), Value::Object(properties));
     m.insert(
         "required".to_string(),
         Value::Array(vec![
-            Value::String("environment_id".to_string()),
-            Value::String("resource_name".to_string()),
-            Value::String("expected_use".to_string()),
-            Value::String("last_credit".to_string()),
-            Value::String("last_credit_at".to_string()),
+            Value::String("environmentId".to_string()),
+            Value::String("resourceName".to_string()),
+            Value::String("expectedUse".to_string()),
+            Value::String("lastCredit".to_string()),
+            Value::String("lastCreditAt".to_string()),
         ]),
     );
     m.insert("additionalProperties".to_string(), Value::Bool(false));

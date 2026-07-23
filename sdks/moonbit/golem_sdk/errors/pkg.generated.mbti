@@ -1,0 +1,31 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/errors"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/agent/common",
+  "golemcloud/golem_sdk/schema",
+}
+
+// Values
+pub fn custom_error(String) -> @common.AgentError
+
+pub fn[T : @schema.IntoSchema] custom_error_of(T) -> @common.AgentError raise
+
+pub fn[T : @schema.FromSchema] decode_custom_error(@common.AgentError) -> T? raise
+
+pub fn internal_error(String) -> @common.AgentError
+
+pub fn invalid_input_error(String) -> @common.AgentError
+
+pub fn invalid_method_error(String) -> @common.AgentError
+
+pub fn invalid_type_error(String) -> @common.AgentError
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+

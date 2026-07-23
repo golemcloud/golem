@@ -15,14 +15,12 @@
 use crate::Tracing;
 use anyhow::anyhow;
 use futures::{SinkExt, StreamExt};
-use golem_common::model::agent::{
-    ComponentModelElementValue, DataValue, ElementValue, ElementValues,
-};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{AgentStatus, IdempotencyKey, PromiseId};
+use golem_common::schema::SchemaValue;
+use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::{IntoValue, IntoValueAndType, Value, ValueAndType};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
@@ -110,11 +108,9 @@ async fn websocket_echo_rust(
             "echo",
             data_value!(format!("ws://localhost:{ws_port}"), "hello websocket"),
         )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .await?;
 
-    assert_eq!(result, Value::String("hello websocket".to_string()));
+    assert_eq!(result.into_typed::<String>()?, "hello websocket");
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -188,11 +184,9 @@ async fn websocket_echo_rust_oplog_replay(
             "echo_and_record",
             data_value!(format!("ws://localhost:{ws_port}"), "hello websocket"),
         )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .await?;
 
-    assert_eq!(first_result, Value::String("hello websocket".to_string()));
+    assert_eq!(first_result.into_typed::<String>()?, "hello websocket");
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -213,13 +207,11 @@ async fn websocket_echo_rust_oplog_replay(
             "echo_and_record",
             data_value!(format!("ws://localhost:{ws_port}"), "hello websocket 2"),
         )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .await?;
 
     assert_eq!(
-        second_result,
-        Value::String("hello websocket|hello websocket 2".to_string())
+        second_result.into_typed::<String>()?,
+        "hello websocket|hello websocket 2"
     );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -371,9 +363,11 @@ async fn websocket_reconnect_replays_completed_steps_and_continues_live(
     wait_for_server_state(&accepted_connections, &transcript, 2, 4).await?;
     assert_eq!(
         result,
-        Value::Result(Ok(Some(Box::new(Value::String(
-            "msg-1|msg-2|msg-3|msg-4".to_string()
-        )))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String(
+                "msg-1|msg-2|msg-3|msg-4".to_string(),
+            ))),
+        })
     );
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
     assert_eq!(
@@ -609,10 +603,8 @@ async fn websocket_closed_connection_stays_terminal_after_replay(
             "connect_and_receive_first",
             data_value!(format!("ws://localhost:{ws_port}")),
         )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
-    assert_eq!(first, Value::String("msg-0".to_string()));
+        .await?;
+    assert_eq!(first.into_typed::<String>()?, "msg-0");
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
 
     let closed_result = executor
@@ -730,10 +722,8 @@ async fn websocket_successful_close_terminalizes_handle_and_prevents_reconnect(
             "connect_and_receive_first",
             data_value!(format!("ws://localhost:{ws_port}")),
         )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
-    assert_eq!(first, Value::String("msg-0".to_string()));
+        .await?;
+    assert_eq!(first.into_typed::<String>()?, "msg-0");
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
 
     let close_result = executor
@@ -746,7 +736,10 @@ async fn websocket_successful_close_terminalizes_handle_and_prevents_reconnect(
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
-    assert_eq!(close_result, Value::Result(Ok(None)));
+    assert_eq!(
+        close_result,
+        SchemaValue::Result(ResultValuePayload::Ok { value: None })
+    );
 
     let closed_result = executor
         .invoke_and_await_agent(
@@ -793,40 +786,34 @@ async fn websocket_successful_close_terminalizes_handle_and_prevents_reconnect(
     Ok(())
 }
 
-fn replay_reconnect_roundtrip_params(url: String, promise_id_value: &Value) -> DataValue {
-    let promise_id_vat = ValueAndType::new(promise_id_value.clone(), PromiseId::get_type());
-
-    DataValue::Tuple(ElementValues {
-        elements: vec![
-            ElementValue::ComponentModel(ComponentModelElementValue {
-                value: url.into_value_and_type(),
-            }),
-            ElementValue::ComponentModel(ComponentModelElementValue {
-                value: promise_id_vat,
-            }),
-        ],
-    })
+fn replay_reconnect_roundtrip_params(
+    url: String,
+    promise_id_value: &SchemaValue,
+) -> golem_common::schema::TypedSchemaValue {
+    crate::raw_params(vec![SchemaValue::String(url), promise_id_value.clone()])
 }
 
-fn extract_oplog_idx_from_promise_id(promise_id_value: &Value) -> OplogIndex {
-    let Value::Record(fields) = promise_id_value else {
+fn extract_oplog_idx_from_promise_id(promise_id_value: &SchemaValue) -> OplogIndex {
+    let SchemaValue::Record { fields } = promise_id_value else {
         panic!("Expected a record for PromiseId");
     };
-    let Value::U64(oplog_idx) = fields[1] else {
+    let SchemaValue::U64(oplog_idx) = fields[1] else {
         panic!("Expected second PromiseId field to be oplog_idx");
     };
 
     OplogIndex::from_u64(oplog_idx)
 }
 
-fn get_result_error_string(result: DataValue) -> String {
+fn get_result_error_string(result: golem_test_framework::dsl::AgentResult) -> String {
     let return_value = result
         .into_return_value()
         .expect("expected a single return value");
 
     match return_value {
-        Value::Result(Err(Some(err_value))) => match *err_value {
-            Value::String(s) => s,
+        SchemaValue::Result(ResultValuePayload::Err {
+            value: Some(err_value),
+        }) => match *err_value {
+            SchemaValue::String(s) => s,
             other => panic!("expected error String, got {other:?}"),
         },
         other => panic!("expected Result(Err(...)), got {other:?}"),
@@ -921,7 +908,7 @@ async fn websocket_receive_with_timeout(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    assert_eq!(result, Value::Option(None));
+    assert_eq!(result, SchemaValue::Option { inner: None });
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -987,7 +974,9 @@ async fn websocket_polling_test(
 
     assert_eq!(
         result,
-        Value::Result(Ok(Some(Box::new(Value::String(message.to_string())))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String(message.to_string())))
+        })
     );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1055,7 +1044,9 @@ async fn websocket_polling_survives_repeated_timeouts(
 
     assert_eq!(
         result,
-        Value::Result(Ok(Some(Box::new(Value::String(message.to_string())))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String(message.to_string())))
+        })
     );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1128,9 +1119,11 @@ async fn websocket_async_bidirectional_test(
 
     assert_eq!(
         result,
-        Value::Result(Ok(Some(Box::new(Value::String(
-            "msg-a|msg-b|msg-c".to_string()
-        )))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String(
+                "msg-a|msg-b|msg-c".to_string()
+            ))),
+        })
     );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1208,9 +1201,11 @@ async fn websocket_async_bidirectional_test_oplog_replay(
 
     assert_eq!(
         first_result,
-        Value::Result(Ok(Some(Box::new(Value::String(
-            "msg-a|msg-b|msg-c".to_string()
-        )))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String(
+                "msg-a|msg-b|msg-c".to_string()
+            ))),
+        })
     );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1232,9 +1227,11 @@ async fn websocket_async_bidirectional_test_oplog_replay(
 
     assert_eq!(
         second_result,
-        Value::Result(Ok(Some(Box::new(Value::String(
-            "msg-a|msg-b|msg-c".to_string()
-        )))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String(
+                "msg-a|msg-b|msg-c".to_string()
+            ))),
+        })
     );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1300,11 +1297,9 @@ async fn websocket_echo_ts(
             "echo",
             data_value!(format!("ws://localhost:{ws_port}"), "hello websocket"),
         )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .await?;
 
-    assert_eq!(result, Value::String("hello websocket".to_string()));
+    assert_eq!(result.into_typed::<String>()?, "hello websocket");
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 

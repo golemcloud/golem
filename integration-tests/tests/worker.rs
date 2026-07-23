@@ -25,7 +25,12 @@ use golem_client::api::RegistryServiceClient;
 use golem_common::model::account::{AccountRevision, AccountSetPlan};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentId};
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::oplog::{
+    OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicQueuedCardEvent,
+};
+use golem_common::model::permission_share::{
+    PermissionShareCreation, PermissionShareData, PermissionShareName,
+};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind,
 };
@@ -33,12 +38,12 @@ use golem_common::model::{
     AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
     StringFilterComparator,
 };
+use golem_common::schema::schema_value::ResultValuePayload;
+use golem_common::schema::{FromSchema, SchemaValue};
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended, WorkerLogEventStream, update_counts};
 use golem_test_framework::model::IFSEntry;
-use golem_wasm::analysis::analysed_type;
-use golem_wasm::{FromValue, IntoValueAndType, Record, UuidRecord, Value, ValueAndType};
 use pretty_assertions::assert_eq;
 use rand::seq::IteratorRandom;
 use std::collections::{HashMap, HashSet};
@@ -53,6 +58,53 @@ use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
+
+fn permission_share_data(permission: &str) -> PermissionShareData {
+    PermissionShareData {
+        lower_positive: vec![permission.to_string()],
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+    }
+}
+
+/// REST/JSON invocation of a method whose only declared input is the
+/// auto-injected `principal` field. The caller supplies no parameters (the
+/// host injects the principal out of band), so the invocation must succeed —
+/// the same way the gRPC executor path and the HTTP gateway path already do.
+///
+/// `ReadonlyAgent::get_count_for(&self, _principal: Principal) -> u64` declares
+/// a single auto-injected principal field and no user-supplied parameters, so
+/// the caller sends an empty parameter record. This guards against the
+/// worker-service REST path validating method parameters against the *full*
+/// input schema (including auto-injected fields) instead of only the
+/// user-supplied ones.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn rest_invoke_of_principal_only_method_succeeds(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "golem_it_agent_sdk_rust_release")
+        .name("golem-it:agent-sdk-rust")
+        .store()
+        .await?;
+    let agent_id = agent_id!("ReadonlyAgent", "rest-principal-1");
+    user.start_agent(&component.id, agent_id.clone()).await?;
+
+    let result = user
+        .invoke_and_await_agent(&component, &agent_id, "get_count_for", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    assert_eq!(result, SchemaValue::U64(0));
+    Ok(())
+}
 
 #[test]
 #[tracing::instrument]
@@ -84,31 +136,403 @@ async fn dynamic_worker_creation(
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     let agent_name = agent_id.to_string();
-    assert_eq!(args, Value::Result(Ok(Some(Box::new(Value::List(vec![]))))));
+    assert_eq!(
+        args,
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::List { elements: vec![] }))
+        })
+    );
     assert_eq!(
         env,
-        Value::Result(Ok(Some(Box::new(Value::List(vec![
-            Value::Tuple(vec![
-                Value::String("GOLEM_AGENT_ID".to_string()),
-                Value::String(agent_name.clone())
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_WORKER_NAME".to_string()),
-                Value::String(agent_name)
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_COMPONENT_ID".to_string()),
-                Value::String(format!("{}", component.id))
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_COMPONENT_REVISION".to_string()),
-                Value::String("0".to_string())
-            ]),
-            Value::Tuple(vec![
-                Value::String("GOLEM_AGENT_TYPE".to_string()),
-                Value::String("Environment".to_string()),
-            ])
-        ])))))
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::List {
+                elements: vec![
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_AGENT_ID".to_string()),
+                            SchemaValue::String(agent_name.clone())
+                        ]
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_WORKER_NAME".to_string()),
+                            SchemaValue::String(agent_name)
+                        ]
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_COMPONENT_ID".to_string()),
+                            SchemaValue::String(format!("{}", component.id))
+                        ]
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_COMPONENT_REVISION".to_string()),
+                            SchemaValue::String("0".to_string())
+                        ]
+                    },
+                    SchemaValue::Tuple {
+                        elements: vec![
+                            SchemaValue::String("GOLEM_AGENT_TYPE".to_string()),
+                            SchemaValue::String("Environment".to_string()),
+                        ]
+                    }
+                ]
+            }))
+        })
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn card_host_api_roundtrip(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
+        .store()
+        .await?;
+    let agent_id = agent_id!("GolemHostApi", "card-host-api-roundtrip");
+    let _agent_id = user.start_agent(&component.id, agent_id.clone()).await?;
+
+    let result = user
+        .invoke_and_await_agent(&component, &agent_id, "card_api_roundtrip", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    assert_eq!(
+        result,
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::Bool(true),
+                SchemaValue::Bool(true),
+                SchemaValue::Bool(true),
+                SchemaValue::Bool(true),
+            ]
+        }
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn card_host_api_observes_revocation(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let owner = deps.user().await?;
+    let target = deps.user().await?;
+    let (_, target_env) = target.app_and_env().await?;
+
+    let share = owner
+        .registry_service_client()
+        .await
+        .create_permission_share(
+            &owner.account_id.0,
+            &PermissionShareCreation {
+                target_account_email: target.account_email.clone(),
+                name: PermissionShareName("card-host-api-revocation".to_string()),
+                data: permission_share_data(&format!(
+                    "application({}/card-host-api-revocation) @ {} : view :",
+                    owner.account_email.as_str(),
+                    target.account_email.as_str()
+                )),
+            },
+        )
+        .await?;
+    let card_id = share
+        .current_card_id
+        .ok_or_else(|| anyhow!("permission share did not create a card"))?;
+    let (high_bits, low_bits) = card_id.0.as_u64_pair();
+
+    let component = target
+        .component(&target_env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
+        .store()
+        .await?;
+    let agent_id = agent_id!("GolemHostApi", "card-host-api-revocation");
+    let _agent_id = target.start_agent(&component.id, agent_id.clone()).await?;
+
+    let install_result = target
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "install_card_by_id",
+            data_value!(high_bits, low_bits),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected install return value"))?;
+    assert_eq!(install_result, SchemaValue::Bool(true));
+
+    let derive_before_revoke = target
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "derive_card_by_id",
+            data_value!(high_bits, low_bits),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected derive return value"))?;
+    assert_eq!(derive_before_revoke, SchemaValue::Bool(true));
+
+    owner
+        .registry_service_client()
+        .await
+        .delete_permission_share(&share.id.0, share.revision.into())
+        .await?;
+
+    let mut revoked_observed = false;
+    for _ in 0..40 {
+        let derive_after_revoke = target
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "derive_card_by_id",
+                data_value!(high_bits, low_bits),
+            )
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected derive return value"))?;
+        if derive_after_revoke == SchemaValue::Bool(false) {
+            revoked_observed = true;
+            break;
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
+
+    assert!(revoked_observed, "revoked card remained installed");
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn card_host_api_observes_revocation_during_invocation(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let owner = deps.user().await?;
+    let target = deps.user().await?;
+    let (_, target_env) = target.app_and_env().await?;
+
+    let share = owner
+        .registry_service_client()
+        .await
+        .create_permission_share(
+            &owner.account_id.0,
+            &PermissionShareCreation {
+                target_account_email: target.account_email.clone(),
+                name: PermissionShareName("card-mid-invocation-revocation".to_string()),
+                data: permission_share_data(&format!(
+                    "application({}/card-mid-invocation-revocation) @ {} : view :",
+                    owner.account_email.as_str(),
+                    target.account_email.as_str()
+                )),
+            },
+        )
+        .await?;
+    let card_id = share
+        .current_card_id
+        .ok_or_else(|| anyhow!("permission share did not create a card"))?;
+    let (high_bits, low_bits) = card_id.0.as_u64_pair();
+
+    let component = target
+        .component(&target_env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
+        .store()
+        .await?;
+    let agent_id = agent_id!("GolemHostApi", "card-mid-invocation-revocation");
+    let target_agent_id = target.start_agent(&component.id, agent_id.clone()).await?;
+
+    let install_result = target
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "install_card_by_id",
+            data_value!(high_bits, low_bits),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected install return value"))?;
+    assert_eq!(install_result, SchemaValue::Bool(true));
+
+    let release_promise = target
+        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected release promise"))?;
+    let release_promise = <PromiseId as FromSchema>::from_value(&release_promise)
+        .map_err(|error| anyhow!("{error}"))?;
+
+    let invocation = {
+        let target = target.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        let release_promise = release_promise.clone();
+        tokio::spawn(
+            async move {
+                target
+                    .invoke_and_await_agent(
+                        &component,
+                        &agent_id,
+                        "derive_card_after_promise",
+                        data_value!(high_bits, low_bits, release_promise),
+                    )
+                    .await
+            }
+            .in_current_span(),
+        )
+    };
+
+    target
+        .wait_for_status(
+            &target_agent_id,
+            AgentStatus::Running,
+            Duration::from_secs(10),
+        )
+        .await?;
+    sleep(Duration::from_millis(250)).await;
+
+    owner
+        .registry_service_client()
+        .await
+        .delete_permission_share(&share.id.0, share.revision.into())
+        .await?;
+
+    target
+        .complete_promise(&release_promise, b"release".to_vec())
+        .await?;
+
+    let invocation = tokio::time::timeout(Duration::from_secs(30), invocation)
+        .await
+        .map_err(|_| anyhow!("bounded invocation did not finish"))?;
+    let result = invocation??
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected mid-invocation revocation result"))?;
+    assert_eq!(
+        result,
+        SchemaValue::Record {
+            fields: vec![SchemaValue::Bool(true), SchemaValue::Bool(false)]
+        }
+    );
+
+    target
+        .wait_for_status(&target_agent_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    let oplog = target
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
+        .await?;
+
+    let invocation_started_index = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+                invocation: PublicAgentInvocation::AgentMethodInvocation(params),
+                ..
+            }) if params.method_name == "derive_card_after_promise" => Some(entry.oplog_index),
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("missing invocation start entry"))?;
+    let queued_event_index = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::CardEventQueued(params)
+                if matches!(
+                    &params.event,
+                    PublicQueuedCardEvent::Revoke(event) if event.card_id == card_id
+                ) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("card revocation was not queued"))?;
+    let revoked_event_index = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::CardRevoked(params)
+                if params.queued_event_index == queued_event_index && params.card_id == card_id =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("queued card revocation was not applied"))?;
+    let invocation_finished_index = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationFinished(params)
+                if params.method_name.as_deref() == Some("derive_card_after_promise") =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("missing invocation finish entry"))?;
+
+    let random_boundary_before_queue_index = oplog
+        .iter()
+        .find_map(|entry| {
+            (entry.oplog_index > invocation_started_index
+                && entry.oplog_index < queued_event_index
+                && matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(params) if params.function_name.contains("random")
+                ))
+            .then_some(entry.oplog_index)
+        })
+        .ok_or_else(|| {
+            anyhow!("card revocation was queued before the first random-call durable boundary")
+        })?;
+    let random_boundary_after_revoke_index = oplog
+        .iter()
+        .find_map(|entry| {
+            (entry.oplog_index > revoked_event_index
+                && entry.oplog_index < invocation_finished_index
+                && matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(params) if params.function_name.contains("random")
+                ))
+            .then_some(entry.oplog_index)
+        })
+        .ok_or_else(|| {
+            anyhow!("no random-call durable boundary processed the queued revocation")
+        })?;
+    let derive_after_revoke_index = oplog
+        .iter()
+        .find_map(|entry| {
+            (entry.oplog_index > revoked_event_index
+                && entry.oplog_index < invocation_finished_index
+                && matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(params) if params.function_name.contains("derive-card")
+                ))
+            .then_some(entry.oplog_index)
+        })
+        .ok_or_else(|| anyhow!("card derivation did not run after the revocation was applied"))?;
+
+    assert!(
+        invocation_started_index < random_boundary_before_queue_index
+            && random_boundary_before_queue_index < queued_event_index
+            && queued_event_index < revoked_event_index
+            && revoked_event_index < random_boundary_after_revoke_index
+            && random_boundary_after_revoke_index < derive_after_revoke_index
+            && derive_after_revoke_index < invocation_finished_index,
+        "card revocation was not processed between durable boundaries of the invocation"
     );
 
     Ok(())
@@ -145,7 +569,7 @@ async fn counter_resource_test_1(
 
     let result_value = result.into_return_value().expect("Expected a return value");
 
-    assert_eq!(result_value, Value::U64(5));
+    assert_eq!(result_value, SchemaValue::U64(5));
 
     user.check_oplog_is_queryable(&agent_id).await?;
     Ok(())
@@ -182,7 +606,7 @@ async fn counter_resource_test_1_json(
 
     let result_value = result.into_return_value().expect("Expected a return value");
 
-    assert_eq!(result_value, Value::U64(5));
+    assert_eq!(result_value, SchemaValue::U64(5));
 
     user.check_oplog_is_queryable(&agent_id).await?;
     Ok(())
@@ -249,23 +673,31 @@ async fn shopping_cart_example(
 
     assert_eq!(
         contents_value,
-        Value::List(vec![
-            Value::Record(vec![
-                Value::String("G1000".to_string()),
-                Value::String("Golem T-Shirt M".to_string()),
-                Value::U64(1),
-            ]),
-            Value::Record(vec![
-                Value::String("G1001".to_string()),
-                Value::String("Golem Cloud Subscription 1y".to_string()),
-                Value::U64(1),
-            ]),
-            Value::Record(vec![
-                Value::String("G1002".to_string()),
-                Value::String("Mud Golem".to_string()),
-                Value::U64(2),
-            ]),
-        ])
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("G1000".to_string()),
+                        SchemaValue::String("Golem T-Shirt M".to_string()),
+                        SchemaValue::U64(1),
+                    ]
+                },
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("G1001".to_string()),
+                        SchemaValue::String("Golem Cloud Subscription 1y".to_string()),
+                        SchemaValue::U64(1),
+                    ]
+                },
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("G1002".to_string()),
+                        SchemaValue::String("Mud Golem".to_string()),
+                        SchemaValue::U64(2),
+                    ]
+                },
+            ]
+        }
     );
 
     Ok(())
@@ -307,7 +739,7 @@ async fn rust_rpc_with_payload(
         .into_return_value()
         .expect("Expected a single return value");
 
-    let uuid = UuidRecord::from_value(uuid_as_value.clone()).expect("UUID expected");
+    let uuid = <uuid::Uuid as FromSchema>::from_value(&uuid_as_value).expect("UUID expected");
 
     let child_agent_id = agent_id!("RustChild", uuid);
 
@@ -323,11 +755,15 @@ async fn rust_rpc_with_payload(
 
     assert_eq!(
         option_payload_as_value,
-        Value::Option(Some(Box::new(Value::Record(vec![
-            Value::String("hello world".to_string()),
-            uuid_as_value.clone(),
-            Value::Enum(0)
-        ]))))
+        SchemaValue::Option {
+            inner: Some(Box::new(SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("hello world".to_string()),
+                    uuid_as_value.clone(),
+                    SchemaValue::Enum { case: 0 }
+                ]
+            }))
+        }
     );
     Ok(())
 }
@@ -346,7 +782,7 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
 
     let workers_count = 150;
     let mut agent_ids = HashSet::new();
-    let mut agent_map: Vec<(AgentId, golem_common::model::agent::LegacyParsedAgentId)> = Vec::new();
+    let mut agent_map: Vec<(AgentId, golem_common::model::agent::ParsedAgentId)> = Vec::new();
 
     for i in 0..workers_count {
         let aid = agent_id!("Repository", format!("gw{i}"));
@@ -488,7 +924,7 @@ async fn get_running_workers(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let workers_count = 15;
-    let mut workers: Vec<(AgentId, golem_common::model::agent::LegacyParsedAgentId)> = Vec::new();
+    let mut workers: Vec<(AgentId, golem_common::model::agent::ParsedAgentId)> = Vec::new();
 
     for _i in 0..workers_count {
         let aid = phantom_agent_id!("HttpClient2", Uuid::new_v4());
@@ -732,7 +1168,7 @@ async fn auto_update_on_idle(
 
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0
-    assert_eq!(result, data_value!(0u64));
+    assert_eq!(result.into_return_value(), Some(SchemaValue::U64(0)));
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
     Ok(())
@@ -779,43 +1215,35 @@ async fn auto_update_on_idle_via_host_function(
         .await?;
 
     let (high_bits, low_bits) = agent_id.component_id.0.as_u64_pair();
-    user.invoke_and_await_agent(
-        &host_api_component,
-        &host_api_agent_id,
-        "update_worker",
-        data_value!(
-            Record(vec![
-                (
-                    "component_id",
-                    Record(vec![(
-                        "uuid",
-                        Record(vec![
-                            ("high_bits", high_bits.into_value_and_type()),
-                            ("low_bits", low_bits.into_value_and_type()),
-                        ])
-                        .into_value_and_type(),
-                    )])
-                    .into_value_and_type(),
-                ),
-                (
-                    "agent_id",
-                    parsed_agent_id.to_string().into_value_and_type(),
-                ),
-            ])
-            .into_value_and_type(),
-            updated_component.revision.into_value_and_type(),
-            ValueAndType {
-                value: Value::Variant {
-                    case_idx: 0,
-                    case_value: None,
+    user.invoke_and_await_agent(&host_api_component, &host_api_agent_id, "update_worker", {
+        use golem_common::schema::{
+            SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue, build_input_record,
+        };
+        fn ph(value: SchemaValue) -> TypedSchemaValue {
+            TypedSchemaValue::new(
+                SchemaGraph {
+                    defs: vec![],
+                    root: SchemaType::bool(),
                 },
-                typ: analysed_type::variant(vec![
-                    analysed_type::unit_case("automatic"),
-                    analysed_type::unit_case("snapshot-based"),
-                ]),
-            },
-        ),
-    )
+                value,
+            )
+        }
+        build_input_record(vec![
+            ph(SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::Record {
+                        fields: vec![SchemaValue::Record {
+                            fields: vec![SchemaValue::U64(high_bits), SchemaValue::U64(low_bits)],
+                        }],
+                    },
+                    SchemaValue::String(parsed_agent_id.to_string()),
+                ],
+            }),
+            ph(SchemaValue::U64(updated_component.revision.into())),
+            ph(SchemaValue::Enum { case: 0 }),
+        ])
+        .expect("data_value")
+    })
     .await?
     .into_return_value();
 
@@ -827,7 +1255,7 @@ async fn auto_update_on_idle_via_host_function(
 
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0
-    assert_eq!(result, data_value!(0u64));
+    assert_eq!(result.into_return_value(), Some(SchemaValue::U64(0)));
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
     Ok(())
@@ -1028,9 +1456,9 @@ async fn worker_recreation(
         .into_return_value()
         .expect("Expected a return value");
 
-    assert_eq!(result1_value, Value::U64(1200));
-    assert_eq!(result2_value, Value::U64(1));
-    assert_eq!(result3_value, Value::U64(0));
+    assert_eq!(result1_value, SchemaValue::U64(1200));
+    assert_eq!(result2_value, SchemaValue::U64(1));
+    assert_eq!(result3_value, SchemaValue::U64(0));
 
     Ok(())
 }
@@ -1098,7 +1526,7 @@ async fn stale_scheduled_invocation_dropped_after_worker_recreation(
 
     assert_eq!(
         result,
-        Value::U64(0),
+        SchemaValue::U64(0),
         "Stale scheduled invocation was unexpectedly delivered to the recreated worker"
     );
 
@@ -1156,13 +1584,21 @@ async fn worker_use_initial_files(
 
     assert_eq!(
         result,
-        Value::Tuple(vec![
-            Value::Option(Some(Box::new(Value::String("foo\n".to_string())))),
-            Value::Option(None),
-            Value::Option(None),
-            Value::Option(Some(Box::new(Value::String("baz\n".to_string())))),
-            Value::Option(Some(Box::new(Value::String("hello world".to_string())))),
-        ])
+        SchemaValue::Tuple {
+            elements: vec![
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("foo\n".to_string())))
+                },
+                SchemaValue::Option { inner: None },
+                SchemaValue::Option { inner: None },
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("baz\n".to_string())))
+                },
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("hello world".to_string())))
+                },
+            ]
+        }
     );
 
     Ok(())
@@ -1485,11 +1921,13 @@ async fn resolve_components_from_name(
 
     assert_eq!(
         result,
-        Value::Record(vec![
-            Value::Bool(true),
-            Value::Bool(true),
-            Value::Bool(false),
-        ])
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::Bool(true),
+                SchemaValue::Bool(true),
+                SchemaValue::Bool(false),
+            ]
+        }
     );
 
     Ok(())
@@ -1519,16 +1957,17 @@ async fn agent_promise_await(
         .invoke_and_await_agent(&component, &promise_agent_id, "getPromise", data_value!())
         .await?;
 
-    let promise_id_vat = result
-        .into_return_value_and_type()
+    let promise_id_value = result
+        .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
     let promise_id =
-        PromiseId::from_value(promise_id_vat.value.clone()).map_err(|e| anyhow!("{e}"))?;
+        <PromiseId as FromSchema>::from_value(&promise_id_value).map_err(|e| anyhow!("{e}"))?;
 
     let task = {
         let executor_clone = user.clone();
         let agent_id_clone = promise_agent_id.clone();
         let component_clone = component.clone();
+        let promise_id_clone = promise_id.clone();
         tokio::spawn(
             async move {
                 executor_clone
@@ -1536,7 +1975,7 @@ async fn agent_promise_await(
                         &component_clone,
                         &agent_id_clone,
                         "awaitPromise",
-                        data_value!(promise_id_vat),
+                        data_value!(promise_id_clone),
                     )
                     .await
             }
@@ -1553,7 +1992,7 @@ async fn agent_promise_await(
     let result = task.await??;
     assert_eq!(
         result.into_return_value(),
-        Some(Value::String("hello".to_string()))
+        Some(SchemaValue::String("hello".to_string()))
     );
 
     Ok(())
@@ -1759,7 +2198,7 @@ async fn agent_update_constructor_signature(
     let result1a = user
         .invoke_and_await_agent(&component, &agent1_id, "increment", data_value!())
         .await?;
-    assert_eq!(result1a.into_return_value(), Some(Value::U32(1)));
+    assert_eq!(result1a.into_return_value(), Some(SchemaValue::U32(1)));
 
     let old_singleton_id = agent_id!("Caller");
     let old_singleton = user
@@ -1770,7 +2209,7 @@ async fn agent_update_constructor_signature(
     let result1b = user
         .invoke_and_await_agent(&component, &old_singleton_id, "call", data_value!("agent1"))
         .await?;
-    assert_eq!(result1b.into_return_value(), Some(Value::U32(2)));
+    assert_eq!(result1b.into_return_value(), Some(SchemaValue::U32(2)));
 
     user.update_component(&component.id, "it_agent_update_v2_release")
         .await?;
@@ -1780,7 +2219,7 @@ async fn agent_update_constructor_signature(
     let result2a = user
         .invoke_and_await_agent(&component, &agent2_id, "increment", data_value!())
         .await?;
-    assert_eq!(result2a.into_return_value(), Some(Value::U32(1)));
+    assert_eq!(result2a.into_return_value(), Some(SchemaValue::U32(1)));
 
     let new_singleton_id = agent_id!("NewCaller");
     let _new_singleton = user
@@ -1789,7 +2228,7 @@ async fn agent_update_constructor_signature(
     let result2b = user
         .invoke_and_await_agent(&component, &new_singleton_id, "call", data_value!(123u64))
         .await?;
-    assert_eq!(result2b.into_return_value(), Some(Value::U32(2)));
+    assert_eq!(result2b.into_return_value(), Some(SchemaValue::U32(2)));
 
     // Still able to call both agents
     let result3a = user
@@ -1806,8 +2245,8 @@ async fn agent_update_constructor_signature(
         .invoke_and_await_agent(&component, &agent2_id, "increment", data_value!())
         .await?;
 
-    assert_eq!(result3a.into_return_value(), Some(Value::U32(3)));
-    assert_eq!(result4a.into_return_value(), Some(Value::U32(3)));
+    assert_eq!(result3a.into_return_value(), Some(SchemaValue::U32(3)));
+    assert_eq!(result4a.into_return_value(), Some(SchemaValue::U32(3)));
 
     // Still able to do RPC
     let result3b = user
@@ -1819,12 +2258,12 @@ async fn agent_update_constructor_signature(
             data_value!("agent1"),
         )
         .await?;
-    assert_eq!(result3b.into_return_value(), Some(Value::U32(4)));
+    assert_eq!(result3b.into_return_value(), Some(SchemaValue::U32(4)));
 
     let result4b = user
         .invoke_and_await_agent(&component, &new_singleton_id, "call", data_value!(123u64))
         .await?;
-    assert_eq!(result4b.into_return_value(), Some(Value::U32(4)));
+    assert_eq!(result4b.into_return_value(), Some(SchemaValue::U32(4)));
 
     // Enumerate agents
     let mut cursor = ScanCursor::default();
@@ -1889,7 +2328,7 @@ async fn deployment_invalidates_agent_resolution_cache(
     let result_v1 = user
         .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
         .await?;
-    assert_eq!(result_v1.into_return_value(), Some(Value::U32(1)));
+    assert_eq!(result_v1.into_return_value(), Some(SchemaValue::U32(1)));
 
     // Update to v2: it_agent_update_v2_release has CounterAgent with both increment() AND
     // decrement(). This triggers a new deployment revision and invalidation event.
@@ -1911,7 +2350,10 @@ async fn deployment_invalidates_agent_resolution_cache(
         .invoke_and_await_agent(&component, &agent_v2_id, "decrement", data_value!())
         .await?;
     // Counter starts at 0, decrement returns option::none
-    assert_eq!(result_v2.into_return_value(), Some(Value::Option(None)));
+    assert_eq!(
+        result_v2.into_return_value(),
+        Some(SchemaValue::Option { inner: None })
+    );
 
     Ok(())
 }

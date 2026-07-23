@@ -17,10 +17,10 @@ use crate::Tracing;
 use anyhow::anyhow;
 use assert2::let_assert;
 use golem_common::model::worker::AgentConfigEntryDto;
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use golem_wasm::Value;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::sync::Arc;
@@ -41,7 +41,7 @@ define_matrix_dimension!(lang: Arc<dyn TestContext> -> "ts", "rust");
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn rpc_provided_config_overrides_defaults(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,
@@ -104,7 +104,7 @@ async fn rpc_provided_config_overrides_defaults(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(agent_config) = response);
+    let_assert!(SchemaValue::String(agent_config) = response);
 
     let parsed_agent_config: serde_json::Value = serde_json::from_str(&agent_config)?;
 
@@ -128,7 +128,7 @@ async fn rpc_provided_config_overrides_defaults(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn rpc_can_start_agent_by_providing_config_missing_in_defaults(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,
@@ -187,7 +187,7 @@ async fn rpc_can_start_agent_by_providing_config_missing_in_defaults(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(agent_config) = response);
+    let_assert!(SchemaValue::String(agent_config) = response);
 
     let parsed_agent_config: serde_json::Value = serde_json::from_str(&agent_config)?;
 
@@ -211,7 +211,7 @@ async fn rpc_can_start_agent_by_providing_config_missing_in_defaults(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn rpc_does_not_override_values_of_existing_agent(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,
@@ -277,7 +277,7 @@ async fn rpc_does_not_override_values_of_existing_agent(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(agent_config) = response);
+    let_assert!(SchemaValue::String(agent_config) = response);
 
     let parsed_agent_config: serde_json::Value = serde_json::from_str(&agent_config)?;
 

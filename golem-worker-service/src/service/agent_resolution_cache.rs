@@ -46,8 +46,9 @@ struct CurrentDeploymentRevisions {
 }
 
 pub struct AgentResolutionCache {
-    cache: Cache<AgentResolutionCacheKey, (), ResolvedAgentType, RegistryServiceError>,
-    pinned_cache: Cache<PinnedAgentResolutionCacheKey, (), ResolvedAgentType, RegistryServiceError>,
+    cache: Cache<AgentResolutionCacheKey, (), Arc<ResolvedAgentType>, RegistryServiceError>,
+    pinned_cache:
+        Cache<PinnedAgentResolutionCacheKey, (), Arc<ResolvedAgentType>, RegistryServiceError>,
     registry_service: Arc<dyn RegistryService>,
     current_revisions: scc::HashMap<EnvironmentId, CurrentDeploymentRevisions>,
 }
@@ -89,7 +90,7 @@ impl AgentResolutionCache {
         agent_type_name: &AgentTypeName,
         owner_account_email: Option<&str>,
         auth_ctx: &AuthCtx,
-    ) -> Result<ResolvedAgentType, RegistryServiceError> {
+    ) -> Result<Arc<ResolvedAgentType>, RegistryServiceError> {
         let key = AgentResolutionCacheKey {
             app_name: app_name.0.clone(),
             env_name: env_name.0.clone(),
@@ -117,6 +118,7 @@ impl AgentResolutionCache {
                 registry
                     .resolve_agent_type_by_names(&app, &env, &agent, None, owner.as_deref(), &auth)
                     .await
+                    .map(Arc::new)
             })
             .await?;
 
@@ -140,7 +142,7 @@ impl AgentResolutionCache {
         deployment_revision: DeploymentRevision,
         owner_account_email: Option<&str>,
         auth_ctx: &AuthCtx,
-    ) -> Result<ResolvedAgentType, RegistryServiceError> {
+    ) -> Result<Arc<ResolvedAgentType>, RegistryServiceError> {
         let key = PinnedAgentResolutionCacheKey {
             app_name: app_name.0.clone(),
             env_name: env_name.0.clone(),
@@ -168,6 +170,7 @@ impl AgentResolutionCache {
                         &auth,
                     )
                     .await
+                    .map(Arc::new)
             })
             .await
     }
@@ -279,14 +282,15 @@ mod tests {
     use golem_common::base_model::application::ApplicationId;
     use golem_common::model::Empty;
     use golem_common::model::agent::{
-        AgentConstructor, AgentMode, AgentType, AgentTypeName, DataSchema, NamedElementSchemas,
-        RegisteredAgentType, RegisteredAgentTypeImplementer, ResolvedAgentType, Snapshotting,
+        AgentMode, AgentTypeName, RegisteredAgentType, RegisteredAgentTypeImplementer,
+        ResolvedAgentType, Snapshotting,
     };
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
     use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
+    use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
     use golem_service_base::clients::registry::RegistryServiceError;
     use golem_service_base::model::auth::AuthCtx;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -296,15 +300,16 @@ mod tests {
     fn make_resolved(env_id: EnvironmentId, rev: DeploymentRevision) -> ResolvedAgentType {
         ResolvedAgentType {
             registered_agent_type: RegisteredAgentType {
-                agent_type: AgentType {
+                agent_type: AgentTypeSchema {
                     type_name: AgentTypeName("test-agent".to_string()),
                     description: String::new(),
                     source_language: String::new(),
-                    constructor: AgentConstructor {
+                    schema: SchemaGraph::empty(),
+                    constructor: AgentConstructorSchema {
                         name: None,
                         description: String::new(),
                         prompt_hint: None,
-                        input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                        input_schema: InputSchema::Parameters(vec![]),
                     },
                     methods: vec![],
                     dependencies: vec![],

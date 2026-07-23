@@ -232,7 +232,7 @@ impl WebsocketTest for WebsocketTestImpl {
             {
                 Some(WebSocketMessage::Text(text)) => return Ok(text),
                 Some(WebSocketMessage::Binary(data)) => {
-                    return Ok(format!("Binary: {} bytes", data.len()))
+                    return Ok(format!("Binary: {} bytes", data.len()));
                 }
                 None => continue,
             }

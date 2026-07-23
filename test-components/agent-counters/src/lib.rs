@@ -1,5 +1,5 @@
-mod snapshot_test;
 pub mod repository;
+mod snapshot_test;
 
 use golem_rust::{agent_definition, agent_implementation, generate_idempotency_key};
 
@@ -87,12 +87,12 @@ impl Counter for CounterImpl {
 
     async fn increment_through_rpc_to_ephemeral(&mut self) -> u32 {
         let mut client = EphemeralCounterClient::new_phantom(format!("{}-ephemeral", self.id));
-        client.increment().await
+        client.increment().await.value
     }
 
     async fn increment_through_rpc_to_ephemeral_phantom(&mut self) -> u32 {
         let mut client = EphemeralSingletonCounterClient::new_phantom();
-        client.increment().await
+        client.increment().await.value
     }
 
     fn busy_for(&mut self, millis: u32) -> u32 {
@@ -154,7 +154,6 @@ impl EphemeralCounter for EphemeralCounterImpl {
     }
 }
 
-
 #[agent_definition(ephemeral)]
 trait EphemeralSingletonCounter {
     fn new() -> Self;
@@ -162,7 +161,7 @@ trait EphemeralSingletonCounter {
 }
 
 struct EphemeralSingletonCounterImpl {
-    count: u32
+    count: u32,
 }
 
 #[agent_implementation]
@@ -176,7 +175,6 @@ impl EphemeralSingletonCounter for EphemeralSingletonCounterImpl {
         self.count
     }
 }
-
 
 #[agent_definition(ephemeral)]
 trait HostFunctionTests {

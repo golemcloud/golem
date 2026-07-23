@@ -15,9 +15,13 @@
 use super::agent_secret::{AgentSecretError, AgentSecretService};
 use super::deployment::{DeploymentError, DeploymentService};
 use super::retry_policy::{RetryPolicyError, RetryPolicyService};
+use golem_common::model::agent_secret::{
+    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::AgentDeploymentDetails;
+use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::environment::EnvironmentState;
 use std::sync::Arc;
 
@@ -111,5 +115,18 @@ impl EnvironmentStateService {
             agent_secrets,
             retry_policies,
         })
+    }
+
+    pub async fn get_agent_secret_revision(
+        &self,
+        environment_id: EnvironmentId,
+        agent_secret_id: AgentSecretId,
+        path: CanonicalAgentSecretPath,
+        revision: AgentSecretRevision,
+    ) -> Result<Option<AgentSecret>, EnvironmentStateError> {
+        self.agent_secret_service
+            .get_revision_unchecked(environment_id, agent_secret_id, path, revision)
+            .await
+            .map_err(Into::into)
     }
 }

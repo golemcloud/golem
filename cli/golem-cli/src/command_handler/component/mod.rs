@@ -14,7 +14,7 @@
 
 use crate::app::context::{BuildContext, validated_to_anyhow};
 
-use crate::app::build::extract_agent_type::extract_and_store_agent_types;
+use crate::app::build::extract_component_metadata::extract_and_store_agent_types;
 use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{OptionalComponentNames, PostDeployArgs};
 use crate::command_handler::Handlers;
@@ -31,6 +31,7 @@ use crate::model::app_raw;
 use crate::model::component::{
     AgentTypeManifestProvisionConfig, ComponentDeployProperties, ComponentNameMatchKind,
     ComponentRevisionSelection, ComponentView, SelectedComponents,
+    initial_permission_from_manifest_card, initial_permission_recipient_context,
 };
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
 use crate::model::deploy::{
@@ -40,7 +41,10 @@ use crate::model::deploy::{
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
-use crate::model::text::component::ComponentGetView;
+use crate::model::text::action_result::AgentRedeployResult;
+use crate::model::text::component::{
+    ComponentGetView, ComponentListView, ComponentManifestTraceView,
+};
 use crate::model::text::fmt::log_text_view;
 use crate::model::text::help::ComponentNameHelp;
 use crate::model::text::plugin::PluginNameAndVersion;
@@ -51,7 +55,7 @@ use futures_util::future::OptionFuture;
 use golem_client::api::ComponentClient;
 use golem_client::model::{ComponentCreation, ComponentDto};
 use golem_common::cache::SimpleCache;
-use golem_common::model::agent::{AgentConfigSource, AgentType, AgentTypeName};
+use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{
     AgentConfigEntryDto, ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
@@ -59,6 +63,7 @@ use golem_common::model::component::{
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff;
 use golem_common::model::environment::EnvironmentName;
+use golem_common::schema::agent::AgentTypeSchema;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::str::FromStr;
@@ -114,8 +119,6 @@ impl ComponentCommandHandler {
     }
 
     async fn cmd_list(&self) -> anyhow::Result<()> {
-        let show_sensitive = self.ctx.show_sensitive();
-
         let environment = self
             .ctx
             .environment_handler()
@@ -137,13 +140,15 @@ impl ComponentCommandHandler {
                         .await?
                         .values
                         .into_iter()
-                        .map(|component| ComponentView::new(show_sensitive, component))
+                        .map(ComponentView::new)
                         .collect::<Vec<_>>())
                 },
             )
             .await?;
 
-        self.ctx.log_handler().log_view(&components)?;
+        self.ctx
+            .log_handler()
+            .log_output(ComponentListView { components })?;
 
         Ok(())
     }
@@ -187,7 +192,7 @@ impl ComponentCommandHandler {
                 )
                 .await?;
             if let Some(component) = component {
-                component_views.push(ComponentView::new(self.ctx.show_sensitive(), component));
+                component_views.push(ComponentView::new(component));
             }
         }
 
@@ -207,7 +212,7 @@ impl ComponentCommandHandler {
         for component_view in component_views {
             self.ctx
                 .log_handler()
-                .log_view(&ComponentGetView(component_view))?;
+                .log_output(ComponentGetView(component_view))?;
             logln("");
         }
 
@@ -326,13 +331,16 @@ impl ComponentCommandHandler {
                 ),
             );
             let _indent = self.ctx.log_handler().decorated_indent_primary();
-            self.ctx.log_handler().log_serializable(
-                &app_ctx
-                    .application()
-                    .component(&component_name)
-                    .layer_properties()
-                    .with_compacted_traces(),
-            )?
+            self.ctx
+                .log_handler()
+                .log_output(ComponentManifestTraceView {
+                    component_name: component_name.clone(),
+                    properties: app_ctx
+                        .application()
+                        .component(&component_name)
+                        .layer_properties()
+                        .with_compacted_traces(),
+                })?
         }
 
         Ok(())
@@ -369,7 +377,7 @@ impl ComponentCommandHandler {
             update_results.extend(result);
         }
 
-        self.ctx.log_handler().log_view(&update_results)?;
+        self.ctx.log_handler().log_output(update_results.clone())?;
 
         if !update_results.failed.is_empty() {
             bail!(NonSuccessfulExit)
@@ -396,8 +404,15 @@ impl ComponentCommandHandler {
                 .await?;
         }
 
-        // TODO: json / yaml output?
         // TODO: unlike updating, redeploy is short-circuiting, should we normalize?
+        self.ctx.log_handler().log_output(AgentRedeployResult {
+            redeployed: true,
+            components: components
+                .iter()
+                .map(|component| component.component_name.clone())
+                .collect(),
+        })?;
+
         Ok(())
     }
 
@@ -878,6 +893,16 @@ impl ComponentCommandHandler {
                         &agent_type.type_name,
                         materialize_agent_config_entries(agent_type, resolved_agent.config()),
                     )?,
+                    initial_card: resolved_agent
+                        .initial_card()
+                        .map(initial_permission_from_manifest_card)
+                        .transpose()
+                        .with_context(|| {
+                            format!(
+                                "Invalid initialCard for component {} and agent {}",
+                                component_name.0, agent_type.type_name.0
+                            )
+                        })?,
                     files_source: component.source().to_path_buf(),
                     files: resolved_agent.files().to_vec(),
                     plugins: resolve_plugin_parameters(component_name, resolved_agent.plugins())?,
@@ -1046,6 +1071,20 @@ impl ComponentCommandHandler {
                 config,
                 files_by_path,
                 plugins_by_grant_id,
+                initial_permissions: {
+                    let context = initial_permission_recipient_context(
+                        environment,
+                        component_name,
+                        agent_type_name,
+                    );
+                    let initial_permission = manifest_config.to_initial_permission(&context);
+                    diff::AgentTypeInitialPermission {
+                        lower_positive: initial_permission.lower_bound.positive,
+                        lower_negative: initial_permission.lower_bound.negative,
+                        upper_positive: initial_permission.upper_bound.positive,
+                        upper_negative: initial_permission.upper_bound.negative,
+                    }
+                },
             };
 
             agent_type_provision_configs.insert(agent_type_name.0.clone(), provision_config.into());
@@ -1077,10 +1116,10 @@ impl ComponentCommandHandler {
                 .plugin_grants(environment)
                 .await?,
             None,
-        );
+        )?;
 
         let wasm = component_stager.open_wasm().await?;
-        let agent_types: Vec<AgentType> = component_stager.agent_types().clone();
+        let agent_types: Vec<AgentTypeSchema> = component_stager.agent_types().clone();
 
         // NOTE: do not drop until the component is created, keeps alive the temp archive
         let files = component_stager.all_files().await?;
@@ -1096,7 +1135,7 @@ impl ComponentCommandHandler {
                     component_name: component_name.clone(),
                     agent_types,
                     agent_type_provision_configs: component_stager
-                        .agent_type_provision_configs()
+                        .agent_type_provision_configs(environment, component_name)
                         .await?,
                 },
                 wasm,
@@ -1172,7 +1211,8 @@ impl ComponentCommandHandler {
                 .await
                 .map_err(UpdateStagedComponentError::Other)?,
             Some(diff),
-        );
+        )
+        .map_err(UpdateStagedComponentError::Other)?;
 
         let wasm = component_stager
             .open_wasm_if_changed()
@@ -1198,7 +1238,11 @@ impl ComponentCommandHandler {
                     current_revision: component.revision,
                     agent_types,
                     agent_type_provision_config_updates: component_stager
-                        .agent_type_provision_config_updates(&changed_files)
+                        .agent_type_provision_config_updates(
+                            environment,
+                            &component.name,
+                            &changed_files,
+                        )
                         .await
                         .map_err(UpdateStagedComponentError::Other)?,
                     allow_incompatible_config,
@@ -1495,7 +1539,7 @@ fn resolve_config_values(
 }
 
 fn materialize_agent_config_entries(
-    agent_type: &AgentType,
+    agent_type: &AgentTypeSchema,
     config_root: Option<&serde_json::Value>,
 ) -> Vec<AgentConfigEntryDto> {
     let Some(config_root) = config_root else {
@@ -1516,7 +1560,7 @@ fn materialize_agent_config_entries(
 }
 
 fn collect_unused_agent_config_paths(
-    agent_type: &AgentType,
+    agent_type: &AgentTypeSchema,
     config_root: Option<&serde_json::Value>,
 ) -> Vec<String> {
     let Some(config_root) = config_root else {

@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::exports::golem::agent::guest::{
-    AgentError, AgentType, DataValue, Principal,
-};
+use crate::golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, Principal};
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
+use crate::schema::SchemaValue;
 
 #[derive(Debug)]
 pub struct SnapshotData {
@@ -35,9 +34,9 @@ pub trait BaseAgent {
     async fn invoke(
         &mut self,
         method_name: String,
-        input: DataValue,
+        input: SchemaValue,
         principal: Principal,
-    ) -> Result<DataValue, AgentError>;
+    ) -> Result<Option<SchemaValue>, AgentError>;
 
     /// Gets the agent type metadata of this agent
     fn get_definition(&self) -> AgentType;

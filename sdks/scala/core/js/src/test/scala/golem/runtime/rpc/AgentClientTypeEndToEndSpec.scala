@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,12 +16,11 @@
 
 package golem.runtime.rpc
 
-import golem.host.js._
+import golem.host.js.schema.JsSchemaValueTree
 import golem.BaseAgent
 import golem.runtime.AgentMethod
 import golem.runtime.annotations.{DurabilityMode, agentDefinition, agentImplementation}
 import golem.runtime.autowire.AgentImplementation
-import golem.runtime.rpc.RpcValueCodec
 import zio._
 import zio.test._
 
@@ -52,45 +51,43 @@ object AgentClientTypeEndToEndSpec extends ZIOSpecDefault {
 
         val agentType = golem.runtime.macros.AgentClientMacro.agentType[AsyncEchoAgent]
 
+        // The host loopback returns the single output `some(tree)` for "echo".
         val rpc = new RpcInvoker {
-          override def invokeAndAwait(functionName: String, input: JsDataValue): Either[String, JsDataValue] =
+          override def invokeAndAwait(
+            functionName: String,
+            input: JsSchemaValueTree
+          ): Either[String, Option[JsSchemaValueTree]] =
             if (functionName != "echo") Left(s"unexpected method: $functionName")
-            else {
-              import golem.GolemSchema._
-              val witValue = RpcValueCodec.encodeValue("hello world")
-              witValue.map { wv =>
-                JsDataValue.tuple(js.Array(JsElementValue.componentModel(wv)))
-              }
-            }
+            else Right(SchemaRpcCodec.encodeSingleResult("hello world"))
 
-          override def asyncInvokeAndAwait(functionName: String, input: JsDataValue): scala.concurrent.Future[JsDataValue] =
-            if (functionName != "echo") scala.concurrent.Future.failed(js.JavaScriptException(s"unexpected method: $functionName"))
-            else {
-              import golem.GolemSchema._
-              val witValue = RpcValueCodec.encodeValue("hello world")
-              witValue match {
-                case Right(wv) => scala.concurrent.Future.successful(JsDataValue.tuple(js.Array(JsElementValue.componentModel(wv))))
-                case Left(err) => scala.concurrent.Future.failed(js.JavaScriptException(err))
-              }
-            }
+          override def asyncInvokeAndAwait(
+            functionName: String,
+            input: JsSchemaValueTree
+          ): scala.concurrent.Future[Option[JsSchemaValueTree]] =
+            if (functionName != "echo")
+              scala.concurrent.Future.failed(js.JavaScriptException(s"unexpected method: $functionName"))
+            else scala.concurrent.Future.successful(SchemaRpcCodec.encodeSingleResult("hello world"))
 
-          override def cancelableAsyncInvokeAndAwait(functionName: String, input: JsDataValue): (scala.concurrent.Future[JsDataValue], CancellationToken) =
+          override def cancelableAsyncInvokeAndAwait(
+            functionName: String,
+            input: JsSchemaValueTree
+          ): (scala.concurrent.Future[Option[JsSchemaValueTree]], CancellationToken) =
             (asyncInvokeAndAwait(functionName, input), CancellationToken.fromFunction(() => ()))
 
-          override def invoke(functionName: String, input: JsDataValue): Either[String, Unit] =
+          override def invoke(functionName: String, input: JsSchemaValueTree): Either[String, Unit] =
             Left("not used")
 
           override def scheduleInvocation(
             @unused datetime: golem.Datetime,
             @unused functionName: String,
-            @unused input: JsDataValue
+            @unused input: JsSchemaValueTree
           ): Either[String, Unit] =
             Left("not used")
 
           override def scheduleCancelableInvocation(
             @unused datetime: golem.Datetime,
             @unused functionName: String,
-            @unused input: JsDataValue
+            @unused input: JsSchemaValueTree
           ): Either[String, CancellationToken] =
             Left("not used")
         }

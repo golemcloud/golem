@@ -28,6 +28,15 @@
       "golem:agent/host@1.5.0": [
         "types/golem_agent_1_5_0_host.d.ts"
       ],
+      "golem:agent/common@2.0.0": [
+        "types/golem_agent_2_0_0_common.d.ts"
+      ],
+      "golem:agent/host@2.0.0": [
+        "types/golem_agent_2_0_0_host.d.ts"
+      ],
+      "golem:core/types@2.0.0": [
+        "types/golem_core_2_0_0_types.d.ts"
+      ],
       "golem:rdbms/ignite2@1.5.0": [
         "types/golem_rdbms_1_5_0_ignite2.d.ts"
       ]
@@ -35,14 +44,15 @@
   },
   "scripts": {
     "bench": "vitest bench",
+    "bench:quickjs": "node ./scripts/bench-quickjs.mjs",
     "lint": "eslint . --ext .ts,.tsx,.mjs",
     "lint:fix": "eslint . --ext .ts,.tsx,.mjs --fix",
     "generate-dts": "wasm-rquickjs generate-dts --wit ../../wit --output types",
     "build": "pnpm run generate-dts && rollup --failAfterWarnings -c",
     "clean": "node ./scripts/clean.mjs",
     "clean-test-data": "node ../../scripts/clean-test-data.mjs",
-    "generate-sample-agents-types": "golem-typegen ./tsconfig.json --files 'tests/**/*.ts' --include-class-decorators agent --golem-ts-sdk-import './src'",
-    "test": "pnpm run clean-test-data && pnpm run generate-sample-agents-types && vitest run",
+    "test": "pnpm run typecheck && pnpm run clean-test-data && vitest run",
+    "typecheck": "pnpm run build && tsc --project tsconfig.type-tests.json",
     "dev": "rollup -c -w",
     "generate-agent-template": "node ./scripts/generate-agent-template.mjs",
     "compile-agent-template": "cargo build --target wasm32-wasip2 --manifest-path=agent-template/Cargo.toml --release --features full,golem",
@@ -55,8 +65,9 @@
   "description": "",
   "devDependencies": {
     "@eslint/js": "^9.33.0",
-    "@golemcloud/golem-ts-typegen": "workspace:*",
-    "@golemcloud/golem-ts-types-core": "workspace:*",
+    "arktype": "^2.1.0",
+    "effect": "^3.10.0",
+    "valibot": "^1.0.0",
     "@rollup/plugin-commonjs": "^28.0.6",
     "@rollup/plugin-node-resolve": "^16.0.1",
     "@rollup/plugin-terser": "^1.0.0",
@@ -75,7 +86,9 @@
     "ts-morph": "^26.0.0",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.39.0",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "zod": "^4.4.3",
+    "zod3": "npm:zod@^3.24.0"
   },
   "private": false,
   "repository": "https://github.com/golemcloud/golem"

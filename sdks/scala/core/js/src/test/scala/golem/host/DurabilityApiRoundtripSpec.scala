@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,6 +18,7 @@ package golem.host
 
 import golem.HostApi
 import golem.host.js._
+import golem.schema.{IntoSchema, SchemaValue, TypedSchemaValue}
 import zio.test._
 
 import scala.scalajs.js
@@ -167,16 +168,11 @@ object DurabilityApiRoundtripSpec extends ZIOSpecDefault {
     // --- PersistedDurableFunctionInvocation ---
 
     test("PersistedDurableFunctionInvocation construction") {
-      val vat = WitValueTypes.ValueAndType(
-        WitValueTypes.WitValue(List(WitValueTypes.WitNode.PrimString("test"))),
-        WitValueTypes.WitType(
-          List(WitValueTypes.NamedWitTypeNode(None, None, WitValueTypes.WitTypeNode.PrimStringType))
-        )
-      )
-      val inv = PersistedDurableFunctionInvocation(
+      val typed: TypedSchemaValue = IntoSchema[String].toTyped("test")
+      val inv                     = PersistedDurableFunctionInvocation(
         timestamp = Datetime(BigInt(1700000000L), 500000000),
         functionName = "golem:api/test.{invoke}",
-        response = vat,
+        response = typed,
         functionType = DurableFunctionType.ReadRemote,
         entryVersion = OplogEntryVersion.V2
       )
@@ -184,7 +180,7 @@ object DurabilityApiRoundtripSpec extends ZIOSpecDefault {
         inv.timestamp.seconds == BigInt(1700000000L),
         inv.timestamp.nanoseconds == 500000000,
         inv.functionName == "golem:api/test.{invoke}",
-        inv.response.value.nodes.head == WitValueTypes.WitNode.PrimString("test"),
+        inv.response.value == SchemaValue.StringValue("test"),
         inv.functionType == DurableFunctionType.ReadRemote,
         inv.entryVersion == OplogEntryVersion.V2
       )

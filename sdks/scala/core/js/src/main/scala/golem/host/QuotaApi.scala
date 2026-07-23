@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,11 +17,19 @@
 package golem.host
 
 import golem.host.js._
-import golem.data.GolemSchema
-import golem.Uuid
-import golem.EnvironmentId
-import zio.blocks.schema.Schema
+import golem.schema.{
+  FromSchema,
+  FromSchemaError,
+  GuestQuotaTokenHandle,
+  IntoSchema,
+  QuotaTokenSpec,
+  SchemaGraph,
+  SchemaType,
+  SchemaTypeBody,
+  SchemaValue
+}
 
+import scala.collection.immutable.ListMap
 import scala.concurrent.{ExecutionContext, Future}
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSImport
@@ -29,19 +37,19 @@ import scala.scalajs.js.annotation.JSImport
 /**
  * Scala.js facade for `golem:quota/types@1.5.0`.
  *
- * WIT interface:
+ * The `quota-token` capability is an opaque, unforgeable, owned resource
+ * defined in `golem:core/types@2.0.0`. Guest code can only hold and move the
+ * handle: it cannot read the token's internals, serialize it, or forge one. The
+ * quota interface exposes free functions over such a handle plus the
+ * `reservation` resource:
  * {{{
  *   record failed-reservation { estimated-wait-nanos: option<u64> }
- *   record quota-token-record { environment-id, resource-name, expected-use, last-credit, last-credit-at }
- *   resource reservation { commit: func(used: u64) }
- *   resource quota-token {
- *     constructor(resource-name: string, expected-use: u64);
- *     reserve: func(amount: u64) -> result<reservation, failed-reservation>;
- *     split: func(child-expected-use: u64) -> quota-token;
- *     merge: func(other: quota-token);
- *     to-record: func() -> quota-token-record;
- *     from-record: static func(serialized: quota-token-record) -> quota-token;
- *   }
+ *   resource reservation { commit: static func(this: reservation, used: u64) }
+ *   new-token: func(resource-name: string, expected-use: u64) -> quota-token;
+ *   reserve:   func(token: borrow<quota-token>, amount: u64)
+ *                -> result<reservation, failed-reservation>;
+ *   split:     func(token: borrow<quota-token>, child-expected-use: u64) -> quota-token;
+ *   merge:     func(token: borrow<quota-token>, other: quota-token);
  * }}}
  */
 object QuotaApi {
@@ -75,7 +83,7 @@ object QuotaApi {
      *     allocation.
      */
     def commit(used: BigInt): Unit =
-      underlying.commit(js.BigInt(used.toString))
+      JsReservationStatic.commit(underlying, js.BigInt(used.toString))
   }
 
   // --- WIT: quota-token resource ---
@@ -83,7 +91,11 @@ object QuotaApi {
   /**
    * An unforgeable capability granting the right to consume a named resource.
    *
-   * Dropping the token releases the underlying lease back to the executor pool.
+   * A `QuotaToken` holds only an opaque, affine handle to the owned host
+   * resource: it carries no readable content and can be transferred to exactly
+   * one destination (an RPC argument, a method return value, ...). Once
+   * transferred the token can no longer be used; [[split]] first if you need to
+   * both keep and send a capability.
    *
    * Typical usage:
    * {{{
@@ -97,7 +109,7 @@ object QuotaApi {
    *   }
    * }}}
    */
-  final class QuotaToken private[golem] (private[golem] val underlying: JsQuotaToken) {
+  final class QuotaToken private[golem] (private[golem] val handle: GuestQuotaTokenHandle) {
 
     /**
      * Reserve `amount` units from the local allocation.
@@ -107,102 +119,83 @@ object QuotaApi {
      * `Left(FailedReservation)` when the enforcement policy is `reject`. For
      * `throttle` / `terminate` policies the call suspends or terminates the
      * agent before returning.
+     *
+     * Traps if this token has already been transferred.
      */
     def reserve(amount: BigInt): Either[FailedReservation, Reservation] =
-      try {
-        val raw = underlying.reserve(js.BigInt(amount.toString))
-        Right(new Reservation(raw))
-      } catch {
-        case e: js.JavaScriptException =>
-          val raw           = e.exception.asInstanceOf[JsFailedReservation]
-          val estimatedWait = raw.estimatedWaitNanos.toOption.map(bi => BigInt(bi.toString))
-          Left(FailedReservation(estimatedWait))
+      handle.withHandle { raw =>
+        try
+          Right(
+            new Reservation(QuotaModule.reserve(raw.asInstanceOf[JsQuotaTokenResource], js.BigInt(amount.toString)))
+          )
+        catch {
+          case e: js.JavaScriptException =>
+            val rawErr        = e.exception.asInstanceOf[JsFailedReservation]
+            val estimatedWait = rawErr.estimatedWaitNanos.toOption.map(bi => BigInt(bi.toString))
+            Left(FailedReservation(estimatedWait))
+        }
       }
+        .getOrElse(throw new IllegalStateException(TOKEN_CONSUMED))
 
     /**
      * Split off a child token with `childExpectedUse` units of expected-use.
      *
      *   - The parent's expected-use is reduced by `childExpectedUse`.
      *   - Credits are divided proportionally between parent and child.
-     *   - Both tokens share the same underlying lease.
      *
-     * Traps if `childExpectedUse` exceeds the parent's current expected-use.
+     * Traps if `childExpectedUse` exceeds the parent's current expected-use, or
+     * if this token has already been transferred.
      */
     def split(childExpectedUse: BigInt): QuotaToken =
-      new QuotaToken(underlying.split(js.BigInt(childExpectedUse.toString)))
+      handle.withHandle { raw =>
+        new QuotaToken(
+          GuestQuotaTokenHandle.fromRaw(
+            QuotaModule.split(raw.asInstanceOf[JsQuotaTokenResource], js.BigInt(childExpectedUse.toString))
+          )
+        )
+      }
+        .getOrElse(throw new IllegalStateException(TOKEN_CONSUMED))
 
     /**
      * Merge `other` back into this token.
      *
      * Combines expected-use and credits. `other` is consumed by this call and
-     * must not be used afterwards.
+     * must not be used afterwards; this token remains usable.
      *
-     * Traps if the tokens refer to different resources.
+     * Traps if the tokens refer to different resources, or if either token has
+     * already been transferred.
      */
-    def merge(other: QuotaToken): Unit =
-      underlying.merge(other.underlying)
+    def merge(other: QuotaToken): Unit = {
+      // Reject merging a token into itself before taking any handle, so a shared
+      // handle is not consumed by the receiver and then read again as `other`.
+      if (other.handle eq this.handle)
+        throw new IllegalArgumentException("cannot merge a quota token with itself")
+      // Borrow this token first (it is a `borrow<quota-token>` and stays usable);
+      // a consumed receiver must not consume `other`.
+      handle.withHandle { thisRaw =>
+        other.handle.take() match {
+          case Some(otherRaw) =>
+            QuotaModule.merge(
+              thisRaw.asInstanceOf[JsQuotaTokenResource],
+              otherRaw.asInstanceOf[JsQuotaTokenResource]
+            )
+          case None => throw new IllegalStateException(TOKEN_CONSUMED)
+        }
+      }
+        .getOrElse(throw new IllegalStateException(TOKEN_CONSUMED))
+    }
 
     /**
-      * Reserve `amount` units, run `f`, then commit the actual usage returned
-      * by `f`.  Commits zero usage on failure and re-throws.
-      *
-      * {{{
-      *   val result = token.withReservation(BigInt(500)) { reservation =>
-      *     Future {
-      *       val data = callExternalApi()
-      *       (data.tokensUsed, data)
-      *     }
-      *   }
-      * }}}
-      */
-    def withReservation[T](amount: BigInt)(f: Reservation => Future[(BigInt, T)]): Future[Either[FailedReservation, T]] =
+     * Reserve `amount` units, run `f`, then commit the actual usage returned by
+     * `f`. Commits zero usage on failure and re-throws.
+     */
+    def withReservation[T](amount: BigInt)(
+      f: Reservation => Future[(BigInt, T)]
+    ): Future[Either[FailedReservation, T]] =
       QuotaApi.withReservation(this, amount)(f)
-
-    private[golem] def toRecord(): QuotaTokenRecord = {
-      val raw = underlying.toRecord()
-      val ts  = raw.lastCreditAt
-      QuotaTokenRecord(
-        environmentId = environmentIdFromJs(raw.environmentId.asInstanceOf[JsEnvironmentId]),
-        resourceName = raw.resourceName,
-        expectedUse = BigInt(raw.expectedUse.toString),
-        lastCredit = BigInt(raw.lastCredit.toString),
-        lastCreditAtSeconds = BigInt(ts.seconds.toString),
-        lastCreditAtNanos = ts.nanoseconds
-      )
-    }
-  }
-
-  /** A serializable snapshot of a [[QuotaToken]], suitable for RPC transfer. */
-  final case class QuotaTokenRecord(
-    environmentId: EnvironmentId,
-    resourceName: String,
-    expectedUse: BigInt,
-    lastCredit: BigInt,
-    lastCreditAtSeconds: BigInt,
-    lastCreditAtNanos: Int
-  )
-
-  object QuotaTokenRecord {
-    implicit val schema: Schema[QuotaTokenRecord] = Schema.derived
   }
 
   object QuotaToken {
-
-    private[golem] def fromRecord(record: QuotaTokenRecord): QuotaToken = {
-      val jsRecord = js.Dynamic
-        .literal(
-          environmentId = environmentIdToJs(record.environmentId),
-          resourceName = record.resourceName,
-          expectedUse = js.BigInt(record.expectedUse.toString),
-          lastCredit = js.BigInt(record.lastCredit.toString),
-          lastCreditAt = JsDatetime(
-            js.BigInt(record.lastCreditAtSeconds.toString),
-            record.lastCreditAtNanos
-          )
-        )
-        .asInstanceOf[JsQuotaTokenRecord]
-      new QuotaToken(JsQuotaTokenStaticClass.fromRecord(jsRecord).asInstanceOf[JsQuotaToken])
-    }
 
     /**
      * Request a quota capability for the named resource.
@@ -215,93 +208,86 @@ object QuotaApi {
      */
     def apply(resourceName: String, expectedUse: BigInt): QuotaToken =
       new QuotaToken(
-        new JsQuotaTokenClass(resourceName, js.BigInt(expectedUse.toString))
-          .asInstanceOf[JsQuotaToken]
+        GuestQuotaTokenHandle.fromRaw(QuotaModule.newToken(resourceName, js.BigInt(expectedUse.toString)))
       )
 
     /**
-     * Automatic serialization for RPC: `QuotaToken` is transparently converted
-     * to/from [[QuotaTokenRecord]] when passing across agent boundaries.
-     *
-     * Users do not need to call `toRecord` / `fromRecord` manually.
+     * Automatic serialization for RPC: a `QuotaToken` is a schema-native
+     * capability node (`golem:core/types@2.0.0` `quota-token` /
+     * `quota-token-handle`), not a plain record. The owned handle is moved into
+     * the value tree when it is encoded, so a token can be sent exactly once
+     * and cannot be forged from data.
      */
-    implicit val golemSchema: GolemSchema[QuotaToken] = {
-      val recordSchema = GolemSchema.fromBlocksSchema[QuotaTokenRecord]
-      new GolemSchema[QuotaToken] {
-        override def schema                                        = recordSchema.schema
-        override def elementSchema                                 = recordSchema.elementSchema
-        override def encode(value: QuotaToken)                     = recordSchema.encode(value.toRecord())
-        override def decode(value: golem.data.StructuredValue)     = recordSchema.decode(value).map(fromRecord)
-        override def encodeElement(value: QuotaToken)              = recordSchema.encodeElement(value.toRecord())
-        override def decodeElement(value: golem.data.ElementValue) = recordSchema.decodeElement(value).map(fromRecord)
+    implicit val intoSchema: IntoSchema[QuotaToken] =
+      new IntoSchema[QuotaToken] {
+        override lazy val graph: SchemaGraph =
+          SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.QuotaTokenType(QuotaTokenSpec())))
+
+        override def toValue(token: QuotaToken): SchemaValue =
+          SchemaValue.QuotaTokenHandle(token.handle)
       }
-    }
+
+    implicit val fromSchema: FromSchema[QuotaToken] =
+      new FromSchema[QuotaToken] {
+        override def fromValue(value: SchemaValue): Either[FromSchemaError, QuotaToken] =
+          value match {
+            case SchemaValue.QuotaTokenHandle(h) => Right(new QuotaToken(h))
+            case other                           =>
+              Left(FromSchemaError(s"expected quota-token handle for QuotaToken, got $other"))
+          }
+      }
   }
+
+  private val TOKEN_CONSUMED =
+    "quota token has already been transferred and can no longer be used; split the token first if " +
+      "you need to both keep and send a capability"
 
   private implicit val ec: ExecutionContext = ExecutionContext.global
 
   /**
-    * Reserve `amount` units from `token`, run `f`, then commit the actual usage
-    * returned by `f`.  Commits zero usage on failure and re-throws, ensuring
-    * unused capacity is always returned to the pool.
-    *
-    * Returns `Future(Left(FailedReservation))` if the reservation could not be
-    * granted, or `Future(Right(value))` on success.
-    *
-    * {{{
-    *   val result = withReservation(token, BigInt(500)) { reservation =>
-    *     Future {
-    *       val data = callExternalApi()
-    *       (data.tokensUsed, data)
-    *     }
-    *   }
-    * }}}
-    */
+   * Reserve `amount` units from `token`, run `f`, then commit the actual usage
+   * returned by `f`. Commits zero usage on failure and re-throws, ensuring
+   * unused capacity is always returned to the pool.
+   *
+   * Returns `Future(Left(FailedReservation))` if the reservation could not be
+   * granted, or `Future(Right(value))` on success.
+   *
+   * {{{
+   *   val result = withReservation(token, BigInt(500)) { reservation =>
+   *     Future {
+   *       val data = callExternalApi()
+   *       (data.tokensUsed, data)
+   *     }
+   *   }
+   * }}}
+   */
   def withReservation[T](token: QuotaToken, amount: BigInt)(
     f: Reservation => Future[(BigInt, T)]
   ): Future[Either[FailedReservation, T]] =
     token.reserve(amount) match {
-      case Left(err) => Future.successful(Left(err))
+      case Left(err)          => Future.successful(Left(err))
       case Right(reservation) =>
-        f(reservation)
-          .map { case (used, value) =>
-            reservation.commit(used)
-            Right(value)
-          }
-          .recoverWith { case e: Throwable =>
-            reservation.commit(BigInt(0))
-            Future.failed(e)
-          }
+        f(reservation).map { case (used, value) =>
+          reservation.commit(used)
+          Right(value)
+        }.recoverWith { case e: Throwable =>
+          reservation.commit(BigInt(0))
+          Future.failed(e)
+        }
     }
 
   @js.native
-  @JSImport("golem:quota/types@1.5.0", "QuotaToken")
-  private class JsQuotaTokenClass(resourceName: String, expectedUse: js.BigInt) extends js.Object {
-    def reserve(amount: js.BigInt): JsReservation        = js.native
-    def split(childExpectedUse: js.BigInt): JsQuotaToken = js.native
-    def merge(other: JsQuotaToken): Unit                 = js.native
-    def toRecord(): JsQuotaTokenRecord                   = js.native
+  @JSImport("golem:quota/types@1.5.0", JSImport.Namespace)
+  private object QuotaModule extends js.Object {
+    def newToken(resourceName: String, expectedUse: js.BigInt): JsQuotaTokenResource          = js.native
+    def reserve(token: JsQuotaTokenResource, amount: js.BigInt): JsReservation                = js.native
+    def split(token: JsQuotaTokenResource, childExpectedUse: js.BigInt): JsQuotaTokenResource = js.native
+    def merge(token: JsQuotaTokenResource, other: JsQuotaTokenResource): Unit                 = js.native
   }
 
   @js.native
-  @JSImport("golem:quota/types@1.5.0", "QuotaToken")
-  private object JsQuotaTokenStaticClass extends js.Object {
-    def fromRecord(serialized: JsQuotaTokenRecord): js.Object = js.native
+  @JSImport("golem:quota/types@1.5.0", "Reservation")
+  private object JsReservationStatic extends js.Object {
+    def commit(self: JsReservation, used: js.BigInt): Unit = js.native
   }
-
-  private def environmentIdToJs(environmentId: EnvironmentId): JsEnvironmentId =
-    JsEnvironmentId(
-      uuid = JsUuid(
-        highBits = js.BigInt(environmentId.uuid.highBits.toString),
-        lowBits = js.BigInt(environmentId.uuid.lowBits.toString)
-      )
-    )
-
-  private def environmentIdFromJs(raw: JsEnvironmentId): EnvironmentId =
-    EnvironmentId(
-      uuid = Uuid(
-        highBits = BigInt(raw.uuid.highBits.toString),
-        lowBits = BigInt(raw.uuid.lowBits.toString)
-      )
-    )
 }

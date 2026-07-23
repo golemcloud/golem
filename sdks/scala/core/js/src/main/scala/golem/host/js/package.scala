@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,20 +16,13 @@
 
 package golem.host
 
-import scala.scalajs.js
-
 package object js {
-  // CoreTypes
-  type JsNodeIndex    = Int
-  type JsResourceId   = js.BigInt
-  type JsResourceMode = String // "owned" | "borrowed"
-
-  // golem:agent/common@1.5.0
+  // golem:agent/common@2.0.0
   type JsAgentMode         = String // "durable" | "ephemeral"
   type JsAgentConfigSource = String // "local" | "secret"
   type JsSystemVariable    = String // "agent-type" | "agent-version"
 
-  // golem:agent/agent-host@1.5.0
+  // golem:api/host@1.5.0
   type JsUpdateMode             = String // "automatic" | "snapshot-based"
   type JsAgentStatus            = String // "running" | "idle" | "suspended" | "interrupted" | "retrying" | "failed" | "exited"
   type JsFilterComparator       = String // "equal" | "not-equal" | "greater-equal" | "greater" | "less-equal" | "less"

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::{CLOUD_URL, NamedProfile, builtin_local_url};
+use crate::config::{DEFAULT_CLOUD_URL, NamedProfile, builtin_local_url};
 use crate::model::app_raw::{BuiltinServer, Environment, Server};
 use colored::Colorize;
 
@@ -29,7 +29,7 @@ impl ToFormattedServerContext for NamedProfile {
         } else {
             match &self.profile.custom_url {
                 Some(custom_url) => custom_url.as_str().underline().to_string(),
-                None => CLOUD_URL.underline().to_string(),
+                None => DEFAULT_CLOUD_URL.underline().to_string(),
             }
         }
     }
@@ -55,5 +55,5 @@ fn local_builtin() -> String {
 }
 
 fn cloud_builtin() -> String {
-    format!("cloud - builtin ({})", CLOUD_URL.underline())
+    format!("cloud - builtin ({})", DEFAULT_CLOUD_URL.underline())
 }

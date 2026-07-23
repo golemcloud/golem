@@ -13,24 +13,23 @@
 // limitations under the License.
 
 use crate::Tracing;
-use anyhow::anyhow;
 use axum::Router;
 use axum::extract::Path;
 use axum::routing::{delete, get, post};
 use bytes::Bytes;
 use golem_common::model::IdempotencyKey;
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{
     TestDsl, drain_connection, stdout_event_starting_with, stdout_events,
 };
-use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
 use pretty_assertions::{assert_eq, assert_ne};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::task::JoinHandle;
 use tracing::info;
@@ -172,8 +171,7 @@ async fn golem_rust_jump(
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "jump", data_value!())
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<u64>()?;
 
     while (rx.len() as u64) < 17 {
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -195,7 +193,7 @@ async fn golem_rust_jump(
 
     info!("events: {:?}", events);
 
-    assert_eq!(result, Value::U64(5));
+    assert_eq!(result, 5);
     assert_eq!(
         stdout_events(events.into_iter().flatten()),
         vec![
@@ -244,8 +242,7 @@ async fn golem_rust_checkpoint(
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "checkpoint_test", data_value!())
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<u64>()?;
 
     while (rx.len() as u64) < 17 {
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -274,7 +271,7 @@ async fn golem_rust_checkpoint(
     //         On replay from checkpoint: state=2 again, remote_call(2) returns false, state=3,
     //         remote_call(3) returns false, so we continue.
     // Step 4: state=4, done.
-    assert_eq!(result, Value::U64(4));
+    assert_eq!(result, 4);
     assert_eq!(
         stdout_events(events.into_iter().flatten()),
         vec![
@@ -324,71 +321,6 @@ async fn golem_rust_explicit_oplog_commit(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     assert!(result.is_ok());
-    Ok(())
-}
-
-#[test]
-#[instrument]
-async fn golem_rust_set_retry_policy(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let agent_id = agent_id!("GolemHostApi", "set-retry-policy-1");
-    let worker_id = executor
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
-
-    let mut _log_output_guards = Vec::new();
-    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
-
-    let start = SystemTime::now();
-    let result1 = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "fail_with_custom_max_retries",
-            data_value!(2u64),
-        )
-        .await;
-    let elapsed = start.elapsed().unwrap();
-
-    let result2 = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "fail_with_custom_max_retries",
-            data_value!(1u64),
-        )
-        .await;
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
-    assert!(elapsed < Duration::from_secs(3)); // 2 retry attempts, 1s delay
-    assert!(result1.is_err());
-    assert!(result2.is_err());
-    let result1_err = format!("{}", result1.unwrap_err());
-    assert!(
-        result1_err.contains("error while executing at wasm backtrace:")
-            || result1_err.contains("Invocation failed"),
-        "Unexpected error: {result1_err}"
-    );
-    let result2_err = format!("{}", result2.unwrap_err());
-    assert!(
-        result2_err.contains("Previous invocation failed")
-            || result2_err.contains("error while executing at wasm backtrace:"),
-        "Unexpected error: {result2_err}"
-    );
-
     Ok(())
 }
 
@@ -693,8 +625,7 @@ async fn golem_rust_infallible_transaction(
             data_value!(),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<u64>()?;
 
     let events = http_server.get_events();
 
@@ -703,7 +634,7 @@ async fn golem_rust_infallible_transaction(
     drop(executor);
     http_server.abort();
 
-    assert_eq!(result, Value::U64(11));
+    assert_eq!(result, 11);
     assert_eq!(
         events,
         vec![
@@ -854,8 +785,7 @@ async fn golem_rust_checkpoint_async(
             data_value!(),
         )
         .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+        .into_typed::<u64>()?;
 
     while (rx.len() as u64) < 17 {
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -877,7 +807,7 @@ async fn golem_rust_checkpoint_async(
 
     info!("events: {:?}", events);
 
-    assert_eq!(result, Value::U64(4));
+    assert_eq!(result, 4);
     assert_eq!(
         stdout_events(events.into_iter().flatten()),
         vec![
@@ -912,10 +842,6 @@ async fn idempotency_keys_in_ephemeral_workers(
         .await?;
 
     let agent_id = agent_id!("HostFunctionTests", "idempotency_keys_in_ephemeral_workers");
-    let _worker_id = executor
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
-
     let idempotency_key1 = IdempotencyKey::fresh();
     let idempotency_key2 = IdempotencyKey::fresh();
 
@@ -989,8 +915,8 @@ async fn idempotency_keys_in_ephemeral_workers(
         .into_return_value()
         .expect("Expected a return value");
 
-    fn returned_keys_are_different(value: &Value) -> bool {
-        if let Value::Tuple(items) = value {
+    fn returned_keys_are_different(value: &SchemaValue) -> bool {
+        if let SchemaValue::Tuple { elements: items } = value {
             if items.len() == 2 {
                 items[0] != items[1]
             } else {

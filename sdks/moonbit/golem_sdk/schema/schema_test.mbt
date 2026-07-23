@@ -1,191 +1,111 @@
+// Round-trip tests for the standard `IntoSchema` / `FromSchema` impls.
+//
+// Each round-trip exercises the full pipeline a value travels at runtime:
+//   value --IntoSchema--> recursive TypedSchemaValue
+//         --wit codec---> flat WIT carrier
+//         <--wit codec--- recursive TypedSchemaValue
+//         <--FromSchema-- value
+// and asserts the decoded value (and the schema graph) survive unchanged.
+
 ///|
-test "string_schema" {
-  debug_inspect(
-    schema_of(""),
-    content=(
-      #|ComponentModel({ nodes: [{ name: None, owner: None, type_: PrimStringType }] })
-    ),
-  )
+/// Full encode -> WIT -> decode round-trip of a value through the schema layer.
+fn[T : IntoSchema + FromSchema] roundtrip(v : T) -> T raise {
+  let typed = try_into_typed_schema_value(v)
+  let wit = @model.typed_schema_value_to_wit(typed)
+  let back = @model.typed_schema_value_from_wit(wit)
+  // The schema graph must survive the WIT round-trip unchanged.
+  assert_eq(back.graph, typed.graph)
+  T::from_value(back.value)
 }
 
 ///|
-test "uint64_schema" {
-  debug_inspect(
-    schema_of(0UL),
-    content=(
-      #|ComponentModel({ nodes: [{ name: None, owner: None, type_: PrimU64Type }] })
-    ),
-  )
+test "primitive round-trips" {
+  assert_eq(roundtrip(42), 42)
+  assert_eq(roundtrip(0xFFFFFFFFU), 0xFFFFFFFFU)
+  assert_eq(roundtrip(-9_000_000_000L), -9_000_000_000L)
+  assert_eq(roundtrip(18_000_000_000UL), 18_000_000_000UL)
+  assert_eq(roundtrip((1.5 : Float)), (1.5 : Float))
+  assert_eq(roundtrip(2.5), 2.5)
+  assert_eq(roundtrip((0xAB : Byte)), (0xAB : Byte))
+  assert_eq(roundtrip('Z'), 'Z')
+  assert_eq(roundtrip(true), true)
+  assert_eq(roundtrip(false), false)
+  assert_eq(roundtrip("hello"), "hello")
 }
 
 ///|
-test "option_string_schema" {
-  let v : String? = None
-  debug_inspect(
-    schema_of(v),
-    content=(
-      #|ComponentModel(
-      #|  {
-      #|    nodes: [
-      #|      { name: None, owner: None, type_: OptionType(1) },
-      #|      { name: None, owner: None, type_: PrimStringType },
-      #|    ],
-      #|  },
-      #|)
-    ),
-  )
+test "bytes round-trip" {
+  assert_eq(roundtrip(b"\x00\x01\xFE\xFF"), b"\x00\x01\xFE\xFF")
+  assert_eq(roundtrip(b""), b"")
 }
 
 ///|
-test "array_int_schema" {
-  let v : Array[Int] = []
-  debug_inspect(
-    schema_of(v),
-    content=(
-      #|ComponentModel(
-      #|  {
-      #|    nodes: [
-      #|      { name: None, owner: None, type_: ListType(1) },
-      #|      { name: None, owner: None, type_: PrimS32Type },
-      #|    ],
-      #|  },
-      #|)
-    ),
-  )
+test "option round-trips" {
+  assert_eq(roundtrip((Some(7) : Int?)), Some(7))
+  assert_eq(roundtrip((None : Int?)), None)
+  assert_eq(roundtrip((Some("x") : String?)), Some("x"))
 }
 
 ///|
-test "string_from_element_value" {
-  let wit_value = @builder.Builder::new().string("hello")
-  let element = @types.ElementValue::ComponentModel(wit_value)
-  let result : String = from_element_value_as(element)
-  debug_inspect(
-    result,
-    content=(
-      #|"hello"
-    ),
-  )
+test "array round-trips" {
+  assert_eq(roundtrip(([1, 2, 3] : Array[Int])), [1, 2, 3])
+  assert_eq(roundtrip(([] : Array[Int])), [])
+  assert_eq(roundtrip((["a", "b"] : Array[String])), ["a", "b"])
 }
 
 ///|
-test "uint64_from_element_value" {
-  let wit_value = @builder.Builder::new().u64(42)
-  let element = @types.ElementValue::ComponentModel(wit_value)
-  let result : UInt64 = from_element_value_as(element)
-  debug_inspect(result, content="42")
+test "result round-trips (non-unit)" {
+  assert_eq(roundtrip((Ok(1) : Result[Int, String])), Ok(1))
+  assert_eq(roundtrip((Err("boom") : Result[Int, String])), Err("boom"))
 }
 
 ///|
-test "option_some_from_element_value" {
-  let wit_value = @builder.Builder::new().option_some(builder => builder.s32(99))
-  let element = @types.ElementValue::ComponentModel(wit_value)
-  let result : Int? = from_element_value_as(element)
-  debug_inspect(result, content="Some(99)")
+test "result round-trips (unit ok / err omit payload)" {
+  assert_eq(roundtrip((Ok(()) : Result[Unit, String])), Ok(()))
+  assert_eq(roundtrip((Err("e") : Result[Unit, String])), Err("e"))
+  assert_eq(roundtrip((Ok(5) : Result[Int, Unit])), Ok(5))
+  assert_eq(roundtrip((Err(()) : Result[Int, Unit])), Err(()))
 }
 
 ///|
-test "option_none_from_element_value" {
-  let wit_value = @builder.Builder::new().option_none()
-  let element = @types.ElementValue::ComponentModel(wit_value)
-  let result : Int? = from_element_value_as(element)
-  debug_inspect(result, content="None")
+test "map round-trip" {
+  let m : Map[String, Int] = { "a": 1, "b": 2 }
+  assert_eq(roundtrip(m), m)
 }
 
 ///|
-test "array_from_element_value" {
-  let wit_value = @builder.Builder::new().list(builder => {
-    builder.s32(1)
-    builder.s32(2)
-    builder.s32(3)
-  })
-  let element = @types.ElementValue::ComponentModel(wit_value)
-  let result : Array[Int] = from_element_value_as(element)
-  debug_inspect(result, content="[1, 2, 3]")
+test "tuple round-trips" {
+  assert_eq(roundtrip((1, "two")), (1, "two"))
+  assert_eq(roundtrip((1, "two", true)), (1, "two", true))
+  assert_eq(roundtrip((1, 2, 3, 4, 5)), (1, 2, 3, 4, 5))
 }
 
 ///|
-test "option_array_string_schema_nested" {
-  let v : Array[String]? = None
-  debug_inspect(
-    schema_of(v),
-    content=(
-      #|ComponentModel(
-      #|  {
-      #|    nodes: [
-      #|      { name: None, owner: None, type_: OptionType(1) },
-      #|      { name: None, owner: None, type_: ListType(2) },
-      #|      { name: None, owner: None, type_: PrimStringType },
-      #|    ],
-      #|  },
-      #|)
-    ),
-  )
-}
-
-///|
-test "option_array_string_roundtrip" {
-  let val : Array[String]? = Some(["a", "b"])
-  let elem = to_element_value_as(val)
-  let result : Array[String]? = from_element_value_as(elem)
-  debug_inspect(
-    result,
-    content=(
-      #|Some(["a", "b"])
-    ),
-  )
-}
-
-///|
-test "bytes_roundtrip" {
-  let original : Bytes = b"\x01\x02\x03\x04"
-  let element = to_element_value_as(original)
-  let restored : Bytes = from_element_value_as(element)
-  @debug.assert_eq(restored, original)
-}
-
-///|
-test "bytes_schema" {
-  debug_inspect(
-    schema_of_tag((@schema.TypeTag::{  } : @schema.TypeTag[Bytes])),
-    content=(
-      #|ComponentModel(
-      #|  {
-      #|    nodes: [
-      #|      { name: None, owner: None, type_: ListType(1) },
-      #|      { name: None, owner: None, type_: PrimU8Type },
-      #|    ],
-      #|  },
-      #|)
-    ),
-  )
-}
-
-///|
-test "record_with_option_field_schema" {
-  let schema = make_record_schema([
-    ("name", schema_of("")),
-    ("tags", schema_of(([] : Array[String]))),
-    ("note", schema_of((None : String?))),
+test "nested compound round-trips" {
+  assert_eq(roundtrip(([Some(1), None, Some(3)] : Array[Int?])), [
+    Some(1),
+    None,
+    Some(3),
   ])
-  debug_inspect(
-    schema,
-    content=(
-      #|ComponentModel(
-      #|  {
-      #|    nodes: [
-      #|      {
-      #|        name: None,
-      #|        owner: None,
-      #|        type_: RecordType([("name", 1), ("tags", 2), ("note", 4)]),
-      #|      },
-      #|      { name: None, owner: None, type_: PrimStringType },
-      #|      { name: None, owner: None, type_: ListType(3) },
-      #|      { name: None, owner: None, type_: PrimStringType },
-      #|      { name: None, owner: None, type_: OptionType(5) },
-      #|      { name: None, owner: None, type_: PrimStringType },
-      #|    ],
-      #|  },
-      #|)
-    ),
-  )
+  assert_eq(roundtrip((Some(["x", "y"]) : Array[String]?)), Some(["x", "y"]))
+}
+
+///|
+test "structural type has no named definitions" {
+  // A structural (inline) type produces no named definitions.
+  let tag : TypeTag[Int] = type_tag()
+  let g = into_schema_graph(tag)
+  assert_eq(g.defs.length(), 0)
+}
+
+///|
+test "shape mismatch surfaces a FromSchemaError" {
+  let v : @model.SchemaValue = String("nope")
+  let r : Result[Int, FromSchemaError] = try? from_value_as(v)
+  guard r is Err(ShapeMismatch(expected~, actual~, context~)) else {
+    fail("expected ShapeMismatch, got \{r}")
+  }
+  assert_eq(expected, "s32")
+  assert_eq(actual, "string")
+  assert_eq(context, "Int")
 }

@@ -1,10 +1,6 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "golemcloud/golem_sdk/interface/wasi/clocks/wallClock"
 
-import {
-  "moonbitlang/core/debug",
-}
-
 // Values
 pub fn now() -> Datetime
 
@@ -16,7 +12,7 @@ pub fn resolution() -> Datetime
 pub(all) struct Datetime {
   seconds : UInt64
   nanoseconds : UInt
-} derive(Eq, @debug.Debug)
+} derive(Eq, Show)
 
 // Type aliases
 

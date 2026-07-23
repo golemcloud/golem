@@ -21,7 +21,7 @@ use crate::log::log_error;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::text::resource_definition::{
     ResourceDefinitionCreateView, ResourceDefinitionDeleteView, ResourceDefinitionGetView,
-    ResourceDefinitionUpdateView,
+    ResourceDefinitionListView, ResourceDefinitionUpdateView,
 };
 use anyhow::bail;
 use golem_client::api::ResourcesClient;
@@ -119,7 +119,7 @@ impl ResourceDefinitionCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&ResourceDefinitionCreateView(result))?;
+            .log_output(ResourceDefinitionCreateView(result))?;
 
         Ok(())
     }
@@ -206,7 +206,7 @@ impl ResourceDefinitionCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&ResourceDefinitionUpdateView(result))?;
+            .log_output(ResourceDefinitionUpdateView(result))?;
 
         Ok(())
     }
@@ -227,7 +227,7 @@ impl ResourceDefinitionCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&ResourceDefinitionDeleteView(resource))?;
+            .log_output(ResourceDefinitionDeleteView(resource))?;
 
         Ok(())
     }
@@ -241,7 +241,7 @@ impl ResourceDefinitionCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&ResourceDefinitionGetView(result))?;
+            .log_output(ResourceDefinitionGetView(result))?;
 
         Ok(())
     }
@@ -261,7 +261,9 @@ impl ResourceDefinitionCommandHandler {
             .map_service_error()?
             .values;
 
-        self.ctx.log_handler().log_view(&results)?;
+        self.ctx
+            .log_handler()
+            .log_output(ResourceDefinitionListView { resources: results })?;
 
         Ok(())
     }

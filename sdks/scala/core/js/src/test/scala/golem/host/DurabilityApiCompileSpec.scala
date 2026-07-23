@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,6 +17,7 @@
 package golem.host
 
 import golem.HostApi
+import golem.schema.{IntoSchema, SchemaValue, TypedSchemaValue}
 import zio.test._
 
 object DurabilityApiCompileSpec extends ZIOSpecDefault {
@@ -48,19 +49,12 @@ object DurabilityApiCompileSpec extends ZIOSpecDefault {
   private val entryVersions: List[OplogEntryVersion] =
     List(OplogEntryVersion.V1, OplogEntryVersion.V2)
 
-  private val sampleVat: WitValueTypes.ValueAndType = WitValueTypes.ValueAndType(
-    WitValueTypes.WitValue(List(WitValueTypes.WitNode.PrimString("test"))),
-    WitValueTypes.WitType(
-      List(
-        WitValueTypes.NamedWitTypeNode(None, None, WitValueTypes.WitTypeNode.PrimStringType)
-      )
-    )
-  )
+  private val sampleTyped: TypedSchemaValue = IntoSchema[String].toTyped("test")
 
   private val invocation: PersistedDurableFunctionInvocation = PersistedDurableFunctionInvocation(
     timestamp = Datetime(BigInt(1700000000L), 500000000),
     functionName = "test-func",
-    response = sampleVat,
+    response = sampleTyped,
     functionType = DurableFunctionType.ReadLocal,
     entryVersion = OplogEntryVersion.V1
   )
@@ -91,7 +85,7 @@ object DurabilityApiCompileSpec extends ZIOSpecDefault {
         invocation.timestamp.seconds == BigInt(1700000000L),
         invocation.timestamp.nanoseconds == 500000000,
         invocation.functionName == "test-func",
-        invocation.response.value.nodes.nonEmpty,
+        invocation.response.value == SchemaValue.StringValue("test"),
         invocation.functionType == DurableFunctionType.ReadLocal,
         invocation.entryVersion == OplogEntryVersion.V1
       )

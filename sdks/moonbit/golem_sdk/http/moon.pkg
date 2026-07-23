@@ -1,5 +1,5 @@
 import {
-  "golemcloud/golem_sdk/interface/wasi/http/outgoingHandler" @outgoingHandler,
-  "golemcloud/golem_sdk/interface/wasi/http/types" @types,
-  "golemcloud/golem_sdk/interface/wasi/io/streams" @streams,
+  "golemcloud/golem_sdk/interface/wasi/http/outgoingHandler",
+  "golemcloud/golem_sdk/interface/wasi/http/types",
+  "golemcloud/golem_sdk/interface/wasi/io/streams",
 }

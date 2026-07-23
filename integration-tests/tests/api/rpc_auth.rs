@@ -48,10 +48,10 @@ use golem_client::api::RegistryServiceClient;
 use golem_common::model::permission_share::{
     PermissionShareCreation, PermissionShareData, PermissionShareName,
 };
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use golem_wasm::Value;
+use golem_test_framework::dsl::{AgentResult, TestDsl, TestDslExtended};
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -72,19 +72,19 @@ async fn store_rpc_component(
         .await
 }
 
-/// Assert that a `DataValue` result from `RpcAuthTester.try_call_counter` is `Ok`.
-fn assert_rpc_outcome_is_ok(result: golem_common::model::agent::DataValue) {
+/// Assert that a result from `RpcAuthTester.try_call_counter` is `Ok`.
+fn assert_rpc_outcome_is_ok(result: AgentResult) {
     let value = result.into_return_value().expect("Expected a return value");
     match value {
-        Value::Variant { case_idx, .. } => {
+        SchemaValue::Variant(payload) => {
             assert_eq!(
-                case_idx, OK_CASE_IDX,
+                payload.case, OK_CASE_IDX,
                 "Expected RpcCallOutcome::Ok (case_idx={}), got case_idx={}",
-                OK_CASE_IDX, case_idx
+                OK_CASE_IDX, payload.case
             );
         }
         other => {
-            panic!("Expected Value::Variant for RpcCallOutcome, got: {other:?}");
+            panic!("Expected SchemaValue::Variant for RpcCallOutcome, got: {other:?}");
         }
     }
 }
@@ -123,14 +123,14 @@ async fn authorized_cross_account_rpc_via_share_succeeds(
                 data: PermissionShareData {
                     lower_positive: vec![
                         format!(
-                            "environment({}/{}) @ {} : view : {}",
+                            "environment({}/{}/{}) @ {} : view :",
                             owner.account_email.as_str(),
                             owner_env.application_name.0,
-                            caller.account_email.as_str(),
                             owner_env.name.0,
+                            caller.account_email.as_str(),
                         ),
                         format!(
-                            "component({}/{}/{}) @ {} : view : *",
+                            "component({}/{}/{}/*) @ {} : view : *",
                             owner.account_email.as_str(),
                             owner_env.application_name.0,
                             owner_env.name.0,

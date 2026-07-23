@@ -149,62 +149,6 @@ macro_rules! newtype_uuid {
             }
         }
 
-        impl golem_wasm::IntoValue for $name {
-            fn into_value(self) -> golem_wasm::Value {
-                let (hi, lo) = self.0.as_u64_pair();
-                golem_wasm::Value::Record(vec![golem_wasm::Value::Record(vec![
-                    golem_wasm::Value::U64(hi),
-                    golem_wasm::Value::U64(lo),
-                ])])
-            }
-
-            fn get_type() -> golem_wasm::analysis::AnalysedType {
-                let uuid_type = $name::uuid_analysed_type();
-                let rec = golem_wasm::analysis::analysed_type::record(vec![
-                    golem_wasm::analysis::analysed_type::field("uuid", uuid_type),
-                ]);
-                let wit_name: &str = $wit_name;
-                let wit_owner: &str = $wit_owner;
-                let rec = if !wit_name.is_empty() { rec.named(wit_name) } else { rec };
-                if !wit_owner.is_empty() { rec.owned(wit_owner) } else { rec }
-            }
-        }
-
-        impl $name {
-            pub fn uuid_analysed_type() -> golem_wasm::analysis::AnalysedType {
-                golem_wasm::analysis::analysed_type::record(vec![
-                    golem_wasm::analysis::analysed_type::field(
-                        "high-bits",
-                        golem_wasm::analysis::analysed_type::u64(),
-                    ),
-                    golem_wasm::analysis::analysed_type::field(
-                        "low-bits",
-                        golem_wasm::analysis::analysed_type::u64(),
-                    ),
-                ])
-                .named("uuid")
-                .owned("golem:core@1.5.0/types")
-            }
-        }
-
-        impl golem_wasm::FromValue for $name {
-            fn from_value(value: golem_wasm::Value) -> Result<$name, String> {
-                match value {
-                    golem_wasm::Value::Record(mut fields) if fields.len() == 1 => {
-                        match fields.remove(0) {
-                            golem_wasm::Value::Record(mut fields) if fields.len() == 2 => {
-                                let hi = u64::from_value(fields.remove(0))?;
-                                let lo = u64::from_value(fields.remove(0))?;
-                                Ok($name(uuid::Uuid::from_u64_pair(hi, lo)))
-                            }
-                            other => Err(format!("Expected a record with two u64 fields, got {other:?}"))
-                        }
-                    }
-                    other => Err(format!("Expected a record with one record field, got {other:?}"))
-                }
-            }
-        }
-
         $(
             #[cfg(feature = "full")]
             impl TryFrom<$proto_type> for $name {
@@ -245,7 +189,6 @@ macro_rules! declare_revision {
             Ord,
             Hash,
             ::serde::Serialize,
-            ::golem_wasm_derive::IntoValue,
             ::derive_more::Display,
         )]
         #[cfg_attr(feature = "full", derive(poem_openapi::NewType))]
@@ -348,18 +291,6 @@ macro_rules! declare_revision {
             }
         }
 
-        impl ::golem_wasm::FromValue for $name {
-            fn from_value(value: ::golem_wasm::Value) -> Result<Self, String> {
-                match value {
-                    ::golem_wasm::Value::U64(inner) => $name::try_from(inner),
-                    _ => Err(format!(
-                        "Unexpected value for {}: {value:?}",
-                        stringify!($name)
-                    )),
-                }
-            }
-        }
-
         #[cfg(feature = "full")]
         impl ::desert_rust::BinarySerializer for $name {
             fn serialize<Output: ::desert_rust::BinaryOutput>(
@@ -453,46 +384,44 @@ macro_rules! error_forwarding {
     };
 }
 
-/// Create a DataValue::Tuple from component model values.
+/// Create a schema-native agent invocation input (a parameter record
+/// [`TypedSchemaValue`](crate::schema::TypedSchemaValue)) from values whose
+/// types implement [`IntoSchema`](crate::schema::IntoSchema).
 ///
-/// Each argument is converted to ValueAndType via `.convert_to_value_and_type()` and
-/// wrapped in ElementValue::ComponentModel. This is useful for creating
-/// agent parameter tuples.
-///
-/// Values that are already `ValueAndType` are passed through unchanged (via the
-/// inherent method), while other types are converted using `IntoValueAndType`.
+/// Each argument is converted to a `TypedSchemaValue` via
+/// `into_typed_schema_value()` and combined into a single positional record
+/// carrier with [`build_input_record`](crate::schema::build_input_record).
+/// This is the schema-native carrier accepted by the invocation DSL and by
+/// [`agent_id!`] / [`phantom_agent_id!`] for constructor parameters.
 ///
 /// # Example
 /// ```ignore
-/// let value = data_value!(42_i32, "hello", 3.14_f64);
-/// // Creates DataValue::Tuple with three ElementValue::ComponentModel elements
+/// let value = data_value!(42_u32, "hello".to_string(), 3.14_f64);
 /// ```
 #[macro_export]
 macro_rules! data_value {
-    ($($element:expr),* $(,)?) => {
-        {
-            #[allow(unused_imports)]
-            use golem_wasm::ConvertToValueAndType as _;
-            $crate::model::agent::DataValue::Tuple(
-                $crate::model::agent::ElementValues {
-                    elements: vec![
-                        $($crate::model::agent::ElementValue::ComponentModel(
-                            $crate::model::agent::ComponentModelElementValue {
-                                value: $element.convert_to_value_and_type()
-                            }
-                        )),*
-                    ],
-                }
-            )
-        }
+    () => {
+        $crate::schema::build_input_record(::std::vec::Vec::new())
+            .expect("data_value: build_input_record failed")
     };
+    ($($element:expr),+ $(,)?) => {{
+        #[allow(unused_imports)]
+        use $crate::schema::IntoTypedSchemaValue as _;
+        $crate::schema::build_input_record(::std::vec![
+            $(
+                $crate::schema::IntoTypedSchemaValue::into_typed_schema_value(&$element)
+                    .expect("data_value: into_typed_schema_value failed")
+            ),+
+        ])
+        .expect("data_value: build_input_record failed")
+    }};
 }
 
-/// Create an AgentId with the given agent type name and parameters.
+/// Create a ParsedAgentId with the given agent type name and parameters.
 ///
 /// The first argument is the agent type name (as a string expression), followed by
 /// optional component model values. Expands to:
-/// `AgentId::new(AgentTypeName("NAME".to_string()), data_value!(...params), None)`
+/// `ParsedAgentId::from_legacy_parameters(AgentTypeName("NAME".to_string()), data_value!(...params), None)`
 ///
 /// # Example
 /// ```ignore
@@ -502,14 +431,14 @@ macro_rules! data_value {
 #[macro_export]
 macro_rules! agent_id {
     ($name:expr) => {
-        $crate::base_model::agent::LegacyParsedAgentId::new(
+        $crate::model::agent::ParsedAgentId::try_new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!(),
             None
         ).unwrap()
     };
     ($name:expr, $($element:expr),+ $(,)?) => {
-        $crate::base_model::agent::LegacyParsedAgentId::new(
+        $crate::model::agent::ParsedAgentId::try_new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!($($element),+),
             None
@@ -517,11 +446,11 @@ macro_rules! agent_id {
     };
 }
 
-/// Create an AgentId with a phantom UUID.
+/// Create a ParsedAgentId with a phantom UUID.
 ///
 /// The first argument is the agent type name (as a string expression), the second is
 /// a UUID, followed by optional component model values. Expands to:
-/// `AgentId::new(AgentTypeName("NAME".to_string()), data_value!(...params), Some(uuid))`
+/// `ParsedAgentId::from_legacy_parameters(AgentTypeName("NAME".to_string()), data_value!(...params), Some(uuid))`
 ///
 /// # Example
 /// ```ignore
@@ -532,14 +461,14 @@ macro_rules! agent_id {
 #[macro_export]
 macro_rules! phantom_agent_id {
     ($name:expr, $phantom_id:expr) => {
-        $crate::base_model::agent::LegacyParsedAgentId::new(
+        $crate::model::agent::ParsedAgentId::try_new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!(),
             Some($phantom_id)
         ).unwrap()
     };
     ($name:expr, $phantom_id:expr, $($element:expr),+ $(,)?) => {
-        $crate::base_model::agent::LegacyParsedAgentId::new(
+        $crate::model::agent::ParsedAgentId::try_new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!($($element),+),
             Some($phantom_id)

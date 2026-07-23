@@ -3,13 +3,14 @@ use crate::service::auth::AuthService;
 use crate::service::worker::WorkerService;
 use chrono::{DateTime, Utc};
 use golem_common::base_model::api;
-use golem_common::model::agent::{AgentTypeName, UntypedJsonDataValue};
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::recorded_http_api_request;
+use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Header;
@@ -120,10 +121,13 @@ pub struct AgentInvocationRequest {
     pub app_name: ApplicationName,
     pub env_name: EnvironmentName,
     pub agent_type_name: AgentTypeName,
-    pub parameters: UntypedJsonDataValue,
+    pub parameters: SchemaValue,
     pub phantom_id: Option<Uuid>,
+    #[oai(default)]
+    #[serde(default)]
+    pub config: Vec<AgentConfigEntryDto>,
     pub method_name: String,
-    pub method_parameters: UntypedJsonDataValue,
+    pub method_parameters: SchemaValue,
     pub mode: AgentInvocationMode,
     pub schedule_at: Option<DateTime<Utc>>,
     pub idempotency_key: Option<IdempotencyKey>,
@@ -136,7 +140,8 @@ pub struct AgentInvocationRequest {
 #[serde(rename_all = "camelCase")]
 pub struct AgentInvocationResult {
     pub agent_id: AgentId,
-    pub result: Option<UntypedJsonDataValue>,
+    pub idempotency_key: IdempotencyKey,
+    pub result: Option<TypedSchemaValue>,
     pub component_revision: Option<ComponentRevision>,
 }
 
@@ -147,7 +152,7 @@ pub struct CreateAgentRequest {
     pub app_name: ApplicationName,
     pub env_name: EnvironmentName,
     pub agent_type_name: AgentTypeName,
-    pub parameters: UntypedJsonDataValue,
+    pub parameters: SchemaValue,
     pub phantom_id: Option<Uuid>,
     #[oai(default)]
     #[serde(default)]
@@ -160,4 +165,71 @@ pub struct CreateAgentRequest {
 pub struct CreateAgentResponse {
     pub agent_id: AgentId,
     pub component_revision: ComponentRevision,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AgentInvocationRequest, CreateAgentRequest};
+    use poem_openapi::types::{ParseFromJSON, ToJSON};
+    use serde_json::{Value, json};
+    use test_r::test;
+
+    fn empty_parameter_record() -> Value {
+        json!({ "kind": "record", "value": { "fields": [] } })
+    }
+
+    #[test]
+    fn create_agent_request_preserves_canonical_schema_value_json() {
+        let parameters = empty_parameter_record();
+        let config_value = json!({ "arbitrary": [1, true, null] });
+        let request_json = json!({
+            "appName": "app",
+            "envName": "env",
+            "agentTypeName": "agent",
+            "parameters": parameters,
+            "config": [{
+                "path": ["nested"],
+                "value": config_value,
+            }],
+        });
+
+        let request = CreateAgentRequest::parse_from_json(Some(request_json))
+            .expect("canonical SchemaValue JSON must remain accepted");
+        let encoded = request.to_json().expect("request must serialize to JSON");
+
+        assert_eq!(encoded["parameters"], empty_parameter_record());
+        assert_eq!(encoded["config"][0]["value"], config_value);
+    }
+
+    #[test]
+    fn invoke_agent_request_preserves_canonical_schema_value_json() {
+        let request_json = json!({
+            "appName": "app",
+            "envName": "env",
+            "agentTypeName": "agent",
+            "parameters": empty_parameter_record(),
+            "methodName": "run",
+            "methodParameters": empty_parameter_record(),
+            "mode": "await",
+        });
+
+        let request = AgentInvocationRequest::parse_from_json(Some(request_json))
+            .expect("canonical SchemaValue JSON must remain accepted");
+        let encoded = request.to_json().expect("request must serialize to JSON");
+
+        assert_eq!(encoded["parameters"], empty_parameter_record());
+        assert_eq!(encoded["methodParameters"], empty_parameter_record());
+    }
+
+    #[test]
+    fn agent_request_rejects_noncanonical_parameter_json() {
+        let request_json = json!({
+            "appName": "app",
+            "envName": "env",
+            "agentTypeName": "agent",
+            "parameters": [],
+        });
+
+        assert!(CreateAgentRequest::parse_from_json(Some(request_json)).is_err());
+    }
 }

@@ -15,41 +15,17 @@
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::Span;
-use syn::DeriveInput;
 
 use crate::transaction::golem_operation_impl;
 
 mod agentic;
-pub(crate) mod recursion;
+mod rpc_client_common;
+mod tool;
 mod transaction;
-mod value;
-
-#[proc_macro_derive(IntoValue, attributes(flatten_value, unit_case))]
-pub fn derive_into_value(input: TokenStream) -> TokenStream {
-    let ast: DeriveInput = syn::parse(input).expect("derive input");
-    let golem_rust_crate_ident = get_golem_rust_crate_ident();
-
-    value::derive_into_value(&ast, &golem_rust_crate_ident)
-}
-
-#[proc_macro_derive(FromValueAndType, attributes(flatten_value, unit_case))]
-pub fn derive_from_value_and_type(input: TokenStream) -> TokenStream {
-    let ast: DeriveInput = syn::parse(input).expect("derive input");
-    let golem_rust_crate_ident = get_golem_rust_crate_ident();
-
-    value::derive_from_value_and_type(&ast, &golem_rust_crate_ident)
-}
 
 #[proc_macro_derive(MultimodalSchema)]
 pub fn derive_multimodal(input: TokenStream) -> TokenStream {
     agentic::derive_multimodal(input)
-}
-
-#[proc_macro_derive(Schema)]
-pub fn derive_schema(input: TokenStream) -> TokenStream {
-    let golem_rust_crate_ident = get_golem_rust_crate_ident();
-
-    agentic::derive_schema(input, &golem_rust_crate_ident)
 }
 
 #[proc_macro_derive(ConfigSchema, attributes(config_schema))]
@@ -107,6 +83,56 @@ pub fn agent_definition(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn agent_implementation(attr: TokenStream, item: TokenStream) -> TokenStream {
     agentic::agent_implementation_impl(attr, item)
+}
+
+#[proc_macro_attribute]
+pub fn tool_definition(attr: TokenStream, item: TokenStream) -> TokenStream {
+    tool::tool_definition_impl(attr, item)
+}
+
+#[proc_macro_attribute]
+pub fn tool_implementation(attr: TokenStream, item: TokenStream) -> TokenStream {
+    tool::tool_implementation_impl(attr, item)
+}
+
+#[proc_macro_derive(ToolError, attributes(tool_error, example))]
+pub fn derive_tool_error(input: TokenStream) -> TokenStream {
+    tool::derive_tool_error_impl(input)
+}
+
+// Helper attributes consumed by `#[tool_definition]`. A correct use sits on a
+// method inside a `#[tool_definition]` trait, where the outer macro strips it
+// before it ever reaches the compiler. Registering them as real proc-macro
+// attributes keeps them recognized in any position; if one is ever actually
+// expanded it means it was misplaced (outside a tool trait, or ordered before
+// `#[tool_definition]`), so it fails loudly instead of being silently ignored.
+fn misplaced_tool_helper_attr(name: &str) -> TokenStream {
+    syn::Error::new(
+        Span::call_site(),
+        format!("#[{name}] may only be used on methods inside a #[tool_definition] trait"),
+    )
+    .to_compile_error()
+    .into()
+}
+
+#[proc_macro_attribute]
+pub fn arg(_attr: TokenStream, _item: TokenStream) -> TokenStream {
+    misplaced_tool_helper_attr("arg")
+}
+
+#[proc_macro_attribute]
+pub fn command(_attr: TokenStream, _item: TokenStream) -> TokenStream {
+    misplaced_tool_helper_attr("command")
+}
+
+#[proc_macro_attribute]
+pub fn constraint(_attr: TokenStream, _item: TokenStream) -> TokenStream {
+    misplaced_tool_helper_attr("constraint")
+}
+
+#[proc_macro_attribute]
+pub fn result(_attr: TokenStream, _item: TokenStream) -> TokenStream {
+    misplaced_tool_helper_attr("result")
 }
 
 // get the identifier of golem_rust crate to use for referencing the `golem-rust` crate

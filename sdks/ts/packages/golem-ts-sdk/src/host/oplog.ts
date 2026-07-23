@@ -70,10 +70,7 @@ export type { AgentId } from './hostapi';
 // Re-export types that don't contain UUID-based types
 export type {
   Datetime,
-  ValueAndType,
-  DataValue,
-  DataSchema,
-  WitValue,
+  SchemaValueTree,
   ComponentRevision,
   OplogIndex,
   PersistenceLevel,
@@ -97,7 +94,7 @@ export type {
   JumpParameters,
   SetRetryPolicyParameters,
   EndAtomicRegionParameters,
-  TypedDataValue,
+  TypedSchemaValue,
   AgentInitializationParameters,
   AgentMethodInvocationParameters,
   LoadSnapshotParameters,

@@ -19,16 +19,17 @@ use axum::routing::get;
 use axum::{BoxError, Router};
 use bytes::Bytes;
 use futures::{StreamExt, stream};
+use golem_api_grpc::proto::golem::worker::LogEvent;
+use golem_common::model::AgentEvent;
 use golem_common::model::oplog::{
     MultipartPartData, OplogIndex, PublicOplogEntry, PublicSnapshotData,
 };
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::Value;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
-    start_with_snapshot_policy,
+    LastUniqueId, PrecompiledComponent, TEST_CARD_ID, TestContext, WorkerExecutorTestDependencies,
+    start, start_with_snapshot_policy,
 };
 use http::StatusCode;
 use pretty_assertions::assert_eq;
@@ -39,6 +40,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test};
 use tokio::sync::Mutex;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::Instrument;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -56,6 +58,27 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
+
+async fn assert_snapshot_recovery_loaded(events: &mut UnboundedReceiver<LogEvent>) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = events.recv().await {
+            match AgentEvent::try_from(event) {
+                Ok(AgentEvent::SnapshotRecoverySucceeded { .. }) => return,
+                Ok(AgentEvent::SnapshotRecoveryFailed {
+                    snapshot_index,
+                    error,
+                    ..
+                }) => {
+                    panic!("Snapshot recovery from {snapshot_index} failed: {error}");
+                }
+                _ => {}
+            }
+        }
+        panic!("Worker event stream ended before snapshot recovery event");
+    })
+    .await
+    .expect("Timed out waiting for snapshot recovery event");
+}
 
 #[test]
 #[tracing::instrument]
@@ -130,14 +153,8 @@ async fn custom_durability_1(
     drop(executor);
     http_server.abort();
 
-    assert_eq!(
-        result1.into_return_value(),
-        Some(Value::String("0-a".to_string()))
-    );
-    assert_eq!(
-        result2.into_return_value(),
-        Some(Value::String("1-b".to_string()))
-    );
+    assert_eq!(result1.into_typed::<String>()?, "0-a");
+    assert_eq!(result2.into_typed::<String>()?, "1-b");
     Ok(())
 }
 
@@ -264,22 +281,10 @@ async fn lazy_pollable(
     executor.check_oplog_is_queryable(&worker_id).await?;
     http_server.abort();
 
-    assert_eq!(
-        s1.into_return_value(),
-        Some(Value::String("chunk-1-0\n".to_string()))
-    );
-    assert_eq!(
-        s2.into_return_value(),
-        Some(Value::String("chunk-1-1\n".to_string()))
-    );
-    assert_eq!(
-        s3.into_return_value(),
-        Some(Value::String("chunk-1-2\n".to_string()))
-    );
-    assert_eq!(
-        s4.into_return_value(),
-        Some(Value::String("chunk-3-0\n".to_string()))
-    );
+    assert_eq!(s1.into_typed::<String>()?, "chunk-1-0\n");
+    assert_eq!(s2.into_typed::<String>()?, "chunk-1-1\n");
+    assert_eq!(s3.into_typed::<String>()?, "chunk-1-2\n");
+    assert_eq!(s4.into_typed::<String>()?, "chunk-3-0\n");
     Ok(())
 }
 
@@ -300,7 +305,7 @@ async fn automatic_snapshot_disabled(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounter", "disabled");
+    let agent_id = agent_id!("JsonSnapshotCounter", "disabled");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -346,7 +351,7 @@ async fn automatic_snapshot_every_2nd_invocation(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounter", "every-2nd");
+    let agent_id = agent_id!("JsonSnapshotCounter", "every-2nd");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -363,13 +368,33 @@ async fn automatic_snapshot_every_2nd_invocation(
         .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
         .count();
 
-    drop(executor);
-
     assert_eq!(
         snapshot_count,
         SNAPSHOT_TEST_INVOCATIONS / 2,
         "Expected a snapshot every 2 invocations"
     );
+
+    drop(executor);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 2 },
+    )
+    .await?;
+    let mut events = executor.capture_output(&worker_id).await?;
+
+    let result_after_restart = executor
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
+        .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
+
+    assert_eq!(
+        result_after_restart.into_typed::<u32>()?,
+        SNAPSHOT_TEST_INVOCATIONS as u32,
+        "Counter should be restored from the automatic snapshot after restart"
+    );
+
+    drop(executor);
     Ok(())
 }
 
@@ -395,7 +420,7 @@ async fn automatic_snapshot_periodic(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounter", "periodic");
+    let agent_id = agent_id!("JsonSnapshotCounter", "periodic");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -415,8 +440,6 @@ async fn automatic_snapshot_periodic(
         .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
         .count();
 
-    drop(executor);
-
     assert!(
         snapshot_count >= 1,
         "Expected at least 1 snapshot with periodic policy (every 2s over ~5s of invocations), got {snapshot_count}"
@@ -425,6 +448,30 @@ async fn automatic_snapshot_periodic(
         snapshot_count <= SNAPSHOT_TEST_INVOCATIONS,
         "Expected at most {SNAPSHOT_TEST_INVOCATIONS} snapshots, got {snapshot_count}"
     );
+
+    drop(executor);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::Periodic {
+            period: Duration::from_secs(2),
+        },
+    )
+    .await?;
+    let mut events = executor.capture_output(&worker_id).await?;
+
+    let result_after_restart = executor
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
+        .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
+
+    assert_eq!(
+        result_after_restart.into_typed::<u32>()?,
+        SNAPSHOT_TEST_INVOCATIONS as u32,
+        "Counter should be restored from the automatic snapshot after restart"
+    );
+
+    drop(executor);
     Ok(())
 }
 
@@ -440,7 +487,7 @@ async fn snapshot_based_recovery(
     let executor = start_with_snapshot_policy(
         deps,
         &context,
-        SnapshotPolicy::EveryNInvocation { count: 1 },
+        SnapshotPolicy::EveryNInvocation { count: 3 },
     )
     .await?;
 
@@ -453,7 +500,7 @@ async fn snapshot_based_recovery(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    for _ in 0..5 {
+    for _ in 0..105 {
         executor
             .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
             .await?;
@@ -477,32 +524,19 @@ async fn snapshot_based_recovery(
     let executor = start_with_snapshot_policy(
         deps,
         &context,
-        SnapshotPolicy::EveryNInvocation { count: 1 },
+        SnapshotPolicy::EveryNInvocation { count: 3 },
     )
     .await?;
+    let mut events = executor.capture_output(&worker_id).await?;
 
     let result_after = executor
         .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
 
     assert_eq!(
         result_before, result_after,
         "Worker state should be preserved across restart via snapshot recovery"
-    );
-
-    let was_recovered = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "was_recovered_from_snapshot",
-            data_value!(),
-        )
-        .await?;
-
-    assert_eq!(
-        was_recovered.into_return_value(),
-        Some(Value::Bool(true)),
-        "Worker should have been recovered from snapshot, not replayed from scratch"
     );
 
     let increment_after = executor
@@ -510,9 +544,83 @@ async fn snapshot_based_recovery(
         .await?;
 
     assert_eq!(
-        increment_after.into_return_value(),
-        Some(Value::U32(6)),
-        "Counter should continue from 6 after snapshot recovery"
+        increment_after.into_typed::<u32>()?,
+        106,
+        "Counter should continue from 106 after snapshot recovery"
+    );
+
+    drop(executor);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn snapshot_based_recovery_preserves_installed_cards(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotCardRecoveryAgent");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let (high_bits, low_bits) = TEST_CARD_ID.0.as_u64_pair();
+    let installed = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "install_card_by_id",
+            data_value!(high_bits, low_bits),
+        )
+        .await?
+        .into_typed::<bool>()?;
+    assert!(installed, "test card should install");
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let snapshot_count = oplog
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+        .count();
+    assert!(
+        snapshot_count >= 1,
+        "Expected at least one snapshot before restart, got {snapshot_count}"
+    );
+
+    drop(executor);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+
+    let still_usable = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "derive_card_by_id",
+            data_value!(high_bits, low_bits),
+        )
+        .await?
+        .into_typed::<bool>()?;
+
+    assert!(
+        still_usable,
+        "installed card should remain in the agent wallet after snapshot recovery"
     );
 
     drop(executor);
@@ -541,11 +649,11 @@ async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
         .store()
         .await?;
     let agent_id = agent_id!("SnapshotCounter", "multi-restart");
-    let _worker_id = executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    for _ in 0..3 {
+    for _ in 0..105 {
         executor
             .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
             .await?;
@@ -572,30 +680,17 @@ async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
         SnapshotPolicy::EveryNInvocation { count: 1 },
     )
     .await?;
+    let mut events = executor.capture_output(&worker_id).await?;
 
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
 
     assert_eq!(
-        result.into_return_value(),
-        Some(Value::U32(6)),
-        "Counter should be 6 after two rounds of 3 increments across restarts"
-    );
-
-    let was_recovered = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "was_recovered_from_snapshot",
-            data_value!(),
-        )
-        .await?;
-
-    assert_eq!(
-        was_recovered.into_return_value(),
-        Some(Value::Bool(true)),
-        "Worker should have been recovered from snapshot after multiple restarts"
+        result.into_typed::<u32>()?,
+        108,
+        "Counter should be 108 after 105 increments, restart, then 3 more increments"
     );
 
     drop(executor);
@@ -633,8 +728,8 @@ async fn ts_default_json_snapshot_recovery(
         .await?;
 
     assert_eq!(
-        result_before.clone().into_return_value(),
-        Some(Value::F64(5.0)),
+        result_before.clone().into_typed::<f64>()?,
+        5.0,
         "Counter should be 5 after 5 increments"
     );
 
@@ -681,10 +776,12 @@ async fn ts_default_json_snapshot_recovery(
 
     drop(executor);
     let executor = start(deps, &context).await?;
+    let mut events = executor.capture_output(&worker_id).await?;
 
     let result_after = executor
         .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
 
     assert_eq!(
         result_before, result_after,
@@ -696,8 +793,8 @@ async fn ts_default_json_snapshot_recovery(
         .await?;
 
     assert_eq!(
-        increment_after.into_return_value(),
-        Some(Value::F64(6.0)),
+        increment_after.into_typed::<f64>()?,
+        6.0,
         "Counter should continue from 6 after snapshot recovery"
     );
 
@@ -799,14 +896,16 @@ async fn ts_default_json_snapshot_recovery_across_multiple_restarts(
 
     drop(executor);
     let executor = start(deps, &context).await?;
+    let mut events = executor.capture_output(&worker_id).await?;
 
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
 
     assert_eq!(
-        result.into_return_value(),
-        Some(Value::F64(6.0)),
+        result.into_typed::<f64>()?,
+        6.0,
         "Counter should be 6 after two rounds of 3 increments across restarts"
     );
 
@@ -850,8 +949,8 @@ async fn rust_default_json_snapshot_recovery(
         .await?;
 
     assert_eq!(
-        result_before.clone().into_return_value(),
-        Some(Value::U32(5)),
+        result_before.clone().into_typed::<u32>()?,
+        5,
         "Counter should be 5 after 5 increments"
     );
 
@@ -903,10 +1002,12 @@ async fn rust_default_json_snapshot_recovery(
         SnapshotPolicy::EveryNInvocation { count: 1 },
     )
     .await?;
+    let mut events = executor.capture_output(&worker_id).await?;
 
     let result_after = executor
         .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
 
     assert_eq!(
         result_before, result_after,
@@ -918,8 +1019,8 @@ async fn rust_default_json_snapshot_recovery(
         .await?;
 
     assert_eq!(
-        increment_after.into_return_value(),
-        Some(Value::U32(6)),
+        increment_after.into_typed::<u32>()?,
+        6,
         "Counter should continue from 6 after snapshot recovery"
     );
 
@@ -1036,14 +1137,16 @@ async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
         SnapshotPolicy::EveryNInvocation { count: 1 },
     )
     .await?;
+    let mut events = executor.capture_output(&_worker_id).await?;
 
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
 
     assert_eq!(
-        result.into_return_value(),
-        Some(Value::U32(6)),
+        result.into_typed::<u32>()?,
+        6,
         "Counter should be 6 after two rounds of 3 increments across restarts (rust)"
     );
 
@@ -1089,10 +1192,7 @@ async fn ts_sqlite_multipart_snapshot_recovery(
         .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
         .await?;
 
-    let state_before_str = match state_before.clone().into_return_value() {
-        Some(Value::String(s)) => s,
-        other => panic!("Expected string from getState, got {:?}", other),
-    };
+    let state_before_str = state_before.clone().into_typed::<String>()?;
     let state_before_json: serde_json::Value = serde_json::from_str(&state_before_str)?;
     assert_eq!(state_before_json["label"], "after-init");
     assert_eq!(
@@ -1184,11 +1284,13 @@ async fn ts_sqlite_multipart_snapshot_recovery(
     // Restart the executor — this triggers snapshot-based recovery
     drop(executor);
     let executor = start(deps, &context).await?;
+    let mut events = executor.capture_output(&worker_id).await?;
 
     // Verify state is preserved after recovery
     let state_after = executor
         .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
         .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
 
     assert_eq!(
         state_before, state_after,
@@ -1207,10 +1309,7 @@ async fn ts_sqlite_multipart_snapshot_recovery(
         .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
         .await?;
 
-    let state_after_str = match state_after_more.into_return_value() {
-        Some(Value::String(s)) => s,
-        other => panic!("Expected string from getState, got {:?}", other),
-    };
+    let state_after_str = state_after_more.into_typed::<String>()?;
     let state_after_json: serde_json::Value = serde_json::from_str(&state_after_str)?;
     assert_eq!(state_after_json["label"], "after-init");
     assert_eq!(
@@ -1254,7 +1353,7 @@ async fn monotonic_clock_now_replay_parity(
     let recorded_live = executor
         .invoke_and_await_agent(&component, &agent_id, "record_now", data_value!())
         .await?
-        .into_return_value();
+        .into_typed::<u64>()?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1267,15 +1366,11 @@ async fn monotonic_clock_now_replay_parity(
     let recorded_after_replay = executor
         .invoke_and_await_agent(&component, &agent_id, "get_recorded", data_value!())
         .await?
-        .into_return_value();
+        .into_typed::<u64>()?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
 
-    assert!(
-        matches!(recorded_live, Some(Value::U64(_))),
-        "expected a u64 monotonic reading, got: {recorded_live:?}"
-    );
     assert_eq!(
         recorded_live, recorded_after_replay,
         "monotonic_clock::now() must replay to the same value recorded live"

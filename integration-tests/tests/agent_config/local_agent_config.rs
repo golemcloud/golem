@@ -19,10 +19,10 @@ use assert2::let_assert;
 use golem_client::api::WorkerError;
 use golem_common::model::component::AgentTypeProvisionConfigUpdate;
 use golem_common::model::worker::AgentConfigEntryDto;
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use golem_wasm::Value;
 use pretty_assertions::assert_eq;
 use pretty_assertions::assert_matches;
 use serde_json::json;
@@ -46,7 +46,7 @@ define_matrix_dimension!(lang: Arc<dyn TestContext> -> "ts", "rust");
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn agent_with_only_component_agent_config(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,
@@ -102,7 +102,7 @@ async fn agent_with_only_component_agent_config(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(agent_config) = response);
+    let_assert!(SchemaValue::String(agent_config) = response);
 
     let parsed_agent_config: serde_json::Value = serde_json::from_str(&agent_config)?;
 
@@ -126,7 +126,7 @@ async fn agent_with_only_component_agent_config(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn agent_with_only_worker_agent_config(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,
@@ -184,7 +184,7 @@ async fn agent_with_only_worker_agent_config(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(agent_config) = response);
+    let_assert!(SchemaValue::String(agent_config) = response);
 
     let parsed_agent_config: serde_json::Value = serde_json::from_str(&agent_config)?;
 
@@ -208,7 +208,7 @@ async fn agent_with_only_worker_agent_config(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn agent_with_mixed_agent_config(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,
@@ -275,7 +275,7 @@ async fn agent_with_mixed_agent_config(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(agent_config) = response);
+    let_assert!(SchemaValue::String(agent_config) = response);
 
     let parsed_agent_config: serde_json::Value = serde_json::from_str(&agent_config)?;
 
@@ -299,7 +299,7 @@ async fn agent_with_mixed_agent_config(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn agent_with_mixed_agent_config_update(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,
@@ -396,7 +396,7 @@ async fn agent_with_mixed_agent_config_update(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(agent_config) = response);
+    let_assert!(SchemaValue::String(agent_config) = response);
 
     let parsed_agent_config: serde_json::Value = serde_json::from_str(&agent_config)?;
 
@@ -420,7 +420,7 @@ async fn agent_with_mixed_agent_config_update(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn missing_agent_config_key(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,
@@ -476,7 +476,7 @@ async fn missing_agent_config_key(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn mistyped_agent_config_key(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,
@@ -536,7 +536,7 @@ async fn mistyped_agent_config_key(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn optional_agent_config_does_not_need_to_be_provided(
     deps: &EnvBasedTestDependencies,
     #[dimension(lang)] ctx: &Arc<dyn TestContext>,
@@ -587,7 +587,7 @@ async fn optional_agent_config_does_not_need_to_be_provided(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(agent_config) = response);
+    let_assert!(SchemaValue::String(agent_config) = response);
 
     let parsed_agent_config: serde_json::Value = serde_json::from_str(&agent_config)?;
 

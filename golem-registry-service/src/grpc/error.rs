@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::repo::model::card::CardRepoError;
 use crate::services::account_usage::error::{AccountUsageError, LimitExceededError};
 use crate::services::auth::AuthError;
+use crate::services::card::CardError;
 use crate::services::component::ComponentError;
 use crate::services::component_resolver::ComponentResolverError;
 use crate::services::deployment::{DeployedMcpError, DeployedRoutesError, DeploymentError};
@@ -108,6 +110,53 @@ impl From<LimitExceededError> for GrpcApiError {
             code: api::error_code::LIMIT_EXCEEDED.to_string(),
             cause: None,
         })
+    }
+}
+
+impl From<CardRepoError> for GrpcApiError {
+    fn from(value: CardRepoError) -> Self {
+        Self::InternalError(ErrorBody {
+            error: value.to_string(),
+            code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+            cause: Some(value.into_anyhow()),
+        })
+    }
+}
+
+impl From<CardError> for GrpcApiError {
+    fn from(value: CardError) -> Self {
+        let error = value.to_string();
+        match value {
+            CardError::CardNotFound(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::CARD_NOT_FOUND.to_string(),
+                cause: None,
+            }),
+            CardError::CannotRevokeSystemCard
+            | CardError::CannotRevokePermissionShareCard
+            | CardError::CannotRevokeEnvironmentDefaultCard
+            | CardError::CardOwnerNotFound(_)
+            | CardError::Unauthorized(_) => Self::Unauthorized(ErrorBody {
+                error,
+                code: api::error_code::AUTH_FORBIDDEN.to_string(),
+                cause: None,
+            }),
+            CardError::ConcurrentModification => Self::InternalError(ErrorBody {
+                error,
+                code: api::error_code::CONCURRENT_UPDATE.to_string(),
+                cause: None,
+            }),
+            CardError::AccountNotFound(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::ACCOUNT_NOT_FOUND.to_string(),
+                cause: None,
+            }),
+            other @ CardError::InternalError(_) => Self::InternalError(ErrorBody {
+                error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                cause: Some(other.into_anyhow()),
+            }),
+        }
     }
 }
 

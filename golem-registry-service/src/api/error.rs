@@ -17,6 +17,7 @@ use crate::services::account_usage::error::LimitExceededError;
 use crate::services::agent_secret::AgentSecretError;
 use crate::services::application::ApplicationError;
 use crate::services::auth::AuthError;
+use crate::services::card::CardError;
 use crate::services::component::ComponentError;
 use crate::services::deployment::{DeployValidationError, DeploymentError, DeploymentWriteError};
 use crate::services::domain_registration::DomainRegistrationError;
@@ -133,6 +134,9 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
         }
         DeployValidationError::AgentSecretDefaultTypeMismatch { .. } => {
             api::error_code::deployment_validation::AGENT_SECRET_DEFAULT_TYPE_MISMATCH
+        }
+        DeployValidationError::AgentSecretInvalidConfigType { .. } => {
+            api::error_code::deployment_validation::AGENT_SECRET_INVALID_CONFIG_TYPE
         }
         DeployValidationError::NoSecuritySchemeConfigured(_) => {
             api::error_code::deployment_validation::NO_SECURITY_SCHEME_CONFIGURED
@@ -321,6 +325,31 @@ impl From<AccountError> for ApiError {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
             }
             AccountError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<CardError> for ApiError {
+    fn from(value: CardError) -> Self {
+        let error = value.to_safe_string();
+        match value {
+            CardError::CardNotFound(_) => Self::not_found(api::error_code::CARD_NOT_FOUND, error),
+            CardError::AccountNotFound(_) => {
+                Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
+            }
+            CardError::ConcurrentModification => {
+                Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
+            }
+            CardError::CannotRevokeSystemCard
+            | CardError::CannotRevokePermissionShareCard
+            | CardError::CannotRevokeEnvironmentDefaultCard
+            | CardError::CardOwnerNotFound(_)
+            | CardError::Unauthorized(_) => Self::forbidden(api::error_code::AUTH_FORBIDDEN, error),
+            CardError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
                 code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),
@@ -522,6 +551,17 @@ impl From<ComponentError> for ApiError {
             ComponentError::UndeclaredAgentTypeInProvisionConfig(_) => {
                 Self::bad_request(api::error_code::AGENT_TYPE_NOT_DECLARED, error)
             }
+            ComponentError::MissingAgentTypeProvisionConfig(_) => {
+                Self::bad_request(api::error_code::AGENT_TYPE_NOT_DECLARED, error)
+            }
+            ComponentError::NewAgentTypeMissingInitialPermissions(_) => Self::bad_request(
+                api::error_code::NEW_AGENT_TYPE_MISSING_INITIAL_PERMISSIONS,
+                error,
+            ),
+            ComponentError::InvalidAgentInitialPermissionCard { .. } => Self::bad_request(
+                api::error_code::INVALID_AGENT_INITIAL_PERMISSION_CARD,
+                error,
+            ),
             ComponentError::Unauthorized(inner) => inner.into(),
 
             ComponentError::LimitExceeded(inner) => inner.into(),
@@ -1046,6 +1086,7 @@ impl From<ResourceDefinitionError> for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repo::model::card::CardRepoError;
     use crate::services::component::ComponentError;
     use golem_common::base_model::agent_secret::CanonicalAgentSecretPath;
     use golem_common::base_model::quota::ResourceName;
@@ -1148,6 +1189,18 @@ mod tests {
                     body.0.code,
                     api::error_code::RESET_OVERRIDE_REQUIRES_COMPATIBILITY_CHECK_DISABLED
                 );
+            }
+            other => panic!("Expected Conflict, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn card_tree_changed_during_revoke_maps_to_concurrent_update() {
+        let api_error = ApiError::from(CardError::from(CardRepoError::CardTreeChangedDuringDelete));
+
+        match api_error {
+            ApiError::Conflict(body) => {
+                assert_eq!(body.0.code, api::error_code::CONCURRENT_UPDATE);
             }
             other => panic!("Expected Conflict, got: {other:?}"),
         }

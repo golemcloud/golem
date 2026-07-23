@@ -128,7 +128,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let named_policy: NamedRetryPolicy = policy.into();
 
-        if self.state.is_live() {
+        if self.state.snapshotting_mode.is_some() {
+            // Snapshot loading restores in-memory retry policy changes without recording them again.
+        } else if self.state.is_live() {
             self.public_state
                 .worker()
                 .add_and_commit_oplog(OplogEntry::set_retry_policy(named_policy.clone()))
@@ -144,7 +146,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn remove_retry_policy(&mut self, name: String) -> anyhow::Result<()> {
         self.observe_function_call("golem::api::retry", "remove_retry_policy");
 
-        if self.state.is_live() {
+        if self.state.snapshotting_mode.is_some() {
+            // Snapshot loading restores in-memory retry policy changes without recording them again.
+        } else if self.state.is_live() {
             self.public_state
                 .worker()
                 .add_and_commit_oplog(OplogEntry::remove_retry_policy(name.clone()))

@@ -22,9 +22,10 @@
 use crate::Tracing;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{AgentId, OwnedAgentId};
+use golem_common::schema::SchemaValue;
+use golem_common::schema::schema_type::SchemaType;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{TestDsl, count_agent_invocation_pair_since};
-use golem_wasm::Value;
 use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
@@ -50,17 +51,10 @@ const CALLER_TYPE: &str = "ReadonlyCaller";
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn as_u64(value: &Value) -> u64 {
+fn as_u64(value: &SchemaValue) -> u64 {
     match value {
-        Value::U64(v) => *v,
+        SchemaValue::U64(v) => *v,
         other => panic!("expected u64, got {other:?}"),
-    }
-}
-
-fn as_u32(value: &Value) -> u32 {
-    match value {
-        Value::U32(v) => *v,
-        other => panic!("expected u32, got {other:?}"),
     }
 }
 
@@ -133,10 +127,9 @@ async fn t1_read_only_returns_value_on_fresh_agent(
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
         .await?
-        .into_return_value()
-        .expect("expected return value");
+        .into_typed::<u64>()?;
 
-    assert_eq!(as_u64(&result), 0);
+    assert_eq!(result, 0);
 
     Ok(())
 }
@@ -172,9 +165,8 @@ async fn t2_read_only_caches_until_write(
     let first = executor
         .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
         .await?
-        .into_return_value()
-        .expect("expected return value");
-    assert_eq!(as_u64(&first), 0);
+        .into_typed::<u64>()?;
+    assert_eq!(first, 0);
 
     // Give the observer task a moment to populate the cache; the observer
     // runs in a detached `tokio::spawn` after invocation completion.
@@ -189,7 +181,7 @@ async fn t2_read_only_caches_until_write(
 async fn wait_for_cache_hit<E: TestDsl + Sync>(
     executor: &E,
     component: &golem_common::model::component::ComponentDto,
-    agent_id: &golem_common::base_model::agent::LegacyParsedAgentId,
+    agent_id: &golem_common::model::agent::ParsedAgentId,
     worker_id: &AgentId,
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -197,9 +189,7 @@ async fn wait_for_cache_hit<E: TestDsl + Sync>(
         let before = executor.oplog_max_index(worker_id).await?;
         let _ = executor
             .invoke_and_await_agent(component, agent_id, "get_count", data_value!())
-            .await?
-            .into_return_value()
-            .expect("expected return value");
+            .await?;
         let entries = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
         let (started, _) = count_agent_invocation_pair_since(&entries, before);
         if started == 0 {
@@ -252,9 +242,8 @@ async fn t3_read_only_invalidates_after_write(
     let after_increment = executor
         .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
         .await?
-        .into_return_value()
-        .expect("expected return value");
-    assert_eq!(as_u64(&after_increment), 1);
+        .into_typed::<u64>()?;
+    assert_eq!(after_increment, 1);
 
     // Snapshot the oplog and read again; the post-write read must miss the
     // cache and produce exactly one Started/Finished pair on the oplog.
@@ -262,9 +251,8 @@ async fn t3_read_only_invalidates_after_write(
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
         .await?
-        .into_return_value()
-        .expect("expected return value");
-    assert_eq!(as_u64(&result), 1);
+        .into_typed::<u64>()?;
+    assert_eq!(result, 1);
 
     let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let (started, finished) = count_agent_invocation_pair_since(&entries, before);
@@ -346,15 +334,14 @@ async fn t4_read_only_bypasses_queue_during_slow_write(
     )
     .await
     .expect("read-only call must return within 50ms even while slow_increment holds the queue")?
-    .into_return_value()
-    .expect("expected return value");
+    .into_typed::<u64>()?;
 
     assert!(
         started.elapsed() < Duration::from_millis(50),
         "read-only call took {:?}",
         started.elapsed()
     );
-    assert_eq!(as_u64(&result), 0, "must return pre-write value");
+    assert_eq!(result, 0, "must return pre-write value");
 
     let _ = mutator.await;
 
@@ -394,19 +381,31 @@ async fn t5_read_only_bypasses_agent_loading(
     let context = TestContext::new(last_unique_id);
 
     // Tight memory budget: enough for one agent_sdk_rust worker, not two.
-    // - `worker_memory_ratio = 1.0` makes the worker pool == system_memory_override
-    //   so the math is easy to reason about.
-    // - 6 MiB has been chosen experimentally so that one Rust agent_sdk
-    //   worker (whose `Worker::memory_requirement()` is ~4 MiB) fits while
-    //   two do not. The assertions below verify the calibration is still
-    //   valid — if the component's linear memory grows or shrinks materially,
-    //   the test will fail with a clear diagnostic instead of silently
-    //   passing or hanging.
-    const SYSTEM_MEMORY: u64 = 6 * 1024 * 1024;
+    //
+    // Under the measured-headroom admission gate, the first resident worker of a
+    // component reserves *two* things against the budget: its own linear-memory
+    // requirement (`Worker::memory_requirement()`, ~`r_req`) and its component's
+    // shared compiled-module charge (`component_size_coefficient * component_size`,
+    // paid once per resident component). R and Q here are the *same* component, so
+    // the module charge is paid once and Q adds only another `r_req`. The eviction
+    // regime is therefore `module + r_req <= budget < module + 2*r_req`: R loads
+    // standalone, but loading Q would exceed the budget and must evict R.
+    //
+    // - `worker_memory_ratio = 1.0` makes the usable worker pool == the budget so
+    //   the math is easy to reason about.
+    // - `component_size_coefficient` is pinned so the assertions below can recompute
+    //   the module charge deterministically from `component_size`.
+    // - The budget is chosen experimentally to sit inside that window for the Rust
+    //   `agent_sdk` component. The assertions verify the calibration is still valid —
+    //   if the component's module or linear memory grows or shrinks materially, the
+    //   test fails with a clear diagnostic instead of silently passing or hanging.
+    const SYSTEM_MEMORY: u64 = 8 * 1024 * 1024;
+    const COMPONENT_SIZE_COEFFICIENT: f64 = 2.0;
     let overrides = TestExecutorOverrides {
         configure: Some(Arc::new(|config| {
             config.memory.system_memory_override = Some(SYSTEM_MEMORY);
             config.memory.worker_memory_ratio = 1.0;
+            config.memory.component_size_coefficient = COMPONENT_SIZE_COEFFICIENT;
             // Tight `acquire_retry_delay` so Q's permit-wait doesn't hang the
             // test if memory pressure eviction takes a moment to settle.
             config.memory.acquire_retry_delay = Duration::from_millis(25);
@@ -434,17 +433,22 @@ async fn t5_read_only_bypasses_agent_loading(
         .await?;
     wait_for_cache_hit(&executor, &component, &r_agent_id, &r_worker_id).await?;
 
-    // Sanity-check the memory budget. The test only makes sense when
-    // `req <= budget < 2 * req`, which is the regime that forces Q's load to
-    // evict R but lets R load standalone.
+    // Sanity-check the memory budget. The test only makes sense in the regime
+    // `module + r_req <= budget < module + 2*r_req`, which forces Q's load to
+    // evict R but lets R load standalone. `module` is the shared compiled-module
+    // charge the gate reserves for the first resident worker of the component;
+    // R and Q share it, so the second worker only adds another `r_req`.
     let r_req = executor.worker_memory_requirement(&r_owned).await?;
+    let module_charge = (COMPONENT_SIZE_COEFFICIENT * component.component_size as f64) as u64;
+    let one_worker = module_charge + r_req;
+    let two_workers = module_charge + 2 * r_req;
     assert!(
-        r_req <= SYSTEM_MEMORY,
-        "memory budget too tight: budget={SYSTEM_MEMORY} but R needs {r_req}. Increase SYSTEM_MEMORY."
+        one_worker <= SYSTEM_MEMORY,
+        "memory budget too tight: budget={SYSTEM_MEMORY} but R needs module {module_charge} + r_req {r_req} = {one_worker}. Increase SYSTEM_MEMORY."
     );
     assert!(
-        2 * r_req > SYSTEM_MEMORY,
-        "memory budget too generous: budget={SYSTEM_MEMORY}, R req={r_req}, 2*req={} fits inside budget so loading Q would not evict R. \
+        two_workers > SYSTEM_MEMORY,
+        "memory budget too generous: budget={SYSTEM_MEMORY}, but module {module_charge} + 2*r_req {} = {two_workers} fits inside budget so loading Q would not evict R. \
          Decrease SYSTEM_MEMORY (or the component grew significantly).",
         2 * r_req
     );
@@ -455,7 +459,8 @@ async fn t5_read_only_bypasses_agent_loading(
     assert!(executor.worker_is_loaded(&r_owned).await);
 
     // Q: a second worker of the same agent type. Loading Q reserves another
-    // `r_req` from the worker memory semaphore, which forces eviction of R.
+    // `r_req` against the budget (Q shares R's already-charged module), which
+    // forces eviction of R.
     let q_agent_id = agent_id!(AGENT_TYPE, format!("t5-q-{unique_id}"));
     let q_worker_id = executor
         .start_agent(&component.id, q_agent_id.clone())
@@ -477,9 +482,8 @@ async fn t5_read_only_bypasses_agent_loading(
              exceeds budget {SYSTEM_MEMORY}, and that R reached `LoadedIdle` before Q started."
         )
     })??
-    .into_return_value()
-    .expect("expected return value");
-    assert_eq!(as_u64(&q_result), 0);
+    .into_typed::<u64>()?;
+    assert_eq!(q_result, 0);
 
     // The production eviction path should have unloaded R while keeping its
     // `Worker` shell (and read-only cache) resident. Poll briefly because
@@ -504,9 +508,8 @@ async fn t5_read_only_bypasses_agent_loading(
     let result = executor
         .invoke_and_await_agent(&component, &r_agent_id, "get_count", data_value!())
         .await?
-        .into_return_value()
-        .expect("expected return value");
-    assert_eq!(as_u64(&result), 0);
+        .into_typed::<u64>()?;
+    assert_eq!(result, 0);
 
     let entries = executor
         .get_oplog(&r_worker_id, OplogIndex::INITIAL)
@@ -641,9 +644,7 @@ async fn t6_principal_aware_caches_per_principal(
             "get_count_for",
             data_value!(),
         )
-        .await?
-        .into_return_value()
-        .expect("expected return value");
+        .await?;
     let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let (started_a, finished_a) = count_agent_invocation_pair_since(&entries, before);
     assert_eq!(
@@ -667,9 +668,7 @@ async fn t6_principal_aware_caches_per_principal(
             "get_count_for",
             data_value!(),
         )
-        .await?
-        .into_return_value()
-        .expect("expected return value");
+        .await?;
     let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let (started_b, finished_b) = count_agent_invocation_pair_since(&entries, before);
     assert_eq!(
@@ -748,12 +747,122 @@ async fn t6_principal_aware_caches_per_principal(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// T6b — public oplog input for a principal-aware method is well-formed
+// ---------------------------------------------------------------------------
+
+/// Reproducer for the public-oplog bug where a principal-aware method's
+/// recorded (caller-only) input value was paired with a record schema that
+/// still included the auto-injected `principal` field, producing a malformed
+/// `TypedSchemaValue` whose schema arity did not match its value arity.
+///
+/// `get_count_for(_principal: Principal) -> u64` declares a single
+/// auto-injected field and no user-supplied parameters, so the recorded input
+/// is an empty record. The public oplog's `function_input` must describe an
+/// empty record too (the principal excluded), keeping schema and value arities
+/// aligned.
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn t6b_principal_method_public_oplog_input_is_well_formed(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::account::AccountId;
+    use golem_common::model::agent::{GolemUserPrincipal, Principal};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+
+    let unique_id = context.redis_prefix();
+    let agent_id = agent_id!(AGENT_TYPE, format!("t6b-{unique_id}"));
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    wait_oplog_settled(&executor, &worker_id).await?;
+
+    let principal = Principal::GolemUser(GolemUserPrincipal {
+        account_id: AccountId::new(),
+    });
+    executor
+        .invoke_and_await_agent_as_principal(
+            &component,
+            &agent_id,
+            principal,
+            "get_count_for",
+            data_value!(),
+        )
+        .await?;
+
+    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let function_input = method_invocation_input(&entries, "get_count_for")
+        .expect("expected an AgentMethodInvocation oplog entry for get_count_for");
+
+    assert_well_formed_record(&function_input);
+
+    // `get_count_for` declares only the auto-injected principal, so the
+    // caller-visible input is an empty record.
+    let SchemaType::Record { fields, .. } = function_input.root_type() else {
+        panic!("expected record root, got {:?}", function_input.root_type());
+    };
+    assert!(
+        fields.is_empty(),
+        "auto-injected principal must be excluded from the public oplog input, got fields {:?}",
+        fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>()
+    );
+
+    Ok(())
+}
+
+/// Find the `function_input` of the first `AgentMethodInvocation` oplog entry
+/// for `method_name`.
+fn method_invocation_input(
+    entries: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+    method_name: &str,
+) -> Option<golem_common::schema::TypedSchemaValue> {
+    use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
+    entries.iter().find_map(|e| match &e.entry {
+        PublicOplogEntry::AgentInvocationStarted(params) => match &params.invocation {
+            PublicAgentInvocation::AgentMethodInvocation(p) if p.method_name == method_name => {
+                Some(p.function_input.clone())
+            }
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+/// Assert a typed schema value is a well-formed record: its root record schema
+/// arity matches its value record arity.
+fn assert_well_formed_record(typed: &golem_common::schema::TypedSchemaValue) {
+    let SchemaType::Record { fields, .. } = typed.root_type() else {
+        panic!("expected record root, got {:?}", typed.root_type());
+    };
+    let SchemaValue::Record { fields: values } = typed.value() else {
+        panic!("expected record value, got {:?}", typed.value());
+    };
+    assert_eq!(
+        fields.len(),
+        values.len(),
+        "public oplog typed value is malformed: schema arity {} != value arity {}",
+        fields.len(),
+        values.len()
+    );
+}
+
 /// Polls until `get_count_for` as `principal` is served from the per-principal
 /// read-only cache (no new `AgentInvocationStarted` entries on the oplog).
 async fn wait_for_principal_cache_hit<E: TestDsl + Sync>(
     executor: &E,
     component: &golem_common::model::component::ComponentDto,
-    agent_id: &golem_common::base_model::agent::LegacyParsedAgentId,
+    agent_id: &golem_common::model::agent::ParsedAgentId,
     worker_id: &AgentId,
     principal: &golem_common::model::agent::Principal,
 ) -> anyhow::Result<()> {
@@ -841,7 +950,7 @@ async fn t7_ttl_expires_cache_entry(
 async fn wait_for_ttl_cache_hit<E: TestDsl + Sync>(
     executor: &E,
     component: &golem_common::model::component::ComponentDto,
-    agent_id: &golem_common::base_model::agent::LegacyParsedAgentId,
+    agent_id: &golem_common::model::agent::ParsedAgentId,
     worker_id: &AgentId,
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -901,9 +1010,8 @@ async fn t8_no_cache_runs_every_time(
                 data_value!(2u32, 3u32),
             )
             .await?
-            .into_return_value()
-            .expect("expected return value");
-        assert_eq!(as_u32(&r), (2u32.wrapping_add(3)).wrapping_mul(3));
+            .into_typed::<u32>()?;
+        assert_eq!(r, (2u32.wrapping_add(3)).wrapping_mul(3));
     }
 
     let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -1106,11 +1214,8 @@ async fn t11_concurrent_misses_coalesce(
     }
     let mut results = Vec::with_capacity(N);
     for h in handles {
-        let dv = h
-            .await??
-            .into_return_value()
-            .expect("expected return value");
-        results.push(as_u64(&dv));
+        let dv = h.await??.into_typed::<u64>()?;
+        results.push(dv);
     }
 
     for r in &results {
@@ -1229,10 +1334,9 @@ async fn t11b_coalesced_owner_survives_caller_cancellation(
     )
     .await?
     .expect("second Await must not hang on an abandoned pending cache entry")
-    .into_return_value()
-    .expect("expected return value");
+    .into_typed::<u64>()?;
     // The agent's counter hasn't been touched, so `slow_read` returns 0.
-    assert_eq!(as_u64(&result), 0);
+    assert_eq!(result, 0);
 
     // After both calls settle, the oplog must show exactly one Started /
     // Finished pair — the second call must have joined the pending cache
@@ -1308,9 +1412,8 @@ async fn t11c_coalescing_does_not_cache_idempotency_replay(
     let r1 = executor
         .invoke_and_await_agent_with_key(&component, &agent_id, &key, "get_count", data_value!())
         .await?
-        .into_return_value()
-        .expect("expected return value");
-    assert_eq!(as_u64(&r1), 0);
+        .into_typed::<u64>()?;
+    assert_eq!(r1, 0);
 
     // 2. Mutation bumps the read-only cache epoch.
     let _ = executor
@@ -1323,11 +1426,9 @@ async fn t11c_coalescing_does_not_cache_idempotency_replay(
     let r2 = executor
         .invoke_and_await_agent_with_key(&component, &agent_id, &key, "get_count", data_value!())
         .await?
-        .into_return_value()
-        .expect("expected return value");
+        .into_typed::<u64>()?;
     assert_eq!(
-        as_u64(&r2),
-        0,
+        r2, 0,
         "replay of the original idempotency key must return the originally \
          recorded read-only value"
     );
@@ -1338,11 +1439,9 @@ async fn t11c_coalescing_does_not_cache_idempotency_replay(
     let r3 = executor
         .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
         .await?
-        .into_return_value()
-        .expect("expected return value");
+        .into_typed::<u64>()?;
     assert_eq!(
-        as_u64(&r3),
-        1,
+        r3, 1,
         "post-mutation read must reflect the new state (1); a poisoned \
          cache entry would have returned the stale replayed value (0)"
     );
@@ -1358,11 +1457,9 @@ async fn t11c_coalescing_does_not_cache_idempotency_replay(
     let r4 = executor
         .invoke_and_await_agent_with_key(&component, &agent_id, &key, "get_count", data_value!())
         .await?
-        .into_return_value()
-        .expect("expected return value");
+        .into_typed::<u64>()?;
     assert_eq!(
-        as_u64(&r4),
-        0,
+        r4, 0,
         "idempotency replay must bypass the read-only cache fast path even \
          when the current epoch cache is warm"
     );
@@ -1412,9 +1509,8 @@ async fn r1_rpc_read_only_uses_cache_fast_path(
             data_value!(target_str.clone()),
         )
         .await?
-        .into_return_value()
-        .expect("expected return value");
-    assert_eq!(as_u64(&r1), 0);
+        .into_typed::<u64>()?;
+    assert_eq!(r1, 0);
 
     // Wait for cache to populate on the target.
     wait_for_cache_hit(&executor, &component, &target_agent_id, &target_worker_id).await?;
@@ -1429,9 +1525,8 @@ async fn r1_rpc_read_only_uses_cache_fast_path(
             data_value!(target_str.clone()),
         )
         .await?
-        .into_return_value()
-        .expect("expected return value");
-    assert_eq!(as_u64(&r2), 0);
+        .into_typed::<u64>()?;
+    assert_eq!(r2, 0);
     let entries = executor
         .get_oplog(&target_worker_id, OplogIndex::INITIAL)
         .await?;
@@ -1500,15 +1595,14 @@ async fn r2_rpc_read_only_during_slow_target_invocation(
         ),
     )
     .await??
-    .into_return_value()
-    .expect("expected return value");
+    .into_typed::<u64>()?;
 
     assert!(
         started_at.elapsed() < Duration::from_millis(500),
         "slow_then_read took {:?} (cache bypass expected)",
         started_at.elapsed()
     );
-    assert_eq!(as_u64(&result), 0, "must return pre-write value");
+    assert_eq!(result, 0, "must return pre-write value");
 
     Ok(())
 }
@@ -1571,7 +1665,7 @@ async fn r3_rpc_parallel_reads_coalesce(
         .expect("expected return value");
 
     let values = match &result {
-        Value::List(items) => items.iter().map(as_u64).collect::<Vec<_>>(),
+        SchemaValue::List { elements } => elements.iter().map(as_u64).collect::<Vec<_>>(),
         other => panic!("expected a list, got {other:?}"),
     };
     assert!(!values.is_empty());
@@ -1603,9 +1697,8 @@ async fn r3_rpc_parallel_reads_coalesce(
             data_value!(target_str.clone()),
         )
         .await?
-        .into_return_value()
-        .expect("expected return value");
-    assert_eq!(as_u64(&r), 0);
+        .into_typed::<u64>()?;
+    assert_eq!(r, 0);
     let entries = executor
         .get_oplog(&target_worker_id, OplogIndex::INITIAL)
         .await?;

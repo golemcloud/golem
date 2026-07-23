@@ -17,6 +17,7 @@ use crate::repo::{Deps, TestDb};
 use golem_common::config::DbSqliteConfig;
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
+use golem_registry_service::repo::agent_secret::DbAgentSecretRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
 use golem_registry_service::repo::component::DbComponentRepo;
 use golem_registry_service::repo::deployment::DbDeploymentRepo;
@@ -84,6 +85,7 @@ async fn deps(db: &SqliteDb) -> Deps {
     let deps = Deps {
         account_repo: Box::new(DbAccountRepo::logged(db.pool.clone())),
         account_usage_repo: std::sync::Arc::new(DbAccountUsageRepo::logged(db.pool.clone())),
+        agent_secret_repo: Box::new(DbAgentSecretRepo::logged(db.pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(db.pool.clone())),
         environment_repo: Box::new(DbEnvironmentRepo::logged(db.pool.clone())),
         plan_repo: Box::new(DbPlanRepo::logged(db.pool.clone())),
@@ -149,8 +151,71 @@ async fn test_environment_update_concurrently(deps: &Deps) {
 }
 
 #[test]
+async fn test_environment_default_card_ids_by_account_excludes_deleted(deps: &Deps) {
+    crate::repo::common::test_environment_default_card_ids_by_account_excludes_deleted(deps).await;
+}
+
+#[test]
+async fn test_deleted_environment_default_card_revoke_returns_not_found(deps: &Deps) {
+    crate::repo::common::test_deleted_environment_default_card_revoke_returns_not_found(deps).await;
+}
+
+#[test]
+async fn test_deleted_environment_default_card_is_not_reported_existing(deps: &Deps) {
+    crate::repo::common::test_deleted_environment_default_card_is_not_reported_existing(deps).await;
+}
+
+#[test]
+async fn test_environment_default_card_tracks_environment_rename(deps: &Deps) {
+    crate::repo::common::test_environment_default_card_tracks_environment_rename(deps).await;
+}
+
+#[test]
+async fn test_environment_default_card_tracks_application_rename(deps: &Deps) {
+    crate::repo::common::test_environment_default_card_tracks_application_rename(deps).await;
+}
+
+#[test]
+async fn test_agent_secret_get_revision_include_deleted(deps: &Deps) {
+    crate::repo::common::test_agent_secret_get_revision_include_deleted(deps).await;
+}
+
+#[test]
 async fn test_component_stage(deps: &Deps) {
     crate::repo::common::test_component_stage(deps).await;
+}
+
+#[test]
+async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps) {
+    crate::repo::common::test_initial_permission_card_ids_by_account_are_unique(deps).await;
+}
+
+#[test]
+async fn test_agent_initial_card_removed_from_current_component_is_not_live(deps: &Deps) {
+    crate::repo::common::test_agent_initial_card_removed_from_current_component_is_not_live(deps)
+        .await;
+}
+
+#[test]
+async fn test_initial_permission_card_ids_by_account_excludes_deleted_components(deps: &Deps) {
+    crate::repo::common::test_initial_permission_card_ids_by_account_excludes_deleted_components(
+        deps,
+    )
+    .await;
+}
+
+#[test]
+async fn test_deleted_component_agent_initial_card_is_not_reported_existing(deps: &Deps) {
+    crate::repo::common::test_deleted_component_agent_initial_card_is_not_reported_existing(deps)
+        .await;
+}
+
+#[test]
+async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_revisions(deps: &Deps) {
+    crate::repo::common::test_initial_permission_card_ids_by_account_excludes_pre_recreate_revisions(
+        deps,
+    )
+    .await;
 }
 
 #[test]

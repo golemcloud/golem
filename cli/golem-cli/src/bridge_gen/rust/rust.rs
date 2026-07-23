@@ -14,10 +14,24 @@
 
 use heck::ToSnakeCase;
 
+/// Returns true if `name` is already a valid Rust identifier (a leading letter
+/// or underscore followed by letters, digits, or underscores).
+pub fn is_valid_rust_ident(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c == '_' || c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
+}
+
 /// Converts a name to a valid Rust identifier.
 ///
-/// When `same_language` is true, the name is already in Rust's native snake_case,
-/// so only keyword escaping is applied (no `to_snake_case` transformation).
+/// When `same_language` is true, the name is already in Rust's native casing, so
+/// it is preserved verbatim (only keyword escaping is applied) as long as it is a
+/// valid Rust identifier. Identifiers that originate from WIT-defined builtin
+/// types (e.g. the `high-bits` / `low-bits` fields of `uuid`) are kebab-case even
+/// for Rust agents, so they still need `to_snake_case` to become valid Rust.
 /// When `same_language` is false, the name may come from WIT (kebab-case) or
 /// another language, so `to_snake_case` is applied as the default fallback.
 pub fn to_rust_ident(name: &str, same_language: bool) -> String {
@@ -75,7 +89,7 @@ pub fn to_rust_ident(name: &str, same_language: bool) -> String {
         "yield" => "yield_".into(),
         "try" => "try_".into(),
         s => {
-            if same_language {
+            if same_language && is_valid_rust_ident(s) {
                 s.to_string()
             } else {
                 s.to_snake_case()

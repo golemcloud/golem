@@ -13,12 +13,14 @@
 // limitations under the License.
 
 use crate::command::profile::config::ProfileConfigSubcommand;
+use crate::command_handler::Handlers;
 use crate::config::{Config, ProfileName};
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::log_action;
 use crate::log::log_error;
 use crate::model::format::Format;
+use crate::model::text::profile::ProfileConfigSetFormatResult;
 use anyhow::bail;
 use std::sync::Arc;
 
@@ -52,11 +54,19 @@ impl ProfileConfigCommandHandler {
                     "Updating",
                     format!(
                         "profile's default format for {} to {}",
-                        &profile_name, format
+                        profile_name, format
                     ),
                 );
                 Config::set_profile(profile.name, profile.profile, self.ctx.config_dir())?;
                 log_action("Updated", "");
+
+                self.ctx
+                    .log_handler()
+                    .log_output(ProfileConfigSetFormatResult {
+                        updated: true,
+                        profile: profile_name,
+                        format,
+                    })?;
 
                 Ok(())
             }

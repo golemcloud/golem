@@ -40,8 +40,9 @@ pub struct TypeAttrs {
     /// field delegate to the inner type instead of getting a graph slot.
     pub transparent: bool,
     /// `#[schema(rename_all = "...")]` — default rename strategy for fields
-    /// and variant cases. Defaults to `kebab-case` (matching the
-    /// component-model convention).
+    /// and variant cases. Defaults to preserving the native Rust identifier so
+    /// generated bridges show identifiers exactly as written in the user's
+    /// code.
     pub rename_all: RenameAll,
     /// `#[schema(tag = "…", content = "…")]` — adjacently-tagged variant
     /// emission. Mutually exclusive with `#[schema(union)]`.
@@ -52,7 +53,9 @@ pub struct TypeAttrs {
 /// Strategy for default field / case naming.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenameAll {
+    /// Keep the native Rust identifier verbatim.
     #[default]
+    Preserve,
     Kebab,
     Snake,
     Camel,
@@ -63,6 +66,7 @@ pub enum RenameAll {
 impl RenameAll {
     fn from_string(raw: &str, span: proc_macro2::Span) -> syn::Result<Self> {
         match raw {
+            "preserve" => Ok(Self::Preserve),
             "kebab-case" => Ok(Self::Kebab),
             "snake_case" => Ok(Self::Snake),
             "camelCase" => Ok(Self::Camel),
@@ -71,7 +75,7 @@ impl RenameAll {
             other => Err(syn::Error::new(
                 span,
                 format!(
-                    "unknown rename_all strategy `{other}` (expected one of `kebab-case`, `snake_case`, `camelCase`, `PascalCase`, `SCREAMING_SNAKE_CASE`)"
+                    "unknown rename_all strategy `{other}` (expected one of `preserve`, `kebab-case`, `snake_case`, `camelCase`, `PascalCase`, `SCREAMING_SNAKE_CASE`)"
                 ),
             )),
         }
@@ -126,7 +130,6 @@ pub enum RichSpec {
     Path(PathAttrSpec),
     Url(UrlSpec),
     Quantity(QuantitySpec),
-    Secret(SecretAttrSpec),
     QuotaToken(QuotaTokenAttrSpec),
 }
 
@@ -312,12 +315,6 @@ impl FromMeta for StringList {
 }
 
 #[derive(Default, Debug, Clone, FromMeta)]
-pub struct SecretAttrSpec {
-    #[darling(default)]
-    pub category: Option<String>,
-}
-
-#[derive(Default, Debug, Clone, FromMeta)]
 pub struct QuotaTokenAttrSpec {
     #[darling(default)]
     pub resource_name: Option<String>,
@@ -393,7 +390,7 @@ pub fn parse_item_attrs(attrs: &[Attribute]) -> syn::Result<ItemAttrs> {
                 .find(|a| a.path().is_ident(SCHEMA_ATTR))
                 .map(|a| a as &dyn quote::ToTokens)
                 .unwrap_or(&""),
-            "conflicting rich-scalar attributes on the same item (only one of text/binary/path/url/quantity/secret/quota_token allowed)",
+            "conflicting rich-scalar attributes on the same item (only one of text/binary/path/url/quantity/quota_token allowed)",
         ));
     }
     if out.flatten {
@@ -487,9 +484,6 @@ fn apply_item_meta(
         NestedMeta::Meta(Meta::Path(path)) => {
             if path.is_ident("deprecated") {
                 out.deprecated = Some(DeprecatedMarker::Flag);
-            } else if path.is_ident("secret") {
-                *rich_count += 1;
-                out.rich = Some(RichSpec::Secret(SecretAttrSpec::default()));
             } else if path.is_ident("quota_token") {
                 *rich_count += 1;
                 out.rich = Some(RichSpec::QuotaToken(QuotaTokenAttrSpec::default()));
@@ -578,11 +572,6 @@ fn apply_item_meta(
                     *rich_count += 1;
                     let spec = QuantitySpecRaw::from_list(&nested)?;
                     out.rich = Some(RichSpec::Quantity(spec.into()));
-                }
-                "secret" => {
-                    *rich_count += 1;
-                    let spec = SecretAttrSpec::from_list(&nested)?;
-                    out.rich = Some(RichSpec::Secret(spec));
                 }
                 "quota_token" => {
                     *rich_count += 1;

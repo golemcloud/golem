@@ -1,35 +1,43 @@
-use golem_rust::bindings::golem::api::host::{
-    AgentAnyFilter, AgentMetadata, ComponentId as HostComponentId, GetAgents, UpdateMode,
-    get_agent_metadata, get_oplog_index, get_self_metadata, resolve_agent_id,
-    resolve_agent_id_strict, resolve_component_id, set_oplog_index, update_agent,
+use golem_rust::retry::{
+    CountBoxConfig, NamedRetryPolicy, PolicyNode, PredicateNode, RetryPolicy, RetryPredicate,
+    get_retry_policies, get_retry_policy_by_name, remove_retry_policy, set_retry_policy,
+    use_retry_policy,
 };
 use golem_rust::{
-    agent_definition, agent_implementation, generate_idempotency_key, golem_operation, Schema,
-    atomically, atomically_async, get_promise, fork, oplog_commit,
-    fallible_transaction, infallible_transaction,
-    use_idempotence_mode, use_persistence_level,
-    with_persistence_level, with_persistence_level_async,
-    Checkpoint, CheckpointResultExt, PersistenceLevel,
-    ForkResult, PromiseId, Transaction, Uuid,
-};
-use golem_rust::retry::{
-    get_retry_policies, get_retry_policy_by_name, set_retry_policy, remove_retry_policy,
-    use_retry_policy, NamedRetryPolicy, RetryPolicy, RetryPredicate,
-};
-use golem_rust::bindings::golem::api::retry::{
-    PolicyNode, PredicateNode, CountBoxConfig,
+    AgentAnyFilter, AgentId, AgentMetadata, Card, CardId, Checkpoint, CheckpointResultExt,
+    ComponentId, ForkResult, FromSchema, GetAgents, IntoSchema, PersistenceLevel, PromiseId,
+    Schema, Transaction, UpdateMode, Uuid, agent_definition, agent_implementation, atomically,
+    atomically_async, derive_card, fallible_transaction, fork, generate_idempotency_key,
+    get_agent_metadata, get_oplog_index, get_promise, get_self_metadata, golem_operation,
+    infallible_transaction, install_card, oplog_commit, resolve_agent_id, resolve_agent_id_strict,
+    resolve_component_id, self_card, set_oplog_index, update_agent, use_idempotence_mode,
+    use_persistence_level, with_persistence_level, with_persistence_level_async,
 };
 use golem_wasi_http::{Client, Response};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Schema, Serialize, Deserialize)]
+#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
 pub struct ResolveComponentResult {
     pub component_found: bool,
     pub worker_found: bool,
     pub strict_worker_found: bool,
 }
 
-#[agent_definition]
+#[derive(Clone, Schema, Serialize, Deserialize)]
+pub struct CardApiResult {
+    pub self_card_found: bool,
+    pub derive_succeeded: bool,
+    pub install_succeeded: bool,
+    pub self_card_found_after_install: bool,
+}
+
+#[derive(Clone, Schema, Serialize, Deserialize)]
+pub struct MidInvocationCardRevocationResult {
+    pub release_observed: bool,
+    pub derive_succeeded: bool,
+}
+
+#[agent_definition()]
 pub trait GolemHostApi {
     fn new(name: String) -> Self;
 
@@ -55,22 +63,23 @@ pub trait GolemHostApi {
     fn jump(&self) -> u64;
     fn get_workers(
         &self,
-        component_id: HostComponentId,
+        component_id: ComponentId,
         filter: Option<AgentAnyFilter>,
         precise: bool,
     ) -> Vec<AgentMetadata>;
     fn get_self_uri(&self) -> AgentMetadata;
-    fn get_worker_metadata(
-        &self,
-        agent_id: golem_rust::golem_wasm::AgentId,
-    ) -> Option<AgentMetadata>;
-    fn update_worker(
-        &self,
-        agent_id: golem_rust::golem_wasm::AgentId,
-        component_revision: u64,
-        update_mode: UpdateMode,
-    );
+    fn get_worker_metadata(&self, agent_id: AgentId) -> Option<AgentMetadata>;
+    fn update_worker(&self, agent_id: AgentId, component_revision: u64, update_mode: UpdateMode);
     fn generate_idempotency_keys(&self) -> (Uuid, Uuid);
+    fn card_api_roundtrip(&self) -> CardApiResult;
+    fn install_card_by_id(&self, high_bits: u64, low_bits: u64) -> bool;
+    fn derive_card_by_id(&self, high_bits: u64, low_bits: u64) -> bool;
+    async fn derive_card_after_promise(
+        &self,
+        high_bits: u64,
+        low_bits: u64,
+        release: PromiseId,
+    ) -> MidInvocationCardRevocationResult;
 
     fn list_retry_policy_names(&self) -> Vec<String>;
     fn get_retry_policy_count(&self) -> u64;
@@ -269,29 +278,33 @@ impl GolemHostApi for GolemHostApiImpl {
     }
 
     async fn fallible_transaction_test(&self) -> u64 {
-        fallible_transaction(|tx| golem_rust::boxed(async move {
-            tx.transaction_step(1).await?;
-            tx.transaction_step(2).await?;
-            if tx.transaction_step(3).await? {
-                tx.fail("fail after 3".to_string()).await?
-            }
-            tx.transaction_step(4).await?;
-            Ok(11)
-        }))
+        fallible_transaction(|tx| {
+            golem_rust::boxed(async move {
+                tx.transaction_step(1).await?;
+                tx.transaction_step(2).await?;
+                if tx.transaction_step(3).await? {
+                    tx.fail("fail after 3".to_string()).await?
+                }
+                tx.transaction_step(4).await?;
+                Ok(11)
+            })
+        })
         .await
         .expect("Transaction failed")
     }
 
     async fn infallible_transaction_test(&self) -> u64 {
-        infallible_transaction(|tx| golem_rust::boxed(async move {
-            let _ = tx.transaction_step(1).await;
-            let _ = tx.transaction_step(2).await;
-            if tx.transaction_step(3).await.unwrap() {
-                panic!("crash after 3");
-            }
-            let _ = tx.transaction_step(4).await;
-            11
-        }))
+        infallible_transaction(|tx| {
+            golem_rust::boxed(async move {
+                let _ = tx.transaction_step(1).await;
+                let _ = tx.transaction_step(2).await;
+                if tx.transaction_step(3).await.unwrap() {
+                    panic!("crash after 3");
+                }
+                let _ = tx.transaction_step(4).await;
+                11
+            })
+        })
         .await
     }
 
@@ -400,7 +413,7 @@ impl GolemHostApi for GolemHostApiImpl {
 
     fn get_workers(
         &self,
-        component_id: HostComponentId,
+        component_id: ComponentId,
         filter: Option<AgentAnyFilter>,
         precise: bool,
     ) -> Vec<AgentMetadata> {
@@ -421,19 +434,11 @@ impl GolemHostApi for GolemHostApiImpl {
         get_self_metadata()
     }
 
-    fn get_worker_metadata(
-        &self,
-        agent_id: golem_rust::golem_wasm::AgentId,
-    ) -> Option<AgentMetadata> {
+    fn get_worker_metadata(&self, agent_id: AgentId) -> Option<AgentMetadata> {
         get_agent_metadata(&agent_id)
     }
 
-    fn update_worker(
-        &self,
-        agent_id: golem_rust::golem_wasm::AgentId,
-        component_revision: u64,
-        update_mode: UpdateMode,
-    ) {
+    fn update_worker(&self, agent_id: AgentId, component_revision: u64, update_mode: UpdateMode) {
         update_agent(&agent_id, component_revision, update_mode);
     }
 
@@ -443,11 +448,73 @@ impl GolemHostApi for GolemHostApiImpl {
         (key1, key2)
     }
 
+    fn card_api_roundtrip(&self) -> CardApiResult {
+        let Some(card) = self_card() else {
+            return CardApiResult {
+                self_card_found: false,
+                derive_succeeded: false,
+                install_succeeded: false,
+                self_card_found_after_install: false,
+            };
+        };
+
+        let derived = derive_card(card);
+        let derive_succeeded = derived.is_ok();
+        let install_succeeded = match derived {
+            Ok(card) => install_card(card).is_ok(),
+            Err(_) => false,
+        };
+
+        CardApiResult {
+            self_card_found: true,
+            derive_succeeded,
+            install_succeeded,
+            self_card_found_after_install: self_card().is_some(),
+        }
+    }
+
+    fn install_card_by_id(&self, high_bits: u64, low_bits: u64) -> bool {
+        install_card(Card {
+            card_id: CardId {
+                uuid: Uuid::from_u64_pair(high_bits, low_bits),
+            },
+        })
+        .is_ok()
+    }
+
+    fn derive_card_by_id(&self, high_bits: u64, low_bits: u64) -> bool {
+        derive_card(Card {
+            card_id: CardId {
+                uuid: Uuid::from_u64_pair(high_bits, low_bits),
+            },
+        })
+        .is_ok()
+    }
+
+    async fn derive_card_after_promise(
+        &self,
+        high_bits: u64,
+        low_bits: u64,
+        release: PromiseId,
+    ) -> MidInvocationCardRevocationResult {
+        let release = get_promise(&release);
+        let mut release_observed = false;
+
+        for _ in 0..200 {
+            release_observed |= release.get().is_some();
+            let mut bytes = [0; 4];
+            wstd::rand::get_random_bytes(&mut bytes);
+            wstd::task::sleep(wstd::time::Duration::from_millis(50)).await;
+        }
+
+        MidInvocationCardRevocationResult {
+            release_observed,
+            derive_succeeded: release_observed && self.derive_card_by_id(high_bits, low_bits),
+        }
+    }
+
     fn list_retry_policy_names(&self) -> Vec<String> {
-        let mut names: Vec<String> = get_retry_policies()
-            .into_iter()
-            .map(|p| p.name)
-            .collect();
+        let mut names: Vec<String> = get_retry_policies().into_iter().map(|p| p.name).collect();
         names.sort();
         names
     }

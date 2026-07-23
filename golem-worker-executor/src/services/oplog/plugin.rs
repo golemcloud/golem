@@ -29,7 +29,7 @@ use async_lock::Mutex;
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, Principal};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -44,6 +44,7 @@ use golem_common::model::{
 };
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -98,10 +99,8 @@ pub trait OplogProcessorPlugin: Send + Sync {
     async fn lookup_invocation_status(
         &self,
         environment_id: EnvironmentId,
-        plugin: &InstalledPlugin,
         target_agent_id: &AgentId,
         caller_account_id: AccountId,
-        caller_account_email: &golem_common::model::account::AccountEmail,
         idempotency_key: &IdempotencyKey,
     ) -> Result<InvocationStatus, WorkerExecutorError>;
 }
@@ -387,7 +386,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                     proto_metadata,
                     initial_oplog_index,
                     proto_entries,
-                    &worker_metadata.created_by_email,
+                    &AuthCtx::System,
                 )
                 .await
                 .map_err(|e| {
@@ -443,19 +442,16 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
     async fn lookup_invocation_status(
         &self,
         environment_id: EnvironmentId,
-        _plugin: &InstalledPlugin,
         target_agent_id: &AgentId,
-        caller_account_id: AccountId,
-        caller_account_email: &golem_common::model::account::AccountEmail,
+        _caller_account_id: AccountId,
         idempotency_key: &IdempotencyKey,
     ) -> Result<InvocationStatus, WorkerExecutorError> {
         self.worker_proxy
             .lookup_invocation_status(
                 target_agent_id,
                 idempotency_key.clone(),
-                caller_account_id,
-                caller_account_email,
                 Some(environment_id),
+                &AuthCtx::System,
             )
             .await
             .map_err(|e| {
@@ -507,6 +503,7 @@ struct CreateOplogConstructor {
     initial_entry: Option<OplogEntry>,
     inner: Arc<dyn OplogService>,
     last_oplog_index: Option<OplogIndex>,
+    fresh: bool,
     oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     components: Arc<dyn ComponentService>,
     initial_worker_metadata: AgentMetadata,
@@ -524,6 +521,7 @@ impl CreateOplogConstructor {
         initial_entry: Option<OplogEntry>,
         inner: Arc<dyn OplogService>,
         last_oplog_index: Option<OplogIndex>,
+        fresh: bool,
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService>,
         initial_worker_metadata: AgentMetadata,
@@ -538,6 +536,7 @@ impl CreateOplogConstructor {
             initial_entry,
             inner,
             last_oplog_index,
+            fresh,
             oplog_plugins,
             components,
             initial_worker_metadata,
@@ -561,16 +560,29 @@ impl OplogConstructor for CreateOplogConstructor {
             }
         };
         let inner = if let Some(initial_entry) = self.initial_entry {
-            self.inner
-                .create(
-                    &self.owned_agent_id,
-                    self.agent_mode,
-                    initial_entry,
-                    self.initial_worker_metadata.clone(),
-                    self.last_known_status.clone(),
-                    self.execution_status.clone(),
-                )
-                .await
+            if self.fresh {
+                self.inner
+                    .create_fresh(
+                        &self.owned_agent_id,
+                        self.agent_mode,
+                        initial_entry,
+                        self.initial_worker_metadata.clone(),
+                        self.last_known_status.clone(),
+                        self.execution_status.clone(),
+                    )
+                    .await
+            } else {
+                self.inner
+                    .create(
+                        &self.owned_agent_id,
+                        self.agent_mode,
+                        initial_entry,
+                        self.initial_worker_metadata.clone(),
+                        self.last_known_status.clone(),
+                        self.execution_status.clone(),
+                    )
+                    .await
+            }
         } else {
             self.inner
                 .open(
@@ -656,6 +668,38 @@ impl OplogService for ForwardingOplogService {
                     Some(initial_entry),
                     self.inner.clone(),
                     Some(OplogIndex::INITIAL),
+                    false,
+                    self.oplog_plugins.clone(),
+                    self.components.clone(),
+                    initial_worker_metadata,
+                    last_known_status,
+                    execution_status,
+                    self.plugin_max_commit_count,
+                    self.plugin_max_elapsed_time,
+                ),
+            )
+            .await
+    }
+
+    async fn create_fresh(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        initial_entry: OplogEntry,
+        initial_worker_metadata: AgentMetadata,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+    ) -> Arc<dyn Oplog + 'static> {
+        self.oplogs
+            .get_or_open(
+                &owned_agent_id.agent_id,
+                CreateOplogConstructor::new(
+                    owned_agent_id.clone(),
+                    agent_mode,
+                    Some(initial_entry),
+                    self.inner.clone(),
+                    Some(OplogIndex::INITIAL),
+                    true,
                     self.oplog_plugins.clone(),
                     self.components.clone(),
                     initial_worker_metadata,
@@ -686,6 +730,7 @@ impl OplogService for ForwardingOplogService {
                     None,
                     self.inner.clone(),
                     last_oplog_index,
+                    false,
                     self.oplog_plugins.clone(),
                     self.components.clone(),
                     initial_worker_metadata,
@@ -1119,10 +1164,9 @@ impl ForwardingOplogState {
             _ => return,
         };
 
-        let agent_type = LegacyParsedAgentId::parse_agent_type_name(
-            &self.initial_worker_metadata.agent_id.agent_id,
-        )
-        .ok();
+        let agent_type =
+            ParsedAgentId::parse_agent_type_name(&self.initial_worker_metadata.agent_id.agent_id)
+                .ok();
         let plugin = match agent_type
             .as_ref()
             .and_then(|t| component_metadata.metadata.agent_type_plugins(t))
@@ -1296,8 +1340,6 @@ impl ForwardingOplogState {
                 let oplog_plugins = self.oplog_plugins.clone();
                 let environment_id = metadata.environment_id;
                 let caller_account_id = metadata.created_by;
-                let caller_account_email = metadata.created_by_email.clone();
-                let plugin_clone = plugin.clone();
                 let target_clone = target_agent_id.clone();
                 let monitor = tokio::spawn(
                     async move {
@@ -1316,10 +1358,8 @@ impl ForwardingOplogState {
                             match oplog_plugins
                                 .lookup_invocation_status(
                                     environment_id,
-                                    &plugin_clone,
                                     &target_clone,
                                     caller_account_id,
-                                    &caller_account_email,
                                     &idempotency_key,
                                 )
                                 .await
@@ -1536,7 +1576,7 @@ impl ForwardingOplogState {
                 }
             }
 
-            let agent_type = LegacyParsedAgentId::parse_agent_type_name(
+            let agent_type = ParsedAgentId::parse_agent_type_name(
                 &self.initial_worker_metadata.agent_id.agent_id,
             )
             .ok();
@@ -1578,10 +1618,8 @@ impl ForwardingOplogState {
                 .oplog_plugins
                 .lookup_invocation_status(
                     environment_id,
-                    &plugin,
                     &old_target,
                     self.initial_worker_metadata.created_by,
-                    &self.initial_worker_metadata.created_by_email,
                     &last_key,
                 )
                 .await
@@ -1898,10 +1936,8 @@ mod tests {
         async fn lookup_invocation_status(
             &self,
             _environment_id: EnvironmentId,
-            _plugin: &InstalledPlugin,
             _target_agent_id: &AgentId,
             caller_account_id: AccountId,
-            _caller_account_email: &golem_common::model::account::AccountEmail,
             _idempotency_key: &IdempotencyKey,
         ) -> Result<InvocationStatus, WorkerExecutorError> {
             self.lookups
@@ -1958,6 +1994,8 @@ mod tests {
         ) -> Result<Component, WorkerExecutorError> {
             use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
             use golem_common::model::agent::AgentTypeName;
+            use golem_common::model::card::recipient::RecipientPattern;
+            use golem_common::model::component::AgentTypeInitialPermissions;
             use std::collections::BTreeMap;
 
             let provision_configs = if self.installed_plugins.is_empty() {
@@ -1966,8 +2004,18 @@ mod tests {
                 BTreeMap::from([(
                     AgentTypeName("TestPlugin".to_string()),
                     AgentTypeProvisionConfig {
+                        initial_permissions: AgentTypeInitialPermissions::default_for_recipient(
+                            RecipientPattern::Account {
+                                account: golem_common::model::account::AccountEmail::new(
+                                    "test@golem",
+                                ),
+                            },
+                        )
+                        .to_polymorphic_card(),
                         plugins: self.installed_plugins.clone(),
-                        ..Default::default()
+                        env: BTreeMap::new(),
+                        config: Vec::new(),
+                        files: Vec::new(),
                     },
                 )])
             };

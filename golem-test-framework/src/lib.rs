@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod benchmark;
-pub mod sdk_naming;
 
 /// Individual components of an integration test such as services, databases etc.
 pub mod components;

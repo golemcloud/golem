@@ -80,12 +80,42 @@ pub fn expand_enum_into_schema(
         }
     }
 
-    let case_tokens: Vec<TokenStream> = variants.iter().map(variant_case_token).collect();
-    let to_value_arms: Vec<TokenStream> = variants
-        .iter()
-        .enumerate()
-        .map(|(idx, v)| variant_to_value_arm(ident, idx as u32, v))
-        .collect();
+    // A Rust enum whose variants are all unit cases maps to a schema `enum`
+    // (matching WIT `enum`) instead of a `variant`.
+    let all_unit = !variants.is_empty()
+        && variants
+            .iter()
+            .all(|v| matches!(v.payload, PayloadShape::Unit));
+
+    let body_expr: TokenStream = if all_unit {
+        let case_names: Vec<&LitStr> = variants.iter().map(|v| &v.case_name_lit).collect();
+        quote! {
+            #private::SchemaType::r#enum(
+                ::std::vec![ #( ::std::string::String::from(#case_names) ),* ],
+            )
+        }
+    } else {
+        let case_tokens: Vec<TokenStream> = variants.iter().map(variant_case_token).collect();
+        quote! {
+            #private::SchemaType::variant(
+                ::std::vec![ #( #case_tokens ),* ],
+            )
+        }
+    };
+
+    let to_value_arms: Vec<TokenStream> = if all_unit {
+        variants
+            .iter()
+            .enumerate()
+            .map(|(idx, v)| variant_to_enum_value_arm(ident, idx as u32, v))
+            .collect()
+    } else {
+        variants
+            .iter()
+            .enumerate()
+            .map(|(idx, v)| variant_to_value_arm(ident, idx as u32, v))
+            .collect()
+    };
 
     Ok(quote! {
         #[automatically_derived]
@@ -100,9 +130,7 @@ pub fn expand_enum_into_schema(
                     return #private::SchemaType::ref_to(id);
                 }
                 builder.reserve(id.clone());
-                let body: #private::SchemaType = #private::SchemaType::variant(
-                    ::std::vec![ #( #case_tokens ),* ],
-                );
+                let body: #private::SchemaType = #body_expr;
                 builder.commit(id.clone(), #display, #metadata, body);
                 #private::SchemaType::ref_to(id)
             }
@@ -145,13 +173,74 @@ pub fn expand_enum_from_schema(
         }
     }
 
+    let case_count = variants.len() as u32;
+
+    // A Rust enum whose variants are all unit cases decodes from a schema
+    // `enum` value (matching the `IntoSchema` side).
+    let all_unit = !variants.is_empty()
+        && variants
+            .iter()
+            .all(|v| matches!(v.payload, PayloadShape::Unit));
+
+    if all_unit {
+        let arms: Vec<TokenStream> = variants
+            .iter()
+            .enumerate()
+            .map(|(idx, info)| {
+                let idx = idx as u32;
+                let variant_ident = &info.variant_ident;
+                quote! {
+                    #idx => ::core::result::Result::Ok(#ident::#variant_ident),
+                }
+            })
+            .collect();
+
+        return Ok(quote! {
+            #[automatically_derived]
+            impl #impl_generics #private::FromSchema for #ident #ty_generics #where_clause {
+                fn from_value(
+                    value: &#private::SchemaValue,
+                ) -> ::core::result::Result<Self, #private::FromSchemaError> {
+                    let case = match value {
+                        #private::SchemaValue::Enum { case } => *case,
+                        other => {
+                            return ::core::result::Result::Err(
+                                #private::FromSchemaError::shape_mismatch(
+                                    "enum",
+                                    #private::value_kind(other),
+                                    ::std::stringify!(#ident),
+                                ),
+                            );
+                        }
+                    };
+                    if case >= #case_count {
+                        return ::core::result::Result::Err(
+                            #private::FromSchemaError::out_of_range(
+                                case,
+                                #case_count,
+                                ::std::stringify!(#ident),
+                            ),
+                        );
+                    }
+                    match case {
+                        #( #arms )*
+                        other => ::core::result::Result::Err(
+                            #private::FromSchemaError::custom(::std::format!(
+                                "enum case index {} unhandled",
+                                other,
+                            )),
+                        ),
+                    }
+                }
+            }
+        });
+    }
+
     let arms: Vec<TokenStream> = variants
         .iter()
         .enumerate()
         .map(|(idx, info)| variant_decode_arm(ident, idx as u32, info))
         .collect();
-
-    let case_count = variants.len() as u32;
 
     Ok(quote! {
         #[automatically_derived]
@@ -305,6 +394,14 @@ fn variant_case_token(info: &VariantInfo) -> TokenStream {
             payload: #payload_expr,
             metadata: #metadata,
         }
+    }
+}
+
+fn variant_to_enum_value_arm(parent: &Ident, idx: u32, info: &VariantInfo) -> TokenStream {
+    let private = private();
+    let variant_ident = &info.variant_ident;
+    quote! {
+        #parent::#variant_ident => #private::SchemaValue::Enum { case: #idx },
     }
 }
 
