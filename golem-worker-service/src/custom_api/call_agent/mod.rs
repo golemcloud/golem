@@ -67,11 +67,7 @@ impl CallAgentHandler {
         // derived downstream from the invocation's idempotency key, so the
         // target is addressed by its logical agent id.
         let phantom_id = if behaviour.phantom {
-            let agent_mode = self
-                .worker_service
-                .agent_mode(behaviour.component_id, &behaviour.agent_type)
-                .await?;
-            (agent_mode == Some(AgentMode::Durable)).then(Uuid::new_v4)
+            (behaviour.agent_mode == AgentMode::Durable).then(Uuid::new_v4)
         } else {
             None
         };
@@ -132,7 +128,7 @@ impl CallAgentHandler {
                 None,
                 None,
                 invocation_context,
-                phantom_id.is_some(),
+                false,
                 golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
                 Vec::new(),
                 AuthCtx::System,

@@ -179,6 +179,11 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                     .try_into()?,
                 component_revision: call_agent.component_revision.try_into()?,
                 agent_type: AgentTypeName(call_agent.agent_type),
+                agent_mode: proto::golem::component::AgentMode::try_from(
+                    call_agent.agent_mode.ok_or("Missing agent_mode")?,
+                )
+                .map_err(|err| format!("Invalid agent_mode: {err}"))?
+                .into(),
                 constructor_input: call_agent
                     .constructor_input
                     .ok_or("Missing constructor_input")?
@@ -269,6 +274,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                 component_id,
                 component_revision,
                 agent_type,
+                agent_mode,
                 constructor_input,
                 constructor_parameters,
                 phantom,
@@ -284,6 +290,9 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                         component_id: Some(component_id.into()),
                         component_revision: component_revision.into(),
                         agent_type: agent_type.0,
+                        agent_mode: Some(
+                            proto::golem::component::AgentMode::from(agent_mode) as i32,
+                        ),
                         constructor_input: Some(constructor_input.into()),
                         constructor_parameters: constructor_parameters
                             .into_iter()
@@ -879,5 +888,31 @@ impl From<CorsOptions> for golem_api_grpc::proto::golem::customapi::CorsOptions 
         Self {
             allowed_patterns: value.allowed_patterns.into_iter().map(|op| op.0).collect(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use test_r::test;
+
+    #[test]
+    fn call_agent_behaviour_requires_agent_mode() {
+        use proto::golem::customapi::route_behaviour::{CallAgent, Kind};
+
+        let call_agent = CallAgent {
+            component_id: Some(ComponentId::new().into()),
+            component_revision: ComponentRevision::INITIAL.into(),
+            ..Default::default()
+        };
+        let behaviour = proto::golem::customapi::RouteBehaviour {
+            kind: Some(Kind::CallAgent(call_agent)),
+        };
+
+        assert_eq!(
+            RouteBehaviour::try_from(behaviour).unwrap_err(),
+            "Missing agent_mode"
+        );
     }
 }

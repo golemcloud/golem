@@ -97,7 +97,7 @@ fn normalize_agent_invocation_identity(
     component: &Component,
     agent_id: &AgentId,
     idempotency_key: Option<IdempotencyKey>,
-    phantom_was_generated_for_invocation: bool,
+    allow_derived_ephemeral_phantom: bool,
     observation_only: bool,
     freshness_disposition: InvocationFreshnessDisposition,
 ) -> WorkerResult<(AgentId, IdempotencyKey, InvocationFreshnessDisposition)> {
@@ -126,18 +126,19 @@ fn normalize_agent_invocation_identity(
                 InvocationFreshnessDisposition::MayExist,
             ));
         }
-        if !phantom_was_generated_for_invocation {
+        if !allow_derived_ephemeral_phantom {
             crate::metrics::record_ephemeral_explicit_phantom_invocation_rejection();
             return Err(WorkerServiceError::TypeChecker(
                 "An ephemeral invocation cannot select a phantom ID; use the agent ID returned by an invocation only for observation and control operations"
                     .to_string(),
             ));
         }
-        // A phantom generated for this invocation must be the one derived from
-        // the invocation's idempotency key; anything else indicates a caller
-        // bug and is rejected instead of being silently replaced.
-        if parsed_agent_id.phantom_id != Some(ephemeral_invocation_phantom_id(&idempotency_key)) {
-            crate::metrics::record_ephemeral_explicit_phantom_invocation_rejection();
+        // This capability is only valid when a trusted internal caller forwards
+        // both an invocation-derived phantom and the supplied key that derived it.
+        if !key_was_supplied
+            || parsed_agent_id.phantom_id != Some(ephemeral_invocation_phantom_id(&idempotency_key))
+        {
+            crate::metrics::record_ephemeral_derived_phantom_mismatch_rejection();
             return Err(WorkerServiceError::TypeChecker(
                 "The ephemeral invocation phantom ID does not match the identity derived from the invocation's idempotency key"
                     .to_string(),
@@ -919,23 +920,6 @@ impl WorkerService {
             .await
     }
 
-    /// Resolves the agent mode of the given agent type from the current
-    /// revision of the component's metadata, if the agent type exists.
-    pub async fn agent_mode(
-        &self,
-        component_id: ComponentId,
-        agent_type: &AgentTypeName,
-    ) -> WorkerResult<Option<AgentMode>> {
-        let component = self
-            .component_service
-            .get_current_by_id(component_id)
-            .await?;
-        Ok(component
-            .metadata
-            .find_agent_type_by_name_ref(agent_type)
-            .map(|agent_type| agent_type.mode))
-    }
-
     pub async fn invoke_agent(
         &self,
         agent_id: &AgentId,
@@ -945,7 +929,7 @@ impl WorkerService {
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
         invocation_context: Option<InvocationContext>,
-        phantom_was_generated_for_invocation: bool,
+        allow_derived_ephemeral_phantom: bool,
         freshness_disposition: InvocationFreshnessDisposition,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: AuthCtx,
@@ -967,7 +951,7 @@ impl WorkerService {
             schedule_at,
             idempotency_key,
             invocation_context,
-            phantom_was_generated_for_invocation,
+            allow_derived_ephemeral_phantom,
             freshness_disposition,
             config,
             environment_id,
@@ -1006,7 +990,7 @@ impl WorkerService {
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
         invocation_context: Option<InvocationContext>,
-        phantom_was_generated_for_invocation: bool,
+        allow_derived_ephemeral_phantom: bool,
         freshness_disposition: InvocationFreshnessDisposition,
         config: Vec<AgentConfigEntryDto>,
         environment_id: EnvironmentId,
@@ -1022,7 +1006,7 @@ impl WorkerService {
                 component,
                 agent_id,
                 idempotency_key,
-                phantom_was_generated_for_invocation,
+                allow_derived_ephemeral_phantom,
                 observation_only,
                 freshness_disposition,
             )?;
@@ -1573,6 +1557,41 @@ mod tests {
             freshness_disposition,
             InvocationFreshnessDisposition::KnownFresh
         );
+    }
+
+    #[test]
+    fn matching_ephemeral_phantom_requires_explicit_capability() {
+        let component_id = ComponentId::new();
+        let environment_id = EnvironmentId::new();
+        let account_id = AccountId::new();
+        let agent_type_name = AgentTypeName("test".to_string());
+        let idempotency_key = IdempotencyKey::fresh();
+        let agent_id = build_public_agent_id(
+            component_id,
+            agent_type_name.clone(),
+            empty_constructor_parameters(),
+            Some(ephemeral_invocation_phantom_id(&idempotency_key)),
+            AgentMode::Ephemeral,
+        )
+        .unwrap();
+        let component = test_component(
+            component_id,
+            environment_id,
+            account_id,
+            ComponentRevision::INITIAL,
+            test_agent_type(agent_type_name, AgentMode::Ephemeral),
+        );
+
+        let result = normalize_agent_invocation_identity(
+            &component,
+            &agent_id,
+            Some(idempotency_key),
+            false,
+            false,
+            InvocationFreshnessDisposition::MayExist,
+        );
+
+        assert!(matches!(result, Err(WorkerServiceError::TypeChecker(_))));
     }
 
     #[derive(Clone)]

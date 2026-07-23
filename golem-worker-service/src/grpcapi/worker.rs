@@ -538,7 +538,7 @@ impl WorkerGrpcApi {
                 request.schedule_at,
                 request.idempotency_key.map(|k| k.into()),
                 request.context,
-                trusted_internal_caller && !is_lookup,
+                trusted_internal_caller,
                 freshness_disposition,
                 config,
                 auth,

@@ -14,7 +14,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
-import { WasmRpc } from 'golem:agent/host@2.0.0';
+import { makeAgentId, WasmRpc } from 'golem:agent/host@2.0.0';
 import type { CancellationToken, Datetime } from 'golem:agent/host@2.0.0';
 import { defineAgent } from '../src/fluent/defineAgent';
 import type { AgentSpec } from '../src/fluent/defineAgent';
@@ -586,10 +586,13 @@ describe('fluent RPC client', () => {
   it('rejects a missing wire value for a declared single output', async () => {
     const def = defineAgent({
       name: 'MissingSingleOutputAgent',
-      id: {},
+      id: { id: s.u64() },
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
-    const client = clientFor(def)({});
+    const phantomId = new Uuid(1n, 2n);
+    const agentId = 'MissingSingleOutputAgent(1)[00000000-0000-0001-0000-000000000002]';
+    vi.mocked(makeAgentId).mockReturnValueOnce(agentId);
+    const client = clientFor(def)({ id: 1n }, phantomId);
     const rpc = latestRpc();
     rpc.asyncInvokeAndAwait.mockReturnValue({
       metadata: { agentId: 'agent-id', idempotencyKey: 'key' },
@@ -600,7 +603,14 @@ describe('fluent RPC client', () => {
       },
     });
 
-    await expect(client.ping()).rejects.toBeInstanceOf(RemoteCallError);
+    await expect(client.ping()).rejects.toThrow(
+      `Remote agent ${agentId}.ping returned no value for a non-unit output`,
+    );
+    expect(makeAgentId).toHaveBeenLastCalledWith(
+      'MissingSingleOutputAgent',
+      vi.mocked(WasmRpc).mock.calls.at(-1)![1],
+      phantomId,
+    );
   });
 
   it('rejects a wire value whose schema tag does not match the declared output', async () => {
@@ -609,6 +619,7 @@ describe('fluent RPC client', () => {
       id: {},
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
+    vi.mocked(makeAgentId).mockReturnValueOnce('MismatchedSingleOutputAgent()');
     const client = clientFor(def)({});
     const rpc = latestRpc();
     rpc.asyncInvokeAndAwait.mockReturnValue({
@@ -632,6 +643,7 @@ describe('fluent RPC client', () => {
       id: {},
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
+    vi.mocked(makeAgentId).mockReturnValueOnce('BigintRemoteErrorAgent()');
     const client = clientFor(def)({});
     const rpc = latestRpc();
     const errorCodec = compileSchema(s.u64());

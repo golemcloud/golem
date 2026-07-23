@@ -983,6 +983,72 @@ async fn fresh_ephemeral_create_with_compressed_layers_does_not_read_storage(_tr
     drop(oplog);
 }
 
+#[test]
+async fn primary_fresh_ephemeral_create_does_not_read_storage(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(ReadCountingIndexedStorage::new());
+    let service = PrimaryOplogService::new(
+        indexed_storage.clone(),
+        Arc::new(InMemoryBlobStorage::new()),
+        1,
+        1,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "fresh-ephemeral-primary-storage".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let create_entry = OplogEntry::create(
+        agent_id.clone(),
+        AgentMode::Ephemeral,
+        ComponentRevision::new(1).unwrap(),
+        Vec::new(),
+        environment_id,
+        account_id,
+        None,
+        100,
+        100,
+        HashSet::new(),
+        Vec::new(),
+        None,
+        Uuid::new_v4(),
+    )
+    .rounded();
+    let mut metadata = make_agent_metadata(agent_id, account_id, environment_id);
+    metadata.agent_mode = AgentMode::Ephemeral;
+
+    indexed_storage.reset();
+    let oplog = service
+        .create_fresh(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            create_entry.clone(),
+            metadata,
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+
+    assert_eq!(indexed_storage.reads(), 0);
+
+    let entries = service
+        .read(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            OplogIndex::INITIAL,
+            1,
+        )
+        .await;
+    assert_eq!(entries.get(&OplogIndex::INITIAL), Some(&create_entry));
+    assert!(indexed_storage.reads() > 0);
+
+    drop(oplog);
+}
+
 /// Storage-level zero-read contract for the blob archive backend, whose fresh
 /// construction diverges most from the checked path (a real `exists`/`list_dir`
 /// call is bypassed).
