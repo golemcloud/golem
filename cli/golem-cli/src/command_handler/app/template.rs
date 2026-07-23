@@ -849,13 +849,8 @@ impl TemplateHandler {
                     }
                 }
 
-                let build_dir = application_path.join("golem-temp");
-                if build_dir.exists() {
-                    upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                        source: build_dir,
-                        target: target_root.join("golem-temp"),
-                    });
-                }
+                // golem-temp deliberately NOT moved: Go build output goes to the
+                // app-root golem-temp (like TS and Scala), so it stays put.
             }
             GuestLanguage::MoonBit => {
                 let target_root = application_path.join(new_component_dir);
