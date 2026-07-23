@@ -358,16 +358,25 @@ async fn complete_at_rate(
         let staging_limit = staging_limit.clone();
         scheduled_completions += 1;
         restages.spawn(async move {
-            let latency = {
+            let completion = async {
                 let _permit = completion_limit.acquire_owned().await?;
                 let completion_started = Instant::now();
                 complete_promise(&user, &component, &work, payload).await?;
-                (Instant::now(), completion_started.elapsed())
+                Ok::<_, anyhow::Error>((Instant::now(), completion_started.elapsed()))
             };
-            completion_sender
-                .send(Ok(latency))
-                .await
-                .map_err(|_| anyhow::anyhow!("completion receiver closed"))?;
+            match completion.await {
+                Ok(completion) => completion_sender
+                    .send(Ok(completion))
+                    .await
+                    .map_err(|_| anyhow::anyhow!("completion receiver closed"))?,
+                Err(error) => {
+                    completion_sender
+                        .send(Err(error))
+                        .await
+                        .map_err(|_| anyhow::anyhow!("completion receiver closed"))?;
+                    return Ok(());
+                }
+            }
             let idle_wait_started = Instant::now();
             user.wait_for_status(&work.agent, AgentStatus::Idle, WAITER_READY_TIMEOUT)
                 .await?;
@@ -443,11 +452,13 @@ async fn complete_promise(
     payload: Vec<u8>,
 ) -> anyhow::Result<()> {
     if let Some(completer) = &work.completer {
+        let payload_size = u32::try_from(payload.len())
+            .map_err(|_| anyhow::anyhow!("promise payload exceeds u32::MAX bytes"))?;
         user.invoke_and_await_agent(
             component,
             completer,
             "complete_promise",
-            data_value!(work.promise.clone(), payload),
+            data_value!(work.promise.clone(), payload_size),
         )
         .await?;
     } else {
