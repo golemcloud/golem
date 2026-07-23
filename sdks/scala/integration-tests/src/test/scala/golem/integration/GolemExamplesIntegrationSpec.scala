@@ -22,15 +22,22 @@ import zio.test._
 
 import com.sun.net.httpserver.{HttpExchange, HttpServer as JHttpServer}
 
-import java.io.File
+import java.io.{File, RandomAccessFile}
 import java.net.InetSocketAddress
 import java.net.URI
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.nio.channels.AsynchronousSocketChannel
+import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.time.Duration as JDuration
 
-final case class GolemServer(process: ZProcess, examplesDir: File, tsPackagesPath: Option[String])
+final case class GolemServer(
+  process: ZProcess,
+  examplesDir: File,
+  tsPackagesPath: Option[String],
+  logFile: File,
+  exitReported: Ref[Boolean]
+)
 
 object GolemServer {
 
@@ -39,6 +46,7 @@ object GolemServer {
   private val pollInterval          = 500.millis
   private val deployTimeoutSec      = 300L
   private val retryPolicyTimeoutSec = 30L
+  private val serverLogTailBytes    = 64 * 1024
 
   private val scalaCliRetryPolicies = Seq(
     ("scala-integration-immediate", 200, "\"false\"", "\"immediate\""),
@@ -85,25 +93,54 @@ object GolemServer {
       .mapError(e => new RuntimeException(s"golem executable not found on PATH: $e"))
       .unit
 
-  private def waitUntilReady(process: ZProcess): ZIO[Any, Throwable, Unit] = {
-    val probe: ZIO[Any, Throwable, Unit] =
+  private def readLogTail(logFile: File): Task[String] =
+    ZIO.attemptBlocking {
+      if (!logFile.isFile) s"Server log file does not exist: ${logFile.getAbsolutePath}"
+      else {
+        val file = new RandomAccessFile(logFile, "r")
+        try {
+          val length = file.length()
+          val start  = Math.max(0L, length - serverLogTailBytes)
+          val bytes  = Array.ofDim[Byte]((length - start).toInt)
+          file.seek(start)
+          file.readFully(bytes)
+          val tail = new String(bytes, StandardCharsets.UTF_8)
+          if (start > 0) s"... log truncated to last $serverLogTailBytes bytes ...\n$tail" else tail
+        } finally file.close()
+      }
+    }
+
+  private[integration] def unexpectedServerExit(process: ZProcess, logFile: File): UIO[GolemResult] =
+    for {
+      exitCode <- process.exitCode.map(_.code).orElseSucceed(-1)
+      logTail  <- readLogTail(logFile).orElseSucceed(s"Failed to read server log: ${logFile.getAbsolutePath}")
+    } yield GolemResult(
+      exitCode,
+      s"golem server exited unexpectedly (exit=$exitCode). Last server log lines:\n$logTail"
+    )
+
+  private def waitUntilReady(process: ZProcess, logFile: File): ZIO[Any, Throwable, Unit] = {
+    def awaitReady: ZIO[Any, Throwable, Unit] =
       process.isAlive.flatMap {
         case false =>
-          ZIO.fail(new RuntimeException("golem server exited during startup"))
+          unexpectedServerExit(process, logFile).flatMap { result =>
+            ZIO.fail(new RuntimeException(result.output))
+          }
         case true =>
           canConnect(golemPort).flatMap {
             case true  => ZIO.unit
-            case false => ZIO.fail(new RuntimeException("not ready yet"))
+            case false => ZIO.sleep(pollInterval) *> awaitReady
           }
       }
 
-    probe
-      .retry(Schedule.spaced(pollInterval) && Schedule.recurs(120))
-      .timeoutFail(new RuntimeException(s"golem server did not become ready within $startupTimeout"))(startupTimeout)
+    awaitReady.timeoutFail(new RuntimeException(s"golem server did not become ready within $startupTimeout"))(
+      startupTimeout
+    )
   }
 
   private def buildEnv: Map[String, String] =
-    tsPackagesPath.map(v => Map("GOLEM_TS_PACKAGES_PATH" -> v)).getOrElse(Map.empty)
+    Map("RUST_BACKTRACE" -> "1") ++
+      tsPackagesPath.map(v => Map("GOLEM_TS_PACKAGES_PATH" -> v)).getOrElse(Map.empty)
 
   private def runGolemCmd(dir: File, timeoutSec: Long, args: String*): ZIO[Any, Throwable, GolemResult] = {
     val appManifest = new File(dir, "golem.yaml").getAbsolutePath
@@ -266,7 +303,10 @@ object GolemServer {
                }
              }
         logFile <- ZIO.attemptBlocking {
-                     java.nio.file.Files.createTempFile("golem-server-", ".log").toFile
+                     val file = new File(examplesDir.getParentFile, "target/scala-integration/golem-server.log")
+                     java.nio.file.Files.createDirectories(file.toPath.getParent)
+                     java.nio.file.Files.writeString(file.toPath, "")
+                     file
                    }
         process <- ZIO.acquireRelease(
                      Cmd("golem", "-vvv", "server", "run", "--clean", "--disable-app-manifest-discovery")
@@ -277,11 +317,12 @@ object GolemServer {
                        .run
                        .mapError(e => new RuntimeException(s"Failed to start golem server: $e"))
                    )(process => process.killTree.orElse(process.killTreeForcibly).ignore)
-        _     <- waitUntilReady(process)
-        server = GolemServer(process, examplesDir, tsPackagesPath)
-        _     <- deploy(examplesDir)
-        _     <- provisionRetryPolicies(examplesDir)
-        _     <- provisionSecrets(examplesDir)
+        _            <- waitUntilReady(process, logFile)
+        exitReported <- Ref.make(false)
+        server        = GolemServer(process, examplesDir, tsPackagesPath, logFile, exitReported)
+        _            <- deploy(examplesDir)
+        _            <- provisionRetryPolicies(examplesDir)
+        _            <- provisionSecrets(examplesDir)
       } yield server
     }
 }
@@ -511,11 +552,6 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
 
     // --- Host API explorer ---
     Sample(
-      "host-api-explorer-all",
-      "samples/host-api-explorer/repl-explore-all.ts",
-      Contains("=== CONFIG", "=== DURABILITY", "=== CONTEXT")
-    ),
-    Sample(
       "host-api-explorer-config",
       "samples/host-api-explorer/repl-explore-config.ts",
       Contains("Config.get", "Config.getAll")
@@ -549,6 +585,11 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
       "host-api-explorer-rdbms",
       "samples/host-api-explorer/repl-explore-rdbms.ts",
       Contains("Left(")
+    ),
+    Sample(
+      "host-api-explorer-all",
+      "samples/host-api-explorer/repl-explore-all.ts",
+      Contains("=== CONFIG", "=== DURABILITY", "=== CONTEXT")
     ),
 
     // --- Config ---
@@ -597,24 +638,44 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
   // Helpers
   // ---------------------------------------------------------------------------
 
+  private def serverExitResult(server: GolemServer): UIO[Option[GolemResult]] =
+    server.process.isAlive.flatMap {
+      case true  => ZIO.none
+      case false =>
+        GolemServer.unexpectedServerExit(server.process, server.logFile).flatMap { result =>
+          server.exitReported.getAndSet(true).flatMap { alreadyReported =>
+            ZIO
+              .when(!alreadyReported)(ZIO.succeed(java.lang.System.err.println(result.output)))
+              .as(Some(result))
+          }
+        }
+    }
+
   private def runGolem(server: GolemServer, timeoutSec: Long, args: String*): ZIO[Any, Nothing, GolemResult] = {
     val appManifest = new File(server.examplesDir, "golem.yaml").getAbsolutePath
     val fullArgs    = Seq("--yes", "-vvv", "--local", "--app-manifest-path", appManifest) ++ args
     val env         = server.tsPackagesPath.map(v => Map("GOLEM_TS_PACKAGES_PATH" -> v)).getOrElse(Map.empty)
 
-    Cmd("golem", fullArgs*)
-      .workingDirectory(server.examplesDir)
-      .env(env)
-      .redirectErrorStream(true)
-      .string
-      .timeout(timeoutSec.seconds)
-      .map {
-        case Some(output) => GolemResult(0, output)
-        case None         => GolemResult(-1, s"TIMEOUT after ${timeoutSec}s")
-      }
-      .catchAll { e =>
-        ZIO.succeed(GolemResult(-1, s"Command failed: $e"))
-      }
+    serverExitResult(server).flatMap {
+      case Some(result) => ZIO.succeed(result)
+      case None         =>
+        Cmd("golem", fullArgs*)
+          .workingDirectory(server.examplesDir)
+          .env(env)
+          .redirectErrorStream(true)
+          .string
+          .timeout(timeoutSec.seconds)
+          .map {
+            case Some(output) => GolemResult(0, output)
+            case None         => GolemResult(-1, s"TIMEOUT after ${timeoutSec}s")
+          }
+          .catchAll { e =>
+            ZIO.succeed(GolemResult(-1, s"Command failed: $e"))
+          }
+          .flatMap { result =>
+            serverExitResult(server).map(_.getOrElse(result))
+          }
+    }
   }
 
   private def runRepl(server: GolemServer, scriptFile: String): ZIO[Any, Nothing, GolemResult] =

@@ -486,8 +486,18 @@ jobs:
         working-directory: sdks/scala
         env:
           GOLEM_TS_PACKAGES_PATH: ${{ github.workspace }}/sdks/ts/packages
+          RUST_BACKTRACE: 1
         run: sbt -batch "++3.8.2; integrationTests/test"
         timeout-minutes: 20
+
+      - name: Upload Scala integration server log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: scala-sdk-integration-server-log
+          path: sdks/scala/target/scala-integration/golem-server.log
+          if-no-files-found: warn
+          retention-days: 7
 
   golem-schema-guest:
     runs-on: blacksmith

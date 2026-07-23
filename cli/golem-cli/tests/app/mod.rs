@@ -1211,20 +1211,40 @@ fn test_binary_profile() -> String {
     }
 }
 
-/// Resolves the cargo target directory from the running test executable's location
-/// (`<target-dir>/<profile>/deps/<test-binary>`), so it honors redirected target
-/// directories (`CARGO_TARGET_DIR`, `build.target-dir` in cargo config, or cargo
-/// wrappers). Falls back to the legacy `<workspace>/target` location.
-fn cargo_target_dir() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| Some(exe.parent()?.parent()?.parent()?.to_path_buf()))
-        .unwrap_or_else(|| workspace_path().join("target"))
-}
-
 fn test_binary_path(profile: &str, binary_name: &str) -> PathBuf {
-    let path = cargo_target_dir().join(format!(
-        "{profile}/{binary_name}{}",
+    if let Ok(current_exe) = std::env::current_exe()
+        && let Some(dir) = current_exe.parent()
+    {
+        let current_profile_dir = if dir.file_name() == Some(OsStr::new("deps")) {
+            dir.parent()
+        } else {
+            Some(dir)
+        };
+        if let Some(target_dir) = current_profile_dir.and_then(Path::parent) {
+            let profile_dir = target_dir.join(profile);
+            let path = profile_dir.join(format!("{binary_name}{}", std::env::consts::EXE_SUFFIX));
+            if path.exists() {
+                return path;
+            }
+        }
+    }
+
+    if let Some(path) = std::env::var_os("CARGO_MAKE_CRATE_TARGET_DIRECTORY")
+        .or_else(|| std::env::var_os("CARGO_TARGET_DIR"))
+        .map(PathBuf::from)
+        .map(|target_dir| {
+            target_dir.join(format!(
+                "{profile}/{binary_name}{}",
+                std::env::consts::EXE_SUFFIX
+            ))
+        })
+        .filter(|path| path.exists())
+    {
+        return path;
+    }
+
+    let path = workspace_path().join(format!(
+        "target/{profile}/{binary_name}{}",
         std::env::consts::EXE_SUFFIX
     ));
     if !path.exists() {
