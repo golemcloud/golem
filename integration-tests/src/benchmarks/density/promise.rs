@@ -193,11 +193,14 @@ async fn create_work_pool(
                 let agent = user
                     .start_agent(&component.id, parsed_agent.clone())
                     .await?;
-                let completer_worker = if let Some(completer) = &completer {
-                    Some(user.start_agent(&component.id, completer.clone()).await?)
-                } else {
-                    None
-                };
+                let completer_worker = completer
+                    .as_ref()
+                    .map(|completer| {
+                        AgentId::from_agent_id(component.id, completer).map_err(|error| {
+                            anyhow::anyhow!("invalid promise completer agent id: {error}")
+                        })
+                    })
+                    .transpose()?;
                 let (work, _) = stage_work(
                     &user,
                     &component,
