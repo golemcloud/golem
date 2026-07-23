@@ -41,8 +41,8 @@ object GolemServer {
   private val retryPolicyTimeoutSec = 30L
 
   private val scalaCliRetryPolicies = Seq(
-    ("scala-integration-immediate", 200, "\"true\"", "\"immediate\""),
-    ("scala-integration-never", 100, "\"true\"", "\"never\"")
+    ("scala-integration-immediate", 200, "\"false\"", "\"immediate\""),
+    ("scala-integration-never", 100, "\"false\"", "\"never\"")
   )
 
   val scalaCliRetryPolicyNames: Seq[String] = scalaCliRetryPolicies.map(_._1)

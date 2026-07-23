@@ -24,7 +24,7 @@ use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind,
 };
-use golem_common::model::{AgentStatus, IdempotencyKey};
+use golem_common::model::{AgentStatus, IdempotencyKey, RetryConfig};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::ResultValuePayload;
 use golem_test_framework::dsl::{TestDsl, drain_connection, stderr_events, stdout_events};
@@ -2410,7 +2410,19 @@ async fn jump_with_in_flight_durable_call_fails(
     use golem_common::{agent_id, data_value};
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.retry = RetryConfig {
+                max_attempts: 1,
+                min_delay: Duration::from_millis(10),
+                max_delay: Duration::from_millis(10),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
 
     let (port, server) = simulated_slow_request_server(Duration::from_secs(2)).await;
 

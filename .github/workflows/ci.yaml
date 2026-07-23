@@ -349,7 +349,7 @@ jobs:
 
       - name: Install MoonBit SDK tools dependencies
         working-directory: sdks/moonbit/golem_sdk_tools
-        run: moon update && moon install
+        run: moon update
 
       - name: Sync WIT dependencies
         run: cargo make wit
@@ -584,16 +584,16 @@ jobs:
         run: moon update
         working-directory: sdks/moonbit
       - name: Check SDK
-        run: moon check --target wasm
+        run: moon check . --target wasm
         working-directory: sdks/moonbit/golem_sdk
       - name: Test SDK
-        run: moon test --target wasm
+        run: moon test . --target wasm
         working-directory: sdks/moonbit/golem_sdk
       - name: Check tools
-        run: moon check
+        run: moon check .
         working-directory: sdks/moonbit/golem_sdk_tools
       - name: Test tools
-        run: moon test
+        run: moon test .
         working-directory: sdks/moonbit/golem_sdk_tools
 
   build-golem-rust:

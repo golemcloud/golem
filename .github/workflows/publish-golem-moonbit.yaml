@@ -37,23 +37,23 @@ jobs:
           sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" moon.mod.json
 
       - name: Check SDK
-        run: moon check --target wasm
+        run: moon check . --target wasm
         working-directory: sdks/moonbit/golem_sdk
 
       - name: Test SDK
-        run: moon test
+        run: moon test . --target wasm
         working-directory: sdks/moonbit/golem_sdk
 
       - name: Install tools dependencies
-        run: moon update && moon install
+        run: moon update
         working-directory: sdks/moonbit/golem_sdk_tools
 
       - name: Check tools
-        run: moon check
+        run: moon check .
         working-directory: sdks/moonbit/golem_sdk_tools
 
       - name: Test tools
-        run: moon test
+        run: moon test .
         working-directory: sdks/moonbit/golem_sdk_tools
 
       - name: Setup mooncakes credentials

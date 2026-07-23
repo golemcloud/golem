@@ -345,7 +345,7 @@ without_time = false
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
-#
+# 
 # [key_value_storage]
 # type = "NamespaceRouted"
 # 
@@ -382,7 +382,7 @@ without_time = false
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
-#
+# 
 # [limits]
 # ephemeral_fuel_overdraft_multiplier = 100
 # epoch_interval = "10ms"
@@ -513,7 +513,7 @@ without_time = false
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
-#
+# 
 # [suspend]
 # ephemeral_max_sleep = "1m"
 # suspend_after = "10s"
