@@ -455,7 +455,7 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
 
 // Inclusive ranges for the WIT integer scalars, used by the encode preflight to
 // reject out-of-range values before any owned handle is moved (see
-// `preflightValue`). These mirror the Component Model boundary, which would
+// `assertSchemaValueRepresentable`). These mirror the Component Model boundary, which would
 // otherwise throw *after* a sibling quota-token handle was already transferred.
 const INT_RANGES: Record<string, readonly [number, number]> = {
   s8: [-128, 127],
@@ -483,14 +483,14 @@ function checkIntRange(tag: keyof typeof INT_RANGES, value: number): void {
  *
  * This enforces the same invariants the Component Model boundary and the host
  * decoder enforce — narrow-integer ranges, valid `s64`/`u64` magnitudes, a
- * single-code-point non-surrogate `char`, and a `datetime` whose nanoseconds are
- * in `[0, 1_000_000_000)` — plus that every owned `quota-token` is still present
- * and that no underlying owned resource appears more than once. Handles are
- * deduplicated by the identity of the underlying owned resource (peeked without
- * consuming), not merely by holder identity, so two holders that somehow wrap
- * the same resource are also rejected.
+ * single-code-point non-surrogate `char`, a signed-`s64` duration, and a
+ * `datetime` whose nanoseconds are in `[0, 1_000_000_000)` — plus that every
+ * owned `quota-token` is still present and that no underlying owned resource
+ * appears more than once. Handles are deduplicated by the identity of the
+ * underlying owned resource (peeked without consuming), not merely by holder
+ * identity, so two holders that somehow wrap the same resource are also rejected.
  */
-function preflightValue(value: SchemaValue): void {
+export function assertSchemaValueRepresentable(value: SchemaValue): void {
   const seen = new Set<unknown>();
   const visit = (v: SchemaValue): void => {
     switch (v.tag) {
@@ -503,13 +503,28 @@ function preflightValue(value: SchemaValue): void {
         checkIntRange(v.tag, v.value);
         return;
       case 's64':
-        if (v.value < S64_MIN || v.value > S64_MAX) {
+        if (typeof v.value !== 'bigint' || v.value < S64_MIN || v.value > S64_MAX) {
           throw new SchemaEncodeError(`s64 value out of range: ${v.value}`);
         }
         return;
       case 'u64':
-        if (v.value < 0n || v.value > U64_MAX) {
+        if (typeof v.value !== 'bigint' || v.value < 0n || v.value > U64_MAX) {
           throw new SchemaEncodeError(`u64 value out of range: ${v.value}`);
+        }
+        return;
+      case 'bool':
+        if (typeof (v as { value: unknown }).value !== 'boolean') {
+          throw new SchemaEncodeError(
+            `bool value must be a boolean: ${String((v as { value: unknown }).value)}`,
+          );
+        }
+        return;
+      case 'f32':
+      case 'f64':
+        if (typeof (v as { value: unknown }).value !== 'number') {
+          throw new SchemaEncodeError(
+            `${v.tag} value must be a number: ${String((v as { value: unknown }).value)}`,
+          );
         }
         return;
       case 'char': {
@@ -522,6 +537,15 @@ function preflightValue(value: SchemaValue): void {
         }
         return;
       }
+      case 'string':
+      case 'path':
+      case 'url':
+        if (typeof (v as { value: unknown }).value !== 'string') {
+          throw new SchemaEncodeError(
+            `${v.tag} value must be a string: ${String((v as { value: unknown }).value)}`,
+          );
+        }
+        return;
       case 'datetime': {
         const ns = v.value.nanoseconds;
         if (!Number.isInteger(ns) || ns < 0 || ns >= 1_000_000_000) {
@@ -529,11 +553,24 @@ function preflightValue(value: SchemaValue): void {
             `invalid datetime value: nanoseconds must be in [0, 1_000_000_000), got ${ns}`,
           );
         }
-        if (v.value.seconds < S64_MIN || v.value.seconds > S64_MAX) {
+        if (
+          typeof v.value.seconds !== 'bigint' ||
+          v.value.seconds < S64_MIN ||
+          v.value.seconds > S64_MAX
+        ) {
           throw new SchemaEncodeError(`datetime seconds out of range: ${v.value.seconds}`);
         }
         return;
       }
+      case 'duration':
+        if (
+          typeof v.nanoseconds !== 'bigint' ||
+          v.nanoseconds < S64_MIN ||
+          v.nanoseconds > S64_MAX
+        ) {
+          throw new SchemaEncodeError(`duration nanoseconds out of range: ${v.nanoseconds}`);
+        }
+        return;
       case 'secret': {
         if (!(v.handle instanceof GuestSecretHandle)) {
           throw new SchemaEncodeError('secret value contains an invalid secret handle');
@@ -577,7 +614,16 @@ function preflightValue(value: SchemaValue): void {
         v.fields.forEach(visit);
         return;
       case 'variant':
+        checkIntRange('u32', v.caseIndex);
         if (v.payload !== undefined) visit(v.payload);
+        return;
+      case 'enum':
+        checkIntRange('u32', v.caseIndex);
+        return;
+      case 'flags':
+        if (!Array.isArray(v.flags) || v.flags.some((flag) => typeof flag !== 'boolean')) {
+          throw new SchemaEncodeError('flags value must be a boolean array');
+        }
         return;
       case 'tuple':
       case 'list':
@@ -597,24 +643,45 @@ function preflightValue(value: SchemaValue): void {
         if (v.result.value !== undefined) visit(v.result.value);
         return;
       case 'union':
+        if (typeof v.unionTag !== 'string') {
+          throw new SchemaEncodeError(`union tag must be a string: ${String(v.unionTag)}`);
+        }
         visit(v.body);
         return;
-      // Valid leaves with no encode-time validation. They are listed explicitly
-      // (rather than falling through to `default`) so that an unknown tag is
-      // rejected here, before any sibling `quota-token` handle is taken, instead
-      // of later in `emitNode` after the move.
-      case 'bool':
-      case 'f32':
-      case 'f64':
-      case 'string':
-      case 'enum':
-      case 'flags':
       case 'text':
+        if (
+          typeof v.text !== 'string' ||
+          (v.language !== undefined && typeof v.language !== 'string')
+        ) {
+          throw new SchemaEncodeError('text value must contain string text and language values');
+        }
+        return;
       case 'binary':
-      case 'path':
-      case 'url':
-      case 'duration':
+        if (
+          !(v.bytes instanceof Uint8Array) ||
+          (v.mimeType !== undefined && typeof v.mimeType !== 'string')
+        ) {
+          throw new SchemaEncodeError(
+            'binary value must contain Uint8Array bytes and a string MIME type',
+          );
+        }
+        return;
       case 'quantity':
+        if (
+          typeof v.value !== 'object' ||
+          v.value === null ||
+          typeof v.value.mantissa !== 'bigint' ||
+          v.value.mantissa < S64_MIN ||
+          v.value.mantissa > S64_MAX ||
+          !Number.isInteger(v.value.scale) ||
+          v.value.scale < INT_RANGES.s32[0] ||
+          v.value.scale > INT_RANGES.s32[1] ||
+          typeof v.value.unit !== 'string'
+        ) {
+          throw new SchemaEncodeError(
+            'quantity value is not representable as s64, s32, and string',
+          );
+        }
         return;
       default:
         throw new SchemaEncodeError(`unknown schema value tag '${(v as { tag: string }).tag}'`);
@@ -624,7 +691,7 @@ function preflightValue(value: SchemaValue): void {
 }
 
 export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
-  preflightValue(value);
+  assertSchemaValueRepresentable(value);
   const valueNodes: WitSchemaValueNode[] = [];
 
   function emit(v: SchemaValue): ValueNodeIndex {

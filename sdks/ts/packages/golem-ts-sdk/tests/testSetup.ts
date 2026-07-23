@@ -73,6 +73,14 @@ vi.mock('golem:agent/host@2.0.0', () => ({
   })),
 }));
 
+vi.mock('golem:tool/host@0.1.0', () => ({
+  ToolRpc: vi.fn().mockImplementation(() => ({
+    invokeAndAwait: vi.fn(),
+    invoke: vi.fn(),
+    asyncInvokeAndAwait: vi.fn(),
+  })),
+}));
+
 vi.mock('golem:core/types@2.0.0', () => ({
   parseUuid: (uuid: string) => {
     const parts = uuid.replace(/-/g, '');
