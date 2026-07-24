@@ -268,3 +268,15 @@ func ResultOf[T any](v T, err error) Result[T, string] {
 	}
 	return Ok[T, string](v)
 }
+
+// Must2 is Must for the common (value, extra, error) shape — e.g. Go API
+// clients that return (result, *http.Response, error). It returns the first two
+// values, or panics if err is non-nil:
+//
+//	repo, _ := golem.Must2(gh.Repositories.Get(ctx, "owner", "name"))
+func Must2[A any, B any](a A, b B, err error) (A, B) {
+	if err != nil {
+		panic(err)
+	}
+	return a, b
+}
