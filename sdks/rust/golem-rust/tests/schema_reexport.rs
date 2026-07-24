@@ -6,6 +6,14 @@ use golem_rust::{
 };
 use test_r::test;
 
+// Every public golem:permissions interface must remain available through the SDK bindings.
+#[test]
+fn all_permission_wit_bindings_are_publicly_exposed() {
+    use golem_rust::bindings::golem::permissions::kernel_introspection;
+
+    let _ = kernel_introspection::list_modules;
+}
+
 #[derive(Clone, Debug, PartialEq, IntoSchema, FromSchema)]
 struct ReexportedSchemaType {
     name: String,

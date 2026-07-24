@@ -504,6 +504,7 @@ fn is_permission_card_resource(interface_name: &str, resource_name: &str) -> boo
                 | "golem:permissions/derive@0.1.0"
                 | "golem:permissions/revoke@0.1.0"
                 | "golem:permissions/wallet@0.1.0"
+                | "golem:agent/host@2.0.0"
         )
 }
 

@@ -106,6 +106,12 @@ pub mod bindings {
             pub use crate::raw_bindings::golem::agent::host;
         }
 
+        pub mod permissions {
+            pub use crate::raw_bindings::golem::permissions::{
+                derive, inspect, kernel_introspection, revoke, types, wallet,
+            };
+        }
+
         pub mod tool {
             pub use crate::raw_bindings::golem::tool::host;
         }

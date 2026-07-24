@@ -21,7 +21,7 @@ use chrono::{DateTime, Utc};
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
-use golem_common::model::card::{CardId, StoredCard};
+use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -244,6 +244,7 @@ impl WorkerProxy for RecordingWorkerProxy {
         principal: Principal,
         environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
+        scope_card: Option<ScopeCard>,
     ) -> Result<AgentInvocationOutput, WorkerProxyError> {
         self.inner
             .invoke_agent(
@@ -261,6 +262,7 @@ impl WorkerProxy for RecordingWorkerProxy {
                 principal,
                 environment_id,
                 auth_ctx,
+                scope_card,
             )
             .await
     }

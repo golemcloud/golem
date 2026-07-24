@@ -102,6 +102,7 @@ impl WorkerProxy for TestWorkerProxy {
         _principal: Principal,
         _environment_id: EnvironmentId,
         _auth_ctx: &AuthCtx,
+        _scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<AgentInvocationOutput, WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(

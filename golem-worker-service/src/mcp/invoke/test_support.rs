@@ -511,6 +511,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: AccountId,
         _: AuthCtx,
         _: golem_api_grpc::proto::golem::component::Principal,
+        _: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
     ) -> WorkerResult<AgentInvocationOutput> {
         self.agent_ids.lock().unwrap().push(agent_id.clone());
         self.method_params.lock().unwrap().push(method_params);

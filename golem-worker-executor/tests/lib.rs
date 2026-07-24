@@ -50,6 +50,7 @@ pub mod retry_policies;
 pub mod revert;
 pub mod rpc;
 pub mod scalability;
+pub mod scope_cards;
 pub mod storage_quota;
 pub mod transactions;
 pub mod wasi;
@@ -101,6 +102,7 @@ tag_suite!(retry_policies, group2);
 
 tag_suite!(durability, group3);
 tag_suite!(rpc, group3);
+tag_suite!(scope_cards, group3);
 tag_suite!(wasi, group3);
 tag_suite!(scalability, group3);
 tag_suite!(revert, group3);

@@ -8,6 +8,12 @@ world golem-rust {
 
   import golem:agent/host@2.0.0;
   import golem:tool/host@0.1.0;
+  import golem:permissions/types@0.1.0;
+  import golem:permissions/inspect@0.1.0;
+  import golem:permissions/derive@0.1.0;
+  import golem:permissions/revoke@0.1.0;
+  import golem:permissions/wallet@0.1.0;
+  import golem:permissions/kernel-introspection@0.1.0;
 
   import golem:durability/durability@1.5.0;
   import golem:quota/types@1.5.0;
