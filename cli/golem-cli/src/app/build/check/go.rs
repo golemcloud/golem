@@ -54,7 +54,12 @@ pub(super) fn plan_go_mod_fix_steps(
             replace_path,
         );
 
-        if new != original {
+        // A trailing-whitespace-only difference is not a semantic dependency
+        // change — the reconciler always normalizes to a single trailing
+        // newline, but a freshly generated go.mod can carry a trailing blank
+        // line (e.g. an empty replace placeholder in version mode). Skipping it
+        // avoids a spurious go.mod-change confirmation on the first build.
+        if new.trim_end() != original.trim_end() {
             steps.push(DependencyFixStep {
                 path: go_mod_path,
                 current: original,
