@@ -325,8 +325,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         if self.state.snapshotting_mode.is_some() {
             Ok(self.state.current_oplog_index().await.into())
         } else if self.state.is_live() {
-            self.state.oplog.add(OplogEntry::no_op()).await;
-            let marker = self.state.current_oplog_index().await;
+            // Use the index returned by `add` — a concurrently running host task (a durable
+            // call's terminal write, a drop-event `Cancelled`, a log hint entry) may append
+            // between this `add` and a subsequent `current_oplog_index` read, so re-reading the
+            // tip would nondeterministically point past the `NoOp` entry. Debugging sessions
+            // discard writes and return `NONE` from `add`; fall back to the session's replay
+            // target there so the guest never observes an invalid index.
+            let marker = match self.state.oplog.add(OplogEntry::no_op()).await {
+                OplogIndex::NONE => self.state.current_oplog_index().await,
+                index => index,
+            };
             // This `NoOp` index is the realistic `set_oplog_index` target; pin the mid-invocation
             // checkpoint watermark to the earliest one so a checkpoint at `<= marker` survives a
             // later jump back to it. (No checkpoint is taken here — there is no commit at this
@@ -443,11 +451,23 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let next_idempotency_key_oplog_index = self
                 .state
                 .current_atomic_region_idempotency_key_oplog_index();
-            self.state
+            // Use the index returned by `add` — a concurrently running host task (a durable
+            // call's terminal write, a drop-event `Cancelled`, a log hint entry) may append
+            // between this `add` and a subsequent `current_oplog_index` read. Reading the tip
+            // afterwards would record a begin index past the `BeginAtomicRegion` entry, making
+            // `Error.retry_from` diverge from the persisted region marker and breaking the
+            // retry-budget grouping keyed on it. Debugging sessions discard writes and return
+            // `NONE` from `add`; fall back to the session's replay target there, matching the
+            // index the guest observed before.
+            let begin_index = match self
+                .state
                 .oplog
                 .add(OplogEntry::begin_atomic_region())
-                .await;
-            let begin_index = self.state.current_oplog_index().await;
+                .await
+            {
+                OplogIndex::NONE => self.state.current_oplog_index().await,
+                index => index,
+            };
             let next_idempotency_key_oplog_index =
                 next_idempotency_key_oplog_index.unwrap_or_else(|| begin_index.next());
             self.state
