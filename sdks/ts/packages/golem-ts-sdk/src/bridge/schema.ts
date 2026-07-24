@@ -16,12 +16,14 @@ import type {
   UrlRestrictions,
 } from 'golem:core/types@2.0.0';
 import {
+  deepEqual,
   emptyMetadata,
   type SchemaGraph,
   type SchemaType,
   type SchemaTypeBody,
   type TypedSchemaValue,
 } from '../internal/schema-model';
+import { schemaValueConforms } from '../internal/tool/validation';
 
 type JsonObject = Record<string, unknown>;
 
@@ -532,6 +534,16 @@ export function typedSchemaValueFromJson(
   value: TypedSchemaValue['value'],
 ): TypedSchemaValue {
   return { graph: schemaGraphFromJson(json), value };
+}
+
+export function typedSchemaValueConforms(
+  expectedGraph: SchemaGraph,
+  typed: TypedSchemaValue,
+): boolean {
+  return (
+    deepEqual(typed.graph, expectedGraph) &&
+    schemaValueConforms(expectedGraph, expectedGraph.root, typed.value)
+  );
 }
 
 /** Convert an ISO-8601 instant to the nanosecond-precise schema datetime shape. */

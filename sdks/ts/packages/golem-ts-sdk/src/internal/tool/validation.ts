@@ -955,7 +955,7 @@ function isUnicodeScalar(value: string): boolean {
 
 function regexMatches(pattern: string, value: string): boolean {
   try {
-    return new RegExp(pattern).test(value);
+    return new RegExp(pattern, 'u').test(value);
   } catch {
     return false;
   }

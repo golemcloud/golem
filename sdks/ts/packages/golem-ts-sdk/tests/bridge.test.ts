@@ -6,6 +6,7 @@ import { ToolRpc, type RpcError } from 'golem:tool/host@0.1.0';
 import type { OutputStream } from 'wasi:io/streams@0.2.3';
 import { describe, expect, it, vi } from 'vitest';
 import { bridge } from '../src';
+import { validateSchemaGraph } from '../src/internal/schema-model';
 
 const schemaGraphFromObject = (value: unknown) => bridge.schemaGraphFromJson(JSON.stringify(value));
 
@@ -97,6 +98,59 @@ describe('public bridge runtime', () => {
     };
 
     expect(() => schemaGraphFromObject(malformed)).toThrow(/duplicate.*x/i);
+  });
+
+  it('validates both the graph and value of typed schema values', () => {
+    const stringGraph = schemaGraphFromObject({ root: { kind: 'string' } });
+    const otherStringGraph = schemaGraphFromObject({
+      root: { kind: 'string', value: { metadata: { doc: 'different schema' } } },
+    });
+
+    expect(
+      bridge.typedSchemaValueConforms(stringGraph, {
+        graph: stringGraph,
+        value: bridge.v.string('ok'),
+      }),
+    ).toBe(true);
+    expect(
+      bridge.typedSchemaValueConforms(stringGraph, {
+        graph: otherStringGraph,
+        value: bridge.v.string('structurally compatible with the expected value'),
+      }),
+    ).toBe(false);
+    expect(
+      bridge.typedSchemaValueConforms(stringGraph, {
+        graph: stringGraph,
+        value: bridge.v.bool(true),
+      }),
+    ).toBe(false);
+  });
+
+  it('uses Unicode code-point semantics when validating typed values', () => {
+    const graph = schemaGraphFromObject({
+      root: {
+        kind: 'text',
+        value: { restrictions: { regex: '^.$' } },
+      },
+    });
+
+    expect(
+      bridge.typedSchemaValueConforms(graph, {
+        graph,
+        value: bridge.v.text('😀'),
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects legacy regex escapes outside Unicode-mode ECMAScript', () => {
+    const graph = schemaGraphFromObject({
+      root: {
+        kind: 'text',
+        value: { restrictions: { regex: '^\\1$' } },
+      },
+    });
+
+    expect(validateSchemaGraph(graph)).toMatchObject([{ code: 'invalid-text-regex' }]);
   });
 
   it('accepts safe numeric forms for precision-sensitive bridge integers', () => {

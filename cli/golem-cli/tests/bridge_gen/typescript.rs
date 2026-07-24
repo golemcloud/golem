@@ -195,6 +195,63 @@ fn guest_agent_generated_names_do_not_collide_with_schema_names() {
 }
 
 #[test]
+fn static_and_instance_agent_methods_can_share_names() {
+    let methods = vec![
+        method("get", vec![], Some(SchemaType::string())),
+        method("getPhantom", vec![], Some(SchemaType::string())),
+        method("newPhantom", vec![], Some(SchemaType::string())),
+        method("getWithConfig", vec![], Some(SchemaType::string())),
+        method("getPhantomWithConfig", vec![], Some(SchemaType::string())),
+        method("newPhantomWithConfig", vec![], Some(SchemaType::string())),
+        method("getConfiguration", vec![], Some(SchemaType::string())),
+    ];
+
+    for (mode, suffix) in [
+        (TypeScriptBridgeMode::ExternalRest, "client"),
+        (TypeScriptBridgeMode::GuestWasmRpc, "guest-client"),
+    ] {
+        let dir = TempDir::new().unwrap();
+        let target = Utf8Path::from_path(dir.path()).unwrap();
+        let package_dir = target.join(format!("collision-agent-{suffix}"));
+        TypeScriptBridgeGenerator::new_with_mode(
+            agent(
+                "CollisionAgent",
+                "typescript",
+                vec![],
+                methods.clone(),
+                vec![],
+                AgentMode::Durable,
+            ),
+            &package_dir,
+            true,
+            mode,
+        )
+        .unwrap()
+        .generate()
+        .unwrap();
+
+        let source =
+            std::fs::read_to_string(package_dir.join(format!("collision-agent-{suffix}.ts")))
+                .unwrap();
+        for method_name in [
+            "get",
+            "getPhantom",
+            "newPhantom",
+            "getWithConfig",
+            "getPhantomWithConfig",
+            "newPhantomWithConfig",
+            "getConfiguration",
+        ] {
+            assert!(
+                source.contains(&format!("  readonly {method_name}:")),
+                "missing instance method {method_name} in {mode:?}\n{source}"
+            );
+        }
+        install_and_build(&package_dir);
+    }
+}
+
+#[test]
 fn guest_agent_runtime_import_alias_does_not_collide_with_agent_class() {
     let dir = TempDir::new().unwrap();
     generate_and_compile_with_mode(
@@ -784,7 +841,10 @@ fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
     assert!(source.contains("{ tag: 'record', fields }"));
     assert!(source.contains("base.typedSchemaValueFromJson("));
     assert!(source.contains("base.splitToolRpcError(error, decodeGrepError)"));
-    assert!(source.contains("typed.value.tag === 'tuple'"));
+    assert!(
+        source.contains("base.typedSchemaValueConforms(expectedResultGraph, invocation.result)")
+    );
+    assert!(source.contains("base.typedSchemaValueConforms(expectedGraph, typed)"));
     assert!(source.contains("base.disposeToolStdout(invocation.stdout)"));
     assert!(source.contains("tool result did not contain a value"));
     assert!(source.contains("tool result unexpectedly contained a value"));

@@ -272,6 +272,11 @@ impl TypeScriptToolBridgeGenerator {
         }
         let decoded = if let Some(result) = &body.result {
             out.push_str("      if (invocation.result === undefined) throw new Error('tool result did not contain a value');\n");
+            let graph = self.schema_graph_json(&result.type_)?;
+            out.push_str(&format!(
+                "      const expectedResultGraph = base.schemaGraphFromJson({});\n      if (!base.typedSchemaValueConforms(expectedResultGraph, invocation.result)) throw new Error('tool result schema or value does not conform to the declared result');\n",
+                q(&graph)?
+            ));
             Some(
                 self.inner
                     .decode_schema_value("invocation.result.value", &result.type_)?,
@@ -322,18 +327,21 @@ impl TypeScriptToolBridgeGenerator {
                 "function decode{name}(typed: base.TypedSchemaValue): {name} {{\n"
             ));
             for (case, variant) in body.errors.iter().zip(&variants) {
-                if let Some(payload) = &case.payload {
-                    let decoded = self.inner.decode_schema_value("typed.value", payload)?;
-                    let tags = self.expected_tags(payload)?;
-                    let guard = tags
-                        .iter()
-                        .map(|tag| format!("typed.value.tag === {tag:?}"))
-                        .collect::<Vec<_>>()
-                        .join(" || ");
-                    out.push_str(&format!("  if ({guard}) try {{ return {{ tag: {}, value: {decoded} }}; }} catch {{ /* try next declaration */ }}\n", q(variant)?));
+                let payload = case
+                    .payload
+                    .clone()
+                    .unwrap_or_else(|| SchemaType::tuple(vec![]));
+                let graph = self.schema_graph_json(&payload)?;
+                let decoded = self.inner.decode_schema_value("typed.value", &payload)?;
+                let result = if case.payload.is_some() {
+                    format!("{{ tag: {}, value: {decoded} }}", q(variant)?)
                 } else {
-                    out.push_str(&format!("  if (typed.value.tag === 'tuple' && typed.value.elements.length === 0) return {{ tag: {} }};\n", q(variant)?));
-                }
+                    format!("{{ tag: {} }}", q(variant)?)
+                };
+                out.push_str(&format!(
+                    "  {{ const expectedGraph = base.schemaGraphFromJson({}); if (base.typedSchemaValueConforms(expectedGraph, typed)) return {result}; }}\n",
+                    q(&graph)?
+                ));
             }
             out.push_str("  throw new Error('remote tool error payload did not match any declared error case');\n}\n\n");
         }
@@ -383,6 +391,7 @@ impl TypeScriptToolBridgeGenerator {
             "invocation",
             "error",
             "decodeError",
+            "expectedResultGraph",
         ]);
         for (_, type_name) in self.inner.type_naming.types() {
             naming.reserve(format!("encode{type_name}"));
@@ -433,6 +442,15 @@ impl TypeScriptToolBridgeGenerator {
             .collect::<Vec<_>>();
         let graph = record_schema_from_field_graphs(graphs.iter().map(|(n, g)| (n.as_str(), g)))
             .map_err(|e| anyhow!("failed to build tool input record schema: {e}"))?;
+        self.serialize_schema_graph(graph)
+    }
+    fn schema_graph_json(&self, typ: &SchemaType) -> anyhow::Result<String> {
+        self.serialize_schema_graph(SchemaGraph {
+            defs: reachable_defs(&self.tool.schema, typ),
+            root: typ.clone(),
+        })
+    }
+    fn serialize_schema_graph(&self, graph: SchemaGraph) -> anyhow::Result<String> {
         let mut value = serde_json::to_value(graph)?;
         stringify_precision_sensitive_numbers(&mut value);
         Ok(serde_json::to_string(&value)?)
@@ -455,54 +473,6 @@ impl TypeScriptToolBridgeGenerator {
         self.tool
             .canonical_field_for_surface(i, s)
             .ok_or_else(|| anyhow!("canonical surface {s:?} did not resolve"))
-    }
-
-    fn expected_tags(&self, typ: &SchemaType) -> anyhow::Result<Vec<&'static str>> {
-        Ok(match typ {
-            SchemaType::Ref { id, .. } => self.expected_tags(
-                &self
-                    .tool
-                    .schema
-                    .lookup(id)
-                    .context("error payload ref is missing")?
-                    .body,
-            )?,
-            SchemaType::Bool { .. } => vec!["bool"],
-            SchemaType::S8 { .. } => vec!["s8"],
-            SchemaType::S16 { .. } => vec!["s16"],
-            SchemaType::S32 { .. } => vec!["s32"],
-            SchemaType::S64 { .. } => vec!["s64"],
-            SchemaType::U8 { .. } => vec!["u8"],
-            SchemaType::U16 { .. } => vec!["u16"],
-            SchemaType::U32 { .. } => vec!["u32"],
-            SchemaType::U64 { .. } => vec!["u64"],
-            SchemaType::F32 { .. } => vec!["f32"],
-            SchemaType::F64 { .. } => vec!["f64"],
-            SchemaType::Char { .. } => vec!["char"],
-            SchemaType::String { .. } => vec!["string"],
-            SchemaType::List { .. } => vec!["list"],
-            SchemaType::FixedList { .. } => vec!["fixed-list"],
-            SchemaType::Tuple { .. } => vec!["tuple"],
-            SchemaType::Record { .. } => vec!["record"],
-            SchemaType::Flags { .. } => vec!["flags"],
-            SchemaType::Enum { .. } => vec!["enum"],
-            SchemaType::Variant { .. } => vec!["variant"],
-            SchemaType::Option { .. } => vec!["option"],
-            SchemaType::Result { .. } => vec!["result"],
-            SchemaType::Map { .. } => vec!["map"],
-            SchemaType::Union { .. } => vec!["union"],
-            SchemaType::Path { .. } => vec!["path"],
-            SchemaType::Url { .. } => vec!["url"],
-            SchemaType::Datetime { .. } => vec!["datetime"],
-            SchemaType::Duration { .. } => vec!["duration"],
-            SchemaType::Text { .. } => vec!["text"],
-            SchemaType::Binary { .. } => vec!["binary"],
-            SchemaType::Quantity { .. } => vec!["quantity"],
-            SchemaType::Secret { .. } => vec!["secret"],
-            SchemaType::QuotaToken { .. } => vec!["quota-token"],
-            SchemaType::Future { .. } => vec!["future"],
-            SchemaType::Stream { .. } => vec!["stream"],
-        })
     }
 }
 fn q(s: &str) -> anyhow::Result<String> {

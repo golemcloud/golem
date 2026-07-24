@@ -684,16 +684,7 @@ impl TypeScriptBridgeGenerator {
     fn generate_guest_ts_class(&self, writer: &mut TsWriter) -> anyhow::Result<()> {
         let class_name = &self.agent_type.type_name.0;
         let mut member_naming = ParameterNaming::new();
-        member_naming.reserve_many([
-            "resolved",
-            "constructor",
-            "get",
-            "getPhantom",
-            "newPhantom",
-            "getWithConfig",
-            "getPhantomWithConfig",
-            "newPhantomWithConfig",
-        ]);
+        member_naming.reserve_many(["resolved", "constructor"]);
         if self.agent_type.mode == AgentMode::Durable {
             member_naming.reserve("agentId");
         }
@@ -1498,15 +1489,8 @@ impl TypeScriptBridgeGenerator {
             "phantomId",
             "_agentId",
             "constructor",
-            "get",
-            "getPhantom",
-            "newPhantom",
-            "getWithConfig",
-            "getPhantomWithConfig",
-            "newPhantomWithConfig",
             "__getConfig",
             "agentId",
-            "getConfiguration",
         ]);
         for method_def in &self.agent_type.methods {
             let name = names.fresh(self.to_js_ident(&method_def.name));
