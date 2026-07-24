@@ -691,6 +691,7 @@ pub struct SchedulerConfig {
     #[serde(with = "humantime_serde")]
     pub lease_ttl: Duration,
     pub max_batches_per_tick: u32,
+    pub max_concurrent_action_processing: u32,
 }
 
 impl SafeDisplay for SchedulerConfig {
@@ -703,6 +704,11 @@ impl SafeDisplay for SchedulerConfig {
             &mut result,
             "max batches per tick: {}",
             self.max_batches_per_tick
+        );
+        let _ = writeln!(
+            &mut result,
+            "max concurrent action processing: {}",
+            self.max_concurrent_action_processing
         );
         result
     }
@@ -1722,6 +1728,7 @@ impl Default for SchedulerConfig {
             claim_batch_size: 100,
             lease_ttl: Duration::from_secs(30),
             max_batches_per_tick: 10,
+            max_concurrent_action_processing: 64,
         }
     }
 }
