@@ -20,8 +20,6 @@ cargo make build-release  # Full release build
 cargo build -p <crate>    # Build specific crate
 ```
 
-Always run `cargo make build` before starting work to ensure all dependencies are compiled.
-
 **Note:** The SDKs in `sdks/` are not part of the main build flow. Load `sdk-development` when working on the Rust or TypeScript SDKs, `golem-scala-development` when working on the Scala SDK, and see `sdks/moonbit/AGENTS.md` when working on the MoonBit SDK.
 
 **Note:** The user-facing documentation site (deployed at [learn.golem.cloud](https://learn.golem.cloud)) lives under `docs/` and is a Next.js / Nextra project built with Bun — see `docs/AGENTS.md`. It is built and deployed by a dedicated workflow (`.github/workflows/docs.yaml`); the main `ci.yaml` skips runs on docs-only changes.

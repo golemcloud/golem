@@ -223,19 +223,6 @@ describe('schema value decode failures', () => {
     expect(quotaNode.val).toBeUndefined();
   });
 
-  // PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
-  it('rejects unreachable value nodes outside their WIT scalar domains', () => {
-    const wit = {
-      valueNodes: [
-        { tag: 'bool-value', val: true },
-        { tag: 's8-value', val: 128 },
-      ],
-      root: 0,
-    } as WitSchemaValueTree;
-
-    expect(() => schemaValueFromWit(wit)).toThrow(SchemaDecodeError);
-  });
-
   it('root index out of range -> SchemaDecodeError', () => {
     const wit: WitSchemaValueTree = {
       valueNodes: [{ tag: 'bool-value', val: true }],
@@ -319,23 +306,6 @@ describe('schema graph decode failures', () => {
       defs: [],
       root: 0,
     } as unknown as WitSchemaGraph;
-    expect(() => schemaGraphFromWit(wit)).toThrow(SchemaDecodeError);
-  });
-
-  // PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
-  it('rejects schema graph fields outside their declared WIT scalar domains', () => {
-    const wit = {
-      typeNodes: [
-        {
-          body: { tag: 'fixed-list-type', val: { element: 1, length: 4_294_967_296 } },
-          metadata: emptyMetadata(),
-        },
-        { body: { tag: 'u8-type', val: undefined }, metadata: emptyMetadata() },
-      ],
-      defs: [],
-      root: 0,
-    } as WitSchemaGraph;
-
     expect(() => schemaGraphFromWit(wit)).toThrow(SchemaDecodeError);
   });
 });

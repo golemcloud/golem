@@ -857,7 +857,7 @@ impl TypeScriptBridgeGenerator {
         ));
         for (config, param_name) in local_configs.iter().zip(parameter_names) {
             let path = serde_json::to_string(&config.path)?;
-            let encoded = self.encode_schema_value(&param_name, &config.value_type)?;
+            let encoded = self.encode_schema_value(param_name, &config.value_type)?;
             let graph = self.config_schema_graph_json_literal(&config.value_type)?;
             writer.write_line(format!("if ({param_name} !== undefined) {{"));
             writer.indent();
@@ -1433,7 +1433,7 @@ impl TypeScriptBridgeGenerator {
                 .map(|s| format!("\"{}\"", s))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let encoded_value = self.encode_schema_value(&param_name, &config.value_type)?;
+            let encoded_value = self.encode_schema_value(param_name, &config.value_type)?;
             writer.write_line(format!("if ({param_name} !== undefined) {{"));
             writer.indent();
             writer.write_line(format!(
