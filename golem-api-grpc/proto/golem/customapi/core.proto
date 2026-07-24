@@ -221,6 +221,7 @@ message RouteBehaviour {
     optional golem.component.ReadOnlyConfig read_only = 10;
     CompiledInputSchema constructor_input = 11;
     CompiledInputSchema method_input = 12;
+    golem.component.AgentMode agent_mode = 13;
   }
 
   message CorsPreflight {

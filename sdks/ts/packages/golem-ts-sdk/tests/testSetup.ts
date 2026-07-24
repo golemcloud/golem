@@ -15,10 +15,9 @@
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentClassName } from '../src/agentClassName';
 
-// The production runtime boundary now targets `golem:agent/host@2.0.0`. Mock it
-// with a schema-native, JSON-round-trippable `make-agent-id` / `parse-agent-id`
-// pair (the constructor params crossing the boundary are `schema-value-tree`s)
-// plus the registry and RPC stubs the SDK touches.
+// The production runtime boundary now targets `golem:agent/host@2.0.0`. Mock its
+// registry and RPC surfaces; tests that inspect an agent ID configure the exact
+// canonical host result they expect.
 vi.mock('golem:agent/host@2.0.0', () => ({
   getAllAgentTypes: () => [],
   getAgentType: (agentTypeName: string) => {
@@ -34,14 +33,7 @@ vi.mock('golem:agent/host@2.0.0', () => ({
     }
     return undefined;
   },
-  makeAgentId: (
-    agentTypeName: string,
-    input: unknown,
-    phantomId: { highBits: bigint; lowBits: bigint } | undefined,
-  ): string => {
-    const phantomPostfix = phantomId ? `[${phantomId.highBits}-${phantomId.lowBits}]` : '';
-    return `${agentTypeName}(${JSON.stringify(input)})${phantomPostfix}`;
-  },
+  makeAgentId: vi.fn(() => 'MockAgent()'),
   parseAgentId: (agentId: string) => {
     const match = agentId.match(/^(.*)\((.*)\)(\[(\d+)-(\d+)])?$/);
     if (!match) {

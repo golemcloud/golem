@@ -19,7 +19,7 @@ use crate::model::SafeIndex;
 use base64::Engine;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentTypeName, HttpMethod, ReadOnlyConfig};
+use golem_common::model::agent::{AgentMode, AgentTypeName, HttpMethod, ReadOnlyConfig};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
@@ -343,6 +343,7 @@ pub struct CallAgentBehaviour {
     pub component_id: ComponentId,
     pub component_revision: ComponentRevision,
     pub agent_type: AgentTypeName,
+    pub agent_mode: AgentMode,
     /// Self-contained schema of the agent constructor input. Used by the runtime
     /// to build the `TypedSchemaValue` for the agent id from the constructor
     /// parameters.

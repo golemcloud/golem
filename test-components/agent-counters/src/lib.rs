@@ -10,6 +10,7 @@ trait Counter {
     async fn increment_through_rpc(&mut self) -> u32;
     async fn increment_through_rpc_to_ephemeral(&mut self) -> u32;
     async fn increment_through_rpc_to_ephemeral_phantom(&mut self) -> u32;
+    async fn ephemeral_ids_through_rpc(&mut self) -> (String, String);
 }
 
 struct CounterImpl {
@@ -42,28 +43,54 @@ impl Counter for CounterImpl {
         let mut client = EphemeralSingletonCounterClient::new_phantom();
         client.increment().await.value
     }
+
+    async fn ephemeral_ids_through_rpc(&mut self) -> (String, String) {
+        let client = EphemeralCounterClient::new_phantom(format!("{}-ephemeral-ids", self.id));
+        let id1 = client.get_id().await.value;
+        let id2 = client.get_id().await.value;
+        (id1, id2)
+    }
 }
 
 #[agent_definition(ephemeral)]
 trait EphemeralCounter {
     fn new(id: String) -> Self;
     fn increment(&mut self) -> u32;
+    fn get_id(&self) -> String;
+    async fn increment_via_self_rpc(&mut self) -> u32;
+    async fn increment_remote_then_fail(&mut self, target: String) -> u32;
 }
 
 struct EphemeralCounterImpl {
     count: u32,
-    _id: String,
+    id: String,
 }
 
 #[agent_implementation]
 impl EphemeralCounter for EphemeralCounterImpl {
     fn new(id: String) -> Self {
-        Self { _id: id, count: 0 }
+        Self { id, count: 0 }
     }
 
     fn increment(&mut self) -> u32 {
         self.count += 1;
         self.count
+    }
+
+    fn get_id(&self) -> String {
+        golem_rust::agentic::get_agent_id().agent_id
+    }
+
+    async fn increment_via_self_rpc(&mut self) -> u32 {
+        self.count += 1;
+        let mut client = EphemeralCounterClient::new_phantom(self.id.clone());
+        self.count + client.increment().await.value
+    }
+
+    async fn increment_remote_then_fail(&mut self, target: String) -> u32 {
+        let mut client = CounterClient::get(target);
+        let count = client.increment().await;
+        panic!("failing after remote increment to {count}")
     }
 }
 

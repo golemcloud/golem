@@ -435,6 +435,11 @@ impl RustBridgeGenerator {
             quote! {}
         };
 
+        let new_phantom_doc = if self.agent_type.mode == AgentMode::Durable {
+            "Creates a new agent instance with a fresh random phantom id."
+        } else {
+            "Creates a local logical proxy; each invocation receives a fresh final identity."
+        };
         let with_config_methods = if !local_configs.is_empty() {
             let get_phantom_with_config = (self.agent_type.mode == AgentMode::Durable).then(|| quote! {
                 pub async fn get_phantom_with_config(uuid: uuid::Uuid, #(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
@@ -453,6 +458,7 @@ impl RustBridgeGenerator {
                 #get_with_config_method
                 #get_phantom_with_config
 
+                #[doc = #new_phantom_doc]
                 pub async fn new_phantom_with_config(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
                     let mut agent_config = Vec::new();
@@ -546,6 +552,7 @@ impl RustBridgeGenerator {
 
                 #get_phantom_method
 
+                #[doc = #new_phantom_doc]
                 pub async fn new_phantom(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
                     Self::__create(constructor_parameters, #new_phantom_id, vec![]).await
@@ -798,6 +805,11 @@ impl RustBridgeGenerator {
             quote! {}
         };
 
+        let new_phantom_doc = if self.agent_type.mode == AgentMode::Durable {
+            "Creates a new agent instance with a fresh random phantom id."
+        } else {
+            "Creates a local logical proxy; each invocation receives a fresh final identity."
+        };
         let with_config_methods = if !local_configs.is_empty() {
             let new_phantom_with_config_method_name = new_phantom_with_config_method_name
                 .as_ref()
@@ -823,6 +835,7 @@ impl RustBridgeGenerator {
 
                 #get_phantom_with_config_method
 
+                #[doc = #new_phantom_doc]
                 pub fn #new_phantom_with_config_method_name(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let mut #agent_config_values = Vec::new();
                     #(#config_encode_stmts)*
@@ -881,6 +894,7 @@ impl RustBridgeGenerator {
 
                 #get_phantom_method
 
+                #[doc = #new_phantom_doc]
                 pub fn #new_phantom_method_name(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     Self::#create_method_name(#new_phantom_id, Vec::new(), #(#constructor_param_refs),*)
                 }

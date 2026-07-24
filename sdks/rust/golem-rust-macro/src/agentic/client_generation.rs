@@ -160,6 +160,12 @@ pub fn get_remote_client(
         quote! {}
     };
 
+    let new_phantom_doc = if agent_is_durable {
+        "Creates a new agent instance with a fresh random phantom id."
+    } else {
+        "Creates a local logical proxy; each invocation receives a fresh final identity."
+    };
+
     let optional_new_phantom_with_config_impl = if !constructor_agent_config_param_defs.is_empty() {
         let new_phantom_with_config_method_ident = new_phantom_with_config_method_ident
             .as_ref()
@@ -181,6 +187,7 @@ pub fn get_remote_client(
             )
         };
         quote! {
+            #[doc = #new_phantom_doc]
             pub fn #new_phantom_with_config_method_ident(#(#constructor_data_value_param_defs,)* #(#constructor_agent_config_param_defs,)*) -> #remote_client_type_name {
                 #body
             }
@@ -280,6 +287,7 @@ pub fn get_remote_client(
 
             #optional_get_with_config_impl
 
+            #[doc = #new_phantom_doc]
             pub fn #new_phantom_method_ident(#(#constructor_data_value_param_defs,)*) -> #remote_client_type_name {
                 #new_phantom_body
             }

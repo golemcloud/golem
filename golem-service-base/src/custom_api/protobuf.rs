@@ -179,6 +179,9 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                     .try_into()?,
                 component_revision: call_agent.component_revision.try_into()?,
                 agent_type: AgentTypeName(call_agent.agent_type),
+                agent_mode: proto::golem::component::AgentMode::try_from(call_agent.agent_mode)
+                    .map_err(|err| format!("Invalid agent_mode: {err}"))?
+                    .into(),
                 constructor_input: call_agent
                     .constructor_input
                     .ok_or("Missing constructor_input")?
@@ -269,6 +272,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                 component_id,
                 component_revision,
                 agent_type,
+                agent_mode,
                 constructor_input,
                 constructor_parameters,
                 phantom,
@@ -284,6 +288,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                         component_id: Some(component_id.into()),
                         component_revision: component_revision.into(),
                         agent_type: agent_type.0,
+                        agent_mode: proto::golem::component::AgentMode::from(agent_mode) as i32,
                         constructor_input: Some(constructor_input.into()),
                         constructor_parameters: constructor_parameters
                             .into_iter()
