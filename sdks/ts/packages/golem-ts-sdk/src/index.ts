@@ -18,6 +18,8 @@ import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0
 import type { Snapshot } from 'golem:api/host@1.5.0';
 import { getStdout } from 'wasi:cli/stdout@0.2.3';
 import type { InputStream, OutputStream } from 'wasi:io/streams@0.2.3';
+
+export type { InputStream, OutputStream };
 import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
 import { schemaValueConforms, type ExtendedCommandBody } from './internal/tool';
 import {
@@ -68,6 +70,7 @@ export * from './host/durable';
 // exported from the main entry so it is baked into the bundle injected into
 // `agent_guest.wasm` (sharing the runtime registries).
 export * from './fluent';
+export * as bridge from './bridge';
 
 let resolvedAgent: ResolvedAgent | undefined = undefined;
 let initializationPrincipal: Principal | undefined = undefined;

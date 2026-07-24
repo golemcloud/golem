@@ -84,6 +84,24 @@ const restoredPhantom = counters(
 
 Persist the phantom UUID yourself (as a string via `uuid.toString()`, reparsed with `Uuid.parse(...)`) whenever you need to reach the same phantom instance again later.
 
+### Phantoms in Another Component
+
+A generated durable guest client uses static `get`, `getPhantom`, and
+`newPhantom` methods, with flattened id parameters rather than the `clientFor`
+id record. For example:
+
+```typescript
+const shared = CounterAgent.get('shared');
+const existingPhantom = CounterAgent.getPhantom(savedUuid, 'shared');
+const freshPhantom = CounterAgent.newPhantom('shared');
+```
+
+When the target declares local config, the generated client also provides
+`getWithConfig`, `getPhantomWithConfig`, and `newPhantomWithConfig`. See the
+[`golem-call-another-agent-ts`](/next/how-to-guides/ts/golem-call-another-agent-ts) skill for cross-component manifest, TypeScript
+source-path, and import setup. The `clientFor` forms above remain correct within
+the component that defines the agent.
+
 ## Querying the Phantom ID from Inside an Agent
 
 A handler can check its own phantom ID via `this.getPhantomId()`:

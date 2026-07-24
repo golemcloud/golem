@@ -39,6 +39,7 @@ pub mod type_name;
 
 pub use type_name::{RemappedType, ScalaTypeName};
 
+use crate::bridge_gen::json::stringify_precision_sensitive_numbers;
 use crate::bridge_gen::scala::scala::{
     escape_scala_ident, is_scala_keyword, to_scala_term_ident, to_scala_type_ident, unique_idents,
     unique_idents_with_reserved,
@@ -3081,37 +3082,6 @@ fn scala_string_literal(value: &str) -> String {
     }
     escaped.push('"');
     escaped
-}
-
-fn stringify_precision_sensitive_numbers(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(object) => {
-            let is_numeric_bound = object
-                .get("kind")
-                .and_then(|kind| kind.as_str())
-                .is_some_and(|kind| matches!(kind, "signed" | "unsigned" | "float-bits"));
-            if is_numeric_bound
-                && let Some(bound_value) = object.get_mut("value")
-                && bound_value.is_number()
-            {
-                *bound_value = serde_json::Value::String(bound_value.to_string());
-            }
-            if let Some(mantissa) = object.get_mut("mantissa")
-                && mantissa.is_number()
-            {
-                *mantissa = serde_json::Value::String(mantissa.to_string());
-            }
-            for child in object.values_mut() {
-                stringify_precision_sensitive_numbers(child);
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for child in values {
-                stringify_precision_sensitive_numbers(child);
-            }
-        }
-        _ => {}
-    }
 }
 
 fn rewrite_guest_runtime_refs_outside_string_literals(source: &str) -> String {
