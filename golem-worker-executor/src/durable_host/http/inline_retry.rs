@@ -1350,13 +1350,7 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
     //    If the original request already has a Range header, response-body
     //    resumption is not supported because composing Range headers correctly is
     //    complex.
-    if has_guest_range_header(
-        request_state
-            .request
-            .headers
-            .iter()
-            .map(|(k, _)| k.as_str()),
-    ) {
+    if has_guest_range_header(request_state.request.headers.keys().map(|k| k.as_str())) {
         return Ok(false);
     }
 

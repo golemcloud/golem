@@ -276,7 +276,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .table()
             .get(&request)?
             .headers
-            .contains_key(&HeaderName::from_static("idempotency-key"));
+            .contains_key(HeaderName::from_static("idempotency-key"));
 
         let managed_headers = golem_managed_http_headers(
             self,
