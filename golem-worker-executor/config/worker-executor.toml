@@ -260,6 +260,7 @@ multiplier = 3.0
 claim_batch_size = 100
 lease_ttl = "30s"
 max_batches_per_tick = 10
+max_concurrent_action_processing = 64
 refresh_interval = "2s"
 
 [scheduler_storage]
@@ -623,6 +624,7 @@ without_time = false
 # claim_batch_size = 100
 # lease_ttl = "30s"
 # max_batches_per_tick = 10
+# max_concurrent_action_processing = 64
 # refresh_interval = "2s"
 # 
 # [scheduler_storage]
@@ -956,6 +958,7 @@ without_time = false
 # claim_batch_size = 100
 # lease_ttl = "30s"
 # max_batches_per_tick = 10
+# max_concurrent_action_processing = 64
 # refresh_interval = "2s"
 # 
 # [scheduler_storage]
