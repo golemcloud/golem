@@ -385,7 +385,13 @@ pub struct DurableExecutionState {
 #[async_trait]
 pub trait InFunctionRetryHost {
     /// Returns true if the worker is currently inside a user-defined atomic region.
-    fn in_atomic_region(&self) -> bool;
+    ///
+    /// Defaults to `false`, the correct answer for retry hosts detached from any worker atomic
+    /// region (spawned background tasks). Region-aware hosts (`DurableWorkerCtx`,
+    /// `ScopedRetryHost`) must override it.
+    fn in_atomic_region(&self) -> bool {
+        false
+    }
 
     /// Returns the oplog index that `OplogEntry::Error` entries should reference as `retry_from`.
     fn current_retry_point(&self) -> OplogIndex;
@@ -401,12 +407,22 @@ pub trait InFunctionRetryHost {
 
     /// Whether the atomic region identified by `begin_index` has recorded side effects. Lets a
     /// scoped retry host classify against the *call's* own region rather than the ambient state.
-    fn atomic_region_has_side_effects_for(&self, begin_index: OplogIndex) -> bool;
+    ///
+    /// Defaults to `false` for retry hosts detached from any worker atomic region; region-aware
+    /// hosts must override it.
+    fn atomic_region_has_side_effects_for(&self, _begin_index: OplogIndex) -> bool {
+        false
+    }
 
     /// The `inside_atomic_region` flag to persist with an in-function retry `Error` entry: whether
     /// the retry's owning atomic region had side effects. For a scoped call this is the call's own
     /// region; for an unscoped/legacy caller it falls back to the ambient outermost-region state.
-    fn retry_context_atomic_region_had_side_effects(&self) -> bool;
+    ///
+    /// Defaults to `false` for retry hosts detached from any worker atomic region; region-aware
+    /// hosts must override it.
+    fn retry_context_atomic_region_had_side_effects(&self) -> bool {
+        false
+    }
 
     /// Writes an `OplogEntry::Error` entry for an in-function retry attempt, and commits.
     async fn append_retry_error_entry(
@@ -1634,10 +1650,9 @@ pub struct TaskRetryContext<Ctx: WorkerCtx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
-    fn in_atomic_region(&self) -> bool {
-        // Spawned tasks are never inside atomic regions
-        false
-    }
+    // Spawned tasks are never inside atomic regions, so the trait's inert defaults for
+    // `in_atomic_region`, `atomic_region_has_side_effects_for` and
+    // `retry_context_atomic_region_had_side_effects` apply.
 
     fn current_retry_point(&self) -> OplogIndex {
         self.retry_point
@@ -1674,16 +1689,6 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
             assume_idempotence: true,
             max_in_function_retry_delay: self.max_in_function_retry_delay,
         }
-    }
-
-    fn atomic_region_has_side_effects_for(&self, _begin_index: OplogIndex) -> bool {
-        // Spawned tasks are never inside atomic regions
-        false
-    }
-
-    fn retry_context_atomic_region_had_side_effects(&self) -> bool {
-        // Spawned tasks are never inside atomic regions
-        false
     }
 
     async fn append_retry_error_entry(

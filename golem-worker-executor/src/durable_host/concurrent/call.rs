@@ -1359,6 +1359,25 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         }
     }
 
+    /// Snapshots everything a cancellation recorder / terminal guard needs from this live
+    /// persisted call into a self-contained [`DroppedCall`]. `Drop` cannot await, use an
+    /// `Accessor`, or borrow worker state, so the snapshot must carry every call-owned fact
+    /// needed for the deferred oplog/state work. `live_call_permit` is passed explicitly
+    /// because ownership differs by site: terminal paths clone it (the handle stays alive with
+    /// its own permit until the terminal completes), while `Drop` moves it into the drop event
+    /// so the call stays counted as in-flight until the event is drained.
+    fn dropped_call_snapshot(&self, live_call_permit: Option<LiveCallPermit>) -> DroppedCall {
+        DroppedCall {
+            start_idx: self.start_idx,
+            begin_index: self.begin_index,
+            function_type: self.retry.function_type().clone(),
+            request_upload: self.request_upload.clone(),
+            atomic_lease: self.execution_scope.atomic_lease.clone(),
+            trap_context: self.trap_context(),
+            live_call_permit,
+        }
+    }
+
     /// Abandons this call for a hard trap and wraps the escaping error with this call's
     /// [`DurableCallTrapContext`], so `TrapType::from_error` groups the failure against the call's
     /// own scope. Use this at every `TrapType::Error` egress after the call has started; see
@@ -1389,13 +1408,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         result: &Result<Ok, Err>,
         classify: impl Fn(&Err) -> HostFailureKind,
     ) -> anyhow::Result<()> {
-        let outcome = {
-            let mut retry_host = ScopedRetryHost::new(ctx, &self.execution_scope);
-            self.retry
-                .try_trigger_retry(&mut retry_host, result, classify)
-                .await
-        };
-        outcome.map_err(|err| self.trap(err))
+        self.try_trigger_retry_with_properties(ctx, result, classify, RetryProperties::new())
+            .await
     }
 
     pub async fn try_trigger_retry_with_properties<Ok, Err: Display>(
@@ -1420,13 +1434,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         result: &Result<Ok, Err>,
         classify: impl Fn(&Err) -> HostFailureKind,
     ) -> anyhow::Result<InternalRetryResult> {
-        let outcome = {
-            let mut retry_host = ScopedRetryHost::new(ctx, &self.execution_scope);
-            self.retry
-                .try_trigger_retry_or_loop(&mut retry_host, result, classify)
-                .await
-        };
-        outcome.map_err(|err| self.trap(err))
+        self.try_trigger_retry_or_loop_with_properties(
+            ctx,
+            result,
+            classify,
+            RetryProperties::new(),
+        )
+        .await
     }
 
     pub async fn try_trigger_retry_or_loop_with_properties<Ok, Err: Display>(
@@ -1779,17 +1793,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 let ctx = get_ctx(access.data_mut());
                 (ctx.state.oplog.clone(), ctx.state.replay_state.clone())
             });
-            let trap_context = self.trap_context();
             let mut guard = AccessTerminalGuard::<P>::new(
-                DroppedCall {
-                    start_idx: self.start_idx,
-                    begin_index: self.begin_index,
-                    function_type: self.retry.function_type().clone(),
-                    request_upload: self.request_upload.clone(),
-                    atomic_lease: self.execution_scope.atomic_lease.clone(),
-                    trap_context,
-                    live_call_permit: self.live_call_permit.clone(),
-                },
+                self.dropped_call_snapshot(self.live_call_permit.clone()),
                 self.drop_sink.clone(),
                 self.cleanup_sink.clone(),
             );
@@ -1929,57 +1934,24 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .replay_state
             .await_resolution_outcome(replay)
             .await?;
-        match outcome {
-            ResolutionOutcome::Resolved(Resolution::Completed { response, .. }) => {
+        match classify_replay_resolution(outcome) {
+            ReplayedResolution::Delivered(payload) => {
                 // Terminal: mark finished up front so a decode / scope-close failure below does not
                 // drop the (replay) handle as "unfinished".
                 self.finished = true;
                 let oplog = ctx.state.oplog.clone();
-                let response = decode_completed_response::<Pair>(&oplog, response).await?;
+                let response = decode_replayed_payload::<Pair>(&oplog, payload).await?;
                 ctx.end_durable_function(self.retry.function_type(), self.begin_index, false)
                     .await?;
                 Ok(CallReplayOutcome::Replayed(response))
             }
-            ResolutionOutcome::Resolved(Resolution::Cancelled {
-                cancelled_idx,
-                partial,
-            }) => {
+            ReplayedResolution::Undelivered(terminal) => {
+                // Replay divergence: undelivered terminals cannot legally occur on the direct
+                // path (see [`UndeliveredTerminal::direct_divergence_error`]).
                 self.finished = true;
-                if let Some(payload) = partial {
-                    let oplog = ctx.state.oplog.clone();
-                    let response = download_and_decode_response::<Pair>(
-                        &oplog,
-                        payload,
-                        "Cancelled partial payload",
-                    )
-                    .await?;
-                    ctx.end_durable_function(self.retry.function_type(), self.begin_index, false)
-                        .await?;
-                    Ok(CallReplayOutcome::Replayed(response))
-                } else {
-                    Err(WorkerExecutorError::unexpected_oplog_entry(
-                        "End or Cancelled { partial: Some(..) }",
-                        format!("Cancelled without partial at {cancelled_idx}"),
-                    ))
-                }
+                Err(terminal.direct_divergence_error())
             }
-            ResolutionOutcome::Resolved(Resolution::CompletedButDiscarded {
-                end_idx,
-                marker_idx,
-                ..
-            }) => {
-                // Discarded completions are recorded only on the accessor completion path, and
-                // calls replay through the same path they recorded on — a marker resolving on
-                // this non-accessor path means the oplog does not match this code path.
-                self.finished = true;
-                Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "End delivered to the guest",
-                    format!(
-                        "End at {end_idx} marked CompletionDiscarded at {marker_idx} for a non-accessor durable call"
-                    ),
-                ))
-            }
-            ResolutionOutcome::Incomplete => {
+            ReplayedResolution::Incomplete => {
                 self.prepare_incomplete_live_repair(
                     Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
                     || ctx.state.live_host_call_counter(),
@@ -2012,75 +1984,39 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .take()
             .expect("replay_access() called on a live handle");
         let outcome = replay_state.await_resolution_outcome(replay).await?;
-        match outcome {
-            ResolutionOutcome::Resolved(Resolution::Completed { response, .. }) => {
+        match classify_replay_resolution(outcome) {
+            ReplayedResolution::Delivered(payload) => {
                 self.finished = true;
-                let response = decode_completed_response::<Pair>(&oplog, response).await?;
+                let response = decode_replayed_payload::<Pair>(&oplog, payload).await?;
                 end_durable_function_access(store, get_ctx, function_type, begin_index, false)
                     .await?;
                 Ok(CallReplayOutcome::Replayed(response))
             }
-            ResolutionOutcome::Resolved(Resolution::Cancelled {
-                cancelled_idx,
-                partial,
-            }) => {
-                if let Some(payload) = partial {
-                    self.finished = true;
-                    let response = download_and_decode_response::<Pair>(
-                        &oplog,
-                        payload,
-                        "Cancelled partial payload",
-                    )
-                    .await?;
-                    end_durable_function_access(store, get_ctx, function_type, begin_index, false)
-                        .await?;
-                    Ok(CallReplayOutcome::Replayed(response))
-                } else {
-                    // `Cancelled` with no partial result: in the recorded run this call never
-                    // returned a value to the guest — its future was dropped mid-flight (e.g. the
-                    // loser of a guest `race`/`select!`). Mirror that exactly: never complete, so
-                    // the deterministic guest drops this future at the same point it did live.
-                    // Resolving to an error here instead would race the guest's own drop — the
-                    // resolver delivers the recorded terminal as soon as the cursor crosses it,
-                    // which may be before the winning branch has been polled and had a chance to
-                    // drop the loser.
-                    //
-                    // Durable cleanup (closing the durable scope for scope-opening calls) is
-                    // deferred to this handle's `Drop`, which enqueues the idempotent
-                    // `CloseDurableScope` event. Awaiting `end_durable_function_access` *here*,
-                    // before the park, would open a cancellation window: for scope-opening calls
-                    // it takes the scope's replay handle before its first await, so the guest
-                    // dropping this future mid-close would strand the open scope (with `finished`
-                    // already set, `Drop` would not clean it up either).
-                    tracing::debug!(
-                        "durable call cancelled without partial at {cancelled_idx} during replay; \
-                         parking until the guest drops it"
-                    );
-                    self.parked_undelivered_replay = true;
-                    std::future::pending::<()>().await;
-                    unreachable!("std::future::pending never completes")
-                }
-            }
-            ResolutionOutcome::Resolved(Resolution::CompletedButDiscarded {
-                end_idx,
-                marker_idx,
-                ..
-            }) => {
-                // The recorded run persisted a successful `End`, but the guest dropped the
-                // completion future before the response was delivered (the `CompletionDiscarded`
-                // marker at `marker_idx` records this). Mirror live exactly, like the
-                // cancelled-without-partial park above: never complete, so the deterministic
-                // guest drops this future at the same point it did live; durable cleanup is
-                // deferred to this handle's `Drop`.
-                tracing::debug!(
-                    "durable call completed at {end_idx} but its completion was discarded by the \
-                     guest (marker at {marker_idx}); parking until the guest drops it"
-                );
+            ReplayedResolution::Undelivered(terminal) => {
+                // The recorded run never delivered this terminal to the guest (either the call
+                // was cancelled mid-flight without a partial result, or its completion was
+                // discarded before delivery). Mirror that exactly: never complete, so the
+                // deterministic guest drops this future at the same point it did live. Resolving
+                // to an error here instead would race the guest's own drop — the resolver
+                // delivers the recorded terminal as soon as the cursor crosses it, which may be
+                // before the winning branch has been polled and had a chance to drop the loser.
+                //
+                // Durable cleanup (closing the durable scope for scope-opening calls) is
+                // deferred to this handle's `Drop`, which enqueues the idempotent
+                // `CloseDurableScope` event. Awaiting `end_durable_function_access` *here*,
+                // before the park, would open a cancellation window: for scope-opening calls
+                // it takes the scope's replay handle before its first await, so the guest
+                // dropping this future mid-close would strand the open scope (with `finished`
+                // already set, `Drop` would not clean it up either).
+                terminal.log_parking();
                 self.parked_undelivered_replay = true;
-                std::future::pending::<()>().await;
-                unreachable!("std::future::pending never completes")
+                // Release the terminal before suspending: a discarded completion carries the
+                // persisted response payload, which must not be kept alive for as long as the
+                // guest keeps this parked future around.
+                drop(terminal);
+                park_undelivered_forever().await
             }
-            ResolutionOutcome::Incomplete => {
+            ReplayedResolution::Incomplete => {
                 self.prepare_incomplete_live_repair(
                     Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
                     || {
@@ -2123,75 +2059,60 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .take()
             .expect("replay_access_deferred() called on a live handle");
         let outcome = replay_state.await_resolution_outcome(replay).await?;
-        match outcome {
-            ResolutionOutcome::Resolved(Resolution::Completed { response, .. }) => {
+        match classify_replay_resolution(outcome) {
+            ReplayedResolution::Delivered(payload) => {
                 self.finished = true;
-                let response = decode_completed_response::<Pair>(&oplog, response).await?;
+                let response = decode_replayed_payload::<Pair>(&oplog, payload).await?;
                 end_durable_function_access(store, get_ctx, function_type, begin_index, false)
                     .await?;
+                // The delivery token is constructed only after the fallible decode / scope close
+                // succeeded: a token dropped on the error path would log a spurious
+                // unconsumed-token warning.
                 Ok(DeferredCallReplayOutcome::Replayed(
                     response,
                     CompletionDelivery::replay_delivered(),
                 ))
             }
-            ResolutionOutcome::Resolved(Resolution::CompletedButDiscarded {
+            ReplayedResolution::Undelivered(UndeliveredTerminal::CompletionDiscarded {
                 end_idx,
                 marker_idx,
                 response,
             }) => {
                 // The recorded run persisted a successful `End` but the guest discarded the
-                // completion before final delivery (marker at `marker_idx`). Decode the persisted
-                // response and close the durable scope — the exact state live was in when its
-                // delivery token was armed — and let the caller run its deterministic post-`End`
-                // continuation before parking at the delivery boundary.
+                // completion before final delivery (marker at `marker_idx`). Decode the
+                // persisted response and close the durable scope — the exact state live was in
+                // when its delivery token was armed — and let the caller run its deterministic
+                // post-`End` continuation before parking at the delivery boundary.
                 tracing::debug!(
-                    "durable call completed at {end_idx} but its completion was discarded by the \
-                     guest (marker at {marker_idx}); replaying its post-End continuation before \
-                     parking at the delivery boundary"
+                    "durable call completed at {end_idx} but its completion was discarded \
+                     by the guest (marker at {marker_idx}); replaying its post-End \
+                     continuation before parking at the delivery boundary"
                 );
                 self.finished = true;
-                let response = decode_completed_response::<Pair>(&oplog, response).await?;
+                let response =
+                    decode_replayed_payload::<Pair>(&oplog, ReplayedPayload::Completed(response))
+                        .await?;
                 end_durable_function_access(store, get_ctx, function_type, begin_index, false)
                     .await?;
+                // As above, the token is constructed only after the fallible operations.
                 Ok(DeferredCallReplayOutcome::Replayed(
                     response,
                     CompletionDelivery::replay_discarded(),
                 ))
             }
-            ResolutionOutcome::Resolved(Resolution::Cancelled {
-                cancelled_idx,
-                partial,
-            }) => {
-                if let Some(payload) = partial {
-                    self.finished = true;
-                    let response = download_and_decode_response::<Pair>(
-                        &oplog,
-                        payload,
-                        "Cancelled partial payload",
-                    )
-                    .await?;
-                    end_durable_function_access(store, get_ctx, function_type, begin_index, false)
-                        .await?;
-                    Ok(DeferredCallReplayOutcome::Replayed(
-                        response,
-                        CompletionDelivery::replay_delivered(),
-                    ))
-                } else {
-                    // Cancelled with no partial: in the recorded run this call never returned a
-                    // value to the guest. Mirror exactly — park here so the deterministic guest
-                    // drops this future at the same point it did live; durable cleanup is
-                    // deferred to this handle's `Drop`. See [`Self::replay_access`] for why the
-                    // scope close must not happen before the park.
-                    tracing::debug!(
-                        "durable call cancelled without partial at {cancelled_idx} during replay; \
-                         parking until the guest drops it"
-                    );
-                    self.parked_undelivered_replay = true;
-                    std::future::pending::<()>().await;
-                    unreachable!("std::future::pending never completes")
-                }
+            ReplayedResolution::Undelivered(
+                terminal @ UndeliveredTerminal::CancelledWithoutPartial { .. },
+            ) => {
+                // Cancelled with no partial: in the recorded run this call never returned a
+                // value to the guest. Mirror exactly — park here so the deterministic guest
+                // drops this future at the same point it did live; durable cleanup is
+                // deferred to this handle's `Drop`. See [`Self::replay_access`] for why the
+                // scope close must not happen before the park.
+                terminal.log_parking();
+                self.parked_undelivered_replay = true;
+                park_undelivered_forever().await
             }
-            ResolutionOutcome::Incomplete => {
+            ReplayedResolution::Incomplete => {
                 self.prepare_incomplete_live_repair(
                     Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
                     || {
@@ -2263,16 +2184,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         if self.is_live {
             if self.persisted {
                 let oplog = ctx.state.oplog.clone();
-                let trap_context = self.trap_context();
-                let dropped_call = DroppedCall {
-                    start_idx: self.start_idx,
-                    begin_index: self.begin_index,
-                    function_type: self.retry.function_type().clone(),
-                    request_upload: self.request_upload.clone(),
-                    atomic_lease: self.execution_scope.atomic_lease.clone(),
-                    trap_context,
-                    live_call_permit: self.live_call_permit.clone(),
-                };
+                let dropped_call = self.dropped_call_snapshot(self.live_call_permit.clone());
                 // As in `complete`: surface a deferred request-upload failure at the call site before
                 // recording the `Cancelled` that references the request. A no-op when the request was
                 // inline or eagerly uploaded.
@@ -2280,22 +2192,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     dropped_call.release_atomic_lease();
                     return Err(err);
                 }
-                let partial_payload = match partial {
-                    Some(partial) => {
-                        let host_response: HostResponse = partial.into();
-                        match oplog.upload_payload(&host_response).await.map_err(|err| {
-                            WorkerExecutorError::runtime(format!(
-                                "failed to serialize and store partial durable call response: {err}"
-                            ))
-                        }) {
-                            Ok(payload) => Some(payload),
-                            Err(err) => {
-                                dropped_call.release_atomic_lease();
-                                return Err(err);
-                            }
-                        }
+                let partial_payload = match upload_partial_response(&oplog, partial).await {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        dropped_call.release_atomic_lease();
+                        return Err(err);
                     }
-                    None => None,
                 };
                 dropped_call
                     .append_cancelled_with_oplog(oplog, partial_payload)
@@ -2357,33 +2259,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         if self.is_live {
             if self.persisted {
                 let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
-                let trap_context = self.trap_context();
                 let mut guard = AccessTerminalGuard::<P>::new(
-                    DroppedCall {
-                        start_idx: self.start_idx,
-                        begin_index: self.begin_index,
-                        function_type: self.retry.function_type().clone(),
-                        request_upload: self.request_upload.clone(),
-                        atomic_lease: self.execution_scope.atomic_lease.clone(),
-                        trap_context,
-                        live_call_permit: self.live_call_permit.clone(),
-                    },
+                    self.dropped_call_snapshot(self.live_call_permit.clone()),
                     self.drop_sink.clone(),
                     self.cleanup_sink.clone(),
                 );
                 let result = async {
-                    guard.call().expect("terminal guard is armed").wait_request_upload().await?;
-                    let partial_payload = match partial {
-                        Some(partial) => {
-                            let host_response: HostResponse = partial.into();
-                            Some(oplog.upload_payload(&host_response).await.map_err(|err| {
-                                WorkerExecutorError::runtime(format!(
-                                    "failed to serialize and store partial durable call response: {err}"
-                                ))
-                            })?)
-                        }
-                        None => None,
-                    };
+                    guard
+                        .call()
+                        .expect("terminal guard is armed")
+                        .wait_request_upload()
+                        .await?;
+                    let partial_payload = upload_partial_response(&oplog, partial).await?;
                     let call = guard.call().expect("terminal guard is armed").clone();
                     let terminal = tokio::spawn(async move {
                         call.append_cancelled_with_oplog(oplog, partial_payload)
@@ -2472,6 +2359,187 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         self.persisted = true;
         self.live_call_permit = Some(LiveCallPermit::new(get_counter()));
         Ok(())
+    }
+}
+
+/// Parks a replaying call forever, after the caller marked its replay as undelivered: the
+/// recorded run never delivered this terminal to the guest, which will therefore drop this
+/// future at the same point it did live. This future never completes; the return type exists
+/// only so a `match` arm can produce whatever type its siblings do.
+async fn park_undelivered_forever<T>() -> T {
+    let never: std::convert::Infallible = std::future::pending().await;
+    match never {}
+}
+
+/// The recorded response payload a replayed delivery decodes.
+#[derive(Debug)]
+pub(super) enum ReplayedPayload {
+    /// A successful `End`'s response (which must be present; see
+    /// [`decode_completed_response`]).
+    Completed(Option<OplogPayload<HostResponse>>),
+    /// A `Cancelled` entry's partial response.
+    CancelledPartial(OplogPayload<HostResponse>),
+}
+
+/// A recorded terminal that never reached the guest in the recorded run. What to do with it is
+/// each replay path's policy: the direct path treats it as replay divergence (see
+/// [`Self::direct_divergence_error`]), the accessor path parks so the deterministic guest drops
+/// the future at the same point it did live, and the deferred-accessor path re-delivers a
+/// discarded completion to the caller's deterministic post-`End` continuation.
+#[derive(Debug)]
+pub(super) enum UndeliveredTerminal {
+    /// `Cancelled { partial: None }`: the call's future was dropped mid-flight (e.g. the loser
+    /// of a guest `race`/`select!`) without ever returning a value.
+    CancelledWithoutPartial { cancelled_idx: OplogIndex },
+    /// A successful `End` (at `end_idx`) whose completion the guest discarded before delivery
+    /// (recorded by the `CompletionDiscarded` marker at `marker_idx`), carrying the persisted
+    /// response the deferred-delivery replay path decodes and re-delivers.
+    CompletionDiscarded {
+        end_idx: OplogIndex,
+        marker_idx: OplogIndex,
+        response: Option<OplogPayload<HostResponse>>,
+    },
+}
+
+impl UndeliveredTerminal {
+    fn log_parking(&self) {
+        match self {
+            UndeliveredTerminal::CancelledWithoutPartial { cancelled_idx } => {
+                tracing::debug!(
+                    "durable call cancelled without partial at {cancelled_idx} during replay; \
+                     parking until the guest drops it"
+                );
+            }
+            UndeliveredTerminal::CompletionDiscarded {
+                end_idx,
+                marker_idx,
+                ..
+            } => {
+                tracing::debug!(
+                    "durable call completed at {end_idx} but its completion was discarded by the \
+                     guest (marker at {marker_idx}); parking until the guest drops it"
+                );
+            }
+        }
+    }
+
+    /// The replay-divergence error the direct (p2) path reports for an undelivered terminal.
+    /// The direct path is serialized by the store borrow and delivers at the resolution point,
+    /// so a terminal that was never delivered to the guest cannot legally occur on it: an
+    /// undelivered cancellation means the future was dropped mid-flight (accessor-only), and
+    /// discarded completions are recorded only on the accessor completion path — calls replay
+    /// through the same path they recorded on.
+    pub(super) fn direct_divergence_error(&self) -> WorkerExecutorError {
+        match self {
+            UndeliveredTerminal::CancelledWithoutPartial { cancelled_idx } => {
+                WorkerExecutorError::unexpected_oplog_entry(
+                    "End or Cancelled { partial: Some(..) }",
+                    format!("Cancelled without partial at {cancelled_idx}"),
+                )
+            }
+            UndeliveredTerminal::CompletionDiscarded {
+                end_idx,
+                marker_idx,
+                ..
+            } => WorkerExecutorError::unexpected_oplog_entry(
+                "End delivered to the guest",
+                format!(
+                    "End at {end_idx} marked CompletionDiscarded at {marker_idx} for a non-accessor durable call"
+                ),
+            ),
+        }
+    }
+}
+
+/// Mode-independent classification of a replayed durable-call resolution outcome, as produced by
+/// [`classify_replay_resolution`]. This is the single transition model shared by the direct,
+/// accessor, and deferred-accessor replay paths; the classification is total, and each path
+/// expresses its own policy for the [`Self::Undelivered`] case by matching at the call site (see
+/// [`UndeliveredTerminal`]).
+#[derive(Debug)]
+pub(super) enum ReplayedResolution {
+    /// The recorded run delivered this payload to the guest: decode it, close the durable scope,
+    /// and return the response.
+    Delivered(ReplayedPayload),
+    /// The recorded terminal never reached the guest.
+    Undelivered(UndeliveredTerminal),
+    /// The call's `Start` was committed but its terminal never was: candidate for live repair
+    /// (re-execution) when the function type allows it.
+    Incomplete,
+}
+
+/// Pure classification of a replayed durable-call resolution outcome, shared by the direct,
+/// accessor, and deferred-accessor replay paths; the per-path policies (divergence vs park vs
+/// deferred re-delivery, store access, scope close, park bookkeeping) stay in the respective
+/// methods.
+pub(super) fn classify_replay_resolution(outcome: ResolutionOutcome) -> ReplayedResolution {
+    match outcome {
+        ResolutionOutcome::Incomplete => ReplayedResolution::Incomplete,
+        ResolutionOutcome::Resolved(Resolution::Completed { response, .. }) => {
+            ReplayedResolution::Delivered(ReplayedPayload::Completed(response))
+        }
+        ResolutionOutcome::Resolved(Resolution::Cancelled {
+            cancelled_idx,
+            partial,
+        }) => match partial {
+            Some(payload) => {
+                ReplayedResolution::Delivered(ReplayedPayload::CancelledPartial(payload))
+            }
+            // `Cancelled` with no partial result: in the recorded run this call never returned a
+            // value to the guest — its future was dropped mid-flight.
+            None => ReplayedResolution::Undelivered(UndeliveredTerminal::CancelledWithoutPartial {
+                cancelled_idx,
+            }),
+        },
+        // The recorded run persisted a successful `End`, but a `CompletionDiscarded` marker
+        // records that the guest dropped the completion future before the response was
+        // delivered.
+        ResolutionOutcome::Resolved(Resolution::CompletedButDiscarded {
+            end_idx,
+            marker_idx,
+            response,
+        }) => ReplayedResolution::Undelivered(UndeliveredTerminal::CompletionDiscarded {
+            end_idx,
+            marker_idx,
+            response,
+        }),
+    }
+}
+
+/// Serializes and uploads a cancellation's optional partial response payload, shared by the
+/// direct and accessor cancellation paths. The caller is responsible for site-specific failure
+/// cleanup (releasing the atomic lease / terminal guard handling).
+async fn upload_partial_response<Resp: Into<HostResponse>>(
+    oplog: &Arc<dyn Oplog>,
+    partial: Option<Resp>,
+) -> Result<Option<OplogPayload<HostResponse>>, WorkerExecutorError> {
+    match partial {
+        Some(partial) => {
+            let host_response: HostResponse = partial.into();
+            Ok(Some(oplog.upload_payload(&host_response).await.map_err(
+                |err| {
+                    WorkerExecutorError::runtime(format!(
+                        "failed to serialize and store partial durable call response: {err}"
+                    ))
+                },
+            )?))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Decodes a replayed delivery's recorded payload into the call's typed response.
+async fn decode_replayed_payload<Pair: HostPayloadPair>(
+    oplog: &Arc<dyn Oplog>,
+    payload: ReplayedPayload,
+) -> Result<Pair::Resp, WorkerExecutorError> {
+    match payload {
+        ReplayedPayload::Completed(response) => {
+            decode_completed_response::<Pair>(oplog, response).await
+        }
+        ReplayedPayload::CancelledPartial(payload) => {
+            download_and_decode_response::<Pair>(oplog, payload, "Cancelled partial payload").await
+        }
     }
 }
 
@@ -3366,17 +3434,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for CallHandle<Pair, P> {
         if self.is_live {
             if self.persisted {
                 // A live call dropped without finish/cancel: run the compile-time drop policy.
-                let trap_context = self.trap_context();
+                let live_call_permit = self.live_call_permit.take();
                 P::unfinished_drop(
-                    DroppedCall {
-                        start_idx: self.start_idx,
-                        begin_index: self.begin_index,
-                        function_type: self.retry.function_type().clone(),
-                        request_upload: self.request_upload.clone(),
-                        atomic_lease: self.execution_scope.atomic_lease.clone(),
-                        trap_context,
-                        live_call_permit: self.live_call_permit.take(),
-                    },
+                    self.dropped_call_snapshot(live_call_permit),
                     self.drop_sink.as_ref(),
                 );
             }

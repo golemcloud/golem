@@ -1543,3 +1543,147 @@ fn can_reexecute_matches_internal_retry_eligibility() {
         .can_reexecute_on_incomplete_replay()
     );
 }
+
+// ---- replay resolution classification ----
+
+fn payload(bytes: Vec<u8>) -> OplogPayload<HostResponse> {
+    OplogPayload::SerializedInline {
+        bytes,
+        cached: None,
+    }
+}
+
+#[test]
+fn classify_incomplete_is_incomplete() {
+    match classify_replay_resolution(ResolutionOutcome::Incomplete) {
+        ReplayedResolution::Incomplete => {}
+        other => panic!("expected Incomplete, got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_completed_is_delivered() {
+    let outcome = ResolutionOutcome::Resolved(Resolution::Completed {
+        end_idx: idx(3),
+        response: Some(payload(vec![1, 2, 3])),
+        forced_commit: false,
+    });
+    match classify_replay_resolution(outcome) {
+        ReplayedResolution::Delivered(ReplayedPayload::Completed(Some(p))) => {
+            assert_eq!(p, payload(vec![1, 2, 3]), "payload preserved")
+        }
+        other => panic!("expected Delivered(Completed), got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_completed_without_response_payload_is_delivered() {
+    // A missing `End` response payload is only rejected later, by the decode step
+    // (`decode_completed_response`), not by classification.
+    let outcome = ResolutionOutcome::Resolved(Resolution::Completed {
+        end_idx: idx(3),
+        response: None,
+        forced_commit: false,
+    });
+    match classify_replay_resolution(outcome) {
+        ReplayedResolution::Delivered(ReplayedPayload::Completed(None)) => {}
+        other => panic!("expected Delivered(Completed(None)), got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_cancelled_with_partial_is_delivered() {
+    let outcome = ResolutionOutcome::Resolved(Resolution::Cancelled {
+        cancelled_idx: idx(5),
+        partial: Some(payload(vec![9])),
+    });
+    match classify_replay_resolution(outcome) {
+        ReplayedResolution::Delivered(ReplayedPayload::CancelledPartial(p)) => {
+            assert_eq!(p, payload(vec![9]), "partial payload preserved")
+        }
+        other => panic!("expected Delivered(CancelledPartial), got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_cancelled_without_partial_is_undelivered_cancellation() {
+    // In the recorded run this call never returned a value to the guest — its future was
+    // dropped mid-flight. The accessor paths park on this terminal; the direct path reports it
+    // as replay divergence (asserted separately below).
+    let outcome = ResolutionOutcome::Resolved(Resolution::Cancelled {
+        cancelled_idx: idx(5),
+        partial: None,
+    });
+    match classify_replay_resolution(outcome) {
+        ReplayedResolution::Undelivered(UndeliveredTerminal::CancelledWithoutPartial {
+            cancelled_idx,
+        }) => assert_eq!(cancelled_idx, idx(5)),
+        other => panic!("expected Undelivered(CancelledWithoutPartial), got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_discarded_completion_is_undelivered_with_response() {
+    // A persisted successful `End` whose completion the guest discarded before delivery. The
+    // access path parks on this terminal; the deferred path decodes the carried response and
+    // re-delivers it to the caller's deterministic post-`End` continuation; the direct path
+    // reports replay divergence (asserted separately below).
+    let outcome = ResolutionOutcome::Resolved(Resolution::CompletedButDiscarded {
+        end_idx: idx(7),
+        marker_idx: idx(8),
+        response: Some(payload(vec![4])),
+    });
+    match classify_replay_resolution(outcome) {
+        ReplayedResolution::Undelivered(UndeliveredTerminal::CompletionDiscarded {
+            end_idx,
+            marker_idx,
+            response,
+        }) => {
+            assert_eq!(end_idx, idx(7));
+            assert_eq!(marker_idx, idx(8));
+            assert_eq!(
+                response,
+                Some(payload(vec![4])),
+                "persisted response preserved for deferred re-delivery"
+            );
+        }
+        other => panic!("expected Undelivered(CompletionDiscarded), got {other:?}"),
+    }
+}
+
+#[test]
+fn undelivered_cancellation_direct_divergence_error() {
+    // The direct path is serialized by the store borrow, so an undelivered terminal cannot
+    // occur on it: it is a replay divergence, never a park.
+    let terminal = UndeliveredTerminal::CancelledWithoutPartial {
+        cancelled_idx: idx(5),
+    };
+    match terminal.direct_divergence_error() {
+        WorkerExecutorError::UnexpectedOplogEntry { expected, got } => {
+            assert_eq!(expected, "End or Cancelled { partial: Some(..) }");
+            assert!(got.contains("Cancelled without partial at 5"), "{got}");
+        }
+        other => panic!("expected UnexpectedOplogEntry, got {other:?}"),
+    }
+}
+
+#[test]
+fn undelivered_discarded_completion_direct_divergence_error() {
+    // Discarded completions are recorded only on the accessor completion path, and calls replay
+    // through the same path they recorded on.
+    let terminal = UndeliveredTerminal::CompletionDiscarded {
+        end_idx: idx(7),
+        marker_idx: idx(8),
+        response: None,
+    };
+    match terminal.direct_divergence_error() {
+        WorkerExecutorError::UnexpectedOplogEntry { expected, got } => {
+            assert_eq!(expected, "End delivered to the guest");
+            assert!(
+                got.contains("End at 7 marked CompletionDiscarded at 8"),
+                "{got}"
+            );
+        }
+        other => panic!("expected UnexpectedOplogEntry, got {other:?}"),
+    }
+}

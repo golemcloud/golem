@@ -3066,3 +3066,70 @@ async fn plain_scope_claim_never_matches_discriminated_scope_start() {
     }
     assert!(rs.is_live(), "replay must reach live at the end");
 }
+
+/// Pins the exact "expected" label each [`StartClaim`] variant renders for
+/// `unexpected_oplog_entry` claim errors, so diagnostic wording does not silently drift.
+#[test]
+fn start_claim_expected_descriptions_are_stable() {
+    use super::claims::StartClaim;
+
+    let name = HostFunctionName::MonotonicClockNow;
+    let request = HostRequest::NoInput(HostRequestNoInput {});
+
+    assert_eq!(
+        StartClaim::any_unowned_call().expected_description(),
+        "Start { request: Some(..), parent_start_index: None }"
+    );
+
+    assert_eq!(
+        StartClaim::scope(&name, &DurableFunctionType::WriteRemoteBatched(None))
+            .expected_description(),
+        format!(
+            "Start {{ {name}, WriteRemoteBatched(None), request: None, parent_start_index: None }}"
+        )
+    );
+
+    assert_eq!(
+        StartClaim::unowned(&name, &DurableFunctionType::ReadRemote).expected_description(),
+        format!("Start {{ {name}, ReadRemote, request: Some(..), parent_start_index: None }}")
+    );
+    assert_eq!(
+        StartClaim::unowned(
+            &name,
+            &DurableFunctionType::WriteRemoteBatched(Some(OplogIndex::from_u64(4)))
+        )
+        .expected_description(),
+        format!(
+            "Start {{ {name}, WriteRemoteBatched(Some(OplogIndex(4))), request: Some(..), parent_start_index: Some(OplogIndex(4)) }}"
+        )
+    );
+    assert_eq!(
+        StartClaim::unowned_matching_request(&name, &DurableFunctionType::ReadRemote, &request)
+            .expected_description(),
+        format!(
+            "Start {{ {name}, ReadRemote, request: Some(<matching payload>), parent_start_index: None }}"
+        )
+    );
+
+    assert_eq!(
+        StartClaim::owned(
+            &name,
+            &DurableFunctionType::ReadRemote,
+            OplogIndex::from_u64(7)
+        )
+        .expected_description(),
+        format!("Start {{ {name}, ReadRemote, parent_start_index: Some(7) }}")
+    );
+    assert_eq!(
+        StartClaim::owned_matching_request(
+            &name,
+            &DurableFunctionType::ReadRemote,
+            OplogIndex::from_u64(7),
+            &request
+        )
+        .expected_description(),
+        format!(
+            "Start {{ {name}, ReadRemote, request: Some(<matching payload>), parent_start_index: Some(7) }}"
+        )
+    );
+}

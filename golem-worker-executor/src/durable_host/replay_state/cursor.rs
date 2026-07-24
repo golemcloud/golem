@@ -1,4 +1,4 @@
-use super::claims::{parent_start_index_of, recorded_request_payload_matches};
+use super::claims::{StartClaim, recorded_request_payload_matches};
 use super::*;
 
 impl ReplayCursor {
@@ -383,13 +383,8 @@ impl CursorTx<'_> {
     /// resolver awaiter (and is therefore an *awaited terminal* the cursor auto-drains to its owner
     /// rather than handing to a positional reader).
     pub(super) fn is_awaited_terminal(&self, entry: &OplogEntry) -> bool {
-        let start_index = match entry {
-            OplogEntry::End { start_index, .. } | OplogEntry::Cancelled { start_index, .. } => {
-                *start_index
-            }
-            _ => return false,
-        };
-        self.st.concurrent_resolver.is_pending(start_index)
+        terminal_start_index(entry)
+            .is_some_and(|start_index| self.st.concurrent_resolver.is_pending(start_index))
     }
 
     /// Whether `entry` is an `End`/`Cancelled` whose `start_index` lies inside a skipped/deleted
@@ -399,13 +394,8 @@ impl CursorTx<'_> {
     /// regions), so no awaiter can ever exist for it; the cursor consumes it like a no-op instead
     /// of surfacing it to a positional reader as an unexpected entry.
     pub(super) fn is_orphan_terminal(&self, entry: &OplogEntry) -> bool {
-        let start_index = match entry {
-            OplogEntry::End { start_index, .. } | OplogEntry::Cancelled { start_index, .. } => {
-                *start_index
-            }
-            _ => return false,
-        };
-        self.st.skipped_regions.is_in_deleted_region(start_index)
+        terminal_start_index(entry)
+            .is_some_and(|start_index| self.st.skipped_regions.is_in_deleted_region(start_index))
     }
 
     /// Commits a just-read entry: apply its commit-only side effects, publish the cursor advance,
@@ -943,251 +933,53 @@ impl CursorTx<'_> {
         ))
     }
 
-    /// Claims the next top-level (unowned) durable-call `Start` **without** validating its
-    /// function name or durable function type, registering a resolver receiver keyed by the
-    /// `Start`'s index and returning the claimed entry's identity. The `Start` must carry a
-    /// request (durable host calls always do; a request-less `Start` is a scope `Start`) and must
-    /// not be owned by another durable record — owned `Start`s are claimed by their owner via
-    /// [`Self::claim_owned_start`].
-    pub(super) async fn claim_any_concurrent_start(
+    /// Claims the `Start` entry described by `claim`: builds the identity predicate from the
+    /// typed descriptor and drives the shared claim core ([`Self::claim_start_matching`], or its
+    /// request-matching counterpart [`Self::claim_start_matching_request`] when the descriptor
+    /// pins the recorded request payload). Returns the registered replay handle together with the
+    /// claimed `Start` entry.
+    pub(super) async fn claim_start(
         &mut self,
-    ) -> Result<ClaimedConcurrentStart, WorkerExecutorError> {
-        let (handle, entry) = self
-            .claim_start_matching(
-                |entry| {
-                    matches!(
-                        entry,
-                        OplogEntry::Start {
-                            request: Some(_),
-                            parent_start_index: None,
-                            ..
-                        }
-                    )
-                },
-                || "Start { request: Some(..), parent_start_index: None }".to_string(),
-            )
-            .await?;
-        let OplogEntry::Start {
-            timestamp,
-            function_name,
-            durable_function_type,
-            ..
-        } = *entry
-        else {
-            unreachable!("claim_start_matching only matches Start entries");
+        claim: &StartClaim,
+    ) -> Result<(ReplayCallHandle, Box<OplogEntry>), WorkerExecutorError> {
+        let matches_identity = |entry: &OplogEntry| {
+            matches!(entry, OplogEntry::Start {
+                function_name,
+                request,
+                durable_function_type,
+                parent_start_index,
+                ..
+            } if claim
+                .expected_function_name()
+                .is_none_or(|expected| function_name == expected)
+                && claim
+                    .expected_function_type()
+                    .is_none_or(|expected| durable_function_type == expected)
+                && request.is_some() == claim.carries_request()
+                && *parent_start_index == claim.expected_parent_start_index())
         };
-        Ok(ClaimedConcurrentStart {
-            handle,
-            function_name,
-            durable_function_type,
-            timestamp,
-        })
-    }
-
-    /// Claims the next durable-*scope* `Start` (a request-less, unowned scope `Start` such as
-    /// `<scope:batched-write>` / `<scope:transaction>`) matching the expected function
-    /// name and the expected durable function type, and registers a resolver awaiter keyed by its
-    /// index so the matching scope `End` is routed through the resolver instead of being
-    /// read positionally. Returns the scope's begin index and the handle its `end_function` /
-    /// transaction-terminal awaits.
-    ///
-    /// The expected name must be exactly the name the live path recorded, including any
-    /// discriminator suffix (a caller-supplied suffix that makes a concurrent scope claim-safe,
-    /// e.g. `<scope:batched-write:req:HASH>`). There is no plain-name fallback: a discriminated
-    /// claim must never match a plain scope `Start` (P3 deploys on a clean database, so every
-    /// replayed oplog was recorded with the same naming scheme).
-    ///
-    /// Folding scope `End`s into the resolver is what lets a scope `End` be auto-drained by any
-    /// cursor driver (so a positional reader never steals a concurrently-replaying sibling call's
-    /// terminal, and the scope close never steals a sibling's), at the cost of nothing on the serial
-    /// path: when the scope `End` is the entry at the cursor head, awaiting it resolves immediately.
-    pub(super) async fn claim_scope_start(
-        &mut self,
-        expected_function_name: &HostFunctionName,
-        expected_function_type: &DurableFunctionType,
-    ) -> Result<(OplogIndex, ReplayCallHandle), WorkerExecutorError> {
-        let (handle, _) = self
-            .claim_start_matching(
-                |entry| {
-                    matches!(entry, OplogEntry::Start {
-                        function_name,
-                        request,
-                        durable_function_type,
-                        parent_start_index,
-                        ..
-                    } if request.is_none()
-                        && function_name == expected_function_name
-                        && durable_function_type == expected_function_type
-                        && parent_start_index.is_none())
-                },
-                || {
-                    format!(
-                        "Start {{ {expected_function_name}, {expected_function_type:?}, request: None, parent_start_index: None }}"
-                    )
-                },
-            )
-            .await?;
-        let start_idx = handle.start_idx();
-        // Every durable scope `Start` consumed during
-        // replay leaves a registered awaiter, so its `End` is always a resolver-routed *awaited
-        // terminal* and never an orphan that a parked awaiter behind it could sleep on until
-        // `switch_to_live`. The only un-drained terminals the cursor may leave at its head are then
-        // the dedicated-positional-consumer pairs (manual durability, `GolemApiFork`).
+        let expected = || claim.expected_description();
+        let (handle, entry) = match claim.matching_request() {
+            Some(expected_request) => {
+                self.claim_start_matching_request(matches_identity, expected_request, expected)
+                    .await?
+            }
+            None => {
+                self.claim_start_matching(matches_identity, expected)
+                    .await?
+            }
+        };
+        // Every `Start` claim registers a resolver awaiter atomically with the consume/claim, so
+        // its terminal is always a resolver-routed *awaited terminal* — never an orphan a parked
+        // awaiter behind it could sleep on until `switch_to_live`. The only un-drained terminals
+        // the cursor may leave at its head are the dedicated-positional-consumer pairs (manual
+        // durability, `GolemApiFork`).
         debug_assert!(
-            self.st.concurrent_resolver.is_pending(start_idx),
-            "scope Start claim at {start_idx} must leave a registered awaiter"
+            self.st.concurrent_resolver.is_pending(handle.start_idx()),
+            "Start claim at {} must leave a registered awaiter",
+            handle.start_idx()
         );
-        Ok((start_idx, handle))
-    }
-
-    /// Claims the next top-level (unowned) durable-call `Start` matching the expected function
-    /// name and durable function type, registering a resolver receiver keyed by the `Start`'s
-    /// index. See [`Self::claim_start_matching`] for the identity-based claim semantics.
-    ///
-    /// "Unowned" means the caller did not open its own durable scope; the recorded
-    /// `parent_start_index` is still the scope encoded in the durable function type when there is
-    /// one (batched / transaction `Some(begin_index)`), mirroring how the write side derives it.
-    pub(super) async fn claim_unowned_start(
-        &mut self,
-        expected_function_name: &HostFunctionName,
-        expected_function_type: &DurableFunctionType,
-    ) -> Result<ReplayCallHandle, WorkerExecutorError> {
-        let expected_parent = parent_start_index_of(expected_function_type);
-        let (handle, _) = self
-            .claim_start_matching(
-                |entry| {
-                    matches!(entry, OplogEntry::Start {
-                        function_name,
-                        request,
-                        durable_function_type,
-                        parent_start_index,
-                        ..
-                    } if function_name == expected_function_name
-                        && request.is_some()
-                        && durable_function_type == expected_function_type
-                        && *parent_start_index == expected_parent)
-                },
-                || {
-                    format!(
-                        "Start {{ {expected_function_name}, {expected_function_type:?}, request: Some(..), parent_start_index: {expected_parent:?} }}"
-                    )
-                },
-            )
-            .await?;
-        Ok(handle)
-    }
-
-    /// Claims the `Start` entry of a durable call that is *owned* by another durable record
-    /// (`parent_start_index` points at the owning scope/call `Start`), matching by identity
-    /// (function name, durable function type, request presence, parent index). Matching `Start`s
-    /// that share the same full identity (several chunks under one parent) are claimed in oplog
-    /// order, preserving the deterministic per-parent chain order. See
-    /// [`Self::claim_start_matching`] for the identity-based claim semantics.
-    pub(super) async fn claim_owned_start(
-        &mut self,
-        expected_function_name: &HostFunctionName,
-        expected_function_type: &DurableFunctionType,
-        expected_parent_start_index: OplogIndex,
-    ) -> Result<ReplayCallHandle, WorkerExecutorError> {
-        let (handle, _) = self
-            .claim_start_matching(
-                |entry| {
-                    matches!(entry, OplogEntry::Start {
-                        function_name,
-                        request,
-                        durable_function_type,
-                        parent_start_index,
-                        ..
-                    } if function_name == expected_function_name
-                        && request.is_some()
-                        && durable_function_type == expected_function_type
-                        && *parent_start_index == Some(expected_parent_start_index))
-                },
-                || {
-                    format!(
-                        "Start {{ {expected_function_name}, {expected_function_type:?}, parent_start_index: Some({expected_parent_start_index}) }}"
-                    )
-                },
-            )
-            .await?;
-        Ok(handle)
-    }
-
-    /// Claims the next top-level (unowned) durable-call `Start` whose identity **and recorded
-    /// request payload** match. Payload matching is what disambiguates concurrent durable calls
-    /// that share the same function name and durable function type but were issued with different
-    /// requests (e.g. parallel P3 HTTP sends): their `Start` entries land in the oplog in
-    /// scheduling order, so identity alone would pair a replayed call with another call's record —
-    /// and consequently deliver another call's recorded response. Calls with equal requests are
-    /// still claimed in oplog order among the matches.
-    ///
-    /// `expected_request` must be the [`HostRequest`] value the live path would have persisted in
-    /// the `Start` entry; see [`recorded_request_payload_matches`] for the value-based comparison.
-    pub(super) async fn claim_unowned_start_matching_request(
-        &mut self,
-        expected_function_name: &HostFunctionName,
-        expected_function_type: &DurableFunctionType,
-        expected_request: &HostRequest,
-    ) -> Result<ReplayCallHandle, WorkerExecutorError> {
-        let expected_parent = parent_start_index_of(expected_function_type);
-        let (handle, _) = self
-            .claim_start_matching_request(
-                |entry| {
-                    matches!(entry, OplogEntry::Start {
-                        function_name,
-                        request: Some(_),
-                        durable_function_type,
-                        parent_start_index,
-                        ..
-                    } if function_name == expected_function_name
-                        && durable_function_type == expected_function_type
-                        && *parent_start_index == expected_parent)
-                },
-                expected_request,
-                || {
-                    format!(
-                        "Start {{ {expected_function_name}, {expected_function_type:?}, request: Some(<matching payload>), parent_start_index: {expected_parent:?} }}"
-                    )
-                },
-            )
-            .await?;
-        Ok(handle)
-    }
-
-    /// Claims the `Start` entry of a durable call owned by another durable record, matching by
-    /// identity **and recorded request payload** — the owned counterpart of
-    /// [`Self::claim_unowned_start_matching_request`]. With a claim-safe parent (a discriminated
-    /// scope) the parent index already pins the call, so the payload match acts as a cheap
-    /// validation that the claimed record really belongs to this call.
-    pub(super) async fn claim_owned_start_matching_request(
-        &mut self,
-        expected_function_name: &HostFunctionName,
-        expected_function_type: &DurableFunctionType,
-        expected_parent_start_index: OplogIndex,
-        expected_request: &HostRequest,
-    ) -> Result<ReplayCallHandle, WorkerExecutorError> {
-        let (handle, _) = self
-            .claim_start_matching_request(
-                |entry| {
-                    matches!(entry, OplogEntry::Start {
-                        function_name,
-                        request: Some(_),
-                        durable_function_type,
-                        parent_start_index,
-                        ..
-                    } if function_name == expected_function_name
-                        && durable_function_type == expected_function_type
-                        && *parent_start_index == Some(expected_parent_start_index))
-                },
-                expected_request,
-                || {
-                    format!(
-                        "Start {{ {expected_function_name}, {expected_function_type:?}, request: Some(<matching payload>), parent_start_index: Some({expected_parent_start_index}) }}"
-                    )
-                },
-            )
-            .await?;
-        Ok(handle)
+        Ok((handle, entry))
     }
 
     /// Switches the cursor to live mode: records `ReplayFinished` if replay was still in progress,
@@ -1824,5 +1616,16 @@ impl ReplayState {
         })
         .await?
         .ok_or_else(|| self.end_of_replay_error())
+    }
+}
+
+/// The `start_index` of the durable call `entry` terminates, when `entry` is a durable-call
+/// terminal (`End` / `Cancelled`); `None` for every other entry kind.
+pub(super) fn terminal_start_index(entry: &OplogEntry) -> Option<OplogIndex> {
+    match entry {
+        OplogEntry::End { start_index, .. } | OplogEntry::Cancelled { start_index, .. } => {
+            Some(*start_index)
+        }
+        _ => None,
     }
 }
