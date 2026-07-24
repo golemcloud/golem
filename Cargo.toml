@@ -116,7 +116,7 @@ futures = "0.3.31"
 futures-concurrency = "7.6.3"
 futures-util = "0.3.31"
 fuzzy-matcher = "0.3.7"
-ignite-v2-client = "0.2.0"
+ignite-v2-client = "0.4.0"
 git-version = "0.3.9"
 glob-match = "0.2.1"
 goldenfile = "1.8.0"
@@ -318,6 +318,7 @@ wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem
 wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v45.0.0" }
 wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v45.0.0" }
 wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v45.0.0" }
+ignite-v2-client = { git = "https://github.com/golemcloud/ignite-v2-client.git", branch = "golem-ignite-v2-client-v0.4.0" }
 
 [profile.dev]
 panic = "abort"

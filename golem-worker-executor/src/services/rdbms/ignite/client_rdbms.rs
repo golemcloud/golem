@@ -30,7 +30,6 @@ use ignite_client::{
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 use url::Url;
@@ -138,15 +137,12 @@ fn parse_config(address: &Url) -> Result<IgniteClientConfig, RdbmsError> {
     }
 
     Ok(IgniteClientConfig {
-        address: ignite_address,
         username,
         password,
         max_pool_size,
-        connect_timeout: Duration::from_secs(10),
-        request_timeout: Duration::from_secs(30),
         page_size,
         use_tls,
-        tls_accept_invalid_certs: false,
+        ..IgniteClientConfig::new(ignite_address)
     })
 }
 
