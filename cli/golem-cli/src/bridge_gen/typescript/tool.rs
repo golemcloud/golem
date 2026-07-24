@@ -31,6 +31,12 @@ struct ClientNode {
     provided: Vec<CanonicalSurfaceRef>,
 }
 
+type CollectedNames = (
+    BTreeMap<usize, ClientNode>,
+    BTreeMap<usize, String>,
+    Vec<String>,
+);
+
 pub struct TypeScriptToolBridgeGenerator {
     tool: Tool,
     tool_name: String,
@@ -528,14 +534,7 @@ fn error_variant_names(body: &CommandBody) -> Vec<String> {
         .map(|e| n.fresh(type_ident([e.name.clone()], "")))
         .collect()
 }
-fn collect_names(
-    tool: &Tool,
-    name: &str,
-) -> anyhow::Result<(
-    BTreeMap<usize, ClientNode>,
-    BTreeMap<usize, String>,
-    Vec<String>,
-)> {
+fn collect_names(tool: &Tool, name: &str) -> anyhow::Result<CollectedNames> {
     fn visit(
         tool: &Tool,
         tool_name: &str,
