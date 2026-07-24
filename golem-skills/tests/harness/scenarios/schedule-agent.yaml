@@ -8,15 +8,29 @@ steps:
       deploy: true
 
   - id: "schedule-via-agent"
-    prompt: >
-      I have the test-app project deployed with a CounterAgent that has a string constructor
-      parameter (the counter name) and an increment method. Use the CLI to schedule an
-      invocation of the increment method for a counter named "c1" to run 15 seconds from now.
+    prompt:
+      rust: &non-effect-schedule-agent-prompt >
+        I have the test-app project deployed with a CounterAgent that has a string constructor
+        parameter (the counter name) and an increment method. Use the CLI to schedule an
+        invocation of the increment method for a counter named "c1" to run 15 seconds from now.
+      ts: *non-effect-schedule-agent-prompt
+      effect: >
+        I have the Effect-based test-app project deployed with the generated `Counter` agent. Its
+        Effect v4 `defineAgent` contract has the exact runtime name `Counter`, one string
+        `constructorParams` field for the counter name, and an `increment` method. Use the Golem
+        CLI, not the in-agent typed client, to schedule an invocation of `increment` for the
+        counter named "c1" to run 15 seconds from now. Use TypeScript constructor and method value
+        syntax, and do not rename or modify the generated agent. Submit the scheduling command as
+        your final operational step; do not wait for it to run or invoke `increment` yourself.
+      scala: *non-effect-schedule-agent-prompt
+      moonbit: *non-effect-schedule-agent-prompt
     expectedSkills:
       rust:
         - "golem-schedule-agent-rust"
       ts:
         - "golem-schedule-agent-ts"
+      effect:
+        - "golem-schedule-agent-effect"
       scala:
         - "golem-schedule-agent-scala"
       moonbit:
@@ -25,6 +39,22 @@ steps:
   - id: "invoke-before-schedule"
     invoke_json:
       agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      rust: &non-effect-before-schedule-expect
+        result_json:
+          - path: "$"
+            equals: 1
+      ts: *non-effect-before-schedule-expect
+      effect: {}
+      scala: *non-effect-before-schedule-expect
+      moonbit: *non-effect-before-schedule-expect
+
+  - id: "invoke-effect-before-schedule"
+    only_if:
+      language: "effect"
+    invoke_json:
+      agent: 'Counter("c1")'
       method: "increment"
     expect:
       result_json:
@@ -37,6 +67,22 @@ steps:
   - id: "invoke-after-schedule"
     invoke_json:
       agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      rust: &non-effect-after-schedule-expect
+        result_json:
+          - path: "$"
+            equals: 3
+      ts: *non-effect-after-schedule-expect
+      effect: {}
+      scala: *non-effect-after-schedule-expect
+      moonbit: *non-effect-after-schedule-expect
+
+  - id: "invoke-effect-after-schedule"
+    only_if:
+      language: "effect"
+    invoke_json:
+      agent: 'Counter("c1")'
       method: "increment"
     expect:
       result_json:

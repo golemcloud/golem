@@ -22,10 +22,10 @@ const WATCHER_SNAPSHOT_SETTLE_MS = 25;
 
 // --- Language-conditional resolution ---
 
-const SUPPORTED_LANG_KEYS = new Set(["ts", "rust", "scala", "moonbit"]);
+const SUPPORTED_LANG_KEYS = new Set(["ts", "effect", "rust", "scala", "moonbit"]);
 
 /**
- * Checks if a value is a language-keyed map (e.g., { ts: "...", rust: "...", scala: "..." }).
+ * Checks if a value is a language-keyed map (e.g., { ts: "...", effect: "...", rust: "..." }).
  * Returns true only if the value is a plain object whose keys are all known language codes.
  */
 function isLanguageMap(value: unknown): value is Record<string, unknown> {
@@ -190,9 +190,16 @@ const ACTION_FIELDS = [
   "mcp_call",
 ] as const;
 
-// Language-conditional: accepts either T or { ts: T, rust: T, scala: T, ... }
+// Language-conditional: accepts either T or { ts: T, effect: T, rust: T, ... }
 function langConditional<T extends z.ZodType>(schema: T) {
-  return z.union([schema, z.record(z.string(), schema)]);
+  const languageMap = z.record(z.string(), schema).refine(
+    (value) => {
+      const keys = Object.keys(value);
+      return keys.length > 0 && keys.every((key) => SUPPORTED_LANG_KEYS.has(key));
+    },
+    { message: "language-conditional map keys must be language codes" },
+  );
+  return z.union([languageMap, schema]);
 }
 
 const CreateProjectSchema = z.object({
@@ -200,11 +207,13 @@ const CreateProjectSchema = z.object({
   presets: langConditional(z.array(z.string())).optional(),
 });
 
-const VerifySchema = z.object({
-  build: z.boolean().optional(),
-  deploy: z.boolean().optional(),
-  expectedFiles: langConditional(z.array(z.string())).optional(),
-});
+const VerifySchema = z
+  .object({
+    build: z.boolean().optional(),
+    deploy: z.boolean().optional(),
+    expectedFiles: langConditional(z.array(z.string())).optional(),
+  })
+  .strict();
 
 const StepSpecSchema = z
   .object({
@@ -278,6 +287,7 @@ const PrerequisitesSchema = z
 
 const ScenarioSpecSchema = z.object({
   name: z.string({ required_error: 'Scenario must have a "name" field' }),
+  semanticRequirements: z.record(z.array(z.string().min(1))).optional(),
   languageAgnostic: z.boolean().optional(),
   settings: SettingsSchema,
   prerequisites: PrerequisitesSchema,

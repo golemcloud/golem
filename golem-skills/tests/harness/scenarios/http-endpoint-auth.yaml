@@ -10,37 +10,71 @@ steps:
       build: true
 
   - id: "add-secure-agent"
-    prompt: >
-      In the test-app project, add a new durable agent type called `VaultAgent` identified by
-      a single constructor parameter for the vault name. Give it an HTTP mount under
-      `/vaults/{vault-name}` with authentication enabled at the mount level (auth = true),
-      and make sure it is exposed through the app HTTP API on `test-app.localhost:9006`.
+    prompt:
+      rust: &non-effect-add-secure-agent-prompt >
+        In the test-app project, add a new durable agent type called `VaultAgent` identified by
+        a single constructor parameter for the vault name. Give it an HTTP mount under
+        `/vaults/{vault-name}` with authentication enabled at the mount level (auth = true),
+        and make sure it is exposed through the app HTTP API on `test-app.localhost:9006`.
 
-      VaultAgent must store a single string value called `secret` in agent state, initially
-      set to `"none"`.
+        VaultAgent must store a single string value called `secret` in agent state, initially
+        set to `"none"`.
 
-      Expose these HTTP endpoints:
+        Expose these HTTP endpoints:
 
-      1. `GET /health` — returns the string `"ok"`. This endpoint must have auth disabled
-         (auth = false) so it can be called without authentication.
+        1. `GET /health` — returns the string `"ok"`. This endpoint must have auth disabled
+           (auth = false) so it can be called without authentication.
 
-      2. `GET /secret` — returns the current stored secret string. This endpoint inherits
-         mount-level auth, so it requires authentication.
+        2. `GET /secret` — returns the current stored secret string. This endpoint inherits
+           mount-level auth, so it requires authentication.
 
-      3. `POST /store` — accepts a `secret` (string) as a JSON body field, stores it in
-         agent state, and returns the stored value as a JSON object with a `secret` field.
-         This endpoint inherits mount-level auth.
+        3. `POST /store` — accepts a `secret` (string) as a JSON body field, stores it in
+           agent state, and returns the stored value as a JSON object with a `secret` field.
+           This endpoint inherits mount-level auth.
 
-      For the deployment configuration in golem.yaml, use `testSessionHeaderName: X-Test-Auth`
-      for the VaultAgent so that authentication can be tested with a simple header in
-      development mode.
+        For the deployment configuration in golem.yaml, use `testSessionHeaderName: X-Test-Auth`
+        for the VaultAgent so that authentication can be tested with a simple header in
+        development mode.
 
-      Make sure the project builds and deploys successfully.
+        Make sure the project builds and deploys successfully.
+      ts: *non-effect-add-secure-agent-prompt
+      effect: >
+        In the Effect-based test-app project, add a durable `VaultAgent` with one
+        `constructorParams` string named `vaultName`. Use
+        `Http.mount("/vaults/{vaultName}", { auth: true })` from
+        `@golemcloud/effect-golem`, and expose the agent through the app HTTP API on
+        `test-app.localhost:9006`.
+
+        Store one durable string field named `secret`, initially `"none"`, using Effect state and
+        snapshot APIs. Define an Effect Schema for the state and initialize its snapshot exactly
+        once.
+
+        Expose these methods with Effect Golem HTTP metadata:
+
+        1. `GET /health` — return `"ok"` and explicitly set endpoint `auth: false` so it is
+           public despite mount-level auth.
+
+        2. `GET /secret` — return the current secret and omit endpoint `auth` so the route
+           inherits mount-level authentication.
+
+        3. `POST /store` — accept an unbound `secret` string parameter from the camelCase JSON
+           body, store it, and return an Effect Schema object with a `secret` string field. Omit
+           endpoint `auth` so the route inherits mount-level authentication.
+
+        In `golem.yaml`, configure `VaultAgent` with
+        `testSessionHeaderName: X-Test-Auth`. Implement every handler as an Effect, register the
+        implementation module from `src/main.ts`, preserve existing manifest entries, and make
+        sure the project builds and deploys successfully. Do not invoke the agent or its HTTP
+        routes after deployment; the harness must observe the untouched `"none"` state first.
+      scala: *non-effect-add-secure-agent-prompt
+      moonbit: *non-effect-add-secure-agent-prompt
     expectedSkills:
       rust:
         - "golem-add-http-auth-rust"
       ts:
         - "golem-add-http-auth-ts"
+      effect:
+        - "golem-add-http-auth-effect"
       scala:
         - "golem-add-http-auth-scala"
       moonbit:

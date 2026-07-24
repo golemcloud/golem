@@ -6,10 +6,10 @@ import {
   type DriverTimeoutOptions,
   type UsageStats,
 } from "./base.js";
-import { execute, type AmpOptions } from "@sourcegraph/amp-sdk";
+import { execute, type AmpOptions } from "@ampcode/sdk";
 import * as log from "../log.js";
 
-const VALID_MODES = ["smart", "rush", "deep"] as const;
+const VALID_MODES = ["low", "medium", "high", "ultra"] as const;
 type ValidMode = (typeof VALID_MODES)[number];
 
 export class AmpAgentDriver extends BaseAgentDriver {

@@ -23,6 +23,7 @@ use golem_common::model::agent::{DataValue, ElementValues};
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::lucene::Query;
+use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
@@ -232,6 +233,33 @@ pub trait PublicOplogEntryOps: Sized {
     ) -> Result<Self, String>;
 }
 
+const REDACTED_VALUE: &str = "[REDACTED]";
+
+fn redact_public_host_call(
+    function_name: &HostFunctionName,
+    mut request: HostRequest,
+    mut response: HostResponse,
+) -> (HostRequest, HostResponse) {
+    if let HostRequest::HttpRequest(request) = &mut request {
+        for (name, value) in &mut request.headers {
+            if matches!(
+                name.to_ascii_lowercase().as_str(),
+                "authorization" | "proxy-authorization" | "cookie"
+            ) {
+                *value = REDACTED_VALUE.to_string();
+            }
+        }
+    }
+
+    if function_name == &HostFunctionName::GolemAgentGetConfigValue
+        && let HostResponse::GolemAgentGetConfigValue(response) = &mut response
+    {
+        response.result = golem_wasm::Value::String(REDACTED_VALUE.to_string());
+    }
+
+    (request, response)
+}
+
 #[async_trait]
 impl PublicOplogEntryOps for PublicOplogEntry {
     async fn from_oplog_entry(
@@ -326,6 +354,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     }
                     other => other,
                 };
+                let (host_request, host_response) =
+                    redact_public_host_call(&function_name, host_request, host_response);
 
                 Ok(PublicOplogEntry::HostCall(HostCallParams {
                     timestamp,
@@ -1101,5 +1131,104 @@ fn make_plugin_installation_description(
         plugin_name: installation.plugin_name,
         plugin_version: installation.plugin_version,
         parameters: installation.parameters,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::oplog::types::SerializableHttpMethod;
+    use golem_common::model::oplog::{
+        HostRequestHttpRequest, HostResponseGolemAgentGetConfigValue,
+    };
+    use std::collections::HashMap;
+    use test_r::test;
+
+    #[test]
+    fn redacts_sensitive_http_headers_only_from_public_host_calls() {
+        let raw_request = HostRequest::HttpRequest(HostRequestHttpRequest {
+            uri: "https://example.com".to_string(),
+            method: SerializableHttpMethod::Get,
+            headers: HashMap::from([
+                ("Authorization".to_string(), "Bearer top-secret".to_string()),
+                (
+                    "proxy-authorization".to_string(),
+                    "Basic secret".to_string(),
+                ),
+                ("Cookie".to_string(), "session=secret".to_string()),
+                ("Accept".to_string(), "application/json".to_string()),
+            ]),
+        });
+        let raw_response = HostResponse::Custom("ok".to_string().into_value_and_type());
+
+        let (public_request, _) = redact_public_host_call(
+            &HostFunctionName::HttpTypesFutureIncomingResponseGet,
+            raw_request.clone(),
+            raw_response,
+        );
+
+        let HostRequest::HttpRequest(public_request) = public_request else {
+            panic!("expected HTTP request")
+        };
+        assert_eq!(
+            public_request
+                .headers
+                .get("Authorization")
+                .map(String::as_str),
+            Some(REDACTED_VALUE)
+        );
+        assert_eq!(
+            public_request
+                .headers
+                .get("proxy-authorization")
+                .map(String::as_str),
+            Some(REDACTED_VALUE)
+        );
+        assert_eq!(
+            public_request.headers.get("Cookie").map(String::as_str),
+            Some(REDACTED_VALUE)
+        );
+        assert_eq!(
+            public_request.headers.get("Accept").map(String::as_str),
+            Some("application/json")
+        );
+
+        let HostRequest::HttpRequest(raw_request) = raw_request else {
+            panic!("expected HTTP request")
+        };
+        assert_eq!(
+            raw_request.headers.get("Authorization").map(String::as_str),
+            Some("Bearer top-secret")
+        );
+    }
+
+    #[test]
+    fn redacts_secret_config_response_only_from_public_host_calls() {
+        let raw_response =
+            HostResponse::GolemAgentGetConfigValue(HostResponseGolemAgentGetConfigValue {
+                result: golem_wasm::Value::String("top-secret".to_string()),
+            });
+
+        let (_, public_response) = redact_public_host_call(
+            &HostFunctionName::GolemAgentGetConfigValue,
+            HostRequest::NoInput(golem_common::model::oplog::HostRequestNoInput {}),
+            raw_response.clone(),
+        );
+
+        let HostResponse::GolemAgentGetConfigValue(public_response) = public_response else {
+            panic!("expected secret config response")
+        };
+        assert_eq!(
+            public_response.result,
+            golem_wasm::Value::String(REDACTED_VALUE.to_string())
+        );
+
+        let HostResponse::GolemAgentGetConfigValue(raw_response) = raw_response else {
+            panic!("expected secret config response")
+        };
+        assert_eq!(
+            raw_response.result,
+            golem_wasm::Value::String("top-secret".to_string())
+        );
     }
 }

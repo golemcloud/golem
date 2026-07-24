@@ -12,6 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import {
+  isInteger,
+  isLosslessNumber,
+  isSafeNumber,
+  LosslessNumber,
+  parse as parseLosslessJson,
+  stringify as stringifyLosslessJson,
+} from 'lossless-json';
+
 export type PhantomId = string;
 
 export type GolemServer =
@@ -199,7 +208,7 @@ export async function createAgent(
   const rawResponse = await fetch(`${baseUrl}/v1/agents/create-agent`, {
     method: 'POST',
     headers,
-    body: JSON.stringify(request),
+    body: stringifyJson(request),
   });
 
   if (!rawResponse.ok) {
@@ -274,7 +283,7 @@ export async function invokeAgent(
     const rawResponse = await fetch(`${baseUrl}/v1/agents/invoke-agent`, {
       method: 'POST',
       headers,
-      body: JSON.stringify(request),
+      body: stringifyJson(request),
       signal,
     });
 
@@ -287,7 +296,7 @@ export async function invokeAgent(
       }
     }
 
-    let response = await (rawResponse.json() as Promise<AgentInvocationResult>);
+    const response = parseJson<AgentInvocationResult>(await rawResponse.text());
 
     if (aroundInvokeHook) {
       await aroundInvokeHook.afterInvoke(request, { ok: response });
@@ -675,4 +684,61 @@ export function decodeOption<T>(
   } else {
     return decode(value);
   }
+}
+
+const U64_MAX = 18_446_744_073_709_551_615n;
+const S64_MIN = -9_223_372_036_854_775_808n;
+const S64_MAX = 9_223_372_036_854_775_807n;
+
+function parseInt64(value: unknown, min: bigint, max: bigint, type: 'u64' | 's64'): bigint {
+  let result: bigint;
+  if (isLosslessNumber(value) && /^-?(0|[1-9][0-9]*)$/.test(value.value)) {
+    result = BigInt(value.value);
+  } else if (typeof value === 'number' && Number.isSafeInteger(value)) {
+    result = BigInt(value);
+  } else {
+    throw new Error(`Expected ${type} as an exact JSON integer, got ${String(value)}`);
+  }
+
+  if (result < min || result > max) {
+    throw new Error(`Value ${result} is outside the ${type} range`);
+  }
+  return result;
+}
+
+function validateInt64(value: bigint, min: bigint, max: bigint, type: 'u64' | 's64'): bigint {
+  if (typeof value !== 'bigint') {
+    throw new Error(`Expected ${type} as bigint, got ${String(value)}`);
+  }
+  if (value < min || value > max) {
+    throw new Error(`Value ${value} is outside the ${type} range`);
+  }
+  return value;
+}
+
+export const encodeU64 = (value: bigint): bigint => validateInt64(value, 0n, U64_MAX, 'u64');
+export const encodeS64 = (value: bigint): bigint => validateInt64(value, S64_MIN, S64_MAX, 's64');
+export const decodeU64 = (value: unknown): bigint => parseInt64(value, 0n, U64_MAX, 'u64');
+export const decodeS64 = (value: unknown): bigint => parseInt64(value, S64_MIN, S64_MAX, 's64');
+
+export function decodeNumber(value: unknown): number {
+  if (typeof value === 'number') return value;
+  if (isLosslessNumber(value)) {
+    const result = Number(value.value);
+    if (!Number.isNaN(result)) return result;
+  }
+  throw new Error(`Expected number, got ${String(value)}`);
+}
+
+export function stringifyJson(value: unknown): string {
+  const result = stringifyLosslessJson(value);
+  if (result === undefined) throw new Error('Cannot serialize undefined as JSON');
+  return result;
+}
+
+export function parseJson<T>(value: string, reviver?: (key: string, value: unknown) => unknown): T {
+  return parseLosslessJson(value, reviver, {
+    parseNumber: (source) =>
+      isInteger(source) && !isSafeNumber(source) ? new LosslessNumber(source) : Number(source),
+  }) as T;
 }

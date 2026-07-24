@@ -10,46 +10,94 @@ steps:
       build: true
 
   - id: "add-approval-workflow"
-    prompt: >
-      In the test-app project, build a human-in-the-loop approval workflow using two
-      new durable agent types: `ApprovalAgent` and `DeciderAgent`. Both are identified
-      by a single name constructor parameter.
+    prompt:
+      rust: &non-effect-approval-workflow-prompt >
+        In the test-app project, build a human-in-the-loop approval workflow using two
+        new durable agent types: `ApprovalAgent` and `DeciderAgent`. Both are identified
+        by a single name constructor parameter.
 
-      Give `ApprovalAgent` an HTTP mount under `/approvals/{name}` and `DeciderAgent`
-      an HTTP mount under `/deciders/{name}`. Make sure both are exposed through the
-      app HTTP API on `test-app.localhost:9006`.
+        Give `ApprovalAgent` an HTTP mount under `/approvals/{name}` and `DeciderAgent`
+        an HTTP mount under `/deciders/{name}`. Make sure both are exposed through the
+        app HTTP API on `test-app.localhost:9006`.
 
-      **ApprovalAgent** must have a mutable state field `result` of type string, initially
-      empty. It must expose these HTTP endpoints:
+        **ApprovalAgent** must have a mutable state field `result` of type string, initially
+        empty. It must expose these HTTP endpoints:
 
-      - `POST /request` — starts an approval request. The agent must durably suspend
-        and wait for an external decision to arrive from the `DeciderAgent`. It should
-        hand off the waiting handle to DeciderAgent (identified by the same name) via
-        RPC so the decider can deliver the decision later. Once the decision arrives,
-        store the decision string in the `result` field and return it.
+        - `POST /request` — starts an approval request. The agent must durably suspend
+          and wait for an external decision to arrive from the `DeciderAgent`. It should
+          hand off the waiting handle to DeciderAgent (identified by the same name) via
+          RPC so the decider can deliver the decision later. Once the decision arrives,
+          store the decision string in the `result` field and return it.
 
-      - `GET /result` — returns the current value of `result` as a plain string.
+        - `GET /result` — returns the current value of `result` as a plain string.
 
-      **DeciderAgent** must be able to receive a pending approval handle from
-      `ApprovalAgent` and store it. It must expose these HTTP endpoints:
+        **DeciderAgent** must be able to receive a pending approval handle from
+        `ApprovalAgent` and store it. It must expose these HTTP endpoints:
 
-      - `POST /receive` — receives and stores the waiting handle from an ApprovalAgent.
-        Returns nothing.
+        - `POST /receive` — receives and stores the waiting handle from an ApprovalAgent.
+          Returns nothing.
 
-      - `POST /decide` — accepts a JSON body with a `decision` field (a string).
-        Delivers it to the waiting ApprovalAgent by completing the stored handle.
-        Returns a boolean indicating success.
+        - `POST /decide` — accepts a JSON body with a `decision` field (a string).
+          Delivers it to the waiting ApprovalAgent by completing the stored handle.
+          Returns a boolean indicating success.
 
-      The expected flow is: ApprovalAgent starts a request, hands off a handle to
-      DeciderAgent, and suspends. Later, someone calls DeciderAgent's decide endpoint
-      with a decision string, which wakes up the ApprovalAgent.
+        The expected flow is: ApprovalAgent starts a request, hands off a handle to
+        DeciderAgent, and suspends. Later, someone calls DeciderAgent's decide endpoint
+        with a decision string, which wakes up the ApprovalAgent.
 
-      Make sure the project builds successfully.
+        Make sure the project builds successfully.
+      ts: *non-effect-approval-workflow-prompt
+      effect: >
+        In the Effect-based test-app project, use Effect v4 and
+        `@golemcloud/effect-golem` to build a human-in-the-loop approval workflow with two new
+        durable agent types named exactly `ApprovalAgent` and `DeciderAgent`. Define both with
+        `defineAgent`; each has one `Schema.String` constructor parameter named `name`. Do not use
+        the Promise-based TypeScript SDK, an Effect `Deferred`, or a webhook. Use the durable
+        `Agents.Promises` API.
+
+        Give `ApprovalAgent` the HTTP mount `/approvals/{name}` and `DeciderAgent` the mount
+        `/deciders/{name}` using the Effect SDK's `Http` declarations. Add both agents to the
+        existing local `httpApi` deployment on `test-app.localhost:9006` without removing existing
+        manifest entries, and import their implementation module or modules from `src/main.ts`.
+
+        `ApprovalAgent` keeps a string in an Effect `Ref` named or representing `result`, initially
+        empty. It exposes:
+
+        - `request`, with no parameters, `success: Schema.String`, and `POST /request`. Create a
+          Golem promise with `Agents.Promises.create`, send its `PromiseId` to the `DeciderAgent`
+          with the same `name` through its typed RPC client, then durably suspend with
+          `Agents.Promises.await`. Decode the completed bytes as UTF-8, store the decision in
+          `result`, and return it.
+        - `getResult`, with no parameters, `success: Schema.String`, and `GET /result`. Return the
+          current result.
+
+        `DeciderAgent` keeps the pending `Agents.PromiseId` in an Effect `Ref`. Because the SDK has
+        no ready-made PromiseId Schema, declare its exact nested structural schema and use
+        `WitTypes.Uint64` for the UUID halves and `oplogIdx`. It exposes:
+
+        - `receive`, with a parameter named `promiseId`, `success: Schema.Void`, and
+          `POST /receive`. Store the ID for later completion.
+        - `decide`, with one `Schema.String` parameter named `decision`,
+          `success: Schema.Boolean`, and `POST /decide`. Encode the decision with `TextEncoder`,
+          complete the stored ID with `Agents.Promises.complete`, and return `true`; return `false`
+          when no pending ID exists or the promise was already completed. The normal HTTP JSON
+          request body must be `{ "decision": "approved" }`.
+
+        Only ApprovalAgent may await the promise it created; DeciderAgent only stores and completes
+        the shared ID. Yield every SDK and RPC Effect, deliberately handle or convert SDK host and
+        client errors so the declared method channels type-check, preserve the generated Effect
+        agent and existing manifest entries, and make the project build and deploy successfully.
+        Do not invoke `request` or call either approval endpoint during your own validation because
+        the harness performs the state-changing flow after this prompt.
+      scala: *non-effect-approval-workflow-prompt
+      moonbit: *non-effect-approval-workflow-prompt
     expectedSkills:
       rust:
         - "golem-wait-for-external-input-rust"
       ts:
         - "golem-wait-for-external-input-ts"
+      effect:
+        - "golem-wait-for-external-input-effect"
       scala:
         - "golem-wait-for-external-input-scala"
       moonbit:
@@ -69,7 +117,7 @@ steps:
   - id: "verify-approval-agent-suspended"
     shell:
       command: "golem"
-      args: ["agent", "get", "ApprovalAgent(\"a1\")"]
+      args: ["agent", "get", 'ApprovalAgent("a1")']
       cwd: "test-app"
     expect:
       exit_code: 0

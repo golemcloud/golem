@@ -1,4 +1,7 @@
 name: "add-cors"
+semanticRequirements:
+  effect:
+    - The Effect scenario must configure a mount-level explicit origin and an endpoint-level wildcard through Effect-Golem CORS metadata, then verify host-generated preflight and ordinary response headers; application OPTIONS handlers and manual CORS responses are not substitutes.
 settings:
   golem_server:
     custom_request_port: 9006
@@ -10,26 +13,45 @@ steps:
       build: true
 
   - id: "add-note-agent-with-http"
-    prompt: >
-      In the test-app project, add a new durable agent type called `NoteAgent` identified by
-      a single constructor parameter for the notebook name. Give it an HTTP mount under
-      `/notes/{notebook-name}` and make sure it is exposed through the app HTTP API on
-      `test-app.localhost:9006`.
+    prompt:
+      rust: &non-effect-add-note-agent-with-http-prompt >
+        In the test-app project, add a new durable agent type called `NoteAgent` identified by
+        a single constructor parameter for the notebook name. Give it an HTTP mount under
+        `/notes/{notebook-name}` and make sure it is exposed through the app HTTP API on
+        `test-app.localhost:9006`.
 
-      NoteAgent must store a list of notes in agent state. Each note is a simple string.
+        NoteAgent must store a list of notes in agent state. Each note is a simple string.
 
-      Expose these HTTP endpoints:
-      - `POST /add` — accepts a `text` string in the JSON request body, appends it to the
-        stored list, and returns the added note as a JSON object with a `text` field.
-      - `GET /list` — returns all stored notes as a JSON array of objects, each with a `text`
-        field.
+        Expose these HTTP endpoints:
+        - `POST /add` — accepts a `text` string in the JSON request body, appends it to the
+          stored list, and returns the added note as a JSON object with a `text` field.
+        - `GET /list` — returns all stored notes as a JSON array of objects, each with a `text`
+          field.
 
-      Make sure the project builds and deploys successfully.
+        Make sure the project builds and deploys successfully.
+      ts: *non-effect-add-note-agent-with-http-prompt
+      effect: >
+        In the Effect-based test-app project, add a durable `NoteAgent` with one
+        `constructorParams` string named `notebookName`. Use
+        `Http.mount("/notes/{notebookName}")` from `@golemcloud/effect-golem` and expose it through
+        the app HTTP API on `test-app.localhost:9006`.
+
+        Store an initially empty durable list of note strings with Effect state and snapshot APIs.
+        Define a `Note` Effect Schema with one string field named `text`.
+
+        Expose `POST /add`, taking an unbound `text` parameter from the JSON body and returning a
+        `Note`, and `GET /list`, returning all notes as an array of `Note` objects. Implement the
+        methods as Effects, register the module from `src/main.ts`, and make sure the project
+        builds and deploys successfully.
+      scala: *non-effect-add-note-agent-with-http-prompt
+      moonbit: *non-effect-add-note-agent-with-http-prompt
     expectedSkills:
       rust:
         - "golem-add-http-endpoint-rust"
       ts:
         - "golem-add-http-endpoint-ts"
+      effect:
+        - "golem-add-http-endpoint-effect"
       scala:
         - "golem-add-http-endpoint-scala"
       moonbit:
@@ -39,20 +61,34 @@ steps:
       deploy: true
 
   - id: "add-cors"
-    prompt: >
-      Enable CORS on the NoteAgent. Configure mount-level CORS to allow the origin
-      `https://frontend.example.com`. Additionally, on the `GET /list` endpoint specifically,
-      add wildcard CORS (`*`) so that it allows all origins (in addition to the mount-level
-      origin).
+    prompt:
+      rust: &non-effect-add-cors-prompt >
+        Enable CORS on the NoteAgent. Configure mount-level CORS to allow the origin
+        `https://frontend.example.com`. Additionally, on the `GET /list` endpoint specifically,
+        add wildcard CORS (`*`) so that it allows all origins (in addition to the mount-level
+        origin).
 
-      Do not change the endpoint logic — only add CORS configuration.
+        Do not change the endpoint logic — only add CORS configuration.
 
-      Make sure the project builds and deploys successfully.
+        Make sure the project builds and deploys successfully.
+      ts: *non-effect-add-cors-prompt
+      effect: >
+        In the Effect-based test-app project, enable CORS on `NoteAgent` with the Effect Golem
+        `Http` API. Add `https://frontend.example.com` to the mount's `cors` option. On the
+        `Http.get("/list")` endpoint specifically, add endpoint-level wildcard CORS (`*`) so that
+        it allows all origins in addition to the mount-level origin.
+
+        Do not change the Effect handlers, method schemas, or endpoint logic; only add CORS
+        metadata. Make sure the project builds and deploys successfully.
+      scala: *non-effect-add-cors-prompt
+      moonbit: *non-effect-add-cors-prompt
     expectedSkills:
       rust:
         - "golem-add-cors-rust"
       ts:
         - "golem-add-cors-ts"
+      effect:
+        - "golem-add-cors-effect"
       scala:
         - "golem-add-cors-scala"
       moonbit:

@@ -5,6 +5,7 @@ import { defineConfig } from 'rollup';
 export default defineConfig([
   {
     input: 'src/index.ts',
+    external: ['lossless-json'],
     output: {
       file: 'dist/index.mjs',
       format: 'esm',
@@ -22,6 +23,7 @@ export default defineConfig([
   },
   {
     input: 'src/index.ts',
+    external: ['lossless-json'],
     output: {
       file: 'dist/index.d.mts',
       format: 'esm',

@@ -42,6 +42,35 @@ steps:
         only via the scheduled future call.
 
         Make sure the project builds successfully.
+      effect: >
+        In the Effect-based test-app project, use Effect v4 and
+        `@golemcloud/effect-golem`, not the Promise-based TypeScript SDK. The generated
+        template initially declares the existing counter's `defineAgent` name as `Counter`
+        and references that name under the local HTTP API deployment's `agents` map in
+        `golem.yaml`. Change both names to exactly `CounterAgent` so the component metadata,
+        HTTP API deployment, and cross-language scenario contract stay synchronized. Do not
+        leave an HTTP API deployment entry for the old `Counter` agent type.
+
+        Add a second durable agent type called `DelayedRecorder`, defined with `defineAgent`
+        and the same string `constructorParams` field named `name` as the counter.
+        `DelayedRecorder` must expose two externally invokable camelCase Effect methods:
+        `recordCount` with one named numeric parameter `value`, and `recordedCounts` with no
+        parameters. Keep the recorded numbers in durable snapshot state. `recordCount` must
+        append `value`, and `recordedCounts` must return all recorded values in order.
+
+        Then add an externally invokable `scheduleReport` Effect method to `CounterAgent`.
+        It must increment the counter exactly like the existing `increment` method, obtain
+        the typed `DelayedRecorder` client for `{ name }`, and schedule `recordCount` to run
+        30 seconds in the future with the new counter value. Use the real Effect SDK API:
+        `DelayedRecorderDefinition.client.get({ name })`, then
+        `recorder.recordCount.schedule(scheduledAt, { value: newCount })`. Construct
+        `scheduledAt` as `{ seconds: bigint, nanoseconds: number }`. Yield the client and
+        scheduling Effects so submission completes, then return the new counter value
+        immediately. Do not directly invoke `recordCount`, use a local timer, or await the
+        scheduled method's eventual execution.
+
+        Register the new implementation from `src/main.ts`, preserve all other manifest
+        entries, and make sure the project builds and deploys successfully.
       scala: >
         In the test-app project, add a second agent type called `DelayedRecorder` that has
         the same constructor parameter as the existing CounterAgent. `DelayedRecorder` must
@@ -81,6 +110,8 @@ steps:
         - "golem-schedule-future-call-rust"
       ts:
         - "golem-schedule-future-call-ts"
+      effect:
+        - "golem-schedule-future-call-effect"
       scala:
         - "golem-schedule-future-call-scala"
       moonbit:
@@ -95,6 +126,7 @@ steps:
       method:
         rust: "schedule_report"
         ts: "scheduleReport"
+        effect: "scheduleReport"
         scala: "scheduleReport"
         moonbit: "schedule_report"
     expect:
@@ -108,6 +140,7 @@ steps:
       method:
         rust: "recorded_counts"
         ts: "recordedCounts"
+        effect: "recordedCounts"
         scala: "recordedCounts"
         moonbit: "recorded_counts"
     expect:
@@ -124,6 +157,7 @@ steps:
       method:
         rust: "recorded_counts"
         ts: "recordedCounts"
+        effect: "recordedCounts"
         scala: "recordedCounts"
         moonbit: "recorded_counts"
     expect:

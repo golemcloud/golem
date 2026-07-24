@@ -297,6 +297,11 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
                         crate::model::GuestLanguage::Effect => vec![Transform::EffectSdk],
                         _ => vec![Transform::TsSdk],
                     },
+                    (true, "rollup.config.component.mjs")
+                        if ctx.template.language == crate::model::GuestLanguage::Effect =>
+                    {
+                        vec![Transform::EffectSdk]
+                    }
                     (true, "Cargo.toml") => vec![Transform::RustSdk],
                     (true, "build.sbt") => vec![Transform::ScalaSdk, Transform::ApplicationName],
                     (true, "plugins.sbt") => vec![Transform::ScalaSdk],
@@ -675,7 +680,11 @@ fn get_contents<'a>(dir: &Dir<'a>, source: &'a Path) -> anyhow::Result<&'a str> 
 
 #[cfg(test)]
 mod tests {
+    use crate::app::template::repo::AppTemplateRepo;
+    use crate::model::GuestLanguage;
+    use golem_common::base_model::application::ApplicationName;
     use std::collections::BTreeMap;
+    use std::fs;
     use std::path::{Path, PathBuf};
     use test_r::test;
 
@@ -721,5 +730,74 @@ mod tests {
         let transformed = super::replace_all("app-name -> componentname", &replacements);
 
         assert_eq!(transformed, "Y -> my:comp");
+    }
+
+    #[test]
+    fn generated_effect_rollup_uses_concrete_embedded_effect_version() {
+        let repo = AppTemplateRepo::get(false).unwrap();
+        let template = repo
+            .common_on_demand_template(GuestLanguage::Effect)
+            .unwrap()
+            .as_ref()
+            .unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("golem-temp");
+
+        template.generate(temp.path(), &target).unwrap();
+
+        let rollup = fs::read_to_string(target.join("rollup.config.component.mjs")).unwrap();
+        assert!(rollup.contains(&format!(
+            "const expectedEffectVersion = \"{}\";",
+            crate::versions::effect_dep::EFFECT,
+        )));
+        assert!(!rollup.contains("GOLEM_EFFECT_VERSION"));
+        assert!(!rollup.contains("@effect/ai-openai"));
+        assert!(!rollup.contains("id.startsWith(\"effect/\")"));
+        assert!(!rollup.contains("id.startsWith(\"node:\")"));
+        assert!(rollup.contains("existsSync(path.join(effectDistDir, `${moduleName}.js`))"));
+        for module in [
+            "effect",
+            "@golemcloud/effect-golem",
+            "@golemcloud/effect-golem/postgres",
+            "@golemcloud/effect-golem/mysql",
+            "@golemcloud/effect-golem/ignite2",
+            "@golemcloud/effect-golem/sqlite",
+        ] {
+            assert!(
+                rollup.contains(&format!("\"{module}\",")),
+                "missing embedded package {module} from generated Rollup externals"
+            );
+        }
+        assert!(!rollup.contains("\"node:sqlite\","));
+        assert!(rollup.contains("nodeResolve({"));
+    }
+
+    #[test]
+    fn generated_effect_package_does_not_install_optional_ai_provider() {
+        let repo = AppTemplateRepo::get(false).unwrap();
+        let template = repo
+            .common_template(GuestLanguage::Effect)
+            .unwrap()
+            .as_ref()
+            .unwrap();
+        let generated = template
+            .generate(
+                &ApplicationName("test-app".to_string()),
+                Path::new("test-app"),
+            )
+            .unwrap();
+        let package: serde_json::Value =
+            serde_json::from_str(generated.get(Path::new("test-app/package.json")).unwrap())
+                .unwrap();
+
+        assert_eq!(
+            package["dependencies"]["effect"],
+            crate::versions::effect_dep::EFFECT,
+        );
+        assert_eq!(
+            package["dependencies"]["@golemcloud/effect-golem"],
+            crate::versions::sdk::EFFECT_GOLEM,
+        );
+        assert!(package["dependencies"].get("@effect/ai-openai").is_none());
     }
 }

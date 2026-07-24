@@ -8,15 +8,26 @@ steps:
       deploy: true
 
   - id: "create-agent-via-prompt"
-    prompt: >
-      I have the test-app project deployed with a CounterAgent that has a string constructor
-      parameter (the counter name) and an increment method. Use the CLI to pre-create a new
-      agent instance named "c1" without invoking any method on it.
+    prompt:
+      rust: &non-effect-create-agent-instance-prompt >
+        I have the test-app project deployed with a CounterAgent that has a string constructor
+        parameter (the counter name) and an increment method. Use the CLI to pre-create a new
+        agent instance named "c1" without invoking any method on it.
+      ts: *non-effect-create-agent-instance-prompt
+      effect: >
+        I have the Effect-based test-app project deployed with a `Counter` agent type whose exact
+        `defineAgent` name is `Counter`. It has a string constructor parameter (the counter name)
+        and an increment method. Use the CLI to pre-create a new agent instance named "c1" without
+        invoking any method on it.
+      scala: *non-effect-create-agent-instance-prompt
+      moonbit: *non-effect-create-agent-instance-prompt
     expectedSkills:
       rust:
         - "golem-create-agent-instance-rust"
       ts:
         - "golem-create-agent-instance-ts"
+      effect:
+        - "golem-create-agent-instance-effect"
       scala:
         - "golem-create-agent-instance-scala"
       moonbit:
@@ -25,8 +36,20 @@ steps:
   - id: "verify-agent-created"
     shell:
       command: "golem"
-      args: ["agent", "oplog", "CounterAgent(\"c1\")"]
+      args:
+        rust: &non-effect-created-agent-args ["agent", "oplog", 'CounterAgent("c1")']
+        ts: *non-effect-created-agent-args
+        effect: ["agent", "get", 'Counter("c1")']
+        scala: *non-effect-created-agent-args
+        moonbit: *non-effect-created-agent-args
       cwd: "test-app"
     expect:
-      exit_code: 0
-      stdout_contains: "create"
+      rust: &non-effect-created-agent-expect
+        exit_code: 0
+        stdout_contains: "create"
+      ts: *non-effect-created-agent-expect
+      effect:
+        exit_code: 0
+        stdout_contains: "c1"
+      scala: *non-effect-created-agent-expect
+      moonbit: *non-effect-created-agent-expect

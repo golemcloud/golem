@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { findGolemAppDir } from "../src/workspace.js";
+import { findGolemAppDir, resolveGolemTargetDir } from "../src/workspace.js";
 
 describe("findGolemAppDir", () => {
   let tmpDir: string;
@@ -53,5 +53,34 @@ describe("findGolemAppDir", () => {
     await fs.mkdir(path.join(tmpDir, "empty-dir"));
     const result = await findGolemAppDir(tmpDir);
     assert.equal(result, tmpDir);
+  });
+});
+
+describe("resolveGolemTargetDir", () => {
+  it("uses an explicit target directory override", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "target-dir-test-"));
+    try {
+      const targetDir = path.join(tmpDir, "cargo-target", "debug");
+      await fs.mkdir(targetDir, { recursive: true });
+      const golemBinary = path.join(targetDir, "golem");
+      await fs.writeFile(golemBinary, "#!/bin/sh\nexit 0\n");
+      await fs.chmod(golemBinary, 0o755);
+
+      assert.equal(resolveGolemTargetDir(tmpDir, targetDir), targetDir);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an override without an executable golem binary", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "target-dir-test-"));
+    try {
+      assert.throws(
+        () => resolveGolemTargetDir(tmpDir, path.join(tmpDir, "missing")),
+        /GOLEM_TARGET_DIR/,
+      );
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });
