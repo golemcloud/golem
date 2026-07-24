@@ -128,7 +128,7 @@ impl EnrichedAgentMethod {
             prompt_hint: self.prompt_hint.clone(),
             input_schema,
             output_schema,
-            read_only: self.read_only.clone(),
+            read_only: self.read_only,
         }
     }
 }
@@ -152,6 +152,7 @@ impl ExtendedAgentConstructor {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 pub enum EnrichedParameterSchema {
     Value(SchemaGraph),
@@ -265,7 +266,7 @@ fn encode_output_schema(
     output_schema: &[(String, SchemaGraph)],
 ) -> Result<OutputSchema, crate::schema::wit::EncodeError> {
     match output_schema {
-        fields if fields.is_empty() => Ok(OutputSchema::Unit),
+        [] => Ok(OutputSchema::Unit),
         fields if fields.len() == 1 => Ok(OutputSchema::Single(
             encoder.encode_type(&schema_graph_root(&fields[0].1))?,
         )),

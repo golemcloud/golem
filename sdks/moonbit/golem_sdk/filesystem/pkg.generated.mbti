@@ -12,15 +12,15 @@ pub fn get_preopened_dir(String) -> @types.Descriptor?
 
 pub fn get_root_dir() -> @types.Descriptor?
 
-pub fn list_directory(@types.Descriptor, String) -> Result[Array[String], @types.ErrorCode]
+pub async fn list_directory(@types.Descriptor, String) -> Result[Array[String], @types.ErrorCode]
 
-pub fn read_bytes(@types.Descriptor, String) -> Result[FixedArray[Byte], @types.ErrorCode]
+pub async fn read_bytes(@types.Descriptor, String) -> Result[FixedArray[Byte], @types.ErrorCode]
 
-pub fn read_string(@types.Descriptor, String) -> Result[String, @types.ErrorCode]
+pub async fn read_string(@types.Descriptor, String) -> Result[String, @types.ErrorCode]
 
-pub fn write_bytes(@types.Descriptor, String, FixedArray[Byte]) -> Result[Unit, @types.ErrorCode]
+pub async fn write_bytes(@types.Descriptor, String, FixedArray[Byte]) -> Result[Unit, @types.ErrorCode]
 
-pub fn write_string(@types.Descriptor, String, String) -> Result[Unit, @types.ErrorCode]
+pub async fn write_string(@types.Descriptor, String, String) -> Result[Unit, @types.ErrorCode]
 
 // Errors
 
@@ -40,8 +40,6 @@ pub using @types {type DescriptorStat}
 pub using @types {type DescriptorType}
 
 pub using @types {type DirectoryEntry}
-
-pub using @types {type DirectoryEntryStream}
 
 pub using @types {type MetadataHashValue}
 

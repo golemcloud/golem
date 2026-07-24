@@ -18,7 +18,7 @@ pub(all) enum ToolError[E] {
 ///|
 pub(all) struct InvocationResult {
   result : @model.TypedSchemaValue?
-  stdout : @streams.OutputStream?
+  stdout : @async-core.Stream[Byte]?
 }
 
 ///|
@@ -37,52 +37,52 @@ pub fn ToolClient::drop(self : ToolClient) -> Unit {
 }
 
 ///|
-pub fn[E] ToolClient::invoke_and_await(
+pub async fn[E] ToolClient::invoke_and_await(
   self : ToolClient,
   command_path : Array[String],
   input : @model.TypedSchemaValue,
-  stdin : @streams.InputStream?,
+  stdin : @async-core.Stream[Byte]?,
   decode_error : (@model.TypedSchemaValue) -> Result[E, String],
 ) -> Result[InvocationResult, ToolError[E]] {
   invoke_and_await(self.rpc, command_path, input, stdin, decode_error)
 }
 
 ///|
-pub fn[E : @schema.FromSchema] ToolClient::invoke_and_await_payload_error(
+pub async fn[E : @schema.FromSchema] ToolClient::invoke_and_await_payload_error(
   self : ToolClient,
   command_path : Array[String],
   input : @model.TypedSchemaValue,
-  stdin : @streams.InputStream?,
+  stdin : @async-core.Stream[Byte]?,
 ) -> Result[InvocationResult, ToolError[E]] {
   invoke_and_await_payload_error(self.rpc, command_path, input, stdin)
 }
 
 ///|
-pub fn[E : ToolErrorSchema] ToolClient::invoke_and_await_tool_error(
+pub async fn[E : ToolErrorSchema] ToolClient::invoke_and_await_tool_error(
   self : ToolClient,
   command_path : Array[String],
   input : @model.TypedSchemaValue,
-  stdin : @streams.InputStream?,
+  stdin : @async-core.Stream[Byte]?,
 ) -> Result[InvocationResult, ToolError[E]] {
   invoke_and_await_tool_error(self.rpc, command_path, input, stdin)
 }
 
 ///|
-pub fn ToolClient::invoke_and_await_no_tool_error(
+pub async fn ToolClient::invoke_and_await_no_tool_error(
   self : ToolClient,
   command_path : Array[String],
   input : @model.TypedSchemaValue,
-  stdin : @streams.InputStream?,
+  stdin : @async-core.Stream[Byte]?,
 ) -> Result[InvocationResult, ToolError[NoToolError]] {
   invoke_and_await_no_tool_error(self.rpc, command_path, input, stdin)
 }
 
 ///|
-pub fn[E] invoke_and_await(
+pub async fn[E] invoke_and_await(
   rpc : @toolHost.ToolRpc,
   command_path : Array[String],
   input : @model.TypedSchemaValue,
-  stdin : @streams.InputStream?,
+  stdin : @async-core.Stream[Byte]?,
   decode_error : (@model.TypedSchemaValue) -> Result[E, String],
 ) -> Result[InvocationResult, ToolError[E]] {
   let wire_input = @model.typed_schema_value_to_wit(input) catch {
@@ -97,21 +97,21 @@ pub fn[E] invoke_and_await(
 }
 
 ///|
-pub fn[E : @schema.FromSchema] invoke_and_await_payload_error(
+pub async fn[E : @schema.FromSchema] invoke_and_await_payload_error(
   rpc : @toolHost.ToolRpc,
   command_path : Array[String],
   input : @model.TypedSchemaValue,
-  stdin : @streams.InputStream?,
+  stdin : @async-core.Stream[Byte]?,
 ) -> Result[InvocationResult, ToolError[E]] {
   invoke_and_await(rpc, command_path, input, stdin, decode_custom_tool_error)
 }
 
 ///|
-pub fn[E : ToolErrorSchema] invoke_and_await_tool_error(
+pub async fn[E : ToolErrorSchema] invoke_and_await_tool_error(
   rpc : @toolHost.ToolRpc,
   command_path : Array[String],
   input : @model.TypedSchemaValue,
-  stdin : @streams.InputStream?,
+  stdin : @async-core.Stream[Byte]?,
 ) -> Result[InvocationResult, ToolError[E]] {
   invoke_and_await(rpc, command_path, input, stdin, fn(value) {
     E::from_error_payload_value(value)
@@ -119,11 +119,11 @@ pub fn[E : ToolErrorSchema] invoke_and_await_tool_error(
 }
 
 ///|
-pub fn invoke_and_await_no_tool_error(
+pub async fn invoke_and_await_no_tool_error(
   rpc : @toolHost.ToolRpc,
   command_path : Array[String],
   input : @model.TypedSchemaValue,
-  stdin : @streams.InputStream?,
+  stdin : @async-core.Stream[Byte]?,
 ) -> Result[InvocationResult, ToolError[NoToolError]] {
   invoke_and_await(rpc, command_path, input, stdin, fn(_value) {
     Err("remote custom tool error is not declared by this client")
@@ -150,7 +150,7 @@ fn[E] decode_invocation_result(
 ///|
 pub fn[T : @schema.FromSchema, E] decode_result_with_stdout(
   result : InvocationResult,
-) -> Result[(T, @streams.OutputStream), ToolError[E]] {
+) -> Result[(T, @async-core.Stream[Byte]), ToolError[E]] {
   let stdout = expect_stdout(result.stdout)
   let value = decode_expected_value(result.result)
   match (stdout, value) {
@@ -173,7 +173,7 @@ pub fn[T : @schema.FromSchema, E] decode_result_value(
 ///|
 pub fn[E] decode_result_stdout_only(
   result : InvocationResult,
-) -> Result[@streams.OutputStream, ToolError[E]] {
+) -> Result[@async-core.Stream[Byte], ToolError[E]] {
   let stdout = expect_stdout(result.stdout)
   match (stdout, expect_no_value(result.result)) {
     (Ok(stdout), Ok(_)) => Ok(stdout)
@@ -194,8 +194,8 @@ pub fn[E] decode_result_empty(
 
 ///|
 pub fn[E] expect_stdout(
-  stdout : @streams.OutputStream?,
-) -> Result[@streams.OutputStream, ToolError[E]] {
+  stdout : @async-core.Stream[Byte]?,
+) -> Result[@async-core.Stream[Byte], ToolError[E]] {
   match stdout {
     Some(stdout) => Ok(stdout)
     None =>
@@ -209,7 +209,7 @@ pub fn[E] expect_stdout(
 
 ///|
 pub fn[E] expect_no_stdout(
-  stdout : @streams.OutputStream?,
+  stdout : @async-core.Stream[Byte]?,
 ) -> Result[Unit, ToolError[E]] {
   match stdout {
     Some(_) =>

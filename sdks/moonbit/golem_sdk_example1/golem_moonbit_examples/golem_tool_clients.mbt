@@ -16,7 +16,7 @@ pub fn CanonicalGrepClient::drop(self : CanonicalGrepClient) -> Unit {
 }
 
 ///|
-pub fn CanonicalGrepClient::canonical_grep(
+pub async fn CanonicalGrepClient::canonical_grep(
   self : CanonicalGrepClient,
   case_sensitive : Bool,
   color : CanonicalGrepColorMode,
@@ -24,9 +24,9 @@ pub fn CanonicalGrepClient::canonical_grep(
   extra_patterns : Array[String],
   max_count : UInt?,
   files : Array[@schema.Path],
-  stdin : @streams.InputStream,
+  stdin : @asyncCore.Stream[Byte],
 ) -> Result[
-  (Array[CanonicalGrepHit], @streams.OutputStream),
+  (Array[CanonicalGrepHit], @asyncCore.Stream[Byte]),
   @tool.ToolError[CanonicalGrepError],
 ] {
   let __golem_def = __golem_tool_def_CanonicalGrep()
@@ -64,7 +64,7 @@ pub fn CanonicalGrepClient::canonical_grep(
 }
 
 ///|
-pub fn CanonicalGrepClient::replace(
+pub async fn CanonicalGrepClient::replace(
   self : CanonicalGrepClient,
   case_sensitive : Bool,
   color : CanonicalGrepColorMode,
@@ -123,7 +123,7 @@ pub fn CanonicalGitClient::drop(self : CanonicalGitClient) -> Unit {
 }
 
 ///|
-pub fn CanonicalGitClient::commit(
+pub async fn CanonicalGitClient::commit(
   self : CanonicalGitClient,
   verbose : UInt,
   git_dir : @schema.Path,
@@ -202,7 +202,7 @@ pub fn CanonicalGitClient::remote(
 }
 
 ///|
-pub fn CanonicalGitRemoteClient::add(
+pub async fn CanonicalGitRemoteClient::add(
   self : CanonicalGitRemoteClient,
   name : String,
   url : @schema.Url,
@@ -248,12 +248,12 @@ pub fn CanonicalGitRemoteClient::add(
 }
 
 ///|
-pub fn CanonicalGitRemoteClient::remove(
+pub async fn CanonicalGitRemoteClient::remove(
   self : CanonicalGitRemoteClient,
   name : String,
 ) -> Result[Unit, @tool.ToolError[CanonicalRemoteError]] {
   let __golem_def = __golem_tool_def_CanonicalGit()
-  let __golem_index = 
+  let __golem_index =
     match __golem_def.command_index_by_path(["remote", "remove"]) {
       Some(__golem_index) => __golem_index
       None => {
@@ -285,7 +285,7 @@ pub fn CanonicalGitRemoteClient::remove(
 }
 
 ///|
-pub fn CanonicalGitRemoteClient::set_url(
+pub async fn CanonicalGitRemoteClient::set_url(
   self : CanonicalGitRemoteClient,
   name : String,
   newurl : @schema.Url,
@@ -295,7 +295,7 @@ pub fn CanonicalGitRemoteClient::set_url(
   delete : Bool,
 ) -> Result[Unit, @tool.ToolError[CanonicalSetUrlError]] {
   let __golem_def = __golem_tool_def_CanonicalGit()
-  let __golem_index = 
+  let __golem_index =
     match __golem_def.command_index_by_path(["remote", "set-url"]) {
       Some(__golem_index) => __golem_index
       None => {
@@ -355,7 +355,7 @@ pub fn CanonicalGitClient::stash(
 }
 
 ///|
-pub fn CanonicalGitStashClient::stash(
+pub async fn CanonicalGitStashClient::stash(
   self : CanonicalGitStashClient,
   message : String,
   keep_index : Bool,
@@ -391,7 +391,7 @@ pub fn CanonicalGitStashClient::stash(
 }
 
 ///|
-pub fn CanonicalGitStashClient::pop(
+pub async fn CanonicalGitStashClient::pop(
   self : CanonicalGitStashClient,
   name : String?,
   index : UInt?,
@@ -429,13 +429,13 @@ pub fn CanonicalGitStashClient::pop(
 }
 
 ///|
-pub fn CanonicalGitStashClient::apply(
+pub async fn CanonicalGitStashClient::apply(
   self : CanonicalGitStashClient,
   name : String?,
   index : UInt?,
 ) -> Result[Unit, @tool.ToolError[CanonicalStashError]] {
   let __golem_def = __golem_tool_def_CanonicalGit()
-  let __golem_index = 
+  let __golem_index =
     match __golem_def.command_index_by_path(["stash", "apply"]) {
       Some(__golem_index) => __golem_index
       None => {
@@ -468,7 +468,7 @@ pub fn CanonicalGitStashClient::apply(
 }
 
 ///|
-pub fn CanonicalGitClient::log(
+pub async fn CanonicalGitClient::log(
   self : CanonicalGitClient,
   max_count : Int64?,
   since : @types.Datetime?,
@@ -535,7 +535,7 @@ pub fn CanonicalBigBoundClient::drop(self : CanonicalBigBoundClient) -> Unit {
 }
 
 ///|
-pub fn CanonicalBigBoundClient::canonical_big_bound(
+pub async fn CanonicalBigBoundClient::canonical_big_bound(
   self : CanonicalBigBoundClient,
   count : UInt64?,
 ) -> Result[Unit, @tool.ToolError[CanonicalGrepError]] {
@@ -567,4 +567,3 @@ pub fn CanonicalBigBoundClient::canonical_big_bound(
     Ok(__golem_result) => @tool.decode_result_empty(__golem_result)
   }
 }
-

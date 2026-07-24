@@ -12,21 +12,190 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
+use std::io::Cursor;
+use std::marker::PhantomData;
+use std::pin::Pin;
 use std::sync::{Arc, RwLock};
+use std::task::{Context, Poll};
 
+use bytes::BytesMut;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::oplog::host_functions::{
+    P3KeyvalueCacheVacancyFill, P3KeyvalueTypesIncomingValueConsumeAsync,
+};
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequestNoInput, HostResponseKVUnit,
+    HostResponseP3KeyvalueIncomingValueStream,
+};
+
+use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable};
+use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::wasi::keyvalue::types::{
-    Error, Host, HostBucket, HostIncomingValue, HostOutgoingValue, IncomingValue,
-    IncomingValueAsyncBody, IncomingValueSyncBody, OutgoingValueBodyAsync, OutgoingValueBodySync,
+    Error, Host, HostBucket, HostIncomingValue, HostIncomingValueWithStore, HostOutgoingValue,
+    HostOutgoingValueWithStore, IncomingValue,
 };
 use crate::workerctx::WorkerCtx;
-use async_trait::async_trait;
-use bytes::Bytes;
-use wasmtime::component::Resource;
-use wasmtime_wasi::{
-    DynInputStream, DynOutputStream, InputStream, IoView, OutputStream, Pollable, StreamResult,
+use wasmtime::AsContextMut;
+use wasmtime::StoreContextMut;
+use wasmtime::component::{
+    Access, Accessor, AccessorTask, Destination, HasSelf, Resource, Source, StreamConsumer,
+    StreamProducer, StreamReader, StreamResult,
 };
+use wasmtime_wasi::IoView;
+
+const KEYVALUE_STREAM_BUFFER_CAPACITY: usize = 8192;
+
+enum DeferredIncomingValueStreamState {
+    Awaiting(tokio::sync::oneshot::Receiver<wasmtime::Result<Vec<u8>>>),
+    Streaming(Cursor<BytesMut>),
+    Done,
+}
+
+struct DeferredIncomingValueStreamProducer {
+    state: DeferredIncomingValueStreamState,
+}
+
+impl DeferredIncomingValueStreamProducer {
+    fn new(rx: tokio::sync::oneshot::Receiver<wasmtime::Result<Vec<u8>>>) -> Self {
+        Self {
+            state: DeferredIncomingValueStreamState::Awaiting(rx),
+        }
+    }
+}
+
+impl<D> StreamProducer<D> for DeferredIncomingValueStreamProducer {
+    type Item = u8;
+    type Buffer = BytesMut;
+
+    fn poll_produce<'a>(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        mut store: StoreContextMut<'a, D>,
+        dst: Destination<'a, Self::Item, Self::Buffer>,
+        _finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        loop {
+            match &mut self.state {
+                DeferredIncomingValueStreamState::Awaiting(rx) => match Pin::new(rx).poll(cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(Ok(Ok(contents))) => {
+                        self.state = DeferredIncomingValueStreamState::Streaming(Cursor::new(
+                            BytesMut::from(contents.as_slice()),
+                        ));
+                    }
+                    Poll::Ready(Ok(Err(error))) => {
+                        self.state = DeferredIncomingValueStreamState::Done;
+                        return Poll::Ready(Err(error));
+                    }
+                    Poll::Ready(Err(_)) => {
+                        self.state = DeferredIncomingValueStreamState::Done;
+                        return Poll::Ready(Err(wasmtime::Error::msg(
+                            "keyvalue incoming value replay task dropped",
+                        )));
+                    }
+                },
+                DeferredIncomingValueStreamState::Streaming(contents) => {
+                    if dst.remaining(store.as_context_mut()) == Some(0) {
+                        return Poll::Ready(Ok(StreamResult::Completed));
+                    }
+
+                    let bytes = contents.get_ref();
+                    let position = contents.position() as usize;
+                    if position >= bytes.len() {
+                        self.state = DeferredIncomingValueStreamState::Done;
+                        return Poll::Ready(Ok(StreamResult::Dropped));
+                    }
+
+                    let mut dst = dst.as_direct(store, KEYVALUE_STREAM_BUFFER_CAPACITY);
+                    let remaining = &bytes[position..];
+                    let n = remaining.len().min(dst.remaining().len());
+                    dst.remaining()[..n].copy_from_slice(&remaining[..n]);
+                    dst.mark_written(n);
+                    contents.set_position((position + n) as u64);
+                    return Poll::Ready(Ok(StreamResult::Completed));
+                }
+                DeferredIncomingValueStreamState::Done => {
+                    return Poll::Ready(Ok(StreamResult::Dropped));
+                }
+            }
+        }
+    }
+}
+
+struct IncomingValueConsumeTask<Ctx> {
+    contents: Vec<u8>,
+    result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Vec<u8>>>,
+    /// The task's whole run is durable work with no guest-driven wait, so it
+    /// stays active (no safe park point) from spawn to finish.
+    _activity: TailActivity,
+    _phantom: PhantomData<fn() -> Ctx>,
+}
+
+impl<Ctx> IncomingValueConsumeTask<Ctx> {
+    fn new(
+        contents: Vec<u8>,
+        result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Vec<u8>>>,
+        activity: TailActivity,
+    ) -> Self {
+        Self {
+            contents,
+            result_tx,
+            _activity: activity,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<Ctx, T> AccessorTask<T, HasSelf<DurableWorkerCtx<Ctx>>> for IncomingValueConsumeTask<Ctx>
+where
+    Ctx: WorkerCtx,
+    T: 'static,
+{
+    async fn run(
+        self,
+        accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
+    ) -> wasmtime::Result<()> {
+        let result = async {
+            let mut handle =
+                CallHandle::<P3KeyvalueTypesIncomingValueConsumeAsync, Cancellable>::start_access(
+                    accessor,
+                    accessor.getter(),
+                    HostRequestNoInput {},
+                    DurableFunctionType::ReadRemote,
+                )
+                .await
+                .map_err(wasmtime::Error::from)?;
+
+            if !handle.is_live() {
+                match handle
+                    .replay_access(accessor, accessor.getter())
+                    .await
+                    .map_err(wasmtime::Error::from)?
+                {
+                    CallReplayOutcome::Replayed(response) => return Ok(response.contents),
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
+            let response = handle
+                .complete_access(
+                    accessor,
+                    accessor.getter(),
+                    HostResponseP3KeyvalueIncomingValueStream {
+                        contents: self.contents,
+                    },
+                )
+                .await
+                .map_err(wasmtime::Error::from)?;
+            Ok(response.contents)
+        }
+        .await;
+
+        let _ = self.result_tx.send(result);
+        Ok(())
+    }
+}
 
 impl<Ctx: WorkerCtx> HostBucket for DurableWorkerCtx<Ctx> {
     async fn open_bucket(
@@ -55,29 +224,10 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
         Ok(outgoing_value)
     }
 
-    async fn outgoing_value_write_body_async(
-        &mut self,
-        self_: Resource<OutgoingValueEntry>,
-    ) -> anyhow::Result<Result<Resource<OutgoingValueBodyAsync>, Resource<Error>>> {
-        self.observe_function_call(
-            "keyvalue::types::outgoing_value",
-            "outgoing_value_write_body_async",
-        );
-        let body = self
-            .as_wasi_view()
-            .table()
-            .get::<OutgoingValueEntry>(&self_)?
-            .body
-            .clone();
-        let body: DynOutputStream = Box::new(OutgoingValueEntryStream::new(body));
-        let outgoing_value_async_body = self.as_wasi_view().table().push(body)?;
-        Ok(Ok(outgoing_value_async_body))
-    }
-
     async fn outgoing_value_write_body_sync(
         &mut self,
         self_: Resource<OutgoingValueEntry>,
-        value: OutgoingValueBodySync,
+        value: Vec<u8>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
         self.observe_function_call(
             "keyvalue::types::outgoing_value",
@@ -92,12 +242,108 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
         body.write().unwrap().extend_from_slice(&value);
         Ok(Ok(()))
     }
+}
 
-    async fn drop(&mut self, rep: Resource<OutgoingValueEntry>) -> anyhow::Result<()> {
-        self.observe_function_call("keyvalue::types::outgoing_value", "drop");
-        self.as_wasi_view()
-            .table()
-            .delete::<OutgoingValueEntry>(rep)?;
+/// Consumes the guest-provided `stream<u8>` written into an outgoing value and
+/// appends the bytes to the outgoing value's in-memory body buffer. The buffer
+/// is later captured durably by the consuming durable call (`eventual::set`,
+/// batch set or cache vacancy fill), so this consumer itself performs no oplog
+/// recording.
+struct OutgoingValueWriteConsumer {
+    body: Arc<RwLock<Vec<u8>>>,
+}
+
+impl<D> StreamConsumer<D> for OutgoingValueWriteConsumer {
+    type Item = u8;
+
+    fn poll_consume(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        store: StoreContextMut<D>,
+        source: Source<'_, Self::Item>,
+        _finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        let mut source = source.as_direct(store);
+        let bytes = source.remaining();
+        if bytes.is_empty() {
+            return Poll::Ready(Ok(StreamResult::Completed));
+        }
+        let len = bytes.len();
+        self.body.write().unwrap().extend_from_slice(bytes);
+        source.mark_read(len);
+        Poll::Ready(Ok(StreamResult::Completed))
+    }
+}
+
+impl<U: Send + 'static, Ctx: WorkerCtx> HostOutgoingValueWithStore<U>
+    for HasSelf<DurableWorkerCtx<Ctx>>
+{
+    fn outgoing_value_write_body_async(
+        mut host: Access<U, Self>,
+        self_: Resource<OutgoingValueEntry>,
+        data: StreamReader<u8>,
+    ) -> anyhow::Result<Result<(), Resource<Error>>> {
+        let body = {
+            let ctx = host.get();
+            ctx.observe_function_call(
+                "keyvalue::types::outgoing_value",
+                "outgoing_value_write_body_async",
+            );
+            ctx.as_wasi_view()
+                .table()
+                .get::<OutgoingValueEntry>(&self_)?
+                .body
+                .clone()
+        };
+        data.pipe(&mut host, OutgoingValueWriteConsumer { body })?;
+        Ok(Ok(()))
+    }
+
+    async fn drop(
+        accessor: &Accessor<U, Self>,
+        rep: Resource<OutgoingValueEntry>,
+    ) -> anyhow::Result<()> {
+        let (mut entry, key_value_service) = accessor.with(|mut access| {
+            let ctx = access.get();
+            ctx.observe_function_call("keyvalue::types::outgoing_value", "drop");
+            Ok::<_, anyhow::Error>((
+                ctx.as_wasi_view()
+                    .table()
+                    .delete::<OutgoingValueEntry>(rep)?,
+                ctx.state.key_value_service.clone(),
+            ))
+        })?;
+
+        if let Some(mut fill) = entry.cache_fill.take()
+            && let Some(mut handle) = fill.handle.take()
+        {
+            let value = entry.body.read().unwrap().clone();
+            let response = 'resp: {
+                if !handle.is_live() {
+                    match handle.replay_access(accessor, accessor.getter()).await? {
+                        CallReplayOutcome::Replayed(response) => break 'resp response,
+                        CallReplayOutcome::Incomplete(live) => handle = live,
+                    }
+                }
+
+                let result = key_value_service
+                    .set(
+                        fill.environment_id,
+                        CACHE_BUCKET.to_string(),
+                        fill.key,
+                        value,
+                    )
+                    .await
+                    .map_err(|err| err.to_string());
+                handle
+                    .complete_access(accessor, accessor.getter(), HostResponseKVUnit { result })
+                    .await?
+            };
+
+            if let Err(error) = response.result {
+                tracing::debug!(error, "keyvalue::cache vacancy fill failed");
+            }
+        }
         Ok(())
     }
 }
@@ -106,7 +352,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
     async fn incoming_value_consume_sync(
         &mut self,
         self_: Resource<IncomingValue>,
-    ) -> anyhow::Result<Result<IncomingValueSyncBody, Resource<Error>>> {
+    ) -> anyhow::Result<Result<Vec<u8>, Resource<Error>>> {
         self.observe_function_call(
             "keyvalue::types::incoming_value",
             "incoming_value_consume_sync",
@@ -119,25 +365,6 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
             .clone();
         let value = body.write().unwrap().drain(..).collect();
         Ok(Ok(value))
-    }
-
-    async fn incoming_value_consume_async(
-        &mut self,
-        self_: Resource<IncomingValue>,
-    ) -> anyhow::Result<Result<Resource<IncomingValueAsyncBody>, Resource<Error>>> {
-        self.observe_function_call(
-            "keyvalue::types::incoming_value",
-            "incoming_value_consume_async",
-        );
-        let body = self
-            .as_wasi_view()
-            .table()
-            .get::<IncomingValueEntry>(&self_)?
-            .body
-            .clone();
-        let input_stream: DynInputStream = Box::new(IncomingValueEntryStream::new(body));
-        let incoming_value_async_body = self.as_wasi_view().table().push(input_stream)?;
-        Ok(Ok(incoming_value_async_body))
     }
 
     async fn incoming_value_size(
@@ -164,7 +391,39 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
     }
 }
 
+impl<U: Send + 'static, Ctx: WorkerCtx> HostIncomingValueWithStore<U>
+    for HasSelf<DurableWorkerCtx<Ctx>>
+{
+    fn incoming_value_consume_async(
+        mut host: Access<U, Self>,
+        self_: Resource<IncomingValue>,
+    ) -> anyhow::Result<Result<StreamReader<u8>, Resource<Error>>> {
+        let contents = {
+            let ctx = host.get();
+            let body = ctx
+                .as_wasi_view()
+                .table()
+                .get::<IncomingValueEntry>(&self_)?
+                .body
+                .clone();
+            body.write().unwrap().drain(..).collect::<Vec<u8>>()
+        };
+
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        let activity = host.get().tail_work_tracker().activity();
+        host.spawn(IncomingValueConsumeTask::<Ctx>::new(
+            contents, result_tx, activity,
+        ));
+        Ok(Ok(StreamReader::new(
+            &mut host,
+            DeferredIncomingValueStreamProducer::new(result_rx),
+        )?))
+    }
+}
+
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
+
+pub(crate) const CACHE_BUCKET: &str = "__golem_wasi_keyvalue_cache";
 
 pub struct BucketEntry {
     pub name: String,
@@ -178,6 +437,7 @@ impl BucketEntry {
 
 pub struct OutgoingValueEntry {
     pub body: Arc<RwLock<Vec<u8>>>,
+    pub(crate) cache_fill: Option<CacheFillState>,
 }
 
 impl Default for OutgoingValueEntry {
@@ -190,42 +450,22 @@ impl OutgoingValueEntry {
     pub fn new() -> Self {
         Self {
             body: Arc::new(RwLock::new(Vec::new())),
+            cache_fill: None,
+        }
+    }
+
+    pub(crate) fn new_cache_fill(cache_fill: CacheFillState) -> Self {
+        Self {
+            body: Arc::new(RwLock::new(Vec::new())),
+            cache_fill: Some(cache_fill),
         }
     }
 }
 
-pub struct OutgoingValueEntryStream {
-    pub body: Arc<RwLock<Vec<u8>>>,
-}
-
-impl OutgoingValueEntryStream {
-    pub fn new(body: Arc<RwLock<Vec<u8>>>) -> Self {
-        Self { body }
-    }
-}
-
-#[async_trait]
-impl Pollable for OutgoingValueEntryStream {
-    async fn ready(&mut self) {}
-}
-
-impl OutputStream for OutgoingValueEntryStream {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn write(&mut self, bytes: Bytes) -> StreamResult<()> {
-        self.body.write().unwrap().extend_from_slice(&bytes);
-        Ok(())
-    }
-
-    fn flush(&mut self) -> StreamResult<()> {
-        Ok(())
-    }
-
-    fn check_write(&mut self) -> StreamResult<usize> {
-        Ok(usize::MAX)
-    }
+pub(crate) struct CacheFillState {
+    pub handle: Option<CallHandle<P3KeyvalueCacheVacancyFill, Cancellable>>,
+    pub environment_id: EnvironmentId,
+    pub key: String,
 }
 
 pub struct IncomingValueEntry {
@@ -237,35 +477,5 @@ impl IncomingValueEntry {
         IncomingValueEntry {
             body: Arc::new(RwLock::new(body)),
         }
-    }
-}
-
-pub struct IncomingValueEntryStream {
-    body: Arc<RwLock<Vec<u8>>>,
-}
-
-impl IncomingValueEntryStream {
-    pub fn new(body: Arc<RwLock<Vec<u8>>>) -> IncomingValueEntryStream {
-        IncomingValueEntryStream { body }
-    }
-}
-
-#[async_trait]
-impl Pollable for IncomingValueEntryStream {
-    async fn ready(&mut self) {}
-}
-
-impl InputStream for IncomingValueEntryStream {
-    fn read(&mut self, size: usize) -> StreamResult<Bytes> {
-        let mut buf = vec![0u8; size];
-        let mut body = self.body.write().unwrap();
-        let size = std::cmp::min(buf.len(), body.len());
-        buf[..size].copy_from_slice(&body[..size]);
-        body.drain(..size);
-        Ok(buf.into())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

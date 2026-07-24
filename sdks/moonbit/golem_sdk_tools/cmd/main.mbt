@@ -8,7 +8,7 @@ fn fix_broken_strings(input : String) -> String {
   let mut in_broken = false
   let mut acc = ""
   for line in lines {
-    let s = line.to_string()
+    let s = line.trim_end(chars=" ").to_string()
     if in_broken {
       acc = acc + " " + s.trim_start(chars=" ").to_string()
       let trimmed = s.trim_end(chars=" ").to_string()
@@ -35,7 +35,7 @@ fn fix_broken_strings(input : String) -> String {
   if in_broken {
     result.push(acc)
   }
-  result.join("\n")
+  result.join("\n").trim_end(chars="\n").to_string() + "\n"
 }
 
 ///|
@@ -137,7 +137,7 @@ fn run_agents(project_root : String) -> Unit raise {
         pkg_content, "golemcloud/golem_sdk/interface/golem/tool/common", "@toolCommon",
       )
       pkg_content = @lib.ensure_pkg_import(
-        pkg_content, "golemcloud/golem_sdk/interface/wasi/io/streams", "@streams",
+        pkg_content, "golemcloud/golem_sdk/async-core", "@asyncCore",
       )
       @fs.write_string_to_file(pkg_path, pkg_content)
     } else {
@@ -215,7 +215,7 @@ fn run_agents(project_root : String) -> Unit raise {
         pkg_content, "golemcloud/golem_sdk/interface/golem/agent/host", "@agentHost",
       )
       pkg_content = @lib.ensure_pkg_import(
-        pkg_content, "golemcloud/golem_sdk/interface/wasi/clocks/wallClock", "@wallClock",
+        pkg_content, "golemcloud/golem_sdk/interface/wasi/clocks/system-clock", "@systemClock",
       )
       // JSON snapshot helpers are emitted for agents deriving ToJson/FromJson.
       let needs_json = agents

@@ -46,7 +46,7 @@ use golem_common::model::component::{
 use golem_common::model::component::{
     AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
 };
-use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -1146,6 +1146,9 @@ async fn analyze_and_validate_component_wasm(
     agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
 ) -> Result<ComponentMetadata, ComponentError> {
     for agent_type in &agent_types {
+        agent_type
+            .validate()
+            .map_err(ComponentProcessingError::Metadata)?;
         validate_agent_config_declarations(agent_type)?;
     }
 

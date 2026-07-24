@@ -173,7 +173,14 @@ async fn fork_running_worker_1(
     user.check_oplog_is_queryable(&target_agent_id).await?;
 
     let total_invocations = user
-        .search_oplog(&target_agent_id, "add AND invoke AND NOT pending")
+        // Oplog search uses case-insensitive substring matching, and idempotency keys are
+        // random hex UUIDs which can contain "add" as a substring, so the query must also
+        // require the method-invocation marker to avoid spuriously matching the agent's
+        // constructor (agent-initialization) entry.
+        .search_oplog(
+            &target_agent_id,
+            "add AND agent-method-invocation AND NOT pending",
+        )
         .await?;
 
     assert_eq!(total_invocations.len(), 1);

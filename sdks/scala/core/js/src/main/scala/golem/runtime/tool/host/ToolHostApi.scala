@@ -17,10 +17,9 @@
 package golem.runtime.tool.host
 
 import golem.host.ToolWireInterop
-import golem.host.js.{JsComponentId, JsResult}
+import golem.host.js.JsComponentId
 import golem.host.js.schema.JsTypedSchemaValue
 import golem.host.js.tool.{JsInvocationResult, JsTool, JsToolError, JsWasiInputStream}
-import golem.runtime.rpc.host.AgentHostApi
 import golem.runtime.tool.ToolImplementationRuntime
 import golem.tool.ToolRpcFailure
 import golem.tool.wire.WitTool
@@ -103,7 +102,7 @@ private[golem] object ToolHostApi {
       commandPath: js.Array[String],
       input: JsTypedSchemaValue,
       stdin: js.UndefOr[JsWasiInputStream]
-    ): JsInvocationResult = js.native
+    ): js.Promise[JsInvocationResult] = js.native
 
     def invoke(
       commandPath: js.Array[String],
@@ -121,9 +120,8 @@ private[golem] object ToolHostApi {
   @js.native
   @JSImport("golem:tool/host@0.1.0", "FutureInvokeResult")
   final class RawToolFutureInvokeResult extends js.Object {
-    def subscribe(): AgentHostApi.Pollable                              = js.native
-    def get(): js.UndefOr[JsResult[JsInvocationResult, JsToolRpcError]] = js.native
-    def cancel(): Unit                                                  = js.native
+    def get(): js.Promise[JsInvocationResult] = js.native
+    def cancel(): Unit                        = js.native
   }
 
   /**

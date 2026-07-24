@@ -603,6 +603,7 @@ export function cloneSchemaValue(value: SchemaValue): SchemaValue {
     case 'binary':
       return { ...value, bytes: value.bytes.slice() };
     case 'datetime':
+      return { ...value, value: { ...value.value } };
     case 'quantity':
       return { ...value, value: { ...value.value } };
     case 'union':

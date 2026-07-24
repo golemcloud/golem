@@ -162,7 +162,6 @@ object HostApi {
   }
   type GetAgentsHandle        = AgentHostApi.GetAgentsHandle
   type GetPromiseResultHandle = AgentHostApi.GetPromiseResultHandle
-  type Pollable               = AgentHostApi.Pollable
   type UuidLiteral            = AgentHostApi.UuidLiteral
   val UuidLiteral: AgentHostApi.UuidLiteral.type               = AgentHostApi.UuidLiteral
   val ComponentIdLiteral: AgentHostApi.ComponentIdLiteral.type = AgentHostApi.ComponentIdLiteral
@@ -365,62 +364,17 @@ object HostApi {
 
   /**
    * Awaits a promise completion and returns the payload bytes.
-   *
-   * This is implemented in a non-blocking way (polling `pollable.ready()`), so
-   * it can be safely composed with other async work using `Future`.
-   *
-   * If you want the explicit blocking behavior, use `awaitPromiseBlocking`.
    */
   def awaitPromise(promiseId: PromiseId): Future[Array[Byte]] =
     awaitPromiseRaw(promiseId).map(fromUint8Array)(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
 
-  /**
-   * Blocks until a promise is completed, then returns the payload bytes.
-   *
-   * Under the hood this calls WIT `subscribe` / `pollable.block`.
-   */
-  def awaitPromiseBlocking(promiseId: PromiseId): Array[Byte] =
-    fromUint8Array(awaitPromiseBlockingRaw(promiseId))
-
   /** Low-level await using `Uint8Array` (internal; prefer `Array[Byte]`). */
-  private[golem] def awaitPromiseRaw(promiseId: PromiseId): Future[Uint8Array] = {
-    val handle   = AgentHostApi.getPromise(promiseId)
-    val pollable = handle.subscribe()
-    golem.FutureInterop
-      .fromPromise(pollable.promise())
-      .map { _ =>
-        handle.get().toOption match {
-          case Some(bytes) => bytes
-          case None        => throw new IllegalStateException("Promise completed but result is empty")
-        }
-      }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
-  }
-
-  /**
-   * Low-level blocking await using `Uint8Array` (internal; prefer
-   * `Array[Byte]`).
-   *
-   * Uses WASI `pollable.block()` for synchronous blocking. This should only be
-   * used from synchronous (non-async) code paths. For async code, use
-   * `awaitPromiseRaw` which uses `pollable.promise()`.
-   */
-  private[golem] def awaitPromiseBlockingRaw(promiseId: PromiseId): Uint8Array = {
-    val handle   = AgentHostApi.getPromise(promiseId)
-    val pollable = handle.subscribe()
-    pollable.block()
-    handle.get().toOption match {
-      case Some(bytes) => bytes
-      case None        => throw new IllegalStateException("Promise completed but result is empty")
-    }
-  }
+  private[golem] def awaitPromiseRaw(promiseId: PromiseId): Future[Uint8Array] =
+    golem.FutureInterop.fromPromise(AgentHostApi.getPromise(promiseId).get())
 
   /**
    * Await a promise and decode the payload as JSON using
    * `zio.blocks.schema.json`.
-   *
-   * This is the '''non-blocking''' variant that polls via `setTimeout`. For
-   * fork+join patterns (where the Golem runtime must know the worker is
-   * suspended), use [[awaitPromiseBlockingJson]] instead.
    *
    * By default, decoding is lenient (extra JSON fields are ignored). If you
    * want strict decoding, set `rejectExtraFields = true`.
@@ -435,28 +389,6 @@ object HostApi {
         case Left(err)    => throw new IllegalArgumentException(err.toString)
       }
     }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
-
-  /**
-   * Blocks until a promise is completed, then decodes the payload as JSON.
-   *
-   * Uses WASI `pollable.block()` under the hood, which properly signals to the
-   * Golem runtime that this worker is suspended. This is required for fork+join
-   * patterns where the forked worker must complete the promise before the
-   * original worker can proceed.
-   *
-   * @see
-   *   [[awaitPromiseJson]] for the non-blocking variant
-   */
-  def awaitPromiseBlockingJson[A](promiseId: PromiseId, rejectExtraFields: Boolean = false)(implicit
-    schema: Schema[A]
-  ): A = {
-    val bytes = awaitPromiseBlocking(promiseId)
-    val codec = jsonCodec[A](rejectExtraFields)
-    codec.decode(bytes) match {
-      case Right(value) => value
-      case Left(err)    => throw new IllegalArgumentException(err.toString)
-    }
-  }
 
   /**
    * Encode a value as JSON and complete the promise with the encoded bytes.
@@ -486,8 +418,7 @@ object HostApi {
    * {{{
    *   val webhook = HostApi.createWebhook()
    *   // Send webhook.url to an external service
-   *   val payload = webhook.awaitBlocking()
-   *   val data = payload.json[MyType]
+   *   val data = webhook.await().map(_.json[MyType]())
    * }}}
    */
   def createWebhook(): WebhookHandler = {
@@ -504,24 +435,11 @@ object HostApi {
 
     /**
      * Awaits the webhook POST payload asynchronously.
-     *
-     * This is non-blocking (polls via `setTimeout`). For fork+join patterns
-     * where the Golem runtime must know the worker is suspended, use
-     * [[awaitBlocking]] instead.
      */
     def await(): Future[WebhookRequestPayload] =
       awaitPromiseRaw(promiseId).map(new WebhookRequestPayload(_))(
         scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
       )
-
-    /**
-     * Blocks until the webhook POST payload arrives.
-     *
-     * Uses WASI `pollable.block()` under the hood. Use this from synchronous
-     * code paths or fork+join patterns.
-     */
-    def awaitBlocking(): WebhookRequestPayload =
-      new WebhookRequestPayload(awaitPromiseBlockingRaw(promiseId))
   }
 
   /**

@@ -1,10 +1,6 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "golemcloud/golem_sdk/interface/golem/websocket/client"
 
-import {
-  "golemcloud/golem_sdk/interface/wasi/io/poll",
-}
-
 // Values
 
 // Errors
@@ -32,10 +28,9 @@ pub(all) struct WebsocketConnection(Int) derive(Eq, Show)
 pub fn WebsocketConnection::close(Self, UInt?, String?) -> Result[Unit, Error_]
 pub fn WebsocketConnection::connect(String, Array[(String, String)]?) -> Result[Self, Error_]
 pub fn WebsocketConnection::drop(Self) -> Unit
-pub fn WebsocketConnection::receive(Self) -> Result[Message, Error_]
-pub fn WebsocketConnection::receive_with_timeout(Self, UInt64) -> Result[Message?, Error_]
+pub async fn WebsocketConnection::receive(Self) -> Result[Message, Error_]
+pub async fn WebsocketConnection::receive_with_timeout(Self, UInt64) -> Result[Message?, Error_]
 pub fn WebsocketConnection::send(Self, Message) -> Result[Unit, Error_]
-pub fn WebsocketConnection::subscribe(Self) -> @poll.Pollable
 
 // Type aliases
 

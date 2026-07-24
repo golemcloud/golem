@@ -4,8 +4,6 @@ package golem:api@1.5.0;
 /// the durability and transactional guarantees the executor provides.
 interface host {
     use golem:core/types@2.0.0.{component-id, card-id, uuid, agent-id, promise-id, oplog-index};
-    use wasi:io/poll@0.2.3.{pollable};
-
     /// Represents a Golem component's version
     type component-revision = u64;
 
@@ -184,10 +182,8 @@ interface host {
     }
 
     resource get-promise-result {
-      /// Returns a pollable that can be used to wait for the promise to become ready.j
-      subscribe: func() -> pollable;
-      /// Poll the result of the promise, returning none if it is not yet ready.
-      get: func() -> option<list<u8>>;
+      /// Awaits the result of the promise.
+      get: async func() -> list<u8>;
     }
 
     /// Plain-data handle to a permission card visible to the guest.
@@ -324,7 +320,7 @@ interface save-snapshot {
     use host.{snapshot};
 
     /// Saves the component's state into a user-defined snapshot
-    save: func() -> snapshot;
+    save: async func() -> snapshot;
 }
 
 /// Interface providing user-defined snapshotting capability. This can be used to perform manual update of agents
@@ -334,7 +330,7 @@ interface load-snapshot {
 
     /// Tries to load a user-defined snapshot, setting up the agent's state based on it.
     /// The function can return with a failure to indicate that the update is not possible.
-    load: func(snapshot: snapshot) -> result<_, string>;
+    load: async func(snapshot: snapshot) -> result<_, string>;
 }
 
 world golem-host {

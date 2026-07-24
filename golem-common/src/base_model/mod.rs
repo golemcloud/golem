@@ -134,11 +134,11 @@ newtype_uuid!(
 );
 
 #[cfg(feature = "full")]
-impl From<Timestamp> for wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime {
+impl From<Timestamp> for wasmtime_wasi::p3::bindings::clocks::system_clock::Instant {
     fn from(value: Timestamp) -> Self {
         let ms = value.to_millis();
         Self {
-            seconds: ms / 1000,
+            seconds: (ms / 1000) as i64,
             nanoseconds: ((ms % 1000) * 1_000_000) as u32,
         }
     }

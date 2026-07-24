@@ -12,21 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agentic::InputStream;
 use crate::agentic::extended_tool_type::ExtendedToolType;
 use crate::golem_agentic::exports::golem::tool::guest::{
     InvocationResult, Tool, ToolError, TypedSchemaValue,
 };
 use crate::golem_agentic::golem::agent::common::Principal;
-use crate::wasip2::io::streams::InputStream;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
 
-pub type ToolInvoker = fn(
-    Vec<String>,
-    TypedSchemaValue,
-    Option<InputStream>,
-    Principal,
-) -> Result<InvocationResult, ToolError>;
+pub type ToolInvokeFuture = Pin<Box<dyn Future<Output = Result<InvocationResult, ToolError>>>>;
+
+pub type ToolInvoker =
+    fn(Vec<String>, TypedSchemaValue, Option<InputStream>, Principal) -> ToolInvokeFuture;
 
 #[derive(Default)]
 pub struct State {

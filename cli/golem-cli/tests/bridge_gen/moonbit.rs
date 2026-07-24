@@ -447,6 +447,10 @@ fn guest_mode_generates_wasm_rpc_project_layout() {
     assert!(moon_pkg.contains(r#""golemcloud/golem_sdk/schema_model" @model"#));
     assert!(moon_pkg.contains(r#""golemcloud/golem_sdk/interface/golem/agent/common" @common"#));
     assert!(moon_pkg.contains(r#""golemcloud/golem_sdk/interface/golem/core/types" @types"#));
+    assert!(
+        moon_pkg
+            .contains(r#""golemcloud/golem_sdk/interface/wasi/clocks/system-clock" @systemClock"#)
+    );
     assert!(!moon_pkg.contains("moonbitlang/async"));
     assert!(!moon_pkg.contains("/runtime"));
     assert!(!moon_pkg.contains("golemcloud/golem_sdk/tool"));
@@ -472,13 +476,13 @@ fn guest_tool_mode_generates_schema_complete_buildable_consumer_module() {
     assert!(!source.contains("@runtime"));
     for expected in [
         "pub(all) struct NewClient",
-        "pub fn NewClient::new_2(",
-        "pub fn NewClient::drop_2(",
-        "pub fn NewClient::client(",
-        "stdin : @streams.InputStream?",
-        "stdin : @streams.InputStream",
-        "@streams.OutputStream?",
-        "@streams.OutputStream",
+        "pub async fn NewClient::new_2(",
+        "pub async fn NewClient::drop_2(",
+        "pub async fn NewClient::client(",
+        "stdin : @asyncCore.Stream[Byte]?",
+        "stdin : @asyncCore.Stream[Byte]",
+        "@asyncCore.Stream[Byte]?",
+        "@asyncCore.Stream[Byte]",
         "pub(all) enum NewError",
         "Error(String)",
         "Error_2(UnstructuredText)",
@@ -504,7 +508,7 @@ fn guest_tool_mode_generates_schema_complete_buildable_consumer_module() {
     .unwrap();
     std::fs::write(
         target.join("consumer/consumer.mbt"),
-        r#"pub fn consume() -> Unit {
+        r#"pub async fn consume() -> Unit {
   let client = @client.NewClient::new()
   ignore(client.client())
   client.drop()
@@ -628,7 +632,8 @@ fn guest_mode_emits_native_agent_client_and_exact_config_graph() {
     assert!(source.contains("@rpc.AgentClient::get(\"ConfiguredCounter\", constructor_input)"));
     assert!(source.contains("@rpc.AgentClient::new_phantom("));
     assert!(source.contains("@rpc.AgentClient::get_phantom("));
-    assert!(source.contains("pub fn[T] ConfiguredCounterClient::scoped("));
+    assert!(source.contains("pub async fn[T] ConfiguredCounterClient::scoped("));
+    assert!(source.contains("scheduled_at : @systemClock.Instant"));
     assert!(source.contains("pub fn ConfiguredCounterClient::get_agent_id("));
     assert!(source.contains("pub fn ConfiguredCounterClient::phantom_id("));
     assert!(source.contains("pub fn ConfiguredCounterClient::drop("));
@@ -655,10 +660,10 @@ fn guest_mode_emits_native_agent_client_and_exact_config_graph() {
     .unwrap();
     std::fs::write(
         guest.path().join("consumer/consumer.mbt"),
-        r#"pub fn call_provider(name : String) -> Int64 raise @common.AgentError {
+        r#"pub async fn call_provider(name : String) -> Int64 {
   @client.ConfiguredCounterClient::scoped(
     name,
-    fn(provider) raise @common.AgentError {
+    async fn(provider) {
       provider.read(1)
     },
   )
@@ -710,8 +715,8 @@ fn guest_mode_handles_helper_wrapper_and_local_name_collisions() {
     let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
     let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
 
-    assert!(source.contains("pub fn CollisionAgentClient::drop_2("));
-    assert!(source.contains("pub fn CollisionAgentClient::phantom_id_2("));
+    assert!(source.contains("pub async fn CollisionAgentClient::drop_2("));
+    assert!(source.contains("pub async fn CollisionAgentClient::phantom_id_2("));
     assert!(source.contains("pub fn CollisionAgentClient::schedule_cancelable_drop_2("));
     assert!(source.contains("client_2 : String"));
     assert!(source.contains("constructor_input_2 : String"));
@@ -847,9 +852,9 @@ fn ephemeral_guest_methods_keep_names_of_absent_lifecycle_helpers() {
     let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
     let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
     let expected_methods = [
-        "pub fn EphemeralCollisionAgentClient::get(self : EphemeralCollisionAgentClient)",
-        "pub fn EphemeralCollisionAgentClient::get_with_config(self : EphemeralCollisionAgentClient)",
-        "pub fn EphemeralCollisionAgentClient::scoped(self : EphemeralCollisionAgentClient)",
+        "pub async fn EphemeralCollisionAgentClient::get(self : EphemeralCollisionAgentClient)",
+        "pub async fn EphemeralCollisionAgentClient::get_with_config(self : EphemeralCollisionAgentClient)",
+        "pub async fn EphemeralCollisionAgentClient::scoped(self : EphemeralCollisionAgentClient)",
     ];
     let missing = expected_methods
         .iter()

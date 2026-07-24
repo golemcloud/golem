@@ -108,6 +108,9 @@ wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
 zstd = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
 [[bench]]
 name = "invocation_lowering"
 harness = false

@@ -2,15 +2,15 @@
 pub type Principal = @agentCommon.Principal
 
 ///|
-pub fn get_stdout() -> @streams.OutputStream {
-  @stdout.get_stdout()
+pub fn new_stdout() -> (@async-core.Stream[Byte], @async-core.Sink[Byte]) {
+  @async-core.Stream::new()
 }
 
 ///|
 type ToolInvoker = (
   Array[String],
   @types.TypedSchemaValue,
-  @streams.InputStream?,
+  @async-core.Stream[Byte]?,
   @agentCommon.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError]
 
@@ -122,7 +122,7 @@ pub fn invoke_registered_tool(
   tool_name : String,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
-  stdin : @streams.InputStream?,
+  stdin : @async-core.Stream[Byte]?,
   principal : @agentCommon.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   if !state.tools.contains(tool_name) {
@@ -136,7 +136,7 @@ fn invoke_registered_invoker(
   tool_name : String,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
-  stdin : @streams.InputStream?,
+  stdin : @async-core.Stream[Byte]?,
   principal : @agentCommon.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   match state.invokers.get(tool_name) {
@@ -150,7 +150,7 @@ pub fn invoke_registered_subtool(
   tool_name : String,
   command_path : Array[String],
   fields : Array[CanonicalInputValue],
-  stdin : @streams.InputStream?,
+  stdin : @async-core.Stream[Byte]?,
   principal : @agentCommon.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   let def = match state.defs.get(tool_name) {

@@ -466,6 +466,11 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         config.wasm_multi_value(true);
         config.wasm_component_model(true);
+        // Required for WASI p3: enables the async ABI (stream<T>, future<T>,
+        // async lift/lower, error-context). Without this, components that use
+        // any p3 async builtins fail to instantiate.
+        config.wasm_component_model_async(true);
+        config.wasm_component_model_error_context(true);
         config.epoch_interruption(true);
         config.consume_fuel(true);
         config.wasm_backtrace_details(WasmBacktraceDetails::Enable);
@@ -928,6 +933,7 @@ pub async fn create_worker_executor_impl<
         golem_config.scheduler.lease_ttl,
         golem_config.scheduler.max_batches_per_tick,
         golem_config.scheduler_storage_retry.clone(),
+        golem_config.scheduler.max_concurrent_action_processing,
         shutdown_token.clone(),
     );
 

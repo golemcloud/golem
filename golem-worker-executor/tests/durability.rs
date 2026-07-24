@@ -13,12 +13,9 @@
 // limitations under the License.
 
 use crate::Tracing;
+use axum::Router;
 use axum::extract::Query;
-use axum::response::Response;
 use axum::routing::get;
-use axum::{BoxError, Router};
-use bytes::Bytes;
-use futures::{StreamExt, stream};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::AgentEvent;
 use golem_common::model::oplog::{
@@ -31,7 +28,6 @@ use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TEST_CARD_ID, TestContext, WorkerExecutorTestDependencies,
     start, start_with_snapshot_policy,
 };
-use http::StatusCode;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -39,7 +35,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test};
-use tokio::sync::Mutex;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::Instrument;
 
@@ -155,136 +150,6 @@ async fn custom_durability_1(
 
     assert_eq!(result1.into_typed::<String>()?, "0-a");
     assert_eq!(result2.into_typed::<String>()?, "1-b");
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn lazy_pollable(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    #[derive(Deserialize)]
-    struct QueryParams {
-        idx: u32,
-    }
-
-    let (signal_tx, signal_rx) = tokio::sync::mpsc::unbounded_channel();
-    let signal_rx = Arc::new(Mutex::new(signal_rx));
-
-    let http_server = tokio::spawn(
-        async move {
-            let route = Router::new().route(
-                "/fetch",
-                get(move |query: Query<QueryParams>| async move {
-                    let idx = query.idx;
-                    tracing::info!("fetch called with: {}", idx);
-
-                    let stream = stream::iter(0..3).then(move |i| {
-                        let signal_rx = signal_rx.clone();
-                        async move {
-                            tracing::info!("fetch awaiting signal");
-                            signal_rx.lock().await.recv().await;
-                            let fragment_str = format!("chunk-{idx}-{i}\n");
-                            tracing::info!("emitting response fragment: {fragment_str}");
-                            let fragment = Bytes::from(fragment_str);
-                            Ok::<Bytes, BoxError>(fragment)
-                        }
-                    });
-
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .body(axum::body::Body::from_stream(stream))
-                        .unwrap()
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
-    );
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-    let agent_id = agent_id!("CustomDurability", "lazy-pollable-1");
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), host_http_port.to_string());
-
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
-        .await?;
-
-    signal_tx.send(()).unwrap();
-
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "lazy_pollable_init", data_value!())
-        .await?;
-
-    let s1 = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "lazy_pollable_test",
-            data_value!(1u32),
-        )
-        .await?;
-
-    signal_tx.send(()).unwrap();
-
-    let s2 = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "lazy_pollable_test",
-            data_value!(2u32),
-        )
-        .await?;
-
-    signal_tx.send(()).unwrap();
-
-    let s3 = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "lazy_pollable_test",
-            data_value!(3u32),
-        )
-        .await?;
-
-    signal_tx.send(()).unwrap();
-
-    drop(executor);
-    let executor = start(deps, &context).await?;
-
-    signal_tx.send(()).unwrap();
-
-    let s4 = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "lazy_pollable_test",
-            data_value!(3u32),
-        )
-        .await?;
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-    http_server.abort();
-
-    assert_eq!(s1.into_typed::<String>()?, "chunk-1-0\n");
-    assert_eq!(s2.into_typed::<String>()?, "chunk-1-1\n");
-    assert_eq!(s3.into_typed::<String>()?, "chunk-1-2\n");
-    assert_eq!(s4.into_typed::<String>()?, "chunk-3-0\n");
     Ok(())
 }
 

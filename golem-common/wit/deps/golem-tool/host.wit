@@ -10,8 +10,6 @@ package golem:tool@0.1.0;
 interface host {
   use common.{tool, tool-error, invocation-result};
   use golem:core/types@2.0.0.{typed-schema-value, component-id};
-  use wasi:io/streams@0.2.3.{input-stream};
-  use wasi:io/poll@0.2.3.{pollable};
 
   /// A tool registered in the environment, addressable by name from
   /// any agent or other tool. `definition` carries the full metadata;
@@ -57,28 +55,27 @@ interface host {
   resource tool-rpc {
     constructor(tool-name: string);
 
-    invoke-and-await: func(
+    invoke-and-await: async func(
       command-path: list<string>,
       input:        typed-schema-value,
-      stdin:        option<input-stream>,
+      stdin:        option<stream<u8>>,
     ) -> result<invocation-result, rpc-error>;
 
     invoke: func(
       command-path: list<string>,
       input:        typed-schema-value,
-      stdin:        option<input-stream>,
+      stdin:        option<stream<u8>>,
     ) -> result<_, rpc-error>;
 
     async-invoke-and-await: func(
       command-path: list<string>,
       input:        typed-schema-value,
-      stdin:        option<input-stream>,
+      stdin:        option<stream<u8>>,
     ) -> future-invoke-result;
   }
 
   resource future-invoke-result {
-    subscribe: func() -> pollable;
-    get: func() -> option<result<invocation-result, rpc-error>>;
+    get: async func() -> result<invocation-result, rpc-error>;
     cancel: func();
   }
 }

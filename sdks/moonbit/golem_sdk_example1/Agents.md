@@ -311,29 +311,32 @@ Logs are visible via `golem agent stream`.
 
 The `agents` code generation tool auto-generates a `<AgentName>Client` struct for calling agents remotely. Each method gets three variants:
 
-- `method(args)` — awaited call (blocks until result)
+- `method(args)` — async call that awaits the result
 - `trigger_method(args)` — fire-and-forget (returns immediately)
 - `schedule_method(scheduled_at, args)` — scheduled invocation at a future time
 
 ```moonbit
-// Awaited call — use scoped for automatic resource cleanup
-CounterClient::scoped("my-counter", fn(counter) raise @common.AgentError {
-  counter.increment()
-  counter.increment()
-  let value = counter.get_value()
-  value
-})
+// Awaited call — use an async method and scoped for automatic cleanup
+pub async fn call_counter() -> UInt64 {
+  CounterClient::scoped("my-counter", async fn(counter) {
+    counter.increment()
+    counter.increment()
+    counter.get_value()
+  })
+}
 
 // Fire-and-forget
-CounterClient::scoped("my-counter", fn(counter) raise @common.AgentError {
-  counter.trigger_increment()
-})
-
-// Manual lifecycle management
 let counter = CounterClient::get("my-counter")
-counter.increment()
-let value = counter.get_value()
-counter.drop()  // must call drop when done
+counter.trigger_increment()
+counter.drop()
+
+// Manual lifecycle management in an async function
+pub async fn read_counter() -> UInt64 {
+  let counter = CounterClient::get("my-counter")
+  defer counter.drop()
+  counter.increment()
+  counter.get_value()
+}
 
 // Phantom agents (multiple instances with same constructor params)
 let phantom = CounterClient::new_phantom("my-counter")
@@ -343,6 +346,8 @@ let same = CounterClient::get_phantom("my-counter", id.unwrap())
 ```
 
 Avoid RPC cycles (A calls B calls A) — use `trigger_` to break deadlocks.
+Awaited calls use P3 component-model futures and suspend the current task instead of polling a P2
+`Pollable`.
 
 ## Durability Features
 

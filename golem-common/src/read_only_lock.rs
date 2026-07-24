@@ -43,6 +43,37 @@ pub mod std {
     }
 }
 
+pub mod arc_swap {
+    use arc_swap::ArcSwap;
+    use std::sync::Arc;
+
+    /// Read-only view of an [`ArcSwap`] cell that only allows loading the current value.
+    /// Useful if you want to limit which parts of the code are allowed to publish new values.
+    pub struct ReadOnlyView<T> {
+        inner: Arc<ArcSwap<T>>,
+    }
+
+    impl<T> ReadOnlyView<T> {
+        pub fn new(underlying: Arc<ArcSwap<T>>) -> Self {
+            Self { inner: underlying }
+        }
+
+        /// Loads the currently published value. Lock-free; the returned `Arc` is a consistent
+        /// snapshot that stays valid even if a new value is published afterwards.
+        pub fn get(&self) -> Arc<T> {
+            self.inner.load_full()
+        }
+    }
+
+    impl<T> Clone for ReadOnlyView<T> {
+        fn clone(&self) -> Self {
+            Self {
+                inner: self.inner.clone(),
+            }
+        }
+    }
+}
+
 pub mod tokio {
     use std::sync::Arc;
     use tokio::sync::{RwLock, RwLockReadGuard};

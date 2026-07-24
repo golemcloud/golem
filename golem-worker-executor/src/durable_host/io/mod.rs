@@ -32,6 +32,10 @@ impl ManagedStdIn {
     pub fn disabled() -> Self {
         Self
     }
+
+    pub fn is_disabled(&self) -> bool {
+        true
+    }
 }
 
 impl IsTerminal for ManagedStdIn {

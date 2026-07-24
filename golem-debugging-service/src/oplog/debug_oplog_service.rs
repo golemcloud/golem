@@ -58,7 +58,7 @@ impl OplogService for DebugOplogService {
         _agent_mode: AgentMode,
         _initial_entry: OplogEntry,
         _initial_worker_metadata: AgentMetadata,
-        _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
         panic!("Cannot create a new oplog when debugging")
@@ -70,7 +70,7 @@ impl OplogService for DebugOplogService {
         _agent_mode: AgentMode,
         _initial_entry: OplogEntry,
         _initial_worker_metadata: AgentMetadata,
-        _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
         panic!("Cannot create a new oplog when debugging")
@@ -82,7 +82,7 @@ impl OplogService for DebugOplogService {
         agent_mode: AgentMode,
         last_oplog_index: Option<OplogIndex>,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
         self.oplogs
@@ -133,12 +133,11 @@ impl OplogService for DebugOplogService {
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        // In a debugging service, the read happens only through resume_replay which implies every call to
-        // oplog_service.read will be always part of a replay (and never live)
-        let debug_session_id = DebugSessionId::new(owned_agent_id.clone());
-        self.debug_session
-            .update_oplog_index(&debug_session_id, idx)
-            .await;
+        // This read must not move the debug session's current oplog index: service-level reads
+        // also happen outside replay (for example folding the worker status when the worker is
+        // created), and letting them move the session index would corrupt the session's replay
+        // position. Replay progress is tracked by the sequential entry reads going through
+        // `DebugOplog::read` instead.
         self.inner.read(owned_agent_id, agent_mode, idx, n).await
     }
 

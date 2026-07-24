@@ -402,7 +402,7 @@ impl MoonBitBridgeGenerator {
                   "golemcloud/golem_sdk/interface/golem/agent/common" @common,
                   "golemcloud/golem_sdk/interface/golem/agent/host" @agentHost,
                   "golemcloud/golem_sdk/interface/golem/core/types" @types,
-                  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
+                  "golemcloud/golem_sdk/interface/wasi/clocks/system-clock" @systemClock,
                   "golemcloud/golem_sdk/rpc",
                   "golemcloud/golem_sdk/schema_model" @model,
                 }}
@@ -1105,11 +1105,11 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 .map(|(name, _)| name.clone())
                 .collect::<Vec<_>>();
             let f_decl = append_param(
-                &format!("f : ({client}) -> {result_type_param} raise @common.AgentError"),
+                &format!("f : async ({client}) -> {result_type_param}"),
                 &param_decls,
             );
             writer.line(format!(
-                "pub fn[{result_type_param}] {client}::scoped({f_decl}) -> {result_type_param} raise @common.AgentError {{"
+                "pub async fn[{result_type_param}] {client}::scoped({f_decl}) -> {result_type_param} {{"
             ));
             writer.indent();
             writer.line(format!(
@@ -1402,7 +1402,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         let decode = decode.map(guest_codec_source);
 
         writer.line(format!(
-            "pub fn {client}::{base}(self : {self_decls}) -> {ret_ty} raise @common.AgentError {{"
+            "pub async fn {client}::{base}(self : {self_decls}) -> {ret_ty} {{"
         ));
         writer.indent();
         self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
@@ -1457,7 +1457,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         writer.line("}");
         writer.blank();
 
-        let schedule_decls = prepend_param("scheduled_at : @wallClock.Datetime", &param_decls);
+        let schedule_decls = prepend_param("scheduled_at : @systemClock.Instant", &param_decls);
         let schedule_self_decls = prepend_self_decl(client, &schedule_decls);
         writer.line(format!(
             "pub fn {client}::schedule_{base}(self : {schedule_self_decls}) -> Unit raise @common.AgentError {{"

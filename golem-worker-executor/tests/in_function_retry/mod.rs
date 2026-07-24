@@ -25,6 +25,7 @@ pub mod host_services;
 pub mod http_request;
 pub mod http_servers;
 pub mod http_streams;
+pub mod p3;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -48,6 +49,7 @@ inherit_test_dep!(Tracing);
 timeout_suite!(host_services, "2 minutes");
 timeout_suite!(http_request, "2 minutes");
 timeout_suite!(http_streams, "2 minutes");
+timeout_suite!(p3, "2 minutes");
 
 /// Helper: count oplog Error entries whose error message contains the given substring.
 pub(crate) async fn count_oplog_errors_containing(

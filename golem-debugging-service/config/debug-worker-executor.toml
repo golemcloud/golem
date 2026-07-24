@@ -108,6 +108,7 @@ max_active_workers = 1024
 max_concurrent_streams = 1024
 max_invocation_context_stack_depth = 1024
 max_oplog_query_pages_size = 100
+tail_work_settle_timeout = "30s"
 
 [memory]
 acquire_retry_delay = "500ms"
@@ -210,6 +211,7 @@ multiplier = 3.0
 claim_batch_size = 100
 lease_ttl = "30s"
 max_batches_per_tick = 10
+max_concurrent_action_processing = 64
 refresh_interval = "2s"
 
 [scheduler_storage]
@@ -230,6 +232,8 @@ multiplier = 3.0
 [suspend]
 ephemeral_max_sleep = "1m"
 suspend_after = "10s"
+wait_suspend_check_interval = "10s"
+wait_suspend_grace = "1s"
 
 [tracing]
 console = false
@@ -393,6 +397,7 @@ without_time = false
 # max_concurrent_streams = 1024
 # max_invocation_context_stack_depth = 1024
 # max_oplog_query_pages_size = 100
+# tail_work_settle_timeout = "30s"
 # 
 # [memory]
 # acquire_retry_delay = "500ms"
@@ -495,6 +500,7 @@ without_time = false
 # claim_batch_size = 100
 # lease_ttl = "30s"
 # max_batches_per_tick = 10
+# max_concurrent_action_processing = 64
 # refresh_interval = "2s"
 # 
 # [scheduler_storage]
@@ -515,6 +521,8 @@ without_time = false
 # [suspend]
 # ephemeral_max_sleep = "1m"
 # suspend_after = "10s"
+# wait_suspend_check_interval = "10s"
+# wait_suspend_grace = "1s"
 # 
 # [tracing]
 # console = false

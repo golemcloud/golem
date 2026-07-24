@@ -67,24 +67,28 @@ test "pure dispatcher, subtree authoring, and stdout support" {
   let stdout =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(input : @streams.InputStream, output : @streams.OutputStream) -> Unit { () }
+    #|pub fn Out::out(input : @asyncCore.Stream[Byte], output : @asyncCore.Sink[Byte]) -> Unit { () }
   let stdout_tools = @lib.parse_tools([("stdout.mbt", stdout)])
   let stdout_registration = @formatter.impls_to_string(
     @lib.generate_tool_registration(stdout_tools),
   )
   assert_true(stdout_registration.contains("stdout: Some("))
   assert_true(stdout_registration.contains("match __golem_stdin"))
-  assert_true(stdout_registration.contains("let output = @tool.get_stdout()"))
   assert_true(
     stdout_registration.contains(
-      "@tool.invocation_result_stdout(@tool.get_stdout())",
+      "let (__golem_stdout, output) = @tool.new_stdout()",
+    ),
+  )
+  assert_true(
+    stdout_registration.contains(
+      "@tool.invocation_result_stdout(__golem_stdout)",
     ),
   )
   let stdout_client = @formatter.impls_to_string(
     @lib.generate_tool_client_code(stdout_tools),
   )
-  assert_true(stdout_client.contains("@streams.OutputStream"))
-  assert_false(stdout_client.contains("output : @streams.InputStream"))
+  assert_true(stdout_client.contains("@asyncCore.Stream[Byte]"))
+  assert_false(stdout_client.contains("output : @asyncCore.Sink[Byte]"))
   assert_true(stdout_client.contains("@tool.decode_result_stdout_only"))
 }
 
@@ -93,14 +97,16 @@ test "labelled stdout is injected and returned by generated invoker" {
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(output~ : @streams.OutputStream) -> Unit { ignore(output) }
+    #|pub fn Out::out(output~ : @asyncCore.Sink[Byte]) -> Unit { ignore(output) }
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("stdout.mbt", source)])),
   )
-  assert_true(generated.contains("let output = @tool.get_stdout()"))
+  assert_true(
+    generated.contains("let (__golem_stdout, output) = @tool.new_stdout()"),
+  )
   assert_true(generated.contains("Out::out(output~)"))
   assert_true(
-    generated.contains("@tool.invocation_result_stdout(@tool.get_stdout())"),
+    generated.contains("@tool.invocation_result_stdout(__golem_stdout)"),
   )
 }
 
@@ -109,13 +115,18 @@ test "stdout result does not reuse the stream handle owned by the tool method" {
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(output : @streams.OutputStream) -> Unit {
+    #|pub fn Out::out(output : @asyncCore.Sink[Byte]) -> Unit {
     #|  output.drop()
     #|}
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("stdout.mbt", source)])),
   )
-  assert_eq(generated.split("@tool.get_stdout()").length(), 3)
+  assert_true(
+    generated.contains("let (__golem_stdout, output) = @tool.new_stdout()"),
+  )
+  assert_true(
+    generated.contains("@tool.invocation_result_stdout(__golem_stdout)"),
+  )
 }
 
 ///|
@@ -123,7 +134,7 @@ test "stdout parameter is not shadowed by a generated result binding" {
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(value : @streams.OutputStream) -> String {
+    #|pub fn Out::out(value : @asyncCore.Sink[Byte]) -> String {
     #|  ignore(value)
     #|  "ok"
     #|}
@@ -142,7 +153,7 @@ test "stdout parameter cannot collide with reserved result binding" {
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(__golem_value : @streams.OutputStream) -> String {
+    #|pub fn Out::out(__golem_value : @asyncCore.Sink[Byte]) -> String {
     #|  ignore(__golem_value)
     #|  "ok"
     #|}
@@ -154,12 +165,12 @@ test "tool generated internals use runtime facades instead of consumer aliases" 
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(output : @streams.OutputStream) -> Unit { ignore(output) }
+    #|pub fn Out::out(output : @asyncCore.Sink[Byte]) -> Unit { ignore(output) }
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("stdout.mbt", source)])),
   )
   assert_true(generated.contains("@tool.Principal"))
-  assert_true(generated.contains("@tool.get_stdout()"))
+  assert_true(generated.contains("@tool.new_stdout()"))
   assert_false(generated.contains("@common.Principal"))
   assert_false(generated.contains("@stdout.get_stdout()"))
 }
@@ -1074,7 +1085,7 @@ test "structural metadata is closed over each inferred argument surface" {
       #|#derive.tool
       #|struct Runner {}
       #|#derive.arg("stream", required=true)
-      #|pub fn Runner::run(stream : @streams.InputStream) -> Unit { () }
+      #|pub fn Runner::run(stream : @asyncCore.Stream[Byte]) -> Unit { () }
     ),
     "required",
   )

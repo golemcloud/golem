@@ -41,7 +41,7 @@ pub struct PluginRecord {
     pub homepage: String,
     pub plugin_type: i16,
 
-    // for ComponentTransformer plugin type
+    // columns kept for the removed ComponentTransformer plugin type
     pub provided_wit_package: Option<String>,
     pub json_schema: Option<Json<serde_json::Value>>,
     pub validate_url: Option<String>,
@@ -51,7 +51,7 @@ pub struct PluginRecord {
     pub component_id: Option<Uuid>,
     pub component_revision_id: Option<i64>,
 
-    // for Library and App plugin type
+    // column kept for the removed Library and App plugin types
     pub wasm_content_hash: Option<SqlBlake3Hash>,
 }
 

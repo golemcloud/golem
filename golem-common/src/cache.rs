@@ -58,6 +58,12 @@ pub struct Cache<K, PV, V, E> {
     /// snapshots.
     #[cfg(test)]
     evict_before_retain_interleave: Arc<Mutex<Option<EvictInterleaveHook>>>,
+    /// Test-only seam: when set, awaited in `get_or_insert_spawned` between
+    /// spawning the owner task and subscribing to the result watch, so a test
+    /// can deterministically let the spawned owner finish before the caller
+    /// subscribes.
+    #[cfg(test)]
+    spawned_pre_subscribe_interleave: Arc<Mutex<Option<EvictInterleaveHook>>>,
 }
 
 #[cfg(test)]
@@ -159,6 +165,8 @@ impl<
             evict_interleave: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             evict_before_retain_interleave: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            spawned_pre_subscribe_interleave: Arc::new(Mutex::new(None)),
         };
 
         if let Some(capacity) = capacity {
@@ -220,6 +228,19 @@ impl<
     #[cfg(test)]
     fn clear_evict_before_retain_interleave(&self) {
         *self.evict_before_retain_interleave.lock().unwrap() = None;
+    }
+
+    /// Test-only: installs a hook awaited in `get_or_insert_spawned` between
+    /// spawning the owner task and subscribing to the result watch.
+    #[cfg(test)]
+    fn set_spawned_pre_subscribe_interleave(&self, hook: EvictInterleaveHook) {
+        *self.spawned_pre_subscribe_interleave.lock().unwrap() = Some(hook);
+    }
+
+    /// Test-only: removes the pre-subscribe interleave hook.
+    #[cfg(test)]
+    fn clear_spawned_pre_subscribe_interleave(&self) {
+        *self.spawned_pre_subscribe_interleave.lock().unwrap() = None;
     }
 
     /// Tries to get a cached value for the given key. If the value is missing or is pending, it returns None.
@@ -313,7 +334,11 @@ impl<
                         } else {
                             self.state.items.remove_async(key).await;
                         }
-                        let _ = tx.send(Some(value.clone()));
+                        // `send_replace` instead of `send`: a plain `send` fails
+                        // without storing the value when the channel has no
+                        // receivers, and waiters that found the pending entry but
+                        // have not subscribed yet would then wait forever.
+                        tx.send_replace(Some(value.clone()));
 
                         value
                     } else {
@@ -406,7 +431,12 @@ impl<
                             } else {
                                 self_clone.state.items.remove_async(&key_clone).await;
                             }
-                            let _ = tx_clone.send(Some(value));
+                            // `send_replace` instead of `send`: the spawned owner
+                            // can finish before the caller subscribes, and a plain
+                            // `send` on a receiver-less channel fails without
+                            // storing the value, leaving all subsequent
+                            // subscribers waiting forever.
+                            tx_clone.send_replace(Some(value));
                             if eviction_needed {
                                 self_clone.evict().await;
                             }
@@ -416,6 +446,21 @@ impl<
                 } else {
                     record_cache_hit(self.name);
                 }
+
+                // Test-only seam: let a test delay the subscription until the
+                // spawned owner has already completed and sent its result.
+                #[cfg(test)]
+                {
+                    let hook = self
+                        .spawned_pre_subscribe_interleave
+                        .lock()
+                        .unwrap()
+                        .clone();
+                    if let Some(hook) = hook {
+                        hook().await;
+                    }
+                }
+
                 // Owner and all waiters subscribe to the same watch and
                 // receive the spawned future's `Result<V, E>`.
                 let mut rx = tx.subscribe();
@@ -493,7 +538,11 @@ impl<
                                 } else {
                                     self_clone.state.items.remove_async(&key_clone).await;
                                 }
-                                let _ = tx_clone.send(Some(value.clone()));
+                                // `send_replace` instead of `send`: a plain `send`
+                                // fails without storing the value when no waiter
+                                // has subscribed yet, and later subscribers would
+                                // then wait forever.
+                                tx_clone.send_replace(Some(value.clone()));
                             }
                             .in_current_span(),
                         );
@@ -839,6 +888,7 @@ mod tests {
 
     #[test]
     async fn watch_late_subscribe_sees_message() {
+        // Note: `_rx` keeps the initial receiver alive, so `send` succeeds.
         let (tx, _rx) = tokio::sync::watch::channel::<Option<Result<u64, String>>>(None);
 
         let _ = tx.send(Some(Ok(42)));
@@ -847,6 +897,41 @@ mod tests {
         let result =
             tokio::time::timeout(Duration::from_millis(200), rx.wait_for(|v| v.is_some())).await;
         assert!(result.is_ok(), "watch late subscriber sees the message");
+        let val = result.unwrap().unwrap().clone().unwrap();
+        assert_eq!(val, Ok(42));
+    }
+
+    #[test]
+    async fn watch_send_without_receivers_loses_value() {
+        // The initial receiver is dropped immediately, matching how the cache
+        // creates the channel in `get_or_add_as_pending`.
+        let (tx, _) = tokio::sync::watch::channel::<Option<Result<u64, String>>>(None);
+
+        assert!(tx.send(Some(Ok(42))).is_err());
+
+        let mut rx = tx.subscribe();
+        let result =
+            tokio::time::timeout(Duration::from_millis(200), rx.wait_for(|v| v.is_some())).await;
+        assert!(
+            result.is_err(),
+            "send on a receiver-less watch channel fails without storing the value \
+             (proving the lost-wakeup bug)"
+        );
+    }
+
+    #[test]
+    async fn watch_send_replace_without_receivers_stores_value() {
+        let (tx, _) = tokio::sync::watch::channel::<Option<Result<u64, String>>>(None);
+
+        tx.send_replace(Some(Ok(42)));
+
+        let mut rx = tx.subscribe();
+        let result =
+            tokio::time::timeout(Duration::from_millis(200), rx.wait_for(|v| v.is_some())).await;
+        assert!(
+            result.is_ok(),
+            "send_replace stores the value even with no receivers"
+        );
         let val = result.unwrap().unwrap().clone().unwrap();
         assert_eq!(val, Ok(42));
     }
@@ -1606,17 +1691,21 @@ mod tests {
             })
         }));
 
-        let release = Arc::new(tokio::sync::Notify::new());
+        // A 3-party barrier (two producers + the test) guarantees both spawned
+        // producer futures are running before any of them proceeds, without
+        // sleeps or `Notify` (whose `notify_waiters` is lost if a producer has
+        // not started waiting yet).
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
         let tasks: Vec<_> = [100u64, 101u64]
             .into_iter()
             .map(|key| {
                 let cache = cache.clone();
-                let release = release.clone();
+                let barrier = barrier.clone();
                 let completed = completed.clone();
                 tokio::spawn(async move {
                     let result = cache
                         .get_or_insert_simple_spawned(&key, move || async move {
-                            release.notified().await;
+                            barrier.wait().await;
                             Ok(key)
                         })
                         .await;
@@ -1626,8 +1715,7 @@ mod tests {
             })
             .collect();
 
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        release.notify_waiters();
+        barrier.wait().await;
 
         let results = tokio::time::timeout(Duration::from_secs(5), join_all(tasks))
             .await
@@ -2150,6 +2238,39 @@ mod tests {
     }
 
     // ---- get_or_insert_simple_spawned cancellation safety ----
+
+    #[test]
+    async fn spawned_owner_completing_before_subscribe_does_not_hang() {
+        let cache = test_cache("spawned_pre_subscribe");
+
+        // Delay the caller's subscription to the result watch until the
+        // spawned owner has already cached the value and sent the result,
+        // deterministically forcing the interleaving where the result is
+        // sent on a channel that has no receivers yet.
+        let cache_for_hook = cache.clone();
+        cache.set_spawned_pre_subscribe_interleave(Arc::new(move || {
+            let cache = cache_for_hook.clone();
+            Box::pin(async move {
+                for _ in 0..5000 {
+                    if cache.try_get(&42).await.is_some() {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                panic!("spawned owner did not complete");
+            })
+        }));
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            cache.get_or_insert_simple_spawned(&42, || async { Ok(42u64) }),
+        )
+        .await
+        .expect("caller hung because the owner's result was sent before the caller subscribed");
+        assert_eq!(result, Ok(42));
+
+        cache.clear_spawned_pre_subscribe_interleave();
+    }
 
     #[test]
     async fn spawned_owner_survives_caller_cancellation() {

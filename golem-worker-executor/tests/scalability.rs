@@ -15,9 +15,9 @@
 use crate::Tracing;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
-use golem_common::model::AgentStatus;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::{AgentId, AgentStatus};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::OplogConfig;
@@ -411,6 +411,129 @@ async fn dynamic_large_memory_allocation(
 
     for i in 0..N {
         assert_eq!(results[i].clone().into_typed::<u64>()?, 0);
+    }
+
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn interrupt_wins_over_dynamic_memory_permit_reacquisition(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("large_dynamic_memory")] large_dynamic_memory: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const MEMORY_LIMIT: u64 = 768 * 1024 * 1024;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_customized(
+        deps,
+        &context,
+        Some(MEMORY_LIMIT),
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, large_dynamic_memory)
+        .store()
+        .await?;
+
+    let mut workers = Vec::new();
+    let mut invocations = Vec::new();
+    for i in 0..3 {
+        let agent_id = agent_id!("LargeDynamicMemoryAgent", format!("interrupt-{i}"));
+        workers.push(AgentId {
+            component_id: component.id,
+            agent_id: agent_id.to_string(),
+        });
+
+        let executor = executor.clone();
+        let component = component.clone();
+        invocations.push(spawn(
+            async move {
+                executor
+                    .invoke_and_await_agent(
+                        &component,
+                        &agent_id,
+                        "run_with_delay",
+                        data_value!(30_000u64),
+                    )
+                    .await
+            }
+            .in_current_span(),
+        ));
+    }
+
+    let pressure_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let mut unfinished_memory = 0;
+        for (worker, invocation) in workers.iter().zip(&invocations) {
+            if !invocation.is_finished()
+                && let Some(metadata) = executor.get_worker_metadata_opt(worker).await?
+            {
+                unfinished_memory += metadata.total_linear_memory_size;
+            }
+        }
+
+        if unfinished_memory > MEMORY_LIMIT {
+            break;
+        }
+        if invocations
+            .iter()
+            .all(|invocation| invocation.is_finished())
+        {
+            anyhow::bail!(
+                "all invocations completed before their aggregate linear memory exceeded the configured limit"
+            );
+        }
+        if tokio::time::Instant::now() >= pressure_deadline {
+            anyhow::bail!(
+                "timed out waiting for unfinished invocations to exceed the configured memory limit (last aggregate: {unfinished_memory})"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let interrupted = invocations
+        .iter()
+        .enumerate()
+        .filter_map(|(index, invocation)| (!invocation.is_finished()).then_some(index))
+        .collect::<Vec<_>>();
+    assert!(
+        !interrupted.is_empty(),
+        "memory pressure must leave at least one invocation to interrupt"
+    );
+
+    let mut interrupts = interrupted
+        .iter()
+        .map(|index| executor.interrupt(&workers[*index]))
+        .collect::<FuturesUnordered<_>>();
+    while let Some(result) = interrupts.next().await {
+        result?;
+    }
+
+    for index in &interrupted {
+        executor
+            .wait_for_status(
+                &workers[*index],
+                AgentStatus::Interrupted,
+                Duration::from_secs(10),
+            )
+            .await?;
+    }
+    for (index, invocation) in invocations.into_iter().enumerate() {
+        let result = invocation.await?;
+        if interrupted.contains(&index) {
+            assert!(result.is_err(), "invocation {index} completed successfully");
+        } else {
+            result?;
+        }
     }
 
     Ok(())

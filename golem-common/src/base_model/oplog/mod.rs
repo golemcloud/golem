@@ -739,5 +739,51 @@ oplog_entry! {
         public {
             card_id: CardId,
         }
+    },
+    /// A durably recorded frame of a host-owned stream (e.g. the outgoing request body of a
+    /// P3 HTTP `client::send`), attached to the durable host call identified by
+    /// `parent_start_index` (its `Start` entry's index). `kind` selects which of the owning
+    /// call's streams the frame belongs to and determines how `payload` is interpreted.
+    ///
+    /// Frames are hints: the replay cursor skips them, they take part in no `Start`/terminal
+    /// pairing or claim resolution, and interrupted recordings need no closing entry. Consumers
+    /// find a stream's frames by scanning the oplog for `HostStreamFrame` entries with a matching
+    /// `parent_start_index` and `kind`.
+    HostStreamFrame {
+        hint: true
+        wit_raw_type: "raw-host-stream-frame-parameters"
+        wit_public_type: "host-stream-frame-parameters"
+        raw {
+            parent_start_index: OplogIndex,
+            kind: HostStreamKind,
+            payload: payload::OplogPayload<payload::HostRequest>,
+        }
+        public {
+            parent_start_index: OplogIndex,
+            kind: HostStreamKind,
+            payload: TypedSchemaValue,
+        }
+    },
+    /// Marks that the successful completion (`End`) of the durable host call started by the
+    /// `Start` at `start_index` was persisted, but its response was never delivered to the
+    /// guest: the guest dropped the call's completion future (e.g. as the loser of a `select!`)
+    /// after the `End` was already appended.
+    ///
+    /// During replay the recorded `End` for such a call must not be resolved to the guest;
+    /// the call parks unresolved so the deterministic guest drops it at the same point it did
+    /// live. The marker is a hint entry: it always lies physically *after* the `End` it
+    /// describes (its exact position depends on drop-event drain timing), so the replay cursor
+    /// skips it positionally and instead collects all markers in an upfront oplog scan,
+    /// consulting that map when the `End` is resolved.
+    CompletionDiscarded {
+        hint: true
+        wit_raw_type: "raw-completion-discarded-parameters"
+        wit_public_type: "completion-discarded-parameters"
+        raw {
+            start_index: OplogIndex,
+        }
+        public {
+            start_index: OplogIndex,
+        }
     }
 }

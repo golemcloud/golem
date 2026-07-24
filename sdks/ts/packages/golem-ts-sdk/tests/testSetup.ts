@@ -103,15 +103,9 @@ vi.mock('golem:secrets/reveal@0.1.0', () => ({
   },
 }));
 
-vi.mock('wasi:cli/stdout@0.2.3', () => ({
-  getStdout: vi.fn(() => {
-    throw new Error('getStdout is not mocked for this test');
-  }),
-}));
-
 (globalThis as any).currentAgentId = 'foo-agent(123)';
 
-vi.mock('wasi:cli/environment@0.2.3', () => ({
+vi.mock('wasi:cli/environment@0.3.0', () => ({
   getEnvironment: () => [['GOLEM_AGENT_ID', (globalThis as any).currentAgentId]],
 }));
 

@@ -43,3 +43,28 @@ async fn can_extract_agent_type_schemas_2() -> anyhow::Result<()> {
     assert!(let Ok(_) = result);
     Ok(())
 }
+
+#[test]
+async fn can_extract_agent_type_schemas_from_component_importing_p3_http() -> anyhow::Result<()> {
+    let wasm_path = PathBuf::from_str("../test-components/golem_it_http_tests_release.wasm")?;
+
+    // Guard: the fixture must actually import P3 `wasi:http`, otherwise a
+    // future rebuild of the component would silently defeat the purpose of
+    // this regression test.
+    let mut config = wasmtime::Config::default();
+    config.wasm_component_model(true);
+    config.wasm_component_model_async(true);
+    config.wasm_component_model_error_context(true);
+    let engine = wasmtime::Engine::new(&config)?;
+    let component = wasmtime::component::Component::from_file(&engine, &wasm_path)?;
+    let imports_p3_http = component
+        .component_type()
+        .imports(&engine)
+        .any(|(name, _)| name.starts_with("wasi:http/") && name.contains("@0.3."));
+    assert!(imports_p3_http);
+
+    let result = extract_agent_type_schemas(&wasm_path, false, false).await;
+    assert!(let Ok(_) = &result);
+    assert!(!result?.is_empty());
+    Ok(())
+}
