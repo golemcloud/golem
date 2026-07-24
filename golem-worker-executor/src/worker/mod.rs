@@ -1007,7 +1007,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .last_known_status
             .pending_updates
             .front()
-            .map(|update| *update.description.target_revision());
+            .map(|update| update.target_revision);
         let component_revision = component_charge_revision(pending_target, current_revision);
 
         // The currently-loaded revision's module size is already recorded in the

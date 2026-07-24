@@ -369,7 +369,7 @@ fn ns2() -> Namespaces {
 
 // Exercises the per-agent `AgentStatus` namespace (Redis-hash routed) used by the split agent
 // status cache, across every backend.
-#[test_dep(scope = PerWorker, tagged_as = "ns3")]
+#[test_dep(tagged_as = "ns3")]
 fn ns3() -> Namespaces {
     Namespaces {
         ns: KeyValueStorageNamespace::AgentStatus {

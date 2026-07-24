@@ -397,6 +397,10 @@ impl DefaultWorkerService {
         format!("worker:agent_mode:{}", agent_id.to_redis_key())
     }
 
+    fn legacy_status_key(agent_id: &AgentId) -> String {
+        format!("worker:status:{}", agent_id.to_redis_key())
+    }
+
     fn running_in_shard_key(shard_id: &ShardId) -> String {
         format!("worker:running_in_shard:{shard_id}")
     }
@@ -587,6 +591,21 @@ impl DefaultWorkerService {
         }
     }
 
+    async fn remove_legacy_cached_status(&self, owned_agent_id: &OwnedAgentId) {
+        self.key_value_storage
+            .with("worker", "remove_legacy_status")
+            .del(
+                KeyValueStorageNamespace::Worker {
+                    agent_id: owned_agent_id.agent_id(),
+                },
+                &Self::legacy_status_key(&owned_agent_id.agent_id),
+            )
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to remove legacy status for {owned_agent_id}: {err}")
+            });
+    }
+
     /// Reads the dedicated `agent_mode` key, if present. Returns `None` on a cache miss or if the
     /// stored value cannot be deserialized in the current format (treated as a miss).
     async fn read_cached_agent_mode(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
@@ -748,6 +767,7 @@ impl WorkerService for DefaultWorkerService {
                         // Cold path: no in-memory previous, reconcile against stored fields.
                         self.update_cached_status(owned_agent_id, None, last_known_status.clone())
                             .await;
+                        self.remove_legacy_cached_status(owned_agent_id).await;
 
                         Some(last_known_status)
                     }
@@ -812,6 +832,7 @@ impl WorkerService for DefaultWorkerService {
             .await;
         self.remove_split_status(owned_agent_id, Self::checkpoint_namespace(agent_id))
             .await;
+        self.remove_legacy_cached_status(owned_agent_id).await;
 
         // The `agent_mode` key has its own lifecycle and lives in the `Worker` namespace.
         self.key_value_storage

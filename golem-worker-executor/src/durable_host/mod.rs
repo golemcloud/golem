@@ -1614,7 +1614,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
         if self.state.snapshotting_mode.is_some() {
-            Ok(())
+            return Ok(());
         } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
@@ -1651,7 +1651,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
         if self.state.snapshotting_mode.is_some() {
-            Ok(())
+            return Ok(());
         } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
