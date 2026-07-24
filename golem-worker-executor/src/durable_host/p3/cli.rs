@@ -16,11 +16,11 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use crate::durable_host::logging::policy as logging_policy;
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
     observe_function_call_store,
 };
-use crate::durable_host::logging::policy as logging_policy;
 use crate::durable_host::tail_work::TailActivity;
 use crate::model::event::InternalWorkerEvent;
 use crate::workerctx::WorkerCtx;

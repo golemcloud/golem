@@ -1184,8 +1184,7 @@ where
                                     // content verification — P2 parity) and continue
                                     // from there.
                                     let mut fresh_body = response.into_body();
-                                    match skip_body_prefix(&mut fresh_body, delivered_bytes).await
-                                    {
+                                    match skip_body_prefix(&mut fresh_body, delivered_bytes).await {
                                         Ok(leftover) => {
                                             body = fresh_body;
                                             _rebuild_io_guard = Some(io_guard);
@@ -1196,14 +1195,14 @@ where
                                         }
                                         Err(SkipBodyPrefixError::BodyTooShort) => {
                                             retry_exempt = true;
-                                            frame = HttpBodyFrame::Error(
-                                                ErrorCode::InternalError(Some(
+                                            frame = HttpBodyFrame::Error(ErrorCode::InternalError(
+                                                Some(
                                                     "response-body resume failed: the re-sent \
                                                      response body is shorter than the bytes \
                                                      already delivered to the guest"
                                                         .to_string(),
-                                                )),
-                                            );
+                                                ),
+                                            ));
                                             break;
                                         }
                                         Err(SkipBodyPrefixError::Read(code)) => {

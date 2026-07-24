@@ -19,12 +19,11 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::payload::host_functions::HostFunctionName;
 use golem_common::model::oplog::payload::types::{
-    SerializableHttpErrorCode, SerializableHttpMethod, SerializableP3HttpBodyChunk,
-    SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
+    SerializableHttpErrorCode, SerializableHttpMethod, SerializableIpAddress,
+    SerializableP3HttpBodyChunk, SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
     SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestOptions,
-    SerializableIpAddress, SerializableP3HttpScheme, SerializableP3IpSocketAddress,
-    SerializableP3SocketErrorCode, SerializableP3TcpChunk, SerializableP3UdpDatagram,
-    SerializableResponseHeaders,
+    SerializableP3HttpScheme, SerializableP3IpSocketAddress, SerializableP3SocketErrorCode,
+    SerializableP3TcpChunk, SerializableP3UdpDatagram, SerializableResponseHeaders,
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostRequestP3HttpClientSend,

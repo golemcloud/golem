@@ -1350,7 +1350,13 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
     //    If the original request already has a Range header, response-body
     //    resumption is not supported because composing Range headers correctly is
     //    complex.
-    if has_guest_range_header(request_state.request.headers.iter().map(|(k, _)| k.as_str())) {
+    if has_guest_range_header(
+        request_state
+            .request
+            .headers
+            .iter()
+            .map(|(k, _)| k.as_str()),
+    ) {
         return Ok(false);
     }
 
@@ -1657,14 +1663,12 @@ pub(crate) async fn try_status_code_retry<Ctx: crate::workerctx::WorkerCtx>(
         InlineRetryPhase::AwaitingResponse
     };
 
-    if let Err(reason) =
-        is_http_inline_retry_eligible(
-            &exec_state,
-            &eligibility_state,
-            eligibility_phase,
-            ctx.in_atomic_region(),
-        )
-    {
+    if let Err(reason) = is_http_inline_retry_eligible(
+        &exec_state,
+        &eligibility_state,
+        eligibility_phase,
+        ctx.in_atomic_region(),
+    ) {
         tracing::debug!(
             ?reason,
             policy = %matched.name,
@@ -1966,11 +1970,17 @@ mod tests {
         let exec = make_exec_state();
         let req = make_request_state();
         assert!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false).is_ok()
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false)
+                .is_ok()
         );
         assert!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody, false)
-                .is_ok()
+            is_http_inline_retry_eligible(
+                &exec,
+                &req,
+                InlineRetryPhase::ResumingResponseBody,
+                false
+            )
+            .is_ok()
         );
     }
 
@@ -1995,7 +2005,12 @@ mod tests {
             Err(InlineRetryIneligible::OutputStreamSubscribed)
         );
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody, false),
+            is_http_inline_retry_eligible(
+                &exec,
+                &req,
+                InlineRetryPhase::ResumingResponseBody,
+                false
+            ),
             Err(InlineRetryIneligible::OutputStreamSubscribed)
         );
         assert_eq!(
@@ -2022,11 +2037,17 @@ mod tests {
         req.retry.had_body_skip = true;
         // AwaitingResponse should still be eligible
         assert!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false).is_ok()
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false)
+                .is_ok()
         );
         // ResumingResponseBody should be disqualified
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody, false),
+            is_http_inline_retry_eligible(
+                &exec,
+                &req,
+                InlineRetryPhase::ResumingResponseBody,
+                false
+            ),
             Err(InlineRetryIneligible::HadBodySkip)
         );
     }
@@ -2038,11 +2059,17 @@ mod tests {
         req.retry.body_finished = false;
         // output_stream_rep is None (no stream opened), so body_finished is irrelevant
         assert!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false).is_ok()
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false)
+                .is_ok()
         );
         assert!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody, false)
-                .is_ok()
+            is_http_inline_retry_eligible(
+                &exec,
+                &req,
+                InlineRetryPhase::ResumingResponseBody,
+                false
+            )
+            .is_ok()
         );
     }
 
@@ -2064,7 +2091,8 @@ mod tests {
         exec.assume_idempotence = false;
         let req = make_request_state(); // GET is idempotent
         assert!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false).is_ok()
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false)
+                .is_ok()
         );
     }
 

@@ -24,8 +24,8 @@ use crate::model::oplog::types::{
     SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
     SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestBodyFrame,
     SerializableP3HttpRequestOptions, SerializableP3HttpScheme, SerializableP3IpSocketAddress,
-    SerializableP3SocketErrorCode, SerializableP3TcpChunk,
-    SerializableP3UdpDatagram, SerializableResponseHeaders, SerializableStreamError,
+    SerializableP3SocketErrorCode, SerializableP3TcpChunk, SerializableP3UdpDatagram,
+    SerializableResponseHeaders, SerializableStreamError,
 };
 use crate::model::oplog::{
     HostPayloadPair, HostRequest, HostRequestFileSystemPath, HostRequestKVCacheKey,

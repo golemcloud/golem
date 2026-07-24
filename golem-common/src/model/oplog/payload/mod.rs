@@ -34,8 +34,8 @@ use crate::model::oplog::types::{
     SerializableInvokeResult, SerializableIpAddresses, SerializableP3HttpBodyChunk,
     SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
     SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestBodyFrame,
-    SerializableP3IpNameLookupError, SerializableP3TcpChunk,
-    SerializableRdbmsError, SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleId,
+    SerializableP3IpNameLookupError, SerializableP3TcpChunk, SerializableRdbmsError,
+    SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleId,
     SerializableStreamError,
 };
 use crate::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryPolicy};

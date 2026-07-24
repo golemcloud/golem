@@ -88,8 +88,7 @@ use crate::worker::status::{
 use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, InvocationContextManagement, InvocationHooks,
-    InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
-    UpdateManagement, WorkerCtx,
+    InvocationManagement, PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
