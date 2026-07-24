@@ -27,6 +27,7 @@ import {
   TypedAgentConfigValue,
   InvocationMetadata,
   CancelableScheduledInvocationReceipt,
+  RpcError,
 } from 'golem:agent/host@2.0.0';
 import {
   schemaValueToWit,
@@ -35,7 +36,7 @@ import {
   v,
 } from '../internal/schema-model';
 import type { SchemaGraph, SchemaType, SchemaValue } from '../internal/schema-model';
-import { awaitPollable, throwIfAborted } from '../internal/pollableUtils';
+import { awaitAbortable, throwIfAborted } from '../internal/pollableUtils';
 import { compileConfig, ConfigDeclaration } from './config';
 import { Uuid } from '../uuid';
 import { compileSchema } from './schema/adapter';
@@ -166,6 +167,21 @@ interface CompiledRemoteMethod {
 /** Raised when a remote agent invocation fails or returns an error result. */
 export class RemoteCallError extends Error {
   readonly _tag = 'RemoteCallError';
+}
+
+function isRpcError(error: unknown): error is RpcError {
+  if (error === null || typeof error !== 'object') return false;
+
+  switch ((error as { tag?: unknown }).tag) {
+    case 'protocol-error':
+    case 'denied':
+    case 'not-found':
+    case 'remote-internal-error':
+    case 'remote-agent-error':
+      return true;
+    default:
+      return false;
+  }
 }
 
 /** Encode a method/constructor input record (positional, declaration order). */
@@ -311,34 +327,19 @@ export function clientFor<
         const inputTree = encodeRecord(mc.inputCodecs, input);
         const invocation = wasmRpc.asyncInvokeAndAwait(mc.name, inputTree);
         const future = invocation.future;
-        let onAbort: (() => void) | undefined;
-        if (signal) {
-          onAbort = () => {
-            try {
-              future.cancel();
-            } catch {
-              /* the future may already have resolved */
-            }
-          };
-          signal.addEventListener('abort', onAbort, { once: true });
-        }
+        let result;
         try {
-          await awaitPollable(future.subscribe(), signal);
-        } finally {
-          if (signal && onAbort) signal.removeEventListener('abort', onAbort);
-        }
-        const result = future.get();
-        if (!result) {
-          throw new RemoteCallError(`RPC to ${agentId}.${mc.name} failed (no result)`);
-        }
-        if (result.tag === 'err') {
+          result = await awaitAbortable(future.get(), signal, () => future.cancel());
+        } catch (error) {
+          if (!isRpcError(error)) throw error;
+
           throw new RemoteCallError(
-            `Remote agent ${agentId}.${mc.name} errored: ${JSON.stringify(result.val, (_, value) =>
+            `Remote agent ${agentId}.${mc.name} errored: ${JSON.stringify(error, (_, value) =>
               typeof value === 'bigint' ? value.toString() : value,
             )}`,
           );
         }
-        const value = decodeOutput(mc, result.val);
+        const value = decodeOutput(mc, result);
         return def.mode === 'ephemeral' ? { metadata: invocation.metadata, value } : value;
       };
       const methodFn =

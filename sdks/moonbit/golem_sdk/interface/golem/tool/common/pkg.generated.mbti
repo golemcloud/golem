@@ -2,8 +2,8 @@
 package "golemcloud/golem_sdk/interface/golem/tool/common"
 
 import {
+  "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
-  "golemcloud/golem_sdk/interface/wasi/io/streams",
 }
 
 // Values
@@ -137,8 +137,8 @@ pub(all) struct ImpliesC {
 
 pub(all) struct InvocationResult {
   result : @types.TypedSchemaValue?
-  stdout : @streams.OutputStream?
-} derive(Eq, Show)
+  stdout : @async-core.Stream[Byte]?
+}
 
 pub(all) enum OptionShape {
   Scalar(Int)
@@ -246,4 +246,3 @@ pub(all) struct ValueIsRef {
 // Type aliases
 
 // Traits
-

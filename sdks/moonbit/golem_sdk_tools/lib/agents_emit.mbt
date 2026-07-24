@@ -362,7 +362,22 @@ fn emit_raw_agent(buf : StringBuilder, agent : AgentInfo) -> Unit {
   )
   buf.write_string("    }\n")
   buf.write_string("  } catch {\n")
-  buf.write_string("    e => Err(e)\n")
+  buf.write_string(
+    "    @common.AgentError::InvalidInput(message) => Err(@common.AgentError::InvalidInput(message))\n",
+  )
+  buf.write_string(
+    "    @common.AgentError::InvalidMethod(method_name) => Err(@common.AgentError::InvalidMethod(method_name))\n",
+  )
+  buf.write_string(
+    "    @common.AgentError::InvalidType(message) => Err(@common.AgentError::InvalidType(message))\n",
+  )
+  buf.write_string(
+    "    @common.AgentError::InvalidAgentId(message) => Err(@common.AgentError::InvalidAgentId(message))\n",
+  )
+  buf.write_string(
+    "    @common.AgentError::CustomError(value) => Err(@common.AgentError::CustomError(value))\n",
+  )
+  buf.write_string("    e => raise e\n")
   buf.write_string("  }\n")
   buf.write_string("}\n\n")
 }

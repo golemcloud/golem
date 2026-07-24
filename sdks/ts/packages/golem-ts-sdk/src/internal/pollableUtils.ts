@@ -12,26 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { Pollable } from 'wasi:io/poll@0.2.3';
-
-const disposeSymbol = (Symbol as typeof Symbol & { readonly dispose?: symbol }).dispose;
-
-export function disposeWitResource(resource: unknown): void {
-  if (
-    !disposeSymbol ||
-    resource === null ||
-    (typeof resource !== 'object' && typeof resource !== 'function')
-  )
-    return;
-
-  try {
-    const dispose = (resource as Record<symbol, unknown>)[disposeSymbol];
-    if (typeof dispose === 'function') dispose.call(resource);
-  } catch {
-    // Generated WIT resources are always released on a best-effort basis.
-  }
-}
-
 export function throwIfAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) return;
 
@@ -44,18 +24,43 @@ export function throwIfAborted(signal?: AbortSignal): void {
   throw err;
 }
 
-export async function awaitPollable(pollable: Pollable, signal?: AbortSignal): Promise<void> {
-  try {
-    if (!signal) {
-      await pollable.promise();
-      return;
-    }
+export async function awaitAbortable<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+  onAbort?: () => void,
+): Promise<T> {
+  if (!signal) {
+    return promise;
+  }
 
-    throwIfAborted(signal);
-    await pollable.abortablePromise(signal);
+  if (signal.aborted) {
+    promise.catch(() => undefined);
+  }
+  throwIfAborted(signal);
+
+  let abortListener: (() => void) | undefined;
+  const abort = new Promise<never>((_, reject) => {
+    abortListener = () => {
+      try {
+        throwIfAborted(signal);
+      } catch (reason) {
+        reject(reason);
+      }
+
+      try {
+        onAbort?.();
+      } catch {
+        // Cancellation is best-effort; the signal reason determines the rejection.
+      }
+    };
+    signal.addEventListener('abort', abortListener, { once: true });
+  });
+
+  try {
+    return await Promise.race([promise, abort]);
   } finally {
-    // wasm-rquickjs consumes a pollable while awaiting it, except when an
-    // already-aborted signal rejects before that transfer takes place.
-    disposeWitResource(pollable);
+    if (abortListener) {
+      signal.removeEventListener('abort', abortListener);
+    }
   }
 }

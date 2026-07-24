@@ -1,0 +1,132 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/async-core"
+
+import {
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn check_cancellation() -> Unit raise
+
+pub fn is_being_cancelled() -> Bool
+
+pub async fn[X] protect_from_cancel(async () -> X, resume_on_cancel? : Bool) -> X
+
+pub async fn[X] with_task_group(async (TaskGroup[X]) -> X) -> X
+
+// Errors
+pub(all) suberror Cancelled derive(@debug.Debug)
+
+pub(all) suberror EndpointBusy {
+  Read
+  Write
+}
+
+pub(all) suberror FutureReadError {
+  Cancelled
+  Dropped
+}
+
+pub suberror OpCancelled {
+  SubTaskCancelled(before_started~ : Bool)
+  StreamReadCancelled
+}
+
+pub(all) suberror PromiseClosed derive(@debug.Debug)
+
+// Types and methods
+pub struct CondVar {
+  // private fields
+}
+#alias(new, deprecated)
+pub fn CondVar::CondVar() -> Self
+pub fn CondVar::broadcast(Self) -> Unit
+pub fn CondVar::signal(Self) -> Unit
+pub async fn CondVar::wait(Self) -> Unit
+
+type Coroutine
+
+pub struct Future[X] {
+  // private fields
+}
+pub async fn[X] Future::drop(Self[X]) -> Unit noraise
+pub fn[X] Future::drop_sync(Self[X]) -> Unit
+pub fn[X] Future::from(async () -> X, on_unstarted_drop? : () -> Unit) -> Self[X]
+pub fn[X] Future::from_source(async () -> X, async () -> Unit, () -> Unit) -> Self[X]
+pub async fn[X] Future::get(Self[X]) -> X
+pub fn[X] Future::new() -> (Self[X], Promise[X])
+pub fn[X] Future::new_with_cleanup((X) -> Unit) -> (Self[X], Promise[X])
+pub fn[X] Future::ready(X) -> Self[X]
+pub fn[X] Future::ready_with_cleanup(X, (X) -> Unit) -> Self[X]
+pub async fn[X] Future::reject(Self[X], (X) -> Unit) -> Unit noraise
+
+pub struct Mutex {
+  // private fields
+}
+pub fn Mutex::Mutex() -> Self
+pub async fn Mutex::acquire(Self) -> Unit
+pub fn Mutex::release(Self) -> Unit
+pub fn Mutex::try_acquire(Self) -> Bool
+
+pub struct Promise[X] {
+  // private fields
+}
+pub fn[X] Promise::close(Self[X]) -> Bool
+pub fn[X] Promise::complete(Self[X], X) -> Bool
+pub fn[X] Promise::fail(Self[X], Error) -> Bool
+
+pub struct Semaphore {
+  size : Int
+  // private fields
+}
+#alias(new, deprecated)
+pub fn Semaphore::Semaphore(Int, initial_value? : Int) -> Self
+pub async fn Semaphore::acquire(Self) -> Unit
+pub fn Semaphore::release(Self) -> Unit
+pub fn Semaphore::try_acquire(Self) -> Bool
+
+pub struct Sink[X] {
+  // private fields
+}
+pub async fn[X] Sink::close(Self[X]) -> Unit
+pub fn[X] Sink::from_callbacks(async (ArrayView[X]) -> Int, async () -> Unit, () -> Bool, ((X) -> Unit)?) -> Self[X]
+pub fn[X] Sink::is_open(Self[X]) -> Bool
+pub async fn[X] Sink::write(Self[X], ArrayView[X]) -> Int
+pub async fn[X] Sink::write_all(Self[X], ArrayView[X]) -> Bool
+pub async fn Sink::write_all_bytes(Self[Byte], BytesView) -> Bool
+pub async fn Sink::write_bytes(Self[Byte], BytesView) -> Int
+
+pub struct Stream[X] {
+  // private fields
+}
+pub async fn[X] Stream::drop(Self[X]) -> Unit noraise
+pub fn[X] Stream::drop_sync(Self[X]) -> Unit
+pub fn[X] Stream::from_source(async (Int) -> FixedArray[X]?, async () -> Unit, () -> Unit) -> Self[X]
+pub fn[X] Stream::new(capacity? : Int) -> (Self[X], Sink[X])
+pub fn[X] Stream::new_with_cleanup((X) -> Unit, capacity? : Int) -> (Self[X], Sink[X])
+pub fn[X] Stream::produce(async (Sink[X]) -> Unit, cleanup? : (X) -> Unit, on_unstarted_drop? : () -> Unit) -> Self[X]
+pub async fn[X] Stream::read(Self[X], Int) -> FixedArray[X]?
+pub async fn[X] Stream::reject(Self[X], (X) -> Unit) -> Unit noraise
+pub fn[X] Stream::take_producer(Self[X]) -> (async (Sink[X]) -> Unit)?
+
+pub struct Task[X] {
+  // private fields
+}
+pub fn[X] Task::cancel(Self[X]) -> Unit
+pub fn[X] Task::try_wait(Self[X]) -> X? raise
+pub async fn[X] Task::wait(Self[X]) -> X
+
+pub struct TaskGroup[X] {
+  // private fields
+}
+pub fn[X] TaskGroup::add_defer(Self[X], async () -> Unit) -> Unit
+pub fn[X] TaskGroup::return_immediately(Self[X], X) -> Unit raise
+pub fn[G, X] TaskGroup::spawn(Self[G], async () -> X, no_wait? : Bool, allow_failure? : Bool) -> Task[X]
+pub fn[X] TaskGroup::spawn_bg(Self[X], async () -> Unit, no_wait? : Bool, allow_failure? : Bool) -> Unit
+
+type WaitableSet derive(Eq, Hash)
+
+// Type aliases
+
+// Traits
+

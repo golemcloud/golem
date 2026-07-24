@@ -17,10 +17,10 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use crate::TypedSchemaValue;
+use crate::agentic::InputStream;
 use crate::bindings::golem::tool::host::RpcError as WitRpcError;
 use crate::bindings::golem::tool::host::{self, ToolRpc as HostToolRpc};
 use crate::schema::{FromSchema, FromSchemaError};
-use crate::wasip2::io::streams::{InputStream, OutputStream};
 
 /// RPC-level failures reported while invoking a remote tool.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -93,7 +93,7 @@ impl<E: Error + 'static> Error for ToolError<E> {
 /// Decoded successful result of `tool-rpc.invoke-and-await`.
 pub struct InvocationResult {
     pub result: Option<TypedSchemaValue>,
-    pub stdout: Option<OutputStream>,
+    pub stdout: Option<InputStream>,
 }
 
 /// Decodes an invocation result declared to carry both a value and a stdout
@@ -101,7 +101,7 @@ pub struct InvocationResult {
 /// protocol error.
 pub fn decode_result_with_stdout<T: FromSchema, E>(
     result: InvocationResult,
-) -> Result<(T, OutputStream), ToolError<E>> {
+) -> Result<(T, InputStream), ToolError<E>> {
     let stdout = expect_stdout(result.stdout)?;
     let value = decode_expected_value(result.result)?;
     Ok((value, stdout))
@@ -116,9 +116,7 @@ pub fn decode_result_value<T: FromSchema, E>(result: InvocationResult) -> Result
 
 /// Decodes an invocation result declared to carry a stdout stream and no
 /// value.
-pub fn decode_result_stdout_only<E>(
-    result: InvocationResult,
-) -> Result<OutputStream, ToolError<E>> {
+pub fn decode_result_stdout_only<E>(result: InvocationResult) -> Result<InputStream, ToolError<E>> {
     let stdout = expect_stdout(result.stdout)?;
     expect_no_value(result.result)?;
     Ok(stdout)
@@ -132,14 +130,14 @@ pub fn decode_result_empty<E>(result: InvocationResult) -> Result<(), ToolError<
 }
 
 /// Requires the declared stdout stream to be present in an invocation result.
-pub fn expect_stdout<E>(stdout: Option<OutputStream>) -> Result<OutputStream, ToolError<E>> {
+pub fn expect_stdout<E>(stdout: Option<InputStream>) -> Result<InputStream, ToolError<E>> {
     stdout.ok_or_else(|| {
         protocol_error("tool result did not contain declared stdout stream".to_string())
     })
 }
 
 /// Rejects an invocation result that unexpectedly carries a stdout stream.
-pub fn expect_no_stdout<E>(stdout: Option<OutputStream>) -> Result<(), ToolError<E>> {
+pub fn expect_no_stdout<E>(stdout: Option<InputStream>) -> Result<(), ToolError<E>> {
     if stdout.is_some() {
         return Err(protocol_error(
             "tool result unexpectedly contained stdout stream".to_string(),
@@ -177,8 +175,9 @@ pub fn expect_no_value<E>(value: Option<TypedSchemaValue>) -> Result<(), ToolErr
 }
 
 /// Tool RPC resource types accepted by typed tool client helpers.
+#[allow(async_fn_in_trait)]
 pub trait ToolRpcClient {
-    fn invoke_and_await_tool(
+    async fn invoke_and_await_tool(
         &self,
         command_path: &[String],
         input: crate::schema::wit::wire::TypedSchemaValue,
@@ -187,42 +186,44 @@ pub trait ToolRpcClient {
 }
 
 impl ToolRpcClient for HostToolRpc {
-    fn invoke_and_await_tool(
+    async fn invoke_and_await_tool(
         &self,
         command_path: &[String],
         input: crate::schema::wit::wire::TypedSchemaValue,
         stdin: Option<InputStream>,
     ) -> Result<host::InvocationResult, WitRpcError> {
-        self.invoke_and_await(command_path, input, stdin)
+        self.invoke_and_await(command_path.to_vec(), input, stdin)
+            .await
     }
 }
 
 impl ToolRpcClient for crate::golem_agentic::golem::tool::host::ToolRpc {
-    fn invoke_and_await_tool(
+    async fn invoke_and_await_tool(
         &self,
         command_path: &[String],
         input: crate::schema::wit::wire::TypedSchemaValue,
         stdin: Option<InputStream>,
     ) -> Result<host::InvocationResult, WitRpcError> {
-        self.invoke_and_await(command_path, input, stdin)
+        self.invoke_and_await(command_path.to_vec(), input, stdin)
+            .await
             .map(Into::into)
             .map_err(Into::into)
     }
 }
 
 /// Invokes a tool and decodes remote custom errors with a generated error decoder.
-pub fn invoke_and_await<E>(
+pub async fn invoke_and_await<E>(
     rpc: &impl ToolRpcClient,
     command_path: &[String],
     input: &TypedSchemaValue,
     stdin: Option<InputStream>,
     decode_error: impl Fn(TypedSchemaValue) -> Result<E, String>,
 ) -> Result<InvocationResult, ToolError<E>> {
-    invoke_and_await_with_error_decoder(rpc, command_path, input, stdin, decode_error)
+    invoke_and_await_with_error_decoder(rpc, command_path, input, stdin, decode_error).await
 }
 
 /// Invokes a tool whose remote custom-error payload is directly encoded as `E`.
-pub fn invoke_and_await_payload_error<E: FromSchema>(
+pub async fn invoke_and_await_payload_error<E: FromSchema>(
     rpc: &impl ToolRpcClient,
     command_path: &[String],
     input: &TypedSchemaValue,
@@ -235,9 +236,10 @@ pub fn invoke_and_await_payload_error<E: FromSchema>(
         stdin,
         decode_custom_tool_error::<E>,
     )
+    .await
 }
 
-fn invoke_and_await_with_error_decoder<E>(
+async fn invoke_and_await_with_error_decoder<E>(
     rpc: &impl ToolRpcClient,
     command_path: &[String],
     input: &TypedSchemaValue,
@@ -248,6 +250,7 @@ fn invoke_and_await_with_error_decoder<E>(
         .map_err(|error| protocol_error(format!("failed to encode tool input: {error}")))?;
     let result = rpc
         .invoke_and_await_tool(command_path, input, stdin)
+        .await
         .map_err(|error| map_rpc_error(error, &decode_error))?;
 
     let result_value = result
@@ -264,7 +267,7 @@ fn invoke_and_await_with_error_decoder<E>(
 }
 
 /// Invokes a zero-error tool and treats remote custom errors as protocol failures.
-pub fn invoke_and_await_infallible(
+pub async fn invoke_and_await_infallible(
     rpc: &impl ToolRpcClient,
     command_path: &[String],
     input: &TypedSchemaValue,
@@ -274,6 +277,7 @@ pub fn invoke_and_await_infallible(
         .map_err(|error| protocol_error(format!("failed to encode tool input: {error}")))?;
     let result = rpc
         .invoke_and_await_tool(command_path, input, stdin)
+        .await
         .map_err(map_infallible_rpc_error)?;
 
     let result_value = result
@@ -445,7 +449,7 @@ mod tests {
     struct FakeToolRpc;
 
     impl ToolRpcClient for FakeToolRpc {
-        fn invoke_and_await_tool(
+        async fn invoke_and_await_tool(
             &self,
             _command_path: &[String],
             _input: crate::schema::wit::wire::TypedSchemaValue,
@@ -468,7 +472,7 @@ mod tests {
     struct FailingToolRpc(FakeFailure);
 
     impl ToolRpcClient for FailingToolRpc {
-        fn invoke_and_await_tool(
+        async fn invoke_and_await_tool(
             &self,
             _command_path: &[String],
             _input: crate::schema::wit::wire::TypedSchemaValue,
@@ -484,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn invoke_and_await_decoding_error_decodes_custom_tool_error_payload() {
+    async fn invoke_and_await_decoding_error_decodes_custom_tool_error_payload() {
         let input = ().into_typed_schema_value().unwrap();
 
         let decode_error = |value: TypedSchemaValue| {
@@ -493,7 +497,7 @@ mod tests {
                 .map_err(format_from_schema_error)
         };
 
-        match invoke_and_await(&FakeToolRpc, &[], &input, None, decode_error) {
+        match invoke_and_await(&FakeToolRpc, &[], &input, None, decode_error).await {
             Err(ToolError::Tool(CliError::Usage(message))) => assert_eq!(message, "bad flag"),
             Err(ToolError::Rpc(error)) => {
                 panic!("expected declared tool error, got RPC error: {error:?}")
@@ -503,7 +507,7 @@ mod tests {
     }
 
     #[test]
-    fn invoke_and_await_maps_framing_errors_to_rpc_errors() {
+    async fn invoke_and_await_maps_framing_errors_to_rpc_errors() {
         let input = ().into_typed_schema_value().unwrap();
 
         match invoke_and_await_payload_error::<CliError>(
@@ -511,7 +515,9 @@ mod tests {
             &[],
             &input,
             None,
-        ) {
+        )
+        .await
+        {
             Err(ToolError::Rpc(RpcError::Denied(message))) => assert_eq!(message, "no access"),
             Err(other) => panic!("expected denied RPC error, got {other:?}"),
             Ok(_) => panic!("expected denied RPC error, got success"),
@@ -522,7 +528,9 @@ mod tests {
             &[],
             &input,
             None,
-        ) {
+        )
+        .await
+        {
             Err(ToolError::Rpc(RpcError::Protocol(message))) => {
                 assert!(
                     message.contains("remote tool error: invalid input: bad wire input"),

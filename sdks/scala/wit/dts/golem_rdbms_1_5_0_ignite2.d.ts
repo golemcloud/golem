@@ -59,7 +59,7 @@ declare module 'golem:rdbms/ignite2@1.5.0' {
   /**
    * ── Error ──────────────────────────────────────────────────────────────────
    */
-  export type Error = 
+  export type Error =
   {
     tag: 'connection-failure'
     val: string
@@ -83,7 +83,7 @@ declare module 'golem:rdbms/ignite2@1.5.0' {
   /**
    * ── Value types (maps 1-to-1 onto ignite_client::IgniteValue) ─────────────
    */
-  export type DbValue = 
+  export type DbValue =
   {
     tag: 'db-null'
   } |

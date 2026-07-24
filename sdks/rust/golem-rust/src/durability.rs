@@ -14,7 +14,6 @@
 
 use crate::bindings::golem::durability::durability::{
     DurableExecutionState, DurableFunctionType as RawDurableFunctionType,
-    LazyInitializedPollable as RawLazyInitializedPollable,
     OplogEntryVersion as RawOplogEntryVersion, OplogIndex, PersistedDurableFunctionInvocation,
     PersistenceLevel, begin_durable_function, current_durable_execution_state,
     end_durable_function, observe_function_call, persist_durable_function_invocation,
@@ -61,32 +60,6 @@ impl From<RawOplogEntryVersion> for OplogEntryVersion {
             RawOplogEntryVersion::V1 => Self::V1,
             RawOplogEntryVersion::V2 => Self::V2,
         }
-    }
-}
-
-pub struct LazyInitializedPollable {
-    raw: RawLazyInitializedPollable,
-}
-
-impl LazyInitializedPollable {
-    pub fn new() -> Self {
-        Self {
-            raw: RawLazyInitializedPollable::new(),
-        }
-    }
-
-    pub fn set(&self, pollable: wasip2::io::poll::Pollable) {
-        self.raw.set(pollable)
-    }
-
-    pub fn subscribe(&self) -> wasip2::io::poll::Pollable {
-        self.raw.subscribe()
-    }
-}
-
-impl Default for LazyInitializedPollable {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

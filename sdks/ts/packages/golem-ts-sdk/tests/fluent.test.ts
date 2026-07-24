@@ -569,7 +569,7 @@ describe('fluent RPC client', () => {
     const metadata = { agentId: 'final-agent-id', idempotencyKey: 'key' };
     const future = {
       subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-      get: vi.fn().mockReturnValue({ tag: 'ok', val: undefined }),
+      get: vi.fn().mockResolvedValue(undefined),
       cancel: vi.fn(),
     };
     rpc.asyncInvokeAndAwait.mockReturnValue({ metadata, future });
@@ -595,7 +595,7 @@ describe('fluent RPC client', () => {
       metadata: { agentId: 'agent-id', idempotencyKey: 'key' },
       future: {
         subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-        get: vi.fn().mockReturnValue({ tag: 'ok', val: undefined }),
+        get: vi.fn().mockResolvedValue(undefined),
         cancel: vi.fn(),
       },
     });
@@ -615,10 +615,7 @@ describe('fluent RPC client', () => {
       metadata: { agentId: 'agent-id', idempotencyKey: 'key' },
       future: {
         subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-        get: vi.fn().mockReturnValue({
-          tag: 'ok',
-          val: schemaValueToWit(compileSchema(z.number()).toValue(42)),
-        }),
+        get: vi.fn().mockResolvedValue(schemaValueToWit(compileSchema(z.number()).toValue(42))),
         cancel: vi.fn(),
       },
     });
@@ -639,17 +636,14 @@ describe('fluent RPC client', () => {
       metadata: { agentId: 'agent-id', idempotencyKey: 'key' },
       future: {
         subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-        get: vi.fn().mockReturnValue({
-          tag: 'err',
+        get: vi.fn().mockRejectedValue({
+          tag: 'remote-agent-error',
           val: {
-            tag: 'remote-agent-error',
-            val: {
-              tag: 'custom-error',
-              val: typedSchemaValueToWit({
-                graph: errorCodec.graph,
-                value: errorCodec.toValue(1n),
-              }),
-            },
+            tag: 'custom-error',
+            val: typedSchemaValueToWit({
+              graph: errorCodec.graph,
+              value: errorCodec.toValue(1n),
+            }),
           },
         }),
         cancel: vi.fn(),

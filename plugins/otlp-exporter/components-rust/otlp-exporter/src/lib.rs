@@ -25,7 +25,7 @@ use std::collections::HashMap;
 struct OtlpExporterComponent;
 
 impl OplogProcessorGuest for OtlpExporterComponent {
-    fn process(
+    async fn process(
         _account_info: golem_rust::oplog_processor::exports::golem::api::oplog_processor::AccountInfo,
         config: Vec<(String, String)>,
         component_id: ComponentId,
@@ -105,7 +105,7 @@ impl OplogProcessorGuest for OtlpExporterComponent {
                     }],
                 }],
             };
-            send_spans(&exporter_config, request_body)?;
+            send_spans(&exporter_config, request_body).await?;
             println!("OTLP: exported {span_count} trace span(s)");
         }
 
@@ -122,7 +122,7 @@ impl OplogProcessorGuest for OtlpExporterComponent {
                     }],
                 }],
             };
-            send_logs(&exporter_config, request_body)?;
+            send_logs(&exporter_config, request_body).await?;
             println!("OTLP: exported {log_count} log record(s)");
         }
 
@@ -139,7 +139,7 @@ impl OplogProcessorGuest for OtlpExporterComponent {
                     }],
                 }],
             };
-            send_metrics(&exporter_config, request_body)?;
+            send_metrics(&exporter_config, request_body).await?;
             println!("OTLP: exported {metric_count} metric(s)");
         }
 

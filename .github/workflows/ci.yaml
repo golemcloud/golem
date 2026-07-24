@@ -32,7 +32,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.3.6"
+  WASM_RQUICKJS_VERSION: "0.4.0"
   MOONBIT_INSTALL_VERSION: "0.10.1+a46be2066"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
@@ -321,7 +321,7 @@ jobs:
           auto-start: false
 
       - name: Install wasm-tools
-        run: cargo binstall --force --locked wasm-tools@1.227.1
+        run: cargo binstall --force --locked wasm-tools@1.248.0
       - name: Install wit-bindgen
         run: cargo binstall --force --locked wit-bindgen-cli@0.40.0
 
@@ -349,7 +349,7 @@ jobs:
 
       - name: Install MoonBit SDK tools dependencies
         working-directory: sdks/moonbit/golem_sdk_tools
-        run: moon update && moon install
+        run: moon update
 
       - name: Sync WIT dependencies
         run: cargo make wit
@@ -486,8 +486,18 @@ jobs:
         working-directory: sdks/scala
         env:
           GOLEM_TS_PACKAGES_PATH: ${{ github.workspace }}/sdks/ts/packages
+          RUST_BACKTRACE: 1
         run: sbt -batch "++3.8.2; integrationTests/test"
         timeout-minutes: 20
+
+      - name: Upload Scala integration server log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: scala-sdk-integration-server-log
+          path: sdks/scala/target/scala-integration/golem-server.log
+          if-no-files-found: warn
+          retention-days: 7
 
   golem-schema-guest:
     runs-on: blacksmith
@@ -580,34 +590,31 @@ jobs:
           core-version: ${{ env.MOONBIT_INSTALL_VERSION }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Update MoonBit workspace dependencies
+        run: moon update
+        working-directory: sdks/moonbit
       - name: Check SDK
-        run: moon check --target wasm
+        run: find . -name moon.pkg -exec dirname {} \; | xargs moon check --target wasm
         working-directory: sdks/moonbit/golem_sdk
       - name: Test SDK
-        run: moon test --target wasm
+        run: find . -name moon.pkg -exec dirname {} \; | xargs moon test --target wasm
         working-directory: sdks/moonbit/golem_sdk
-      - name: Install tools dependencies
-        run: moon update && moon install
-        working-directory: sdks/moonbit/golem_sdk_tools
       - name: Check tools
-        run: moon check
+        run: moon check cmd lib
         working-directory: sdks/moonbit/golem_sdk_tools
       - name: Test tools
-        run: moon test
+        run: moon test cmd lib
         working-directory: sdks/moonbit/golem_sdk_tools
 
   build-golem-rust:
     runs-on: blacksmith
     steps:
       - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-rust
         with:
-          prefix-key: v2-golem-rust
-          shared-key: debug
-          cache-all-crates: true
-          save-if: false
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+          rust-targets: 'wasm32-wasip2'
+          cache-prefix-key: 'v2-golem-rust'
+          install-cargo-make: 'false'
       - name: Check formatting
         run: cargo fmt -- --check
         working-directory: sdks/rust

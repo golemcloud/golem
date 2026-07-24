@@ -1,6 +1,8 @@
 import {
+  "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
-  "golemcloud/golem_sdk/interface/wasi/io/streams",
 }
+
+supported_targets = "+wasm"
 
 warnings = "-44"

@@ -11,7 +11,7 @@ pub(all) struct WebhookHandler {
   // private fields
 }
 pub fn WebhookHandler::url(Self) -> String
-pub fn WebhookHandler::wait(Self) -> WebhookRequestPayload
+pub async fn WebhookHandler::wait(Self) -> WebhookRequestPayload
 
 pub(all) struct WebhookRequestPayload {
   // private fields

@@ -22,7 +22,8 @@ use crate::services::oplog::multilayer::BackgroundTransferMessage::{
     TransferFromLower, TransferFromPrimary,
 };
 use crate::services::oplog::{
-    CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService, downcast_oplog, scan_modes,
+    CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService, OrderedOplogStart,
+    downcast_oplog, scan_modes,
 };
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
@@ -389,7 +390,7 @@ struct CreateOplogConstructor {
     last_oplog_index: Option<OplogIndex>,
     fresh: bool,
     initial_worker_metadata: AgentMetadata,
-    last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+    last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
     execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
 }
 
@@ -404,7 +405,7 @@ impl CreateOplogConstructor {
         last_oplog_index: Option<OplogIndex>,
         fresh: bool,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Self {
         Self {
@@ -533,7 +534,7 @@ impl OplogService for MultiLayerOplogService {
         agent_mode: AgentMode,
         initial_entry: OplogEntry,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
         self.oplogs
@@ -561,7 +562,7 @@ impl OplogService for MultiLayerOplogService {
         agent_mode: AgentMode,
         initial_entry: OplogEntry,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
         self.oplogs
@@ -589,7 +590,7 @@ impl OplogService for MultiLayerOplogService {
         agent_mode: AgentMode,
         last_oplog_index: Option<OplogIndex>,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
         self.oplogs
@@ -1164,7 +1165,9 @@ impl Oplog for MultiLayerOplog {
         let full_match = match partial_result.first_key_value() {
             None => false,
             Some((first_idx, _)) => {
-                remaining -= partial_result.len() as u64;
+                // A layer may return more entries than requested (archived layers read whole
+                // chunks), so the subtraction must saturate
+                remaining = remaining.saturating_sub(partial_result.len() as u64);
                 *first_idx == idx
             }
         };
@@ -1177,7 +1180,7 @@ impl Oplog for MultiLayerOplog {
                 let full_match = match partial_result.first_key_value() {
                     None => false,
                     Some((first_idx, _)) => {
-                        remaining -= partial_result.len() as u64;
+                        remaining = remaining.saturating_sub(partial_result.len() as u64);
                         *first_idx == idx
                     }
                 };
@@ -1226,6 +1229,21 @@ impl Oplog for MultiLayerOplog {
         let (first_idx, second_idx) = self.primary.add_pair(start, make_second).await;
         self.last_oplog_index.set(second_idx);
         (first_idx, second_idx)
+    }
+
+    async fn add_start_with_reserved_raw_payload(
+        &self,
+        serialized_request: Vec<u8>,
+        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+    ) -> Result<OrderedOplogStart, String> {
+        // Delegate to the primary (which owns the Start-ordering critical section) and mirror the
+        // assigned index into `last_oplog_index`, like `add`/`add_pair` do.
+        let ordered = self
+            .primary
+            .add_start_with_reserved_raw_payload(serialized_request, build_start)
+            .await?;
+        self.last_oplog_index.set(ordered.index);
+        Ok(ordered)
     }
 
     fn inner(&self) -> Option<Arc<dyn Oplog>> {

@@ -42,7 +42,6 @@ use sqlx::postgres::types::{Oid, PgInterval, PgRange, PgTimeTz};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Display, Formatter};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::ops::Add;
 use std::ops::Bound;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
@@ -52,6 +51,10 @@ use wasmtime_wasi::p2::bindings::filesystem;
 use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::IpAddress;
 use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode as SocketErrorCode;
 use wasmtime_wasi::p2::{FsError, SocketError};
+use wasmtime_wasi::p3::bindings::filesystem as p3_filesystem;
+use wasmtime_wasi::p3::bindings::sockets::{
+    ip_name_lookup as p3_ip_name_lookup, types as p3_socket_types,
+};
 use wasmtime_wasi_http::FieldMap;
 use wasmtime_wasi_http::p2::bindings::http::types::{
     DnsErrorPayload, FieldSizePayload, Method, TlsAlertReceivedPayload,
@@ -118,15 +121,41 @@ pub struct ObjectMetadata {
     golem_schema_derive::FromSchema,
 )]
 #[desert(evolution())]
+/// A point in time relative to the Unix epoch.
+///
+/// `seconds` is the *floored* number of whole seconds since the epoch (negative
+/// for pre-epoch instants) and `nanoseconds` is the offset within that second,
+/// always in `0..1_000_000_000`. This matches the WASI P3 `system-clock`
+/// `instant` representation, so P3 conversions are lossless field copies.
 pub struct SerializableDateTime {
-    pub seconds: u64,
+    pub seconds: i64,
     pub nanoseconds: u32,
+}
+
+impl From<wasmtime_wasi::p3::bindings::clocks::system_clock::Instant> for SerializableDateTime {
+    fn from(value: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant) -> Self {
+        Self {
+            seconds: value.seconds,
+            nanoseconds: value.nanoseconds,
+        }
+    }
+}
+
+impl From<SerializableDateTime> for wasmtime_wasi::p3::bindings::clocks::system_clock::Instant {
+    fn from(value: SerializableDateTime) -> Self {
+        Self {
+            seconds: value.seconds,
+            nanoseconds: value.nanoseconds,
+        }
+    }
 }
 
 impl From<wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> for SerializableDateTime {
     fn from(value: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime) -> Self {
+        // The P2 `datetime` seconds field is unsigned; values beyond `i64::MAX`
+        // (hundreds of billions of years from now) saturate instead of wrapping.
         Self {
-            seconds: value.seconds,
+            seconds: i64::try_from(value.seconds).unwrap_or(i64::MAX),
             nanoseconds: value.nanoseconds,
         }
     }
@@ -134,38 +163,113 @@ impl From<wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> for Seriali
 
 impl From<SerializableDateTime> for wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime {
     fn from(value: SerializableDateTime) -> Self {
-        Self {
-            seconds: value.seconds,
-            nanoseconds: value.nanoseconds,
+        // The P2 `wall-clock` `datetime` type has unsigned seconds and cannot
+        // represent pre-epoch instants, so those clamp to the epoch itself
+        // (zeroing the nanoseconds too, otherwise the result would be *after*
+        // the epoch and thus further from the original value).
+        if value.seconds < 0 {
+            Self {
+                seconds: 0,
+                nanoseconds: 0,
+            }
+        } else {
+            Self {
+                seconds: value.seconds as u64,
+                nanoseconds: value.nanoseconds,
+            }
         }
     }
 }
 
 impl From<SerializableDateTime> for SystemTime {
     fn from(value: SerializableDateTime) -> Self {
-        SystemTime::UNIX_EPOCH.add(Duration::new(value.seconds, value.nanoseconds))
+        // Pre-epoch instants are preserved: `seconds` is the floored second with
+        // `nanoseconds` on top, so the offset before the epoch is
+        // `|seconds| - nanoseconds`. The result is clamped to the Unix epoch only
+        // if the platform's `SystemTime` cannot represent the instant at all
+        // (e.g. pre-1601 dates on Windows).
+        if value.seconds >= 0 {
+            SystemTime::UNIX_EPOCH
+                .checked_add(Duration::new(value.seconds as u64, value.nanoseconds))
+                .unwrap_or(SystemTime::UNIX_EPOCH)
+        } else {
+            let before_epoch = Duration::new(value.seconds.unsigned_abs(), 0)
+                .saturating_sub(Duration::new(0, value.nanoseconds));
+            SystemTime::UNIX_EPOCH
+                .checked_sub(before_epoch)
+                .unwrap_or(SystemTime::UNIX_EPOCH)
+        }
     }
 }
 
 impl From<SystemTime> for SerializableDateTime {
     fn from(value: SystemTime) -> Self {
-        let duration = value.duration_since(SystemTime::UNIX_EPOCH).unwrap();
-        Self {
-            seconds: duration.as_secs(),
-            nanoseconds: duration.subsec_nanos(),
+        // Instants outside the representable `i64` second range saturate to the
+        // nearest representable bound; everything else converts losslessly.
+        match value.duration_since(SystemTime::UNIX_EPOCH) {
+            Ok(since_epoch) => match i64::try_from(since_epoch.as_secs()) {
+                Ok(seconds) => Self {
+                    seconds,
+                    nanoseconds: since_epoch.subsec_nanos(),
+                },
+                Err(_) => Self {
+                    seconds: i64::MAX,
+                    nanoseconds: 999_999_999,
+                },
+            },
+            Err(err) => {
+                // Pre-epoch: represent as floored (negative) seconds plus a
+                // non-negative nanosecond offset within that second. Computed in
+                // i128 because the floored second of the earliest representable
+                // instants would overflow i64 negation.
+                let before_epoch = err.duration();
+                let nanoseconds = before_epoch.subsec_nanos();
+                let floored_seconds =
+                    -i128::from(before_epoch.as_secs()) - i128::from(nanoseconds != 0);
+                match i64::try_from(floored_seconds) {
+                    Ok(seconds) => Self {
+                        seconds,
+                        nanoseconds: if nanoseconds == 0 {
+                            0
+                        } else {
+                            1_000_000_000 - nanoseconds
+                        },
+                    },
+                    Err(_) => Self {
+                        seconds: i64::MIN,
+                        nanoseconds: 0,
+                    },
+                }
+            }
         }
     }
 }
 
 impl From<SerializableDateTime> for DateTime<Utc> {
     fn from(value: SerializableDateTime) -> Self {
-        Self::from(SystemTime::from(value))
+        // Chrono cannot represent the full i64 second range (its bounds are
+        // roughly ±262,000 years), so out-of-range values clamp to
+        // `DateTime::<Utc>::MIN_UTC` / `MAX_UTC`.
+        DateTime::<Utc>::from_timestamp(value.seconds, value.nanoseconds).unwrap_or({
+            if value.seconds < 0 {
+                DateTime::<Utc>::MIN_UTC
+            } else {
+                DateTime::<Utc>::MAX_UTC
+            }
+        })
     }
 }
 
 impl From<DateTime<Utc>> for SerializableDateTime {
     fn from(value: DateTime<Utc>) -> Self {
-        SystemTime::from(value).into()
+        // `timestamp()` is the floored second (negative for pre-epoch), matching
+        // the `SerializableDateTime` representation directly. Chrono represents
+        // leap seconds with a subsecond nano count >= 1e9; those clamp to the
+        // last nanosecond of the preceding second.
+        Self {
+            seconds: value.timestamp(),
+            nanoseconds: value.timestamp_subsec_nanos().min(999_999_999),
+        }
     }
 }
 
@@ -213,6 +317,168 @@ impl From<FileSystemError> for FsError {
         match value {
             FileSystemError::ErrorCode(SerializableFsErrorCode(error_code)) => error_code.into(),
             FileSystemError::Generic(error) => FsError::trap(wasmtime::Error::msg(error)),
+        }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3FileSystemError {
+    ErrorCode(SerializableP3FsErrorCode),
+    Generic(String),
+}
+
+impl SerializableP3FileSystemError {
+    pub fn from_result(result: Result<p3_filesystem::types::ErrorCode, String>) -> Self {
+        match result {
+            Ok(error_code) => Self::ErrorCode(SerializableP3FsErrorCode::from(error_code)),
+            Err(msg) => SerializableP3FileSystemError::Generic(msg),
+        }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3FsErrorCode {
+    Access,
+    Already,
+    BadDescriptor,
+    Busy,
+    Deadlock,
+    Quota,
+    Exist,
+    FileTooLarge,
+    IllegalByteSequence,
+    InProgress,
+    Interrupted,
+    Invalid,
+    Io,
+    IsDirectory,
+    Loop,
+    TooManyLinks,
+    MessageSize,
+    NameTooLong,
+    NoDevice,
+    NoEntry,
+    NoLock,
+    InsufficientMemory,
+    InsufficientSpace,
+    NotDirectory,
+    NotEmpty,
+    NotRecoverable,
+    Unsupported,
+    NoTty,
+    NoSuchDevice,
+    Overflow,
+    NotPermitted,
+    Pipe,
+    ReadOnly,
+    InvalidSeek,
+    TextFileBusy,
+    CrossDevice,
+    Other(Option<String>),
+}
+
+impl From<p3_filesystem::types::ErrorCode> for SerializableP3FsErrorCode {
+    fn from(value: p3_filesystem::types::ErrorCode) -> Self {
+        match value {
+            p3_filesystem::types::ErrorCode::Access => Self::Access,
+            p3_filesystem::types::ErrorCode::Already => Self::Already,
+            p3_filesystem::types::ErrorCode::BadDescriptor => Self::BadDescriptor,
+            p3_filesystem::types::ErrorCode::Busy => Self::Busy,
+            p3_filesystem::types::ErrorCode::Deadlock => Self::Deadlock,
+            p3_filesystem::types::ErrorCode::Quota => Self::Quota,
+            p3_filesystem::types::ErrorCode::Exist => Self::Exist,
+            p3_filesystem::types::ErrorCode::FileTooLarge => Self::FileTooLarge,
+            p3_filesystem::types::ErrorCode::IllegalByteSequence => Self::IllegalByteSequence,
+            p3_filesystem::types::ErrorCode::InProgress => Self::InProgress,
+            p3_filesystem::types::ErrorCode::Interrupted => Self::Interrupted,
+            p3_filesystem::types::ErrorCode::Invalid => Self::Invalid,
+            p3_filesystem::types::ErrorCode::Io => Self::Io,
+            p3_filesystem::types::ErrorCode::IsDirectory => Self::IsDirectory,
+            p3_filesystem::types::ErrorCode::Loop => Self::Loop,
+            p3_filesystem::types::ErrorCode::TooManyLinks => Self::TooManyLinks,
+            p3_filesystem::types::ErrorCode::MessageSize => Self::MessageSize,
+            p3_filesystem::types::ErrorCode::NameTooLong => Self::NameTooLong,
+            p3_filesystem::types::ErrorCode::NoDevice => Self::NoDevice,
+            p3_filesystem::types::ErrorCode::NoEntry => Self::NoEntry,
+            p3_filesystem::types::ErrorCode::NoLock => Self::NoLock,
+            p3_filesystem::types::ErrorCode::InsufficientMemory => Self::InsufficientMemory,
+            p3_filesystem::types::ErrorCode::InsufficientSpace => Self::InsufficientSpace,
+            p3_filesystem::types::ErrorCode::NotDirectory => Self::NotDirectory,
+            p3_filesystem::types::ErrorCode::NotEmpty => Self::NotEmpty,
+            p3_filesystem::types::ErrorCode::NotRecoverable => Self::NotRecoverable,
+            p3_filesystem::types::ErrorCode::Unsupported => Self::Unsupported,
+            p3_filesystem::types::ErrorCode::NoTty => Self::NoTty,
+            p3_filesystem::types::ErrorCode::NoSuchDevice => Self::NoSuchDevice,
+            p3_filesystem::types::ErrorCode::Overflow => Self::Overflow,
+            p3_filesystem::types::ErrorCode::NotPermitted => Self::NotPermitted,
+            p3_filesystem::types::ErrorCode::Pipe => Self::Pipe,
+            p3_filesystem::types::ErrorCode::ReadOnly => Self::ReadOnly,
+            p3_filesystem::types::ErrorCode::InvalidSeek => Self::InvalidSeek,
+            p3_filesystem::types::ErrorCode::TextFileBusy => Self::TextFileBusy,
+            p3_filesystem::types::ErrorCode::CrossDevice => Self::CrossDevice,
+            p3_filesystem::types::ErrorCode::Other(error) => Self::Other(error),
+        }
+    }
+}
+
+impl From<SerializableP3FsErrorCode> for p3_filesystem::types::ErrorCode {
+    fn from(value: SerializableP3FsErrorCode) -> Self {
+        match value {
+            SerializableP3FsErrorCode::Access => Self::Access,
+            SerializableP3FsErrorCode::Already => Self::Already,
+            SerializableP3FsErrorCode::BadDescriptor => Self::BadDescriptor,
+            SerializableP3FsErrorCode::Busy => Self::Busy,
+            SerializableP3FsErrorCode::Deadlock => Self::Deadlock,
+            SerializableP3FsErrorCode::Quota => Self::Quota,
+            SerializableP3FsErrorCode::Exist => Self::Exist,
+            SerializableP3FsErrorCode::FileTooLarge => Self::FileTooLarge,
+            SerializableP3FsErrorCode::IllegalByteSequence => Self::IllegalByteSequence,
+            SerializableP3FsErrorCode::InProgress => Self::InProgress,
+            SerializableP3FsErrorCode::Interrupted => Self::Interrupted,
+            SerializableP3FsErrorCode::Invalid => Self::Invalid,
+            SerializableP3FsErrorCode::Io => Self::Io,
+            SerializableP3FsErrorCode::IsDirectory => Self::IsDirectory,
+            SerializableP3FsErrorCode::Loop => Self::Loop,
+            SerializableP3FsErrorCode::TooManyLinks => Self::TooManyLinks,
+            SerializableP3FsErrorCode::MessageSize => Self::MessageSize,
+            SerializableP3FsErrorCode::NameTooLong => Self::NameTooLong,
+            SerializableP3FsErrorCode::NoDevice => Self::NoDevice,
+            SerializableP3FsErrorCode::NoEntry => Self::NoEntry,
+            SerializableP3FsErrorCode::NoLock => Self::NoLock,
+            SerializableP3FsErrorCode::InsufficientMemory => Self::InsufficientMemory,
+            SerializableP3FsErrorCode::InsufficientSpace => Self::InsufficientSpace,
+            SerializableP3FsErrorCode::NotDirectory => Self::NotDirectory,
+            SerializableP3FsErrorCode::NotEmpty => Self::NotEmpty,
+            SerializableP3FsErrorCode::NotRecoverable => Self::NotRecoverable,
+            SerializableP3FsErrorCode::Unsupported => Self::Unsupported,
+            SerializableP3FsErrorCode::NoTty => Self::NoTty,
+            SerializableP3FsErrorCode::NoSuchDevice => Self::NoSuchDevice,
+            SerializableP3FsErrorCode::Overflow => Self::Overflow,
+            SerializableP3FsErrorCode::NotPermitted => Self::NotPermitted,
+            SerializableP3FsErrorCode::Pipe => Self::Pipe,
+            SerializableP3FsErrorCode::ReadOnly => Self::ReadOnly,
+            SerializableP3FsErrorCode::InvalidSeek => Self::InvalidSeek,
+            SerializableP3FsErrorCode::TextFileBusy => Self::TextFileBusy,
+            SerializableP3FsErrorCode::CrossDevice => Self::CrossDevice,
+            SerializableP3FsErrorCode::Other(error) => Self::Other(error),
         }
     }
 }
@@ -319,7 +585,7 @@ impl BinaryDeserializer for SerializableFsErrorCode {
     }
 }
 
-// Schema-native A2 impl: a flat enum mirroring the legacy schema
+// Schema-native representation mirroring the legacy schema
 // above: a flat enum with the same 37 cases/indices.
 impl crate::schema::conversion::IntoSchema for SerializableFsErrorCode {
     fn type_id() -> TypeId {
@@ -585,7 +851,7 @@ impl BinaryDeserializer for SerializableSocketErrorCode {
     }
 }
 
-// Schema-native A2 impl: a flat enum mirroring the legacy schema
+// Schema-native representation mirroring the legacy schema
 // above: a flat enum with the same 21 cases/indices.
 impl crate::schema::conversion::IntoSchema for SerializableSocketErrorCode {
     fn type_id() -> TypeId {
@@ -1204,6 +1470,219 @@ impl Display for SerializableHttpMethod {
     }
 }
 
+/// Serializable form of a p3 `http::client::send` request head — the Start
+/// payload of the `P3HttpClientSend` oplog pair.
+///
+/// Records everything needed to identify and replay the outgoing request
+/// except the body bytes. The outgoing request body is a `stream<u8>` the guest
+/// writes; its bytes are owned by that stream's own durable wrapper (the
+/// outgoing-body stream path), so they are intentionally not duplicated here.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableP3HttpClientSend {
+    pub method: SerializableHttpMethod,
+    pub scheme: Option<SerializableP3HttpScheme>,
+    pub authority: Option<String>,
+    pub path_with_query: Option<String>,
+    pub headers: HashMap<String, Vec<Vec<u8>>>,
+    pub options: Option<SerializableP3HttpRequestOptions>,
+}
+
+/// Serializable form of a p3 request `Scheme`. `http::uri::Scheme` only ever
+/// holds `http`/`https` or an arbitrary other scheme string.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3HttpScheme {
+    Http,
+    Https,
+    Other(String),
+}
+
+/// Serializable form of `wasi:http/types.request-options`.
+///
+/// All three timeouts are `std::time::Duration`s (unsigned), stored as
+/// nanoseconds. The p3 no-clamp rule applies to *signed* instants, so it does
+/// not apply here; durations are stored and replayed verbatim.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableP3HttpRequestOptions {
+    pub connect_timeout_nanos: Option<u64>,
+    pub first_byte_timeout_nanos: Option<u64>,
+    pub between_bytes_timeout_nanos: Option<u64>,
+}
+
+/// Result of a p3 `http::client::send` — the End payload of the
+/// `P3HttpClientSend` oplog pair. This is a result/enum rather than a bare
+/// status+headers so that a replayed transport/protocol `ErrorCode` (the gap
+/// blocker #2 closes) round-trips back to the guest exactly as it did live.
+///
+/// Only the response *head* (status + headers) lives here. The body and
+/// trailers arrive after the body closes and are replayed by the separate
+/// `consume_body` payload pair (step 5), not by this result. Hard traps still
+/// escape via `CallHandle::trap`.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3HttpClientSendResult {
+    HttpError(SerializableHttpErrorCode),
+    /// The outgoing request body is durably recorded as `HostStreamFrame` hint entries under the
+    /// send's `Start` (see [`SerializableP3HttpRequestBodyFrame`]), so an interrupted response-body
+    /// stream can be rebuilt after a restart by re-issuing the request with the recorded body.
+    SuccessWithRecordedRequestBody {
+        headers: SerializableResponseHeaders,
+        /// Whether the recording had already reached its terminal frame when
+        /// the send's `End` was appended. When `false`, the request body was
+        /// still streaming at that point, so replay must treat the recording
+        /// as potentially truncated and be prepared to resume it from the
+        /// replayed guest body.
+        recording_complete_at_end: bool,
+    },
+}
+
+/// Terminal of a p3 response `consume-body` — the End payload of the
+/// `P3HttpClientConsumeBody` oplog pair.
+///
+/// The response body *bytes* are not recorded here; they are persisted
+/// chunk-by-chunk as [`SerializableP3HttpBodyChunk`] child calls under the
+/// `consume-body` batched scope and replayed lazily. This enum captures only
+/// how the body stream terminated:
+///
+/// * `Trailers(None)` — the body closed cleanly with no trailers (also used
+///   when the guest dropped the stream before it completed).
+/// * `Trailers(Some(..))` — the body closed cleanly and delivered trailers.
+/// * `HttpError(..)` — the body errored before completing. In p3 a body error
+///   is surfaced to the guest via the trailers future's `ErrorCode`, not via
+///   the body stream, so it round-trips here rather than on the stream.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3HttpConsumeBodyResult {
+    Trailers(Option<HashMap<String, Vec<Vec<u8>>>>),
+    HttpError(SerializableHttpErrorCode),
+}
+
+/// One persisted unit of a P3 HTTP response body stream.
+///
+/// The body is recorded chunk-by-chunk as child durable calls under the
+/// `consume-body` batched scope (mirroring the per-read durability of the P2
+/// incoming body stream): every non-empty upstream frame becomes a `Data`
+/// chunk, persisted before its bytes are delivered to the guest, and a single
+/// `End` chunk terminates the recorded stream so replay knows when to stop
+/// reading children. The trailers / body-error terminal is carried by the
+/// parent `consume-body` call's [`SerializableP3HttpConsumeBodyResult`].
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3HttpBodyChunk {
+    Data(Vec<u8>),
+    End,
+    Cancelled,
+}
+
+/// One persisted unit of a P3 HTTP *outgoing request* body stream.
+///
+/// The request body produced by the guest is recorded frame-by-frame as
+/// `HostStreamFrame` *hint* oplog entries referencing the send's host-call
+/// `Start` (the outgoing mirror of [`SerializableP3HttpBodyChunk`], which uses
+/// child durable calls instead): every guest-produced data frame becomes a
+/// `Data` frame and trailers become a `Trailers` frame, each persisted before
+/// the frame is released to the wire. A single terminal frame — `End` for a
+/// cleanly finished body or `Error` for a guest-side body failure — closes the
+/// recorded stream. Because the entries are hints, the replay cursor skips
+/// them; consumers find them by scanning the oplog for `HostStreamFrame`
+/// entries whose `parent_start_index` matches the send's `Start`. The recorded
+/// frames are what in-function retry and post-restart rebuild replay to
+/// re-issue the request with a byte-identical body, streaming from the oplog
+/// so the body is never buffered whole in memory.
+///
+/// `Data` frames carry the byte `offset` of the frame's first byte within the
+/// logical request-body byte stream. A send whose recording was left truncated
+/// by a crash resumes recording under the same `Start` index after replay, so
+/// a second recorded sequence can follow the first run's truncated one. The
+/// guest's body production is deterministic, so every such sequence is a
+/// prefix of the same byte stream: consumers merge sequences by offset (a
+/// frame restarting at an already-covered offset re-covers known bytes)
+/// instead of concatenating them.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3HttpRequestBodyFrame {
+    Data { offset: u64, bytes: Vec<u8> },
+    Trailers(Option<HashMap<String, Vec<Vec<u8>>>>),
+    End,
+    Error(SerializableHttpErrorCode),
+}
+
+/// One persisted unit of a P3 TCP socket receive stream.
+///
+/// Incoming socket bytes are recorded chunk-by-chunk as child durable calls
+/// under the `receive` batched scope (mirroring the chunk-by-chunk durability
+/// of the P3 HTTP response body stream): every non-empty upstream chunk becomes
+/// a `Data` chunk, persisted before its bytes are delivered to the guest, and a
+/// single `End` chunk terminates the recorded stream so replay knows when to
+/// stop reading children. The terminal `Result<(), error-code>` is carried by
+/// the parent `receive` call's response payload.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3TcpChunk {
+    Data(Vec<u8>),
+    End,
+}
+
 /// A subset of AgentMetadata visible for guests (and serializable to oplog)
 #[derive(
     Debug,
@@ -1326,7 +1805,7 @@ impl From<SerializableIpAddress> for IpAddress {
     }
 }
 
-// Schema-native A2 impl: a flat enum mirroring the legacy schema
+// Schema-native representation mirroring the legacy schema
 // above: the address rendered as a string.
 impl crate::schema::conversion::IntoSchema for SerializableIpAddress {
     fn type_id() -> TypeId {
@@ -1390,6 +1869,36 @@ impl From<SerializableIpAddress> for IpAddr {
     }
 }
 
+impl From<p3_socket_types::IpAddress> for SerializableIpAddress {
+    fn from(value: p3_socket_types::IpAddress) -> Self {
+        match value {
+            p3_socket_types::IpAddress::Ipv4(address) => SerializableIpAddress::IPv4 {
+                address: [address.0, address.1, address.2, address.3],
+            },
+            p3_socket_types::IpAddress::Ipv6(address) => SerializableIpAddress::IPv6 {
+                address: [
+                    address.0, address.1, address.2, address.3, address.4, address.5, address.6,
+                    address.7,
+                ],
+            },
+        }
+    }
+}
+
+impl From<SerializableIpAddress> for p3_socket_types::IpAddress {
+    fn from(value: SerializableIpAddress) -> Self {
+        match value {
+            SerializableIpAddress::IPv4 { address } => {
+                p3_socket_types::IpAddress::Ipv4((address[0], address[1], address[2], address[3]))
+            }
+            SerializableIpAddress::IPv6 { address } => p3_socket_types::IpAddress::Ipv6((
+                address[0], address[1], address[2], address[3], address[4], address[5], address[6],
+                address[7],
+            )),
+        }
+    }
+}
+
 #[derive(
     Debug,
     Clone,
@@ -1411,6 +1920,215 @@ impl From<Vec<IpAddress>> for SerializableIpAddresses {
 impl From<SerializableIpAddresses> for Vec<IpAddress> {
     fn from(value: SerializableIpAddresses) -> Self {
         value.0.into_iter().map(|v| v.into()).collect()
+    }
+}
+
+impl From<Vec<p3_socket_types::IpAddress>> for SerializableIpAddresses {
+    fn from(value: Vec<p3_socket_types::IpAddress>) -> Self {
+        SerializableIpAddresses(value.into_iter().map(|v| v.into()).collect())
+    }
+}
+
+impl From<SerializableIpAddresses> for Vec<p3_socket_types::IpAddress> {
+    fn from(value: SerializableIpAddresses) -> Self {
+        value.0.into_iter().map(|v| v.into()).collect()
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableP3IpSocketAddress {
+    pub address: SerializableIpAddress,
+    pub port: u16,
+    pub flow_info: Option<u32>,
+    pub scope_id: Option<u32>,
+}
+
+impl From<p3_socket_types::IpSocketAddress> for SerializableP3IpSocketAddress {
+    fn from(value: p3_socket_types::IpSocketAddress) -> Self {
+        match value {
+            p3_socket_types::IpSocketAddress::Ipv4(address) => Self {
+                address: p3_socket_types::IpAddress::Ipv4(address.address).into(),
+                port: address.port,
+                flow_info: None,
+                scope_id: None,
+            },
+            p3_socket_types::IpSocketAddress::Ipv6(address) => Self {
+                address: p3_socket_types::IpAddress::Ipv6(address.address).into(),
+                port: address.port,
+                flow_info: Some(address.flow_info),
+                scope_id: Some(address.scope_id),
+            },
+        }
+    }
+}
+
+impl From<SerializableP3IpSocketAddress> for p3_socket_types::IpSocketAddress {
+    fn from(value: SerializableP3IpSocketAddress) -> Self {
+        match p3_socket_types::IpAddress::from(value.address) {
+            p3_socket_types::IpAddress::Ipv4(address) => {
+                p3_socket_types::IpSocketAddress::Ipv4(p3_socket_types::Ipv4SocketAddress {
+                    port: value.port,
+                    address,
+                })
+            }
+            p3_socket_types::IpAddress::Ipv6(address) => {
+                p3_socket_types::IpSocketAddress::Ipv6(p3_socket_types::Ipv6SocketAddress {
+                    port: value.port,
+                    flow_info: value.flow_info.unwrap_or_default(),
+                    address,
+                    scope_id: value.scope_id.unwrap_or_default(),
+                })
+            }
+        }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableP3UdpDatagram {
+    pub data: Vec<u8>,
+    pub remote_address: SerializableP3IpSocketAddress,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3IpNameLookupError {
+    AccessDenied,
+    InvalidArgument,
+    NameUnresolvable,
+    TemporaryResolverFailure,
+    PermanentResolverFailure,
+    Other(Option<String>),
+}
+
+impl From<p3_ip_name_lookup::ErrorCode> for SerializableP3IpNameLookupError {
+    fn from(value: p3_ip_name_lookup::ErrorCode) -> Self {
+        match value {
+            p3_ip_name_lookup::ErrorCode::AccessDenied => Self::AccessDenied,
+            p3_ip_name_lookup::ErrorCode::InvalidArgument => Self::InvalidArgument,
+            p3_ip_name_lookup::ErrorCode::NameUnresolvable => Self::NameUnresolvable,
+            p3_ip_name_lookup::ErrorCode::TemporaryResolverFailure => {
+                Self::TemporaryResolverFailure
+            }
+            p3_ip_name_lookup::ErrorCode::PermanentResolverFailure => {
+                Self::PermanentResolverFailure
+            }
+            p3_ip_name_lookup::ErrorCode::Other(error) => Self::Other(error),
+        }
+    }
+}
+
+impl From<SerializableP3IpNameLookupError> for p3_ip_name_lookup::ErrorCode {
+    fn from(value: SerializableP3IpNameLookupError) -> Self {
+        match value {
+            SerializableP3IpNameLookupError::AccessDenied => Self::AccessDenied,
+            SerializableP3IpNameLookupError::InvalidArgument => Self::InvalidArgument,
+            SerializableP3IpNameLookupError::NameUnresolvable => Self::NameUnresolvable,
+            SerializableP3IpNameLookupError::TemporaryResolverFailure => {
+                Self::TemporaryResolverFailure
+            }
+            SerializableP3IpNameLookupError::PermanentResolverFailure => {
+                Self::PermanentResolverFailure
+            }
+            SerializableP3IpNameLookupError::Other(error) => Self::Other(error),
+        }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3SocketErrorCode {
+    AccessDenied,
+    NotSupported,
+    InvalidArgument,
+    OutOfMemory,
+    Timeout,
+    InvalidState,
+    AddressNotBindable,
+    AddressInUse,
+    RemoteUnreachable,
+    ConnectionRefused,
+    ConnectionBroken,
+    ConnectionReset,
+    ConnectionAborted,
+    DatagramTooLarge,
+    Other(Option<String>),
+}
+
+impl From<p3_socket_types::ErrorCode> for SerializableP3SocketErrorCode {
+    fn from(value: p3_socket_types::ErrorCode) -> Self {
+        match value {
+            p3_socket_types::ErrorCode::AccessDenied => Self::AccessDenied,
+            p3_socket_types::ErrorCode::NotSupported => Self::NotSupported,
+            p3_socket_types::ErrorCode::InvalidArgument => Self::InvalidArgument,
+            p3_socket_types::ErrorCode::OutOfMemory => Self::OutOfMemory,
+            p3_socket_types::ErrorCode::Timeout => Self::Timeout,
+            p3_socket_types::ErrorCode::InvalidState => Self::InvalidState,
+            p3_socket_types::ErrorCode::AddressNotBindable => Self::AddressNotBindable,
+            p3_socket_types::ErrorCode::AddressInUse => Self::AddressInUse,
+            p3_socket_types::ErrorCode::RemoteUnreachable => Self::RemoteUnreachable,
+            p3_socket_types::ErrorCode::ConnectionRefused => Self::ConnectionRefused,
+            p3_socket_types::ErrorCode::ConnectionBroken => Self::ConnectionBroken,
+            p3_socket_types::ErrorCode::ConnectionReset => Self::ConnectionReset,
+            p3_socket_types::ErrorCode::ConnectionAborted => Self::ConnectionAborted,
+            p3_socket_types::ErrorCode::DatagramTooLarge => Self::DatagramTooLarge,
+            p3_socket_types::ErrorCode::Other(error) => Self::Other(error),
+        }
+    }
+}
+
+impl From<SerializableP3SocketErrorCode> for p3_socket_types::ErrorCode {
+    fn from(value: SerializableP3SocketErrorCode) -> Self {
+        match value {
+            SerializableP3SocketErrorCode::AccessDenied => Self::AccessDenied,
+            SerializableP3SocketErrorCode::NotSupported => Self::NotSupported,
+            SerializableP3SocketErrorCode::InvalidArgument => Self::InvalidArgument,
+            SerializableP3SocketErrorCode::OutOfMemory => Self::OutOfMemory,
+            SerializableP3SocketErrorCode::Timeout => Self::Timeout,
+            SerializableP3SocketErrorCode::InvalidState => Self::InvalidState,
+            SerializableP3SocketErrorCode::AddressNotBindable => Self::AddressNotBindable,
+            SerializableP3SocketErrorCode::AddressInUse => Self::AddressInUse,
+            SerializableP3SocketErrorCode::RemoteUnreachable => Self::RemoteUnreachable,
+            SerializableP3SocketErrorCode::ConnectionRefused => Self::ConnectionRefused,
+            SerializableP3SocketErrorCode::ConnectionBroken => Self::ConnectionBroken,
+            SerializableP3SocketErrorCode::ConnectionReset => Self::ConnectionReset,
+            SerializableP3SocketErrorCode::ConnectionAborted => Self::ConnectionAborted,
+            SerializableP3SocketErrorCode::DatagramTooLarge => Self::DatagramTooLarge,
+            SerializableP3SocketErrorCode::Other(error) => Self::Other(error),
+        }
     }
 }
 
@@ -1685,7 +2403,7 @@ pub enum SerializableRdbmsError {
 #[desert(transparent)]
 pub struct SerializableMacAddress(pub MacAddress);
 
-// Schema-native A2 impl: a flat enum mirroring the legacy schema
+// Schema-native representation mirroring the legacy schema
 // above: the MAC address rendered as a string.
 impl crate::schema::conversion::IntoSchema for SerializableMacAddress {
     fn type_id() -> TypeId {

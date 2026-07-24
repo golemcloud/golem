@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import type {
+  Duration as RawDuration,
   NamedRetryPolicy as RawNamedRetryPolicy,
   PolicyNode as RawPolicyNode,
   PredicateNode as RawPredicateNode,
@@ -20,7 +21,6 @@ import type {
   RetryPolicy as RawRetryPolicy,
   RetryPredicate as RawRetryPredicate,
 } from 'golem:api/retry@1.5.0';
-import type { Duration as RawDuration } from 'wasi:clocks/monotonic-clock@0.2.3';
 
 const INT64_MIN = -(1n << 63n);
 const INT64_MAX = (1n << 63n) - 1n;
