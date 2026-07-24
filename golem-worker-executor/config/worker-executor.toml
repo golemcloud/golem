@@ -355,12 +355,12 @@ without_time = false
 # [agent_status_checkpoint]
 # enabled = true
 # min_oplog_delta = 1000
-#
+# 
 # [agent_status_flush]
 # enabled = true
 # interval = "1s"
 # max_concurrency = 128
-#
+# 
 # [agent_types_service]
 # type = "Grpc"
 # 
@@ -699,12 +699,12 @@ without_time = false
 # [agent_status_checkpoint]
 # enabled = true
 # min_oplog_delta = 1000
-#
+# 
 # [agent_status_flush]
 # enabled = true
 # interval = "1s"
 # max_concurrency = 128
-#
+# 
 # [agent_types_service]
 # type = "Grpc"
 # 
