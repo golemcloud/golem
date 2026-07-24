@@ -153,10 +153,15 @@ func DefineMethod[Id any, In any, Out any](name string, opts ...MethodOpt) Metho
 //
 // The handler is wrapped once, here, into a uniform dispatcher; dispatch itself
 // never uses reflection to call user code.
+// A handler returns only its output value. There is no error return: a failed
+// invocation is signalled by panicking (the SDK recovers it into a non-retriable
+// agent-error surfaced to the caller — the worker survives). Reserve panic for
+// genuine failures; model expected, typed outcomes as a [Result] in the output.
+// Use [Must] to turn an inner (value, error) call into a panic-on-error.
 func Implement[Id any, S any, In any, Out any](
 	a *Agent[Id, S],
 	m MethodDef[Id, In, Out],
-	h func(*Context[S], In) (Out, error),
+	h func(*Context[S], In) Out,
 ) {
 	e := registry[a.name]
 	if e == nil {
@@ -192,10 +197,7 @@ func Implement[Id any, S any, In any, Out any](
 
 		stage = stageHandler
 		ctx := &Context[S]{State: state.(*S), agentID: agentID}
-		result, herr := h(ctx, inVal.Interface().(In))
-		if herr != nil {
-			return nil, herr
-		}
+		result := h(ctx, inVal.Interface().(In))
 		if me.outCodec == nil {
 			return nil, nil
 		}
@@ -219,39 +221,29 @@ func Implement[Id any, S any, In any, Out any](
 // argument is the receiver, so these adapters allow authoring agents as ordinary
 // Go methods with full compile-time checking and no reflection:
 //
-//	func (s *CartState) AddItem(in AddItemIn) (int64, error) { ... }
+//	func (s *CartState) AddItem(in AddItemIn) int64 { ... }
 //	golem.Implement(Cart, CartAdd, golem.Bind((*CartState).AddItem))
 //
-// Go has no overloading, so there is one adapter per method shape: `0` = no
-// input, `NoErr` = cannot fail, `Unit` = no output.
+// Methods signal failure by panicking, like any handler. Go has no overloading,
+// so there is one adapter per method shape: `0` = no input, `Unit` = no output.
 // ---------------------------------------------------------------------------
 
-// Bind adapts func(*S, In) (Out, error) — the canonical shape.
-func Bind[S, In, Out any](m func(*S, In) (Out, error)) func(*Context[S], In) (Out, error) {
-	return func(ctx *Context[S], in In) (Out, error) { return m(ctx.State, in) }
+// Bind adapts func(*S, In) Out — the canonical shape.
+func Bind[S, In, Out any](m func(*S, In) Out) func(*Context[S], In) Out {
+	return func(ctx *Context[S], in In) Out { return m(ctx.State, in) }
 }
 
-// BindNoErr adapts func(*S, In) Out.
-func BindNoErr[S, In, Out any](m func(*S, In) Out) func(*Context[S], In) (Out, error) {
-	return func(ctx *Context[S], in In) (Out, error) { return m(ctx.State, in), nil }
-}
-
-// Bind0 adapts func(*S) (Out, error) — no input.
-func Bind0[S, Out any](m func(*S) (Out, error)) func(*Context[S], Unit) (Out, error) {
-	return func(ctx *Context[S], _ Unit) (Out, error) { return m(ctx.State) }
-}
-
-// Bind0NoErr adapts func(*S) Out.
-func Bind0NoErr[S, Out any](m func(*S) Out) func(*Context[S], Unit) (Out, error) {
-	return func(ctx *Context[S], _ Unit) (Out, error) { return m(ctx.State), nil }
+// Bind0 adapts func(*S) Out — no input.
+func Bind0[S, Out any](m func(*S) Out) func(*Context[S], Unit) Out {
+	return func(ctx *Context[S], _ Unit) Out { return m(ctx.State) }
 }
 
 // BindUnit adapts func(*S, In) — no output.
-func BindUnit[S, In any](m func(*S, In)) func(*Context[S], In) (Unit, error) {
-	return func(ctx *Context[S], in In) (Unit, error) { m(ctx.State, in); return Unit{}, nil }
+func BindUnit[S, In any](m func(*S, In)) func(*Context[S], In) Unit {
+	return func(ctx *Context[S], in In) Unit { m(ctx.State, in); return Unit{} }
 }
 
 // Bind0Unit adapts func(*S) — neither input nor output.
-func Bind0Unit[S any](m func(*S)) func(*Context[S], Unit) (Unit, error) {
-	return func(ctx *Context[S], _ Unit) (Unit, error) { m(ctx.State); return Unit{}, nil }
+func Bind0Unit[S any](m func(*S)) func(*Context[S], Unit) Unit {
+	return func(ctx *Context[S], _ Unit) Unit { m(ctx.State); return Unit{} }
 }

@@ -31,19 +31,19 @@ var (
 )
 
 func init() {
-	Implement(tCounter, tValue, func(ctx *Context[tCounterState], _ Unit) (int64, error) {
-		return ctx.State.count, nil
+	Implement(tCounter, tValue, func(ctx *Context[tCounterState], _ Unit) int64 {
+		return ctx.State.count
 	})
-	Implement(tCounter, tInc, func(ctx *Context[tCounterState], _ Unit) (int64, error) {
+	Implement(tCounter, tInc, func(ctx *Context[tCounterState], _ Unit) int64 {
 		ctx.State.count++
-		return ctx.State.count, nil
+		return ctx.State.count
 	})
-	Implement(tCounter, tAdd, func(ctx *Context[tCounterState], in tAddIn) (int64, error) {
+	Implement(tCounter, tAdd, func(ctx *Context[tCounterState], in tAddIn) int64 {
 		ctx.State.count += in.By
-		return ctx.State.count, nil
+		return ctx.State.count
 	})
 	Implement(tCounter, tReset, Bind0Unit((*tCounterState).reset)) // method-expression binding
-	Implement(tCounter, tBoom, func(*Context[tCounterState], Unit) (int64, error) {
+	Implement(tCounter, tBoom, func(*Context[tCounterState], Unit) int64 {
 		panic("kaboom from agent code")
 	})
 }
@@ -228,8 +228,8 @@ var tEcho = DefineAgent[tEchoId, tEchoState](
 var tSay = DefineMethod[tEchoId, tEchoIn, string]("say")
 
 func init() {
-	Implement(tEcho, tSay, func(ctx *Context[tEchoState], in tEchoIn) (string, error) {
-		return ctx.State.prefix + in.Msg, nil
+	Implement(tEcho, tSay, func(ctx *Context[tEchoState], in tEchoIn) string {
+		return ctx.State.prefix + in.Msg
 	})
 }
 
@@ -277,8 +277,8 @@ func TestWorkerRunsOneOfSeveralAgentTypes(t *testing.T) {
 var tPay = DefineMethod[tEchoId, Unit, PaymentMethod]("pay")
 
 func init() {
-	Implement(tEcho, tPay, func(*Context[tEchoState], Unit) (PaymentMethod, error) {
-		return Transfer{IBAN: "GB33"}, nil
+	Implement(tEcho, tPay, func(*Context[tEchoState], Unit) PaymentMethod {
+		return Transfer{IBAN: "GB33"}
 	})
 }
 

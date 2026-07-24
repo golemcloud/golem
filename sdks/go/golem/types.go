@@ -106,12 +106,12 @@ func (o *Option[T]) optionSetSome() reflect.Value {
 
 // Result is a value that is either a success or a typed failure.
 //
-// It is not how a method reports failure — a handler returns (Out, error), and
-// a returned error becomes the WIT agent-error channel. Result is for a
-// fallible value nested *inside* data: a field, a list element, one arm of
-// another Result. That distinction mirrors the TS SDK, where a Result lowers to
-// a component-model result inside the success payload while throws stay on the
-// agent-error channel.
+// It is not how a method reports failure — a handler panics for that, which
+// surfaces as the WIT agent-error channel. Result is for a fallible value
+// delivered on a *successful* invocation: a return value the caller inspects, a
+// field, a list element, one arm of another Result. That distinction mirrors the
+// TS SDK, where a Result lowers to a component-model result inside the success
+// payload while throws stay on the agent-error channel.
 type Result[Ok any, Err any] struct {
 	isErr bool
 	ok    Ok
@@ -235,3 +235,36 @@ func (s Secret[T]) secretElem() reflect.Type { return reflect.TypeFor[T]() }
 func (s Secret[T]) secretGet() reflect.Value { return reflect.ValueOf(&s.value).Elem() }
 
 func (s *Secret[T]) secretSet() reflect.Value { return reflect.ValueOf(&s.value).Elem() }
+
+// ---------------------------------------------------------------------------
+// (value, error) bridges
+// ---------------------------------------------------------------------------
+
+// Must adapts an ordinary Go (value, error) call into the panic-as-failure
+// model: it returns the value, or panics if err is non-nil. Go's multi-value
+// passing lets a call be dropped straight in:
+//
+//	n := golem.Must(strconv.Atoi(ctx.State.raw))
+//
+// Use it for failures that should abort the invocation. For an expected outcome
+// the caller should inspect, produce a [Result] instead (see [ResultOf]).
+func Must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+// ResultOf turns a Go (value, error) pair into a Result value, so a fallible
+// call can be surfaced to the caller as data rather than aborting:
+//
+//	return golem.ResultOf(strconv.Atoi(s))   // Result[int, string]
+//
+// The error becomes the Err arm as its message string (Go's error is an
+// interface with no wire schema; the string is what crosses the boundary).
+func ResultOf[T any](v T, err error) Result[T, string] {
+	if err != nil {
+		return Err[T, string](err.Error())
+	}
+	return Ok[T, string](v)
+}

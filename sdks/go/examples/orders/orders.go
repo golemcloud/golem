@@ -4,7 +4,6 @@
 package main
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
@@ -121,35 +120,36 @@ var Ledger = golem.DefineAgent[LedgerId, LedgerState](
 var Record = golem.DefineMethod[LedgerId, RefundIn, Money]("record")
 
 func init() {
-	golem.Implement(Ledger, Record, func(ctx *golem.Context[LedgerState], in RefundIn) (Money, error) {
+	golem.Implement(Ledger, Record, func(ctx *golem.Context[LedgerState], in RefundIn) Money {
 		ctx.State.total.Amount += in.Amount.Amount
-		return ctx.State.total, nil
+		return ctx.State.total
 	})
 }
 
 func init() {
-	golem.Implement(Orders, Place, func(ctx *golem.Context[OrderState], in PlaceIn) (Order, error) {
+	golem.Implement(Orders, Place, func(ctx *golem.Context[OrderState], in PlaceIn) Order {
 		if len(in.Lines) == 0 {
-			// A real failure: this becomes the WIT agent-error channel.
-			return Order{}, fmt.Errorf("an order needs at least one line")
+			// A genuine failure: panic aborts the invocation and surfaces a
+			// non-retriable error to the caller (the worker survives).
+			panic("an order needs at least one line")
 		}
 		ctx.State.order.Lines = in.Lines
 		ctx.State.order.Method = in.Method
 		ctx.State.order.Coupon = in.Coupon
 		ctx.State.order.State = StatePaid
-		return ctx.State.order, nil
+		return ctx.State.order
 	})
 
-	golem.Implement(Orders, Refund, func(ctx *golem.Context[OrderState], in RefundIn) (Order, error) {
-		// An expected, typed failure: this is a *value*, not an error, so
-		// callers see result<money, string> rather than a failed invocation.
+	golem.Implement(Orders, Refund, func(ctx *golem.Context[OrderState], in RefundIn) Order {
+		// An expected, typed outcome: a *value*, not a failure — the caller sees
+		// result<money, string> on a successful invocation, not an aborted one.
 		if ctx.State.order.State != StatePaid {
 			ctx.State.order.Refund = golem.Some(golem.Err[Money, string]("order is not paid"))
-			return ctx.State.order, nil
+			return ctx.State.order
 		}
 		ctx.State.order.Refund = golem.Some(golem.Ok[Money, string](in.Amount))
 		ctx.State.order.State = StateRefunded
-		return ctx.State.order, nil
+		return ctx.State.order
 	})
 }
 
@@ -157,39 +157,30 @@ func init() {
 func (s *OrderState) snapshot() Order { return s.order }
 
 func init() {
-	golem.Implement(Orders, Audit, func(ctx *golem.Context[OrderState], _ golem.Unit) ([]Money, error) {
+	golem.Implement(Orders, Audit, func(ctx *golem.Context[OrderState], _ golem.Unit) []Money {
 		regions := []string{"eu-west", "eu-central", "us-east"}
 
 		// Fan out. CallAsync returns immediately, so all three are in flight;
 		// a goroutine blocked in Get yields to the component-model event loop.
 		// (Concurrency is across DIFFERENT targets — one agent instance still
-		// handles a single invocation at a time.)
+		// handles a single invocation at a time.) golem.Must turns the inner
+		// (value, error) calls into a panic-on-error, aborting the invocation.
 		futures := make([]*golem.Future[Money], 0, len(regions))
 		for _, region := range regions {
-			client, err := golem.ClientFor(Ledger, LedgerId{Region: region})
-			if err != nil {
-				return nil, err
-			}
-			f, err := Record.CallAsync(client, RefundIn{Amount: Money{Amount: 1, Currency: "EUR"}})
-			if err != nil {
-				return nil, err
-			}
+			client := golem.Must(golem.ClientFor(Ledger, LedgerId{Region: region}))
+			f := golem.Must(Record.CallAsync(client, RefundIn{Amount: Money{Amount: 1, Currency: "EUR"}}))
 			futures = append(futures, f)
 		}
 
 		totals := make([]Money, 0, len(futures))
 		for _, f := range futures {
-			total, err := f.Get()
-			if err != nil {
-				return nil, fmt.Errorf("ledger fan-out failed: %w", err)
-			}
-			totals = append(totals, total)
+			totals = append(totals, golem.Must(f.Get()))
 		}
-		return totals, nil
+		return totals
 	})
 
-	// The blocking form, for the single-call case.
-	golem.Implement(Orders, Get, golem.Bind0NoErr((*OrderState).snapshot))
+	// A plain Go method bound via a method expression.
+	golem.Implement(Orders, Get, golem.Bind0((*OrderState).snapshot))
 }
 
 func main() {}

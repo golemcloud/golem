@@ -20,20 +20,20 @@ var (
 )
 
 func init() {
-	golem.Implement(Counter, Value, func(ctx *golem.Context[CounterState], _ golem.Unit) (int64, error) {
-		return ctx.State.count, nil
+	golem.Implement(Counter, Value, func(ctx *golem.Context[CounterState], _ golem.Unit) int64 {
+		return ctx.State.count
 	})
-	golem.Implement(Counter, Increment, func(ctx *golem.Context[CounterState], _ golem.Unit) (int64, error) {
+	golem.Implement(Counter, Increment, func(ctx *golem.Context[CounterState], _ golem.Unit) int64 {
 		ctx.State.count++
-		return ctx.State.count, nil
+		return ctx.State.count
 	})
-	golem.Implement(Counter, Add, func(ctx *golem.Context[CounterState], in AddIn) (int64, error) {
+	golem.Implement(Counter, Add, func(ctx *golem.Context[CounterState], in AddIn) int64 {
 		ctx.State.count += in.By
-		return ctx.State.count, nil
+		return ctx.State.count
 	})
-	golem.Implement(Counter, Reset, func(ctx *golem.Context[CounterState], _ golem.Unit) (golem.Unit, error) {
+	golem.Implement(Counter, Reset, func(ctx *golem.Context[CounterState], _ golem.Unit) golem.Unit {
 		ctx.State.count = 0
-		return golem.Unit{}, nil
+		return golem.Unit{}
 	})
 }
 

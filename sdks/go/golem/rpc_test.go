@@ -39,9 +39,9 @@ var tPayment = DefineAgent[tPayId, tPayState](
 var tCharge = DefineMethod[tPayId, tChargeIn, Money]("charge")
 
 func init() {
-	Implement(tPayment, tCharge, func(ctx *Context[tPayState], in tChargeIn) (Money, error) {
+	Implement(tPayment, tCharge, func(ctx *Context[tPayState], in tChargeIn) Money {
 		ctx.State.charged += in.AmountCents
-		return Money{Amount: ctx.State.charged, Currency: "EUR"}, nil
+		return Money{Amount: ctx.State.charged, Currency: "EUR"}
 	})
 }
 
