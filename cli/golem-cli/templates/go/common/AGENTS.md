@@ -119,10 +119,6 @@ Wire names come from the SDK's declarations, not from Go identifiers:
 - `func main() {}` must exist and can be empty — the SDK wires the component exports from its `init()`.
 - Multiple agents can coexist in one component; a worker is initialized as exactly one of them.
 - Do NOT edit files under `internal/wit/` in the SDK — they are generated.
-- **No `httpApi` deployments yet.** Exposing an agent over HTTP needs the agent type to carry
-  http-mount details, which the Go SDK does not emit yet. Declaring a deployment without it fails
-  with `HTTP_API_AGENT_TYPE_MISSING_HTTP_MOUNT`. Invoke agents directly meanwhile:
-  `golem agent invoke 'CounterAgent("c1")' increment`.
 
 ## Coding Convention
 

@@ -8,9 +8,10 @@ module component-name
 
 go GOLEM_GO_DEP_GO_VERSION
 
-require GOLEM_GO_DEP_SDK_MODULE GOLEM_GO_DEP_SDK_VERSION
-
-require github.com/bytecodealliance/componentize-go GOLEM_GO_DEP_COMPONENTIZE_GO_VERSION
+require (
+	GOLEM_GO_DEP_SDK_MODULE GOLEM_GO_DEP_SDK_VERSION
+	github.com/bytecodealliance/componentize-go GOLEM_GO_DEP_COMPONENTIZE_GO_VERSION
+)
 
 // componentize-go is pinned per-app through this directive rather than installed
 // globally, so `go tool componentize-go` always runs the version this app was

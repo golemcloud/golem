@@ -166,16 +166,29 @@ const MOONBIT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
 // project's `tool` directive (so it is pinned per-app, never installed
 // globally), and it downloads the patched Go it needs into its own cache
 // side-by-side with the user's installation.
-const GO_TOOL_REQUIREMENTS: &[ToolRequirement] = &[ToolRequirement {
-    key: "go",
-    name: "Go",
-    check: ToolRequirementCheck::CommandVersion {
-        command: "go",
-        args: &["version"],
+const GO_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
+    ToolRequirement {
+        key: "go",
+        name: "Go",
+        check: ToolRequirementCheck::CommandVersion {
+            command: "go",
+            args: &["version"],
+        },
+        version_range: Some(VersionRange::at_least(versions::build_tool::GO_MIN)),
+        install_hint: "Install Go 1.25.5 or newer: https://go.dev/dl/",
     },
-    version_range: Some(VersionRange::at_least(versions::build_tool::GO_MIN)),
-    install_hint: "Install Go 1.25.5 or newer: https://go.dev/dl/",
-}];
+    // Used by the release preset's `wasm-tools strip` step.
+    ToolRequirement {
+        key: "wasm-tools",
+        name: "wasm-tools",
+        check: ToolRequirementCheck::CommandVersion {
+            command: "wasm-tools",
+            args: &["--version"],
+        },
+        version_range: Some(VersionRange::at_least(versions::build_tool::WASM_TOOLS_MIN)),
+        install_hint: "Install wasm-tools: https://github.com/bytecodealliance/wasm-tools",
+    },
+];
 
 pub fn tool_requirements_for_language(language: GuestLanguage) -> &'static [ToolRequirement] {
     match language {

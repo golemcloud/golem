@@ -16,6 +16,7 @@ pub mod agents_md;
 pub mod build_sbt;
 pub mod cargo_toml;
 pub mod gitignore;
+pub mod go_mod;
 pub mod golem_yaml;
 pub mod json;
 pub mod main_rs;

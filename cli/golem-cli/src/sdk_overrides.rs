@@ -696,6 +696,8 @@ mod tests {
             scala_sdk_version: None,
             moonbit_sdk_path: None,
             moonbit_sdk_version: None,
+            go_sdk_path: None,
+            go_sdk_version: None,
         };
 
         assert_eq!(
@@ -715,6 +717,8 @@ mod tests {
             scala_sdk_version: None,
             moonbit_sdk_path: None,
             moonbit_sdk_version: None,
+            go_sdk_path: None,
+            go_sdk_version: None,
         }
         .to_env_vars();
 
