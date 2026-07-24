@@ -8,7 +8,8 @@ use crate::bridge_gen::rust::tool::RustToolBridgeGenerator;
 use crate::bridge_gen::rust::{RustBridgeGenerator, RustBridgeMode};
 use crate::bridge_gen::scala::tool::ScalaToolBridgeGenerator;
 use crate::bridge_gen::scala::{ScalaBridgeGenerator, ScalaBridgeMode};
-use crate::bridge_gen::typescript::TypeScriptBridgeGenerator;
+use crate::bridge_gen::typescript::tool::TypeScriptToolBridgeGenerator;
+use crate::bridge_gen::typescript::{TypeScriptBridgeGenerator, TypeScriptBridgeMode};
 use crate::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use crate::command::GolemCliCommand;
 use crate::error::NonSuccessfulExit;
@@ -527,11 +528,16 @@ async fn collect_tool_manifest_targets_for_entry(
     if bridge_mode != BridgeMode::Guest
         || !matches!(
             target_language,
-            GuestLanguage::Rust | GuestLanguage::Scala | GuestLanguage::MoonBit
+            GuestLanguage::Rust
+                | GuestLanguage::TypeScript
+                | GuestLanguage::Scala
+                | GuestLanguage::MoonBit
         )
     {
         logln("");
-        log_error("tool guest bridge SDKs are only supported for Rust, Scala and MoonBit yet");
+        log_error(
+            "tool guest bridge SDKs are only supported for Rust, TypeScript, Scala and MoonBit yet",
+        );
         bail!(NonSuccessfulExit)
     }
 
@@ -716,11 +722,17 @@ fn supported_dependency_guest_bridge_target_language(
     match dependency {
         ComponentDependency::Agent { .. } => matches!(
             language,
-            GuestLanguage::Rust | GuestLanguage::Scala | GuestLanguage::MoonBit
+            GuestLanguage::Rust
+                | GuestLanguage::TypeScript
+                | GuestLanguage::Scala
+                | GuestLanguage::MoonBit
         ),
         ComponentDependency::Tool { .. } => matches!(
             language,
-            GuestLanguage::Rust | GuestLanguage::Scala | GuestLanguage::MoonBit
+            GuestLanguage::Rust
+                | GuestLanguage::TypeScript
+                | GuestLanguage::Scala
+                | GuestLanguage::MoonBit
         ),
     }
 }
@@ -854,6 +866,14 @@ async fn gen_bridge_sdk_target(
                         (GuestLanguage::TypeScript, BridgeMode::External) => Box::new(
                             TypeScriptBridgeGenerator::new(agent_type, &output_dir, false)?,
                         ),
+                        (GuestLanguage::TypeScript, BridgeMode::Guest) => {
+                            Box::new(TypeScriptBridgeGenerator::new_with_mode(
+                                agent_type,
+                                &output_dir,
+                                false,
+                                TypeScriptBridgeMode::GuestWasmRpc,
+                            )?)
+                        }
                         (GuestLanguage::Scala, BridgeMode::External) => {
                             Box::new(ScalaBridgeGenerator::new_with_mode(
                                 agent_type,
@@ -881,10 +901,6 @@ async fn gen_bridge_sdk_target(
                                 MoonBitBridgeMode::GuestWasmRpc,
                             )?)
                         }
-                        (language, BridgeMode::Guest) => bail!(
-                            "internal bridge mode is not supported for {} yet",
-                            language.to_string().log_color_highlight()
-                        ),
                     };
 
                         fs::remove(&output_dir)?;
@@ -899,11 +915,15 @@ async fn gen_bridge_sdk_target(
                             fs::remove(&output_dir)?;
                             ScalaToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
                         }
+                        (GuestLanguage::TypeScript, BridgeMode::Guest) => {
+                            fs::remove(&output_dir)?;
+                            TypeScriptToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
+                        }
                         (GuestLanguage::MoonBit, BridgeMode::Guest) => {
                             fs::remove(&output_dir)?;
                             MoonBitToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
                         }
-                        _ => bail!("tool guest bridge generation is only implemented for Rust, Scala and MoonBit guest bridges"),
+                        _ => bail!("tool guest bridge generation is only implemented for Rust, TypeScript, Scala and MoonBit guest bridges"),
                     },
                 }
             },
@@ -972,17 +992,25 @@ pub(crate) fn validate_supported_bridge_targets(targets: &[BridgeSdkTarget]) -> 
             && (target.bridge_mode != BridgeMode::Guest
                 || !matches!(
                     target.target_language,
-                    GuestLanguage::Rust | GuestLanguage::Scala | GuestLanguage::MoonBit
+                    GuestLanguage::Rust
+                        | GuestLanguage::TypeScript
+                        | GuestLanguage::Scala
+                        | GuestLanguage::MoonBit
                 ))
         {
-            bail!("tool guest bridge SDKs are only supported for rust, scala and moonbit yet");
+            bail!(
+                "tool guest bridge SDKs are only supported for rust, typescript, scala and moonbit yet"
+            );
         }
 
         if !matches!(target.kind, BridgeSdkTargetKind::Tool(_))
             && target.bridge_mode == BridgeMode::Guest
             && !matches!(
                 target.target_language,
-                GuestLanguage::Rust | GuestLanguage::Scala | GuestLanguage::MoonBit
+                GuestLanguage::Rust
+                    | GuestLanguage::TypeScript
+                    | GuestLanguage::Scala
+                    | GuestLanguage::MoonBit
             )
         {
             bail!(
@@ -1044,25 +1072,15 @@ mod tests {
     }
 
     #[test]
-    fn validate_supported_bridge_targets_rejects_unsupported_guest_languages() {
-        {
-            let unsupported_language = GuestLanguage::TypeScript;
-            let targets = vec![bridge_sdk_target_with_mode(
-                "AlphaAgent",
-                unsupported_language,
-                BridgeMode::Guest,
-                tempdir().unwrap().path().join("bridge/alpha-guest-client"),
-            )];
+    fn validate_supported_bridge_targets_accepts_typescript_agent_guest_targets() {
+        let targets = vec![bridge_sdk_target_with_mode(
+            "AlphaAgent",
+            GuestLanguage::TypeScript,
+            BridgeMode::Guest,
+            tempdir().unwrap().path().join("bridge/alpha-guest-client"),
+        )];
 
-            let error = validate_supported_bridge_targets(&targets).unwrap_err();
-
-            assert!(
-                error.to_string().contains(&format!(
-                    "internal bridge mode is not supported for {unsupported_language} yet"
-                )),
-                "unexpected error for {unsupported_language}: {error:?}"
-            );
-        }
+        validate_supported_bridge_targets(&targets).unwrap();
     }
 
     #[test]
@@ -1134,32 +1152,23 @@ mod tests {
     }
 
     #[test]
-    fn validate_supported_bridge_targets_rejects_unsupported_tool_targets() {
-        {
-            let unsupported_language = GuestLanguage::TypeScript;
-            let targets = vec![BridgeSdkTarget {
-                component_name: ComponentName("component".to_string()),
-                kind: BridgeSdkTargetKind::Tool(tool("MyTool")),
-                target_language: unsupported_language,
-                bridge_mode: BridgeMode::Guest,
-                output_dir: tempdir()
-                    .unwrap()
-                    .path()
-                    .join("bridge/my-tool-guest-client"),
-            }];
+    fn validate_supported_bridge_targets_accepts_typescript_tool_guest_targets() {
+        let targets = vec![BridgeSdkTarget {
+            component_name: ComponentName("component".to_string()),
+            kind: BridgeSdkTargetKind::Tool(tool("MyTool")),
+            target_language: GuestLanguage::TypeScript,
+            bridge_mode: BridgeMode::Guest,
+            output_dir: tempdir()
+                .unwrap()
+                .path()
+                .join("bridge/my-tool-guest-client"),
+        }];
 
-            let error = validate_supported_bridge_targets(&targets).unwrap_err();
-            assert!(
-                format!("{error:?}").contains(
-                    "tool guest bridge SDKs are only supported for rust, scala and moonbit yet"
-                ),
-                "unexpected error for {unsupported_language}: {error:?}"
-            );
-        }
+        validate_supported_bridge_targets(&targets).unwrap();
     }
 
     #[test]
-    fn dependency_guest_bridge_support_allows_moonbit_for_agents_and_tools() {
+    fn dependency_guest_bridge_support_allows_all_guest_languages_for_agents_and_tools() {
         let component_name = ComponentName("component".to_string());
         let agent_dependency = ComponentDependency::Agent {
             component_name: component_name.clone(),
@@ -1183,6 +1192,10 @@ mod tests {
             GuestLanguage::MoonBit
         ));
         assert!(supported_dependency_guest_bridge_target_language(
+            &agent_dependency,
+            GuestLanguage::TypeScript
+        ));
+        assert!(supported_dependency_guest_bridge_target_language(
             &tool_dependency,
             GuestLanguage::Rust
         ));
@@ -1193,6 +1206,10 @@ mod tests {
         assert!(supported_dependency_guest_bridge_target_language(
             &tool_dependency,
             GuestLanguage::MoonBit
+        ));
+        assert!(supported_dependency_guest_bridge_target_language(
+            &tool_dependency,
+            GuestLanguage::TypeScript
         ));
     }
 

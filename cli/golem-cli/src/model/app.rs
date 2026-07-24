@@ -3327,6 +3327,7 @@ mod app_builder {
                                 if !matches!(
                                     target_language,
                                     crate::model::GuestLanguage::Rust
+                                        | crate::model::GuestLanguage::TypeScript
                                         | crate::model::GuestLanguage::Scala
                                         | crate::model::GuestLanguage::MoonBit
                                 )
@@ -4622,7 +4623,7 @@ mod test {
     }
 
     #[test]
-    fn non_rust_guest_bridge_mode_is_rejected() {
+    fn typescript_guest_bridge_mode_is_accepted() {
         let source = indoc! { r#"
             app: hello-app
 
@@ -4658,7 +4659,7 @@ mod test {
             panic!("expected Some(ApplicationPreload)")
         };
 
-        let (_app, _warns, errors) = Application::from_raw_apps(
+        let (_app, warns, errors) = Application::from_raw_apps(
             std::env::current_dir().unwrap(),
             application_name,
             environments,
@@ -4668,12 +4669,8 @@ mod test {
         )
         .into_product();
 
-        assert_eq!(errors.len(), 1);
-        assert!(
-            errors[0].contains("internal bridge mode is not supported for TypeScript yet"),
-            "unexpected error: {}",
-            errors[0]
-        );
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
     }
 
     #[test]
@@ -4716,7 +4713,7 @@ mod test {
     }
 
     #[test]
-    fn non_rust_guest_bridge_config_without_agents_is_rejected() {
+    fn typescript_guest_bridge_config_without_agents_is_accepted() {
         let source = indoc! { r#"
             app: hello-app
 
@@ -4766,12 +4763,7 @@ mod test {
         .into_product();
 
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
-        assert_eq!(errors.len(), 1);
-        assert!(
-            errors[0].contains("internal bridge mode is not supported for TypeScript yet"),
-            "unexpected error: {}",
-            errors[0]
-        );
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
     }
 
     #[test]

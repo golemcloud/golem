@@ -13,12 +13,14 @@
 // limitations under the License.
 
 mod javascript;
+pub mod tool;
 #[allow(dead_code)]
 mod ts_writer;
 mod type_name;
 
 pub use type_name::TypeScriptTypeName;
 
+use crate::bridge_gen::json::stringify_precision_sensitive_numbers;
 use crate::bridge_gen::parameter_naming::ParameterNaming;
 use crate::bridge_gen::type_naming::{TypeNaming, user_supplied_fields};
 use crate::bridge_gen::typescript::javascript::escape_js_ident;
@@ -34,7 +36,7 @@ use golem_common::model::agent::{AgentConfigSource, AgentMode};
 use golem_common::schema::agent::{
     AgentConfigDeclarationSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
 };
-use golem_common::schema::graph::SchemaTypeDef;
+use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef, reachable_defs};
 use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::schema_type::{
     BinaryRestrictions, SchemaType, TextRestrictions, UnionSpec, VariantCaseType,
@@ -68,8 +70,33 @@ enum TsOutput {
     Multimodal(Vec<(String, SchemaType)>),
 }
 
+struct ExternalConstructorNames {
+    config_parameters: Vec<String>,
+    parameters: String,
+    phantom_id: String,
+    agent_config: String,
+    config: String,
+    create_response: String,
+}
+
 const TS_BRIDGE_PACKAGE_NAME: &str = "@golemcloud/golem-ts-bridge";
+const TS_SDK_PACKAGE_NAME: &str = "@golemcloud/golem-ts-sdk";
 const MULTIMODAL_INPUT_NAME: &str = "multimodalInput";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TypeScriptBridgeMode {
+    ExternalRest,
+    GuestWasmRpc,
+}
+
+impl TypeScriptBridgeMode {
+    fn bridge_mode(self) -> BridgeMode {
+        match self {
+            TypeScriptBridgeMode::ExternalRest => BridgeMode::External,
+            TypeScriptBridgeMode::GuestWasmRpc => BridgeMode::Guest,
+        }
+    }
+}
 
 pub struct TypeScriptBridgeGenerator {
     target_path: Utf8PathBuf,
@@ -77,6 +104,7 @@ pub struct TypeScriptBridgeGenerator {
     agent_type: AgentTypeSchema,
     testing: bool,
     same_language: bool,
+    mode: TypeScriptBridgeMode,
 }
 
 impl BridgeGenerator for TypeScriptBridgeGenerator {
@@ -102,7 +130,7 @@ impl BridgeGenerator for TypeScriptBridgeGenerator {
         self.generate_ts(&ts_path)?;
         self.generate_package_json(&package_json_path)?;
         self.generate_tsconfig_json(&tsconfig_json_path)?;
-        if self.testing {
+        if self.testing && self.mode == TypeScriptBridgeMode::ExternalRest {
             self.generate_test(&test_path)?;
         }
 
@@ -116,16 +144,61 @@ impl TypeScriptBridgeGenerator {
         target_path: &Utf8Path,
         testing: bool,
     ) -> anyhow::Result<Self> {
+        Self::new_with_mode(
+            agent_type,
+            target_path,
+            testing,
+            TypeScriptBridgeMode::ExternalRest,
+        )
+    }
+
+    pub fn new_with_mode(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+        mode: TypeScriptBridgeMode,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_mode_and_reserved(agent_type, target_path, testing, mode, Vec::new())
+    }
+
+    pub(crate) fn new_guest_with_extra_reserved_names(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+        reserved: Vec<String>,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_mode_and_reserved(
+            agent_type,
+            target_path,
+            testing,
+            TypeScriptBridgeMode::GuestWasmRpc,
+            reserved,
+        )
+    }
+
+    fn new_with_mode_and_reserved(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+        mode: TypeScriptBridgeMode,
+        mut reserved: Vec<String>,
+    ) -> anyhow::Result<Self> {
         let same_language = agent_type
             .source_language
             .eq_ignore_ascii_case("typescript")
             || agent_type.source_language.eq_ignore_ascii_case("ts");
+        reserved.push(agent_type.type_name.0.clone());
         Ok(Self {
             target_path: target_path.to_path_buf(),
-            type_naming: TypeNaming::new(&agent_type, same_language)?,
+            type_naming: TypeNaming::new_with_reserved_names(
+                &agent_type,
+                same_language,
+                reserved.into_iter().map(TypeScriptTypeName::from),
+            )?,
             agent_type,
             testing,
             same_language,
+            mode,
         })
     }
 
@@ -139,10 +212,24 @@ impl TypeScriptBridgeGenerator {
         {
             return Ok(TsInput::Multimodal(self.multimodal_cases(cases)?));
         }
+        let mut naming = ParameterNaming::new();
+        naming.reserve("base");
+        naming.reserve(self.agent_type.type_name.0.clone());
+        for (_, type_name) in self.type_naming.types() {
+            naming.reserve(format!("encode{type_name}"));
+            naming.reserve(format!("decode{type_name}"));
+        }
+        if self.mode == TypeScriptBridgeMode::ExternalRest {
+            naming.reserve("uuidv4");
+            naming.reserve(self.global_config_var_name());
+        }
+        if self.testing {
+            naming.reserve_many(["readStdin", "__json", "__result"]);
+        }
         Ok(TsInput::Params(
             fields
                 .iter()
-                .map(|f| (f.name.clone(), f.schema.clone()))
+                .map(|f| (naming.fresh(self.to_js_ident(&f.name)), f.schema.clone()))
                 .collect(),
         ))
     }
@@ -216,6 +303,16 @@ impl TypeScriptBridgeGenerator {
         sdk_overrides()?.ts_package_dep("golem-ts-bridge")
     }
 
+    pub(crate) fn sdk_package_dep(testing: bool) -> anyhow::Result<String> {
+        if testing {
+            return Ok(
+                fs::path_to_str(&workspace_root()?.join("sdks/ts/packages/golem-ts-sdk"))?
+                    .to_string(),
+            );
+        }
+        sdk_overrides()?.ts_package_dep("golem-ts-sdk")
+    }
+
     /// Generates the client library's package.json
     fn generate_package_json(&self, path: &Utf8Path) -> anyhow::Result<()> {
         let scripts = if self.testing {
@@ -229,6 +326,15 @@ impl TypeScriptBridgeGenerator {
                 "build": "tsc",
             })
         };
+        let dependencies = match self.mode {
+            TypeScriptBridgeMode::ExternalRest => json!({
+                "uuid": "^13",
+                (TS_BRIDGE_PACKAGE_NAME): Self::bridge_package_dep(self.testing)?,
+            }),
+            TypeScriptBridgeMode::GuestWasmRpc => json!({
+                (TS_SDK_PACKAGE_NAME): Self::sdk_package_dep(self.testing)?,
+            }),
+        };
         let package_json = json! {
             {
                 "name": self.library_name(),
@@ -238,10 +344,7 @@ impl TypeScriptBridgeGenerator {
                 "main": format!("{}.js", self.library_name()),
                 "types": format!("{}.d.ts", self.library_name()),
                 "scripts": scripts,
-                "dependencies": {
-                    "uuid": "^13",
-                    (TS_BRIDGE_PACKAGE_NAME): Self::bridge_package_dep(self.testing)?,
-                },
+                "dependencies": dependencies,
                 "devDependencies": {
                     "typescript": "^5.9",
                     "tsx": "^4.7",
@@ -286,13 +389,14 @@ impl TypeScriptBridgeGenerator {
     /// should never be part of the generated NPM package outside of Golem's internal tests.
     fn generate_test(&self, path: &Utf8Path) -> anyhow::Result<()> {
         let mut writer = TsWriter::new();
+        let helper_names = self.test_method_helper_names();
 
         self.generate_test_imports(&mut writer);
         self.generate_test_type_definitions(&mut writer)?;
         self.generate_test_read_stdin_helper(&mut writer);
-        self.generate_test_method_functions(&mut writer)?;
-        self.generate_test_functions_map(&mut writer);
-        self.generate_test_main_handler(&mut writer)?;
+        self.generate_test_method_functions(&mut writer, &helper_names)?;
+        self.generate_test_functions_map(&mut writer, &helper_names);
+        self.generate_test_main_handler(&mut writer, &helper_names)?;
         self.generate_test_entry_point(&mut writer);
 
         writer.finish(path)
@@ -300,7 +404,7 @@ impl TypeScriptBridgeGenerator {
 
     /// Writes the imports section of the test module.
     fn generate_test_imports(&self, writer: &mut TsWriter) {
-        writer.import_module("base", TS_BRIDGE_PACKAGE_NAME);
+        self.generate_runtime_import(writer);
     }
 
     /// Defines the test types and their corresponding encode/decode functions. These types and functions are
@@ -327,16 +431,20 @@ impl TypeScriptBridgeGenerator {
     }
 
     /// Generate encode/decode test functions for each agent method's input and output schema
-    fn generate_test_method_functions(&self, writer: &mut TsWriter) -> anyhow::Result<()> {
+    fn generate_test_method_functions(
+        &self,
+        writer: &mut TsWriter,
+        helper_names: &[[String; 4]],
+    ) -> anyhow::Result<()> {
         // Generate test functions for each method using the same code generators as the main library
-        for method_def in &self.agent_type.methods {
-            self.generate_test_method_encode_input(writer, method_def)?;
+        for (method_def, names) in self.agent_type.methods.iter().zip(helper_names) {
+            self.generate_test_method_encode_input(writer, method_def, &names[0])?;
             writer.write_line("");
-            self.generate_test_method_decode_input(writer, method_def)?;
+            self.generate_test_method_decode_input(writer, method_def, &names[1])?;
             writer.write_line("");
-            self.generate_test_method_encode_output(writer, method_def)?;
+            self.generate_test_method_encode_output(writer, method_def, &names[2])?;
             writer.write_line("");
-            self.generate_test_method_decode_output(writer, method_def)?;
+            self.generate_test_method_decode_output(writer, method_def, &names[3])?;
             writer.write_line("");
         }
         Ok(())
@@ -349,10 +457,9 @@ impl TypeScriptBridgeGenerator {
         &self,
         writer: &mut TsWriter,
         method_def: &AgentMethodSchema,
+        function_name: &str,
     ) -> anyhow::Result<()> {
-        let method_name_pascal = self.to_method_pascal(&method_def.name);
-        let mut encode_input =
-            writer.begin_export_async_function(&format!("encode{}Input", method_name_pascal));
+        let mut encode_input = writer.begin_export_async_function(function_name);
         encode_input.result("void");
         encode_input.write_line("const __json = await readStdin();");
         if !self.input_is_unit(&method_def.input_schema) {
@@ -377,10 +484,9 @@ impl TypeScriptBridgeGenerator {
         &self,
         writer: &mut TsWriter,
         method_def: &AgentMethodSchema,
+        function_name: &str,
     ) -> anyhow::Result<()> {
-        let method_name_pascal = self.to_method_pascal(&method_def.name);
-        let mut decode_input =
-            writer.begin_export_async_function(&format!("decode{}Input", method_name_pascal));
+        let mut decode_input = writer.begin_export_async_function(function_name);
         decode_input.result("void");
         decode_input.write_line("const __jsonResult: base.SchemaValue = await readStdin();");
         decode_input.write_line("const __decoded = (() => {");
@@ -399,10 +505,9 @@ impl TypeScriptBridgeGenerator {
         &self,
         writer: &mut TsWriter,
         method_def: &AgentMethodSchema,
+        function_name: &str,
     ) -> anyhow::Result<()> {
-        let method_name_pascal = self.to_method_pascal(&method_def.name);
-        let mut encode_output =
-            writer.begin_export_async_function(&format!("encode{}Output", method_name_pascal));
+        let mut encode_output = writer.begin_export_async_function(function_name);
         encode_output.result("void");
         if matches!(method_def.output_schema, OutputSchema::Unit) {
             encode_output.write_line("console.log('void');");
@@ -425,10 +530,9 @@ impl TypeScriptBridgeGenerator {
         &self,
         writer: &mut TsWriter,
         method_def: &AgentMethodSchema,
+        function_name: &str,
     ) -> anyhow::Result<()> {
-        let method_name_pascal = self.to_method_pascal(&method_def.name);
-        let mut decode_output =
-            writer.begin_export_async_function(&format!("decode{}Output", method_name_pascal));
+        let mut decode_output = writer.begin_export_async_function(function_name);
         decode_output.result("void");
         if matches!(method_def.output_schema, OutputSchema::Unit) {
             decode_output.write_line("console.log('void');");
@@ -446,16 +550,14 @@ impl TypeScriptBridgeGenerator {
     }
 
     /// Generates a map of encode/decode pairs keyed by the method name
-    fn generate_test_functions_map(&self, writer: &mut TsWriter) {
+    fn generate_test_functions_map(&self, writer: &mut TsWriter, helper_names: &[[String; 4]]) {
         // Create a map of available functions
         writer.write_line("const testFunctions: { [key: string]: () => Promise<void> | void } = {");
         writer.indent();
-        for method_def in &self.agent_type.methods {
-            let method_name_pascal = self.to_method_pascal(&method_def.name);
-            writer.write_line(format!("encode{}Input,", method_name_pascal));
-            writer.write_line(format!("decode{}Input,", method_name_pascal));
-            writer.write_line(format!("encode{}Output,", method_name_pascal));
-            writer.write_line(format!("decode{}Output,", method_name_pascal));
+        for names in helper_names {
+            for name in names {
+                writer.write_line(format!("{name},"));
+            }
         }
         writer.unindent();
         writer.write_line("};");
@@ -463,11 +565,15 @@ impl TypeScriptBridgeGenerator {
     }
 
     /// Generates the main function for the test module
-    fn generate_test_main_handler(&self, writer: &mut TsWriter) -> anyhow::Result<()> {
+    fn generate_test_main_handler(
+        &self,
+        writer: &mut TsWriter,
+        helper_names: &[[String; 4]],
+    ) -> anyhow::Result<()> {
         let mut main = writer.begin_export_async_function("main");
         main.result("void");
 
-        self.generate_test_main_arg_validation(&mut main)?;
+        self.generate_test_main_arg_validation(&mut main, helper_names)?;
         self.generate_test_main_function_lookup(&mut main);
         self.generate_test_main_function_call(&mut main);
 
@@ -478,6 +584,7 @@ impl TypeScriptBridgeGenerator {
     fn generate_test_main_arg_validation(
         &self,
         main: &mut TsFunctionWriter<'_>,
+        helper_names: &[[String; 4]],
     ) -> anyhow::Result<()> {
         main.write_line("const args = process.argv.slice(2);");
         main.write_line("if (args.length === 0) {");
@@ -485,11 +592,10 @@ impl TypeScriptBridgeGenerator {
         main.write_line("console.error('Usage: npx tsx test.ts <function-name>');");
         main.write_line("console.error('Available functions:');");
 
-        for method_def in &self.agent_type.methods {
-            let method_name_pascal = self.to_method_pascal(&method_def.name);
+        for names in helper_names {
             main.write_line(format!(
-                "console.error('  encode{}Input, decode{}Input, encode{}Output, decode{}Output');",
-                method_name_pascal, method_name_pascal, method_name_pascal, method_name_pascal
+                "console.error('  {}, {}, {}, {}');",
+                names[0], names[1], names[2], names[3]
             ));
         }
 
@@ -542,18 +648,328 @@ impl TypeScriptBridgeGenerator {
         let config_var = self.global_config_var_name();
 
         self.generate_ts_imports(&mut writer);
-        self.generate_ts_config_global(&mut writer, &config_var);
+        if self.mode == TypeScriptBridgeMode::ExternalRest {
+            self.generate_ts_config_global(&mut writer, &config_var);
+        }
         self.generate_ts_type_definitions(&mut writer)?;
-        self.generate_ts_class(&mut writer, &config_var)?;
-        self.generate_ts_configure_function(&mut writer, &config_var);
+        if self.mode == TypeScriptBridgeMode::ExternalRest {
+            self.generate_ts_class(&mut writer, &config_var)?;
+            self.generate_ts_configure_function(&mut writer, &config_var);
+        } else {
+            self.generate_guest_ts_class(&mut writer)?;
+        }
 
         writer.finish(path)
     }
 
     /// Generates the import section of the client library
     fn generate_ts_imports(&self, writer: &mut TsWriter) {
-        writer.import_item("v4", "uuidv4", "uuid");
-        writer.import_module("base", TS_BRIDGE_PACKAGE_NAME);
+        if self.mode == TypeScriptBridgeMode::ExternalRest {
+            writer.import_item("v4", "uuidv4", "uuid");
+        }
+        self.generate_runtime_import(writer);
+    }
+
+    fn generate_runtime_import(&self, writer: &mut TsWriter) {
+        match self.mode {
+            TypeScriptBridgeMode::ExternalRest => {
+                writer.import_module("base", TS_BRIDGE_PACKAGE_NAME)
+            }
+            TypeScriptBridgeMode::GuestWasmRpc => {
+                writer.import_item("bridge", "base", TS_SDK_PACKAGE_NAME);
+            }
+        }
+    }
+
+    fn generate_guest_ts_class(&self, writer: &mut TsWriter) -> anyhow::Result<()> {
+        let class_name = &self.agent_type.type_name.0;
+        let mut member_naming = ParameterNaming::new();
+        member_naming.reserve_many(["resolved", "constructor"]);
+        if self.agent_type.mode == AgentMode::Durable {
+            member_naming.reserve("agentId");
+        }
+        writer.write_doc(&self.agent_type.description);
+        writer.begin_export_class(class_name);
+        writer.declare_field("resolved", "base.RemoteAgentHandle", None);
+        let mut constructor = writer.begin_private_constructor();
+        constructor.param("resolved", "base.RemoteAgentHandle");
+        constructor.write_line("this.resolved = resolved;");
+        drop(constructor);
+
+        self.generate_guest_constructors(writer, class_name)?;
+        if self.agent_type.mode == AgentMode::Durable {
+            writer.write_doc("Returns the durable agent's runtime identity.");
+            let mut getter = writer.begin_method("get agentId");
+            getter.result("string");
+            getter.write_line("return this.resolved.agentId;");
+        }
+        for method in &self.agent_type.methods {
+            let member_name = member_naming.fresh(self.to_js_ident(&method.name));
+            self.generate_guest_remote_method(writer, method, &member_name)?;
+        }
+        writer.end_export_class();
+        Ok(())
+    }
+
+    fn generate_guest_constructors(
+        &self,
+        writer: &mut TsWriter,
+        class_name: &str,
+    ) -> anyhow::Result<()> {
+        let local_configs: Vec<_> = self
+            .agent_type
+            .config
+            .iter()
+            .filter(|config| config.source == AgentConfigSource::Local)
+            .collect();
+        if self.agent_type.mode == AgentMode::Durable {
+            self.generate_guest_constructor(writer, class_name, "get", false, false, &[])?;
+            self.generate_guest_constructor(writer, class_name, "getPhantom", true, false, &[])?;
+        }
+        self.generate_guest_constructor(writer, class_name, "newPhantom", false, true, &[])?;
+        if !local_configs.is_empty() {
+            if self.agent_type.mode == AgentMode::Durable {
+                self.generate_guest_constructor(
+                    writer,
+                    class_name,
+                    "getWithConfig",
+                    false,
+                    false,
+                    &local_configs,
+                )?;
+                self.generate_guest_constructor(
+                    writer,
+                    class_name,
+                    "getPhantomWithConfig",
+                    true,
+                    false,
+                    &local_configs,
+                )?;
+            }
+            self.generate_guest_constructor(
+                writer,
+                class_name,
+                "newPhantomWithConfig",
+                false,
+                true,
+                &local_configs,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn generate_guest_constructor(
+        &self,
+        writer: &mut TsWriter,
+        class_name: &str,
+        name: &str,
+        explicit_phantom: bool,
+        new_phantom: bool,
+        local_configs: &[&AgentConfigDeclarationSchema],
+    ) -> anyhow::Result<()> {
+        let mut naming = ParameterNaming::new();
+        match self.ts_input(&self.agent_type.constructor.input_schema)? {
+            TsInput::Params(params) => {
+                naming.reserve_many(params.iter().map(|(name, _)| name.clone()));
+            }
+            TsInput::Multimodal(_) => naming.reserve(MULTIMODAL_INPUT_NAME),
+        }
+        let config_names = local_configs
+            .iter()
+            .map(|config| naming.fresh(Self::guest_config_parameter_name(config)))
+            .collect::<Vec<_>>();
+        let phantom_id = naming.fresh("phantomId");
+        let constructor_payload = naming.fresh("constructorPayload");
+        let agent_config = naming.fresh("agentConfig");
+        let resolved = naming.fresh("resolved");
+
+        let mut method = writer.begin_static_method(name);
+        if explicit_phantom {
+            method.param(&phantom_id, "base.Uuid");
+        }
+        self.write_parameter_list(&mut method, &self.agent_type.constructor.input_schema)?;
+        self.write_guest_config_parameter_list(&mut method, local_configs, &config_names)?;
+        method.result(class_name);
+        method.write_line(format!("const {constructor_payload}: base.SchemaValue = "));
+        self.write_encode_input_record(
+            &mut method,
+            &self.agent_type.constructor.input_schema,
+            MULTIMODAL_INPUT_NAME,
+        )?;
+        if new_phantom && self.agent_type.mode == AgentMode::Durable {
+            method.write_line(format!("const {phantom_id} = base.Uuid.generate();"));
+        } else if !explicit_phantom {
+            method.write_line(format!("const {phantom_id} = undefined;"));
+        }
+        self.write_guest_config_encoding(&mut method, local_configs, &config_names, &agent_config)?;
+        method.write_line(format!(
+            "const {resolved} = base.resolveRemoteAgent({}, {constructor_payload}, {phantom_id}, {agent_config});",
+            serde_json::to_string(self.agent_type.type_name.as_str())?,
+        ));
+        method.write_line(format!("return new {class_name}({resolved});"));
+        Ok(())
+    }
+
+    fn guest_config_parameter_name(config: &AgentConfigDeclarationSchema) -> String {
+        format!(
+            "config{}",
+            config
+                .path
+                .iter()
+                .map(|segment| segment.to_upper_camel_case())
+                .collect::<String>()
+        )
+    }
+
+    fn write_guest_config_parameter_list(
+        &self,
+        writer: &mut TsFunctionWriter<'_>,
+        local_configs: &[&AgentConfigDeclarationSchema],
+        parameter_names: &[String],
+    ) -> anyhow::Result<()> {
+        for (config, parameter_name) in local_configs.iter().zip(parameter_names) {
+            writer.param(
+                &format!("{parameter_name}?"),
+                &self.type_reference(&config.value_type)?,
+            );
+        }
+        Ok(())
+    }
+
+    fn write_guest_config_encoding(
+        &self,
+        writer: &mut TsFunctionWriter<'_>,
+        local_configs: &[&AgentConfigDeclarationSchema],
+        parameter_names: &[String],
+        agent_config_name: &str,
+    ) -> anyhow::Result<()> {
+        writer.write_line(format!(
+            "const {agent_config_name}: base.AgentConfigEntry[] = [];"
+        ));
+        for (config, param_name) in local_configs.iter().zip(parameter_names) {
+            let path = serde_json::to_string(&config.path)?;
+            let encoded = self.encode_schema_value(param_name, &config.value_type)?;
+            let graph = self.config_schema_graph_json_literal(&config.value_type)?;
+            writer.write_line(format!("if ({param_name} !== undefined) {{"));
+            writer.indent();
+            writer.write_line(format!(
+                "{agent_config_name}.push({{ path: {path}, value: base.typedSchemaValueFromJson({graph}, {encoded}) }});"
+            ));
+            writer.unindent();
+            writer.write_line("}");
+        }
+        Ok(())
+    }
+
+    fn config_schema_graph_json_literal(&self, typ: &SchemaType) -> anyhow::Result<String> {
+        let graph = SchemaGraph {
+            defs: reachable_defs(self.type_naming.graph(), typ),
+            root: typ.clone(),
+        };
+        let mut value = serde_json::to_value(graph)?;
+        stringify_precision_sensitive_numbers(&mut value);
+        Ok(serde_json::to_string(&serde_json::to_string(&value)?)?)
+    }
+
+    fn generate_guest_remote_method(
+        &self,
+        writer: &mut TsWriter,
+        method: &AgentMethodSchema,
+        member_name: &str,
+    ) -> anyhow::Result<()> {
+        let args = self.input_type_list(&method.input_schema)?;
+        let result = self.output_result_type(&method.output_schema)?;
+        let method_name = serde_json::to_string(&method.name)?;
+        let encode = self.build_encode_args_fn(method)?.trim().to_string();
+        let decode = self
+            .build_guest_decode_result_fn(method)?
+            .trim()
+            .to_string();
+        let ephemeral = self.agent_type.mode == AgentMode::Ephemeral;
+        let await_result = if ephemeral {
+            format!("{{ metadata: base.RemoteInvocationResult['metadata']; value: {result} }}")
+        } else {
+            result.clone()
+        };
+        let trigger_result = if ephemeral {
+            "base.RemoteInvocationResult['metadata']"
+        } else {
+            "void"
+        };
+        let cancel_result = if ephemeral {
+            "ReturnType<base.RemoteAgentHandle['scheduleCancelableWithMetadata']>"
+        } else {
+            "ReturnType<base.RemoteAgentHandle['scheduleCancelable']>"
+        };
+        let schedule_result = if ephemeral {
+            "ReturnType<base.RemoteAgentHandle['scheduleWithMetadata']>"
+        } else {
+            "void"
+        };
+        let await_call = if ephemeral {
+            format!(
+                "const __result = await this.resolved.invokeAndAwaitWithMetadata({method_name}, __encode(__args), signal); return {{ metadata: __result.metadata, value: __decode(__result.value) }};"
+            )
+        } else {
+            format!(
+                "const __result = await this.resolved.invokeAndAwait({method_name}, __encode(__args), signal); return __decode(__result);"
+            )
+        };
+        let trigger_call = if ephemeral {
+            format!("return this.resolved.invokeWithMetadata({method_name}, __encode(__args));")
+        } else {
+            format!("this.resolved.invoke({method_name}, __encode(__args));")
+        };
+        let cancel_call = if ephemeral {
+            format!(
+                "return this.resolved.scheduleCancelableWithMetadata(at, {method_name}, __encode(__args));"
+            )
+        } else {
+            format!("return this.resolved.scheduleCancelable(at, {method_name}, __encode(__args));")
+        };
+        let schedule_call = if ephemeral {
+            format!(
+                "return this.resolved.scheduleWithMetadata(at, {method_name}, __encode(__args));"
+            )
+        } else {
+            format!("this.resolved.schedule(at, {method_name}, __encode(__args));")
+        };
+        writer.write_doc(&method.description);
+        writer.write_line(formatdoc! {"
+            readonly {}: {{
+              (...args: [{}]): Promise<{}>;
+              abortable(signal: AbortSignal, ...args: [{}]): Promise<{}>;
+              trigger(...args: [{}]): {};
+              schedule(at: Parameters<base.RemoteAgentHandle['schedule']>[0], ...args: [{}]): {};
+              scheduleCancelable(at: Parameters<base.RemoteAgentHandle['schedule']>[0], ...args: [{}]): {};
+            }} = (() => {{
+              const __encode = {};
+              const __decode = {};
+              const __await = async (signal: AbortSignal | undefined, ...__args: [{}]): Promise<{}> => {{ {} }};
+              const __call = (...__args: [{}]) => __await(undefined, ...__args);
+              return Object.assign(__call, {{
+                abortable: (signal: AbortSignal, ...__args: [{}]) => __await(signal, ...__args),
+                trigger: (...__args: [{}]): {} => {{ {} }},
+                schedule: (at: Parameters<base.RemoteAgentHandle['schedule']>[0], ...__args: [{}]): {} => {{ {} }},
+                scheduleCancelable: (at: Parameters<base.RemoteAgentHandle['schedule']>[0], ...__args: [{}]): {} => {{ {} }},
+              }});
+            }})();
+        ", member_name, args, await_result, args, await_result,
+            args, trigger_result, args, schedule_result, args, cancel_result, encode, decode, args,
+            await_result, await_call, args, args, args, trigger_result, trigger_call,
+            args, schedule_result, schedule_call, args, cancel_result, cancel_call});
+        Ok(())
+    }
+
+    fn build_guest_decode_result_fn(&self, method: &AgentMethodSchema) -> anyhow::Result<String> {
+        let mut decode = TsAnonymousFunctionWriter::new();
+        decode.param("value", "base.SchemaValue | undefined");
+        self.write_decode_output(
+            &mut decode,
+            &method.output_schema,
+            "value === undefined ? undefined : { value }",
+        )?;
+        Ok(decode.build())
     }
 
     /// Generates the global variables of the client library.
@@ -572,7 +988,7 @@ impl TypeScriptBridgeGenerator {
 
     /// Generates a type definition and an encode/decode function pair for custom types used
     /// by the agent.
-    fn generate_ts_type_definitions(&self, writer: &mut TsWriter) -> anyhow::Result<()> {
+    pub(crate) fn generate_ts_type_definitions(&self, writer: &mut TsWriter) -> anyhow::Result<()> {
         for (typ, name) in self.type_naming.types() {
             self.generate_ts_schema_type_def(writer, name, typ)?;
             self.generate_ts_schema_type_encode(writer, name, typ)?;
@@ -700,6 +1116,7 @@ impl TypeScriptBridgeGenerator {
         class_name: &str,
         config_var: &str,
     ) -> anyhow::Result<()> {
+        let names = self.external_constructor_names(&[])?;
         writer.write_doc(&format!(
             "Gets or creates an instance of this agent\n{}",
             self.agent_type.constructor.description
@@ -708,16 +1125,17 @@ impl TypeScriptBridgeGenerator {
         self.write_parameter_list(&mut get, &self.agent_type.constructor.input_schema)?;
         get.result(class_name);
 
-        get.write_line("const parameters: base.SchemaValue = ");
+        get.write_line(format!("const {}: base.SchemaValue = ", names.parameters));
         self.write_encode_input_record(
             &mut get,
             &self.agent_type.constructor.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
-        get.write_line("const phantomId = undefined;");
-        self.write_create_agent_call(&mut get, config_var, "[]");
+        get.write_line(format!("const {} = undefined;", names.phantom_id));
+        self.write_create_agent_call(&mut get, config_var, "[]", &names);
         get.write_line(format!(
-            "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
+            "return new {class_name}({}, {}, {}.agentId);",
+            names.parameters, names.phantom_id, names.create_response
         ));
 
         Ok(())
@@ -730,24 +1148,26 @@ impl TypeScriptBridgeGenerator {
         class_name: &str,
         config_var: &str,
     ) -> anyhow::Result<()> {
+        let names = self.external_constructor_names(&[])?;
         writer.write_doc(&format!(
             "Gets or creates a phantom instance of this agent with a specific phantom ID\n{}",
             self.agent_type.constructor.description
         ));
         let mut get_phantom = writer.begin_static_async_method("getPhantom");
-        get_phantom.param("phantomId", "base.PhantomId");
+        get_phantom.param(&names.phantom_id, "base.PhantomId");
         self.write_parameter_list(&mut get_phantom, &self.agent_type.constructor.input_schema)?;
         get_phantom.result(class_name);
 
-        get_phantom.write_line("const parameters: base.SchemaValue = ");
+        get_phantom.write_line(format!("const {}: base.SchemaValue = ", names.parameters));
         self.write_encode_input_record(
             &mut get_phantom,
             &self.agent_type.constructor.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
-        self.write_create_agent_call(&mut get_phantom, config_var, "[]");
+        self.write_create_agent_call(&mut get_phantom, config_var, "[]", &names);
         get_phantom.write_line(format!(
-            "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
+            "return new {class_name}({}, {}, {}.agentId);",
+            names.parameters, names.phantom_id, names.create_response
         ));
 
         Ok(())
@@ -760,6 +1180,7 @@ impl TypeScriptBridgeGenerator {
         class_name: &str,
         config_var: &str,
     ) -> anyhow::Result<()> {
+        let names = self.external_constructor_names(&[])?;
         writer.write_doc(&format!(
             "Creates a new phantom instance of this agent\n{}",
             self.agent_type.constructor.description
@@ -768,22 +1189,24 @@ impl TypeScriptBridgeGenerator {
         self.write_parameter_list(&mut new_phantom, &self.agent_type.constructor.input_schema)?;
         new_phantom.result(class_name);
 
-        new_phantom.write_line("const parameters: base.SchemaValue = ");
+        new_phantom.write_line(format!("const {}: base.SchemaValue = ", names.parameters));
         self.write_encode_input_record(
             &mut new_phantom,
             &self.agent_type.constructor.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
         if self.agent_type.mode == AgentMode::Ephemeral {
-            new_phantom.write_line("const phantomId = undefined;");
+            new_phantom.write_line(format!("const {} = undefined;", names.phantom_id));
             new_phantom.write_line(format!(
-                "return new {class_name}(parameters, phantomId, []);"
+                "return new {class_name}({}, {}, []);",
+                names.parameters, names.phantom_id
             ));
         } else {
-            new_phantom.write_line("const phantomId = uuidv4();");
-            self.write_create_agent_call(&mut new_phantom, config_var, "[]");
+            new_phantom.write_line(format!("const {} = uuidv4();", names.phantom_id));
+            self.write_create_agent_call(&mut new_phantom, config_var, "[]", &names);
             new_phantom.write_line(format!(
-                "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
+                "return new {class_name}({}, {}, {}.agentId);",
+                names.parameters, names.phantom_id, names.create_response
             ));
         }
 
@@ -796,19 +1219,24 @@ impl TypeScriptBridgeGenerator {
         writer: &mut TsFunctionWriter<'_>,
         config_var: &str,
         agent_config_expr: &str,
+        names: &ExternalConstructorNames,
     ) {
         let agent_type_name = &self.agent_type.type_name.0;
-        writer.write_line(format!("const __config = {config_var};"));
+        writer.write_line(format!("const {} = {config_var};", names.config));
         writer.write_line(format!(
-            "if (!__config) {{ throw new Error(\"{agent_type_name} configuration is not set\"); }}"
+            "if (!{}) {{ throw new Error(\"{agent_type_name} configuration is not set\"); }}",
+            names.config
         ));
-        writer.write_line("const __createResponse = await base.createAgent(__config.server, {");
+        writer.write_line(format!(
+            "const {} = await base.createAgent({}.server, {{",
+            names.create_response, names.config
+        ));
         writer.indent();
-        writer.write_line("appName: __config.application,");
-        writer.write_line("envName: __config.environment,");
+        writer.write_line(format!("appName: {}.application,", names.config));
+        writer.write_line(format!("envName: {}.environment,", names.config));
         writer.write_line(format!("agentTypeName: \"{agent_type_name}\","));
-        writer.write_line("parameters,");
-        writer.write_line("phantomId,");
+        writer.write_line(format!("parameters: {},", names.parameters));
+        writer.write_line(format!("phantomId: {},", names.phantom_id));
         writer.write_line(format!("config: {agent_config_expr},"));
         writer.unindent();
         writer.write_line("});");
@@ -822,26 +1250,28 @@ impl TypeScriptBridgeGenerator {
         config_var: &str,
         local_configs: &[&AgentConfigDeclarationSchema],
     ) -> anyhow::Result<()> {
+        let names = self.external_constructor_names(local_configs)?;
         writer.write_doc(&format!(
             "Gets or creates an instance of this agent with configuration\n{}",
             self.agent_type.constructor.description
         ));
         let mut method = writer.begin_static_async_method("getWithConfig");
         self.write_parameter_list(&mut method, &self.agent_type.constructor.input_schema)?;
-        self.write_config_parameter_list(&mut method, local_configs)?;
+        self.write_config_parameter_list(&mut method, local_configs, &names.config_parameters)?;
         method.result(class_name);
 
-        method.write_line("const parameters: base.SchemaValue = ");
+        method.write_line(format!("const {}: base.SchemaValue = ", names.parameters));
         self.write_encode_input_record(
             &mut method,
             &self.agent_type.constructor.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
-        method.write_line("const phantomId = undefined;");
-        self.write_config_encoding(&mut method, local_configs)?;
-        self.write_create_agent_call(&mut method, config_var, "agentConfig");
+        method.write_line(format!("const {} = undefined;", names.phantom_id));
+        self.write_config_encoding(&mut method, local_configs, &names)?;
+        self.write_create_agent_call(&mut method, config_var, &names.agent_config, &names);
         method.write_line(format!(
-            "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
+            "return new {class_name}({}, {}, {}.agentId);",
+            names.parameters, names.phantom_id, names.create_response
         ));
 
         Ok(())
@@ -855,26 +1285,28 @@ impl TypeScriptBridgeGenerator {
         config_var: &str,
         local_configs: &[&AgentConfigDeclarationSchema],
     ) -> anyhow::Result<()> {
+        let names = self.external_constructor_names(local_configs)?;
         writer.write_doc(&format!(
             "Gets or creates a phantom instance of this agent with configuration and a specific phantom ID\n{}",
             self.agent_type.constructor.description
         ));
         let mut method = writer.begin_static_async_method("getPhantomWithConfig");
-        method.param("phantomId", "base.PhantomId");
+        method.param(&names.phantom_id, "base.PhantomId");
         self.write_parameter_list(&mut method, &self.agent_type.constructor.input_schema)?;
-        self.write_config_parameter_list(&mut method, local_configs)?;
+        self.write_config_parameter_list(&mut method, local_configs, &names.config_parameters)?;
         method.result(class_name);
 
-        method.write_line("const parameters: base.SchemaValue = ");
+        method.write_line(format!("const {}: base.SchemaValue = ", names.parameters));
         self.write_encode_input_record(
             &mut method,
             &self.agent_type.constructor.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
-        self.write_config_encoding(&mut method, local_configs)?;
-        self.write_create_agent_call(&mut method, config_var, "agentConfig");
+        self.write_config_encoding(&mut method, local_configs, &names)?;
+        self.write_create_agent_call(&mut method, config_var, &names.agent_config, &names);
         method.write_line(format!(
-            "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
+            "return new {class_name}({}, {}, {}.agentId);",
+            names.parameters, names.phantom_id, names.create_response
         ));
 
         Ok(())
@@ -888,39 +1320,76 @@ impl TypeScriptBridgeGenerator {
         config_var: &str,
         local_configs: &[&AgentConfigDeclarationSchema],
     ) -> anyhow::Result<()> {
+        let names = self.external_constructor_names(local_configs)?;
         writer.write_doc(&format!(
             "Creates a new phantom instance of this agent with configuration\n{}",
             self.agent_type.constructor.description
         ));
         let mut method = writer.begin_static_async_method("newPhantomWithConfig");
         self.write_parameter_list(&mut method, &self.agent_type.constructor.input_schema)?;
-        self.write_config_parameter_list(&mut method, local_configs)?;
+        self.write_config_parameter_list(&mut method, local_configs, &names.config_parameters)?;
         method.result(class_name);
 
-        method.write_line("const parameters: base.SchemaValue = ");
+        method.write_line(format!("const {}: base.SchemaValue = ", names.parameters));
         self.write_encode_input_record(
             &mut method,
             &self.agent_type.constructor.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
         method.write_line(if self.agent_type.mode == AgentMode::Ephemeral {
-            "const phantomId = undefined;"
+            format!("const {} = undefined;", names.phantom_id)
         } else {
-            "const phantomId = uuidv4();"
+            format!("const {} = uuidv4();", names.phantom_id)
         });
-        self.write_config_encoding(&mut method, local_configs)?;
+        self.write_config_encoding(&mut method, local_configs, &names)?;
         if self.agent_type.mode == AgentMode::Ephemeral {
             method.write_line(format!(
-                "return new {class_name}(parameters, phantomId, agentConfig);"
+                "return new {class_name}({}, {}, {});",
+                names.parameters, names.phantom_id, names.agent_config
             ));
         } else {
-            self.write_create_agent_call(&mut method, config_var, "agentConfig");
+            self.write_create_agent_call(&mut method, config_var, &names.agent_config, &names);
             method.write_line(format!(
-                "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
+                "return new {class_name}({}, {}, {}.agentId);",
+                names.parameters, names.phantom_id, names.create_response
             ));
         }
 
         Ok(())
+    }
+
+    fn external_constructor_names(
+        &self,
+        local_configs: &[&AgentConfigDeclarationSchema],
+    ) -> anyhow::Result<ExternalConstructorNames> {
+        let mut naming = ParameterNaming::new();
+        match self.ts_input(&self.agent_type.constructor.input_schema)? {
+            TsInput::Params(params) => {
+                naming.reserve_many(params.into_iter().map(|(name, _)| name));
+            }
+            TsInput::Multimodal(_) => naming.reserve(MULTIMODAL_INPUT_NAME),
+        }
+        let config_parameters = local_configs
+            .iter()
+            .map(|config| {
+                naming.fresh(format!(
+                    "config{}",
+                    config
+                        .path
+                        .iter()
+                        .map(|part| part.to_upper_camel_case())
+                        .collect::<String>()
+                ))
+            })
+            .collect();
+        Ok(ExternalConstructorNames {
+            config_parameters,
+            parameters: naming.fresh("parameters"),
+            phantom_id: naming.fresh("phantomId"),
+            agent_config: naming.fresh("agentConfig"),
+            config: naming.fresh("__config"),
+            create_response: naming.fresh("__createResponse"),
+        })
     }
 
     /// Writes optional config parameters to the method signature
@@ -928,18 +1397,11 @@ impl TypeScriptBridgeGenerator {
         &self,
         writer: &mut TsFunctionWriter<'_>,
         local_configs: &[&AgentConfigDeclarationSchema],
+        config_names: &[String],
     ) -> anyhow::Result<()> {
-        for config in local_configs {
-            let param_name = format!(
-                "config{}?",
-                config
-                    .path
-                    .iter()
-                    .map(|s| s.to_upper_camel_case())
-                    .collect::<String>()
-            );
+        for (config, param_name) in local_configs.iter().zip(config_names) {
             let param_type = self.type_reference(&config.value_type)?;
-            writer.param(&param_name, &param_type);
+            writer.param(&format!("{param_name}?"), &param_type);
         }
         Ok(())
     }
@@ -949,28 +1411,25 @@ impl TypeScriptBridgeGenerator {
         &self,
         writer: &mut TsFunctionWriter<'_>,
         local_configs: &[&AgentConfigDeclarationSchema],
+        names: &ExternalConstructorNames,
     ) -> anyhow::Result<()> {
-        writer.write_line("const agentConfig: base.AgentConfigEntry[] = [];");
-        for config in local_configs {
-            let param_name = format!(
-                "config{}",
-                config
-                    .path
-                    .iter()
-                    .map(|s| s.to_upper_camel_case())
-                    .collect::<String>()
-            );
+        writer.write_line(format!(
+            "const {}: base.AgentConfigEntry[] = [];",
+            names.agent_config
+        ));
+        for (config, param_name) in local_configs.iter().zip(&names.config_parameters) {
             let path_array = config
                 .path
                 .iter()
                 .map(|s| format!("\"{}\"", s))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let encoded_value = self.encode_schema_value(&param_name, &config.value_type)?;
+            let encoded_value = self.encode_schema_value(param_name, &config.value_type)?;
             writer.write_line(format!("if ({param_name} !== undefined) {{"));
             writer.indent();
             writer.write_line(format!(
-                "agentConfig.push({{ path: [{path_array}], value: {encoded_value} }});"
+                "{}.push({{ path: [{path_array}], value: {encoded_value} }});",
+                names.agent_config
             ));
             writer.unindent();
             writer.write_line("}");
@@ -1024,8 +1483,18 @@ impl TypeScriptBridgeGenerator {
         writer: &mut TsWriter,
         _class_name: &str,
     ) -> anyhow::Result<()> {
+        let mut names = ParameterNaming::new();
+        names.reserve_many([
+            "parameters",
+            "phantomId",
+            "_agentId",
+            "constructor",
+            "__getConfig",
+            "agentId",
+        ]);
         for method_def in &self.agent_type.methods {
-            self.generate_ts_remote_method(writer, method_def)?;
+            let name = names.fresh(self.to_js_ident(&method_def.name));
+            self.generate_ts_remote_method(writer, method_def, &name)?;
         }
         Ok(())
     }
@@ -1037,6 +1506,7 @@ impl TypeScriptBridgeGenerator {
         &self,
         writer: &mut TsWriter,
         method_def: &AgentMethodSchema,
+        member_name: &str,
     ) -> anyhow::Result<()> {
         let get_server_config_fn = self.build_get_server_config_fn();
         let get_around_invoke_hook_fn = self.build_get_around_invoke_hook_fn();
@@ -1046,7 +1516,7 @@ impl TypeScriptBridgeGenerator {
 
         writer.write_doc(&method_def.description);
         writer.declare_field(
-            &self.to_js_ident(&method_def.name),
+            member_name,
             &format!(
                 "base.{}<[{}], {}>",
                 if self.agent_type.mode == AgentMode::Ephemeral {
@@ -1123,8 +1593,7 @@ impl TypeScriptBridgeGenerator {
         let mut parameter_naming = ParameterNaming::new();
         match self.ts_input(&method_def.input_schema)? {
             TsInput::Params(params) => {
-                parameter_naming
-                    .reserve_many(params.iter().map(|(name, _)| self.to_js_ident(name)));
+                parameter_naming.reserve_many(params.iter().map(|(name, _)| name.clone()));
             }
             TsInput::Multimodal(_) => parameter_naming.reserve(MULTIMODAL_INPUT_NAME),
         }
@@ -1144,8 +1613,9 @@ impl TypeScriptBridgeGenerator {
             &method_def.input_schema,
             &multimodal_input_name,
         )?;
+        let schema_value_type = "base.SchemaValue";
         encode_args.write_line(format!(
-            "const {method_parameters_name}: base.SchemaValue = "
+            "const {method_parameters_name}: {schema_value_type} = "
         ));
         self.write_encode_input_record(
             &mut encode_args,
@@ -1246,27 +1716,49 @@ impl TypeScriptBridgeGenerator {
         cases: &[(String, SchemaType)],
         list_expr: &str,
     ) -> anyhow::Result<()> {
-        writer.write_line(format!("if ({list_expr}.kind !== 'list') {{"));
+        let discriminator = if self.mode == TypeScriptBridgeMode::GuestWasmRpc {
+            "tag"
+        } else {
+            "kind"
+        };
+        let elements = if self.mode == TypeScriptBridgeMode::GuestWasmRpc {
+            "elements"
+        } else {
+            "value.elements"
+        };
+        let case_index = if self.mode == TypeScriptBridgeMode::GuestWasmRpc {
+            "caseIndex"
+        } else {
+            "value.case"
+        };
+        let payload = if self.mode == TypeScriptBridgeMode::GuestWasmRpc {
+            "payload"
+        } else {
+            "value.payload"
+        };
+        writer.write_line(format!("if ({list_expr}.{discriminator} !== 'list') {{"));
         writer.indent();
         writer.write_line(format!(
-            "throw new Error(`Invalid value. Expected a multimodal list value, got ${{{list_expr}.kind}}`);"
+            "throw new Error(`Invalid value. Expected a multimodal list value, got ${{{list_expr}.{discriminator}}}`);"
         ));
         writer.unindent();
         writer.write_line("}");
         writer.write_line(format!(
-            "return {list_expr}.value.elements.map((item: any) => {{"
+            "return {list_expr}.{elements}.map((item: any) => {{"
         ));
         writer.indent();
         for (idx, (name, schema)) in cases.iter().enumerate() {
             let if_or_else = if idx == 0 { "if" } else { "else if" };
-            writer.write_line(format!("{if_or_else} (item.value.case === {idx}) {{"));
+            writer.write_line(format!("{if_or_else} (item.{case_index} === {idx}) {{"));
             writer.indent();
-            let decoded = self.decode_schema_value("item.value.payload", schema)?;
+            let decoded = self.decode_schema_value(&format!("item.{payload}"), schema)?;
             writer.write_line(format!("return {{ type: '{name}', value: {decoded} }};"));
             writer.unindent();
             writer.write_line("}");
         }
-        writer.write_line("throw new Error(`Unknown multimodal case index: ${item.value.case}`);");
+        writer.write_line(format!(
+            "throw new Error(`Unknown multimodal case index: ${{item.{case_index}}}`);"
+        ));
         writer.unindent();
         writer.write_line("});");
         Ok(())
@@ -1295,7 +1787,10 @@ impl TypeScriptBridgeGenerator {
                 writer.write_line("throw new Error('Invalid result value: missing result value');");
                 writer.unindent();
                 writer.write_line("}");
-                writer.write_line("const __outValue: base.SchemaValue = __out.value;");
+                let schema_value_type = "base.SchemaValue";
+                writer.write_line(format!(
+                    "const __outValue: {schema_value_type} = __out.value;"
+                ));
                 match other {
                     TsOutput::Unit => unreachable!(),
                     TsOutput::Single(schema) => {
@@ -1321,10 +1816,20 @@ impl TypeScriptBridgeGenerator {
         value_expr: &str,
     ) -> anyhow::Result<()> {
         writer.write_line(format!("const __rec: base.SchemaValue = {value_expr};"));
-        writer.write_line("if (__rec.kind !== 'record') {");
+        let discriminator = if self.mode == TypeScriptBridgeMode::GuestWasmRpc {
+            "tag"
+        } else {
+            "kind"
+        };
+        let fields = if self.mode == TypeScriptBridgeMode::GuestWasmRpc {
+            "fields"
+        } else {
+            "value.fields"
+        };
+        writer.write_line(format!("if (__rec.{discriminator} !== 'record') {{"));
         writer.indent();
         writer.write_line(
-            "throw new Error(`Invalid input value. Expected a record value, got ${__rec.kind}`);",
+            format!("throw new Error(`Invalid input value. Expected a record value, got ${{__rec.{discriminator}}}`);")
         );
         writer.unindent();
         writer.write_line("}");
@@ -1333,7 +1838,7 @@ impl TypeScriptBridgeGenerator {
                 writer.write_line("return [");
                 writer.indent();
                 for (idx, (_, schema)) in params.iter().enumerate() {
-                    let elem = format!("__rec.value.fields[{idx}]");
+                    let elem = format!("__rec.{fields}[{idx}]");
                     let decoded = self.decode_schema_value(&elem, schema)?;
                     writer.write_line(format!("{decoded},"));
                 }
@@ -1341,7 +1846,9 @@ impl TypeScriptBridgeGenerator {
                 writer.write_line("];");
             }
             TsInput::Multimodal(cases) => {
-                writer.write_line("const __parts: base.SchemaValue = __rec.value.fields[0];");
+                writer.write_line(format!(
+                    "const __parts: base.SchemaValue = __rec.{fields}[0];"
+                ));
                 self.write_decode_multimodal_list(writer, &cases, "__parts")?;
             }
         }
@@ -1358,10 +1865,8 @@ impl TypeScriptBridgeGenerator {
     ) -> anyhow::Result<()> {
         match self.ts_input(input)? {
             TsInput::Params(params) => {
-                let param_names: Vec<String> = params
-                    .iter()
-                    .map(|(name, _)| self.to_js_ident(name))
-                    .collect();
+                let param_names: Vec<String> =
+                    params.iter().map(|(name, _)| name.clone()).collect();
                 writer.write_line(format!("const [{}] = {};", param_names.join(", "), tuple));
                 Ok(())
             }
@@ -1386,8 +1891,24 @@ impl TypeScriptBridgeGenerator {
         multimodal_input_name: &str,
         terminator: &str,
     ) -> anyhow::Result<()> {
+        let (list_open, variant_open, variant_close, list_close) =
+            if self.mode == TypeScriptBridgeMode::GuestWasmRpc {
+                (
+                    "{ tag: 'list', elements: ",
+                    "{ tag: 'variant', caseIndex: ",
+                    " }",
+                    " }",
+                )
+            } else {
+                (
+                    "{ kind: 'list', value: { elements: ",
+                    "{ kind: 'variant', value: { case: ",
+                    " } }",
+                    " } }",
+                )
+            };
         writer.write_line(format!(
-            "{{ kind: 'list', value: {{ elements: {multimodal_input_name}.map((item: any) => {{"
+            "{list_open}{multimodal_input_name}.map((item: any) => {{"
         ));
         writer.indent();
         for (idx, (name, schema)) in cases.iter().enumerate() {
@@ -1396,14 +1917,14 @@ impl TypeScriptBridgeGenerator {
             writer.indent();
             let payload_expr = self.encode_schema_value("item.value", schema)?;
             writer.write_line(format!(
-                "return {{ kind: 'variant', value: {{ case: {idx}, payload: {payload_expr} }} }};"
+                "return {variant_open}{idx}, payload: {payload_expr}{variant_close};"
             ));
             writer.unindent();
             writer.write_line("}");
         }
         writer.write_line("throw new Error(`Unknown multimodal type: ${item.type}`);");
         writer.unindent();
-        writer.write_line(format!("}}) }} }}{terminator}"));
+        writer.write_line(format!("}}){list_close}{terminator}"));
         Ok(())
     }
 
@@ -1418,13 +1939,16 @@ impl TypeScriptBridgeGenerator {
         multimodal_input_name: &str,
     ) -> anyhow::Result<()> {
         writer.indent();
-        writer.write_line("{ kind: 'record', value: { fields: [");
+        writer.write_line(if self.mode == TypeScriptBridgeMode::GuestWasmRpc {
+            "{ tag: 'record', fields: ["
+        } else {
+            "{ kind: 'record', value: { fields: ["
+        });
         writer.indent();
         match self.ts_input(input)? {
             TsInput::Params(params) => {
                 for (name, schema) in &params {
-                    let param_name = self.to_js_ident(name);
-                    let field_expr = self.encode_schema_value(&param_name, schema)?;
+                    let field_expr = self.encode_schema_value(name, schema)?;
                     writer.write_line(format!("{field_expr},"));
                 }
             }
@@ -1433,7 +1957,11 @@ impl TypeScriptBridgeGenerator {
             }
         }
         writer.unindent();
-        writer.write_line("] } };");
+        writer.write_line(if self.mode == TypeScriptBridgeMode::GuestWasmRpc {
+            "] };"
+        } else {
+            "] } };"
+        });
         writer.unindent();
         Ok(())
     }
@@ -1452,7 +1980,11 @@ impl TypeScriptBridgeGenerator {
         writer.indent();
         match self.ts_output(output)? {
             TsOutput::Unit => {
-                writer.write_line("{ kind: 'tuple', value: { elements: [] } };");
+                writer.write_line(if self.mode == TypeScriptBridgeMode::GuestWasmRpc {
+                    "{ tag: 'tuple', elements: [] };"
+                } else {
+                    "{ kind: 'tuple', value: { elements: [] } };"
+                });
             }
             TsOutput::Single(schema) => {
                 let value_expr = self.encode_schema_value(value_var, &schema)?;
@@ -1469,17 +2001,211 @@ impl TypeScriptBridgeGenerator {
     /// Decodes a schema-native `SchemaValue` wire value (`value`) into a TS
     /// value of the given [`SchemaType`]. Named types delegate to their
     /// generated `decode<Name>` function; everything else is decoded inline.
-    fn decode_schema_value(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
+    pub(crate) fn decode_schema_value(
+        &self,
+        value: &str,
+        typ: &SchemaType,
+    ) -> anyhow::Result<String> {
         if let Some(name) = self.type_naming.type_name_for_type(typ) {
             return Ok(format!("decode{}({})", name, value));
         }
         self.decode_schema_value_body(value, typ)
     }
 
+    fn decode_guest_schema_value_body(
+        &self,
+        value: &str,
+        typ: &SchemaType,
+    ) -> anyhow::Result<String> {
+        if let Some(restrictions) = unstructured_text_restrictions(self.type_naming.graph(), typ)? {
+            let text_type = self.unstructured_text_type(restrictions);
+            return Ok(format!(
+                "((n: any): {text_type} => (n.caseIndex === 0 ? base.UnstructuredText.fromInline(n.payload.text, n.payload.language) : base.UnstructuredText.fromUrl(n.payload.value)) as {text_type})(({value} as any))"
+            ));
+        }
+        if let Some(restrictions) = unstructured_binary_restrictions(self.type_naming.graph(), typ)?
+        {
+            let binary_type = self.unstructured_binary_type(restrictions);
+            return Ok(format!(
+                "((n: any): {binary_type} => (n.caseIndex === 0 ? base.UnstructuredBinary.fromInline(n.payload.bytes, n.payload.mimeType) : base.UnstructuredBinary.fromUrl(n.payload.value)) as {binary_type})(({value} as any))"
+            ));
+        }
+        let rendered = match typ {
+            SchemaType::String { .. } | SchemaType::Char { .. } => {
+                format!("((n: any) => n.value as string)({value})")
+            }
+            SchemaType::S64 { .. } | SchemaType::U64 { .. } => {
+                format!("((n: any) => n.value as bigint)({value})")
+            }
+            SchemaType::F64 { .. }
+            | SchemaType::F32 { .. }
+            | SchemaType::U32 { .. }
+            | SchemaType::S32 { .. }
+            | SchemaType::U16 { .. }
+            | SchemaType::S16 { .. }
+            | SchemaType::U8 { .. }
+            | SchemaType::S8 { .. } => format!("((n: any) => n.value as number)({value})"),
+            SchemaType::Bool { .. } => format!("((n: any) => n.value as boolean)({value})"),
+            SchemaType::Option { inner, .. } => {
+                let decode = self.decode_schema_value("n.value", inner)?;
+                format!("((n: any) => n.value === undefined ? undefined : {decode})({value})")
+            }
+            SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
+                let decode = self.decode_schema_value("item", element)?;
+                if matches!(**element, SchemaType::U8 { .. }) {
+                    format!(
+                        "((n: any) => new Uint8Array(n.elements.map((item: any) => ({decode}))))({value})"
+                    )
+                } else {
+                    format!("((n: any) => n.elements.map((item: any) => ({decode})))({value})")
+                }
+            }
+            SchemaType::Tuple { elements, .. } => {
+                let items = elements
+                    .iter()
+                    .enumerate()
+                    .map(|(i, typ)| self.decode_schema_value(&format!("n.elements[{i}]"), typ))
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                format!("((n: any) => [{}])({value})", items.join(", "))
+            }
+            SchemaType::Record { fields, .. } => {
+                let names = self.member_names(fields.iter().map(|field| field.name.as_str()));
+                let fields = fields
+                    .iter()
+                    .zip(names)
+                    .enumerate()
+                    .map(|(i, (field, name))| {
+                        Ok(format!(
+                            "{name}: {}",
+                            self.decode_schema_value(&format!("n.fields[{i}]"), &field.body)?
+                        ))
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                format!("((n: any) => ({{ {} }}))({value})", fields.join(", "))
+            }
+            SchemaType::Enum { cases, .. } => {
+                let cases_array = cases
+                    .iter()
+                    .map(|c| format!("'{c}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let cases_union = cases
+                    .iter()
+                    .map(|c| format!("'{c}'"))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                format!(
+                    "((n: any) => {{ const __cases = [{cases_array}]; const __i = n.caseIndex; if (__i < 0 || __i >= __cases.length) {{ throw new Error(`Invalid enum case index ${{__i}}`); }} return __cases[__i] as ({cases_union}); }})({value})"
+                )
+            }
+            SchemaType::Flags { flags, .. } => {
+                let names = self.member_names(flags.iter().map(String::as_str));
+                format!(
+                    "((n: any) => ({{ {} }}))({value})",
+                    names
+                        .iter()
+                        .enumerate()
+                        .map(|(i, name)| format!("{name}: n.flags[{i}]"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+            SchemaType::Variant { cases, .. } => {
+                let arms = cases
+                    .iter()
+                    .enumerate()
+                    .map(|(i, case)| {
+                        Ok(match &case.payload {
+                            Some(typ) => format!(
+                                "if (n.caseIndex === {i}) return {{ tag: '{}', val: {} }};",
+                                case.name,
+                                self.decode_schema_value("n.payload", typ)?
+                            ),
+                            None => format!(
+                                "if (n.caseIndex === {i}) return {{ tag: '{}' }};",
+                                case.name
+                            ),
+                        })
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                format!(
+                    "((n: any) => {{ {} throw new Error(`Unknown variant case index ${{n.caseIndex}}`); }})({value})",
+                    arms.join(" ")
+                )
+            }
+            SchemaType::Map {
+                key, value: val, ..
+            } => format!(
+                "((n: any) => new Map(n.entries.map((entry: any) => [{}, {}])))({value})",
+                self.decode_schema_value("entry.key", key)?,
+                self.decode_schema_value("entry.value", val)?
+            ),
+            SchemaType::Result { spec, .. } => {
+                let ok = match spec.ok.as_deref() {
+                    Some(typ) => format!(
+                        "{{ ok: {} }}",
+                        self.decode_schema_value("n.result.value", typ)?
+                    ),
+                    None => "{ ok: undefined }".to_string(),
+                };
+                let err = match spec.err.as_deref() {
+                    Some(typ) => format!(
+                        "{{ err: {} }}",
+                        self.decode_schema_value("n.result.value", typ)?
+                    ),
+                    None => "{ err: undefined }".to_string(),
+                };
+                format!("((n: any) => n.result.tag === 'ok' ? {ok} : {err})({value})")
+            }
+            SchemaType::Union { spec, .. } => {
+                let arms = spec
+                    .branches
+                    .iter()
+                    .map(|branch| {
+                        Ok(format!(
+                            "if (n.unionTag === '{}') return {{ tag: '{}', val: {} }};",
+                            branch.tag,
+                            branch.tag,
+                            self.decode_schema_value("n.body", &branch.body)?
+                        ))
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                format!(
+                    "((n: any) => {{ {} throw new Error(`Unknown union branch tag ${{n.unionTag}}`); }})({value})",
+                    arms.join(" ")
+                )
+            }
+            SchemaType::Path { .. } | SchemaType::Url { .. } => {
+                format!("((n: any) => n.value as string)({value})")
+            }
+            SchemaType::Datetime { .. } => {
+                format!("((n: any) => base.datetimeToISOString(n.value))({value})")
+            }
+            SchemaType::Duration { .. } => format!("((n: any) => n.nanoseconds)({value})"),
+            SchemaType::Ref { .. } => anyhow::bail!(
+                "Unresolved SchemaType::Ref reached guest decode; value expr = {value}"
+            ),
+            SchemaType::Text { .. } | SchemaType::Binary { .. } => anyhow::bail!(
+                "Bare text/binary rich scalars have no TypeScript bridge surface; type = {typ:?}"
+            ),
+            SchemaType::Quantity { .. }
+            | SchemaType::Secret { .. }
+            | SchemaType::QuotaToken { .. }
+            | SchemaType::Future { .. }
+            | SchemaType::Stream { .. } => anyhow::bail!(
+                "SchemaType variant has no TypeScript bridge decoding yet; type = {typ:?}"
+            ),
+        };
+        Ok(rendered)
+    }
+
     /// Inline schema-native decode for a single [`SchemaType`], without the
     /// named-type lookup. `value` is a `SchemaValue` wire-node expression
     /// (`{ kind, value }`); the result is a TS value expression.
     fn decode_schema_value_body(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
+        if self.mode == TypeScriptBridgeMode::GuestWasmRpc {
+            return self.decode_guest_schema_value_body(value, typ);
+        }
         // Role-marked unstructured-text/binary variant → ergonomic wrapper.
         if let Some(restrictions) = unstructured_text_restrictions(self.type_naming.graph(), typ)? {
             return Ok(format!(
@@ -1549,14 +2275,16 @@ impl TypeScriptBridgeGenerator {
                 // Wire form is a positional `bits` boolean array; `base.decodeFlags`
                 // maps it onto the JS-cased fields of the `initial` shape (every
                 // field starts `false`) using the declaration-ordered pairs.
-                let flag_initializers = flags
+                let names = self.member_names(flags.iter().map(String::as_str));
+                let flag_initializers = names
                     .iter()
-                    .map(|name| format!("{}: false", self.to_js_ident(name)))
+                    .map(|name| format!("{name}: false"))
                     .collect::<Vec<_>>()
                     .join(", ");
                 let flag_pairs = flags
                     .iter()
-                    .map(|name| format!("['{}', '{}']", name, self.to_js_ident(name)))
+                    .zip(&names)
+                    .map(|(original, name)| format!("['{original}', '{name}']"))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("base.decodeFlags({value}, {{ {flag_initializers} }}, [{flag_pairs}])")
@@ -1572,11 +2300,12 @@ impl TypeScriptBridgeGenerator {
                 format!("((n: any) => [{}])({value})", items.join(", "))
             }
             SchemaType::Record { fields, .. } => {
+                let names = self.member_names(fields.iter().map(|field| field.name.as_str()));
                 let field_decoders: Vec<String> = fields
                     .iter()
+                    .zip(names)
                     .enumerate()
-                    .map(|(idx, field)| {
-                        let js_field_name = self.to_js_ident(&field.name);
+                    .map(|(idx, (field, js_field_name))| {
                         let field_decode = self
                             .decode_schema_value(&format!("n.value.fields[{idx}]"), &field.body)?;
                         Ok::<_, anyhow::Error>(format!("{js_field_name}: {field_decode}"))
@@ -1713,17 +2442,166 @@ impl TypeScriptBridgeGenerator {
     /// Encodes a TS value of the given [`SchemaType`] into its schema-native
     /// `SchemaValue` wire form. Named types delegate to their generated
     /// `encode<Name>` function; everything else is encoded inline.
-    fn encode_schema_value(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
+    pub(crate) fn encode_schema_value(
+        &self,
+        value: &str,
+        typ: &SchemaType,
+    ) -> anyhow::Result<String> {
         if let Some(name) = self.type_naming.type_name_for_type(typ) {
             return Ok(format!("encode{}({})", name, value));
         }
         self.encode_schema_value_body(value, typ)
     }
 
+    fn encode_guest_schema_value_body(
+        &self,
+        value: &str,
+        typ: &SchemaType,
+    ) -> anyhow::Result<String> {
+        if let Some(restrictions) = unstructured_text_restrictions(self.type_naming.graph(), typ)? {
+            let text_type = self.unstructured_text_type(restrictions);
+            return Ok(format!(
+                "((v: {text_type}) => v.tag === 'inline' ? {{ tag: 'variant', caseIndex: 0, payload: {{ tag: 'text', text: v.val, language: v.languageCode }} }} : {{ tag: 'variant', caseIndex: 1, payload: {{ tag: 'url', value: v.val }} }})({value})"
+            ));
+        }
+        if let Some(restrictions) = unstructured_binary_restrictions(self.type_naming.graph(), typ)?
+        {
+            let binary_type = self.unstructured_binary_type(restrictions);
+            return Ok(format!(
+                "((v: {binary_type}) => v.tag === 'inline' ? {{ tag: 'variant', caseIndex: 0, payload: {{ tag: 'binary', bytes: v.val, mimeType: v.mimeType }} }} : {{ tag: 'variant', caseIndex: 1, payload: {{ tag: 'url', value: v.val }} }})({value})"
+            ));
+        }
+        let rendered = match typ {
+            SchemaType::Bool { .. } => format!("{{ tag: 'bool', value: {value} }}"),
+            SchemaType::S8 { .. } => format!("{{ tag: 's8', value: {value} }}"),
+            SchemaType::S16 { .. } => format!("{{ tag: 's16', value: {value} }}"),
+            SchemaType::S32 { .. } => format!("{{ tag: 's32', value: {value} }}"),
+            SchemaType::S64 { .. } => format!("{{ tag: 's64', value: {value} }}"),
+            SchemaType::U8 { .. } => format!("{{ tag: 'u8', value: {value} }}"),
+            SchemaType::U16 { .. } => format!("{{ tag: 'u16', value: {value} }}"),
+            SchemaType::U32 { .. } => format!("{{ tag: 'u32', value: {value} }}"),
+            SchemaType::U64 { .. } => format!("{{ tag: 'u64', value: {value} }}"),
+            SchemaType::F32 { .. } => format!("{{ tag: 'f32', value: {value} }}"),
+            SchemaType::F64 { .. } => format!("{{ tag: 'f64', value: {value} }}"),
+            SchemaType::Char { .. } => format!("{{ tag: 'char', value: {value} }}"),
+            SchemaType::String { .. } => format!("{{ tag: 'string', value: {value} }}"),
+            SchemaType::Option { inner, .. } => format!(
+                "((v: any) => ({{ tag: 'option', value: v === undefined ? undefined : {} }}))({value})",
+                self.encode_schema_value("v", inner)?
+            ),
+            SchemaType::List { element, .. } => format!(
+                "{{ tag: 'list', elements: Array.from({value} as Iterable<any>).map((item: any) => ({})) }}",
+                self.encode_schema_value("item", element)?
+            ),
+            SchemaType::FixedList { element, .. } => format!(
+                "{{ tag: 'fixed-list', elements: Array.from({value} as Iterable<any>).map((item: any) => ({})) }}",
+                self.encode_schema_value("item", element)?
+            ),
+            SchemaType::Tuple { elements, .. } => format!(
+                "{{ tag: 'tuple', elements: [{}] }}",
+                elements
+                    .iter()
+                    .enumerate()
+                    .map(|(i, typ)| self.encode_schema_value(&format!("{value}[{i}]"), typ))
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(", ")
+            ),
+            SchemaType::Record { fields, .. } => format!(
+                "{{ tag: 'record', fields: [{}] }}",
+                fields
+                    .iter()
+                    .zip(self.member_names(fields.iter().map(|field| field.name.as_str())))
+                    .map(|(field, name)| self
+                        .encode_schema_value(&format!("{value}.{name}"), &field.body))
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(", ")
+            ),
+            SchemaType::Enum { cases, .. } => format!(
+                "((v: any) => {{ const caseIndex = [{}].indexOf(v); if (caseIndex < 0) throw new Error(`Invalid enum value ${{v}}`); return {{ tag: 'enum', caseIndex }} as base.SchemaValue; }})({value})",
+                cases
+                    .iter()
+                    .map(|c| format!("'{c}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            SchemaType::Flags { flags, .. } => format!(
+                "{{ tag: 'flags', flags: [{}] }}",
+                self.member_names(flags.iter().map(String::as_str))
+                    .iter()
+                    .map(|name| format!("{value}.{name}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            SchemaType::Variant { cases, .. } => {
+                let arms = cases.iter().enumerate().map(|(i, case)| Ok(match &case.payload { Some(typ) => format!("if (v.tag === '{}') return {{ tag: 'variant', caseIndex: {i}, payload: {} }};", case.name, self.encode_schema_value("v.val", typ)?), None => format!("if (v.tag === '{}') return {{ tag: 'variant', caseIndex: {i} }};", case.name) })).collect::<anyhow::Result<Vec<_>>>()?;
+                format!(
+                    "((v: any) => {{ {} throw new Error(`Unknown variant case ${{v.tag}}`); }})({value})",
+                    arms.join(" ")
+                )
+            }
+            SchemaType::Map {
+                key, value: val, ..
+            } => format!(
+                "{{ tag: 'map', entries: Array.from(({value} as Map<any, any>).entries()).map((entry: any) => ({{ key: {}, value: {} }})) }}",
+                self.encode_schema_value("entry[0]", key)?,
+                self.encode_schema_value("entry[1]", val)?
+            ),
+            SchemaType::Result { spec, .. } => {
+                let ok = match spec.ok.as_deref() {
+                    Some(typ) => format!(
+                        "{{ tag: 'ok', value: {} }}",
+                        self.encode_schema_value("v.ok", typ)?
+                    ),
+                    None => "{ tag: 'ok' }".to_string(),
+                };
+                let err = match spec.err.as_deref() {
+                    Some(typ) => format!(
+                        "{{ tag: 'err', value: {} }}",
+                        self.encode_schema_value("v.err", typ)?
+                    ),
+                    None => "{ tag: 'err' }".to_string(),
+                };
+                format!(
+                    "((v: any) => ({{ tag: 'result', result: ('ok' in v) ? {ok} : {err} }}))({value})"
+                )
+            }
+            SchemaType::Union { spec, .. } => {
+                let arms = spec.branches.iter().map(|branch| Ok(format!("if (v.tag === '{}') return {{ tag: 'union', unionTag: '{}', body: {} }};", branch.tag, branch.tag, self.encode_schema_value("v.val", &branch.body)?))).collect::<anyhow::Result<Vec<_>>>()?;
+                format!(
+                    "((v: any) => {{ {} throw new Error(`Unknown union branch ${{v.tag}}`); }})({value})",
+                    arms.join(" ")
+                )
+            }
+            SchemaType::Path { .. } => format!("{{ tag: 'path', value: {value} }}"),
+            SchemaType::Url { .. } => format!("{{ tag: 'url', value: {value} }}"),
+            SchemaType::Datetime { .. } => {
+                format!("{{ tag: 'datetime', value: base.datetimeFromISOString({value}) }}")
+            }
+            SchemaType::Duration { .. } => format!("{{ tag: 'duration', nanoseconds: {value} }}"),
+            SchemaType::Ref { .. } => anyhow::bail!(
+                "Unresolved SchemaType::Ref reached guest encode; value expr = {value}"
+            ),
+            SchemaType::Text { .. } | SchemaType::Binary { .. } => anyhow::bail!(
+                "Bare text/binary rich scalars have no TypeScript bridge surface; type = {typ:?}"
+            ),
+            SchemaType::Quantity { .. }
+            | SchemaType::Secret { .. }
+            | SchemaType::QuotaToken { .. }
+            | SchemaType::Future { .. }
+            | SchemaType::Stream { .. } => anyhow::bail!(
+                "SchemaType variant has no TypeScript bridge encoding yet; type = {typ:?}"
+            ),
+        };
+        Ok(rendered)
+    }
+
     /// Inline schema-native encode for a single [`SchemaType`], without the
     /// named-type lookup. `value` is a TS value expression; the result is a
     /// `SchemaValue` wire-node expression (`{ kind, value }`).
     fn encode_schema_value_body(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
+        if self.mode == TypeScriptBridgeMode::GuestWasmRpc {
+            return self.encode_guest_schema_value_body(value, typ);
+        }
         // Role-marked unstructured-text/binary variant → ergonomic wrapper.
         if unstructured_text_restrictions(self.type_naming.graph(), typ)?.is_some() {
             return Ok(format!("base.UnstructuredText.toSchemaValue({value})"));
@@ -1771,9 +2649,11 @@ impl TypeScriptBridgeGenerator {
                 // Wire form is a positional `bits` boolean array aligned with the
                 // declared flag names; `base.encodeFlags` reads the JS-cased
                 // fields in declaration order.
+                let names = self.member_names(flags.iter().map(String::as_str));
                 let flag_pairs = flags
                     .iter()
-                    .map(|name| format!("['{}', '{}']", name, self.to_js_ident(name)))
+                    .zip(names)
+                    .map(|(original, name)| format!("['{original}', '{name}']"))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("base.encodeFlags({value} as Record<string, boolean>, [{flag_pairs}])")
@@ -1792,10 +2672,11 @@ impl TypeScriptBridgeGenerator {
                 )
             }
             SchemaType::Record { fields, .. } => {
+                let names = self.member_names(fields.iter().map(|field| field.name.as_str()));
                 let items: Vec<String> = fields
                     .iter()
-                    .map(|field| {
-                        let js_field_name = self.to_js_ident(&field.name);
+                    .zip(names)
+                    .map(|(field, js_field_name)| {
                         self.encode_schema_value(&format!("{value}.{js_field_name}"), &field.body)
                     })
                     .collect::<anyhow::Result<_>>()?;
@@ -1924,31 +2805,33 @@ impl TypeScriptBridgeGenerator {
         Ok(rendered)
     }
 
-    fn unstructured_text_type(restrictions: &TextRestrictions) -> String {
+    fn unstructured_text_type(&self, restrictions: &TextRestrictions) -> String {
+        let type_name = "base.UnstructuredTextType";
         match &restrictions.languages {
             Some(langs) if !langs.is_empty() => format!(
-                "base.UnstructuredText<[{}]>",
+                "{type_name}<[{}]>",
                 langs
                     .iter()
                     .map(|l| format!("'{l}'"))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            _ => "base.UnstructuredText".to_string(),
+            _ => type_name.to_string(),
         }
     }
 
-    fn unstructured_binary_type(restrictions: &BinaryRestrictions) -> String {
+    fn unstructured_binary_type(&self, restrictions: &BinaryRestrictions) -> String {
+        let type_name = "base.UnstructuredBinaryType";
         match &restrictions.mime_types {
             Some(mimes) if !mimes.is_empty() => format!(
-                "base.UnstructuredBinary<[{}]>",
+                "{type_name}<[{}]>",
                 mimes
                     .iter()
                     .map(|m| format!("'{m}'"))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            _ => "base.UnstructuredBinary".to_string(),
+            _ => type_name.to_string(),
         }
     }
 
@@ -2037,10 +2920,8 @@ impl TypeScriptBridgeGenerator {
     ) -> anyhow::Result<()> {
         match self.ts_input(input)? {
             TsInput::Params(params) => {
-                let param_names: Vec<String> = params
-                    .iter()
-                    .map(|(name, _)| self.to_js_ident(name))
-                    .collect();
+                let param_names: Vec<String> =
+                    params.iter().map(|(name, _)| name.clone()).collect();
                 writer.write(param_names.join(", "));
             }
             TsInput::Multimodal(_) => {
@@ -2058,8 +2939,7 @@ impl TypeScriptBridgeGenerator {
         match self.ts_input(input)? {
             TsInput::Params(params) => {
                 for (name, schema) in &params {
-                    let param_name = self.to_js_ident(name);
-                    writer.param(&param_name, &self.type_reference(schema)?);
+                    writer.param(name, &self.type_reference(schema)?);
                 }
                 Ok(())
             }
@@ -2083,27 +2963,32 @@ impl TypeScriptBridgeGenerator {
         })
     }
 
-    fn type_reference(&self, typ: &SchemaType) -> anyhow::Result<String> {
+    pub(crate) fn type_reference(&self, typ: &SchemaType) -> anyhow::Result<String> {
         match self.type_naming.type_name_for_type(typ) {
             Some(name) => Ok(name.to_string()),
             None => {
                 // Role-marked unstructured-text/binary variant → ergonomic
-                // wrapper type (`base.UnstructuredText` / `base.UnstructuredBinary`).
+                // wrapper type (`base.UnstructuredTextType` / `base.UnstructuredBinaryType`).
                 if let Some(restrictions) =
                     unstructured_text_restrictions(self.type_naming.graph(), typ)?
                 {
-                    return Ok(Self::unstructured_text_type(restrictions));
+                    return Ok(self.unstructured_text_type(restrictions));
                 }
                 if let Some(restrictions) =
                     unstructured_binary_restrictions(self.type_naming.graph(), typ)?
                 {
-                    return Ok(Self::unstructured_binary_type(restrictions));
+                    return Ok(self.unstructured_binary_type(restrictions));
                 }
                 match typ {
                     SchemaType::String { .. } => Ok("string".to_string()),
                     SchemaType::Char { .. } => Ok("string".to_string()),
                     SchemaType::F64 { .. } => Ok("number".to_string()),
                     SchemaType::F32 { .. } => Ok("number".to_string()),
+                    SchemaType::U64 { .. } | SchemaType::S64 { .. }
+                        if self.mode == TypeScriptBridgeMode::GuestWasmRpc =>
+                    {
+                        Ok("bigint".to_string())
+                    }
                     SchemaType::U64 { .. } => Ok("number".to_string()),
                     SchemaType::S64 { .. } => Ok("number".to_string()),
                     SchemaType::U32 { .. } => Ok("number".to_string()),
@@ -2145,7 +3030,11 @@ impl TypeScriptBridgeGenerator {
                             .map(|t| self.type_reference(t))
                             .transpose()?
                             .unwrap_or("void".to_string());
-                        Ok(format!("base.JsonResult<{ok_type}, {err_type}>"))
+                        if self.mode == TypeScriptBridgeMode::GuestWasmRpc {
+                            Ok(format!("{{ ok: {ok_type} }} | {{ err: {err_type} }}"))
+                        } else {
+                            Ok(format!("base.JsonResult<{ok_type}, {err_type}>"))
+                        }
                     }
                     // Named-composite refs resolve via [`type_name_for_type`]
                     // above; reaching this arm means the type_naming pass
@@ -2233,7 +3122,11 @@ impl TypeScriptBridgeGenerator {
                     .map(|t| self.type_reference(t))
                     .transpose()?
                     .unwrap_or("void".to_string());
-                Ok(format!("base.JsonResult<{ok_type}, {err_type}>")) // TODO: convert to a more convenient result type
+                if self.mode == TypeScriptBridgeMode::GuestWasmRpc {
+                    Ok(format!("{{ ok: {ok_type} }} | {{ err: {err_type} }}"))
+                } else {
+                    Ok(format!("base.JsonResult<{ok_type}, {err_type}>"))
+                }
             }
             SchemaType::Option { inner, .. } => {
                 let inner_ts_type = self.type_reference(inner)?;
@@ -2249,8 +3142,7 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Flags { flags, .. } => {
                 let mut flags_def = String::new();
                 flags_def.push_str("{\n");
-                for flag in flags {
-                    let flag_name = self.to_js_ident(flag);
+                for flag_name in self.member_names(flags.iter().map(String::as_str)) {
                     flags_def.push_str(&format!("  {flag_name}: boolean;\n"));
                 }
                 flags_def.push('}');
@@ -2259,8 +3151,10 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Record { fields, .. } => {
                 let mut record_def = String::new();
                 record_def.push_str("{\n");
-                for field in fields {
-                    let js_name = self.to_js_ident(&field.name);
+                for (field, js_name) in fields
+                    .iter()
+                    .zip(self.member_names(fields.iter().map(|field| field.name.as_str())))
+                {
                     let field_str = if let SchemaType::Option { inner, .. } = &field.body {
                         let field_type = self.type_reference(inner)?;
                         format!("{js_name}?: {field_type};\n")
@@ -2293,6 +3187,11 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Char { .. } => Ok("string".to_string()),
             SchemaType::F64 { .. } => Ok("number".to_string()),
             SchemaType::F32 { .. } => Ok("number".to_string()),
+            SchemaType::U64 { .. } | SchemaType::S64 { .. }
+                if self.mode == TypeScriptBridgeMode::GuestWasmRpc =>
+            {
+                Ok("bigint".to_string())
+            }
             SchemaType::U64 { .. } => Ok("number".to_string()),
             SchemaType::S64 { .. } => Ok("number".to_string()),
             SchemaType::U32 { .. } => Ok("number".to_string()),
@@ -2344,7 +3243,7 @@ impl TypeScriptBridgeGenerator {
     }
 
     fn library_name(&self) -> String {
-        bridge_client_directory_name(&self.agent_type.type_name, BridgeMode::External)
+        bridge_client_directory_name(&self.agent_type.type_name, self.mode.bridge_mode())
     }
 
     fn global_config_var_name(&self) -> String {
@@ -2354,6 +3253,27 @@ impl TypeScriptBridgeGenerator {
         )
     }
 
+    fn test_method_helper_names(&self) -> Vec<[String; 4]> {
+        let mut naming = ParameterNaming::new();
+        for (_, type_name) in self.type_naming.types() {
+            naming.reserve(format!("encode{type_name}"));
+            naming.reserve(format!("decode{type_name}"));
+        }
+        self.agent_type
+            .methods
+            .iter()
+            .map(|method| {
+                let method_name = self.to_method_pascal(&method.name);
+                [
+                    naming.fresh(format!("encode{method_name}Input")),
+                    naming.fresh(format!("decode{method_name}Input")),
+                    naming.fresh(format!("encode{method_name}Output")),
+                    naming.fresh(format!("decode{method_name}Output")),
+                ]
+            })
+            .collect()
+    }
+
     /// Converts a name to a JS/TS identifier.
     fn to_js_ident(&self, name: &str) -> String {
         if self.same_language {
@@ -2361,6 +3281,14 @@ impl TypeScriptBridgeGenerator {
         } else {
             escape_js_ident(name.to_lower_camel_case())
         }
+    }
+
+    fn member_names<'a>(&self, names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+        let mut naming = ParameterNaming::new();
+        names
+            .into_iter()
+            .map(|name| naming.fresh(self.to_js_ident(name)))
+            .collect()
     }
 
     /// Converts a method name to PascalCase for use in generated function names like `encodeXxxInput`.

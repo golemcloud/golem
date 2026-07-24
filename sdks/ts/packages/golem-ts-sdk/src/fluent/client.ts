@@ -19,24 +19,14 @@
 // symmetric by construction. Reuses the host `WasmRpc` resource (no decorator
 // `Type.Type`/metadata).
 
-import {
-  makeAgentId,
-  WasmRpc,
+import type {
   Datetime,
   CancellationToken,
-  TypedAgentConfigValue,
   InvocationMetadata,
   CancelableScheduledInvocationReceipt,
-  RpcError,
 } from 'golem:agent/host@2.0.0';
-import {
-  schemaValueToWit,
-  schemaValueFromWit,
-  typedSchemaValueToWit,
-  v,
-} from '../internal/schema-model';
+import { v } from '../internal/schema-model';
 import type { SchemaGraph, SchemaType, SchemaValue } from '../internal/schema-model';
-import { awaitAbortable, throwIfAborted } from '../internal/pollableUtils';
 import { compileConfig, ConfigDeclaration } from './config';
 import { Uuid } from '../uuid';
 import { compileSchema } from './schema/adapter';
@@ -45,6 +35,9 @@ import { StandardSchemaV1 } from './schema/standardSchema';
 import type { MarkerKindOf } from './schema/markers';
 import { AgentDefinition, ConfigSpec, IdRecord, MethodsRecord } from './defineAgent';
 import { MethodSpec } from './method';
+import { resolveRemoteAgent, RemoteCallError, type AgentConfigEntry } from '../bridge/agent';
+
+export { RemoteCallError } from '../bridge/agent';
 
 type InferRecord<R extends Record<string, StandardSchemaV1>> = {
   [K in keyof R]: StandardSchemaV1.InferOutput<R[K]>;
@@ -164,29 +157,9 @@ interface CompiledRemoteMethod {
   output: { tag: 'unit' } | { tag: 'single'; codec: FluentCodec };
 }
 
-/** Raised when a remote agent invocation fails or returns an error result. */
-export class RemoteCallError extends Error {
-  readonly _tag = 'RemoteCallError';
-}
-
-function isRpcError(error: unknown): error is RpcError {
-  if (error === null || typeof error !== 'object') return false;
-
-  switch ((error as { tag?: unknown }).tag) {
-    case 'protocol-error':
-    case 'denied':
-    case 'not-found':
-    case 'remote-internal-error':
-    case 'remote-agent-error':
-      return true;
-    default:
-      return false;
-  }
-}
-
 /** Encode a method/constructor input record (positional, declaration order). */
 function encodeRecord(codecs: NamedCodec[], input: Record<string, unknown>) {
-  return schemaValueToWit(v.record(codecs.map((c) => c.codec.toValue(input[c.name]))));
+  return v.record(codecs.map((c) => c.codec.toValue(input[c.name])));
 }
 
 function assertValueMatchesType(value: SchemaValue, type: SchemaType, graph: SchemaGraph): void {
@@ -232,8 +205,8 @@ function getAtPath(
 function encodeConfigOverrides(
   declarations: ConfigDeclaration[],
   overrides: Record<string, unknown>,
-): TypedAgentConfigValue[] {
-  const out: TypedAgentConfigValue[] = [];
+): AgentConfigEntry[] {
+  const out: AgentConfigEntry[] = [];
   for (const decl of declarations) {
     const found = getAtPath(overrides, decl.path);
     if (!found.present) continue;
@@ -244,7 +217,7 @@ function encodeConfigOverrides(
     }
     out.push({
       path: [...decl.path],
-      value: typedSchemaValueToWit({ graph: decl.graph, value: decl.codec.toValue(found.value) }),
+      value: { graph: decl.graph, value: decl.codec.toValue(found.value) },
     });
   }
   return out;
@@ -297,10 +270,14 @@ export function clientFor<
     phantomId?: Uuid,
     config?: Record<string, unknown>,
   ): RemoteClient<Methods, Mode> => {
-    const constructorTree = encodeRecord(idCodecs, id as Record<string, unknown>);
-    const agentId = makeAgentId(def.name, constructorTree, phantomId);
     const agentConfig = config ? encodeConfigOverrides(configDecls, config) : [];
-    const wasmRpc = new WasmRpc(def.name, constructorTree, phantomId, agentConfig);
+    const remote = resolveRemoteAgent(
+      def.name,
+      encodeRecord(idCodecs, id as Record<string, unknown>),
+      phantomId,
+      agentConfig,
+    );
+    const agentId = remote.agentId;
 
     const decodeOutput = (mc: CompiledRemoteMethod, val: unknown): unknown => {
       if (mc.output.tag === 'unit') return undefined;
@@ -310,7 +287,7 @@ export function clientFor<
         );
       }
       try {
-        const decoded = schemaValueFromWit(val as Parameters<typeof schemaValueFromWit>[0]);
+        const decoded = val as SchemaValue;
         assertValueMatchesType(decoded, mc.output.codec.graph.root, mc.output.codec.graph);
         return mc.output.codec.fromValue(decoded);
       } catch (error) {
@@ -323,23 +300,9 @@ export function clientFor<
     const client: Record<string, unknown> = {};
     for (const mc of methodCodecs) {
       const invoke = async (input: Record<string, unknown> = {}, signal?: AbortSignal) => {
-        throwIfAborted(signal);
         const inputTree = encodeRecord(mc.inputCodecs, input);
-        const invocation = wasmRpc.asyncInvokeAndAwait(mc.name, inputTree);
-        const future = invocation.future;
-        let result;
-        try {
-          result = await awaitAbortable(future.get(), signal, () => future.cancel());
-        } catch (error) {
-          if (!isRpcError(error)) throw error;
-
-          throw new RemoteCallError(
-            `Remote agent ${agentId}.${mc.name} errored: ${JSON.stringify(error, (_, value) =>
-              typeof value === 'bigint' ? value.toString() : value,
-            )}`,
-          );
-        }
-        const value = decodeOutput(mc, result);
+        const invocation = await remote.invokeAndAwaitWithMetadata(mc.name, inputTree, signal);
+        const value = decodeOutput(mc, invocation.value);
         return def.mode === 'ephemeral' ? { metadata: invocation.metadata, value } : value;
       };
       const methodFn =
@@ -349,11 +312,11 @@ export function clientFor<
               invoke(input, options?.signal);
       client[mc.name] = Object.assign(methodFn, {
         trigger: (input: Record<string, unknown> = {}) => {
-          const metadata = wasmRpc.invoke(mc.name, encodeRecord(mc.inputCodecs, input));
+          const metadata = remote.invokeWithMetadata(mc.name, encodeRecord(mc.inputCodecs, input));
           return def.mode === 'ephemeral' ? metadata : undefined;
         },
         schedule: (at: Datetime, input: Record<string, unknown> = {}) => {
-          const receipt = wasmRpc.scheduleCancelableInvocation(
+          const receipt = remote.scheduleCancelableWithMetadata(
             at,
             mc.name,
             encodeRecord(mc.inputCodecs, input),

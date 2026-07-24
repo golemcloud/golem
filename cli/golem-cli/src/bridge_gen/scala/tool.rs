@@ -18,8 +18,9 @@ use super::scala::{
 use super::scala_writer::ScalaWriter;
 use super::{
     CLIENT_PKG_BASE, GUEST_CODEC, GUEST_SCHEMA_VALUE_TYPE, LIST, SCALA_SOURCE_ROOT,
-    ScalaBridgeGenerator, scala_string_literal, stringify_precision_sensitive_numbers,
+    ScalaBridgeGenerator, scala_string_literal,
 };
+use crate::bridge_gen::json::stringify_precision_sensitive_numbers;
 use crate::bridge_gen::tool_bridge_client_directory_name;
 use crate::bridge_gen::tool_common::{
     command_path, field_names, global_surfaces, idx_to_usize, synthetic_agent_type,

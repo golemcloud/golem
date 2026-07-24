@@ -30,6 +30,18 @@ const processor = clientFor(DataProcessor)({ name: 'pipeline-1' });
 processor.processBatch.trigger({ batch: batchData });
 ```
 
+For an agent in another component, the generated guest client exposes the same
+`.trigger()` method, but its constructor uses flattened id parameters:
+
+```typescript
+import { CounterAgent } from 'counter-agent-guest-client';
+
+CounterAgent.get('my-counter').increment.trigger();
+```
+
+See the `golem-call-another-agent-ts` skill for the required `golem.yaml` and
+`tsconfig.json` setup. Do not replace `clientFor` for same-component calls.
+
 ## When to Use
 
 - **Breaking RPC cycles**: If agent A calls agent B and B needs to call back to A, use `.trigger()` for the callback to avoid deadlocks

@@ -550,11 +550,18 @@ export const v = {
   option: (value?: SchemaValue): SchemaValue => ({ tag: 'option', value }),
   ok: (value?: SchemaValue): SchemaValue => ({ tag: 'result', result: { tag: 'ok', value } }),
   err: (value?: SchemaValue): SchemaValue => ({ tag: 'result', result: { tag: 'err', value } }),
+  text: (text: string, language?: string): SchemaValue => ({ tag: 'text', text, language }),
+  binary: (bytes: Uint8Array, mimeType?: string): SchemaValue => ({
+    tag: 'binary',
+    bytes,
+    mimeType,
+  }),
   path: (value: string): SchemaValue => ({ tag: 'path', value }),
   url: (value: string): SchemaValue => ({ tag: 'url', value }),
   datetime: (value: Datetime): SchemaValue => ({ tag: 'datetime', value }),
   duration: (nanoseconds: bigint): SchemaValue => ({ tag: 'duration', nanoseconds }),
   quantity: (value: QuantityValue): SchemaValue => ({ tag: 'quantity', value }),
+  union: (unionTag: string, body: SchemaValue): SchemaValue => ({ tag: 'union', unionTag, body }),
   secret: (handle: GuestSecretHandle): SchemaValue => ({ tag: 'secret', handle }),
   quotaToken: (handle: GuestQuotaTokenHandle): SchemaValue => ({ tag: 'quota-token', handle }),
 };

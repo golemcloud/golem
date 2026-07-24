@@ -91,7 +91,8 @@ const FLOAT_BITS = new DataView(new ArrayBuffer(8));
 /**
  * Validate every definition body followed by the graph root, in deterministic order.
  *
- * Regex restrictions are compiled with the platform's ECMAScript `RegExp` implementation.
+ * Regex restrictions are compiled with the platform's Unicode-mode ECMAScript `RegExp`
+ * implementation.
  * Rust validates the same schema fields with the `regex` crate, so engine-specific syntax can
  * be accepted by one SDK and rejected by the other. Cross-SDK schemas should use their common
  * regular-expression subset.
@@ -431,7 +432,7 @@ function checkTextRestrictions(
   }
   if (restrictions.regex !== undefined) {
     try {
-      new RegExp(restrictions.regex);
+      new RegExp(restrictions.regex, 'u');
     } catch (error) {
       issue(
         errors,
@@ -611,7 +612,7 @@ function checkUnionBranch(graph: SchemaGraph, branch: UnionBranch, errors: Error
         );
       } else {
         try {
-          new RegExp(rule.val);
+          new RegExp(rule.val, 'u');
         } catch (error) {
           issue(
             errors,
