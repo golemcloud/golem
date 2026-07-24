@@ -32,6 +32,11 @@ use crate::durable_host::durability::{
     AsyncRetryDecision, DurabilityHost, DurableExecutionState, HostFailureKind,
     InFunctionRetryHost, InFunctionRetryState,
 };
+use crate::durable_host::http::policy::{
+    HttpRetryDisallowedReason, ResumeResponseAction, classify_resume_response,
+    has_guest_range_header, http_worker_state_allows_retry, is_http_request_idempotent,
+    parse_content_range_start, resume_range_headers,
+};
 use crate::durable_host::http::types::classify_http_error_code;
 use crate::durable_host::{HttpOutgoingBodyState, HttpRequestState, PendingStatusRetryDecision};
 use crate::services::environment_state::EnvironmentStateService;
@@ -40,10 +45,8 @@ use crate::services::{HasOplog, HasWorker};
 use bytes::Bytes;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::payload::HostPayloadPair;
-use golem_common::model::oplog::types::SerializableHttpMethod;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestHttpRequest, HostResponse, OplogEntry, OplogIndex,
-    PersistenceLevel,
 };
 use golem_common::model::{NamedRetryPolicy, PredicateValue, RetryContext, RetryProperties};
 use http::{HeaderName, HeaderValue};
@@ -126,6 +129,9 @@ pub enum InlineRetryIneligible {
     Snapshotting,
     /// Persistence level is PersistNothing — no oplog data to reconstruct from.
     PersistNothing,
+    /// Worker is inside a user-defined atomic region; a failure must escalate
+    /// to trap+replay so the whole region re-executes.
+    InAtomicRegion,
     /// The outgoing body used splice/blocking_splice, so bytes can't be reconstructed.
     UnreconstructableBody,
     /// The outgoing body included trailers, which are not persisted.
@@ -153,6 +159,18 @@ pub enum InlineRetryPhase {
     WritingRequestBody,
 }
 
+impl From<HttpRetryDisallowedReason> for InlineRetryIneligible {
+    fn from(reason: HttpRetryDisallowedReason) -> Self {
+        match reason {
+            HttpRetryDisallowedReason::NotLive => InlineRetryIneligible::NotLive,
+            HttpRetryDisallowedReason::Snapshotting => InlineRetryIneligible::Snapshotting,
+            HttpRetryDisallowedReason::PersistNothing => InlineRetryIneligible::PersistNothing,
+            HttpRetryDisallowedReason::InAtomicRegion => InlineRetryIneligible::InAtomicRegion,
+            HttpRetryDisallowedReason::NotIdempotent => InlineRetryIneligible::NotIdempotent,
+        }
+    }
+}
+
 /// Checks whether the given HTTP request is eligible for transparent inline retry.
 ///
 /// Returns `Ok(())` if eligible, or `Err(reason)` explaining why not.
@@ -160,18 +178,10 @@ pub(crate) fn is_http_inline_retry_eligible(
     exec_state: &DurableExecutionState,
     request_state: &HttpRequestState,
     zone: InlineRetryPhase,
+    in_atomic_region: bool,
 ) -> Result<(), InlineRetryIneligible> {
-    if !exec_state.is_live {
-        return Err(InlineRetryIneligible::NotLive);
-    }
-
-    if exec_state.snapshotting_mode.is_some() {
-        return Err(InlineRetryIneligible::Snapshotting);
-    }
-
-    if exec_state.persistence_level == PersistenceLevel::PersistNothing {
-        return Err(InlineRetryIneligible::PersistNothing);
-    }
+    http_worker_state_allows_retry(exec_state, in_atomic_region)
+        .map_err(InlineRetryIneligible::from)?;
 
     if request_state.retry.has_unreconstructable_body {
         return Err(InlineRetryIneligible::UnreconstructableBody);
@@ -212,28 +222,11 @@ pub(crate) fn is_http_inline_retry_eligible(
     }
 
     // Idempotency check
-    if !exec_state.assume_idempotence && !is_method_idempotent(&request_state.request.method) {
+    if !is_http_request_idempotent(exec_state.assume_idempotence, &request_state.request.method) {
         return Err(InlineRetryIneligible::NotIdempotent);
     }
 
     Ok(())
-}
-
-/// Returns true if the HTTP method is inherently idempotent (safe to retry
-/// even when `assume_idempotence` is false).
-fn is_method_idempotent(method: &SerializableHttpMethod) -> bool {
-    matches!(
-        method,
-        SerializableHttpMethod::Get
-            | SerializableHttpMethod::Head
-            | SerializableHttpMethod::Put
-            | SerializableHttpMethod::Delete
-            | SerializableHttpMethod::Options
-    )
-}
-
-fn is_http_request_idempotent(assume_idempotence: bool, method: &SerializableHttpMethod) -> bool {
-    assume_idempotence || is_method_idempotent(method)
 }
 
 /// A chunk of outgoing body data reconstructed from the oplog.
@@ -1184,6 +1177,7 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
         &exec_state,
         &request_state,
         InlineRetryPhase::WritingRequestBody,
+        ctx.in_atomic_region(),
     )
     .is_err()
     {
@@ -1338,6 +1332,7 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
         &exec_state,
         &request_state,
         InlineRetryPhase::ResumingResponseBody,
+        ctx.in_atomic_region(),
     )
     .is_err()
     {
@@ -1355,12 +1350,7 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
     //    If the original request already has a Range header, response-body
     //    resumption is not supported because composing Range headers correctly is
     //    complex.
-    let has_range = request_state
-        .request
-        .headers
-        .iter()
-        .any(|(k, _)| k.eq_ignore_ascii_case("range"));
-    if has_range {
+    if has_guest_range_header(request_state.request.headers.iter().map(|(k, _)| k.as_str())) {
         return Ok(false);
     }
 
@@ -1396,11 +1386,7 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
         }
     }
 
-    let extra_headers = if consumed_len > 0 {
-        vec![("range".to_string(), format!("bytes={consumed_len}-"))]
-    } else {
-        vec![]
-    };
+    let extra_headers = resume_range_headers(consumed_len);
     // 6. Send the reconstructed request (with interrupt-aware retries)
     let connection_pool = ctx.wasi_http.connection_pool.clone();
     let response = match send_with_interrupt_aware_retries(
@@ -1421,93 +1407,28 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
     let original_status = request_state.response_status;
     let between_bytes_timeout = response.between_bytes_timeout;
 
-    // 7. Handle response status
-    match status {
-        206 => {
-            // Partial Content — verify Content-Range header matches consumed_len
-            let content_range = response
-                .resp
-                .headers()
-                .get("content-range")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_owned());
+    // 7. Handle the resume response according to the shared policy
+    let content_range = response
+        .resp
+        .headers()
+        .get("content-range")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_owned());
+    let range_start = content_range.as_deref().and_then(parse_content_range_start);
 
-            let range_start = content_range.as_deref().and_then(parse_content_range_start);
+    match classify_resume_response(status, range_start, consumed_len, original_status) {
+        ResumeResponseAction::Resume | ResumeResponseAction::SkipPrefix => {
+            // Resume: 206 body already starts at consumed_len, nothing to skip.
+            // SkipPrefix: full response body — skip consumed_len bytes (count-only,
+            // no content verification, because materializing the previously
+            // consumed data would require the same OOM-prone allocation we are
+            // trying to avoid) then swap.
+            let skip_len = if status == 206 { 0 } else { consumed_len };
 
-            match range_start {
-                Some(start) if start == consumed_len => {
-                    // Range matches — swap body+stream
-                    let (_parts, body) = response.resp.into_parts();
-                    let new_body = HostIncomingBody::new(body, between_bytes_timeout);
-
-                    // Swap IncomingBody at body_handle, then take stream from it
-                    let body_entry: &mut HostIncomingBody =
-                        ctx.table()
-                            .get_mut(&Resource::<WasiIncomingBody>::new_borrow(body_handle))?;
-                    *body_entry = new_body;
-                    let new_stream = body_entry.take_stream().ok_or_else(|| {
-                        anyhow::anyhow!("HTTP retry failed: could not take stream from new body")
-                    })?;
-
-                    // Swap the InputStream in the resource table
-                    let stream_entry: &mut wasmtime_wasi::DynInputStream = ctx
-                        .table()
-                        .get_mut(&Resource::<WasiInputStream>::new_borrow(stream_handle))?;
-                    *stream_entry = new_stream;
-
-                    tracing::debug!(
-                        stream_handle = stream_handle,
-                        consumed_len = consumed_len,
-                        "Resuming response body inline retry: 206 Partial Content, body+stream swapped"
-                    );
-                    Ok(true)
-                }
-                _ => {
-                    // Content-Range doesn't match or missing — fall back
-                    tracing::debug!(
-                        stream_handle = stream_handle,
-                        content_range = ?content_range,
-                        consumed_len = consumed_len,
-                        "Resuming response body inline retry: 206 Content-Range mismatch, falling back"
-                    );
-                    Ok(false)
-                }
-            }
-        }
-        _ if original_status == Some(status) && consumed_len == 0 => {
-            // Full response with nothing consumed yet — swap body+stream directly
             let (_parts, body) = response.resp.into_parts();
             let new_body = HostIncomingBody::new(body, between_bytes_timeout);
 
-            let body_entry: &mut HostIncomingBody =
-                ctx.table()
-                    .get_mut(&Resource::<WasiIncomingBody>::new_borrow(body_handle))?;
-            *body_entry = new_body;
-            let new_stream = body_entry.take_stream().ok_or_else(|| {
-                anyhow::anyhow!("HTTP retry failed: could not take stream from new body")
-            })?;
-
-            let stream_entry: &mut wasmtime_wasi::DynInputStream = ctx
-                .table()
-                .get_mut(&Resource::<WasiInputStream>::new_borrow(stream_handle))?;
-            *stream_entry = new_stream;
-
-            tracing::debug!(
-                stream_handle = stream_handle,
-                status = status,
-                "Resuming response body inline retry: matching full response (no bytes consumed), body+stream swapped"
-            );
-            Ok(true)
-        }
-        _ if original_status == Some(status) => {
-            // Full response — skip consumed_len bytes then swap.
-            // We only count bytes (no content verification) because materializing
-            // the previously consumed data would require the same OOM-prone
-            // allocation we are trying to avoid.
-            let (_parts, body) = response.resp.into_parts();
-            let new_body = HostIncomingBody::new(body, between_bytes_timeout);
-
-            // Swap IncomingBody at body_handle first
+            // Swap IncomingBody at body_handle first, then take stream from it
             let body_entry: &mut HostIncomingBody =
                 ctx.table()
                     .get_mut(&Resource::<WasiIncomingBody>::new_borrow(body_handle))?;
@@ -1516,13 +1437,13 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
                 anyhow::anyhow!("HTTP retry failed: could not take stream from new body")
             })?;
 
-            // Skip consumed_len bytes from the new stream (read and discard)
+            // Skip skip_len bytes from the new stream (read and discard)
             let mut skipped = 0u64;
-            while skipped < consumed_len {
+            while skipped < skip_len {
                 // Wait for data to be available
                 new_stream.ready().await;
 
-                let remaining = (consumed_len - skipped) as usize;
+                let remaining = (skip_len - skipped) as usize;
                 let chunk = new_stream.read(remaining).map_err(|e| match e {
                     wasmtime_wasi::StreamError::Closed => anyhow::anyhow!(
                         "HTTP retry failed: response shorter than previously consumed bytes"
@@ -1543,7 +1464,7 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
                 skipped += chunk.len() as u64;
             }
 
-            // Prefix skipped — swap the stream (which now has the remaining body)
+            // Swap the InputStream in the resource table (it now has the remaining body)
             let stream_entry: &mut wasmtime_wasi::DynInputStream = ctx
                 .table()
                 .get_mut(&Resource::<WasiInputStream>::new_borrow(stream_handle))?;
@@ -1553,23 +1474,27 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
                 stream_handle = stream_handle,
                 status = status,
                 consumed_len = consumed_len,
-                "Resuming response body inline retry: matching full response with prefix skip, body+stream swapped"
+                skip_len = skip_len,
+                "Resuming response body inline retry: body+stream swapped"
             );
             Ok(true)
         }
-        416 => {
+        ResumeResponseAction::RangeNotSatisfiable => {
             // Range Not Satisfiable — content changed
             Err(anyhow::anyhow!(
                 "HTTP retry failed: server returned 416 Range Not Satisfiable"
             ))
         }
-        _ => {
-            // Unexpected or status-changing response — don't retry
+        ResumeResponseAction::Fallback => {
+            // Mismatched/missing Content-Range on a 206, status change, or
+            // unsupported status — don't retry
             tracing::debug!(
                 stream_handle = stream_handle,
                 status = status,
                 original_status = original_status,
-                "Resuming response body inline retry: retried status mismatch or unsupported status, falling back"
+                content_range = ?content_range,
+                consumed_len = consumed_len,
+                "Resuming response body inline retry: resume response not usable, falling back"
             );
             Ok(false)
         }
@@ -1733,7 +1658,12 @@ pub(crate) async fn try_status_code_retry<Ctx: crate::workerctx::WorkerCtx>(
     };
 
     if let Err(reason) =
-        is_http_inline_retry_eligible(&exec_state, &eligibility_state, eligibility_phase)
+        is_http_inline_retry_eligible(
+            &exec_state,
+            &eligibility_state,
+            eligibility_phase,
+            ctx.in_atomic_region(),
+        )
     {
         tracing::debug!(
             ?reason,
@@ -1849,6 +1779,7 @@ pub(crate) async fn try_awaiting_response_inline_retry<Ctx: crate::workerctx::Wo
         &exec_state,
         &eligibility_state,
         InlineRetryPhase::AwaitingResponse,
+        ctx.in_atomic_region(),
     )
     .is_err()
     {
@@ -1865,62 +1796,13 @@ pub(crate) async fn try_awaiting_response_inline_retry<Ctx: crate::workerctx::Wo
         .await
 }
 
-/// Parses the start byte position from a Content-Range header value.
-///
-/// Expected format: `bytes <start>-<end>/<total>` or `bytes <start>-<end>/*`
-/// Returns the start position if successfully parsed.
-pub(crate) fn parse_content_range_start(value: &str) -> Option<u64> {
-    let rest = value.strip_prefix("bytes ")?;
-    let dash_pos = rest.find('-')?;
-    rest[..dash_pos].parse::<u64>().ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::oplog::PersistenceLevel;
+    use golem_common::model::oplog::types::SerializableHttpMethod;
     use golem_common::model::{Predicate, RetryPolicy};
     use test_r::test;
-
-    #[test]
-    fn test_is_method_idempotent() {
-        assert!(is_method_idempotent(&SerializableHttpMethod::Get));
-        assert!(is_method_idempotent(&SerializableHttpMethod::Head));
-        assert!(is_method_idempotent(&SerializableHttpMethod::Put));
-        assert!(is_method_idempotent(&SerializableHttpMethod::Delete));
-        assert!(is_method_idempotent(&SerializableHttpMethod::Options));
-        assert!(!is_method_idempotent(&SerializableHttpMethod::Post));
-        assert!(!is_method_idempotent(&SerializableHttpMethod::Patch));
-        assert!(!is_method_idempotent(&SerializableHttpMethod::Connect));
-        assert!(!is_method_idempotent(&SerializableHttpMethod::Trace));
-        assert!(!is_method_idempotent(&SerializableHttpMethod::Other(
-            "CUSTOM".to_string()
-        )));
-    }
-
-    #[test]
-    fn test_parse_content_range_start_standard() {
-        assert_eq!(
-            parse_content_range_start("bytes 1024-2047/4096"),
-            Some(1024)
-        );
-    }
-
-    #[test]
-    fn test_parse_content_range_start_unknown_total() {
-        assert_eq!(parse_content_range_start("bytes 512-1023/*"), Some(512));
-    }
-
-    #[test]
-    fn test_parse_content_range_start_zero() {
-        assert_eq!(parse_content_range_start("bytes 0-999/1000"), Some(0));
-    }
-
-    #[test]
-    fn test_parse_content_range_start_invalid() {
-        assert_eq!(parse_content_range_start("invalid"), None);
-        assert_eq!(parse_content_range_start("bytes abc-def/ghi"), None);
-        assert_eq!(parse_content_range_start(""), None);
-    }
 
     fn make_exec_state() -> DurableExecutionState {
         DurableExecutionState {
@@ -2084,10 +1966,10 @@ mod tests {
         let exec = make_exec_state();
         let req = make_request_state();
         assert!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse).is_ok()
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false).is_ok()
         );
         assert!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody)
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody, false)
                 .is_ok()
         );
     }
@@ -2098,7 +1980,7 @@ mod tests {
         let mut req = make_request_state();
         req.retry.has_unreconstructable_body = true;
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse),
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false),
             Err(InlineRetryIneligible::UnreconstructableBody)
         );
     }
@@ -2109,15 +1991,15 @@ mod tests {
         let mut req = make_request_state();
         req.retry.output_stream_subscribed = true;
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse),
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false),
             Err(InlineRetryIneligible::OutputStreamSubscribed)
         );
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody),
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody, false),
             Err(InlineRetryIneligible::OutputStreamSubscribed)
         );
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::WritingRequestBody),
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::WritingRequestBody, false),
             Err(InlineRetryIneligible::OutputStreamSubscribed)
         );
     }
@@ -2128,7 +2010,7 @@ mod tests {
         let mut req = make_request_state();
         req.retry.has_outgoing_trailers = true;
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse),
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false),
             Err(InlineRetryIneligible::HasOutgoingTrailers)
         );
     }
@@ -2140,11 +2022,11 @@ mod tests {
         req.retry.had_body_skip = true;
         // AwaitingResponse should still be eligible
         assert!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse).is_ok()
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false).is_ok()
         );
         // ResumingResponseBody should be disqualified
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody),
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody, false),
             Err(InlineRetryIneligible::HadBodySkip)
         );
     }
@@ -2156,10 +2038,10 @@ mod tests {
         req.retry.body_finished = false;
         // output_stream_rep is None (no stream opened), so body_finished is irrelevant
         assert!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse).is_ok()
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false).is_ok()
         );
         assert!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody)
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody, false)
                 .is_ok()
         );
     }
@@ -2171,7 +2053,7 @@ mod tests {
         let mut req = make_request_state();
         req.request.method = SerializableHttpMethod::Post;
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse),
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false),
             Err(InlineRetryIneligible::NotIdempotent)
         );
     }
@@ -2182,7 +2064,7 @@ mod tests {
         exec.assume_idempotence = false;
         let req = make_request_state(); // GET is idempotent
         assert!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse).is_ok()
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false).is_ok()
         );
     }
 
@@ -2192,7 +2074,7 @@ mod tests {
         exec.is_live = false;
         let req = make_request_state();
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse),
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false),
             Err(InlineRetryIneligible::NotLive)
         );
     }
@@ -2203,7 +2085,7 @@ mod tests {
         exec.persistence_level = PersistenceLevel::PersistNothing;
         let req = make_request_state();
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse),
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false),
             Err(InlineRetryIneligible::PersistNothing)
         );
     }

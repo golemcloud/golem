@@ -26,7 +26,10 @@ use crate::durable_host::durability::{
     AsyncRetryDecision, DurabilityHost, DurableCallTrapContext, HostFailureKind,
     InFunctionRetryState, TaskRetryContext, mark_durable_call_trap_context,
 };
-use crate::durable_host::http::inline_retry::parse_content_range_start;
+use crate::durable_host::http::policy::{
+    ResumeResponseAction, classify_resume_response, has_guest_range_header,
+    parse_content_range_start, resume_range_headers,
+};
 use crate::durable_host::http::types::classify_serializable_http_error_code;
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
@@ -1086,12 +1089,7 @@ where
                     // A request that already carried a guest-set `Range`
                     // header cannot be resumed: composing range semantics on
                     // top of the guest's own range is not supported.
-                    if resend
-                        .request
-                        .headers
-                        .keys()
-                        .any(|name| name.eq_ignore_ascii_case("range"))
-                    {
+                    if has_guest_range_header(resend.request.headers.keys().map(String::as_str)) {
                         break;
                     }
                     // The same worker-state and idempotence gates as the send's
@@ -1131,11 +1129,7 @@ where
                         }
                     }
 
-                    let range_headers = if delivered_bytes > 0 {
-                        vec![("range".to_string(), format!("bytes={delivered_bytes}-"))]
-                    } else {
-                        Vec::new()
-                    };
+                    let range_headers = resume_range_headers(delivered_bytes);
                     match resend_recorded_request::<Ctx, U>(accessor, resend, &range_headers).await
                     {
                         // The recorded request body cannot be reconstructed:
@@ -1153,76 +1147,81 @@ where
                         }
                         ResendOutcome::Sent { response, io_guard } => {
                             let status = response.status().as_u16();
-                            if status == 206 {
-                                let content_range_start = response
-                                    .headers()
-                                    .get("content-range")
-                                    .and_then(|value| value.to_str().ok())
-                                    .and_then(parse_content_range_start);
-                                if content_range_start == Some(delivered_bytes) {
+                            let content_range_start = response
+                                .headers()
+                                .get("content-range")
+                                .and_then(|value| value.to_str().ok())
+                                .and_then(parse_content_range_start);
+                            match classify_resume_response(
+                                status,
+                                content_range_start,
+                                delivered_bytes,
+                                Some(resend.recorded_status),
+                            ) {
+                                ResumeResponseAction::Resume => {
                                     body = response.into_body();
                                     _rebuild_io_guard = Some(io_guard);
                                     frame = read_http_body_frame(&mut body).await;
-                                } else {
+                                }
+                                ResumeResponseAction::RangeNotSatisfiable => {
+                                    // The server refuses the range: the resource
+                                    // changed since the original response, so the
+                                    // already-delivered prefix cannot be continued.
+                                    // Deterministic for this request — never
+                                    // retry-routed.
+                                    retry_exempt = true;
+                                    frame = HttpBodyFrame::Error(ErrorCode::InternalError(Some(
+                                        "response-body resume failed: the server returned 416 \
+                                         Range Not Satisfiable"
+                                            .to_string(),
+                                    )));
+                                    break;
+                                }
+                                ResumeResponseAction::SkipPrefix => {
+                                    // The server ignored the range and re-sent the
+                                    // full response with the original status: skip
+                                    // the already-delivered prefix (count-only, no
+                                    // content verification — P2 parity) and continue
+                                    // from there.
+                                    let mut fresh_body = response.into_body();
+                                    match skip_body_prefix(&mut fresh_body, delivered_bytes).await
+                                    {
+                                        Ok(leftover) => {
+                                            body = fresh_body;
+                                            _rebuild_io_guard = Some(io_guard);
+                                            frame = match leftover {
+                                                Some(bytes) => HttpBodyFrame::Data(bytes),
+                                                None => read_http_body_frame(&mut body).await,
+                                            };
+                                        }
+                                        Err(SkipBodyPrefixError::BodyTooShort) => {
+                                            retry_exempt = true;
+                                            frame = HttpBodyFrame::Error(
+                                                ErrorCode::InternalError(Some(
+                                                    "response-body resume failed: the re-sent \
+                                                     response body is shorter than the bytes \
+                                                     already delivered to the guest"
+                                                        .to_string(),
+                                                )),
+                                            );
+                                            break;
+                                        }
+                                        Err(SkipBodyPrefixError::Read(code)) => {
+                                            frame = HttpBodyFrame::Error(code);
+                                        }
+                                    }
+                                }
+                                ResumeResponseAction::Fallback => {
                                     debug!(
+                                        status,
+                                        recorded_status = resend.recorded_status,
                                         ?content_range_start,
                                         delivered_bytes,
-                                        "p3 HTTP response-body resume: 206 Content-Range \
-                                         mismatch, falling back"
+                                        "p3 HTTP response-body resume: resume response not \
+                                         usable, falling back"
                                     );
                                     break;
                                 }
-                            } else if status == 416 {
-                                // The server refuses the range: the resource
-                                // changed since the original response, so the
-                                // already-delivered prefix cannot be continued.
-                                // Deterministic for this request — never
-                                // retry-routed.
-                                retry_exempt = true;
-                                frame = HttpBodyFrame::Error(ErrorCode::InternalError(Some(
-                                    "response-body resume failed: the server returned 416 Range \
-                                     Not Satisfiable"
-                                        .to_string(),
-                                )));
-                                break;
-                            } else if status == resend.recorded_status {
-                                // The server ignored the range and re-sent the
-                                // full response with the original status: skip
-                                // the already-delivered prefix (count-only, no
-                                // content verification — P2 parity) and continue
-                                // from there.
-                                let mut fresh_body = response.into_body();
-                                match skip_body_prefix(&mut fresh_body, delivered_bytes).await {
-                                    Ok(leftover) => {
-                                        body = fresh_body;
-                                        _rebuild_io_guard = Some(io_guard);
-                                        frame = match leftover {
-                                            Some(bytes) => HttpBodyFrame::Data(bytes),
-                                            None => read_http_body_frame(&mut body).await,
-                                        };
-                                    }
-                                    Err(SkipBodyPrefixError::BodyTooShort) => {
-                                        retry_exempt = true;
-                                        frame =
-                                            HttpBodyFrame::Error(ErrorCode::InternalError(Some(
-                                                "response-body resume failed: the re-sent \
-                                                 response body is shorter than the bytes already \
-                                                 delivered to the guest"
-                                                    .to_string(),
-                                            )));
-                                        break;
-                                    }
-                                    Err(SkipBodyPrefixError::Read(code)) => {
-                                        frame = HttpBodyFrame::Error(code);
-                                    }
-                                }
-                            } else {
-                                debug!(
-                                    status,
-                                    recorded_status = resend.recorded_status,
-                                    "p3 HTTP response-body resume: unexpected status, falling back"
-                                );
-                                break;
                             }
                         }
                     }

@@ -1869,6 +1869,36 @@ impl From<SerializableIpAddress> for IpAddr {
     }
 }
 
+impl From<p3_socket_types::IpAddress> for SerializableIpAddress {
+    fn from(value: p3_socket_types::IpAddress) -> Self {
+        match value {
+            p3_socket_types::IpAddress::Ipv4(address) => SerializableIpAddress::IPv4 {
+                address: [address.0, address.1, address.2, address.3],
+            },
+            p3_socket_types::IpAddress::Ipv6(address) => SerializableIpAddress::IPv6 {
+                address: [
+                    address.0, address.1, address.2, address.3, address.4, address.5, address.6,
+                    address.7,
+                ],
+            },
+        }
+    }
+}
+
+impl From<SerializableIpAddress> for p3_socket_types::IpAddress {
+    fn from(value: SerializableIpAddress) -> Self {
+        match value {
+            SerializableIpAddress::IPv4 { address } => {
+                p3_socket_types::IpAddress::Ipv4((address[0], address[1], address[2], address[3]))
+            }
+            SerializableIpAddress::IPv6 { address } => p3_socket_types::IpAddress::Ipv6((
+                address[0], address[1], address[2], address[3], address[4], address[5], address[6],
+                address[7],
+            )),
+        }
+    }
+}
+
 #[derive(
     Debug,
     Clone,
@@ -1893,105 +1923,14 @@ impl From<SerializableIpAddresses> for Vec<IpAddress> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
-#[desert(evolution())]
-pub enum SerializableP3IpAddress {
-    IPv4 { address: [u8; 4] },
-    IPv6 { address: [u16; 8] },
-}
-
-impl From<p3_socket_types::IpAddress> for SerializableP3IpAddress {
-    fn from(value: p3_socket_types::IpAddress) -> Self {
-        match value {
-            p3_socket_types::IpAddress::Ipv4(address) => SerializableP3IpAddress::IPv4 {
-                address: [address.0, address.1, address.2, address.3],
-            },
-            p3_socket_types::IpAddress::Ipv6(address) => SerializableP3IpAddress::IPv6 {
-                address: [
-                    address.0, address.1, address.2, address.3, address.4, address.5, address.6,
-                    address.7,
-                ],
-            },
-        }
-    }
-}
-
-impl From<SerializableP3IpAddress> for p3_socket_types::IpAddress {
-    fn from(value: SerializableP3IpAddress) -> Self {
-        match value {
-            SerializableP3IpAddress::IPv4 { address } => {
-                p3_socket_types::IpAddress::Ipv4((address[0], address[1], address[2], address[3]))
-            }
-            SerializableP3IpAddress::IPv6 { address } => p3_socket_types::IpAddress::Ipv6((
-                address[0], address[1], address[2], address[3], address[4], address[5], address[6],
-                address[7],
-            )),
-        }
-    }
-}
-
-impl crate::schema::conversion::IntoSchema for SerializableP3IpAddress {
-    fn type_id() -> TypeId {
-        TypeId::new("golem_common.model.oplog.payload.SerializableP3IpAddress")
-    }
-
-    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::string()
-    }
-
-    fn to_value(&self) -> SchemaValue {
-        let addr = match self {
-            SerializableP3IpAddress::IPv4 { address } => IpAddr::V4((*address).into()),
-            SerializableP3IpAddress::IPv6 { address } => IpAddr::V6((*address).into()),
-        };
-        SchemaValue::String(addr.to_string())
-    }
-}
-
-impl crate::schema::conversion::FromSchema for SerializableP3IpAddress {
-    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
-        match v {
-            SchemaValue::String(s) => {
-                let ipaddr =
-                    IpAddr::from_str(s).map_err(|err| FromSchemaError::custom(err.to_string()))?;
-                match ipaddr {
-                    IpAddr::V4(addr) => Ok(SerializableP3IpAddress::IPv4 {
-                        address: addr.octets(),
-                    }),
-                    IpAddr::V6(addr) => Ok(SerializableP3IpAddress::IPv6 {
-                        address: addr.segments(),
-                    }),
-                }
-            }
-            other => Err(FromSchemaError::shape_mismatch(
-                "string",
-                value_kind(other),
-                "SerializableP3IpAddress",
-            )),
-        }
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    BinaryCodec,
-    golem_schema_derive::IntoSchema,
-    golem_schema_derive::FromSchema,
-)]
-#[desert(transparent)]
-pub struct SerializableP3IpAddresses(pub Vec<SerializableP3IpAddress>);
-
-impl From<Vec<p3_socket_types::IpAddress>> for SerializableP3IpAddresses {
+impl From<Vec<p3_socket_types::IpAddress>> for SerializableIpAddresses {
     fn from(value: Vec<p3_socket_types::IpAddress>) -> Self {
-        SerializableP3IpAddresses(value.into_iter().map(|v| v.into()).collect())
+        SerializableIpAddresses(value.into_iter().map(|v| v.into()).collect())
     }
 }
 
-impl From<SerializableP3IpAddresses> for Vec<p3_socket_types::IpAddress> {
-    fn from(value: SerializableP3IpAddresses) -> Self {
+impl From<SerializableIpAddresses> for Vec<p3_socket_types::IpAddress> {
+    fn from(value: SerializableIpAddresses) -> Self {
         value.0.into_iter().map(|v| v.into()).collect()
     }
 }
@@ -2007,7 +1946,7 @@ impl From<SerializableP3IpAddresses> for Vec<p3_socket_types::IpAddress> {
 )]
 #[desert(evolution())]
 pub struct SerializableP3IpSocketAddress {
-    pub address: SerializableP3IpAddress,
+    pub address: SerializableIpAddress,
     pub port: u16,
     pub flow_info: Option<u32>,
     pub scope_id: Option<u32>,

@@ -18,7 +18,7 @@ use golem_common::model::oplog::host_functions::{
     P3SocketsTypesUdpSocketReceive, P3SocketsTypesUdpSocketSend,
 };
 use golem_common::model::oplog::types::{
-    SerializableP3IpAddress, SerializableP3IpAddresses, SerializableP3IpNameLookupError,
+    SerializableIpAddress, SerializableIpAddresses, SerializableP3IpNameLookupError,
     SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3UdpDatagram,
 };
 use golem_common::model::oplog::{
@@ -38,7 +38,7 @@ fn p3_ip_name_lookup_address_payload_mapping_roundtrips() {
     let ipv4 = types::IpAddress::Ipv4((127, 0, 0, 1));
     let ipv6 = types::IpAddress::Ipv6((0, 0, 0, 0, 0, 0, 0, 1));
 
-    let serialized = SerializableP3IpAddresses::from(vec![ipv4, ipv6]);
+    let serialized = SerializableIpAddresses::from(vec![ipv4, ipv6]);
     let replayed = Vec::<types::IpAddress>::from(serialized);
 
     assert_p3_ip_address_eq(replayed[0], ipv4);
@@ -171,7 +171,7 @@ fn p3_udp_socket_address_payload_mapping_roundtrips_ipv6() {
 #[test]
 fn p3_udp_socket_host_payload_pair_roundtrips() {
     let remote_address = SerializableP3IpSocketAddress {
-        address: SerializableP3IpAddress::IPv4 {
+        address: SerializableIpAddress::IPv4 {
             address: [127, 0, 0, 1],
         },
         port: 1234,

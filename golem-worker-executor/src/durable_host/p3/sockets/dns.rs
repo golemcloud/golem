@@ -19,9 +19,7 @@ use crate::durable_host::p3::{
 use crate::workerctx::WorkerCtx;
 use golem_common::model::RetryContext;
 use golem_common::model::oplog::host_functions::P3SocketsIpNameLookupResolveAddresses;
-use golem_common::model::oplog::types::{
-    SerializableP3IpAddresses, SerializableP3IpNameLookupError,
-};
+use golem_common::model::oplog::types::{SerializableIpAddresses, SerializableP3IpNameLookupError};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestP3SocketsResolveName, HostResponseP3SocketsResolveName,
 };
@@ -68,7 +66,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for Dur
 
                     Ok(HostResponseP3SocketsResolveName {
                         result: result
-                            .map(SerializableP3IpAddresses::from)
+                            .map(SerializableIpAddresses::from)
                             .map_err(Into::into),
                     })
                 },

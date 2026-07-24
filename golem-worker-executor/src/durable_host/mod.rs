@@ -1713,101 +1713,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     async fn emit_log_event(&self, event: InternalWorkerEvent) {
-        if let Some(entry) = event.as_oplog_entry()
-            && let OplogEntry::Log {
-                level,
-                context,
-                message,
-                ..
-            } = &entry
-        {
-            // Oplog processor plugin logs are emitted into the server log because
-            // they cannot be easily watched with CLI tools.
-            if self.state.component_metadata.metadata.has_oplog_processor() {
-                let agent_id = &self.owned_agent_id;
-                match level {
-                    LogLevel::Stdout | LogLevel::Debug | LogLevel::Trace => {
-                        tracing::debug!(
-                            plugin_agent = %agent_id,
-                            context,
-                            "Plugin: {message}"
-                        );
-                    }
-                    LogLevel::Stderr | LogLevel::Info => {
-                        tracing::info!(
-                            plugin_agent = %agent_id,
-                            context,
-                            "Plugin: {message}"
-                        );
-                    }
-                    LogLevel::Warn => {
-                        tracing::warn!(
-                            plugin_agent = %agent_id,
-                            context,
-                            "Plugin: {message}"
-                        );
-                    }
-                    LogLevel::Error | LogLevel::Critical => {
-                        tracing::error!(
-                            plugin_agent = %agent_id,
-                            context,
-                            "Plugin: {message}"
-                        );
-                    }
-                }
-            }
-
-            match Ctx::LOG_EVENT_EMIT_BEHAVIOUR {
-                LogEventEmitBehaviour::LiveOnly => {
-                    // Stdout and stderr writes are persistent and overwritten by sending the data to the event
-                    // service instead of the real output stream
-
-                    if self.state.is_live()
-                    // If the worker is in live mode we always emit events
-                    {
-                        if !self
-                            .state
-                            .replay_state
-                            .seen_log(*level, context, message)
-                            .await
-                        {
-                            // haven't seen this log before
-                            self.public_state
-                                .event_service
-                                .emit_event(event.clone(), true);
-                            self.public_state.worker().add_to_oplog(entry).await;
-                        } else {
-                            // we have persisted emitting this log before, so we mark it as non-live and
-                            // remove the entry from the seen log set.
-                            // note that we still call emit_event because we need replayed log events for
-                            // improved error reporting in case of invocation failures
-                            self.public_state
-                                .event_service
-                                .emit_event(event.clone(), false);
-                            self.state
-                                .replay_state
-                                .remove_seen_log(*level, context, message)
-                                .await;
-                        }
-                    }
-                }
-                LogEventEmitBehaviour::Always => {
-                    self.public_state
-                        .event_service
-                        .emit_event(event.clone(), true);
-
-                    if self.state.is_live()
-                        & !self
-                            .state
-                            .replay_state
-                            .seen_log(*level, context, message)
-                            .await
-                    {
-                        self.state.oplog.add(entry).await;
-                    }
-                }
-            }
-        }
+        logging::policy::emit_log_event_with_state::<Ctx>(
+            event,
+            self.state.component_metadata.metadata.has_oplog_processor(),
+            &self.owned_agent_id,
+            &self.public_state,
+            &self.state.replay_state,
+            &self.state.oplog,
+            self.state.is_live(),
+        )
+        .await;
     }
 
     pub async fn begin_function(

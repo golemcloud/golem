@@ -1030,6 +1030,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "set-size",
             )
         });
+        fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
         // Charge growth before resizing and credit shrink afterwards, matching
         // the WASI P2 storage-quota accounting. The quota helpers are no-ops
         // during replay, so the storage usage is rebuilt purely from the oplog.

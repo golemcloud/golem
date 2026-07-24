@@ -26,6 +26,10 @@ use crate::durable_host::durability::{
     AsyncRetryDecision, ClassifiedHostError, DurabilityHost, HostFailureKind, InFunctionRetryHost,
     InFunctionRetryState, TaskRetryContext, try_trigger_host_trap_retry,
 };
+use crate::durable_host::http::policy::{
+    apply_managed_http_headers, golem_managed_http_headers, http_transparent_retry_allowed,
+    is_http_request_idempotent, is_idempotent_http_method,
+};
 use crate::durable_host::http::types::classify_serializable_http_error_code;
 use crate::durable_host::p3::{DurableP3, DurableP3View, durable_worker_ctx, wasi_http_view};
 use crate::services::HasWorker;
@@ -47,8 +51,7 @@ use golem_common::model::{
     NamedRetryPolicy, OwnedAgentId, PredicateValue, RetryContext, RetryProperties,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::headers::TraceContextHeaders;
-use http::{HeaderMap, HeaderName, HeaderValue};
+use http::HeaderMap;
 use http_body_util::BodyExt as _;
 use http_body_util::combinators::UnsyncBoxBody;
 use std::collections::HashMap;
@@ -1088,7 +1091,7 @@ where
 {
     store.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        ctx.state.assume_idempotence || is_idempotent_http_method(serialized_method)
+        is_http_request_idempotent(ctx.state.assume_idempotence, serialized_method)
     })
 }
 
@@ -1106,12 +1109,12 @@ where
 {
     store.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        ctx.state.is_live()
-            && ctx.state.snapshotting_mode.is_none()
-            && ctx.state.persistence_level
-                != golem_common::model::oplog::PersistenceLevel::PersistNothing
-            && ctx.state.active_atomic_regions.is_empty()
-            && (ctx.state.assume_idempotence || is_idempotent_http_method(method))
+        http_transparent_retry_allowed(
+            &ctx.durable_execution_state(),
+            ctx.in_atomic_region(),
+            method,
+        )
+        .is_ok()
     })
 }
 
@@ -1300,14 +1303,11 @@ pub(super) fn outgoing_http_request_span_attributes(
 }
 
 /// Computes the Golem-managed headers to inject into an outgoing p3 HTTP
-/// request, mirroring P2 (`http/outgoing_http.rs`): the trace-context headers
-/// of the request's invocation span (when `forward_trace_context_headers` is
-/// enabled) and an `idempotency-key` derived from the send's own host-call
-/// `Start` index (when `set_outgoing_http_idempotency_key` is enabled and the
-/// guest did not set the header itself). The `Start` index is stable across
-/// live execution and replay, so a retried send reuses the same key.
-/// `guest_headers` is the serialized request head used to detect a
-/// guest-provided idempotency key.
+/// request via the shared policy (see `http::policy::golem_managed_http_headers`),
+/// using the send's own host-call `Start` index as the idempotency-key
+/// derivation point — stable across live execution and replay, so a retried
+/// send reuses the same key. `guest_headers` is the serialized request head
+/// used to detect a guest-provided idempotency key.
 pub(super) fn golem_outgoing_http_headers<Ctx: WorkerCtx, U: Send>(
     store: &Accessor<U, DurableP3<Ctx>>,
     span_id: &SpanId,
@@ -1316,28 +1316,12 @@ pub(super) fn golem_outgoing_http_headers<Ctx: WorkerCtx, U: Send>(
 ) -> Result<Vec<(String, String)>, WorkerExecutorError> {
     store.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        let mut headers = Vec::new();
-        if ctx.state.forward_trace_context_headers {
-            let invocation_context =
-                ctx.state
-                    .invocation_context
-                    .get_stack(span_id)
-                    .map_err(|err| {
-                        WorkerExecutorError::runtime(format!(
-                            "span {span_id} missing from the invocation context while injecting trace context headers: {err}"
-                        ))
-                    })?;
-            let trace_context_headers =
-                TraceContextHeaders::from_invocation_context(invocation_context);
-            headers.extend(trace_context_headers.to_raw_headers_map());
-        }
-        if ctx.state.set_outgoing_http_idempotency_key
-            && !guest_headers.contains_key("idempotency-key")
-        {
-            let idempotency_key = ctx.derive_idempotency_key(start_index);
-            headers.push(("idempotency-key".to_string(), idempotency_key.to_string()));
-        }
-        Ok(headers)
+        golem_managed_http_headers(
+            ctx,
+            span_id,
+            start_index,
+            guest_headers.contains_key("idempotency-key"),
+        )
     })
 }
 
@@ -1367,48 +1351,7 @@ pub(super) fn apply_headers_to_request_resource<Ctx: WorkerCtx, U: Send>(
                     "failed to get outgoing p3 HTTP request from table: {err}"
                 ))
             })?;
-        request.headers.set_mutable(field_size_limit);
-        let mut result = Ok(());
-        for (name, value) in headers {
-            let header_name = match HeaderName::try_from(name.as_str()) {
-                Ok(name) => name,
-                Err(err) => {
-                    result = Err(WorkerExecutorError::runtime(format!(
-                        "invalid injected header name {name}: {err}"
-                    )));
-                    break;
-                }
-            };
-            let header_value = match HeaderValue::try_from(value.as_str()) {
-                Ok(value) => value,
-                Err(err) => {
-                    result = Err(WorkerExecutorError::runtime(format!(
-                        "invalid injected header value for {name}: {err}"
-                    )));
-                    break;
-                }
-            };
-            let _ = request.headers.remove_all(header_name.clone());
-            if let Err(err) = request.headers.append(header_name, header_value) {
-                result = Err(WorkerExecutorError::runtime(format!(
-                    "failed to inject header {name} into outgoing p3 HTTP request: {err:?}"
-                )));
-                break;
-            }
-        }
-        request.headers.set_immutable();
-        result
+        apply_managed_http_headers(&mut request.headers, field_size_limit, headers)
+            .map_err(WorkerExecutorError::runtime)
     })
-}
-
-pub(super) fn is_idempotent_http_method(method: &SerializableHttpMethod) -> bool {
-    matches!(
-        method,
-        SerializableHttpMethod::Get
-            | SerializableHttpMethod::Head
-            | SerializableHttpMethod::Put
-            | SerializableHttpMethod::Delete
-            | SerializableHttpMethod::Options
-            | SerializableHttpMethod::Trace
-    )
 }

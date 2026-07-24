@@ -34,7 +34,7 @@ use crate::model::oplog::types::{
     SerializableInvokeResult, SerializableIpAddresses, SerializableP3HttpBodyChunk,
     SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
     SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestBodyFrame,
-    SerializableP3IpAddresses, SerializableP3IpNameLookupError, SerializableP3TcpChunk,
+    SerializableP3IpNameLookupError, SerializableP3TcpChunk,
     SerializableRdbmsError, SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleId,
     SerializableStreamError,
 };
@@ -418,7 +418,7 @@ oplog_payload! {
             result: Result<SerializableIpAddresses, SerializableSocketError>
         },
         P3SocketsResolveName {
-            result: Result<SerializableP3IpAddresses, SerializableP3IpNameLookupError>
+            result: Result<SerializableIpAddresses, SerializableP3IpNameLookupError>
         },
         WebsocketConnectResponse {
             result: Result<(), SerializableWebsocketError>,

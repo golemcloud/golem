@@ -20,13 +20,11 @@ use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
     observe_function_call_store,
 };
+use crate::durable_host::logging::policy as logging_policy;
 use crate::durable_host::tail_work::TailActivity;
 use crate::model::event::InternalWorkerEvent;
-use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
-use crate::workerctx::{LogEventEmitBehaviour, PublicWorkerIo};
 use bytes::BytesMut;
-use golem_common::model::oplog::{LogLevel, OplogEntry};
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::{mpsc, oneshot};
 use wasmtime::AsContextMut as _;
@@ -335,83 +333,29 @@ async fn emit_log_event_access<Ctx: WorkerCtx, U: 'static>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     event: InternalWorkerEvent,
 ) {
-    if let Some(entry) = event.as_oplog_entry()
-        && let OplogEntry::Log {
-            level,
-            context,
-            message,
-            ..
-        } = &entry
-    {
-        let (has_oplog_processor, owned_agent_id, public_state, replay_state, oplog, is_live) =
-            accessor.with(|mut access| {
-                let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-                (
-                    ctx.state.component_metadata.metadata.has_oplog_processor(),
-                    ctx.owned_agent_id.clone(),
-                    ctx.public_state.clone(),
-                    ctx.state.replay_state.clone(),
-                    ctx.state.oplog.clone(),
-                    ctx.state.is_live(),
-                )
-            });
+    let (has_oplog_processor, owned_agent_id, public_state, replay_state, oplog, is_live) =
+        accessor.with(|mut access| {
+            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+            (
+                ctx.state.component_metadata.metadata.has_oplog_processor(),
+                ctx.owned_agent_id.clone(),
+                ctx.public_state.clone(),
+                ctx.state.replay_state.clone(),
+                ctx.state.oplog.clone(),
+                ctx.state.is_live(),
+            )
+        });
 
-        if has_oplog_processor {
-            match level {
-                LogLevel::Stdout | LogLevel::Debug | LogLevel::Trace => {
-                    tracing::debug!(
-                        plugin_agent = %owned_agent_id,
-                        context,
-                        "Plugin: {message}"
-                    );
-                }
-                LogLevel::Stderr | LogLevel::Info => {
-                    tracing::info!(
-                        plugin_agent = %owned_agent_id,
-                        context,
-                        "Plugin: {message}"
-                    );
-                }
-                LogLevel::Warn => {
-                    tracing::warn!(
-                        plugin_agent = %owned_agent_id,
-                        context,
-                        "Plugin: {message}"
-                    );
-                }
-                LogLevel::Error | LogLevel::Critical => {
-                    tracing::error!(
-                        plugin_agent = %owned_agent_id,
-                        context,
-                        "Plugin: {message}"
-                    );
-                }
-            }
-        }
-
-        match Ctx::LOG_EVENT_EMIT_BEHAVIOUR {
-            LogEventEmitBehaviour::LiveOnly => {
-                if is_live {
-                    if !replay_state.seen_log(*level, context, message).await {
-                        public_state.event_service().emit_event(event.clone(), true);
-                        public_state.worker().add_to_oplog(entry).await;
-                    } else {
-                        public_state
-                            .event_service()
-                            .emit_event(event.clone(), false);
-                        replay_state.remove_seen_log(*level, context, message).await;
-                    }
-                }
-            }
-            LogEventEmitBehaviour::Always => {
-                public_state.event_service().emit_event(event.clone(), true);
-
-                if is_live && !replay_state.seen_log(*level, context, message).await {
-                    oplog.add(entry).await;
-                }
-            }
-        }
-    }
+    logging_policy::emit_log_event_with_state::<Ctx>(
+        event,
+        has_oplog_processor,
+        &owned_agent_id,
+        &public_state,
+        &replay_state,
+        &oplog,
+        is_live,
+    )
+    .await;
 }
 
 async fn write_standard_stream_via_stream<Ctx, U>(

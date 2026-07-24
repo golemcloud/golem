@@ -23,8 +23,8 @@ use crate::model::oplog::types::{
     SerializableP3FileSystemError, SerializableP3FsErrorCode, SerializableP3HttpBodyChunk,
     SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
     SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestBodyFrame,
-    SerializableP3HttpRequestOptions, SerializableP3HttpScheme, SerializableP3IpAddress,
-    SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3TcpChunk,
+    SerializableP3HttpRequestOptions, SerializableP3HttpScheme, SerializableP3IpSocketAddress,
+    SerializableP3SocketErrorCode, SerializableP3TcpChunk,
     SerializableP3UdpDatagram, SerializableResponseHeaders, SerializableStreamError,
 };
 use crate::model::oplog::{
@@ -424,7 +424,7 @@ fn p3_tcp_socket_host_payload_pairs_roundtrip() {
 #[test]
 fn p3_udp_socket_host_payload_pairs_roundtrip() {
     let remote_address = SerializableP3IpSocketAddress {
-        address: SerializableP3IpAddress::IPv4 {
+        address: SerializableIpAddress::IPv4 {
             address: [127, 0, 0, 1],
         },
         port: 1234,

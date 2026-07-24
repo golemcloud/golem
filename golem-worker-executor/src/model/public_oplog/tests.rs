@@ -22,7 +22,7 @@ use golem_common::model::oplog::payload::types::{
     SerializableHttpErrorCode, SerializableHttpMethod, SerializableP3HttpBodyChunk,
     SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
     SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestOptions,
-    SerializableP3HttpScheme, SerializableP3IpAddress, SerializableP3IpSocketAddress,
+    SerializableIpAddress, SerializableP3HttpScheme, SerializableP3IpSocketAddress,
     SerializableP3SocketErrorCode, SerializableP3TcpChunk, SerializableP3UdpDatagram,
     SerializableResponseHeaders,
 };
@@ -239,7 +239,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             HostRequestP3SocketsUdpSend {
                 data: vec![1, 2, 3],
                 remote_address: Some(SerializableP3IpSocketAddress {
-                    address: SerializableP3IpAddress::IPv4 {
+                    address: SerializableIpAddress::IPv4 {
                         address: [127, 0, 0, 1],
                     },
                     port: 9000,
@@ -257,7 +257,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
                 result: Ok(SerializableP3UdpDatagram {
                     data: vec![4, 5, 6],
                     remote_address: SerializableP3IpSocketAddress {
-                        address: SerializableP3IpAddress::IPv6 {
+                        address: SerializableIpAddress::IPv6 {
                             address: [0, 0, 0, 0, 0, 0, 0, 1],
                         },
                         port: 4242,
