@@ -24,8 +24,6 @@ use golem_common::model::oplog::{
     HostResponseBlobStoreListObjects, HostResponseBlobStoreObjectMetadata,
     HostResponseBlobStoreUnit,
 };
-use std::any::{Any, type_name};
-
 use wasmtime::component::{Accessor, HasSelf, Resource, StreamReader};
 use wasmtime_wasi::IoView;
 
@@ -44,20 +42,6 @@ use crate::preview2::wasi::blobstore::container::{
     IncomingValue, ObjectMetadata, ObjectName, OutgoingValue,
 };
 use crate::workerctx::WorkerCtx;
-
-fn durable_worker_ctx_from_self<Ctx: WorkerCtx, T: 'static>(
-    data: &mut T,
-) -> &mut DurableWorkerCtx<Ctx> {
-    (data as &mut dyn Any)
-        .downcast_mut::<DurableWorkerCtx<Ctx>>()
-        .unwrap_or_else(|| {
-            panic!(
-                "durable blobstore wrapper registered with unexpected store data type: expected {}, got {}",
-                type_name::<DurableWorkerCtx<Ctx>>(),
-                type_name::<T>(),
-            )
-        })
-}
 
 async fn list_objects_durable_access<Ctx: WorkerCtx, T: 'static>(
     accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
@@ -80,7 +64,7 @@ async fn list_objects_durable_access<Ctx: WorkerCtx, T: 'static>(
 
     let mut handle = CallHandle::<BlobstoreContainerListObject, NotCancellable>::start_access(
         accessor,
-        durable_worker_ctx_from_self::<Ctx, T>,
+        accessor.getter(),
         HostRequestBlobStoreContainer {
             container: container_name.clone(),
         },
@@ -90,10 +74,7 @@ async fn list_objects_durable_access<Ctx: WorkerCtx, T: 'static>(
 
     let result = 'resp: {
         if !handle.is_live() {
-            match handle
-                .replay_access(accessor, durable_worker_ctx_from_self::<Ctx, T>)
-                .await?
-            {
+            match handle.replay_access(accessor, accessor.getter()).await? {
                 CallReplayOutcome::Replayed(response) => break 'resp response,
                 CallReplayOutcome::Incomplete(live) => handle = live,
             }
@@ -105,7 +86,7 @@ async fn list_objects_durable_access<Ctx: WorkerCtx, T: 'static>(
         handle
             .complete_access(
                 accessor,
-                durable_worker_ctx_from_self::<Ctx, T>,
+                accessor.getter(),
                 HostResponseBlobStoreListObjects {
                     result: result.map_err(|err| err.to_string()),
                 },
