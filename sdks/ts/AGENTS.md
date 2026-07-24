@@ -8,9 +8,8 @@ This directory contains the TypeScript SDK for building Golem components. It's a
 
 - Node.js
 - pnpm (managed via packageManager field)
-- wasm-rquickjs-cli: install the revision in `WASM_RQUICKJS_VERSION` from
-  `.github/workflows/ci.yaml` with
-  `cargo install --force --locked --git https://github.com/golemcloud/wasm-rquickjs --rev <REVISION> wasm-rquickjs-cli`
+- wasm-rquickjs-cli: install the version in `WASM_RQUICKJS_VERSION` from
+  `.github/workflows/ci.yaml` with `cargo install --locked wasm-rquickjs-cli@<VERSION>`
 
 ## Building
 
@@ -76,9 +75,8 @@ npx pnpm run build-agent-template
 
 **Important:** You must also run `build-agent-template` whenever you modify SDK runtime code (e.g., `baseAgent.ts`, `index.ts`, `resolvedAgent.ts`). Running `pnpm run build` alone only updates the JS bundle, but TS components use a pre-compiled `agent_guest.wasm` that embeds the SDK. Without rebuilding the template, TS components will bundle stale SDK code.
 
-**Testing local wasm-rquickjs changes:** The SDK requires the WASI Preview 3 support from the
-`wasi-p3` branch. If modifying wasm-rquickjs locally (in a separate checkout), install it from the
-local path:
+**Testing local wasm-rquickjs changes:** If modifying wasm-rquickjs locally (in a separate
+checkout), install it from the local path:
 
 ```shell
 cd /path/to/wasm-rquickjs
