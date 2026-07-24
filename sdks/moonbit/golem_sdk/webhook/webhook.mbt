@@ -43,10 +43,12 @@ pub fn WebhookHandler::url(self : WebhookHandler) -> String {
 }
 
 ///|
-/// Blocks until the webhook receives a POST request and returns the payload.
+/// Awaits a webhook POST request and returns the payload.
 /// The agent is durably suspended by the Golem runtime while waiting — it
 /// survives failures, restarts, and updates transparently.
-pub fn WebhookHandler::wait(self : WebhookHandler) -> WebhookRequestPayload {
+pub async fn WebhookHandler::wait(
+  self : WebhookHandler,
+) -> WebhookRequestPayload {
   let data = @api.await_promise(self.promise_id)
   { payload: data }
 }

@@ -26,7 +26,6 @@ import {
   type TypedSchemaValue as WireTypedSchemaValue,
 } from 'golem:tool/host@0.1.0';
 import { createToolClientTransport, isRpcError } from '../bridge/tool';
-import type { InputStream, OutputStream } from 'wasi:io/streams@0.2.3';
 import type { Principal } from '../principal';
 import {
   type ExtendedCommandBody,
@@ -61,7 +60,6 @@ import {
   typedSchemaValueToWit,
   type TypedSchemaValue,
 } from '../internal/schema-model';
-import { disposeWitResource } from '../internal/pollableUtils';
 import { ToolRegistry } from '../internal/registry/toolRegistry';
 import { compileSchema } from './schema/adapter';
 import type { FluentCodec } from './schema/codec';
@@ -455,17 +453,17 @@ export type ToolClientErrors<Method> = Method extends {
   ? Errors
   : never;
 
-type ClientStdin<Body> = StreamContextField<'stdin', BodyStdin<Body>, InputStream>;
+type ClientStdin<Body> = StreamContextField<'stdin', BodyStdin<Body>, AsyncIterable<number>>;
 
 type ClientResult<Body> =
   BodyStdout<Body> extends 'required'
     ? [BodySuccess<Body>] extends [undefined]
-      ? OutputStream
-      : { result: BodySuccess<Body>; stdout: OutputStream }
+      ? AsyncIterable<number>
+      : { result: BodySuccess<Body>; stdout: AsyncIterable<number> }
     : BodyStdout<Body> extends 'optional'
       ? [BodySuccess<Body>] extends [undefined]
-        ? OutputStream | undefined
-        : { result: BodySuccess<Body>; stdout?: OutputStream }
+        ? AsyncIterable<number> | undefined
+        : { result: BodySuccess<Body>; stdout?: AsyncIterable<number> }
       : [BodySuccess<Body>] extends [undefined]
         ? void
         : BodySuccess<Body>;
@@ -518,7 +516,7 @@ export type ToolClient<Definition> = Simplify<RootClient<ToolCommandModelOf<Defi
 
 export interface ToolClientInvocationResult {
   readonly result?: WireTypedSchemaValue;
-  readonly stdout?: OutputStream;
+  readonly stdout?: AsyncIterable<number>;
 }
 
 /** Raw WIT invocation seam used by typed tool clients. */
@@ -526,7 +524,7 @@ export interface ToolClientTransport {
   invokeAndAwait(
     commandPath: readonly string[],
     input: WireTypedSchemaValue,
-    stdin: InputStream | undefined,
+    stdin: AsyncIterable<number> | undefined,
   ): ToolClientInvocationResult | Promise<ToolClientInvocationResult>;
 }
 
@@ -1331,9 +1329,9 @@ function createToolClientMethod(
         }),
       );
       const input = typedSchemaValueToWit(inputModel.encodeTyped(canonicalInput));
-      const stdin = body.stdin ? (args.stdin as InputStream | undefined) : undefined;
-      if (stdin !== undefined && !isWitResource(stdin)) {
-        throw new Error('stdin must be a WIT resource');
+      const stdin = body.stdin ? (args.stdin as AsyncIterable<number> | undefined) : undefined;
+      if (stdin !== undefined && !isAsyncIterable(stdin)) {
+        throw new Error('stdin must be an async iterable');
       }
       if (body.stdin?.required && stdin === undefined) {
         throw new Error('required stdin stream is missing');
@@ -1357,8 +1355,8 @@ function decodeToolClientResult(
   const hasStdout = invocation.stdout !== undefined;
 
   try {
-    if (hasStdout && !isWitResource(invocation.stdout)) {
-      throw protocolToolCallError(`${callName}: stdout must be a WIT resource`);
+    if (hasStdout && !isAsyncIterable(invocation.stdout)) {
+      throw protocolToolCallError(`${callName}: stdout must be an async iterable`);
     }
     if (!body.result && hasResult) {
       throw protocolToolCallError(`${callName}: unit command returned an unexpected result`);
@@ -1382,13 +1380,25 @@ function decodeToolClientResult(
       ? { result: decodedResult, stdout: invocation.stdout }
       : { result: decodedResult };
   } catch (error) {
-    disposeWitResource(invocation.stdout);
+    void closeAsyncIterable(invocation.stdout);
     throw error;
   }
 }
 
-function isWitResource(value: unknown): boolean {
-  return value !== null && (typeof value === 'object' || typeof value === 'function');
+function isAsyncIterable(value: unknown): value is AsyncIterable<number> {
+  return (
+    value !== null &&
+    (typeof value === 'object' || typeof value === 'function') &&
+    typeof (value as Record<PropertyKey, unknown>)[Symbol.asyncIterator] === 'function'
+  );
+}
+
+async function closeAsyncIterable(value: AsyncIterable<number> | undefined): Promise<void> {
+  try {
+    await value?.[Symbol.asyncIterator]().return?.();
+  } catch {
+    // Stream cleanup is best-effort when response validation fails.
+  }
 }
 
 function mapToolRpcError(
@@ -1456,7 +1466,7 @@ function decodeTypedValue(codec: FluentCodec, typed: TypedSchemaValue, position:
 }
 
 function protocolToolCallError(message: string): ToolCallError<never> {
-  return new ToolCallError({ tag: 'rpc', error: protocolRpcError(message) });
+  return new ToolCallError<never>({ tag: 'rpc', error: protocolRpcError(message) });
 }
 
 function protocolRpcError(message: string): RpcError {

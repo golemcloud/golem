@@ -40,9 +40,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
 use std::time::Duration;
 
+use arc_swap::ArcSwap;
 use futures::StreamExt;
 use tokio::sync::Mutex;
-use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Level, debug, error, span};
@@ -103,7 +103,7 @@ pub struct AgentStatusFlusher {
     queue: Arc<AgentStatusFlushQueue>,
 
     /// The live in-memory status, shared with the owning `Worker` (its `last_known_status`).
-    current_status: Arc<RwLock<AgentStatusRecord>>,
+    current_status: Arc<ArcSwap<AgentStatusRecord>>,
     /// Whether the worker's status is currently detached from the oplog, shared with the owning
     /// `Worker`. While detached the in-memory status is not authoritative, so flushing is skipped.
     detached: Arc<AtomicBool>,
@@ -127,7 +127,7 @@ impl AgentStatusFlusher {
         background_enabled: bool,
         worker_service: Arc<dyn WorkerService>,
         queue: Arc<AgentStatusFlushQueue>,
-        current_status: Arc<RwLock<AgentStatusRecord>>,
+        current_status: Arc<ArcSwap<AgentStatusRecord>>,
         detached: Arc<AtomicBool>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|self_weak| Self {
@@ -247,7 +247,7 @@ impl AgentStatusFlusher {
         // write re-sets `dirty` (and re-enqueues), guaranteeing it is not lost.
         self.dirty.store(false, Ordering::Release);
 
-        let snapshot = self.current_status.read().await.clone();
+        let snapshot = self.current_status.load_full().as_ref().clone();
         let previous = if baseline.base_known {
             Some(&baseline.last_flushed)
         } else {
@@ -530,10 +530,10 @@ mod tests {
         queue: Arc<AgentStatusFlushQueue>,
     ) -> (
         Arc<AgentStatusFlusher>,
-        Arc<RwLock<AgentStatusRecord>>,
+        Arc<ArcSwap<AgentStatusRecord>>,
         Arc<AtomicBool>,
     ) {
-        let current = Arc::new(RwLock::new(status(AgentStatus::Idle, 0)));
+        let current = Arc::new(ArcSwap::from_pointee(status(AgentStatus::Idle, 0)));
         let detached = Arc::new(AtomicBool::new(false));
         let flusher = AgentStatusFlusher::new(
             agent_id(),
@@ -558,12 +558,12 @@ mod tests {
         let queue = test_queue();
         let (flusher, current, _) = make_flusher(false, true, ws.clone(), queue.clone());
 
-        *current.write().await = status(AgentStatus::Running, 1);
+        current.store(Arc::new(status(AgentStatus::Running, 1)));
         flusher.mark_dirty();
         assert_eq!(queue.len(), 1);
         queue.sweep().await;
 
-        *current.write().await = status(AgentStatus::Running, 2);
+        current.store(Arc::new(status(AgentStatus::Running, 2)));
         flusher.mark_dirty();
         queue.sweep().await;
 
@@ -585,7 +585,7 @@ mod tests {
 
         // Several status changes between sweeps collapse into a single write of the latest value.
         for idx in 1..=5 {
-            *current.write().await = status(AgentStatus::Running, idx);
+            current.store(Arc::new(status(AgentStatus::Running, idx)));
             flusher.mark_dirty();
         }
         assert_eq!(queue.len(), 1);
@@ -622,7 +622,7 @@ mod tests {
 
         // A change is marked dirty and enqueued, then a forced flush (e.g. suspend) writes it and
         // clears `dirty` -- but does not drain the queue entry.
-        *current.write().await = status(AgentStatus::Running, 1);
+        current.store(Arc::new(status(AgentStatus::Running, 1)));
         flusher.mark_dirty();
         assert_eq!(queue.len(), 1);
         let _ = flusher.flush(FlushReason::Forced).await;
@@ -642,7 +642,7 @@ mod tests {
         let queue = test_queue();
         let (flusher, current, _) = make_flusher(false, true, ws.clone(), queue.clone());
 
-        *current.write().await = status(AgentStatus::Running, 1);
+        current.store(Arc::new(status(AgentStatus::Running, 1)));
         ws.set_fail(true);
         flusher.mark_dirty();
         queue.sweep().await;
@@ -666,7 +666,7 @@ mod tests {
         let queue = test_queue();
         let (flusher, current, _) = make_flusher(false, true, ws.clone(), queue.clone());
 
-        *current.write().await = status(AgentStatus::Running, 1);
+        current.store(Arc::new(status(AgentStatus::Running, 1)));
         flusher.begin_delete().await;
 
         flusher.mark_dirty();
@@ -684,7 +684,7 @@ mod tests {
         let queue = test_queue();
         let (flusher, current, detached) = make_flusher(false, true, ws.clone(), queue.clone());
 
-        *current.write().await = status(AgentStatus::Running, 1);
+        current.store(Arc::new(status(AgentStatus::Running, 1)));
         detached.store(true, Ordering::Release);
         flusher.mark_dirty();
         let _ = flusher.flush(FlushReason::Forced).await;
@@ -757,7 +757,7 @@ mod tests {
         let queue = test_queue();
         let (flusher, current, _) = make_flusher(false, false, ws.clone(), queue.clone());
 
-        *current.write().await = status(AgentStatus::Running, 1);
+        current.store(Arc::new(status(AgentStatus::Running, 1)));
         flusher
             .on_status_changed(
                 &status(AgentStatus::Idle, 0),

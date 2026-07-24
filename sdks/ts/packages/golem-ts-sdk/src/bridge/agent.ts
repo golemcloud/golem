@@ -7,9 +7,10 @@ import type {
   CancelableScheduledInvocationReceipt,
   Datetime,
   InvocationMetadata,
+  RpcError,
   ScheduledInvocationReceipt,
 } from 'golem:agent/host@2.0.0';
-import { awaitPollable, disposeWitResource, throwIfAborted } from '../internal/pollableUtils';
+import { awaitAbortable, throwIfAborted } from '../internal/pollableUtils';
 import {
   schemaValueFromWit,
   schemaValueToWit,
@@ -29,6 +30,21 @@ export interface RemoteInvocationResult {
 export interface AgentConfigEntry {
   readonly path: readonly string[];
   readonly value: TypedSchemaValue;
+}
+
+function isRpcError(error: unknown): error is RpcError {
+  if (error === null || typeof error !== 'object') return false;
+
+  switch ((error as { tag?: unknown }).tag) {
+    case 'protocol-error':
+    case 'denied':
+    case 'not-found':
+    case 'remote-internal-error':
+    case 'remote-agent-error':
+      return true;
+    default:
+      return false;
+  }
 }
 
 export interface RemoteAgentHandle {
@@ -84,67 +100,24 @@ export function resolveRemoteAgent(
     throwIfAborted(signal);
     const invocation = rpc.asyncInvokeAndAwait(method, schemaValueToWit(params));
     const future = invocation.future;
-    const onAbort = () => {
-      try {
-        future.cancel();
-      } catch {
-        /* already completed */
-      }
-    };
-    signal?.addEventListener('abort', onAbort, { once: true });
+    let result;
     try {
-      try {
-        try {
-          await awaitPollable(future.subscribe(), signal);
-        } catch (error) {
-          if (!signal?.aborted) {
-            try {
-              future.cancel();
-            } catch {
-              /* already completed */
-            }
-          }
-          try {
-            future.get();
-          } catch {
-            // Preserve the polling failure after consuming the terminal result.
-          }
-          throw error;
-        }
-      } finally {
-        signal?.removeEventListener('abort', onAbort);
-      }
-      const result = future.get();
-      if (!result) {
-        try {
-          future.cancel();
-        } catch {
-          /* already completed */
-        }
-        try {
-          future.get();
-        } catch {
-          // Preserve the missing result error after consuming the terminal result.
-        }
-        throw new RemoteCallError(`RPC to ${agentId}.${method} failed (no result)`);
-      }
-      if (result.tag === 'err')
-        throw new RemoteCallError(
-          `Remote agent ${agentId}.${method} errored: ${JSON.stringify(result.val, (_, value) => (typeof value === 'bigint' ? value.toString() : value))}`,
-        );
-      try {
-        return {
-          metadata: invocation.metadata,
-          value: result.val === undefined ? undefined : schemaValueFromWit(result.val),
-        };
-      } catch (error) {
-        if (error instanceof RemoteCallError) throw error;
-        throw new RemoteCallError(
-          `Remote agent ${agentId}.${method} returned an invalid schema value: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    } finally {
-      disposeWitResource(future);
+      result = await awaitAbortable(future.get(), signal, () => future.cancel());
+    } catch (error) {
+      if (!isRpcError(error)) throw error;
+      throw new RemoteCallError(
+        `Remote agent ${agentId}.${method} errored: ${JSON.stringify(error, (_, value) => (typeof value === 'bigint' ? value.toString() : value))}`,
+      );
+    }
+    try {
+      return {
+        metadata: invocation.metadata,
+        value: result === undefined ? undefined : schemaValueFromWit(result),
+      };
+    } catch (error) {
+      throw new RemoteCallError(
+        `Remote agent ${agentId}.${method} returned an invalid schema value: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   };
   return {

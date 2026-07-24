@@ -384,6 +384,14 @@ pub struct Limits {
     pub epoch_ticks: u64,
     pub max_oplog_query_pages_size: usize,
     pub max_invocation_context_stack_depth: usize,
+    /// Optional wall-clock upper bound for a single guest invocation. When exceeded, the
+    /// invocation fails like a trap (no invocation-finished marker is written) and normal
+    /// retry handling applies. `None` (the default) leaves invocations unbounded.
+    #[serde(with = "humantime_serde", default)]
+    pub max_invocation_duration: Option<Duration>,
+    /// Maximum time to drain active tail work after a guest export returns.
+    #[serde(with = "humantime_serde")]
+    pub tail_work_settle_timeout: Duration,
 }
 
 impl SafeDisplay for Limits {
@@ -436,6 +444,16 @@ impl SafeDisplay for Limits {
             &mut result,
             "max invocation context stack depth: {}",
             self.max_invocation_context_stack_depth
+        );
+        let _ = writeln!(
+            &mut result,
+            "max invocation duration: {:?}",
+            self.max_invocation_duration
+        );
+        let _ = writeln!(
+            &mut result,
+            "tail work settle timeout: {:?}",
+            self.tail_work_settle_timeout
         );
 
         result
@@ -555,13 +573,20 @@ pub struct SuspendConfig {
     pub suspend_after: Duration,
     #[serde(with = "humantime_serde")]
     pub ephemeral_max_sleep: Duration,
+    #[serde(with = "humantime_serde")]
+    pub wait_suspend_grace: Duration,
+    #[serde(with = "humantime_serde")]
+    pub wait_suspend_check_interval: Duration,
 }
 
 impl SafeDisplay for SuspendConfig {
     fn to_safe_string(&self) -> String {
         format!(
-            "suspend after: {:?}, ephemeral max sleep: {:?}",
-            self.suspend_after, self.ephemeral_max_sleep
+            "suspend after: {:?}, ephemeral max sleep: {:?}, wait suspend grace: {:?}, wait suspend check interval: {:?}",
+            self.suspend_after,
+            self.ephemeral_max_sleep,
+            self.wait_suspend_grace,
+            self.wait_suspend_check_interval
         )
     }
 }
@@ -1651,6 +1676,8 @@ impl Default for Limits {
             epoch_ticks: 1,
             max_oplog_query_pages_size: 100,
             max_invocation_context_stack_depth: 1024,
+            max_invocation_duration: None,
+            tail_work_settle_timeout: Duration::from_secs(30),
         }
     }
 }
@@ -1679,6 +1706,8 @@ impl Default for SuspendConfig {
         Self {
             suspend_after: Duration::from_secs(10),
             ephemeral_max_sleep: Duration::from_secs(60),
+            wait_suspend_grace: Duration::from_secs(1),
+            wait_suspend_check_interval: Duration::from_secs(10),
         }
     }
 }

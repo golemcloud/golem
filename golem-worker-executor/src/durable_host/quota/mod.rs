@@ -204,8 +204,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let interest = match get_live_lease_interest(self, &self_).await {
                 Ok(interest) => interest,
                 Err(err) => {
-                    handle.abandon_for_trap();
-                    return Err(err);
+                    return Err(handle.trap(err));
                 }
             };
             let result = svc.try_reserve(interest, amount).await;
@@ -550,8 +549,7 @@ impl<Ctx: WorkerCtx> HostReservation for DurableWorkerCtx<Ctx> {
         let interest = match get_live_lease_interest(self, &token_resource).await {
             Ok(interest) => interest,
             Err(err) => {
-                handle.abandon_for_trap();
-                return Err(err);
+                return Err(handle.trap(err));
             }
         };
         svc.commit(interest, entry.reservation, used).await;

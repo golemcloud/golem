@@ -157,7 +157,6 @@ interface CompiledRemoteMethod {
   output: { tag: 'unit' } | { tag: 'single'; codec: FluentCodec };
 }
 
-/** Raised when a remote agent invocation fails or returns an error result. */
 /** Encode a method/constructor input record (positional, declaration order). */
 function encodeRecord(codecs: NamedCodec[], input: Record<string, unknown>) {
   return v.record(codecs.map((c) => c.codec.toValue(input[c.name])));

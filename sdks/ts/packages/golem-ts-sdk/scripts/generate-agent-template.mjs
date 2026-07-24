@@ -3,22 +3,21 @@ import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { join, resolve } from 'node:path';
 
 // ---------------------------------------------------------------------------
-// The generated wrapper crate must build its WIT bindings with Golem's forked
-// wit-bindgen, which adds an "outline-lift" optimization that shrinks the giant
-// generated lift/lower wrappers. wasm-rquickjs hardcodes the upstream wit-bindgen
-// version in its skeleton Cargo.toml and exposes no flag to override it, so we
-// rewrite the generated manifest after generation.
+// The generated Preview 3 wrapper must build its async WIT bindings with Golem's
+// forked wit-bindgen, which adds an "outline-lift" optimization that shrinks the
+// giant generated lift/lower wrappers. wasm-rquickjs hardcodes the upstream
+// dependency in its skeleton Cargo.toml and exposes no flag to override it, so
+// rewrite that dependency after generation.
 // ---------------------------------------------------------------------------
 const WIT_BINDGEN_GIT = 'https://github.com/golemcloud/wit-bindgen';
-const WIT_BINDGEN_REV = '4407232ead86d9bcbd06cbebd790a52120a4087a';
+const WIT_BINDGEN_REVISION = '4407232ead86d9bcbd06cbebd790a52120a4087a';
 
 function useForkedWitBindgen(cargoTomlPath) {
   const original = readFileSync(cargoTomlPath, 'utf8');
 
   const witBindgenLine =
-    'wit-bindgen = { version = "0.42.1", default-features = false, features = ["macros"] }';
-  const witBindgenRtLine = 'wit-bindgen-rt = { version = "0.42.1", features = ["bitflags"] }';
-  const forkedLine = `wit-bindgen = { git = "${WIT_BINDGEN_GIT}", rev = "${WIT_BINDGEN_REV}", version = "=0.59.0", default-features = false, features = ["macros"] }`;
+    'wit-bindgen-p3 = { package = "wit-bindgen", version = "0.58.0", default-features = false, features = ["async", "async-spawn", "macros", "inter-task-wakeup"], optional = true }';
+  const forkedLine = `wit-bindgen-p3 = { package = "wit-bindgen", git = "${WIT_BINDGEN_GIT}", rev = "${WIT_BINDGEN_REVISION}", version = "=0.59.0", default-features = false, features = ["async", "async-spawn", "macros", "inter-task-wakeup"], optional = true }`;
 
   const witBindgenCount = original.split(witBindgenLine).length - 1;
   if (witBindgenCount !== 1) {
@@ -28,19 +27,9 @@ function useForkedWitBindgen(cargoTomlPath) {
     );
   }
 
-  // The forked wit-bindgen embeds its runtime, so the separate wit-bindgen-rt
-  // crate is dropped.
-  const rtCount = original.split(witBindgenRtLine).length - 1;
-  if (rtCount !== 1) {
-    throw new Error(
-      `Expected exactly one occurrence of the wit-bindgen-rt dependency line in ${cargoTomlPath}, found ${rtCount}. ` +
-        `The wasm-rquickjs skeleton may have changed; update generate-agent-template.mjs.`,
-    );
-  }
+  const updated = original.replace(witBindgenLine, forkedLine);
 
-  const updated = original.replace(`${witBindgenRtLine}\n`, '').replace(witBindgenLine, forkedLine);
-
-  if (!updated.includes(WIT_BINDGEN_GIT) || updated.includes(witBindgenRtLine)) {
+  if (!updated.includes(WIT_BINDGEN_REVISION) || updated.includes(witBindgenLine)) {
     throw new Error(`Failed to rewrite the wit-bindgen dependency in ${cargoTomlPath}.`);
   }
 
@@ -62,6 +51,7 @@ function useForkedWitBindgen(cargoTomlPath) {
 // ---------------------------------------------------------------------------
 
 const sourceWit = resolve(process.cwd(), '../../wit');
+const output = 'agent-template';
 
 function walk(dir) {
   return readdirSync(dir).flatMap((entry) => {
@@ -83,6 +73,8 @@ if (offenders.length > 0) {
   );
 }
 
+rmSync(output, { recursive: true, force: true });
+
 const result = spawnSync(
   'wasm-rquickjs',
   [
@@ -90,9 +82,11 @@ const result = spawnSync(
     '--wit',
     sourceWit,
     '--output',
-    'agent-template',
+    output,
     '--world',
     'agent-guest',
+    '--target',
+    'wasi-p3',
     '--js-modules',
     '@golemcloud/golem-ts-sdk=dist/index.mjs',
     '--js-modules',
@@ -111,4 +105,4 @@ if (result.status !== 0) {
   process.exit(result.status ?? 1);
 }
 
-useForkedWitBindgen(resolve(process.cwd(), 'agent-template', 'Cargo.toml'));
+useForkedWitBindgen(resolve(process.cwd(), output, 'Cargo.toml'));

@@ -2,25 +2,25 @@
 // Licensed under the Golem Source License v1.1
 
 import { ToolRpc, type RpcError, type ToolError } from 'golem:tool/host@0.1.0';
-import type { InputStream, OutputStream } from 'wasi:io/streams@0.2.3';
 import {
   preflightWitTypedSchemaValue,
   typedSchemaValueFromWit,
   typedSchemaValueToWit,
   type TypedSchemaValue,
 } from '../internal/schema-model';
-import { disposeWitResource } from '../internal/pollableUtils';
 
 export interface ToolInvocationResult {
   readonly result?: TypedSchemaValue;
-  readonly stdout?: OutputStream;
+  readonly stdout?: AsyncIterable<number>;
 }
 export interface ToolClientTransport {
   invokeAndAwait(
     commandPath: readonly string[],
     input: Parameters<ToolRpc['invokeAndAwait']>[1],
-    stdin: InputStream | undefined,
-  ): ReturnType<ToolRpc['invokeAndAwait']> | Promise<ReturnType<ToolRpc['invokeAndAwait']>>;
+    stdin: AsyncIterable<number> | undefined,
+  ):
+    | Awaited<ReturnType<ToolRpc['invokeAndAwait']>>
+    | Promise<Awaited<ReturnType<ToolRpc['invokeAndAwait']>>>;
 }
 
 export function createToolClientTransport(toolName: string): ToolClientTransport {
@@ -37,7 +37,7 @@ export interface ToolClientRuntime {
   invokeAndAwait(
     commandPath: readonly string[],
     input: TypedSchemaValue,
-    stdin?: InputStream,
+    stdin?: AsyncIterable<number>,
   ): Promise<ToolInvocationResult>;
 }
 
@@ -58,16 +58,24 @@ export function createToolClientRuntime(
           stdout: result.stdout,
         };
       } catch (error) {
-        disposeWitResource(result.stdout);
+        await closeAsyncIterable(result.stdout);
         throw error;
       }
     },
   };
 }
 
-/** Dispose a returned stdout resource when generated post-invocation validation fails. */
-export function disposeToolStdout(stdout: OutputStream | undefined): void {
-  disposeWitResource(stdout);
+/** Close a returned stdout iterator when generated post-invocation validation fails. */
+export async function disposeToolStdout(stdout: AsyncIterable<number> | undefined): Promise<void> {
+  await closeAsyncIterable(stdout);
+}
+
+async function closeAsyncIterable(value: AsyncIterable<number> | undefined): Promise<void> {
+  try {
+    await value?.[Symbol.asyncIterator]().return?.();
+  } catch {
+    // Stream cleanup is best-effort when response validation fails.
+  }
 }
 
 export type ToolRuntimeError<Declared> =
@@ -149,4 +157,4 @@ export function splitToolRpcError<Declared>(
   return { tag: 'tool', error: decodeCustomError(typedSchemaValueFromWit(error.val.val)) };
 }
 
-export type { InputStream, OutputStream, RpcError, ToolError };
+export type { RpcError, ToolError };

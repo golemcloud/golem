@@ -3,7 +3,6 @@
 
 import { WasmRpc } from 'golem:agent/host@2.0.0';
 import { ToolRpc, type RpcError } from 'golem:tool/host@0.1.0';
-import type { OutputStream } from 'wasi:io/streams@0.2.3';
 import { describe, expect, it, vi } from 'vitest';
 import { bridge } from '../src';
 import { validateSchemaGraph } from '../src/internal/schema-model';
@@ -453,9 +452,14 @@ describe('public bridge runtime', () => {
     expect(ToolRpc).toHaveBeenCalledWith('git');
   });
 
-  it('disposes stdout exactly once when structured tool result decoding fails', async () => {
-    const dispose = vi.fn();
-    const stdout = { [Symbol.dispose]: dispose } as unknown as OutputStream;
+  it('closes stdout exactly once when structured tool result decoding fails', async () => {
+    const close = vi.fn().mockResolvedValue({ done: true, value: undefined });
+    const stdout: AsyncIterable<number> = {
+      [Symbol.asyncIterator]: () => ({
+        next: vi.fn().mockResolvedValue({ done: true, value: undefined }),
+        return: close,
+      }),
+    };
     const runtime = bridge.createToolClientRuntime('broken-result', {
       invokeAndAwait: () => ({
         result: {
@@ -472,12 +476,17 @@ describe('public bridge runtime', () => {
         value: bridge.v.tuple([]),
       }),
     ).rejects.toThrow();
-    expect(dispose).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it('transfers stdout ownership when structured tool result decoding succeeds', async () => {
-    const dispose = vi.fn();
-    const stdout = { [Symbol.dispose]: dispose } as unknown as OutputStream;
+    const close = vi.fn().mockResolvedValue({ done: true, value: undefined });
+    const stdout: AsyncIterable<number> = {
+      [Symbol.asyncIterator]: () => ({
+        next: vi.fn().mockResolvedValue({ done: true, value: undefined }),
+        return: close,
+      }),
+    };
     const typed = {
       graph: { defs: new Map(), root: bridge.t.string() },
       value: bridge.v.string('ok'),
@@ -492,7 +501,7 @@ describe('public bridge runtime', () => {
         value: bridge.v.tuple([]),
       }),
     ).resolves.toEqual({ result: typed, stdout });
-    expect(dispose).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
   });
 
   it('splits declared custom errors from stable RPC errors', () => {
@@ -671,8 +680,7 @@ describe('public bridge runtime', () => {
     rpc.asyncInvokeAndAwait.mockReturnValue({
       metadata: { agentId: 'example', idempotencyKey: 'key' },
       future: {
-        subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-        get: vi.fn().mockReturnValue({ tag: 'ok', val: { tag: 'not-a-schema-value' } }),
+        get: vi.fn().mockResolvedValue({ tag: 'not-a-schema-value' }),
         cancel: vi.fn(),
       },
     });
@@ -695,49 +703,35 @@ describe('public bridge runtime', () => {
     expect(rpc.scheduleInvocation).toHaveBeenCalledWith(at, 'run', expect.anything());
   });
 
-  it('best-effort disposes the future after an awaited agent invocation', async () => {
+  it('returns unit output from an awaited agent invocation', async () => {
     const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
     const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
       asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
     };
-    const dispose = vi.fn();
     rpc.asyncInvokeAndAwait.mockReturnValue({
       metadata: { agentId: 'example', idempotencyKey: 'key' },
       future: {
-        subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-        get: vi.fn().mockReturnValue({ tag: 'ok', val: undefined }),
+        get: vi.fn().mockResolvedValue(undefined),
         cancel: vi.fn(),
-        [Symbol.dispose]: dispose,
       },
     });
 
     await expect(remote.invokeAndAwait('ping', bridge.v.tuple([]))).resolves.toBeUndefined();
-    expect(dispose).toHaveBeenCalledOnce();
   });
 
-  it('consumes an agent future terminal cancellation result before disposing it', async () => {
+  it('cancels an agent future when the caller aborts', async () => {
     const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
     const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
       asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
     };
     const controller = new AbortController();
     const cancel = vi.fn();
-    const get = vi.fn().mockImplementation(() => {
-      throw new Error('terminal get failed');
-    });
-    const dispose = vi.fn();
+    const get = vi.fn().mockReturnValue(new Promise<never>(() => {}));
     rpc.asyncInvokeAndAwait.mockReturnValue({
       metadata: { agentId: 'example', idempotencyKey: 'key' },
       future: {
-        subscribe: vi.fn().mockReturnValue({
-          abortablePromise: (signal: AbortSignal) =>
-            new Promise<void>((_resolve, reject) => {
-              signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-            }),
-        }),
         get,
         cancel,
-        [Symbol.dispose]: dispose,
       },
     });
 
@@ -747,73 +741,6 @@ describe('public bridge runtime', () => {
     await expect(invocation).rejects.toThrow('cancelled by caller');
     expect(cancel).toHaveBeenCalledOnce();
     expect(get).toHaveBeenCalledOnce();
-    expect(dispose).toHaveBeenCalledOnce();
-    expect(cancel.mock.invocationCallOrder[0]).toBeLessThan(get.mock.invocationCallOrder[0]);
-    expect(get.mock.invocationCallOrder[0]).toBeLessThan(dispose.mock.invocationCallOrder[0]);
-  });
-
-  it('cancels and consumes an agent future before disposal when polling fails', async () => {
-    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
-    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
-      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
-    };
-    const pollError = new Error('poll failed');
-    const cancel = vi.fn().mockImplementation(() => {
-      throw new Error('cancel failed');
-    });
-    const get = vi.fn().mockImplementation(() => {
-      throw new Error('terminal get failed');
-    });
-    const dispose = vi.fn();
-    rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: { agentId: 'example', idempotencyKey: 'key' },
-      future: {
-        subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockRejectedValue(pollError) }),
-        cancel,
-        get,
-        [Symbol.dispose]: dispose,
-      },
-    });
-
-    await expect(remote.invokeAndAwait('ping', bridge.v.tuple([]))).rejects.toBe(pollError);
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(get).toHaveBeenCalledOnce();
-    expect(dispose).toHaveBeenCalledOnce();
-    expect(cancel.mock.invocationCallOrder[0]).toBeLessThan(get.mock.invocationCallOrder[0]);
-    expect(get.mock.invocationCallOrder[0]).toBeLessThan(dispose.mock.invocationCallOrder[0]);
-  });
-
-  it('cancels and terminally consumes an agent future when readiness yields no result', async () => {
-    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
-    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
-      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
-    };
-    const cancel = vi.fn();
-    const get = vi
-      .fn()
-      .mockReturnValueOnce(undefined)
-      .mockReturnValueOnce({ tag: 'err', val: { tag: 'protocol-error', val: 'cancelled' } });
-    const dispose = vi.fn();
-    rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: { agentId: 'example', idempotencyKey: 'key' },
-      future: {
-        subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-        cancel,
-        get,
-        [Symbol.dispose]: dispose,
-      },
-    });
-
-    await expect(remote.invokeAndAwait('ping', bridge.v.tuple([]))).rejects.toMatchObject({
-      _tag: 'RemoteCallError',
-      message: expect.stringContaining('failed (no result)'),
-    });
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(get).toHaveBeenCalledTimes(2);
-    expect(dispose).toHaveBeenCalledOnce();
-    expect(get.mock.invocationCallOrder[0]).toBeLessThan(cancel.mock.invocationCallOrder[0]);
-    expect(cancel.mock.invocationCallOrder[0]).toBeLessThan(get.mock.invocationCallOrder[1]);
-    expect(get.mock.invocationCallOrder[1]).toBeLessThan(dispose.mock.invocationCallOrder[0]);
   });
 
   it.each([1.5, Number.NaN])('rejects invalid datetime nanoseconds (%s)', (nanoseconds) => {

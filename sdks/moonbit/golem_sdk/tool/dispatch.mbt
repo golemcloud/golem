@@ -466,7 +466,7 @@ pub fn[T : @schema.IntoSchema] invocation_result_value(
 
 ///|
 pub fn invocation_result_stdout(
-  stdout : @streams.OutputStream,
+  stdout : @async-core.Stream[Byte],
 ) -> @toolCommon.InvocationResult {
   { result: None, stdout: Some(stdout) }
 }
@@ -474,7 +474,7 @@ pub fn invocation_result_stdout(
 ///|
 pub fn[T : @schema.IntoSchema] invocation_result_value_with_stdout(
   value : T,
-  stdout : @streams.OutputStream,
+  stdout : @async-core.Stream[Byte],
 ) -> @toolCommon.InvocationResult raise @toolCommon.ToolError {
   { result: Some(encode_result_value(value)), stdout: Some(stdout) }
 }

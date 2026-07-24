@@ -64,6 +64,8 @@ message RawOplogEntry {
     RawCardInstalledParameters card_installed = 48;
     RawCardInstallFailedParameters card_install_failed = 49;
     RawCardExpiredParameters card_expired = 50;
+    RawHostStreamFrameParameters host_stream_frame = 51;
+    RawCompletionDiscardedParameters completion_discarded = 52;
   }
 }
 
@@ -165,6 +167,10 @@ message RawEndParameters {
 message RawCancelledParameters {
   uint64 start_index = 1;
   optional RawOplogPayload partial = 2;
+}
+
+message RawCompletionDiscardedParameters {
+  uint64 start_index = 1;
 }
 
 message RawAgentInvocationStartedParameters {
@@ -368,6 +374,14 @@ message RawCardInstallFailedParameters {
   uint64 queued_event_index = 2;
   golem.common.UUID card_id = 3;
   RawCardInstallFailure reason = 4;
+}
+
+// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
+// attached to the durable host call identified by its Start entry's index.
+message RawHostStreamFrameParameters {
+  uint64 parent_start_index = 1;
+  HostStreamKind kind = 2;
+  RawOplogPayload payload = 3;
 }
 
 message RawOplogEntryWithIndex {

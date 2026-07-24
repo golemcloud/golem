@@ -1,0 +1,6 @@
+members = [
+  "./golem_sdk",
+  "./golem_sdk_tools",
+  "./golem_sdk_example1",
+  "./scripts",
+]

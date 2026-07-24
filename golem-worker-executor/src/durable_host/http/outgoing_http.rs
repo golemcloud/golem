@@ -17,6 +17,10 @@ use crate::durable_host::http::inline_retry::{
     InlineRetryPhase, is_http_inline_retry_eligible, spawn_http_request_with_retry,
     spawn_http_status_retry_after_body_finish,
 };
+use crate::durable_host::http::policy::{
+    apply_managed_http_headers, golem_managed_http_headers, http_worker_state_allows_retry,
+    is_http_request_idempotent,
+};
 use crate::durable_host::{
     DurabilityHost, DurableWorkerCtx, HttpOutgoingBodyState, HttpRequestCloseOwner,
     HttpRequestState, HttpRetryEligibility, PendingStatusRetryDecision,
@@ -25,29 +29,16 @@ use crate::services::HasWorker;
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::oplog::types::SerializableHttpMethod;
-use golem_common::model::oplog::{DurableFunctionType, HostRequestHttpRequest, PersistenceLevel};
+use golem_common::model::oplog::{DurableFunctionType, HostRequestHttpRequest};
 use golem_common::model::{NamedRetryPolicy, RetryContext};
-use golem_service_base::headers::TraceContextHeaders;
-use http::{HeaderName, HeaderValue};
+use http::HeaderName;
 use std::collections::HashMap;
-use std::str::FromStr;
 use wasmtime::component::Resource;
 use wasmtime_wasi_http::p2::bindings::http::outgoing_handler::Host;
 use wasmtime_wasi_http::p2::bindings::http::types;
 use wasmtime_wasi_http::p2::bindings::http::types::Scheme;
 use wasmtime_wasi_http::p2::types::{HostFutureIncomingResponse, HostOutgoingRequest};
 use wasmtime_wasi_http::p2::{HttpError, HttpResult};
-
-fn is_method_idempotent(method: &SerializableHttpMethod) -> bool {
-    matches!(
-        method,
-        SerializableHttpMethod::Get
-            | SerializableHttpMethod::Head
-            | SerializableHttpMethod::Put
-            | SerializableHttpMethod::Delete
-            | SerializableHttpMethod::Options
-    )
-}
 
 pub(crate) async fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
@@ -64,19 +55,17 @@ pub(crate) async fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
 
     let durable_state = ctx.durable_execution_state();
     let method_eligible =
-        durable_state.assume_idempotence || is_method_idempotent(&state.request.method);
+        is_http_request_idempotent(durable_state.assume_idempotence, &state.request.method);
     let body_ready_for_retry = state.retry.body_finished || state.outgoing_body_rep.is_none();
 
-    let enable_background_retry = durable_state.is_live
-        && durable_state.snapshotting_mode.is_none()
-        && durable_state.persistence_level != PersistenceLevel::PersistNothing
-        && !ctx.in_atomic_region()
-        && method_eligible
-        && body_ready_for_retry
-        && !state.retry.has_unreconstructable_body
-        && !state.retry.body_closed_without_finish
-        && !state.retry.has_outgoing_trailers
-        && !state.retry.output_stream_subscribed;
+    let enable_background_retry =
+        http_worker_state_allows_retry(&durable_state, ctx.in_atomic_region()).is_ok()
+            && method_eligible
+            && body_ready_for_retry
+            && !state.retry.has_unreconstructable_body
+            && !state.retry.body_closed_without_finish
+            && !state.retry.has_outgoing_trailers
+            && !state.retry.output_stream_subscribed;
 
     if !enable_background_retry {
         return Ok(());
@@ -143,14 +132,11 @@ pub(crate) async fn maybe_enable_http_pending_status_retry<Ctx: WorkerCtx>(
         return Ok(());
     }
 
-    if ctx.in_atomic_region() {
-        return Ok(());
-    }
-
     if is_http_inline_retry_eligible(
         &ctx.durable_execution_state(),
         &state,
         InlineRetryPhase::WritingRequestBody,
+        ctx.in_atomic_region(),
     )
     .is_err()
     {
@@ -281,52 +267,35 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .map_err(|err| HttpError::trap(wasmtime::Error::msg(err.to_string())))?;
 
         // wasmtime-wasi-http v45 marks outgoing-request headers immutable as soon as the
-        // guest constructs the request. Capture the field size limit so we can briefly
-        // remark the headers as mutable while we inject Golem-managed headers and then
-        // restore the immutable flag before continuing.
+        // guest constructs the request. Capture the field size limit so the shared header
+        // injection can briefly remark the headers as mutable while it injects
+        // Golem-managed headers and then restore the immutable flag before continuing.
         let field_size_limit = self.as_wasi_http_view().ctx.field_size_limit;
 
-        if self.state.forward_trace_context_headers {
-            let invocation_context = self
-                .state
-                .invocation_context
-                .get_stack(span.span_id())
-                .unwrap();
+        let guest_has_idempotency_key = self
+            .table()
+            .get(&request)?
+            .headers
+            .contains_key(HeaderName::from_static("idempotency-key"));
+
+        let managed_headers = golem_managed_http_headers(
+            self,
+            span.span_id(),
+            begin_index,
+            guest_has_idempotency_key,
+        )
+        .map_err(|err| HttpError::trap(wasmtime::Error::msg(err.to_string())))?;
+
+        if !managed_headers.is_empty() {
             let host_request = self.table().get_mut(&request)?;
-
-            let trace_context_headers =
-                TraceContextHeaders::from_invocation_context(invocation_context);
-            host_request.headers.set_mutable(field_size_limit);
-            for (key, value) in trace_context_headers.to_raw_headers_map() {
-                let header_name = HeaderName::from_str(&key).unwrap();
-                let _ = host_request.headers.remove_all(header_name.clone());
-                host_request
-                    .headers
-                    .append(header_name, HeaderValue::from_str(&value).unwrap())
-                    .map_err(HttpError::trap)?;
-                headers.insert(key, value);
-            }
-            host_request.headers.set_immutable();
-        }
-
-        if self.state.set_outgoing_http_idempotency_key {
-            let idempotency_key = self.derive_idempotency_key(begin_index);
-            let idempotency_key = idempotency_key.to_string();
-
-            let header_name = HeaderName::from_static("idempotency-key");
-
-            let host_request = self.table().get_mut(&request)?;
-            if !host_request.headers.contains_key(&header_name) {
-                host_request.headers.set_mutable(field_size_limit);
-                host_request
-                    .headers
-                    .append(
-                        header_name,
-                        HeaderValue::from_str(&idempotency_key).unwrap(),
-                    )
-                    .map_err(HttpError::trap)?;
-                host_request.headers.set_immutable();
-                headers.insert("idempotency-key".to_string(), idempotency_key);
+            apply_managed_http_headers(
+                &mut host_request.headers,
+                field_size_limit,
+                &managed_headers,
+            )
+            .map_err(|err| HttpError::trap(wasmtime::Error::msg(err)))?;
+            for (key, value) in &managed_headers {
+                headers.insert(key.clone(), value.clone());
             }
         }
 

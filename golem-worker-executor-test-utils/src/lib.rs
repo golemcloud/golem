@@ -43,8 +43,9 @@ use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{
-    AgentError, OplogEntry, PayloadId, PersistenceLevel, RawOplogPayload,
-    TimestampedUpdateDescription, types::ObjectMetadata,
+    AgentError, HostResponse, HostResponseP3HttpClientConsumeBodyChunk, OplogEntry, OplogPayload,
+    PayloadId, PersistenceLevel, RawOplogPayload, TimestampedUpdateDescription,
+    host_functions::HostFunctionName, types::ObjectMetadata, types::SerializableP3HttpBodyChunk,
 };
 use golem_common::model::plan::PlanId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -76,7 +77,7 @@ use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
 pub use golem_test_framework::dsl::PrecompiledComponent;
 use golem_worker_executor::durable_host::{
-    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
+    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState, SnapshotBoundaryBlocker,
 };
 use golem_worker_executor::model::{
     AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType,
@@ -111,7 +112,7 @@ use golem_worker_executor::services::golem_config::{
     ResourceLimitsDisabledConfig, SchedulerStorageConfig, SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
-use golem_worker_executor::services::oplog::{CommitLevel, Oplog, OplogService};
+use golem_worker_executor::services::oplog::{CommitLevel, Oplog, OplogService, OrderedOplogStart};
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::quota::QuotaService;
 use golem_worker_executor::services::rdbms::ignite::IgniteType;
@@ -147,7 +148,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, Weak};
 use std::time::Duration;
 use tempfile::TempDir;
@@ -638,6 +639,24 @@ impl TestWorkerExecutor {
             .try_get_worker(owned_agent_id)
             .await?;
         worker.eviction_class().await
+    }
+
+    /// Arms a one-shot gate that pauses `agent_id`'s next consume-body chunk
+    /// `End(Data)` append after the entry is durable in the underlying oplog
+    /// but before the wrapper's `Oplog::add` returns, so a test can race a
+    /// guest-side body-reader drop against an already-persisted chunk
+    /// delivery. Await the returned handle's `appended()` to learn the
+    /// producer is paused, then `release()` it. Must be armed before the
+    /// invocation that performs the gated read; re-arming replaces a
+    /// previously fired gate. See
+    /// [`AdditionalTestDeps::gate_first_consume_body_chunk_end`].
+    pub async fn gate_first_consume_body_chunk_end(
+        &self,
+        agent_id: &AgentId,
+    ) -> ConsumeBodyChunkEndGateHandle {
+        self.additional_test_deps
+            .gate_first_consume_body_chunk_end(agent_id.clone())
+            .await
     }
 
     /// Returns the per-worker memory requirement that the executor uses when
@@ -1226,6 +1245,18 @@ impl DurableWorkerCtxView<TestWorkerCtx> for TestWorkerCtx {
     }
 }
 
+impl wasmtime_wasi::WasiView for TestWorkerCtx {
+    fn ctx(&mut self) -> wasmtime_wasi::WasiCtxView<'_> {
+        self.durable_ctx.ctx()
+    }
+}
+
+impl wasmtime_wasi_http::p3::WasiHttpView for TestWorkerCtx {
+    fn http(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
+        self.durable_ctx.as_wasi_http_view_p3()
+    }
+}
+
 impl wasmtime_wasi::p2::bindings::cli::environment::Host for TestWorkerCtx {
     fn get_environment(
         &mut self,
@@ -1393,6 +1424,14 @@ impl InvocationHooks for TestWorkerCtx {
         self.durable_ctx.get_current_retry_point().await
     }
 
+    fn current_in_atomic_region(&self) -> bool {
+        self.durable_ctx.current_in_atomic_region()
+    }
+
+    fn current_atomic_region_had_side_effects(&self) -> bool {
+        self.durable_ctx.current_atomic_region_had_side_effects()
+    }
+
     fn enter_read_only_mode(&mut self, method_name: String) {
         self.durable_ctx.enter_read_only_mode(method_name)
     }
@@ -1423,6 +1462,10 @@ impl ResourceStore for TestWorkerCtx {
 
 #[async_trait]
 impl UpdateManagement for TestWorkerCtx {
+    fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker> {
+        self.durable_ctx.snapshot_boundary_blocker()
+    }
+
     fn begin_call_snapshotting_function(&mut self) {
         self.durable_ctx.begin_call_snapshotting_function()
     }
@@ -1663,7 +1706,6 @@ impl ResourceLimiterAsync for TestWorkerCtx {
         if delta > 0 {
             self.durable_ctx
                 .increase_memory(delta)
-                .await
                 .map_err(wasmtime::Error::from_anyhow)?;
             Ok(true)
         } else {
@@ -1753,7 +1795,7 @@ impl HostWasmRpc for TestWorkerCtx {
     async fn schedule_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+        scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
     ) -> anyhow::Result<ScheduledInvocationReceipt> {
@@ -1765,7 +1807,7 @@ impl HostWasmRpc for TestWorkerCtx {
     async fn schedule_cancelable_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+        scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
     ) -> anyhow::Result<CancelableScheduledInvocationReceipt> {
@@ -1780,28 +1822,8 @@ impl HostWasmRpc for TestWorkerCtx {
 }
 
 impl HostFutureInvokeResult for TestWorkerCtx {
-    async fn subscribe(
-        &mut self,
-        self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Resource<wasmtime_wasi::p2::DynPollable>> {
-        HostFutureInvokeResult::subscribe(&mut self.durable_ctx, self_).await
-    }
-
-    async fn get(
-        &mut self,
-        self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<
-        Option<Result<Option<golem_schema::schema::wit::wire::SchemaValueTree>, RpcError>>,
-    > {
-        HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
-    }
-
     async fn cancel(&mut self, self_: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         HostFutureInvokeResult::cancel(&mut self.durable_ctx, self_).await
-    }
-
-    async fn drop(&mut self, rep: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
-        HostFutureInvokeResult::drop(&mut self.durable_ctx, rep).await
     }
 }
 
@@ -2510,6 +2532,10 @@ struct TestOplog {
     owned_agent_id: OwnedAgentId,
     oplog: Arc<dyn Oplog>,
     additional_test_deps: AdditionalTestDeps,
+    /// Indices of `Start` entries this agent appended for durable consume-body
+    /// chunk reads, so the gated `add` below can recognize their matching `End`
+    /// appends (an `End` only carries its `start_index`).
+    consume_body_chunk_starts: Arc<std::sync::Mutex<HashSet<OplogIndex>>>,
 }
 
 impl TestOplog {
@@ -2522,7 +2548,52 @@ impl TestOplog {
             owned_agent_id,
             oplog,
             additional_test_deps,
+            consume_body_chunk_starts: Arc::new(std::sync::Mutex::new(HashSet::new())),
         }
+    }
+
+    /// Recognizes the `End` of a tracked consume-body chunk `Start` whose
+    /// response is a `Data` frame (the shape the vanished-demand-receiver gate
+    /// must pause at; terminal `End`/`Cancelled` chunk records don't qualify).
+    fn is_consume_body_chunk_data_end(&self, entry: &OplogEntry) -> bool {
+        let OplogEntry::End {
+            start_index,
+            response: Some(response),
+            ..
+        } = entry
+        else {
+            return false;
+        };
+        self.consume_body_chunk_starts
+            .lock()
+            .unwrap()
+            .contains(start_index)
+            && response_is_body_data_chunk(response)
+    }
+
+    /// Pauses at an armed consume-body chunk `End` gate: signals the test that
+    /// the entry (already appended by the caller) is durable, then blocks until
+    /// the test releases the gate. Fires at most once per gate.
+    async fn pause_at_consume_body_chunk_end_gate(&self) {
+        let Some(gate) = self
+            .additional_test_deps
+            .consume_body_chunk_end_gate(&self.owned_agent_id.agent_id)
+            .await
+        else {
+            return;
+        };
+        if !gate.armed.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        if let Some(appended_tx) = gate.appended_tx.lock().unwrap().take() {
+            let _ = appended_tx.send(());
+        }
+        let permit = gate
+            .release
+            .acquire()
+            .await
+            .expect("the consume-body chunk End gate semaphore was closed");
+        permit.forget();
     }
 
     async fn check_oplog_add(&self, entry: &OplogEntry) -> Result<(), String> {
@@ -2583,7 +2654,12 @@ impl TestOplog {
 #[async_trait]
 impl Oplog for TestOplog {
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
-        self.oplog.add(entry).await
+        let gated = self.is_consume_body_chunk_data_end(&entry);
+        let index = self.oplog.add(entry).await;
+        if gated {
+            self.pause_at_consume_body_chunk_end_gate().await;
+        }
+        index
     }
 
     async fn fallible_add(&self, entry: OplogEntry) -> Result<(), String> {
@@ -2643,6 +2719,35 @@ impl Oplog for TestOplog {
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         self.oplog.download_raw_payload(payload_id, md5_hash).await
+    }
+
+    async fn add_start_with_reserved_raw_payload(
+        &self,
+        serialized_request: Vec<u8>,
+        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+    ) -> Result<OrderedOplogStart, String> {
+        let ordered = self
+            .oplog
+            .add_start_with_reserved_raw_payload(serialized_request, build_start)
+            .await?;
+        if matches!(
+            &ordered.entry,
+            OplogEntry::Start {
+                function_name: HostFunctionName::P3HttpClientConsumeBodyChunk,
+                ..
+            }
+        ) && self
+            .additional_test_deps
+            .consume_body_chunk_end_gate(&self.owned_agent_id.agent_id)
+            .await
+            .is_some()
+        {
+            self.consume_body_chunk_starts
+                .lock()
+                .unwrap()
+                .insert(ordered.index);
+        }
+        Ok(ordered)
     }
 
     async fn switch_persistence_level(&self, mode: PersistenceLevel) {
@@ -2868,6 +2973,12 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
 pub struct AdditionalTestDeps {
     oplog_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     rdbms_tx_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
+    /// One-shot gates pausing the first consume-body chunk `End` append of an
+    /// agent inside the [`TestOplog`] wrapper — after the entry is durable in
+    /// the underlying oplog but before the wrapper's `Oplog::add` returns. Used
+    /// to deterministically race a guest-side body-reader drop against an
+    /// already-persisted chunk delivery.
+    consume_body_chunk_end_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyChunkEndGate>>>,
     /// Captured once on first call to [`TestWorkerCtx::create`]. Used by the
     /// read-only test helpers (`worker_is_loaded`,
     /// `worker_eviction_class`, `worker_memory_requirement`) to observe
@@ -2889,8 +3000,43 @@ impl AdditionalTestDeps {
         Self {
             oplog_failures,
             rdbms_tx_failures,
+            consume_body_chunk_end_gates: Arc::new(scc::HashMap::new()),
             active_workers: Arc::new(std::sync::OnceLock::new()),
         }
+    }
+
+    /// Arms a one-shot gate that pauses the given agent's next consume-body
+    /// chunk `End` append after it is durable but before the wrapper's
+    /// `Oplog::add` returns. Must be called before the invocation that
+    /// performs the gated body read (the gate is consulted by the agent's
+    /// [`TestOplog`] both when tracking chunk `Start` appends and on every
+    /// `End` append). Re-arming replaces a previously fired gate, so a test
+    /// can gate one read per executor run.
+    pub async fn gate_first_consume_body_chunk_end(
+        &self,
+        agent_id: AgentId,
+    ) -> ConsumeBodyChunkEndGateHandle {
+        let (appended_tx, appended_rx) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(ConsumeBodyChunkEndGate {
+            armed: AtomicBool::new(true),
+            appended_tx: std::sync::Mutex::new(Some(appended_tx)),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        self.consume_body_chunk_end_gates
+            .entry_async(agent_id)
+            .await
+            .and_modify(|existing| *existing = gate.clone())
+            .or_insert_with(|| gate.clone());
+        ConsumeBodyChunkEndGateHandle { appended_rx, gate }
+    }
+
+    async fn consume_body_chunk_end_gate(
+        &self,
+        agent_id: &AgentId,
+    ) -> Option<Arc<ConsumeBodyChunkEndGate>> {
+        self.consume_body_chunk_end_gates
+            .read_async(agent_id, |_, gate| gate.clone())
+            .await
     }
 
     /// Stores the executor's `ActiveWorkers` registry on first call. Subsequent
@@ -2949,6 +3095,84 @@ impl AdditionalTestDeps {
             .or_default();
 
         *inner.entry_async(entry).await.or_default().get_mut() += 1;
+    }
+}
+
+/// A one-shot pause point at an agent's first consume-body chunk `End` append,
+/// shared between [`AdditionalTestDeps`] (which arms it) and the agent's
+/// [`TestOplog`] (which trips it). The gated `Oplog::add` fires `appended_tx`
+/// only after the underlying oplog append returned — the `End` is durable — and
+/// then blocks until a `release` permit arrives, so a test can act (e.g. make
+/// the guest drop the body reader) in between with both sides settled.
+struct ConsumeBodyChunkEndGate {
+    armed: AtomicBool,
+    appended_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: tokio::sync::Semaphore,
+}
+
+/// Test-facing side of a [`ConsumeBodyChunkEndGate`]: await [`Self::appended`]
+/// to learn that the gated chunk `End` is durable and the producer is paused,
+/// then [`Self::release`] to let the paused `Oplog::add` return.
+pub struct ConsumeBodyChunkEndGateHandle {
+    appended_rx: tokio::sync::oneshot::Receiver<()>,
+    gate: Arc<ConsumeBodyChunkEndGate>,
+}
+
+impl ConsumeBodyChunkEndGateHandle {
+    /// Resolves once the gated consume-body chunk `End` has been appended to
+    /// the underlying oplog and the producer is paused inside `Oplog::add`.
+    pub async fn appended(&mut self) {
+        (&mut self.appended_rx)
+            .await
+            .expect("the consume-body chunk End gate was dropped without firing");
+    }
+
+    /// Releases the paused `Oplog::add`, letting the producer continue with
+    /// the guest-facing delivery of the persisted chunk.
+    pub fn release(&self) {
+        self.gate.release.add_permits(1);
+    }
+}
+
+impl Drop for ConsumeBodyChunkEndGateHandle {
+    /// A handle dropped without [`Self::release`] (e.g. by a failing test) must
+    /// not leave the gated producer blocked in `Oplog::add` forever, so dropping
+    /// releases the gate. The extra permit is harmless after an explicit
+    /// release because the gate fires at most once.
+    fn drop(&mut self) {
+        self.gate.release.add_permits(1);
+    }
+}
+
+/// Whether a persisted consume-body chunk `End` response is a `Data` frame.
+/// External payloads without an in-memory cache cannot be inspected
+/// synchronously and are treated as non-matching; the gated tests use small
+/// chunks that persist inline.
+fn response_is_body_data_chunk(payload: &OplogPayload<HostResponse>) -> bool {
+    fn is_data(response: &HostResponse) -> bool {
+        matches!(
+            response,
+            HostResponse::P3HttpClientConsumeBodyChunk(HostResponseP3HttpClientConsumeBodyChunk {
+                chunk: SerializableP3HttpBodyChunk::Data(_)
+            })
+        )
+    }
+    match payload {
+        OplogPayload::Inline(response) => is_data(response),
+        OplogPayload::SerializedInline {
+            cached: Some(response),
+            ..
+        } => is_data(response),
+        OplogPayload::SerializedInline {
+            bytes,
+            cached: None,
+        } => golem_common::serialization::deserialize::<HostResponse>(bytes)
+            .is_ok_and(|response| is_data(&response)),
+        OplogPayload::External {
+            cached: Some(response),
+            ..
+        } => is_data(response),
+        OplogPayload::External { cached: None, .. } => false,
     }
 }
 

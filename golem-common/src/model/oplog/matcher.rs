@@ -147,6 +147,10 @@ impl PublicOplogEntry {
                         })
                         .unwrap_or(false)
             }
+            PublicOplogEntry::CompletionDiscarded(_) => {
+                Self::string_match("CompletionDiscarded", &[], query_path, query)
+                    || Self::string_match("completion-discarded", &[], query_path, query)
+            }
             PublicOplogEntry::AgentInvocationStarted(params) => {
                 Self::string_match("agentinvocationstarted", &[], query_path, query)
                     || Self::string_match("invoke", &[], query_path, query)
@@ -464,6 +468,11 @@ impl PublicOplogEntry {
                 Self::string_match("cardexpired", &[], query_path, query)
                     || Self::string_match("card-expired", &[], query_path, query)
                     || Self::string_match(&params.card_id.to_string(), &[], query_path, query)
+            }
+            PublicOplogEntry::HostStreamFrame(params) => {
+                Self::string_match("hoststreamframe", &[], query_path, query)
+                    || Self::string_match("host-stream-frame", &[], query_path, query)
+                    || Self::match_typed_schema_value(&params.payload, &[], query_path, query)
             }
         }
     }

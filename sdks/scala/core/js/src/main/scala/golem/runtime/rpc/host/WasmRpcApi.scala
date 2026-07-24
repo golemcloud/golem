@@ -17,7 +17,7 @@
 package golem.runtime.rpc.host
 
 import golem.Datetime
-import golem.host.js.{JsDatetime, JsResult}
+import golem.host.js.JsDatetime
 import golem.host.js.schema.{JsAgentError, JsSchemaValueTree, JsTypedAgentConfigValue, JsUuid}
 import golem.runtime.rpc.{
   AsyncInvocation,
@@ -68,9 +68,17 @@ private[golem] object WasmRpcApi {
   }
 
   private def datetimeToJs(datetime: Datetime): JsDatetime = {
-    val totalMs = datetime.epochMillis
-    val seconds = js.BigInt((totalMs / 1000.0).toLong.toString)
-    val nanos   = ((totalMs % 1000.0) * 1e6).toInt
+    val totalMs            = datetime.epochMillis
+    val truncatedWholeMs   = if (totalMs < 0.0) Math.ceil(totalMs) else Math.floor(totalMs)
+    val wholeMs            = js.BigInt(truncatedWholeMs)
+    val millisPerSecond    = js.BigInt(1000)
+    val truncatedSeconds   = wholeMs / millisPerSecond
+    val remainingWholeMs   = (wholeMs % millisPerSecond).toString.toInt
+    val remainingPartialMs = totalMs  % 1.0
+    val truncatedNanos     = remainingWholeMs * 1000000 + (remainingPartialMs * 1e6).toInt
+    val (seconds, nanos)   =
+      if (truncatedNanos < 0) (truncatedSeconds - js.BigInt(1), truncatedNanos + 1000000000)
+      else (truncatedSeconds, truncatedNanos)
     JsDatetime(seconds, nanos)
   }
 
@@ -230,9 +238,8 @@ private[golem] object WasmRpcApi {
   @js.native
   @JSImport("golem:agent/host@2.0.0", "FutureInvokeResult")
   private[rpc] class RawFutureInvokeResult extends js.Object {
-    def subscribe(): AgentHostApi.Pollable                                     = js.native
-    def get(): js.UndefOr[JsResult[js.UndefOr[JsSchemaValueTree], JsRpcError]] = js.native
-    def cancel(): Unit                                                         = js.native
+    def get(): js.Promise[js.UndefOr[JsSchemaValueTree]] = js.native
+    def cancel(): Unit                                   = js.native
   }
 
   @js.native

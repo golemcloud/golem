@@ -1408,13 +1408,13 @@ async fn test_moonbit_agent_guest_bridge_e2e() {
               { name, }
             }
 
-            pub fn CounterConsumerAgent::increment_provider(
+            pub async fn CounterConsumerAgent::increment_provider(
               self : Self,
               provider_name : String,
-            ) -> String raise @common.AgentError {
+            ) -> String {
               @providerClient.CounterAgentClient::scoped(
                 provider_name,
-                fn(provider) raise @common.AgentError {
+                async fn(provider) {
                   "ok:" + provider.increment().to_string()
                 },
               )
@@ -1571,7 +1571,7 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
               { name, }
             }
 
-            pub fn EchoConsumerAgent::call_echo(self : Self, message : String) -> String {
+            pub async fn EchoConsumerAgent::call_echo(self : Self, message : String) -> String {
               let client = @echoClient.EchoClient::new()
               let result = client.echo(message)
               client.drop()

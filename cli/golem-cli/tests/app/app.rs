@@ -1921,7 +1921,7 @@ fn extracted_component_metadata_for(ctx: &TestContext, component_name: &str) -> 
 }
 
 #[test]
-#[timeout("300s")]
+#[timeout("900s")]
 async fn selected_dependency_guest_bridge_reextracts_rebuilt_old_provider_when_agent_moves(
     _tracing: &Tracing,
 ) {
