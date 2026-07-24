@@ -36,7 +36,7 @@ use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorEr
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::component::Component;
 use golem_worker_executor::durable_host::{
-    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
+    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState, SnapshotBoundaryBlocker,
 };
 use golem_worker_executor::model::{
     AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType,
@@ -283,8 +283,8 @@ impl InvocationHooks for DebugContext {
 
 #[async_trait]
 impl UpdateManagement for DebugContext {
-    fn is_at_safe_snapshot_boundary(&self) -> bool {
-        self.durable_ctx.is_at_safe_snapshot_boundary()
+    fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker> {
+        self.durable_ctx.snapshot_boundary_blocker()
     }
 
     fn begin_call_snapshotting_function(&mut self) {

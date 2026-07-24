@@ -4315,3 +4315,485 @@ async fn reserved_small_request_stays_inline(_tracing: &Tracing) {
         other => panic!("unexpected request: {other:?}"),
     }
 }
+
+fn reserved_start_entry_builder(
+    function_name: &str,
+) -> impl FnOnce(OplogPayload<HostRequest>) -> OplogEntry + Send + 'static {
+    let function_name = HostFunctionName::Custom(function_name.to_string());
+    move |request_payload| OplogEntry::Start {
+        timestamp: Timestamp::now_utc(),
+        parent_start_index: None,
+        function_name,
+        request: Some(request_payload),
+        durable_function_type: DurableFunctionType::ReadRemote,
+    }
+}
+
+fn reserved_start_function_name(entry: &OplogEntry) -> String {
+    match entry {
+        OplogEntry::Start {
+            function_name: HostFunctionName::Custom(name),
+            ..
+        } => name.clone(),
+        other => panic!("unexpected entry: {other:?}"),
+    }
+}
+
+/// Reserved-start on a multi-layer oplog delegates to the primary leaf (which owns the
+/// `Start`-ordering critical section) and keeps the multi-layer's exposed last oplog index in
+/// lockstep with the indices the primary assigned.
+#[test]
+async fn multilayer_reserved_start_delegates_to_primary_and_tracks_last_index(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default()),
+    );
+    let tertiary_layer: Arc<dyn OplogArchiveService> =
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer, tertiary_layer],
+        10,
+        10,
+    ));
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "test".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+
+    let base = oplog.current_oplog_index().await;
+
+    let (first_idx, first_pending) = oplog
+        .add_start_with_reserved_payload(
+            HostRequest::Custom("first".into_typed_schema_value().unwrap()),
+            reserved_start_entry_builder("first"),
+        )
+        .await
+        .unwrap();
+    let (second_idx, second_pending) = oplog
+        .add_start_with_reserved_payload(
+            HostRequest::Custom("second".into_typed_schema_value().unwrap()),
+            reserved_start_entry_builder("second"),
+        )
+        .await
+        .unwrap();
+
+    // Delegated to the primary in initiation order...
+    assert_eq!(first_idx, base.next());
+    assert_eq!(second_idx, first_idx.next());
+    // ...and the multi-layer's exposed last index followed the primary's assignments.
+    assert_eq!(oplog.current_oplog_index().await, second_idx);
+
+    first_pending.wait().await.unwrap();
+    second_pending.wait().await.unwrap();
+    oplog.commit(CommitLevel::Always).await;
+
+    let entries = oplog_service
+        .read(&owned_agent_id, AgentMode::Durable, first_idx, 2)
+        .await;
+    assert_eq!(
+        entries
+            .values()
+            .map(reserved_start_function_name)
+            .collect::<Vec<_>>(),
+        vec!["first".to_string(), "second".to_string()]
+    );
+}
+
+/// Reserved-start on an ephemeral oplog uploads the request payload eagerly: the payload blob is
+/// already durable in storage when the call returns, before any commit. Ephemeral oplogs are never
+/// replayed, so — unlike replayable oplogs — reserved-start makes no cross-call initiation-order
+/// promise here, and this test intentionally does not assert one.
+#[test]
+async fn ephemeral_reserved_start_uploads_payload_eagerly(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default()),
+    );
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer],
+        10,
+        10,
+    ));
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "ephemeral-reserved".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let create_entry = OplogEntry::create(
+        agent_id.clone(),
+        AgentMode::Ephemeral,
+        ComponentRevision::new(1).unwrap(),
+        Vec::new(),
+        environment_id,
+        account_id,
+        None,
+        100,
+        100,
+        HashSet::new(),
+        Vec::new(),
+        None,
+        Uuid::new_v4(),
+    )
+    .rounded();
+    let mut metadata = make_agent_metadata(agent_id, account_id, environment_id);
+    metadata.agent_mode = AgentMode::Ephemeral;
+    let oplog = oplog_service
+        .create(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            create_entry,
+            metadata,
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+
+    // The primary's max_payload_size is 100 bytes, so this request is stored externally.
+    let large_payload = vec![7u8; 64 * 1024];
+    let request = HostRequest::Custom(large_payload.into_typed_schema_value().unwrap());
+    let serialized_request = golem_common::serialization::serialize(&request).unwrap();
+
+    let (start_idx, pending) = oplog
+        .add_start_with_reserved_payload(request, reserved_start_entry_builder("large"))
+        .await
+        .unwrap();
+    // The upload already happened eagerly; waiting is a no-op.
+    pending.wait().await.unwrap();
+
+    // Without any commit, the entry is visible through the uncommitted buffer and the payload
+    // blob is already durable: download the raw bytes directly from storage (bypassing the
+    // in-memory cache embedded in the returned payload reference).
+    let entry = oplog.read(start_idx).await;
+    let (payload_id, md5_hash) = match &entry {
+        OplogEntry::Start {
+            request:
+                Some(OplogPayload::External {
+                    payload_id,
+                    md5_hash,
+                    ..
+                }),
+            ..
+        } => (payload_id.clone(), md5_hash.clone()),
+        other => panic!("expected an externally stored request, got: {other:?}"),
+    };
+    let downloaded = oplog
+        .download_raw_payload(payload_id, md5_hash)
+        .await
+        .unwrap();
+    assert_eq!(downloaded, serialized_request);
+}
+
+/// Smoke test for reserved-start through the actual production oplog stack, in the exact wrapper
+/// order composed in `lib.rs`: `RateLimited(Forwarding(MultiLayer(Primary)))`. Verifies initiation
+/// ordering, large-payload external storage with durable download, and inline small payloads all
+/// survive the full stack.
+#[test]
+async fn reserved_start_through_production_stack_smoke(_tracing: &Tracing) {
+    use crate::services::component::ComponentService;
+    use crate::services::oplog::plugin::{ForwardingOplogService, OplogProcessorPlugin};
+    use crate::services::oplog::rate_limited::RateLimitedOplogService;
+    use crate::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
+    use golem_common::model::InvocationStatus;
+    use golem_common::model::application::ApplicationId;
+    use golem_common::model::component::InstalledPlugin;
+    use golem_service_base::model::component::Component;
+
+    /// The worker has no active oplog processor plugins, so the forwarding layer never consults
+    /// the plugin service; every method is unreachable.
+    #[derive(Debug)]
+    struct NoPluginsOplogProcessorPlugin;
+
+    #[async_trait::async_trait]
+    impl OplogProcessorPlugin for NoPluginsOplogProcessorPlugin {
+        async fn resolve_target(
+            &self,
+            _environment_id: EnvironmentId,
+            _plugin: &InstalledPlugin,
+        ) -> Result<AgentId, WorkerExecutorError> {
+            unreachable!("no active plugins in this test")
+        }
+
+        async fn send(
+            &self,
+            _worker_metadata: AgentMetadata,
+            _plugin: &InstalledPlugin,
+            _target_agent_id: &AgentId,
+            _initial_oplog_index: OplogIndex,
+            _entries: Vec<OplogEntry>,
+        ) -> Result<(), WorkerExecutorError> {
+            unreachable!("no active plugins in this test")
+        }
+
+        async fn invalidate_target(
+            &self,
+            _environment_id: EnvironmentId,
+            _plugin: &InstalledPlugin,
+        ) {
+            unreachable!("no active plugins in this test")
+        }
+
+        async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
+
+        async fn is_local(&self, _agent_id: &AgentId) -> Result<bool, WorkerExecutorError> {
+            unreachable!("no active plugins in this test")
+        }
+
+        async fn lookup_invocation_status(
+            &self,
+            _environment_id: EnvironmentId,
+            _target_agent_id: &AgentId,
+            _caller_account_id: AccountId,
+            _idempotency_key: &IdempotencyKey,
+        ) -> Result<InvocationStatus, WorkerExecutorError> {
+            unreachable!("no active plugins in this test")
+        }
+    }
+
+    /// Component metadata is only fetched when a plugin flush happens; with no active plugins
+    /// every method is unreachable.
+    struct NoComponentsComponentService;
+
+    #[async_trait::async_trait]
+    impl ComponentService for NoComponentsComponentService {
+        async fn get(
+            &self,
+            _engine: &wasmtime::Engine,
+            _component_id: ComponentId,
+            _component_revision: ComponentRevision,
+        ) -> Result<(wasmtime::component::Component, Component), WorkerExecutorError> {
+            unreachable!("no active plugins in this test")
+        }
+
+        async fn get_metadata(
+            &self,
+            _component_id: ComponentId,
+            _forced_revision: Option<ComponentRevision>,
+        ) -> Result<Component, WorkerExecutorError> {
+            unreachable!("no active plugins in this test")
+        }
+
+        async fn resolve_component(
+            &self,
+            _component_reference: String,
+            _resolving_environment: EnvironmentId,
+            _resolving_application: ApplicationId,
+            _resolving_account: AccountId,
+        ) -> Result<Option<ComponentId>, WorkerExecutorError> {
+            unreachable!("no active plugins in this test")
+        }
+
+        async fn all_cached_metadata(&self) -> Vec<Component> {
+            Vec::new()
+        }
+
+        async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
+    }
+
+    /// Unlimited limits ([`AtomicResourceEntry::new`] defaults to the unlimited oplog write
+    /// rate), so the rate-limited wrapper admits every write immediately.
+    struct UnlimitedResourceLimits;
+
+    #[async_trait::async_trait]
+    impl ResourceLimits for UnlimitedResourceLimits {
+        async fn initialize_account(
+            &self,
+            _account_id: AccountId,
+        ) -> Result<Arc<AtomicResourceEntry>, WorkerExecutorError> {
+            Ok(Arc::new(AtomicResourceEntry::new(
+                u64::MAX,
+                usize::MAX,
+                usize::MAX,
+                u64::MAX,
+                AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            )))
+        }
+    }
+
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default()),
+    );
+    let tertiary_layer: Arc<dyn OplogArchiveService> =
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
+    let multilayer_oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service,
+        nev![secondary_layer, tertiary_layer],
+        10,
+        10,
+    ));
+    let forwarding_oplog_service = Arc::new(ForwardingOplogService::new(
+        multilayer_oplog_service,
+        Arc::new(NoPluginsOplogProcessorPlugin),
+        Arc::new(NoComponentsComponentService),
+        100,
+        Duration::from_secs(3600),
+    ));
+    let oplog_service: Arc<dyn OplogService> = Arc::new(RateLimitedOplogService::new(
+        forwarding_oplog_service,
+        Arc::new(UnlimitedResourceLimits),
+    ));
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "production-stack".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+
+    let base = oplog.current_oplog_index().await;
+
+    // The primary's max_payload_size is 100 bytes: the first request goes external (deferred
+    // upload behind the commit barrier), the second stays inline. Deliberately drop the large
+    // call's `PendingUpload` without awaiting it: the leaf commit barrier must still make the
+    // external blob durable.
+    let large_payload = vec![7u8; 64 * 1024];
+    let (large_idx, _pending) = oplog
+        .add_start_with_reserved_payload(
+            HostRequest::Custom(large_payload.clone().into_typed_schema_value().unwrap()),
+            reserved_start_entry_builder("large"),
+        )
+        .await
+        .unwrap();
+    let (small_idx, small_pending) = oplog
+        .add_start_with_reserved_payload(
+            HostRequest::Custom("small".into_typed_schema_value().unwrap()),
+            reserved_start_entry_builder("small"),
+        )
+        .await
+        .unwrap();
+
+    // Initiation order is preserved through the full production wrapper stack.
+    assert_eq!(large_idx, base.next());
+    assert_eq!(small_idx, large_idx.next());
+    small_pending.wait().await.unwrap();
+
+    oplog.commit(CommitLevel::Always).await;
+
+    // Read back through the service stack (no in-memory cache).
+    let entries = oplog_service
+        .read(&owned_agent_id, AgentMode::Durable, large_idx, 2)
+        .await;
+    assert_eq!(
+        entries
+            .values()
+            .map(reserved_start_function_name)
+            .collect::<Vec<_>>(),
+        vec!["large".to_string(), "small".to_string()]
+    );
+
+    let large_stored = match entries.get(&large_idx).unwrap() {
+        OplogEntry::Start {
+            request: Some(payload),
+            ..
+        } => {
+            assert!(
+                matches!(payload, OplogPayload::External { .. }),
+                "a large reserved request must be stored externally"
+            );
+            payload.clone()
+        }
+        other => panic!("unexpected entry: {other:?}"),
+    };
+    let downloaded: HostRequest = oplog_service
+        .download_payload(&owned_agent_id, AgentMode::Durable, large_stored)
+        .await
+        .unwrap();
+    match downloaded {
+        HostRequest::Custom(vnt) => {
+            assert_eq!(Vec::<u8>::from_value(vnt.value()).unwrap(), large_payload);
+        }
+        other => panic!("unexpected request: {other:?}"),
+    }
+
+    let small_stored = match entries.get(&small_idx).unwrap() {
+        OplogEntry::Start {
+            request: Some(payload),
+            ..
+        } => {
+            assert!(
+                matches!(payload, OplogPayload::SerializedInline { .. }),
+                "a small reserved request must be stored inline"
+            );
+            payload.clone()
+        }
+        other => panic!("unexpected entry: {other:?}"),
+    };
+    let downloaded: HostRequest = oplog_service
+        .download_payload(&owned_agent_id, AgentMode::Durable, small_stored)
+        .await
+        .unwrap();
+    match downloaded {
+        HostRequest::Custom(vnt) => {
+            assert_eq!(String::from_value(vnt.value()).unwrap(), "small");
+        }
+        other => panic!("unexpected request: {other:?}"),
+    }
+}

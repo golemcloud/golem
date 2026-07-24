@@ -224,6 +224,13 @@ async fn apply_invocation_deadline<Ctx: WorkerCtx>(
     }
 }
 
+/// Pure settlement predicate for [`run_guest_call_settled`]: an invocation's tail work is
+/// settled when no tracked spawned store task is active (every one has finished or parked at a
+/// safe park point) and no task holds an open replay-cursor transaction.
+fn tail_work_settled(active_spawned_tasks: usize, replay_cursor_open: bool) -> bool {
+    active_spawned_tasks == 0 && !replay_cursor_open
+}
+
 /// Runs a guest export call on the store's event loop, draining Golem-spawned tail work before
 /// returning.
 ///
@@ -286,7 +293,7 @@ async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
         tracing::debug!(
             "invocation tail-work settlement check: {active} spawned task(s) active, replay cursor open: {replay_cursor_open}"
         );
-        active == 0 && !replay_cursor_open
+        tail_work_settled(active, replay_cursor_open)
     };
     let tail_work_deadline = store
         .data()
@@ -1387,5 +1394,26 @@ mod tests {
             validate_invoke_output(METHOD_NAME, &expected, &SchemaValue::Bool(true)).is_err(),
             "mismatched ref output must be rejected"
         );
+    }
+
+    #[test]
+    fn tail_work_settlement_truth_table() {
+        let cases = [
+            // (active_spawned_tasks, replay_cursor_open, expected)
+            (0, false, true),
+            // An active spawned task (pending durable append or I/O) blocks settlement.
+            (1, false, false),
+            (3, false, false),
+            // An open replay-cursor transaction blocks settlement even with no active task.
+            (0, true, false),
+            (2, true, false),
+        ];
+        for (active_spawned_tasks, replay_cursor_open, expected) in cases {
+            assert_eq!(
+                tail_work_settled(active_spawned_tasks, replay_cursor_open),
+                expected,
+                "active_spawned_tasks: {active_spawned_tasks}, replay_cursor_open: {replay_cursor_open}"
+            );
+        }
     }
 }

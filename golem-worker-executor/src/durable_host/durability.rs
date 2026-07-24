@@ -1395,7 +1395,7 @@ pub enum OplogEntryVersion {
 }
 
 /// Holds the in-function retry decision logic for a single durable host call, decoupled from how
-/// the call's request/response is persisted or replayed. Both the legacy [`Durability`] and the
+/// the call's request/response is persisted or replayed. Both the sequential [`Durability`] and the
 /// concurrent [`crate::durable_host::concurrent::CallHandle`] own one and route their
 /// `try_trigger_retry*` methods through it, so the retry logic has a single home.
 ///

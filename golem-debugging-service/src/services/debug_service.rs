@@ -1117,6 +1117,14 @@ mod tests {
             unimplemented!()
         }
 
+        async fn add_pair(
+            &self,
+            _start: OplogEntry,
+            _make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+        ) -> (OplogIndex, OplogIndex) {
+            unimplemented!()
+        }
+
         async fn add_start_with_reserved_raw_payload(
             &self,
             _serialized_request: Vec<u8>,
@@ -1206,6 +1214,14 @@ mod tests {
     #[async_trait]
     impl Oplog for TestOplog {
         async fn add(&self, _entry: OplogEntry) -> OplogIndex {
+            unimplemented!()
+        }
+
+        async fn add_pair(
+            &self,
+            _start: OplogEntry,
+            _make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+        ) -> (OplogIndex, OplogIndex) {
             unimplemented!()
         }
 

@@ -92,24 +92,10 @@ enum CreateInstanceResult<Ctx: WorkerCtx> {
 }
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
-    fn interrupt_decision(kind: InterruptKind) -> RetryDecision {
-        match kind {
-            InterruptKind::Restart | InterruptKind::Jump => RetryDecision::Immediate,
-            _ => RetryDecision::None,
-        }
-    }
-
     async fn pending_interrupt(&self) -> Option<(InterruptKind, RetryDecision)> {
         take_pending_interrupt(&self.interrupt_signal)
             .await
-            .map(|interrupt| {
-                let decision = if interrupt.reacquire_permits {
-                    RetryDecision::ReacquirePermits
-                } else {
-                    Self::interrupt_decision(interrupt.kind)
-                };
-                (interrupt.kind, decision)
-            })
+            .map(|interrupt| (interrupt.kind, interrupt.retry_decision()))
     }
 
     /// Runs the invocation loop of a running worker, responsible for processing incoming
@@ -908,16 +894,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
     /// Performs an interrupt request
     async fn interrupt(&self, interrupt: PendingWorkerInterrupt) -> CommandOutcome {
-        if interrupt.reacquire_permits {
-            CommandOutcome::BreakInnerLoop(RetryDecision::ReacquirePermits)
-        } else {
-            match interrupt.kind {
-                InterruptKind::Restart | InterruptKind::Jump => {
-                    CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
-                }
-                _ => CommandOutcome::BreakInnerLoop(RetryDecision::None),
-            }
-        }
+        CommandOutcome::BreakInnerLoop(interrupt.retry_decision())
     }
 }
 
@@ -1269,12 +1246,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         // The saved snapshot becomes the replay cut point of the snapshot-based update: after the
         // update, replay starts from the snapshot and skips everything before it. No durable call
         // or scope may span that cut, so refuse the update while any is still open.
-        if !self.store.data().is_at_safe_snapshot_boundary() {
+        if let Some(blocker) = self.store.data().snapshot_boundary_blocker() {
             return self
                 .fail_update(
                     target_revision,
-                    "cannot take a snapshot for the update: durable calls or scopes are still open"
-                        .to_string(),
+                    format!("cannot take a snapshot for the update: {blocker}"),
                 )
                 .await;
         }
@@ -1526,10 +1502,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         // A committed snapshot is a replay cut point (snapshot-based recovery skips everything
         // before it), so no durable call or scope may span it. Skip this periodic snapshot when
         // the worker is not at a safe boundary; the next scheduled snapshot will retry.
-        if !self.store.data().is_at_safe_snapshot_boundary() {
-            warn!(
-                "Skipping periodic snapshot: durable calls or scopes are still open at the snapshot point"
-            );
+        if let Some(blocker) = self.store.data().snapshot_boundary_blocker() {
+            warn!("Skipping periodic snapshot: {blocker}");
             return CommandOutcome::Continue;
         }
 

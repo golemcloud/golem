@@ -3688,6 +3688,21 @@ impl PendingWorkerInterrupt {
     fn is_terminal(&self) -> bool {
         !matches!(self.kind, InterruptKind::Restart | InterruptKind::Jump)
     }
+
+    /// How the invocation loop should proceed after honoring this interrupt: restart-like
+    /// interrupts (`Restart`, `Jump`) retry immediately, terminal ones do not retry at all, and a
+    /// permit-reacquisition request overrides both because the retry must go back through the
+    /// admission gate.
+    fn retry_decision(&self) -> RetryDecision {
+        if self.reacquire_permits {
+            RetryDecision::ReacquirePermits
+        } else {
+            match self.kind {
+                InterruptKind::Restart | InterruptKind::Jump => RetryDecision::Immediate,
+                InterruptKind::Interrupt(_) | InterruptKind::Suspend(_) => RetryDecision::None,
+            }
+        }
+    }
 }
 
 impl WorkerInterruptState {
@@ -4567,6 +4582,67 @@ mod tests {
             TargetChargeAction::Retry,
             "a transient resolution failure must retry, not fall back: create_instance may still load the target, so charging the current revision would under-reserve and mis-key the charge"
         );
+    }
+
+    #[test]
+    fn interrupt_retry_decision_matrix() {
+        fn decision(kind: InterruptKind, reacquire_permits: bool) -> RetryDecision {
+            PendingWorkerInterrupt {
+                kind,
+                reacquire_permits,
+            }
+            .retry_decision()
+        }
+
+        // Restart-like interrupts retry immediately.
+        assert_eq!(
+            decision(InterruptKind::Restart, false),
+            RetryDecision::Immediate
+        );
+        assert_eq!(
+            decision(InterruptKind::Jump, false),
+            RetryDecision::Immediate
+        );
+
+        // Terminal interrupts do not retry.
+        assert_eq!(
+            decision(InterruptKind::Interrupt(Timestamp::now_utc()), false),
+            RetryDecision::None
+        );
+        assert_eq!(
+            decision(InterruptKind::Suspend(Timestamp::now_utc()), false),
+            RetryDecision::None
+        );
+
+        // Permit reacquisition overrides the kind-based decision for every kind.
+        for kind in [
+            InterruptKind::Restart,
+            InterruptKind::Jump,
+            InterruptKind::Interrupt(Timestamp::now_utc()),
+            InterruptKind::Suspend(Timestamp::now_utc()),
+        ] {
+            assert_eq!(
+                decision(kind, true),
+                RetryDecision::ReacquirePermits,
+                "reacquire_permits must override the kind-based decision"
+            );
+        }
+    }
+
+    #[test]
+    fn interrupt_terminality_matrix() {
+        fn terminal(kind: InterruptKind) -> bool {
+            PendingWorkerInterrupt {
+                kind,
+                reacquire_permits: false,
+            }
+            .is_terminal()
+        }
+
+        assert!(!terminal(InterruptKind::Restart));
+        assert!(!terminal(InterruptKind::Jump));
+        assert!(terminal(InterruptKind::Interrupt(Timestamp::now_utc())));
+        assert!(terminal(InterruptKind::Suspend(Timestamp::now_utc())));
     }
 }
 

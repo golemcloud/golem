@@ -14,7 +14,9 @@
 
 use super::LogEventEmitBehaviour;
 use crate::durable_host::websocket::WebSocketConnectionPool;
-use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
+use crate::durable_host::{
+    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState, SnapshotBoundaryBlocker,
+};
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
 use crate::preview2::golem::agent::host::{
@@ -574,8 +576,8 @@ impl ResourceStore for Context {
 
 #[async_trait]
 impl UpdateManagement for Context {
-    fn is_at_safe_snapshot_boundary(&self) -> bool {
-        self.durable_ctx.is_at_safe_snapshot_boundary()
+    fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker> {
+        self.durable_ctx.snapshot_boundary_blocker()
     }
 
     fn begin_call_snapshotting_function(&mut self) {

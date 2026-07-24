@@ -84,6 +84,17 @@ impl Oplog for DebugOplog {
         OplogIndex::NONE
     }
 
+    // Mirrors `add`: a debugging session never writes to the oplog, so both entries are built (to
+    // satisfy the closure contract) and discarded.
+    async fn add_pair(
+        &self,
+        _start: OplogEntry,
+        make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+    ) -> (OplogIndex, OplogIndex) {
+        let _second = make_second(OplogIndex::NONE);
+        (OplogIndex::NONE, OplogIndex::NONE)
+    }
+
     // Mirrors `add`: a debugging session never writes to the oplog, so this builds the `Start` (to
     // satisfy the return type) but does not persist it.
     async fn add_start_with_reserved_raw_payload(

@@ -907,9 +907,9 @@ impl PrimaryOplog {
     }
 }
 
-/// A snapshot of [`PrimaryOplogState`] sufficient to serve reads. Reads run on this snapshot
-/// after the state lock has been released, so read I/O never holds the lock (see the
-/// lock-discipline note on [`PrimaryOplog::state`]). The buffer snapshot keeps both single and
+/// A snapshot of [`PrimaryOplogState`] sufficient to serve reads. The actor hands this snapshot
+/// to the caller, which performs the read I/O itself, off the actor task — so large reads never
+/// head-of-line block writes (see [`OplogJob::Reader`]). The buffer snapshot keeps both single and
 /// batched reads' visibility of not-yet-committed entries.
 struct OplogReader {
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
@@ -1086,11 +1086,10 @@ impl PrimaryOplogState {
     /// registers it for the commit barrier — **without** awaiting the upload.
     ///
     /// Intentionally a non-`async` `fn`: computing the reference, spawning the upload, and
-    /// registering the [`PendingUpload`] happen as one non-yielding step under the held state lock.
-    /// The caller (`PrimaryOplog::add_start_with_reserved_raw_payload`) keeps the lock held and
-    /// builds and `push`es the `Start` from this reference with no `.await` in between, so concurrent
-    /// calls' `Start` entries stay in initiation order. That no-`.await` window is enforced at
-    /// compile time by the returned `!Send` [`ReserveGuard`].
+    /// registering the [`PendingUpload`] happen as one non-yielding step inside the actor's
+    /// `AddStart` job handler, which then builds and `push`es the `Start` from this reference with
+    /// no `.await` in between, so concurrent calls' `Start` entries stay in initiation order. That
+    /// no-`.await` window is enforced at compile time by the returned `!Send` [`ReserveGuard`].
     fn reserve_raw_payload(&mut self, data: Vec<u8>) -> ReservedPayload {
         if data.len() > self.max_payload_size {
             let payload_id = PayloadId::new();
@@ -1245,8 +1244,8 @@ impl PrimaryOplogState {
         self.last_oplog_idx
     }
 
-    /// Snapshots everything needed to serve reads without holding the state lock across storage
-    /// I/O (see the lock-discipline note on [`PrimaryOplog::state`]).
+    /// Snapshots everything needed to serve reads off the actor task, so read I/O never blocks
+    /// the actor's job loop (see [`OplogJob::Reader`]).
     fn reader(&self) -> OplogReader {
         OplogReader {
             indexed_storage: self.indexed_storage.clone(),
@@ -1261,8 +1260,8 @@ impl PrimaryOplogState {
     }
 
     /// Whether the buffer has grown past the commit threshold and a commit should be scheduled.
-    /// The commit itself always runs on the committer task; see the lock-discipline note on
-    /// [`PrimaryOplog::state`].
+    /// The commit itself always runs inside the actor, before the triggering job replies (see
+    /// the note on [`OplogJob`]).
     fn over_commit_threshold(&self) -> bool {
         let limit = match &self.persistence_level {
             PersistenceLevel::PersistNothing => {

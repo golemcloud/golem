@@ -347,6 +347,14 @@ mod tests {
             unreachable!("oplog is unused by promise waits")
         }
 
+        async fn add_pair(
+            &self,
+            _start: OplogEntry,
+            _make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+        ) -> (OplogIndex, OplogIndex) {
+            unreachable!("oplog is unused by promise waits")
+        }
+
         async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
             unreachable!("oplog is unused by this test")
         }
@@ -484,6 +492,14 @@ mod tests {
     #[async_trait]
     impl Oplog for StubOplog {
         async fn add(&self, _entry: OplogEntry) -> OplogIndex {
+            unreachable!("oplog writes are unused by wakeup scheduling")
+        }
+
+        async fn add_pair(
+            &self,
+            _start: OplogEntry,
+            _make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+        ) -> (OplogIndex, OplogIndex) {
             unreachable!("oplog writes are unused by wakeup scheduling")
         }
 

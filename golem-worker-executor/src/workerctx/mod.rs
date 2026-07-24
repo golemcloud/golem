@@ -14,8 +14,8 @@
 
 pub mod default;
 
-use crate::durable_host::DurableWorkerCtxView;
 use crate::durable_host::websocket::WebSocketConnectionPool;
+use crate::durable_host::{DurableWorkerCtxView, SnapshotBoundaryBlocker};
 use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
@@ -383,14 +383,14 @@ pub trait InvocationHooks {
 
 #[async_trait]
 pub trait UpdateManagement {
-    /// Whether the worker is currently at a boundary where a snapshot may be taken and
-    /// committed.
+    /// The first condition currently blocking a snapshot from being taken and committed, or
+    /// `None` when the worker is at a safe snapshot boundary.
     ///
     /// A committed snapshot is a replay cut point: snapshot-based recovery and snapshot-based
     /// update skip every oplog entry before the snapshot. No durable construct may span that
-    /// cut, so this is false while any durable host call is in flight or any durable scope or
-    /// atomic region is open.
-    fn is_at_safe_snapshot_boundary(&self) -> bool;
+    /// cut, so this is `Some` while any durable host call is in flight or any durable scope or
+    /// atomic region is open. The returned blocker names the specific condition for diagnostics.
+    fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker>;
 
     /// Marks the beginning of a snapshot function call. This can be used to disabled persistence
     fn begin_call_snapshotting_function(&mut self);

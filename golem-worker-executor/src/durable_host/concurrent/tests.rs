@@ -647,6 +647,16 @@ impl Oplog for InMemoryOplog {
         OplogIndex::from_u64(entries.len() as u64)
     }
 
+    async fn add_pair(
+        &self,
+        _start: OplogEntry,
+        _make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+    ) -> (OplogIndex, OplogIndex) {
+        // The concurrent (p3) durability path under test never writes sequential-adapter pairs,
+        // and a routed-through-`add` implementation could not honor the atomic pair contract.
+        unreachable!("add_pair is not used by the concurrent durability tests")
+    }
+
     async fn add_start_with_reserved_raw_payload(
         &self,
         serialized_request: Vec<u8>,

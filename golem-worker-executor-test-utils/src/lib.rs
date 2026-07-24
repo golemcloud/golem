@@ -77,7 +77,7 @@ use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
 pub use golem_test_framework::dsl::PrecompiledComponent;
 use golem_worker_executor::durable_host::{
-    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
+    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState, SnapshotBoundaryBlocker,
 };
 use golem_worker_executor::model::{
     AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType,
@@ -1462,8 +1462,8 @@ impl ResourceStore for TestWorkerCtx {
 
 #[async_trait]
 impl UpdateManagement for TestWorkerCtx {
-    fn is_at_safe_snapshot_boundary(&self) -> bool {
-        self.durable_ctx.is_at_safe_snapshot_boundary()
+    fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker> {
+        self.durable_ctx.snapshot_boundary_blocker()
     }
 
     fn begin_call_snapshotting_function(&mut self) {

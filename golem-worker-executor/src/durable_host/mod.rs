@@ -3822,8 +3822,8 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
-    fn is_at_safe_snapshot_boundary(&self) -> bool {
-        self.state.at_safe_snapshot_boundary()
+    fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker> {
+        self.state.snapshot_boundary_blocker()
     }
 
     fn begin_call_snapshotting_function(&mut self) {
@@ -4573,6 +4573,191 @@ mod tests {
     use test_r::test;
     use test_r::timeout;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn snapshot_boundary_all_clear_has_no_blocker() {
+        assert_eq!(SnapshotBoundaryConditions::default().blocker(), None);
+    }
+
+    #[test]
+    fn snapshot_boundary_each_condition_blocks_alone() {
+        let cases = [
+            (
+                SnapshotBoundaryConditions {
+                    replaying: true,
+                    ..Default::default()
+                },
+                SnapshotBoundaryBlocker::Replaying,
+            ),
+            (
+                SnapshotBoundaryConditions {
+                    open_atomic_region: true,
+                    ..Default::default()
+                },
+                SnapshotBoundaryBlocker::OpenAtomicRegion,
+            ),
+            (
+                SnapshotBoundaryConditions {
+                    open_durable_scope: true,
+                    ..Default::default()
+                },
+                SnapshotBoundaryBlocker::OpenDurableScope,
+            ),
+            (
+                SnapshotBoundaryConditions {
+                    persist_nothing: true,
+                    ..Default::default()
+                },
+                SnapshotBoundaryBlocker::PersistNothing,
+            ),
+            (
+                SnapshotBoundaryConditions {
+                    snapshotting: true,
+                    ..Default::default()
+                },
+                SnapshotBoundaryBlocker::Snapshotting,
+            ),
+            (
+                SnapshotBoundaryConditions {
+                    in_flight_host_call: true,
+                    ..Default::default()
+                },
+                SnapshotBoundaryBlocker::InFlightHostCall,
+            ),
+        ];
+        for (conditions, expected) in cases {
+            assert_eq!(
+                conditions.blocker(),
+                Some(expected),
+                "single blocking condition {conditions:?} must be reported as {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_boundary_any_condition_combination_blocks() {
+        // Exhaustive truth table over the six conditions: a snapshot is admitted iff every
+        // condition is clear, and the reported blocker is always one of the set conditions.
+        for bits in 0u32..64 {
+            let conditions = SnapshotBoundaryConditions {
+                replaying: bits & 1 != 0,
+                open_atomic_region: bits & 2 != 0,
+                open_durable_scope: bits & 4 != 0,
+                persist_nothing: bits & 8 != 0,
+                snapshotting: bits & 16 != 0,
+                in_flight_host_call: bits & 32 != 0,
+            };
+            let blocker = conditions.blocker();
+            assert_eq!(
+                blocker.is_none(),
+                bits == 0,
+                "snapshot must be admitted iff no condition is set; conditions: {conditions:?}"
+            );
+            if let Some(blocker) = blocker {
+                let named_condition_is_set = match blocker {
+                    SnapshotBoundaryBlocker::Replaying => conditions.replaying,
+                    SnapshotBoundaryBlocker::OpenAtomicRegion => conditions.open_atomic_region,
+                    SnapshotBoundaryBlocker::OpenDurableScope => conditions.open_durable_scope,
+                    SnapshotBoundaryBlocker::PersistNothing => conditions.persist_nothing,
+                    SnapshotBoundaryBlocker::Snapshotting => conditions.snapshotting,
+                    SnapshotBoundaryBlocker::InFlightHostCall => conditions.in_flight_host_call,
+                };
+                assert!(
+                    named_condition_is_set,
+                    "reported blocker {blocker:?} must name a set condition; conditions: {conditions:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn checkpoint_boundary_truth_table() {
+        // Exhaustive truth table over the five blocking conditions: a mid-invocation status
+        // checkpoint is admitted iff every condition is clear.
+        for bits in 0u32..32 {
+            let replaying = bits & 1 != 0;
+            let open_atomic_region = bits & 2 != 0;
+            let open_durable_scope = bits & 4 != 0;
+            let persist_nothing = bits & 8 != 0;
+            let snapshotting = bits & 16 != 0;
+            assert_eq!(
+                PrivateDurableWorkerState::clean_checkpoint_boundary(
+                    replaying,
+                    open_atomic_region,
+                    open_durable_scope,
+                    persist_nothing,
+                    snapshotting,
+                ),
+                bits == 0,
+                "checkpoint must be admitted iff no condition is set; replaying: {replaying}, \
+                 open_atomic_region: {open_atomic_region}, open_durable_scope: {open_durable_scope}, \
+                 persist_nothing: {persist_nothing}, snapshotting: {snapshotting}"
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_boundary_is_checkpoint_boundary_with_no_in_flight_host_call() {
+        // The documented sync invariant between the two predicates: `blocker() == None` is
+        // equivalent to `at_clean_checkpoint_boundary() && !has_in_flight_live_host_calls()`.
+        for bits in 0u32..64 {
+            let conditions = SnapshotBoundaryConditions {
+                replaying: bits & 1 != 0,
+                open_atomic_region: bits & 2 != 0,
+                open_durable_scope: bits & 4 != 0,
+                persist_nothing: bits & 8 != 0,
+                snapshotting: bits & 16 != 0,
+                in_flight_host_call: bits & 32 != 0,
+            };
+            let at_checkpoint_boundary = PrivateDurableWorkerState::clean_checkpoint_boundary(
+                conditions.replaying,
+                conditions.open_atomic_region,
+                conditions.open_durable_scope,
+                conditions.persist_nothing,
+                conditions.snapshotting,
+            );
+            assert_eq!(
+                conditions.blocker().is_none(),
+                at_checkpoint_boundary && !conditions.in_flight_host_call,
+                "snapshot admission must equal checkpoint admission plus no in-flight host call; \
+                 conditions: {conditions:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn suspend_admission_truth_table() {
+        let cases = [
+            // (live_host_calls, suspendable_waits, open_durable_scope, pending_p3_tx, expected)
+            (0, 0, false, false, true),
+            (2, 2, false, false, true),
+            // A live host call not parked in a suspendable wait blocks suspension.
+            (1, 0, false, false, false),
+            (3, 2, false, false, false),
+            // An open durable scope blocks suspension even when all calls are parked.
+            (0, 0, true, false, false),
+            (2, 2, true, false, false),
+            // A pending P3 HTTP request transmission blocks suspension.
+            (0, 0, false, true, false),
+            (2, 2, false, true, false),
+            (1, 0, true, true, false),
+        ];
+        for (live_host_calls, suspendable_waits, open_durable_scope, pending_p3_tx, expected) in
+            cases
+        {
+            assert_eq!(
+                PrivateDurableWorkerState::suspend_admissible(
+                    live_host_calls,
+                    suspendable_waits,
+                    open_durable_scope,
+                    pending_p3_tx,
+                ),
+                expected,
+                "live_host_calls: {live_host_calls}, suspendable_waits: {suspendable_waits}, \
+                 open_durable_scope: {open_durable_scope}, pending_p3_tx: {pending_p3_tx}"
+            );
+        }
+    }
 
     #[test]
     fn card_event_boundary_scan_reads_each_entry_once() {
@@ -6583,9 +6768,25 @@ impl PrivateDurableWorkerState {
     }
 
     fn safe_to_suspend(&self) -> bool {
-        self.live_host_calls.load(Ordering::Acquire) == self.suspendable_waits.lock().unwrap().len()
-            && self.active_durable_scopes.is_empty()
-            && self.pending_p3_http_request_transmissions.is_empty()
+        Self::suspend_admissible(
+            self.live_host_calls.load(Ordering::Acquire),
+            self.suspendable_waits.lock().unwrap().len(),
+            !self.active_durable_scopes.is_empty(),
+            !self.pending_p3_http_request_transmissions.is_empty(),
+        )
+    }
+
+    /// Pure form of [`Self::safe_to_suspend`], factored out so its truth table can be tested
+    /// without constructing worker state: the worker may suspend when every live durable host
+    /// call in flight is parked in a suspendable wait, no durable scope is open, and no P3 HTTP
+    /// request transmission is pending.
+    fn suspend_admissible(
+        live_host_calls: usize,
+        suspendable_waits: usize,
+        open_durable_scope: bool,
+        pending_p3_http_transmission: bool,
+    ) -> bool {
+        live_host_calls == suspendable_waits && !open_durable_scope && !pending_p3_http_transmission
     }
 
     fn wakeup_scheduler(&self) -> WakeupScheduler {
@@ -6818,14 +7019,34 @@ impl PrivateDurableWorkerState {
     /// whose entries are not folded normally. The `get_oplog_index` marker watermark is checked
     /// separately by the caller against the committed status tip.
     pub fn at_clean_checkpoint_boundary(&self) -> bool {
-        self.is_live()
-            && self.active_atomic_regions.is_empty()
-            && self.active_durable_scopes.is_empty()
-            && self.persistence_level != PersistenceLevel::PersistNothing
-            && self.snapshotting_mode.is_none()
+        Self::clean_checkpoint_boundary(
+            !self.is_live(),
+            !self.active_atomic_regions.is_empty(),
+            !self.active_durable_scopes.is_empty(),
+            self.persistence_level == PersistenceLevel::PersistNothing,
+            self.snapshotting_mode.is_some(),
+        )
     }
 
-    /// Whether the worker is at a boundary where a snapshot may be taken.
+    /// Pure form of [`Self::at_clean_checkpoint_boundary`], factored out so its truth table can
+    /// be tested without constructing worker state. Each argument is a *blocking* condition: the
+    /// boundary is clean iff all of them are `false`.
+    fn clean_checkpoint_boundary(
+        replaying: bool,
+        open_atomic_region: bool,
+        open_durable_scope: bool,
+        persist_nothing: bool,
+        snapshotting: bool,
+    ) -> bool {
+        !replaying
+            && !open_atomic_region
+            && !open_durable_scope
+            && !persist_nothing
+            && !snapshotting
+    }
+
+    /// The first condition currently blocking a snapshot, or `None` when the worker is at a safe
+    /// snapshot boundary.
     ///
     /// A committed snapshot is a replay cut point: snapshot-based recovery (and snapshot-based
     /// update) skips every oplog entry before the snapshot. The invariant is that no durable
@@ -6835,8 +7056,20 @@ impl PrivateDurableWorkerState {
     /// itself cannot be restored from the snapshot). Snapshots are therefore only taken at a
     /// clean checkpoint boundary (no open atomic regions or durable scopes, normal persistence
     /// regime) with no durable host call in flight.
-    pub fn at_safe_snapshot_boundary(&self) -> bool {
-        self.at_clean_checkpoint_boundary() && !self.has_in_flight_live_host_calls()
+    ///
+    /// The sampled conditions must stay in sync with [`Self::at_clean_checkpoint_boundary`]:
+    /// `blocker() == None` is equivalent to
+    /// `at_clean_checkpoint_boundary() && !has_in_flight_live_host_calls()`.
+    pub fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker> {
+        SnapshotBoundaryConditions {
+            replaying: !self.is_live(),
+            open_atomic_region: !self.active_atomic_regions.is_empty(),
+            open_durable_scope: !self.active_durable_scopes.is_empty(),
+            persist_nothing: self.persistence_level == PersistenceLevel::PersistNothing,
+            snapshotting: self.snapshotting_mode.is_some(),
+            in_flight_host_call: self.has_in_flight_live_host_calls(),
+        }
+        .blocker()
     }
 
     /// Returns whether we are in replay mode where we are replaying old calls.
@@ -6870,6 +7103,78 @@ impl PrivateDurableWorkerState {
                 precise,
             )
             .await
+    }
+}
+
+/// The snapshot admission conditions sampled from the store state, in diagnostic form.
+///
+/// Each field is a *blocking* condition (`true` blocks the snapshot); with all fields `false`
+/// the worker is at a safe snapshot boundary. This exists solely so snapshot rejections can
+/// name the specific condition instead of a generic "not at a safe boundary" message — it is
+/// not a general boundary policy: checkpoint, suspend and settlement keep their own predicates.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct SnapshotBoundaryConditions {
+    /// The worker is still replaying its oplog (snapshots are only taken in live mode).
+    replaying: bool,
+    /// An atomic region is open: a later trap could append a jump deleting the oplog tip.
+    open_atomic_region: bool,
+    /// A durable scope is open: its `Start`/`End` pair would straddle the snapshot cut.
+    open_durable_scope: bool,
+    /// The current persistence level is `PersistNothing`, so entries are not folded normally.
+    persist_nothing: bool,
+    /// A snapshotting function (save/load) call is already in progress.
+    snapshotting: bool,
+    /// A live durable host call is in flight: its `Start` may precede the cut while its
+    /// terminal entry lands after it.
+    in_flight_host_call: bool,
+}
+
+impl SnapshotBoundaryConditions {
+    /// The first blocking condition in precedence order, or `None` when the worker is at a safe
+    /// snapshot boundary.
+    fn blocker(self) -> Option<SnapshotBoundaryBlocker> {
+        if self.replaying {
+            Some(SnapshotBoundaryBlocker::Replaying)
+        } else if self.open_atomic_region {
+            Some(SnapshotBoundaryBlocker::OpenAtomicRegion)
+        } else if self.open_durable_scope {
+            Some(SnapshotBoundaryBlocker::OpenDurableScope)
+        } else if self.persist_nothing {
+            Some(SnapshotBoundaryBlocker::PersistNothing)
+        } else if self.snapshotting {
+            Some(SnapshotBoundaryBlocker::Snapshotting)
+        } else if self.in_flight_host_call {
+            Some(SnapshotBoundaryBlocker::InFlightHostCall)
+        } else {
+            None
+        }
+    }
+}
+
+/// A single condition that blocks taking a snapshot, used in snapshot rejection diagnostics.
+/// See [`SnapshotBoundaryConditions`] for what each condition means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotBoundaryBlocker {
+    Replaying,
+    OpenAtomicRegion,
+    OpenDurableScope,
+    PersistNothing,
+    Snapshotting,
+    InFlightHostCall,
+}
+
+impl Display for SnapshotBoundaryBlocker {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Replaying => write!(f, "the worker is still replaying its oplog"),
+            Self::OpenAtomicRegion => write!(f, "an atomic region is still open"),
+            Self::OpenDurableScope => write!(f, "a durable scope is still open"),
+            Self::PersistNothing => {
+                write!(f, "persistence is currently disabled (persist-nothing)")
+            }
+            Self::Snapshotting => write!(f, "a snapshot function call is already in progress"),
+            Self::InFlightHostCall => write!(f, "a durable host call is still in flight"),
+        }
     }
 }
 

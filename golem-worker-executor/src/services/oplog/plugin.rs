@@ -2000,6 +2000,7 @@ mod tests {
     struct RecordedSend {
         initial_oplog_index: OplogIndex,
         entry_count: usize,
+        entries: Vec<OplogEntry>,
     }
 
     #[derive(Debug, Clone)]
@@ -2052,6 +2053,7 @@ mod tests {
             self.sends.lock().await.push(RecordedSend {
                 initial_oplog_index,
                 entry_count: entries.len(),
+                entries,
             });
             Ok(())
         }
@@ -2208,11 +2210,17 @@ mod tests {
         async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
     }
 
-    /// A minimal in-memory oplog for testing ForwardingOplog behavior
+    /// A minimal in-memory oplog for testing ForwardingOplog behavior.
+    ///
+    /// Entry `i` (1-based [`OplogIndex`]) is stored at `entries[i - 1]`, so the indices returned
+    /// by `add`/`add_pair` agree with `read`/`read_many` — the forwarding wrapper's mirrored
+    /// buffer relies on this. `commit` returns the newly committed suffix, like the production
+    /// leaf oplogs, so the forwarding actor's `last_committed_idx` tracking is exercised.
     #[allow(dead_code)]
     struct InMemoryOplog {
         entries: async_lock::Mutex<Vec<OplogEntry>>,
         current_idx: async_lock::Mutex<OplogIndex>,
+        committed_idx: async_lock::Mutex<OplogIndex>,
     }
 
     #[allow(dead_code)]
@@ -2220,7 +2228,8 @@ mod tests {
         fn new() -> Self {
             Self {
                 entries: async_lock::Mutex::new(Vec::new()),
-                current_idx: async_lock::Mutex::new(OplogIndex::INITIAL),
+                current_idx: async_lock::Mutex::new(OplogIndex::NONE),
+                committed_idx: async_lock::Mutex::new(OplogIndex::NONE),
             }
         }
     }
@@ -2239,6 +2248,22 @@ mod tests {
             *idx = idx.next();
             entries.push(entry);
             *idx
+        }
+
+        async fn add_pair(
+            &self,
+            start: OplogEntry,
+            make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+        ) -> (OplogIndex, OplogIndex) {
+            let mut entries = self.entries.lock().await;
+            let mut idx = self.current_idx.lock().await;
+            *idx = idx.next();
+            let first_idx = *idx;
+            entries.push(start);
+            *idx = idx.next();
+            let second_idx = *idx;
+            entries.push(make_second(first_idx));
+            (first_idx, second_idx)
         }
 
         async fn add_start_with_reserved_raw_payload(
@@ -2260,7 +2285,17 @@ mod tests {
         }
 
         async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
-            BTreeMap::new()
+            let entries = self.entries.lock().await;
+            let current = *self.current_idx.lock().await;
+            let mut committed = self.committed_idx.lock().await;
+            let mut result = BTreeMap::new();
+            let mut idx = *committed;
+            while idx < current {
+                idx = idx.next();
+                result.insert(idx, entries[(idx.as_u64() - 1) as usize].clone());
+            }
+            *committed = current;
+            result
         }
 
         async fn current_oplog_index(&self) -> OplogIndex {
@@ -2561,5 +2596,96 @@ mod tests {
         let lookups = recording_plugin.lookups().await;
         assert_eq!(lookups.len(), 1, "Expected exactly one status lookup");
         assert_eq!(lookups[0].caller_account_id, worker_owner);
+    }
+
+    // --------------------------------------------------------------------------
+    // Reserved-start through the forwarding actor
+    // --------------------------------------------------------------------------
+
+    /// Reserved starts pass through the forwarding actor in initiation order: the indices the
+    /// wrapper returns are the ones the inner (leaf) oplog assigned, the mirrored buffer stays in
+    /// lockstep, and a flush forwards the `Start` entries to the plugin as regular oplog entries.
+    /// The contract verified here is structural (entry kind, order, batch range); the payload
+    /// representation is owned by the leaf oplog and is not part of the forwarding contract.
+    #[test]
+    async fn reserved_start_forwarded_in_initiation_order_and_reaches_plugin() {
+        use crate::services::oplog::OplogOps;
+        use golem_common::model::oplog::host_functions::HostFunctionName;
+        use golem_common::model::oplog::{DurableFunctionType, HostRequest};
+        use golem_common::schema::IntoTypedSchemaValue;
+
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (metadata, status_lock) = test_worker_metadata(HashSet::from([grant_id]));
+        let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
+        let components: Arc<dyn ComponentService> = Arc::new(
+            FakeComponentService::with_one_oplog_processor_plugin(grant_id),
+        );
+        let inner: Arc<dyn Oplog> = Arc::new(InMemoryOplog::new());
+
+        let oplog = ForwardingOplog::new(
+            inner.clone(),
+            recording_plugin.clone(),
+            components,
+            metadata,
+            status_lock,
+            OplogIndex::NONE,
+            Box::new(|| {}),
+            1,                         // flush on every commit
+            Duration::from_secs(3600), // keep the periodic tick out of this test
+        )
+        .await;
+
+        let build_start = |function_name: HostFunctionName| {
+            move |request_payload| OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: None,
+                function_name,
+                request: Some(request_payload),
+                durable_function_type: DurableFunctionType::ReadRemote,
+            }
+        };
+
+        let (first_idx, first_pending) = oplog
+            .add_start_with_reserved_payload(
+                HostRequest::Custom("first".into_typed_schema_value().unwrap()),
+                build_start(HostFunctionName::Custom("first".to_string())),
+            )
+            .await
+            .unwrap();
+        let (second_idx, second_pending) = oplog
+            .add_start_with_reserved_payload(
+                HostRequest::Custom("second".into_typed_schema_value().unwrap()),
+                build_start(HostFunctionName::Custom("second".to_string())),
+            )
+            .await
+            .unwrap();
+
+        // The wrapper returns the leaf-assigned indices, in initiation order.
+        assert_eq!(first_idx, OplogIndex::INITIAL);
+        assert_eq!(second_idx, first_idx.next());
+        first_pending.wait().await.unwrap();
+        second_pending.wait().await.unwrap();
+
+        // With max_commit_count = 1 the first commit triggers a flush to the plugin.
+        oplog.commit(CommitLevel::Always).await;
+
+        let sends = recording_plugin.sends().await;
+        assert_eq!(sends.len(), 1, "Expected exactly one batch");
+        assert_eq!(sends[0].initial_oplog_index, first_idx);
+        let function_names: Vec<_> = sends[0]
+            .entries
+            .iter()
+            .map(|entry| match entry {
+                OplogEntry::Start {
+                    function_name: HostFunctionName::Custom(name),
+                    ..
+                } => name.clone(),
+                other => panic!("unexpected forwarded entry: {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            function_names,
+            vec!["first".to_string(), "second".to_string()]
+        );
     }
 }
