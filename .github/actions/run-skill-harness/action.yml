@@ -154,7 +154,7 @@ runs:
     - name: Install wasm-tools
       if: inputs.language == 'moonbit'
       shell: bash
-      run: cargo binstall --force --locked wasm-tools@1.227.1
+      run: cargo binstall --force --locked wasm-tools@1.248.0
 
     - name: Install Harness Dependencies
       shell: bash

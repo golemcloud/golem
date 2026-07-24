@@ -321,7 +321,7 @@ jobs:
           auto-start: false
 
       - name: Install wasm-tools
-        run: cargo binstall --force --locked wasm-tools@1.227.1
+        run: cargo binstall --force --locked wasm-tools@1.248.0
       - name: Install wit-bindgen
         run: cargo binstall --force --locked wit-bindgen-cli@0.40.0
 
