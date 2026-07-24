@@ -625,34 +625,39 @@ async fn ensure_go_dependencies(
     ctx: &BuildContext<'_>,
     module_root: &Path,
 ) -> anyhow::Result<()> {
-    let go_mod_path = module_root.join("go.mod");
     let go_sum_path = module_root.join("go.sum");
+    let marker_dir = ctx.application().task_result_marker_dir();
 
-    let go_mod_hash = blake3::hash(&std::fs::read(&go_mod_path)?)
-        .to_hex()
-        .to_string();
-    let go_sum_hash = if go_sum_path.exists() {
-        Some(
-            blake3::hash(&std::fs::read(&go_sum_path)?)
-                .to_hex()
-                .to_string(),
+    // `go mod tidy` rewrites go.mod (indirect requires, block form) and writes
+    // go.sum, so the marker is checked against the CURRENT state but recorded
+    // against the POST-tidy state — otherwise every build would see a changed
+    // go.mod and re-run tidy forever.
+    let go_mod_deps_marker = |root: &Path| -> anyhow::Result<TaskResultMarker> {
+        let go_mod_hash = blake3::hash(&std::fs::read(root.join("go.mod"))?)
+            .to_hex()
+            .to_string();
+        let go_sum_hash = if root.join("go.sum").exists() {
+            Some(
+                blake3::hash(&std::fs::read(root.join("go.sum"))?)
+                    .to_hex()
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+        TaskResultMarker::new(
+            &marker_dir,
+            GoModDepsMarkerHash {
+                go_module_root: root,
+                go_mod_hash: &go_mod_hash,
+                go_sum_hash: go_sum_hash.as_deref(),
+            },
         )
-    } else {
-        None
     };
-
-    let marker = TaskResultMarker::new(
-        &ctx.application().task_result_marker_dir(),
-        GoModDepsMarkerHash {
-            go_module_root: module_root,
-            go_mod_hash: &go_mod_hash,
-            go_sum_hash: go_sum_hash.as_deref(),
-        },
-    )?;
 
     // Up to date only if go.sum exists too: a fresh module has a go.mod but no
     // go.sum, and componentize-go refuses to build without it.
-    if marker.is_up_to_date() && go_sum_path.exists() {
+    if go_mod_deps_marker(module_root)?.is_up_to_date() && go_sum_path.exists() {
         return Ok(());
     }
 
@@ -675,7 +680,10 @@ async fn ensure_go_dependencies(
         );
     }
 
-    marker.result(run_go_mod_tidy(module_root).await)
+    run_go_mod_tidy(module_root).await?;
+
+    // Record success against the post-tidy go.mod/go.sum so the next build skips.
+    go_mod_deps_marker(module_root)?.result(Ok(()))
 }
 
 async fn run_go_mod_tidy(module_root: &Path) -> anyhow::Result<()> {

@@ -166,10 +166,16 @@ impl SdkOverrides {
 
     /// The `replace` directive pointing at a local SDK checkout, or an empty
     /// string when resolving the SDK from the module proxy.
+    ///
+    /// No trailing newline: the template placeholder sits on its own line, so
+    /// the line's own newline terminates the file with exactly one — matching
+    /// the canonical form `edit::go_mod::reconcile_sdk_dependency` produces, so a
+    /// freshly generated app's first build does not report a spurious go.mod
+    /// change (path mode).
     pub fn go_sdk_replace(&self) -> String {
         match &self.go_sdk_path {
             Some(path) => {
-                format!("\nreplace {GO_SDK_MODULE} => {path}\n")
+                format!("\nreplace {GO_SDK_MODULE} => {path}")
             }
             None => String::new(),
         }
