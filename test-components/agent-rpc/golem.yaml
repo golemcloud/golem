@@ -41,6 +41,9 @@ components:
   golem-it:agent-rpc-rust:
     dir: "golem-it-agent-rpc-rust"
     templates: rust-test-build, rust-test-component
+  golem-it:promise-agent-rust:
+    dir: "golem-it-promise-agent-rust"
+    templates: rust-test-build, rust-test-component
   golem-it:agent-rpc:
     dir: "golem-it-agent-rpc"
     templates: ts, ts-test-component

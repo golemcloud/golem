@@ -26,6 +26,10 @@ class PromiseAgent extends BaseAgent {
       return new TextDecoder().decode(resultBytes)
     }
 
+    async awaitPromiseVoid(id: PromiseId): Promise<void> {
+      await awaitPromise(id)
+    }
+
     async forkAndSyncWithPromise(): Promise<string> {
       const promiseId = createPromise();
       const forkResult = fork();
@@ -38,5 +42,6 @@ class PromiseAgent extends BaseAgent {
           completePromise(promiseId, new TextEncoder().encode("Hello from forked agent!"));
           return "forked result";
       }
+      throw new Error(`unexpected fork result: ${forkResult}`)
     }
 }

@@ -237,7 +237,7 @@ pub mod api {
     use lazy_static::lazy_static;
     use prometheus::{Gauge, HistogramVec, register_gauge, register_histogram_vec};
     use std::fmt::Debug;
-    use tracing::{Span, error, info};
+    use tracing::{Span, debug, error};
 
     lazy_static! {
         static ref API_SUCCESS_SECONDS: HistogramVec = register_histogram_vec!(
@@ -353,7 +353,7 @@ pub mod api {
             if let Some(start) = self.start_time.take() {
                 self.span.in_scope(|| {
                     let elapsed = start.elapsed();
-                    info!(elapsed_ms = elapsed.as_millis(), "API request succeeded");
+                    debug!(elapsed_ms = elapsed.as_millis(), "API request succeeded");
 
                     record_api_success(self.api_name, self.api_type, elapsed);
                 })
@@ -369,7 +369,7 @@ pub mod api {
                         // expected error, no need to display cause.
                         // TODO: make this nicer
                         error.take_cause();
-                        info!(
+                        debug!(
                             elapsed_ms = elapsed.as_millis(),
                             error = format!("{:?}", error),
                             "API request failed",

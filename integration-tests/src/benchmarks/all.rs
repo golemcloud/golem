@@ -21,7 +21,8 @@ use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkApi, BenchmarkConfig, BenchmarkResult, BenchmarkSuite, BenchmarkSuiteItem,
-    BenchmarkSuiteResult, DensityAction, DensityAgentModeArg, DensityScenarioArg,
+    BenchmarkSuiteResult, DensityAction, DensityAgentModeArg, DensityPromiseRuntimeArg,
+    DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg, DensityScenarioArg,
     DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg, DensitySectionArg,
     DensitySharingArg, DensitySnapshottingArg, RunMetadata,
 };
@@ -32,7 +33,10 @@ use golem_test_framework::config::{
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use integration_tests::benchmarks::density::agent::{CellConfig, ExecutorProbe, Scenario};
 use integration_tests::benchmarks::density::prep::{PrepManifest, run_prep};
-use integration_tests::benchmarks::density::{AgentMode, ComponentSharing, DensitySection};
+use integration_tests::benchmarks::density::{
+    AgentMode, ComponentSharing, DensitySection, PromiseRuntime, PromiseTopology,
+    PromiseWaiterPresence,
+};
 use integration_tests::benchmarks::{
     cleanup_account, cleanup_user_state, delete_workers, invoke_and_await_agent,
 };
@@ -138,31 +142,6 @@ async fn main() {
             >(mode, verbosity, item, primary_only, otlp))
         }),
     );
-    benchmarks_by_name.insert(
-        "throughput-saturation-counters",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::throughput_saturation::ThroughputSaturationCounters,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "throughput-saturation-echo-rust",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::throughput_saturation::ThroughputSaturationEchoRust,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "throughput-saturation-echo-ts",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::throughput_saturation::ThroughputSaturationEchoTs,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-
     let params = BenchmarkCliParameters::parse_from(std::env::args_os());
     let tracer_provider = BenchmarkTestDependencies::init_logging(&params);
 
@@ -308,6 +287,10 @@ async fn main() {
             schedule_context_spans,
             schedule_target_pattern,
             schedule_rate_period_secs,
+            promise_payload_size,
+            promise_waiter_presence,
+            promise_topology,
+            promise_runtime,
             executor_pod_name,
             executor_namespace,
             save_to_json,
@@ -331,6 +314,10 @@ async fn main() {
                 *schedule_context_spans,
                 schedule_target_pattern.map(map_schedule_target_pattern),
                 *schedule_rate_period_secs,
+                *promise_payload_size,
+                promise_waiter_presence.map(map_promise_waiter_presence),
+                promise_topology.map(map_promise_topology),
+                promise_runtime.map(map_promise_runtime),
                 executor_pod_name.clone(),
                 executor_namespace.clone(),
                 save_to_json.clone(),
@@ -595,6 +582,28 @@ fn map_schedule_target_pattern(
     }
 }
 
+fn map_promise_waiter_presence(arg: DensityPromiseWaiterPresenceArg) -> PromiseWaiterPresence {
+    match arg {
+        DensityPromiseWaiterPresenceArg::Cold => PromiseWaiterPresence::Cold,
+        DensityPromiseWaiterPresenceArg::Warm => PromiseWaiterPresence::Warm,
+        DensityPromiseWaiterPresenceArg::Mixed => PromiseWaiterPresence::Mixed,
+    }
+}
+
+fn map_promise_topology(arg: DensityPromiseTopologyArg) -> PromiseTopology {
+    match arg {
+        DensityPromiseTopologyArg::OnePod => PromiseTopology::OnePod,
+        DensityPromiseTopologyArg::TwoPod => PromiseTopology::TwoPod,
+    }
+}
+
+fn map_promise_runtime(arg: DensityPromiseRuntimeArg) -> PromiseRuntime {
+    match arg {
+        DensityPromiseRuntimeArg::Rust => PromiseRuntime::Rust,
+        DensityPromiseRuntimeArg::Ts => PromiseRuntime::Ts,
+    }
+}
+
 /// Runs one density action: either the one-time prep (writing the manifest) or
 /// a single cell (using a previously-written manifest).
 #[allow(clippy::too_many_arguments)]
@@ -618,6 +627,10 @@ async fn run_density(
     schedule_context_spans: Option<u32>,
     schedule_target_pattern: Option<integration_tests::benchmarks::density::ScheduleTargetPattern>,
     schedule_rate_period_secs: Option<u64>,
+    promise_payload_size: Option<usize>,
+    promise_waiter_presence: Option<PromiseWaiterPresence>,
+    promise_topology: Option<PromiseTopology>,
+    promise_runtime: Option<PromiseRuntime>,
     executor_pod_name: Option<String>,
     executor_namespace: String,
     save_to_json: Option<std::path::PathBuf>,
@@ -686,7 +699,26 @@ async fn run_density(
                     .await
                     .expect("density schedule cell failed")
                 }
-                DensitySection::Promise => panic!("density promise cells are not implemented"),
+                DensitySection::Promise => {
+                    let config = integration_tests::benchmarks::density::promise::CellConfig {
+                        payload_size: promise_payload_size
+                            .expect("--promise-payload-size required for promise cells"),
+                        waiter_presence: promise_waiter_presence
+                            .expect("--promise-waiter-presence required for promise cells"),
+                        topology: promise_topology
+                            .expect("--promise-topology required for promise cells"),
+                        runtime: promise_runtime
+                            .expect("--promise-runtime required for promise cells"),
+                    };
+                    integration_tests::benchmarks::density::promise::run_cell(
+                        &config,
+                        ramp.as_deref(),
+                        &manifest,
+                        &deps,
+                    )
+                    .await
+                    .expect("density promise cell failed")
+                }
             };
 
             // Emit the cell result as a single-result suite so the JSON shape

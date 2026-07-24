@@ -31,6 +31,7 @@
 pub mod agent;
 pub mod ceiling;
 pub mod prep;
+pub mod promise;
 pub mod schedule;
 
 use clap::ValueEnum;
@@ -148,6 +149,53 @@ impl Display for ScheduleTargetResidency {
 pub enum ScheduleTargetPattern {
     Spread,
     Realistic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PromiseWaiterPresence {
+    Cold,
+    Warm,
+    Mixed,
+}
+
+impl Display for PromiseWaiterPresence {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Cold => "cold",
+            Self::Warm => "warm",
+            Self::Mixed => "mixed",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PromiseTopology {
+    OnePod,
+    TwoPod,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PromiseRuntime {
+    Rust,
+    Ts,
+}
+
+impl Display for PromiseRuntime {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Rust => "rust",
+            Self::Ts => "ts",
+        })
+    }
+}
+
+impl Display for PromiseTopology {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::OnePod => "1pod",
+            Self::TwoPod => "2pod",
+        })
+    }
 }
 
 impl ScheduleTargetPattern {

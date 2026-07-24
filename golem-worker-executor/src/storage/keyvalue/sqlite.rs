@@ -140,18 +140,6 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         key: &str,
         value: &[u8],
     ) -> Result<bool, String> {
-        let mut api = self.pool.with_rw(svc_name, api_name);
-        let existing: Option<(i32,)> = api
-            .fetch_optional_as(
-                sqlx::query_as::<_, (i32,)>(
-                    "SELECT 1 FROM kv_storage WHERE key = ? AND namespace = ?",
-                )
-                .bind(key)
-                .bind(Self::namespace(namespace.clone())),
-            )
-            .await
-            .map_err(|err| err.to_safe_string())?;
-
         record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
         let query = sqlx::query(
             "INSERT OR IGNORE INTO kv_storage (key, value, namespace) VALUES (?, ?, ?);",
@@ -160,9 +148,11 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         .bind(value)
         .bind(Self::namespace(namespace));
 
-        api.execute(query)
+        self.pool
+            .with_rw(svc_name, api_name)
+            .execute(query)
             .await
-            .map(|_| existing.is_none())
+            .map(|result| result.rows_affected() == 1)
             .map_err(|err| err.to_safe_string())
     }
 
@@ -502,5 +492,56 @@ struct DBScoreValue {
 impl DBScoreValue {
     fn into_pair(self) -> (f64, Bytes) {
         (self.score, Bytes::from(self.value))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use test_r::test;
+    use tokio::sync::Barrier;
+
+    test_r::enable!();
+
+    #[test]
+    async fn concurrent_set_if_not_exists_has_one_winner() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let config = DbSqliteConfig {
+            database: tempdir.path().join("kv.db").to_string_lossy().into_owned(),
+            max_connections: 10,
+            foreign_keys: false,
+        };
+        let storage = Arc::new(SqliteKeyValueStorage::configured(&config).await.unwrap());
+        let writers = 16;
+        let barrier = Arc::new(Barrier::new(writers));
+        let tasks = (0..writers).map(|writer| {
+            let storage = storage.clone();
+            let barrier = barrier.clone();
+            tokio::spawn(async move {
+                barrier.wait().await;
+                storage
+                    .set_if_not_exists(
+                        "test",
+                        "set-if-not-exists",
+                        "key-value",
+                        KeyValueStorageNamespace::RunningWorkers,
+                        "shared-key",
+                        &[writer as u8],
+                    )
+                    .await
+                    .unwrap()
+            })
+        });
+        let results = futures::future::join_all(tasks).await;
+
+        assert_eq!(
+            results
+                .into_iter()
+                .map(Result::unwrap)
+                .filter(|inserted| *inserted)
+                .count(),
+            1
+        );
     }
 }

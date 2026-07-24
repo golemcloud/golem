@@ -133,6 +133,22 @@ pub enum BenchmarkConfig {
         #[arg(long)]
         schedule_rate_period_secs: Option<u64>,
 
+        /// Bytes passed to `complete_promise` for a promise-density cell.
+        #[arg(long)]
+        promise_payload_size: Option<usize>,
+
+        /// Whether a promise-density completion finds an active waiter.
+        #[arg(long, value_enum)]
+        promise_waiter_presence: Option<DensityPromiseWaiterPresenceArg>,
+
+        /// Worker-executor topology selected by the workflow for this cell.
+        #[arg(long, value_enum)]
+        promise_topology: Option<DensityPromiseTopologyArg>,
+
+        /// Guest runtime used by a promise-density cell.
+        #[arg(long, value_enum)]
+        promise_runtime: Option<DensityPromiseRuntimeArg>,
+
         /// Optional executor pod name for `kubectl` restart-count polling
         /// (drives the catastrophic pod-restart condition).
         #[arg(long)]
@@ -208,6 +224,28 @@ pub enum DensityScheduleTargetResidencyArg {
 pub enum DensityScheduleTargetPatternArg {
     Spread,
     Realistic,
+}
+
+/// Waiter state at promise completion time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensityPromiseWaiterPresenceArg {
+    Cold,
+    Warm,
+    Mixed,
+}
+
+/// Worker-executor topology used by a promise-density cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensityPromiseTopologyArg {
+    OnePod,
+    TwoPod,
+}
+
+/// Guest runtime used by a promise-density cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DensityPromiseRuntimeArg {
+    Rust,
+    Ts,
 }
 
 impl BenchmarkConfig {
