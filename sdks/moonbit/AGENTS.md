@@ -45,11 +45,12 @@ sdks/moonbit/
 │   ├── moon.pkg                       # Root package
 │   ├── README.mbt.md                  # User-facing readme (also the published readme)
 │   ├── scripts/
-│   │   └── regen-bindings.sh          # Regenerates WIT bindings with stock wit-bindgen + fixes
+│   │   └── regen-bindings.sh          # Regenerates WIT bindings with the pinned Golem fork
 │   ├── wit/                           # WIT definitions
 │   │   ├── main.wit                   # The `agent-guest` world definition (core/types@2.0.0)
 │   │   ├── deps.toml / deps.lock      # WIT dependency sources
 │   │   └── deps/                      # Vendored WIT dependencies (golem-core-v2, golem-agent@2.0.0, …)
+│   ├── async-core/                     # wit-bindgen's component-model async runtime
 │   ├── interface/                     # WIT-generated MoonBit types and host-import bindings
 │   │   └── golem/
 │   │       ├── core/types/            # The schema model WIT types (golem:core/types@2.0.0)
@@ -63,11 +64,10 @@ sdks/moonbit/
 │   │   └── wasi/                      # WASI bindings (blobstore, clocks, io, keyvalue, …)
 │   ├── gen/                           # WIT-generated WASM export glue code
 │   │   ├── ffi.mbt                    # mbt_ffi_cabi_realloc, return_area, malloc/free/ptr helpers
-│   │   ├── world_agent_guest_export.mbt
 │   │   └── interface/golem/
 │   │       ├── agent/guest/stub.mbt          # SDK impl of initialize/invoke/get_definition/discover
-│   │       ├── api/saveSnapshot/stub.mbt      # Snapshot save dispatch
-│   │       └── api/loadSnapshot/stub.mbt      # Snapshot load dispatch
+│   │       ├── api/save-snapshot/stub.mbt     # Snapshot save dispatch
+│   │       └── api/load-snapshot/stub.mbt     # Snapshot load dispatch
 │   ├── world/                         # WIT-generated world-level bindings
 │   ├── schema_model/                  # The recursive schema model + WIT conversions
 │   │   ├── model.mbt                  # SchemaType/SchemaTypeBody, SchemaValue, SchemaGraph, SchemaTypeDef
@@ -147,9 +147,21 @@ sdks/moonbit/
 
 ### WIT Bindgen
 
-All code under `interface/`, `world/`, and `gen/` (except the `gen/interface/*/stub.mbt` files) is
-**auto-generated** by `wit-bindgen moonbit`. Do NOT edit these files. Regenerate with the script,
-which uses **stock `wit-bindgen` (no fork)** and applies the required post-processing:
+All code under `async-core/`, `interface/`, `world/`, and `gen/` (except the
+`gen/interface/*/stub.mbt` files) is **auto-generated** by `wit-bindgen moonbit`. Do NOT edit these
+files. Regenerate with the script, which requires this exact revision of the
+[Golem wit-bindgen fork](https://github.com/golemcloud/wit-bindgen):
+
+```sh
+cargo install --locked --git https://github.com/golemcloud/wit-bindgen \
+  --rev 4407232ead86d9bcbd06cbebd790a52120a4087a wit-bindgen-cli
+```
+
+The pin incorporates Bytecode Alliance's draft
+[MoonBit component-model async PR #1659](https://github.com/bytecodealliance/wit-bindgen/pull/1659)
+and Golem's additional outline-lift, named-memory-lowering, and export-disambiguation changes.
+Released wit-bindgen and upstream `main` do not yet generate the async MoonBit exports required by
+this SDK.
 
 ```sh
 cd golem_sdk
@@ -157,12 +169,13 @@ moon run script bindgen          # or: bash scripts/regen-bindings.sh
 ```
 
 The script (`scripts/regen-bindings.sh`):
-1. Runs `wit-bindgen moonbit ./wit --derive-show --derive-eq --derive-error --project-name golemcloud/golem_sdk --ignore-stub`.
-2. Fixes a stock-bindgen `s8`/`s16` double sign-extension bug (the generated code does a signed
+1. Refuses to run unless `wit-bindgen --version` identifies the pinned fork revision.
+2. Runs `wit-bindgen moonbit ./wit --derive-show --derive-eq --derive-error --project-name golemcloud/golem_sdk --ignore-stub` directly against the P3 WIT. Async exports remain async.
+3. Fixes an `s8`/`s16` double sign-extension bug (the generated code does a signed
    load *and* subtracts `0x100`/`0x10000`; the spurious subtraction is stripped).
-3. Removes the `moon.pkg.json` files wit-bindgen emits (this repo tracks hand-maintained plain
-   `moon.pkg` files; keeping both makes `moon` warn).
-4. Asserts the s8/s16 fix took effect.
+4. Removes an emitted `moon.pkg.json` only where a sibling hand-maintained `moon.pkg` owns the
+   package metadata.
+5. Asserts the s8/s16 fix took effect.
 
 `--ignore-stub` means wit-bindgen will NOT (re)generate the stub files. The `stub.mbt` files under
 `gen/interface/` are the **SDK's implementation** of the WIT export interfaces — the dispatch logic
@@ -188,7 +201,7 @@ The core pattern (in `agents/agents.mbt`):
 
 ```moonbit
 pub(open) trait RawAgent {
-  invoke(
+  async fn invoke(
     Self,
     method_name : String,
     input : @types.SchemaValueTree,
@@ -197,11 +210,13 @@ pub(open) trait RawAgent {
 }
 ```
 
-This is the low-level interface every agent implements. The result is `Ok(None)` for `Unit`/no-return
-methods and `Ok(Some(tree))` otherwise (the guest stub does NOT normalize `Some(empty-tuple)` to
-`None` — the generated dispatcher has the method-schema context and decides). The `agents` code
-generation tool auto-generates `RawAgent` impls with method dispatch, constructor deserialization,
-and result serialization. Optional snapshot support is via the `Snapshottable` trait.
+This is the low-level interface every agent implements. It is async so generated dispatch can await
+P3 futures, streams, promises, HTTP, and agent RPC without polling. The result is `Ok(None)` for
+`Unit`/no-return methods and `Ok(Some(tree))` otherwise (the guest stub does NOT normalize
+`Some(empty-tuple)` to `None` — the generated dispatcher has the method-schema context and decides).
+The `agents` code-generation tool auto-generates `RawAgent` impls with method dispatch, constructor
+deserialization, and result serialization. Optional snapshot support is via the `Snapshottable`
+trait.
 
 ### The Schema Model (`schema_model`)
 
@@ -315,6 +330,9 @@ Generates, from source annotations:
    `MultimodalModality` impls for `#derive.multimodal` enums.
 3. **`golem_clients.mbt`** — RPC client stubs for agent-to-agent calls.
 
+Awaited RPC methods and scoped client helpers are generated as `async`; trigger and scheduling
+methods remain synchronous because they only enqueue work.
+
 **Source annotations recognized:**
 - `#derive.agent` on a struct — marks it as a Golem agent (`#derive.agent("ephemeral")` for
   ephemeral mode; default is durable).
@@ -396,8 +414,12 @@ The durability system (host imports in `interface/golem/durability/durability/`)
 
 ## Current State & What Works
 
-- WIT bindings are fully generated against `golem:core/types@2.0.0` + `golem:agent@2.0.0` and compile
-  for the `wasm` target (stock wit-bindgen + post-processing script).
+- WIT bindings are generated in one pass against `golem:core/types@2.0.0` +
+  `golem:agent@2.0.0` and the P3 WASI CLI, filesystem, clocks, and HTTP interfaces. The pinned Golem
+  wit-bindgen fork emits genuine component-model async exports for initialize, invoke, snapshot
+  save, and snapshot load.
+- Promise, webhook, filesystem, HTTP, and RPC wrappers use P3 futures/streams and MoonBit async
+  functions; active SDK code no longer imports `wasi:io/poll` or calls P2 stream `subscribe`.
 - The agent registry + dispatch pattern is implemented over the new `SchemaValueTree` carrier.
 - The schema model (`schema_model`) and serialization traits (`schema`) are complete: `IntoSchema` /
   `FromSchema` for all primitives and compounds (`Option`, `Array`, `Result`, `Map`, `Bytes`, tuples
@@ -406,9 +428,9 @@ The durability system (host imports in `interface/golem/durability/durability/`)
   `list<variant>` with `role = multimodal`).
 - Code generation is complete: `reexports` (→ `golem_reexports.mbt` + `moon.pkg`) and `agents`
   (→ `golem_agents.mbt`, `golem_derive.mbt`, `golem_clients.mbt`).
-- The example package `golem_sdk_example1/golem_moonbit_examples` (8 agents) builds end-to-end:
-  codegen → `moon build --target wasm --release` → `wasm-tools component embed`/`new`, and the final
-  component validates with `import golem:core/types@2.0.0` / `export golem:agent/guest@2.0.0`.
+- The example package `golem_sdk_example1/golem_moonbit_examples` (8 agents) builds and deploys
+  end-to-end. Its async `WebhookAgent.wait_for_webhook` invocation suspends in the local executor
+  while awaiting a promise, resumes after an external HTTP POST, and returns that POST body.
 - Agent mode (durable/ephemeral), prompt hints, code-first config (`Config[T]`/`Secret[T]`), HTTP
   mounts, and agent-to-agent RPC are supported.
 - **No legacy carriers anywhere** — `WitValue`/`WitType`/`WitNode`/`WitTypeNode`/`DataValue`/
@@ -434,7 +456,7 @@ moon check --target wasm          # Type-check
 moon build --target wasm          # Build
 moon test --target wasm           # Run tests
 moon info && moon fmt             # Regenerate .mbti and format
-moon run script bindgen           # Regenerate WIT bindings (stock wit-bindgen + fixes)
+moon run script bindgen           # Regenerate with the exact pinned Golem wit-bindgen fork
 
 # In golem_sdk_tools/ (the codegen CLI, native target):
 moon check
@@ -453,7 +475,7 @@ wasm-tools component embed wit \
 wasm-tools component new \
   _build/wasm/release/golem_moonbit_examples.embed.wasm \
   --output _build/wasm/release/golem_moonbit_examples.agent.wasm
-wasm-tools validate _build/wasm/release/golem_moonbit_examples.agent.wasm
+wasm-tools validate --features all _build/wasm/release/golem_moonbit_examples.agent.wasm
 ```
 
 The example's `golem.yaml` drives the same pipeline (codegen → `moon build` → `wasm-tools`) under
@@ -462,17 +484,17 @@ The example's `golem.yaml` drives the same pipeline (codegen → `moon build` �
 
 ## Release Script
 
-`sdks/moonbit/release.sh` toggles `golem_sdk_example1` between **development mode** (local path deps,
-relative tool paths) and **release/template mode** (versioned mooncakes deps; tools run from
+`sdks/moonbit/release.sh` toggles `golem_sdk_example1` between **development mode** (the local SDK
+selected through `moon.work`, relative tool paths) and **release/template mode** (versioned mooncakes deps; tools run from
 `.mooncakes/`).
 
 ```sh
 ./release.sh 0.1.0              # same version for SDK and tools
 ./release.sh 0.1.0 0.2.0        # different versions for SDK and tools
-./release.sh --dev             # revert to local path deps for in-repo development
+./release.sh --dev             # revert to the local workspace SDK for in-repo development
 ```
 
-Release mode rewrites the example's `moon.mod.json` (`deps` path → versioned; adds `bin-deps` with
+Release mode rewrites the example's `moon.mod.json` (workspace SDK version → release version; adds `bin-deps` with
 `golemcloud/golem_sdk_tools`) and the tool/SDK paths in `golem.yaml`, producing a standalone template
 that depends only on mooncakes. Both `golemcloud/golem_sdk` and `golemcloud/golem_sdk_tools` must be
 published to mooncakes.io for the release template to work.
@@ -503,9 +525,11 @@ published to mooncakes.io for the release template to work.
 
 ## Dependencies & Tools
 
-- **wit-bindgen** — stock `wit-bindgen` with the `moonbit` backend (no fork; validated against
-  `wit-bindgen-cli` 0.57.x). Bindings are regenerated via `scripts/regen-bindings.sh`, which applies
-  the s8/s16 sign-extension fix in post-processing.
+- **wit-bindgen** — Golem's fork pinned at
+  `4407232ead86d9bcbd06cbebd790a52120a4087a`. It combines draft upstream PR #1659's MoonBit
+  component-model async support with Golem's outline-lift, named-memory-lowering, and export
+  disambiguation changes. Bindings are regenerated via `scripts/regen-bindings.sh`, which rejects
+  any other generator revision and applies the s8/s16 sign-extension fix in post-processing.
 - **wasm-tools** — `component embed` (adds WIT type info) and `component new` (creates the Component
   Model WASM).
 - **moon** — MoonBit build tool.

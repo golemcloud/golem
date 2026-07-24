@@ -17,6 +17,7 @@
 package golem.host.js
 
 import scala.scalajs.js
+import scala.scalajs.js.annotation.JSName
 import scala.scalajs.js.typedarray.Uint8Array
 
 // ---------------------------------------------------------------------------
@@ -55,7 +56,7 @@ object JsObjectId {
     js.Dynamic.literal("container" -> container, "object" -> objectName).asInstanceOf[JsObjectId]
 }
 
-// --- Resources (Container, StreamObjectNames, OutgoingValue, IncomingValue) ---
+// --- Resources (Container, OutgoingValue, IncomingValue) ---
 
 @js.native
 sealed trait JsBlobstoreContainer extends js.Object {
@@ -63,7 +64,7 @@ sealed trait JsBlobstoreContainer extends js.Object {
   def info(): JsContainerMetadata                                                       = js.native
   def getData(name: String, start: js.BigInt, end: js.BigInt): JsBlobstoreIncomingValue = js.native
   def writeData(name: String, data: JsBlobstoreOutgoingValue): Unit                     = js.native
-  def listObjects(): JsStreamObjectNames                                                = js.native
+  def listObjects(): JsObjectNameStream                                                 = js.native
   def deleteObject(name: String): Unit                                                  = js.native
   def deleteObjects(names: js.Array[String]): Unit                                      = js.native
   def hasObject(name: String): Boolean                                                  = js.native
@@ -72,23 +73,46 @@ sealed trait JsBlobstoreContainer extends js.Object {
 }
 
 @js.native
-sealed trait JsStreamObjectNames extends js.Object {
-  def readStreamObjectNames(len: js.BigInt): js.Tuple2[js.Array[String], Boolean] = js.native
-  def skipStreamObjectNames(num: js.BigInt): js.Tuple2[js.BigInt, Boolean]        = js.native
+sealed trait JsObjectNameIteratorResult extends js.Object {
+  def done: Boolean = js.native
+  def value: String = js.native
+}
+
+@js.native
+sealed trait JsObjectNameIterator extends js.Object {
+  def next(): js.Promise[JsObjectNameIteratorResult] = js.native
+}
+
+@js.native
+sealed trait JsObjectNameStream extends js.Object {
+  @JSName(js.Symbol.asyncIterator)
+  def asyncIterator(): JsObjectNameIterator = js.native
+}
+
+@js.native
+sealed trait JsByteIteratorResult extends js.Object {
+  def done: Boolean = js.native
+  def value: Int    = js.native
+}
+
+@js.native
+sealed trait JsByteIterator extends js.Object {
+  def next(): js.Promise[JsByteIteratorResult] = js.native
+}
+
+@js.native
+sealed trait JsByteStream extends js.Object {
+  @JSName(js.Symbol.asyncIterator)
+  def asyncIterator(): JsByteIterator = js.native
 }
 
 @js.native
 sealed trait JsBlobstoreOutgoingValue extends js.Object {
-  def outgoingValueWriteBody(): JsBlobstoreOutputStream = js.native
+  def outgoingValueWriteBody(data: JsByteStream): Unit = js.native
 }
 
 @js.native
 sealed trait JsBlobstoreIncomingValue extends js.Object {
   def incomingValueConsumeSync(): Uint8Array = js.native
   def size(): js.BigInt                      = js.native
-}
-
-@js.native
-sealed trait JsBlobstoreOutputStream extends js.Object {
-  def blockingWriteAndFlush(data: Uint8Array): Unit = js.native
 }

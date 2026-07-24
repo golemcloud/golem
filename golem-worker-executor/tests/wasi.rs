@@ -24,7 +24,7 @@ use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind,
 };
-use golem_common::model::{AgentStatus, IdempotencyKey};
+use golem_common::model::{AgentStatus, IdempotencyKey, RetryConfig};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::ResultValuePayload;
 use golem_test_framework::dsl::{TestDsl, drain_connection, stderr_events, stdout_events};
@@ -33,16 +33,17 @@ use golem_worker_executor::metrics::storage::{
     STORAGE_BYTES_WRITTEN_TOTAL, STORAGE_TYPE_FILESYSTEM,
 };
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    WorkerExecutorTestDependencies, start, start_with_overrides,
 };
 use http::{HeaderMap, StatusCode};
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU8;
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
 use tokio::spawn;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -388,6 +389,107 @@ async fn initial_file_read_write(
             ]
         }
     );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn initial_file_p3_parity(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .with_files(
+            "P3FileSystem",
+            &[
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
+                },
+            ],
+        )
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("P3FileSystem", "initial-file-p3-parity-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let expected = vec![
+        "ro_flags_p2_write=false".to_string(),
+        "ro_flags_p3_write=false".to_string(),
+        "ro_hash_parity=true".to_string(),
+        "ro_hash_p3_deterministic=true".to_string(),
+        "ro_hash_at_parity=true".to_string(),
+        "ro_set_times_p2=err:not-permitted".to_string(),
+        "ro_set_times_p3=err:not-permitted".to_string(),
+        "ro_set_times_at_p2=err:not-permitted".to_string(),
+        "ro_set_times_at_p3=err:not-permitted".to_string(),
+        "ro_rename_at_p2=err:not-permitted".to_string(),
+        "ro_rename_at_p3=err:not-permitted".to_string(),
+        "ro_symlink_at_p2=err:not-permitted".to_string(),
+        "ro_symlink_at_p3=err:not-permitted".to_string(),
+        "ro_unlink_file_at_p2=err:not-permitted".to_string(),
+        "ro_unlink_file_at_p3=err:not-permitted".to_string(),
+        "rw_flags_p2_write=true".to_string(),
+        "rw_flags_p3_write=true".to_string(),
+        "rw_hash_parity=true".to_string(),
+        "rw_set_times_p2=ok".to_string(),
+        "rw_set_times_p3=ok".to_string(),
+    ];
+
+    fn as_entries(result: SchemaValue) -> Vec<String> {
+        let SchemaValue::List { elements } = result else {
+            panic!("expected list, got {result:?}")
+        };
+        elements
+            .into_iter()
+            .map(|element| match element {
+                SchemaValue::String(entry) => entry,
+                other => panic!("expected string, got {other:?}"),
+            })
+            .collect::<Vec<_>>()
+    }
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    assert_eq!(as_entries(result), expected);
+
+    // Crash the worker so the next invocation replays the recorded oplog first,
+    // verifying the P3 metadata-hash -> durable stat call sequence is replay-stable
+    executor.simulated_crash(&worker_id).await?;
+
+    let result_after_crash = executor
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    assert_eq!(as_entries(result_after_crash), expected);
 
     Ok(())
 }
@@ -1134,7 +1236,17 @@ async fn environment_variables(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
+    // The same environment must be visible through the P3-native
+    // `wasi:cli/environment@0.3` import as through the P2/std path
+    let result_p3 = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_environment_p3", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
     executor.check_oplog_is_queryable(&worker_id).await?;
+
+    assert_eq!(result_p3, result);
 
     let worker_name = agent_id.to_string();
     assert_eq!(
@@ -1639,15 +1751,317 @@ async fn sleep_longer_than_suspend_threshold(
     Ok(())
 }
 
+#[test]
+#[tracing::instrument]
+async fn p3_sleep_suspends_and_resumes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "p3-sleep-suspends-and-resumes");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let start = Instant::now();
+    let mut fiber = spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_clone,
+                    "sleep_p3",
+                    data_value!(25u64),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    tokio::select! {
+        result = &mut fiber => {
+            let invoke_result = result??;
+            return Err(anyhow!("sleep_p3 returned before suspending: {:?}", invoke_result));
+        }
+        status = executor.wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(15)) => {
+            status?;
+        }
+    }
+
+    fiber.await??;
+    let duration = start.elapsed();
+    assert!(duration.as_secs() >= 25);
+
+    let start = Instant::now();
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_p3", data_value!(0u64))
+        .await?;
+    assert!(start.elapsed().as_secs() < 2);
+
+    Ok(())
+}
+
+/// Interrupting a worker while the guest is parked in a live P3 monotonic-clock wait
+/// (`wasi:clocks` `wait-for`) must deliver the interrupt promptly instead of waiting for the
+/// sleep to elapse: the park races the worker's interrupt signal, the durable call is abandoned
+/// (its `Start` stays incomplete for replay) and the event loop unwinds cooperatively with the
+/// interrupt. After resume, the retained invocation replays, re-enters the wait and completes.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn interrupt_while_parked_in_p3_sleep(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
+    let context = TestContext::new(last_unique_id);
+    // Keep the parked wait from suspending during the test, so the interrupt must be delivered
+    // to the *parked* host future rather than to an already-suspended worker.
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.suspend.wait_suspend_grace = Duration::from_secs(300);
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "interrupt-while-parked-in-p3-sleep");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let fiber = spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_clone,
+                    "sleep_p3",
+                    data_value!(15u64),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    // Give the guest time to enter the P3 clock wait, then interrupt.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let interrupted_at = Instant::now();
+    executor.interrupt(&worker_id).await?;
+
+    let result = fiber.await?;
+    // If the interrupt were not delivered to the parked wait, the sleep would run to completion
+    // and the invocation would succeed instead.
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.err().unwrap());
+    assert!(
+        err_msg.contains("Interrupted via the Golem API"),
+        "Expected interruption error, got: {err_msg}"
+    );
+    assert!(
+        interrupted_at.elapsed() < Duration::from_secs(10),
+        "interrupting a parked P3 sleep must unwind promptly"
+    );
+
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Interrupted,
+            Duration::from_secs(10),
+        )
+        .await?;
+
+    // Resuming replays the worker; the retained invocation re-enters the wait and completes
+    // once the originally recorded deadline elapses.
+    executor.resume(&worker_id, false).await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(60))
+        .await?;
+
+    let start = Instant::now();
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_p3", data_value!(0u64))
+        .await?;
+    assert!(start.elapsed().as_secs() < 2);
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    Ok(())
+}
+
+/// Interrupting a worker while the guest is parked in a live P3 TCP `receive` wait (connected,
+/// but the peer never sends any bytes) must deliver the interrupt promptly: the parked durable
+/// receive task races the worker's interrupt signal, abandons its open chunk child and parent
+/// durable calls (both `Start`s stay incomplete for replay) and unwinds the event loop
+/// cooperatively, closing the socket. After resume, the retained invocation replays: the guest
+/// reconnects live and completes against the now-responding server.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn interrupt_while_parked_in_p3_tcp_receive(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let (connected_tx, mut connected_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (closed_tx, mut closed_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let tcp_server = spawn(
+        async move {
+            let mut first = true;
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let is_first = first;
+                first = false;
+                let connected_tx = connected_tx.clone();
+                let closed_tx = closed_tx.clone();
+                spawn(async move {
+                    if is_first {
+                        // Never send anything; report when the peer closes the connection.
+                        let _ = connected_tx.send(());
+                        let mut byte = [0u8; 1];
+                        let closed = matches!(stream.read(&mut byte).await, Ok(0));
+                        let _ = closed_tx.send(closed);
+                    } else {
+                        let _ = stream.write_all(b"hello").await;
+                        let _ = stream.shutdown().await;
+                    }
+                });
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Networking", "interrupt-while-parked-in-p3-tcp-receive");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let fiber = spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_clone,
+                    "tcp_collect_p3",
+                    data_value!(port),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    // Wait until the guest has connected, then give it a moment to enter the parked receive
+    // wait before interrupting.
+    tokio::time::timeout(Duration::from_secs(30), connected_rx.recv())
+        .await?
+        .ok_or_else(|| anyhow!("tcp server stopped before the guest connected"))?;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    executor.interrupt(&worker_id).await?;
+
+    let result = fiber.await?;
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.err().unwrap());
+    assert!(
+        err_msg.contains("Interrupted via the Golem API"),
+        "Expected interruption error, got: {err_msg}"
+    );
+
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Interrupted,
+            Duration::from_secs(10),
+        )
+        .await?;
+
+    assert!(
+        tokio::time::timeout(Duration::from_secs(10), closed_rx.recv())
+            .await?
+            .unwrap_or(false),
+        "interrupting the worker must close the in-flight TCP connection"
+    );
+
+    // Resuming replays the worker; the retained invocation reconnects live and completes
+    // against the now-responding server.
+    executor.resume(&worker_id, false).await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
+        .await?;
+
+    let result2 = executor
+        .invoke_and_await_agent(&component, &agent_id, "tcp_collect_p3", data_value!(port))
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert_eq!(result2, Ok("hello".to_string()));
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    tcp_server.abort();
+
+    Ok(())
+}
+
 async fn simulated_slow_request_server(delay: Duration) -> (u16, JoinHandle<()>) {
+    let (port, server, _) = counting_slow_request_server(delay).await;
+    (port, server)
+}
+
+/// Like [`simulated_slow_request_server`], but also returns a counter of how many requests the
+/// server has received.
+async fn counting_slow_request_server(delay: Duration) -> (u16, JoinHandle<()>, Arc<AtomicUsize>) {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let request_count_clone = request_count.clone();
 
     let http_server = spawn(
         async move {
             let route = Router::new().route(
                 "/simulated-slow-request",
                 get(move || async move {
+                    request_count_clone.fetch_add(1, Ordering::AcqRel);
                     tokio::time::sleep(delay).await;
                     "slow response".to_string()
                 }),
@@ -1658,7 +2072,7 @@ async fn simulated_slow_request_server(delay: Duration) -> (u16, JoinHandle<()>)
         .in_current_span(),
     );
 
-    (host_http_port, http_server)
+    (host_http_port, http_server, request_count)
 }
 
 /// Creates an HTTP server with a streaming endpoint that sends many small chunks
@@ -1859,6 +2273,67 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
     Ok(())
 }
 
+/// Mixed-ABI suspend regression: one guest task awaits a slow P3 `wasi:http` send while another
+/// blocks in a P2 sleep (`thread::sleep` → `wasi:io/poll`) longer than the suspend threshold.
+/// The worker must not be suspended while the P3 request is in flight — a premature suspend
+/// would drop the pending host call and re-execute the HTTP request on resume, so the server
+/// receiving the request exactly once proves the P3 completion was delivered.
+#[test]
+#[tracing::instrument]
+async fn p3_request_completes_while_blocked_in_p2_sleep_past_suspend_threshold(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let (port, server, request_count) = counting_slow_request_server(Duration::from_secs(5)).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "clock-service-p2-sleep-during-request");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let start = Instant::now();
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "p2_sleep_during_request",
+            data_value!(15u64),
+        )
+        .await?
+        .into_typed::<String>()?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    server.abort();
+    drop(executor);
+
+    let duration = start.elapsed();
+    debug!("duration: {:?}", duration);
+
+    assert_eq!(result, "slow response, slept");
+    assert_eq!(
+        request_count.load(Ordering::Acquire),
+        1,
+        "the P3 HTTP request must be sent exactly once; a second request means the worker was \
+         suspended while the request was in flight and re-executed it on resume"
+    );
+    assert!(duration.as_secs() >= 15);
+
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 async fn sleep_and_awaiting_parallel_responses(
@@ -1919,6 +2394,61 @@ async fn sleep_and_awaiting_parallel_responses(
         "Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n"
     );
     assert!(healthcheck_result);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn jump_with_in_flight_durable_call_fails(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.retry = RetryConfig {
+                max_attempts: 1,
+                min_delay: Duration::from_millis(10),
+                max_delay: Duration::from_millis(10),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let (port, server) = simulated_slow_request_server(Duration::from_secs(2)).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "jump-during-request");
+    executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "jump_during_request", data_value!())
+        .await;
+
+    drop(executor);
+    server.abort();
+
+    assert!(result.is_err());
+    let err = format!("{}", result.unwrap_err());
+    assert!(
+        err.contains("durable host calls are still in flight"),
+        "Unexpected error: {err}"
+    );
 
     Ok(())
 }
@@ -2105,6 +2635,60 @@ async fn resuming_sleep(
 
     assert!(duration.as_secs() < 20);
     assert!(duration.as_secs() >= 10);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn p3_resuming_sleep(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "p3-resuming-sleep");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_agent(&component, &agent_id, "sleep_p3", data_value!(25u64))
+        .await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(15))
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    info!("Restarting worker...");
+    let executor = start(deps, &context).await?;
+    info!("Worker restarted");
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(15))
+        .await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
+        .await?;
+
+    let start = Instant::now();
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_p3", data_value!(0u64))
+        .await?;
+    assert!(start.elapsed().as_secs() < 2);
 
     Ok(())
 }
@@ -3049,6 +3633,150 @@ async fn ip_address_resolve(
     };
     assert!(!entries1.is_empty());
     assert!(!entries2.is_empty());
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn p3_ip_address_resolve(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Networking", "p3-ip-address-resolve-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let result1 = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "resolve_p3",
+            data_value!("golem.cloud"),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    // If the recovery succeeds, the replayed P3 DNS resolution produced the same recorded result
+
+    let result2 = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "resolve_p3",
+            data_value!("golem.cloud"),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // Result 2 is a fresh resolution which is not guaranteed to return the same addresses (or the
+    // same order) but we can expect that it could resolve golem.cloud to at least one address.
+    let SchemaValue::Result(ResultValuePayload::Ok {
+        value: Some(entries1),
+    }) = &result1
+    else {
+        panic!("expected successful resolution, got {:?}", result1)
+    };
+    let SchemaValue::Result(ResultValuePayload::Ok {
+        value: Some(entries2),
+    }) = &result2
+    else {
+        panic!("expected successful resolution, got {:?}", result2)
+    };
+    let SchemaValue::List { elements: entries1 } = entries1.as_ref() else {
+        panic!("expected list, got {:?}", entries1)
+    };
+    let SchemaValue::List { elements: entries2 } = entries2.as_ref() else {
+        panic!("expected list, got {:?}", entries2)
+    };
+    assert!(!entries1.is_empty());
+    assert!(!entries2.is_empty());
+
+    Ok(())
+}
+
+/// A permanently failing P3 DNS lookup (`NameUnresolvable`) must surface to the guest as an error
+/// value without routing through the worker-level retry machinery: the invocation succeeds, the
+/// guest observes the error, and the oplog contains no `Error` (retry) entries. The transient
+/// side of the classification (`TemporaryResolverFailure` / `Other` raising a retry trap) cannot
+/// be induced end-to-end because the underlying resolver maps every lookup failure to
+/// `NameUnresolvable`; it is covered by the classification unit tests in
+/// `durable_host::p3::sockets`.
+#[test]
+#[tracing::instrument]
+async fn p3_ip_address_resolve_permanent_failure_is_guest_visible_without_retry(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+    use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Networking", "p3-ip-address-resolve-failure-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "resolve_p3",
+            data_value!("this-name-does-not-exist.golem-test.invalid"),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let SchemaValue::Result(ResultValuePayload::Err { value: Some(error) }) = &result else {
+        panic!("expected guest-visible resolution error, got {:?}", result)
+    };
+    let SchemaValue::String(error) = error.as_ref() else {
+        panic!("expected error message string, got {:?}", error)
+    };
+    assert!(
+        error.contains("NameUnresolvable"),
+        "expected NameUnresolvable, got {error}"
+    );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let retry_errors = oplog
+        .iter()
+        .filter(|e| matches!(e.entry, PublicOplogEntry::Error(_)))
+        .count();
+    assert_eq!(
+        retry_errors, 0,
+        "a permanent DNS failure must not trigger worker-level retries"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }
@@ -4138,6 +4866,257 @@ async fn oplog_replay_after_streaming_http_read(
 
     server.abort();
     drop(executor);
+    Ok(())
+}
+
+/// A transient mid-body failure of a streaming HTTP response must route
+/// through worker-level retry and re-issue the recorded request instead of
+/// surfacing a truncated body to the guest.
+///
+/// The server aborts the chunked response body mid-stream on the first
+/// attempt and serves the complete body on subsequent attempts. The durable
+/// consume-body task classifies the body error as transient, the worker goes
+/// to `Retrying`, and the retry's replay finds the consume-body scope
+/// incomplete, jumps it to live, and re-issues the recorded request (same
+/// idempotency key) — the guest observes only the complete second body.
+#[test]
+#[tracing::instrument]
+async fn http_client_transient_mid_stream_failure_is_retried_and_reissued(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    let attempts = Arc::new(AtomicU8::new(0));
+    let attempts_clone = attempts.clone();
+    let http_server = spawn(
+        async move {
+            let route = Router::new().route(
+                "/streaming-chunks",
+                get(move || {
+                    let attempts = attempts_clone.clone();
+                    async move {
+                        let attempt = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let stream = stream::iter(0..20).map(move |i| {
+                            if attempt == 0 && i == 5 {
+                                Err::<Bytes, BoxError>("injected mid-body failure".into())
+                            } else {
+                                Ok(Bytes::from(format!("chunk-{i}\n")))
+                            }
+                        });
+
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header("Content-Type", "text/plain")
+                            .body(axum::body::Body::from_stream(stream))
+                            .unwrap()
+                    }
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("StreamingClient");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    executor.log_output(&worker_id).await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "streaming_http_read", data_value!())
+        .await?
+        .into_typed::<String>()?;
+
+    // The complete second body, with no chunks leaking in from the aborted
+    // first attempt (its partial delivery is discarded by the retry's replay).
+    let expected: String = (0..20).map(|i| format!("chunk-{i}\n")).collect();
+    assert_eq!(
+        result, expected,
+        "expected exactly the complete re-issued response body"
+    );
+    assert_eq!(
+        attempts.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the request must have been re-issued exactly once after the mid-body failure"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    http_server.abort();
+    drop(executor);
+    Ok(())
+}
+
+/// Interrupting an agent mid-response-stream and resuming it forces the
+/// restart rebuild gate to reissue the recorded P3 send to continue the
+/// response stream; the reissued request must carry the recorded request body
+/// byte-identically instead of an empty-body reissue.
+#[test]
+#[tracing::instrument]
+async fn http_client_interrupted_mid_response_reissues_recorded_post_body(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let (signal_tx, mut signal_rx) = tokio::sync::mpsc::unbounded_channel();
+    let request_bodies: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+    let request_bodies_clone = request_bodies.clone();
+
+    let http_server = spawn(
+        async move {
+            let route = Router::new().route(
+                "/",
+                post(move |body: Bytes| {
+                    let request_bodies = request_bodies_clone.clone();
+                    let signal_tx = signal_tx.clone();
+                    async move {
+                        let is_first = {
+                            let mut bodies = request_bodies.lock().unwrap();
+                            bodies.push(body.to_vec());
+                            bodies.len() == 1
+                        };
+                        let stream = stream::iter(0..100)
+                            .throttle(Duration::from_millis(20))
+                            .map(move |i| {
+                                if is_first && i == 50 {
+                                    let _ = signal_tx.send(());
+                                }
+                                Ok::<Bytes, BoxError>(Bytes::from(vec![b'x'; 1024]))
+                            });
+
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header("Content-Type", "application/octet-stream")
+                            .body(axum::body::Body::from_stream(stream))
+                            .unwrap()
+                    }
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient4");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
+
+    let key = IdempotencyKey::fresh();
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let key_clone = key.clone();
+    let _handle = spawn(
+        async move {
+            let _ = executor_clone
+                .invoke_and_await_agent_with_key(
+                    &component_clone,
+                    &agent_id_clone,
+                    &key_clone,
+                    "post_with_p3_streamed_body",
+                    data_value!(),
+                )
+                .await;
+        }
+        .in_current_span(),
+    );
+
+    signal_rx.recv().await.unwrap();
+
+    executor.interrupt(&worker_id).await?;
+
+    drain_connection(rx).await;
+
+    executor.resume(&worker_id, false).await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(5))
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &key,
+            "post_with_p3_streamed_body",
+            data_value!(),
+        )
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    let result_value = result.into_typed::<String>()?;
+    assert!(
+        result_value.starts_with("200 "),
+        "Expected a successful 200 response after resume, got: {}",
+        &result_value[..result_value.len().min(64)]
+    );
+
+    // post_with_p3_streamed_body streams 8 chunks of 8 KiB where byte j of
+    // chunk i is (i * 31 + j) % 251
+    let expected_body: Vec<u8> = {
+        let mut body = Vec::with_capacity(8 * 8 * 1024);
+        for i in 0..8usize {
+            body.extend((0..8 * 1024usize).map(|j| ((i * 31 + j) % 251) as u8));
+        }
+        body
+    };
+    let request_bodies = request_bodies.lock().unwrap();
+    assert_eq!(
+        request_bodies.len(),
+        2,
+        "Expected exactly 2 requests (initial attempt + post-resume reissue)"
+    );
+    assert_eq!(
+        request_bodies[0], expected_body,
+        "The initial attempt must upload the full body"
+    );
+    assert_eq!(
+        request_bodies[1], expected_body,
+        "The rebuilt send must reissue the recorded request body byte-identically, not an empty body"
+    );
+
     Ok(())
 }
 

@@ -8,6 +8,7 @@ const COUNT: usize = 512;
 pub trait LargeDynamicMemoryAgent {
     fn new(name: String) -> Self;
     fn run(&self) -> u64;
+    fn run_with_delay(&self, delay_millis: u64) -> u64;
 }
 
 struct LargeDynamicMemoryAgentImpl {
@@ -21,6 +22,18 @@ impl LargeDynamicMemoryAgent for LargeDynamicMemoryAgentImpl {
     }
 
     fn run(&self) -> u64 {
+        self.allocate()
+    }
+
+    fn run_with_delay(&self, delay_millis: u64) -> u64 {
+        let result = self.allocate();
+        std::thread::sleep(Duration::from_millis(delay_millis));
+        result
+    }
+}
+
+impl LargeDynamicMemoryAgentImpl {
+    fn allocate(&self) -> u64 {
         let mut pages = Vec::with_capacity(COUNT);
         for i in 0..COUNT {
             let data = vec![0u8; PAGE_SIZE];

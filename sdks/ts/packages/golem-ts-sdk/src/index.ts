@@ -16,8 +16,6 @@ import { ResolvedAgent } from './internal/resolvedAgent';
 import { AgentType, Principal } from 'golem:agent/common@2.0.0';
 import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0';
 import type { Snapshot } from 'golem:api/host@1.5.0';
-import { getStdout } from 'wasi:cli/stdout@0.2.3';
-import type { InputStream, OutputStream } from 'wasi:io/streams@0.2.3';
 import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
 import { schemaValueConforms, type ExtendedCommandBody } from './internal/tool';
 import {
@@ -38,7 +36,7 @@ import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { ToolRegistry } from './internal/registry/toolRegistry';
 import { sdkPrincipalFromHost } from './principal';
 import type { FluentCodec } from './fluent/schema/codec';
-import { awaitPollable, disposeWitResource, throwIfAborted } from './internal/pollableUtils';
+import { awaitAbortable, throwIfAborted } from './internal/pollableUtils';
 
 export { Uuid } from './uuid';
 export { ComponentId, AccountId, EnvironmentId } from './ids';
@@ -74,23 +72,23 @@ let initializationPrincipal: Principal | undefined = undefined;
 
 interface GolemAgentGuest {
   initialize(agentTypeName: string, input: SchemaValueTree, principal: Principal): Promise<void>;
-  discoverAgentTypes(): Promise<AgentType[]>;
+  discoverAgentTypes(): AgentType[];
   invoke(
     methodName: string,
     input: SchemaValueTree,
     principal: Principal,
   ): Promise<SchemaValueTree | undefined>;
-  getDefinition(): Promise<AgentType>;
+  getDefinition(): AgentType;
 }
 
 interface GolemToolGuest {
-  discoverTools(): Promise<Tool[]>;
-  getTool(name: string): Promise<Tool>;
+  discoverTools(): Tool[];
+  getTool(name: string): Tool;
   invoke(
     toolName: string,
     commandPath: string[],
     input: TypedSchemaValue,
-    stdin: InputStream | undefined,
+    stdin: AsyncIterable<number> | undefined,
     principal: Principal,
   ): Promise<InvocationResult>;
 }
@@ -160,7 +158,7 @@ async function invokeAgent(
   }
 }
 
-async function discoverTools(): Promise<Tool[]> {
+function discoverTools(): Tool[] {
   const registrationErrors = ToolRegistry.getRegistrationErrors();
   if (registrationErrors.length > 0) {
     throw invalidToolResult(
@@ -172,7 +170,7 @@ async function discoverTools(): Promise<Tool[]> {
   return ToolRegistry.getRegisteredTools();
 }
 
-async function getTool(name: string): Promise<Tool> {
+function getTool(name: string): Tool {
   const registered = ToolRegistry.getTool(name);
   if (!registered) throw invalidToolName(name);
   return registered;
@@ -182,18 +180,15 @@ async function invokeTool(
   toolName: string,
   commandPath: string[],
   input: TypedSchemaValue,
-  stdin: InputStream | undefined,
+  stdin: AsyncIterable<number> | undefined,
   principal: Principal,
 ): Promise<InvocationResult> {
   let inputAdapter: ToolInputStreamAdapter | undefined;
-  let output: OutputStream | undefined;
   let outputAdapter: ToolOutputStreamAdapter | undefined;
   let inputCleanup: Promise<void> | undefined;
-  const disposeInput = async (): Promise<void> => {
+  const disposeInput = async (reason?: unknown): Promise<void> => {
     if (!inputCleanup) {
-      inputCleanup = inputAdapter
-        ? inputAdapter.dispose()
-        : Promise.resolve().then(() => disposeWitResource(stdin));
+      inputCleanup = inputAdapter ? inputAdapter.dispose(reason) : closeAsyncIterable(stdin);
     }
     await inputCleanup;
   };
@@ -225,23 +220,18 @@ async function invokeTool(
       }
     }
 
-    output = body.stdout ? getStdout() : undefined;
-    if (output) {
-      outputAdapter = writableStreamFromOutput(output);
+    if (body.stdout) {
+      outputAdapter = createToolOutputStream();
       context.stdout = outputAdapter.stream;
     }
 
     const outcome = await prepared.invoke(context);
-    await outputAdapter?.flush();
-    const result = projectToolOutcome(body, outcome, undefined);
+    const stdout = await outputAdapter?.finish();
+    const result = projectToolOutcome(body, outcome, stdout);
     await disposeInput();
-    disposeWitResource(output);
-    output = undefined;
-    if (body.stdout) result.stdout = getStdout();
     return result;
   } catch (error) {
-    await Promise.allSettled([outputAdapter?.abort(error), disposeInput()]);
-    disposeWitResource(output);
+    await Promise.allSettled([outputAdapter?.abort(error), disposeInput(error)]);
     throw error;
   }
 }
@@ -249,7 +239,7 @@ async function invokeTool(
 function projectToolOutcome(
   body: ExtendedCommandBody,
   outcome: unknown,
-  stdout: OutputStream | undefined,
+  stdout: AsyncIterable<number> | undefined,
 ): InvocationResult {
   if (!isRecord(outcome) || typeof outcome.tag !== 'string') {
     throw invalidToolResult('tool handler returned an invalid outcome');
@@ -327,28 +317,41 @@ interface ToolInputStreamAdapter {
 
 interface ToolOutputStreamAdapter {
   readonly stream: WritableStream<Uint8Array>;
-  flush(): Promise<void>;
+  finish(): Promise<AsyncIterable<number>>;
   abort(reason?: unknown): Promise<void>;
 }
 
-function readableStreamFromInput(input: InputStream): ToolInputStreamAdapter {
+function readableStreamFromInput(input: AsyncIterable<number>): ToolInputStreamAdapter {
+  const iterator = input[Symbol.asyncIterator]();
   const cancellation = new AbortController();
   let activePull: Promise<void> | undefined;
   let disposal: Promise<void> | undefined;
+  let iteratorDisposal: Promise<void> | undefined;
+
+  const disposeIterator = (): Promise<void> => {
+    if (!iteratorDisposal) {
+      iteratorDisposal = Promise.resolve(iterator.return?.()).then(
+        () => undefined,
+        () => undefined,
+      );
+    }
+    return iteratorDisposal;
+  };
 
   const dispose = async (reason?: unknown): Promise<void> => {
     if (!disposal) {
       cancellation.abort(reason);
       const pull = activePull;
       disposal = (async () => {
+        void disposeIterator();
         if (pull) {
           try {
             await pull;
           } catch {
-            // Cancellation only needs to establish that the child pollable was released.
+            // Cancellation only needs to release the input iterator.
           }
         }
-        disposeWitResource(input);
+        await disposeIterator();
       })();
     }
     await disposal;
@@ -356,7 +359,7 @@ function readableStreamFromInput(input: InputStream): ToolInputStreamAdapter {
 
   const stream = new ReadableStream<Uint8Array>({
     pull(controller) {
-      const operation = pullInput(input, controller, cancellation.signal);
+      const operation = pullInput(iterator, controller, cancellation.signal, disposeIterator);
       const tracked = operation.finally(() => {
         if (activePull === tracked) activePull = undefined;
       });
@@ -372,47 +375,41 @@ function readableStreamFromInput(input: InputStream): ToolInputStreamAdapter {
 }
 
 async function pullInput(
-  input: InputStream,
+  iterator: AsyncIterator<number>,
   controller: ReadableStreamDefaultController<Uint8Array>,
   signal: AbortSignal,
+  disposeIterator: () => Promise<void>,
 ): Promise<void> {
-  while (!signal.aborted) {
-    try {
-      const contents = input.read(64n * 1024n);
-      if (contents.length > 0) {
-        controller.enqueue(contents);
-        return;
-      }
-    } catch (error) {
-      if (isClosedStreamError(error)) controller.close();
-      else controller.error(error);
+  try {
+    throwIfAborted(signal);
+    const next = await awaitAbortable(
+      Promise.resolve().then(() => iterator.next()),
+      signal,
+      () => void disposeIterator(),
+    );
+    if (next.done) {
+      closeReadableStream(controller);
       return;
     }
 
-    try {
-      await awaitPollable(input.subscribe(), signal);
-    } catch (error) {
-      if (signal.aborted) {
-        closeReadableStream(controller);
-      } else {
-        controller.error(error);
-      }
-      return;
+    if (!Number.isInteger(next.value) || next.value < 0 || next.value > 255) {
+      throw new TypeError('tool stdin yielded a value outside the byte range');
     }
+    controller.enqueue(Uint8Array.of(next.value));
+  } catch (error) {
+    if (signal.aborted) closeReadableStream(controller);
+    else controller.error(error);
   }
-  closeReadableStream(controller);
 }
 
-function writableStreamFromOutput(output: OutputStream): ToolOutputStreamAdapter {
-  const cancellation = new AbortController();
+function createToolOutputStream(): ToolOutputStreamAdapter {
+  const chunks: Uint8Array[] = [];
   const invocationCompleted = new Error('tool invocation completed');
   let activeOperation: Promise<void> | undefined;
   let controller: WritableStreamDefaultController | undefined;
   let acceptingOperations = true;
-  let lateOperation: { promise: Promise<void>; reject: (reason: unknown) => void } | undefined;
   let failed = false;
   let failure: unknown;
-  let dirty = false;
 
   const recordFailure = (error: unknown): void => {
     if (failed) return;
@@ -448,38 +445,11 @@ function writableStreamFromOutput(output: OutputStream): ToolOutputStreamAdapter
     }
   };
 
-  const flushDirty = async (): Promise<void> => {
-    if (!dirty) return;
-    throwIfAborted(cancellation.signal);
-    output.flush();
-    do {
-      await awaitPollable(output.subscribe(), cancellation.signal);
-    } while (output.checkWrite() === 0n);
-    dirty = false;
-  };
-
-  const waitForFinalization = (): Promise<void> => {
-    if (!lateOperation) {
-      let reject!: (reason: unknown) => void;
-      const promise = new Promise<void>((_resolve, rejectPromise) => {
-        reject = rejectPromise;
-      });
-      lateOperation = { promise, reject };
-    }
-    return lateOperation.promise;
-  };
-
-  const rejectLateOperation = (reason: unknown): void => {
-    lateOperation?.reject(reason);
-  };
-
   const abort = async (reason?: unknown): Promise<void> => {
     const abortReason = reason === undefined ? new Error('tool stdout stream was aborted') : reason;
     recordFailure(abortReason);
     acceptingOperations = false;
     controller?.error(abortReason);
-    rejectLateOperation(abortReason);
-    cancellation.abort(abortReason);
     try {
       await settle();
     } catch {
@@ -492,63 +462,50 @@ function writableStreamFromOutput(output: OutputStream): ToolOutputStreamAdapter
       controller = value;
     },
     write(contents) {
-      if (!acceptingOperations) return waitForFinalization();
+      if (!acceptingOperations) return Promise.reject(failed ? failure : invocationCompleted);
       return track(
-        writeOutput(output, contents, cancellation.signal, () => {
-          dirty = true;
+        Promise.resolve().then(() => {
+          if (!(contents instanceof Uint8Array)) {
+            throw new TypeError('tool stdout accepts only Uint8Array chunks');
+          }
+          chunks.push(contents.slice());
         }),
       );
     },
     close() {
-      if (!acceptingOperations) return waitForFinalization();
-      return track(flushDirty());
+      if (!acceptingOperations) return Promise.reject(failed ? failure : invocationCompleted);
+      return track(Promise.resolve());
     },
     abort,
   });
 
   return {
     stream,
-    async flush() {
+    async finish() {
       await settle();
       if (failed) throw failure;
       acceptingOperations = false;
       await settle();
       if (failed) throw failure;
-      try {
-        await flushDirty();
-      } catch (error) {
-        recordFailure(error);
-        controller?.error(error);
-        rejectLateOperation(error);
-        throw error;
-      }
       controller?.error(invocationCompleted);
-      rejectLateOperation(invocationCompleted);
+      return bytesFromChunks(chunks);
     },
     abort,
   };
 }
 
-async function writeOutput(
-  output: OutputStream,
-  contents: Uint8Array,
-  signal: AbortSignal,
-  markDirty: () => void,
-): Promise<void> {
-  let offset = 0;
-  while (offset < contents.length) {
-    throwIfAborted(signal);
-    const capacity = output.checkWrite();
-    if (capacity === 0n) {
-      await awaitPollable(output.subscribe(), signal);
-      continue;
-    }
+async function* bytesFromChunks(chunks: readonly Uint8Array[]): AsyncIterable<number> {
+  for (const chunk of chunks) {
+    for (const byte of chunk) yield byte;
+  }
+}
 
-    const remaining = BigInt(contents.length - offset);
-    const length = Number(capacity < remaining ? capacity : remaining);
-    output.write(contents.subarray(offset, offset + length));
-    markDirty();
-    offset += length;
+async function closeAsyncIterable(input: AsyncIterable<number> | undefined): Promise<void> {
+  if (!input) return;
+  try {
+    await input[Symbol.asyncIterator]().return?.();
+  } catch {
+    // Input stream cleanup is best-effort.
   }
 }
 
@@ -576,15 +533,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function isClosedStreamError(value: unknown): boolean {
-  return isRecord(value) && value.tag === 'closed';
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function discoverAgentTypes(): Promise<AgentType[]> {
+function discoverAgentTypes(): AgentType[] {
   try {
     const registrationErrors = AgentTypeRegistry.getRegistrationErrors();
     if (registrationErrors.length > 0) {
@@ -614,7 +567,7 @@ function formatAgentRegistrationError(agentTypeName: string, messages: readonly 
   return `- Agent "${agentTypeName}": ${messages.join('; ')}`;
 }
 
-async function getDefinition(): Promise<AgentType> {
+function getDefinition(): AgentType {
   if (!resolvedAgent) {
     throw new Error('Failed to get agent definition: agent is not initialized');
   }
@@ -893,7 +846,7 @@ export const golemTool010Guest: GolemToolGuest = {
   invoke: invokeTool,
 };
 
-// Likewise expose the tool guest by its short interface name.
+// The generated wrapper also looks up the tool guest by its short interface name.
 export const tool: GolemToolGuest = golemTool010Guest;
 
 export const saveSnapshot: SaveSnapshotGuest = {

@@ -110,8 +110,11 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self).await
+                call.replay_expecting_completion(self)
+                    .await
+                    .map_err(StreamError::from)
             }?;
 
             end_http_request_if_closed(self, handle, &result.result).await?;
@@ -233,8 +236,11 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self).await
+                call.replay_expecting_completion(self)
+                    .await
+                    .map_err(StreamError::from)
             }?;
 
             end_http_request_if_closed(self, handle, &result.result).await?;
@@ -276,8 +282,11 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self).await
+                call.replay_expecting_completion(self)
+                    .await
+                    .map_err(StreamError::from)
             }?;
 
             end_http_request_if_closed(self, handle, &result.result).await?;
@@ -379,8 +388,11 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self).await
+                call.replay_expecting_completion(self)
+                    .await
+                    .map_err(StreamError::from)
             }?;
             end_http_request_if_closed(self, handle, &result.result).await?;
 
@@ -393,13 +405,21 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
 
     fn subscribe(&mut self, self_: Resource<InputStream>) -> wasmtime::Result<Resource<Pollable>> {
         self.observe_function_call("io::streams::input_stream", "subscribe");
-        HostInputStream::subscribe(self.table(), self_)
+        let is_file_stream = self
+            .state
+            .open_filesystem_input_streams
+            .contains(&self_.rep());
+        let pollable = HostInputStream::subscribe(self.table(), self_)?;
+        if is_file_stream {
+            self.state.file_stream_pollables.insert(pollable.rep());
+        }
+        Ok(pollable)
     }
 
     async fn drop(&mut self, rep: Resource<InputStream>) -> wasmtime::Result<()> {
         self.observe_function_call("io::streams::input_stream", "drop");
 
-        self.state.open_filesystem_input_streams.remove(&rep.rep());
+        let stream_rep = rep.rep();
 
         if is_incoming_http_body_stream(self, &rep) {
             let handle = rep.rep();
@@ -410,7 +430,13 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             }
         }
 
-        HostInputStream::drop(self.table(), rep).await
+        let result = HostInputStream::drop(self.table(), rep).await;
+        if result.is_ok() {
+            // Only unclassify after the resource is really gone: reps are recycled by the
+            // resource table, and a failed drop leaves the file stream live.
+            self.state.open_filesystem_input_streams.remove(&stream_rep);
+        }
+        result
     }
 }
 
@@ -452,10 +478,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self).await
-            }
-            .map_err(StreamError::from)?;
+                call.replay_expecting_completion(self)
+                    .await
+                    .map_err(StreamError::from)
+            }?;
 
             result.result.map_err(StreamError::from)
         } else {
@@ -580,12 +608,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
                 let replayed = call.replay_expecting_completion(self).await;
                 mark_replayed_body_write(self, state.request_handle);
-                replayed
-            }
-            .map_err(StreamError::from)?;
+                replayed.map_err(StreamError::from)
+            }?;
 
             result.result.map(|_bytes| ()).map_err(StreamError::from)
         } else {
@@ -704,12 +732,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
                 let replayed = call.replay_expecting_completion(self).await;
                 mark_replayed_body_write(self, state.request_handle);
-                replayed
-            }
-            .map_err(StreamError::from)?;
+                replayed.map_err(StreamError::from)
+            }?;
 
             result.result.map(|_bytes| ()).map_err(StreamError::from)
         } else {
@@ -761,10 +789,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self).await
-            }
-            .map_err(StreamError::from)?;
+                call.replay_expecting_completion(self)
+                    .await
+                    .map_err(StreamError::from)
+            }?;
 
             result.result.map_err(StreamError::from)
         } else {
@@ -813,10 +843,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self).await
-            }
-            .map_err(StreamError::from)?;
+                call.replay_expecting_completion(self)
+                    .await
+                    .map_err(StreamError::from)
+            }?;
 
             result.result.map_err(StreamError::from)
         } else {
@@ -842,7 +874,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 .or_default()
                 .output_stream_subscribed = true;
         }
-        HostOutputStream::subscribe(self.table(), self_)
+        let is_file_stream = self.state.open_filesystem_output_streams.contains_key(&rep);
+        let pollable = HostOutputStream::subscribe(self.table(), self_)?;
+        if is_file_stream {
+            self.state.file_stream_pollables.insert(pollable.rep());
+        }
+        Ok(pollable)
     }
 
     async fn write_zeroes(
@@ -891,12 +928,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
                 let replayed = call.replay_expecting_completion(self).await;
                 mark_replayed_body_write(self, state.request_handle);
-                replayed
-            }
-            .map_err(StreamError::from)?;
+                replayed.map_err(StreamError::from)
+            }?;
 
             result.result.map(|_| ()).map_err(StreamError::from)
         } else {
@@ -981,12 +1018,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
                 let replayed = call.replay_expecting_completion(self).await;
                 mark_replayed_body_write(self, state.request_handle);
-                replayed
-            }
-            .map_err(StreamError::from)?;
+                replayed.map_err(StreamError::from)
+            }?;
 
             result.result.map(|_| ()).map_err(StreamError::from)
         } else {
@@ -1039,10 +1076,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self).await
-            }
-            .map_err(StreamError::from)?;
+                call.replay_expecting_completion(self)
+                    .await
+                    .map_err(StreamError::from)
+            }?;
 
             result.result.map_err(StreamError::from)
         } else {
@@ -1106,10 +1145,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self).await
-            }
-            .map_err(StreamError::from)?;
+                call.replay_expecting_completion(self)
+                    .await
+                    .map_err(StreamError::from)
+            }?;
 
             result.result.map_err(StreamError::from)
         } else {
@@ -1142,7 +1183,11 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         }
         let result = HostOutputStream::drop(self.table(), rep).await;
         reconcile_pending_filesystem_stream_reservation(self, handle).await;
-        self.state.open_filesystem_output_streams.remove(&handle);
+        if result.is_ok() {
+            // Only unclassify after the resource is really gone: reps are recycled by the
+            // resource table, and a failed drop leaves the file stream live.
+            self.state.open_filesystem_output_streams.remove(&handle);
+        }
         result
     }
 }

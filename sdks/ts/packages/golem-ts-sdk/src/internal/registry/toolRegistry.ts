@@ -256,11 +256,13 @@ function decodeCanonicalInput(
   if (!deepEqual(input.graph, inputModel.codec.graph)) {
     throw invalidInput('tool input schema does not match the command canonical input schema');
   }
+  const inputValue = input.value;
+  if (inputValue.tag !== 'record' || inputValue.fields.length !== inputModel.fields.length) {
+    throw invalidInput('tool input value does not match the command canonical input schema');
+  }
   if (
-    input.value.tag !== 'record' ||
-    input.value.fields.length !== inputModel.fields.length ||
-    inputModel.fields.some(
-      (field, index) => !canonicalValueConforms(field, input.value.fields[index]),
+    inputModel.fields.some((field, index) =>
+      canonicalValueConforms(field, inputValue.fields[index]) ? false : true,
     )
   ) {
     throw invalidInput('tool input value does not match the command canonical input schema');

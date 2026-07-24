@@ -14,7 +14,6 @@
 
 use golem_rust::quota::QuotaToken;
 use golem_rust::{agent_definition, agent_implementation};
-use wstd::http::{Body, Client, Request};
 
 #[agent_definition]
 pub trait QuotaRpcReceiver {
@@ -50,10 +49,12 @@ impl QuotaRpcReceiver for QuotaRpcReceiverImpl {
             match token.reserve(1) {
                 Err(_) => break,
                 Ok(reservation) => {
-                    let req = Request::get(format!("http://{host}:{port}/call"))
-                        .body(Body::empty())
+                    let _ = wasi_fetch::Client::new()
+                        .get(&format!("http://{host}:{port}/call"))
+                        .redirect_limit(0)
+                        .send()
+                        .await
                         .unwrap();
-                    let _ = Client::new().send(req).await.unwrap();
                     reservation.commit(1);
                 }
             }
@@ -106,10 +107,12 @@ impl QuotaRpcSender for QuotaRpcSenderImpl {
             match token.reserve(1) {
                 Err(_) => break,
                 Ok(reservation) => {
-                    let req = Request::get(format!("http://{host}:{port}/call"))
-                        .body(Body::empty())
+                    wasi_fetch::Client::new()
+                        .get(&format!("http://{host}:{port}/call"))
+                        .redirect_limit(0)
+                        .send()
+                        .await
                         .unwrap();
-                    Client::new().send(req).await.unwrap();
                     reservation.commit(1);
                 }
             }

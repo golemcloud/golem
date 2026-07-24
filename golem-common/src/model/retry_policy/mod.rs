@@ -1892,8 +1892,14 @@ impl From<RetryConfig> for RetryPolicy {
             None => inner,
         };
 
+        // Legacy `RetryConfig::max_attempts` counts *total* attempts including
+        // the first one (`get_delay` returns `None` once `attempts >=
+        // max_attempts`), while `CountBox::max_retries` counts *retries*
+        // (evaluated after each failure, starting from zero). Subtract one so
+        // the synthesized policy performs the same number of physical attempts
+        // as the legacy retry loop; `max_attempts: 1` means no retries at all.
         RetryPolicy::CountBox {
-            max_retries: config.max_attempts,
+            max_retries: config.max_attempts.saturating_sub(1),
             inner: Box::new(inner),
         }
     }
@@ -2799,6 +2805,56 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use test_r::test;
+
+    /// Counts how many `Retry` verdicts the policy issues before it gives up.
+    fn count_retries(policy: &RetryPolicy) -> usize {
+        let mut state = policy.initial_state();
+        let mut rng = FixedRng(0.0);
+        let props = RetryProperties::new();
+        let mut retries = 0;
+        loop {
+            let (new_state, verdict) = policy.step(&state, Duration::ZERO, &props, &mut rng);
+            state = new_state;
+            match verdict {
+                RetryVerdict::Retry(_) => retries += 1,
+                RetryVerdict::GiveUp => return retries,
+                RetryVerdict::Error(err) => panic!("unexpected policy error: {err:?}"),
+            }
+            assert!(retries < 100, "policy never gave up");
+        }
+    }
+
+    /// Legacy `RetryConfig::max_attempts` counts *total* physical attempts (`get_delay` returns
+    /// `None` once `attempts >= max_attempts`), so the synthesized default policy must issue
+    /// exactly `max_attempts - 1` retries. `max_attempts: 1` is the boundary: one attempt, no
+    /// retries at all.
+    #[test]
+    fn synthesized_default_policy_matches_legacy_attempt_count() {
+        for (max_attempts, expected_retries) in [(1u32, 0usize), (3, 2)] {
+            let config = RetryConfig {
+                max_attempts,
+                min_delay: Duration::from_millis(100),
+                max_delay: Duration::from_secs(2),
+                multiplier: 2.0,
+                max_jitter_factor: None,
+            };
+
+            let legacy_retries = (1..)
+                .map_while(|attempts| crate::retries::get_delay(&config, attempts))
+                .count();
+            assert_eq!(
+                legacy_retries, expected_retries,
+                "legacy get_delay loop for max_attempts={max_attempts}"
+            );
+
+            let policy = RetryPolicy::from(config);
+            assert_eq!(
+                count_retries(&policy),
+                expected_retries,
+                "synthesized policy for max_attempts={max_attempts}"
+            );
+        }
+    }
 
     #[test]
     fn periodic_strategy_retries_with_constant_delay() {

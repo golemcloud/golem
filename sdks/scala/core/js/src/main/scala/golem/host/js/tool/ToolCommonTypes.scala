@@ -31,16 +31,38 @@ import scala.scalajs.js.annotation.JSName
 // the trailing-underscore `default_` field names emitted by wasm-rquickjs for
 // the reserved word `default`. Schema positions reuse the
 // `golem:core/types@2.0.0` facades from [[golem.host.js.schema]]; the
-// `wasi:io/streams` handles carried by the invocation contract are opaque.
+// Preview 3 `stream<u8>` values use the JavaScript async-iterable protocol.
 // ---------------------------------------------------------------------------
 
-/** Opaque `wasi:io/streams@0.2.3` `input-stream` resource handle. */
 @js.native
-sealed trait JsWasiInputStream extends js.Object
+sealed trait JsByteStreamIteratorResult extends js.Object {
+  def done: Boolean = js.native
+  def value: Int    = js.native
+}
 
-/** Opaque `wasi:io/streams@0.2.3` `output-stream` resource handle. */
 @js.native
-sealed trait JsWasiOutputStream extends js.Object
+sealed trait JsByteStreamIterator extends js.Object {
+  def next(): js.Promise[JsByteStreamIteratorResult] = js.native
+}
+
+/**
+ * JavaScript representation of a Preview 3 `stream<u8>` supplied as tool stdin.
+ */
+@js.native
+sealed trait JsWasiInputStream extends js.Object {
+  @JSName(js.Symbol.asyncIterator)
+  def asyncIterator(): JsByteStreamIterator = js.native
+}
+
+/**
+ * JavaScript representation of a Preview 3 `stream<u8>` returned as tool
+ * stdout.
+ */
+@js.native
+sealed trait JsWasiOutputStream extends js.Object {
+  @JSName(js.Symbol.asyncIterator)
+  def asyncIterator(): JsByteStreamIterator = js.native
+}
 
 // === Documentation ===
 

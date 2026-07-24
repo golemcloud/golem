@@ -18,8 +18,7 @@ world agent-guest {
   import golem:secrets/types@0.1.0;
   import golem:secrets/reveal@0.1.0;
 
-  import wasi:cli/environment@0.2.3;
-  import wasi:cli/stdout@0.2.3;
+  import wasi:cli/environment@0.3.0;
 
   import wasi:blobstore/blobstore;
   import wasi:blobstore/container;

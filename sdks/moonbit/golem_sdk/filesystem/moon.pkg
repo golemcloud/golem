@@ -1,4 +1,5 @@
 import {
+  "golemcloud/golem_sdk/async-core" @asyncCore,
   "golemcloud/golem_sdk/interface/wasi/filesystem/preopens",
   "golemcloud/golem_sdk/interface/wasi/filesystem/types",
   "moonbitlang/core/encoding/utf8",

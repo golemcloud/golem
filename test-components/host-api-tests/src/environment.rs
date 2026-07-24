@@ -6,6 +6,7 @@ pub trait Environment {
     fn new(name: String) -> Self;
     fn get_environment(&self) -> Result<Vec<(String, String)>, String>;
     fn get_arguments(&self) -> Result<Vec<String>, String>;
+    fn get_environment_p3(&self) -> Result<Vec<(String, String)>, String>;
 }
 
 pub struct EnvironmentImpl {
@@ -24,5 +25,12 @@ impl Environment for EnvironmentImpl {
 
     fn get_arguments(&self) -> Result<Vec<String>, String> {
         Ok(args().collect::<Vec<_>>())
+    }
+
+    // Reads the environment through the P3-native `wasi:cli/environment@0.3` import instead of
+    // std (which lowers to the P2 import), verifying the P3 host path returns the enriched
+    // worker environment as well.
+    fn get_environment_p3(&self) -> Result<Vec<(String, String)>, String> {
+        Ok(golem_rust::wasip3::cli::environment::get_environment())
     }
 }

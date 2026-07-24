@@ -5,7 +5,7 @@ import {
   "moonbitlang/formatter",
   "moonbitlang/parser/syntax",
   "moonbitlang/x/fs",
-  "golemcloud/golem_sdk_tools/lib" @lib,
+  "golemcloud/golem_sdk_tools/lib",
 }
 
 options(
