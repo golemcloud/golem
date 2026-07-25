@@ -69,6 +69,11 @@ pub const UNIFORM_COMPONENT_NAME: &str = "density-counter-uniform";
 /// targets. Both agent types live in the agent-counters WASM.
 pub const SCHEDULE_COMPONENT_NAME: &str = "density-schedule";
 
+/// Registry name of the component used by promise-density cells.
+pub const PROMISE_COMPONENT_NAME: &str = "density-promise";
+pub const PROMISE_RUST_COMPONENT_WASM: &str = "golem_it_promise_agent_rust_release";
+pub const PROMISE_TS_COMPONENT_WASM: &str = "golem_it_agent_promise";
+
 /// Builds the registry name of the `index`-th (1-based) per-agent distinct
 /// component: `density-counter-distinct-0001` ..
 /// `density-counter-distinct-2000`.
@@ -92,6 +97,10 @@ pub struct PrepManifest {
     /// sections that have no shared component.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub uniform_component_id: Option<ComponentId>,
+    /// TypeScript promise component. Promise runtimes use separate environments
+    /// because both export the `PromiseAgent` agent type.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub promise_ts_component_id: Option<ComponentId>,
     /// The per-agent distinct component ids, in upload order (1-based index ->
     /// position). Used by per-agent-sharing cells. Empty for sections without a
     /// per-agent sharing mode.
@@ -215,7 +224,7 @@ pub async fn run_prep(
     //    component per env) so their identical agent type names do not collide —
     //    the deployment requires each agent type name to resolve to a single
     //    component within an environment.
-    let (uniform_component_id, distinct_component_ids) =
+    let (uniform_component_id, distinct_component_ids, promise_ts_component_id) =
         upload_components(&user, &user_client, &app.id.0, &shared_env.id, section).await?;
 
     let manifest = PrepManifest {
@@ -224,6 +233,7 @@ pub async fn run_prep(
         token: manifest_token,
         environment_id: shared_env.id,
         uniform_component_id,
+        promise_ts_component_id,
         distinct_component_ids,
     };
 
@@ -269,7 +279,7 @@ async fn upload_components(
     app_id: &uuid::Uuid,
     shared_env: &EnvironmentId,
     section: DensitySection,
-) -> anyhow::Result<(Option<ComponentId>, Vec<ComponentId>)> {
+) -> anyhow::Result<(Option<ComponentId>, Vec<ComponentId>, Option<ComponentId>)> {
     match section {
         DensitySection::Agent => {
             // The single shared component used by shared-component cells.
@@ -314,7 +324,7 @@ async fn upload_components(
                 }
             }
 
-            Ok((Some(uniform.id), distinct))
+            Ok((Some(uniform.id), distinct, None))
         }
         DensitySection::Schedule => {
             info!("Density-prep: uploading schedule component {SCHEDULE_COMPONENT_NAME}");
@@ -328,10 +338,32 @@ async fn upload_components(
                 .await
                 .context("deploying schedule environment")?;
 
-            Ok((Some(component.id), Vec::new()))
+            Ok((Some(component.id), Vec::new(), None))
         }
         DensitySection::Promise => {
-            anyhow::bail!("density-prep for section {section} is not implemented yet")
+            info!("Density-prep: uploading Rust promise component {PROMISE_COMPONENT_NAME}");
+            let rust_component = user
+                .component(shared_env, PROMISE_RUST_COMPONENT_WASM)
+                .name("golem-it:promise-agent-rust")
+                .store()
+                .await
+                .context("uploading Rust promise component")?;
+            user.deploy_environment(*shared_env)
+                .await
+                .context("deploying Rust promise environment")?;
+
+            let ts_env = create_env(client, app_id, "density-promise-ts-env").await?;
+            let ts_component = user
+                .component(&ts_env.id, PROMISE_TS_COMPONENT_WASM)
+                .name("golem-it:agent-promise")
+                .store()
+                .await
+                .context("uploading TypeScript promise component")?;
+            user.deploy_environment(ts_env.id)
+                .await
+                .context("deploying TypeScript promise environment")?;
+
+            Ok((Some(rust_component.id), Vec::new(), Some(ts_component.id)))
         }
     }
 }
