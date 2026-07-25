@@ -4303,10 +4303,8 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             _ => None,
                         };
                         let recorded_scope_card_id = wallet_pin.and_then(|pin| pin.scope_card_id);
-                        let payload_scope_card_id = match &scope_card {
-                            Some(card) => Some(card.scope_card_id),
-                            None => None,
-                        };
+                        let payload_scope_card_id =
+                            scope_card.as_ref().map(|card| card.scope_card_id);
                         if payload_scope_card_id != recorded_scope_card_id {
                             break Err(WorkerExecutorError::unexpected_oplog_entry(
                                 "matching invocation scope-card payload and wallet pin",

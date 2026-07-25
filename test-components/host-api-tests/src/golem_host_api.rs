@@ -4,14 +4,14 @@ use golem_rust::retry::{
     use_retry_policy,
 };
 use golem_rust::{
-    AgentAnyFilter, AgentId, AgentMetadata, Card, CardId, Checkpoint, CheckpointResultExt,
-    ComponentId, ForkResult, FromSchema, GetAgents, IntoSchema, PersistenceLevel, PromiseId,
-    Schema, Transaction, UpdateMode, Uuid, agent_definition, agent_implementation, atomically,
-    atomically_async, derive_card, fallible_transaction, fork, generate_idempotency_key,
-    get_agent_metadata, get_oplog_index, get_promise, get_self_metadata, golem_operation,
-    infallible_transaction, install_card, oplog_commit, resolve_agent_id, resolve_agent_id_strict,
-    resolve_component_id, self_card, set_oplog_index, update_agent, use_idempotence_mode,
-    use_persistence_level, with_persistence_level, with_persistence_level_async,
+    AgentAnyFilter, AgentId, AgentMetadata, Checkpoint, CheckpointResultExt, ComponentId,
+    ForkResult, FromSchema, GetAgents, IntoSchema, PersistenceLevel, PromiseId, Transaction,
+    UpdateMode, Uuid, agent_definition, agent_implementation, atomically, atomically_async,
+    fallible_transaction, fork, generate_idempotency_key, get_agent_metadata, get_oplog_index,
+    get_promise, get_self_metadata, golem_operation, infallible_transaction, oplog_commit,
+    resolve_agent_id, resolve_agent_id_strict, resolve_component_id, set_oplog_index, update_agent,
+    use_idempotence_mode, use_persistence_level, with_persistence_level,
+    with_persistence_level_async,
 };
 use golem_wasi_http::{Client, Response};
 use serde::{Deserialize, Serialize};
@@ -21,20 +21,6 @@ pub struct ResolveComponentResult {
     pub component_found: bool,
     pub worker_found: bool,
     pub strict_worker_found: bool,
-}
-
-#[derive(Clone, Schema, Serialize, Deserialize)]
-pub struct CardApiResult {
-    pub self_card_found: bool,
-    pub derive_succeeded: bool,
-    pub install_succeeded: bool,
-    pub self_card_found_after_install: bool,
-}
-
-#[derive(Clone, Schema, Serialize, Deserialize)]
-pub struct MidInvocationCardRevocationResult {
-    pub release_observed: bool,
-    pub derive_succeeded: bool,
 }
 
 #[agent_definition()]
@@ -71,15 +57,6 @@ pub trait GolemHostApi {
     fn get_worker_metadata(&self, agent_id: AgentId) -> Option<AgentMetadata>;
     fn update_worker(&self, agent_id: AgentId, component_revision: u64, update_mode: UpdateMode);
     fn generate_idempotency_keys(&self) -> (Uuid, Uuid);
-    fn card_api_roundtrip(&self) -> CardApiResult;
-    fn install_card_by_id(&self, high_bits: u64, low_bits: u64) -> bool;
-    fn derive_card_by_id(&self, high_bits: u64, low_bits: u64) -> bool;
-    async fn derive_card_after_promise(
-        &self,
-        high_bits: u64,
-        low_bits: u64,
-        release: PromiseId,
-    ) -> MidInvocationCardRevocationResult;
 
     fn list_retry_policy_names(&self) -> Vec<String>;
     fn get_retry_policy_count(&self) -> u64;
@@ -446,71 +423,6 @@ impl GolemHostApi for GolemHostApiImpl {
         let key1 = generate_idempotency_key();
         let key2 = generate_idempotency_key();
         (key1, key2)
-    }
-
-    fn card_api_roundtrip(&self) -> CardApiResult {
-        let Some(card) = self_card() else {
-            return CardApiResult {
-                self_card_found: false,
-                derive_succeeded: false,
-                install_succeeded: false,
-                self_card_found_after_install: false,
-            };
-        };
-
-        let derived = derive_card(card);
-        let derive_succeeded = derived.is_ok();
-        let install_succeeded = match derived {
-            Ok(card) => install_card(card).is_ok(),
-            Err(_) => false,
-        };
-
-        CardApiResult {
-            self_card_found: true,
-            derive_succeeded,
-            install_succeeded,
-            self_card_found_after_install: self_card().is_some(),
-        }
-    }
-
-    fn install_card_by_id(&self, high_bits: u64, low_bits: u64) -> bool {
-        install_card(Card {
-            card_id: CardId {
-                uuid: Uuid::from_u64_pair(high_bits, low_bits),
-            },
-        })
-        .is_ok()
-    }
-
-    fn derive_card_by_id(&self, high_bits: u64, low_bits: u64) -> bool {
-        derive_card(Card {
-            card_id: CardId {
-                uuid: Uuid::from_u64_pair(high_bits, low_bits),
-            },
-        })
-        .is_ok()
-    }
-
-    async fn derive_card_after_promise(
-        &self,
-        high_bits: u64,
-        low_bits: u64,
-        release: PromiseId,
-    ) -> MidInvocationCardRevocationResult {
-        let release = get_promise(&release);
-        let mut release_observed = false;
-
-        for _ in 0..200 {
-            release_observed |= release.get().is_some();
-            let mut bytes = [0; 4];
-            wstd::rand::get_random_bytes(&mut bytes);
-            wstd::task::sleep(wstd::time::Duration::from_millis(50)).await;
-        }
-
-        MidInvocationCardRevocationResult {
-            release_observed,
-            derive_succeeded: release_observed && self.derive_card_by_id(high_bits, low_bits),
-        }
     }
 
     fn list_retry_policy_names(&self) -> Vec<String> {

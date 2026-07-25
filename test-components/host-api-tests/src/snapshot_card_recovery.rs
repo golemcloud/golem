@@ -1,114 +1,85 @@
 use golem_rust::bindings::golem::agent::host::{Datetime, RpcError, WasmRpc};
-use golem_rust::bindings::golem::permissions::{derive, inspect, types, wallet};
+use golem_rust::bindings::golem::permissions::{derive, inspect, revoke, types, wallet};
+use golem_rust::schema::wit::wire::{AgentId as WireAgentId, PermissionCard};
 use golem_rust::{
-    Card, CardId, FromSchema, IntoSchema, PromiseId, SchemaValue, Uuid, agent_definition,
-    agent_implementation, await_promise, create_promise, decode_schema_value, derive_card,
-    encode_schema_value, install_card,
+    CardId, ComponentId, FromSchema, IntoSchema, PromiseId, SchemaValue, agent_definition,
+    agent_implementation, await_promise, create_promise, decode_schema_value, encode_schema_value,
 };
-
-#[agent_definition(snapshotting = "enabled")]
-pub trait SnapshotCardRecoveryAgent {
-    fn new() -> Self;
-
-    fn install_card_by_id(&self, high_bits: u64, low_bits: u64) -> bool;
-
-    fn derive_card_by_id(&self, high_bits: u64, low_bits: u64) -> bool;
-}
-
-pub struct SnapshotCardRecoveryAgentImpl;
-
-#[agent_implementation]
-impl SnapshotCardRecoveryAgent for SnapshotCardRecoveryAgentImpl {
-    fn new() -> Self {
-        Self
-    }
-
-    fn install_card_by_id(&self, high_bits: u64, low_bits: u64) -> bool {
-        install_card(Card {
-            card_id: CardId {
-                uuid: Uuid::from_u64_pair(high_bits, low_bits),
-            },
-        })
-        .is_ok()
-    }
-
-    fn derive_card_by_id(&self, high_bits: u64, low_bits: u64) -> bool {
-        derive_card(Card {
-            card_id: CardId {
-                uuid: Uuid::from_u64_pair(high_bits, low_bits),
-            },
-        })
-        .is_ok()
-    }
-
-    async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
-        Ok(Vec::new())
-    }
-
-    async fn load_snapshot(&mut self, _bytes: Vec<u8>) -> Result<(), String> {
-        Ok(())
-    }
-}
 
 fn encode_parameters(values: Vec<SchemaValue>) -> golem_rust::schema::wit::wire::SchemaValueTree {
     encode_schema_value(&SchemaValue::Record { fields: values })
         .expect("failed to encode RPC parameters")
 }
 
-fn parent_card(high_bits: u64, low_bits: u64) -> golem_rust::schema::wit::wire::PermissionCard {
+fn parent_card() -> golem_rust::schema::wit::wire::PermissionCard {
     wallet::self_wallet()
         .into_iter()
-        .find(|card| {
-            let id = types::id(card);
-            id.uuid.high_bits == high_bits && id.uuid.low_bits == low_bits
-        })
+        .find(|card| types::is_polymorphic(card))
         .expect("scope-card test parent is not installed")
 }
 
-fn inspect_grant() -> types::PatternGrant {
-    types::PatternGrant {
-        class: "card".to_string(),
-        owner: "*".to_string(),
-        recipient: "*".to_string(),
-        verb: "inspect".to_string(),
-        resource_id: "*".to_string(),
-    }
+fn is_inspect_grant(grant: &types::PatternGrant) -> bool {
+    grant.class == "card" && grant.verb == "inspect" && grant.resource_id == "*"
 }
 
-fn grant_matches(left: &types::PatternGrant, right: &types::PatternGrant) -> bool {
-    left.class == right.class
-        && left.owner == right.owner
-        && left.recipient == right.recipient
-        && left.verb == right.verb
-        && left.resource_id == right.resource_id
+fn retained_inspect_grant(card: &PermissionCard) -> types::PatternGrant {
+    inspect::inspect_card(card)
+        .expect("failed to inspect parent card")
+        .lower_positive
+        .into_iter()
+        .find(is_inspect_grant)
+        .expect("parent card does not grant card inspection")
 }
 
-fn derive_scope_card(
-    high_bits: u64,
-    low_bits: u64,
-) -> golem_rust::schema::wit::wire::PermissionCard {
-    let parent = parent_card(high_bits, low_bits);
-    derive::derive_scope(&[&parent], &[inspect_grant()], &[], &[], &[])
-        .expect("scope-card derivation failed")
+fn derive_scope_card() -> golem_rust::schema::wit::wire::PermissionCard {
+    let parent = parent_card();
+    let grant = retained_inspect_grant(&parent);
+    derive::derive_scope(&[&parent], &[grant], &[], &[], &[]).expect("scope-card derivation failed")
 }
 
-fn scope_card_observation(high_bits: u64, low_bits: u64) -> (bool, bool, bool) {
-    let card = wallet::self_wallet().into_iter().find(|card| {
-        types::parents(card)
-            .iter()
-            .any(|parent| parent.uuid.high_bits == high_bits && parent.uuid.low_bits == low_bits)
-    });
+fn derive_persistent_card(parent: &PermissionCard) -> PermissionCard {
+    let grant = retained_inspect_grant(parent);
+    derive::derive(parent, &[grant], &[], &[], &[], None)
+        .expect("persistent card derivation failed")
+}
+
+fn derive_persistent_card_from_wallet() -> PermissionCard {
+    let parent = parent_card();
+    let grant = retained_inspect_grant(&parent);
+    derive::derive_from_wallet(&[grant], &[], &[], &[], None)
+        .expect("wallet card derivation failed")
+}
+
+fn card_id(card: &PermissionCard) -> CardId {
+    types::id(card).into()
+}
+
+fn card_has_id(card: &PermissionCard, card_id: &CardId) -> bool {
+    &CardId::from(types::id(card)) == card_id
+}
+
+fn agent_holder(component_id: ComponentId, agent_id: String) -> types::Holder {
+    types::Holder::Agent(WireAgentId {
+        component_id: component_id.into(),
+        agent_id,
+    })
+}
+
+fn scope_card_observation(scope_card_id: &CardId, root_card_id: &CardId) -> (bool, bool, bool) {
+    let card = wallet::self_wallet()
+        .into_iter()
+        .find(|card| card_has_id(card, scope_card_id));
     let Some(card) = card else {
         return (false, false, false);
     };
 
     let parent_matches = types::parents(&card)
         .iter()
-        .any(|parent| parent.uuid.high_bits == high_bits && parent.uuid.low_bits == low_bits);
+        .any(|parent| &CardId::from(parent) == root_card_id);
     let inspect_matches = inspect::inspect_card(&card)
         .map(|view| {
             view.lower_positive.len() == 1
-                && grant_matches(&view.lower_positive[0], &inspect_grant())
+                && is_inspect_grant(&view.lower_positive[0])
                 && view.lower_negative.is_empty()
                 && view.upper_positive.is_empty()
                 && view.upper_negative.is_empty()
@@ -137,50 +108,52 @@ fn decode_scope_observation(
 pub trait ScopeCardAgent {
     fn new(name: String) -> Self;
 
-    fn install_parent(&self, high_bits: u64, low_bits: u64) -> bool;
+    async fn invoke_and_await_scope(&self, target: String) -> (bool, bool, bool, CardId);
 
-    async fn invoke_and_await_scope(
-        &self,
-        target: String,
-        high_bits: u64,
-        low_bits: u64,
-    ) -> (bool, bool, bool);
-
-    async fn async_invoke_and_await_scope(
-        &self,
-        target: String,
-        high_bits: u64,
-        low_bits: u64,
-    ) -> (bool, bool, bool);
+    async fn async_invoke_and_await_scope(&self, target: String) -> (bool, bool, bool, CardId);
 
     async fn invoke_scope_after_promise(
         &self,
         target: String,
-        high_bits: u64,
-        low_bits: u64,
         release: PromiseId,
-    ) -> (bool, bool);
+    ) -> (bool, bool, CardId);
 
-    fn invoke_scope_is_denied(&self, target: String, high_bits: u64, low_bits: u64) -> bool;
+    fn invoke_scope_is_denied(&self, target: String) -> bool;
 
-    fn persistent_scope_is_denied(&self, target: String, high_bits: u64, low_bits: u64) -> bool;
+    fn persistent_scope_is_denied(&self, target: String) -> bool;
 
-    fn schedule_scope(&self, target: String, high_bits: u64, low_bits: u64);
+    fn schedule_scope(&self, target: String);
 
-    fn schedule_cancelable_scope(&self, target: String, high_bits: u64, low_bits: u64);
+    fn schedule_cancelable_scope(&self, target: String);
 
-    fn inspect_scope(&self, high_bits: u64, low_bits: u64) -> (bool, bool, bool);
+    fn inspect_scope(&self, scope_card_id: CardId, root_card_id: CardId) -> (bool, bool, bool);
 
     fn create_release_promise(&self) -> PromiseId;
 
     async fn inspect_scope_after_promise(
         &self,
-        high_bits: u64,
-        low_bits: u64,
+        scope_card_id: CardId,
+        root_card_id: CardId,
         release: PromiseId,
     ) -> (bool, bool);
 
-    fn has_scope(&self, high_bits: u64, low_bits: u64) -> bool;
+    fn derive_and_install_chain(
+        &self,
+        component_id: ComponentId,
+        caller_agent_id: String,
+        target_agent_id: String,
+    ) -> (CardId, CardId);
+
+    async fn derive_and_install_after_promise(
+        &self,
+        component_id: ComponentId,
+        target_agent_id: String,
+        release: PromiseId,
+    ) -> CardId;
+
+    fn revoke_card_by_id(&self, card_id: CardId) -> u32;
+
+    fn has_card(&self, card_id: CardId) -> bool;
 }
 
 pub struct ScopeCardAgentImpl {
@@ -193,46 +166,42 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         Self { _name: name }
     }
 
-    fn install_parent(&self, high_bits: u64, low_bits: u64) -> bool {
-        install_card(Card {
-            card_id: CardId {
-                uuid: Uuid::from_u64_pair(high_bits, low_bits),
-            },
-        })
-        .is_ok()
-    }
-
-    async fn invoke_and_await_scope(
-        &self,
-        target: String,
-        high_bits: u64,
-        low_bits: u64,
-    ) -> (bool, bool, bool) {
-        let scope_card = derive_scope_card(high_bits, low_bits);
+    async fn invoke_and_await_scope(&self, target: String) -> (bool, bool, bool, CardId) {
+        let scope_card = derive_scope_card();
+        let scope_card_id = card_id(&scope_card);
+        let root_card_id = CardId::from(
+            types::parents(&scope_card)
+                .into_iter()
+                .next()
+                .expect("scope card has no root"),
+        );
         let invocation = scope_card_rpc(target)
             .invoke_and_await(
                 "inspect_scope",
-                encode_parameters(vec![high_bits.to_value(), low_bits.to_value()]),
+                encode_parameters(vec![scope_card_id.to_value(), root_card_id.to_value()]),
                 Some(&scope_card),
             )
             .expect("scope-card invoke-and-await failed");
-        decode_scope_observation(
+        let (present, parent_matches, inspect_matches) = decode_scope_observation(
             invocation
                 .result
                 .expect("scope-card observation result is missing"),
-        )
+        );
+        (present, parent_matches, inspect_matches, scope_card_id)
     }
 
-    async fn async_invoke_and_await_scope(
-        &self,
-        target: String,
-        high_bits: u64,
-        low_bits: u64,
-    ) -> (bool, bool, bool) {
-        let scope_card = derive_scope_card(high_bits, low_bits);
+    async fn async_invoke_and_await_scope(&self, target: String) -> (bool, bool, bool, CardId) {
+        let scope_card = derive_scope_card();
+        let scope_card_id = card_id(&scope_card);
+        let root_card_id = CardId::from(
+            types::parents(&scope_card)
+                .into_iter()
+                .next()
+                .expect("scope card has no root"),
+        );
         let invocation = scope_card_rpc(target).async_invoke_and_await(
             "inspect_scope",
-            encode_parameters(vec![high_bits.to_value(), low_bits.to_value()]),
+            encode_parameters(vec![scope_card_id.to_value(), root_card_id.to_value()]),
             Some(&scope_card),
         );
         loop {
@@ -245,8 +214,10 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
                         .expect("scope-card async observation result is missing"),
                 )
                 .expect("failed to decode async scope-card observation");
-                break <(bool, bool, bool) as FromSchema>::from_value(&value)
-                    .expect("invalid async scope-card observation");
+                let (present, parent_matches, inspect_matches) =
+                    <(bool, bool, bool) as FromSchema>::from_value(&value)
+                        .expect("invalid async scope-card observation");
+                break (present, parent_matches, inspect_matches, scope_card_id);
             }
         }
     }
@@ -254,17 +225,22 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
     async fn invoke_scope_after_promise(
         &self,
         target: String,
-        high_bits: u64,
-        low_bits: u64,
         release: PromiseId,
-    ) -> (bool, bool) {
-        let scope_card = derive_scope_card(high_bits, low_bits);
+    ) -> (bool, bool, CardId) {
+        let scope_card = derive_scope_card();
+        let scope_card_id = card_id(&scope_card);
+        let root_card_id = CardId::from(
+            types::parents(&scope_card)
+                .into_iter()
+                .next()
+                .expect("scope card has no root"),
+        );
         let invocation = scope_card_rpc(target)
             .invoke_and_await(
                 "inspect_scope_after_promise",
                 encode_parameters(vec![
-                    high_bits.to_value(),
-                    low_bits.to_value(),
+                    scope_card_id.to_value(),
+                    root_card_id.to_value(),
                     release.to_value(),
                 ]),
                 Some(&scope_card),
@@ -276,61 +252,63 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
                 .expect("replay observation result is missing"),
         )
         .expect("failed to decode replay observation");
-        <(bool, bool) as FromSchema>::from_value(&value).expect("invalid replay observation")
+        let (before, after) =
+            <(bool, bool) as FromSchema>::from_value(&value).expect("invalid replay observation");
+        (before, after, scope_card_id)
     }
 
-    fn invoke_scope_is_denied(&self, target: String, high_bits: u64, low_bits: u64) -> bool {
-        let scope_card = derive_scope_card(high_bits, low_bits);
+    fn invoke_scope_is_denied(&self, target: String) -> bool {
+        let scope_card = derive_scope_card();
         matches!(
             scope_card_rpc(target).invoke(
                 "inspect_scope",
-                encode_parameters(vec![high_bits.to_value(), low_bits.to_value()]),
+                encode_parameters(vec![]),
                 Some(&scope_card),
             ),
             Err(RpcError::Denied(_))
         )
     }
 
-    fn persistent_scope_is_denied(&self, target: String, high_bits: u64, low_bits: u64) -> bool {
-        let parent = parent_card(high_bits, low_bits);
+    fn persistent_scope_is_denied(&self, target: String) -> bool {
+        let parent = parent_card();
         matches!(
             scope_card_rpc(target).invoke_and_await(
                 "inspect_scope",
-                encode_parameters(vec![high_bits.to_value(), low_bits.to_value()]),
+                encode_parameters(vec![]),
                 Some(&parent),
             ),
             Err(RpcError::Denied(_))
         )
     }
 
-    fn schedule_scope(&self, target: String, high_bits: u64, low_bits: u64) {
-        let scope_card = derive_scope_card(high_bits, low_bits);
+    fn schedule_scope(&self, target: String) {
+        let scope_card = derive_scope_card();
         scope_card_rpc(target).schedule_invocation(
             Datetime {
                 seconds: 0,
                 nanoseconds: 0,
             },
             "inspect_scope",
-            encode_parameters(vec![high_bits.to_value(), low_bits.to_value()]),
+            encode_parameters(vec![]),
             Some(&scope_card),
         );
     }
 
-    fn schedule_cancelable_scope(&self, target: String, high_bits: u64, low_bits: u64) {
-        let scope_card = derive_scope_card(high_bits, low_bits);
+    fn schedule_cancelable_scope(&self, target: String) {
+        let scope_card = derive_scope_card();
         scope_card_rpc(target).schedule_cancelable_invocation(
             Datetime {
                 seconds: 0,
                 nanoseconds: 0,
             },
             "inspect_scope",
-            encode_parameters(vec![high_bits.to_value(), low_bits.to_value()]),
+            encode_parameters(vec![]),
             Some(&scope_card),
         );
     }
 
-    fn inspect_scope(&self, high_bits: u64, low_bits: u64) -> (bool, bool, bool) {
-        scope_card_observation(high_bits, low_bits)
+    fn inspect_scope(&self, scope_card_id: CardId, root_card_id: CardId) -> (bool, bool, bool) {
+        scope_card_observation(&scope_card_id, &root_card_id)
     }
 
     fn create_release_promise(&self) -> PromiseId {
@@ -339,17 +317,58 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
 
     async fn inspect_scope_after_promise(
         &self,
-        high_bits: u64,
-        low_bits: u64,
+        scope_card_id: CardId,
+        root_card_id: CardId,
         release: PromiseId,
     ) -> (bool, bool) {
-        let before = scope_card_observation(high_bits, low_bits).0;
+        let before = scope_card_observation(&scope_card_id, &root_card_id).0;
         await_promise(&release).await;
-        let after = scope_card_observation(high_bits, low_bits).0;
+        let after = scope_card_observation(&scope_card_id, &root_card_id).0;
         (before, after)
     }
 
-    fn has_scope(&self, high_bits: u64, low_bits: u64) -> bool {
-        scope_card_observation(high_bits, low_bits).0
+    fn derive_and_install_chain(
+        &self,
+        component_id: ComponentId,
+        caller_agent_id: String,
+        target_agent_id: String,
+    ) -> (CardId, CardId) {
+        let parent = derive_persistent_card_from_wallet();
+        let child = derive_persistent_card(&parent);
+        let parent_id = card_id(&parent);
+        let child_id = card_id(&child);
+        wallet::install_card(child, &agent_holder(component_id.clone(), target_agent_id))
+            .expect("failed to install derived card");
+        wallet::install_card(parent, &agent_holder(component_id, caller_agent_id))
+            .expect("failed to install parent card");
+        (parent_id, child_id)
+    }
+
+    async fn derive_and_install_after_promise(
+        &self,
+        component_id: ComponentId,
+        target_agent_id: String,
+        release: PromiseId,
+    ) -> CardId {
+        let card = derive_persistent_card_from_wallet();
+        let id = card_id(&card);
+        await_promise(&release).await;
+        wallet::install_card(card, &agent_holder(component_id, target_agent_id))
+            .expect("failed to install replayed card");
+        id
+    }
+
+    fn revoke_card_by_id(&self, card_id: CardId) -> u32 {
+        let card = wallet::self_wallet()
+            .into_iter()
+            .find(|card| card_has_id(card, &card_id))
+            .expect("card to revoke is not installed");
+        revoke::revoke_card(card).expect("card revocation failed")
+    }
+
+    fn has_card(&self, card_id: CardId) -> bool {
+        wallet::self_wallet()
+            .into_iter()
+            .any(|card| card_has_id(&card, &card_id))
     }
 }

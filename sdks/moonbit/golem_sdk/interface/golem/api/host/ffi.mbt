@@ -82,15 +82,6 @@ fn wasmImportSetIdempotenceMode(p0 : Int) = "golem:api/host@1.5.0" "set-idempote
 fn wasmImportGenerateIdempotencyKey(p0 : Int) = "golem:api/host@1.5.0" "generate-idempotency-key"
 
 ///|
-fn wasmImportSelfCard(p0 : Int) = "golem:api/host@1.5.0" "self-card"
-
-///|
-fn wasmImportDeriveCard(p0 : Int64, p1 : Int64, p2 : Int) = "golem:api/host@1.5.0" "derive-card"
-
-///|
-fn wasmImportInstallCard(p0 : Int64, p1 : Int64, p2 : Int) = "golem:api/host@1.5.0" "install-card"
-
-///|
 fn wasmImportUpdateAgent(
   p0 : Int64,
   p1 : Int64,

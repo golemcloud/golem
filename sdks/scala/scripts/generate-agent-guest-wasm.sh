@@ -100,14 +100,14 @@ if [[ "$(grep -cF -- "$legacy_wit_bindgen_line" "$cargo_toml")" == "1" ]] &&
   [[ "$(grep -cF -- "$legacy_wit_bindgen_rt_line" "$cargo_toml")" == "1" ]]; then
   wit_bindgen_line="$legacy_wit_bindgen_line"
   wit_bindgen_rt_line="$legacy_wit_bindgen_rt_line"
-  forked_line='wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.58.0", default-features = false, features = ["macros"] }'
+  forked_line='wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.59.0", default-features = false, features = ["macros"] }'
   runtime_feature=''
 elif [[ "$(grep -cF -- "$optional_wit_bindgen_line" "$cargo_toml")" == "1" ]] &&
   [[ "$(grep -cF -- "$optional_wit_bindgen_rt_line" "$cargo_toml")" == "1" ]] &&
   [[ "$(grep -cF -- "$runtime_feature" "$cargo_toml")" == "1" ]]; then
   wit_bindgen_line="$optional_wit_bindgen_line"
   wit_bindgen_rt_line="$optional_wit_bindgen_rt_line"
-  forked_line='wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.58.0", default-features = false, features = ["macros"], optional = true }'
+  forked_line='wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.59.0", default-features = false, features = ["macros"], optional = true }'
 else
   echo "[agent-guest] ERROR: expected exactly one supported wit-bindgen dependency layout in $cargo_toml" >&2
   echo "[agent-guest]   The wasm-rquickjs skeleton may have changed; update this script." >&2
