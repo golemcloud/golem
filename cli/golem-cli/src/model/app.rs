@@ -426,6 +426,23 @@ impl BridgeSdkTargetKind {
             .map(|language| language.to_string())
             .join(", ")
     }
+
+    pub fn support_error(self, bridge_mode: BridgeMode, language: GuestLanguage) -> Option<String> {
+        if self.supports(bridge_mode, language) {
+            return None;
+        }
+
+        let supported_language_names = self.supported_language_names(bridge_mode);
+        if supported_language_names.is_empty() {
+            Some(format!(
+                "{bridge_mode} {self} bridge SDKs are not supported yet"
+            ))
+        } else {
+            Some(format!(
+                "{bridge_mode} {self} bridge SDKs are only supported for {supported_language_names} yet; {language} is not supported"
+            ))
+        }
+    }
 }
 
 impl Display for BridgeSdkTargetKind {
@@ -3398,29 +3415,19 @@ mod app_builder {
                                         }
 
                                         if !agent_targets.is_empty()
-                                            && !BridgeSdkTargetKind::Agent
-                                                .supports(bridge_mode, target_language)
+                                            && let Some(error) = BridgeSdkTargetKind::Agent
+                                                .support_error(bridge_mode, target_language)
                                         {
-                                            validation.add_error(format!(
-                                                "{} agent bridge SDKs are only supported for {} yet",
-                                                bridge_mode,
-                                                BridgeSdkTargetKind::Agent
-                                                    .supported_language_names(bridge_mode)
-                                            ));
+                                            validation.add_error(error);
                                         }
 
                                         if sdk_targets
                                             .tools
                                             .is_some_and(|tools| !tools.is_empty())
-                                            && !BridgeSdkTargetKind::Tool
-                                                .supports(bridge_mode, target_language)
+                                            && let Some(error) = BridgeSdkTargetKind::Tool
+                                                .support_error(bridge_mode, target_language)
                                         {
-                                            validation.add_error(format!(
-                                                "{} tool bridge SDKs are only supported for {} yet",
-                                                bridge_mode,
-                                                BridgeSdkTargetKind::Tool
-                                                    .supported_language_names(bridge_mode)
-                                            ));
+                                            validation.add_error(error);
                                         }
                                     },
                                 );

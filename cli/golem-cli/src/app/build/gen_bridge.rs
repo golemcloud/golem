@@ -526,18 +526,9 @@ async fn collect_tool_manifest_targets_for_entry(
         return Ok(());
     }
 
-    if bridge_mode != BridgeMode::Guest {
+    if let Some(error) = BridgeSdkTargetKind::Tool.support_error(bridge_mode, target_language) {
         logln("");
-        log_error("external tool bridge SDKs are not supported yet");
-        bail!(NonSuccessfulExit)
-    }
-
-    if !BridgeSdkTargetKind::Tool.supports(bridge_mode, target_language) {
-        logln("");
-        log_error(format!(
-            "tool guest bridge SDKs are only supported for {} yet",
-            BridgeSdkTargetKind::Tool.supported_language_names(bridge_mode)
-        ));
+        log_error(error);
         bail!(NonSuccessfulExit)
     }
 
@@ -584,7 +575,7 @@ async fn collect_tool_manifest_targets_for_entry(
                 component_name: component_name.clone(),
                 subject: BridgeSdkTargetSubject::Tool(tool),
                 target_language,
-                bridge_mode: BridgeMode::Guest,
+                bridge_mode,
                 output_dir,
             });
         }
@@ -978,25 +969,8 @@ pub(crate) fn validate_no_output_dir_collisions(targets: &[BridgeSdkTarget]) -> 
 pub(crate) fn validate_supported_bridge_targets(targets: &[BridgeSdkTarget]) -> anyhow::Result<()> {
     for target in targets {
         let target_kind = target.subject.kind();
-        let supported_languages = target_kind
-            .supported_languages(target.bridge_mode)
-            .collect_vec();
-
-        if supported_languages.is_empty() {
-            bail!(
-                "{} {} bridge SDKs are not supported yet",
-                target.bridge_mode,
-                target_kind
-            );
-        }
-
-        if !target_kind.supports(target.bridge_mode, target.target_language) {
-            bail!(
-                "{} bridge SDKs are only supported for {} yet; {} is not supported",
-                target_kind,
-                supported_languages.iter().join(", "),
-                target.target_language
-            );
+        if let Some(error) = target_kind.support_error(target.bridge_mode, target.target_language) {
+            bail!(error);
         }
     }
 
