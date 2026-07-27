@@ -85,6 +85,10 @@ type Spec struct {
 	Description string
 	// Mode defaults to Durable.
 	Mode Mode
+	// HTTP, when set, mounts the agent's methods under an HTTP path prefix so the
+	// platform can route requests to them. The prefix binds the Id fields; see
+	// [Mount] and attach per-method routes with [HTTP].
+	HTTP *Mount
 }
 
 // Context is passed to every method handler. State is the agent instance's
@@ -110,8 +114,9 @@ func (a *Agent[Id, S]) Name() string { return a.name }
 // agents. Id is the target agent's identity type, so a descriptor cannot be
 // used against another agent's client.
 type MethodDef[Id any, In any, Out any] struct {
-	name string
-	desc string
+	name      string
+	desc      string
+	endpoints []Endpoint
 }
 
 // Name returns the method's wire-level name.
@@ -120,7 +125,20 @@ func (m MethodDef[Id, In, Out]) Name() string { return m.name }
 // MethodOpt configures a method descriptor.
 type MethodOpt func(*methodOpts)
 
-type methodOpts struct{ desc string }
+type methodOpts struct {
+	desc      string
+	endpoints []Endpoint
+}
 
 // Desc sets a method's description, surfaced in the agent type metadata.
 func Desc(s string) MethodOpt { return func(o *methodOpts) { o.desc = s } }
+
+// HTTP exposes a method over HTTP at one or more routes (the agent must also
+// declare a [Mount] on its [Spec]). Grouping the endpoints in a single option
+// keeps each route's bindings together:
+//
+//	golem.DefineMethod[CounterID, AddIn, int64]("add",
+//	    golem.HTTP(golem.POST("/add?by={by}"), golem.GET("/add/{by}")))
+func HTTP(endpoints ...Endpoint) MethodOpt {
+	return func(o *methodOpts) { o.endpoints = append(o.endpoints, endpoints...) }
+}

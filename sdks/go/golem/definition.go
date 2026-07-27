@@ -125,6 +125,18 @@ func finalize() {
 				// platform-dependent width; …").
 				recordDefErr(name, "", "%s", reason)
 			}
+			// HTTP mount/endpoints: validate and compile, recording problems and
+			// patching the built type with the metadata the platform routes on.
+			mount, endpoints, httpErrs := buildHTTP(e)
+			defErrs = append(defErrs, httpErrs...)
+			if mount.IsSome() {
+				at.HttpMount = mount
+			}
+			for i := range at.Methods {
+				if eps := endpoints[at.Methods[i].Name]; len(eps) > 0 {
+					at.Methods[i].HttpEndpoint = eps
+				}
+			}
 			cachedType[name] = at
 		}
 	})

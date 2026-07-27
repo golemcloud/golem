@@ -31,10 +31,11 @@ type fieldInfo struct {
 }
 
 type methodEntry struct {
-	name     string
-	desc     string
-	inFields []fieldInfo
-	outCodec *codec // nil => unit output
+	name      string
+	desc      string
+	inFields  []fieldInfo
+	endpoints []Endpoint // HTTP routes, if any
+	outCodec  *codec     // nil => unit output
 	// invoke is the erased dispatcher produced by Implement. Calling it is a
 	// direct func-value call: no reflection is used to reach the handler.
 	invoke func(state any, agentID string, in types.SchemaValueTree) (out *types.SchemaValueTree, err error)
@@ -44,6 +45,7 @@ type agentEntry struct {
 	name     string
 	desc     string
 	mode     common.AgentMode
+	mount    *Mount // HTTP mount, if any
 	idType   reflect.Type
 	idFields []fieldInfo
 	newState func(idVal reflect.Value) any
@@ -127,6 +129,7 @@ func DefineAgent[Id any, S any](spec Spec, init func(Id) *S) *Agent[Id, S] {
 		name:     spec.Name,
 		desc:     spec.Description,
 		mode:     spec.Mode.toWit(),
+		mount:    spec.HTTP,
 		idType:   idType,
 		idFields: structFields(idType),
 		methods:  map[string]*methodEntry{},
@@ -147,7 +150,7 @@ func DefineMethod[Id any, In any, Out any](name string, opts ...MethodOpt) Metho
 	for _, f := range opts {
 		f(&o)
 	}
-	return MethodDef[Id, In, Out]{name: name, desc: o.desc}
+	return MethodDef[Id, In, Out]{name: name, desc: o.desc, endpoints: o.endpoints}
 }
 
 // Implement binds a handler to a method descriptor. S, In and Out are inferred
@@ -179,7 +182,7 @@ func Implement[Id any, S any, In any, Out any](
 	// Codecs are compiled once, here at registration — not per invocation.
 	inType := reflect.TypeFor[In]()
 	outType := reflect.TypeFor[Out]()
-	me := &methodEntry{name: m.name, desc: m.desc, inFields: structFields(inType)}
+	me := &methodEntry{name: m.name, desc: m.desc, inFields: structFields(inType), endpoints: m.endpoints}
 	if outType != reflect.TypeFor[Unit]() {
 		me.outCodec = compile(outType)
 	}
