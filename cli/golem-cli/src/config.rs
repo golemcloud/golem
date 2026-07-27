@@ -205,7 +205,11 @@ impl Config {
             )
         })?;
 
-        // TODO: atomic: check and override urls, if necessary (and save)
+        // Built-in `local`/`cloud` URLs should be fixed (`builtin_local_url()` /
+        // `DEFAULT_CLOUD_URL`), but a `custom_url` hand-edited into their config
+        // entry is still honoured in non-manifest mode — a migration leftover.
+        // Making them authoritative and rewriting stale stored values is a deferred
+        // behaviour change; for now the stored value is left as-is.
         Ok(config.with_local_and_cloud_profiles())
     }
 
