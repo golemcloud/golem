@@ -178,10 +178,16 @@ globally.
 
 ```shell
 cd sdks/go/golem
-go build ./...
-go test ./...                     # native tests; fast, no wasm needed
-GOOS=wasip1 GOARCH=wasm go vet -unsafeptr=false -composites=false ./...
+go test ./...                                       # native tests; fast, no wasm needed
+go vet .                                            # host vet, hand-written package
+GOOS=wasip1 GOARCH=wasm go build ./...              # compile everything for the real target
+GOOS=wasip1 GOARCH=wasm go vet -unsafeptr=false -composites=false .
 ```
+
+Vet is scoped to `.`, not `./...`: the generated `internal/wit` bindings legitimately trip vet's
+`unsafe.Pointer` / unkeyed-field checks, so the whole tree is *compiled* (the `go build` above), not
+vetted, for the wasm target. CI runs exactly this set — plus a "bindings are committed" check — in the
+`build-golem-go` job (`.github/workflows/ci.yaml`).
 
 Native tests cover everything that does not reach a host import. `empty.s` lets a generated package
 *compile* for the host, but the linker still needs a definition for any `//go:wasmimport` symbol that
