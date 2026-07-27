@@ -28,7 +28,13 @@ use tracing::debug;
 static LOG_STATE: LazyLock<RwLock<LogState>> = LazyLock::new(RwLock::default);
 static LOG_STATE_BUFFER: LazyLock<RwLock<Vec<String>>> = LazyLock::new(RwLock::default);
 static TERMINAL_WIDTH: OnceLock<Option<usize>> = OnceLock::new();
-static WRAP_PADDING: usize = 2;
+/// Columns kept free at the right edge when wrapping logged text. Callers that
+/// pre-format multi-line output must reserve it too, else their lines re-wrap.
+pub static WRAP_PADDING: usize = 2;
+
+/// One level of log indentation. Callers that pre-format multi-line output reuse
+/// it to reproduce the same geometry (see `text::fmt::field_value_width`).
+pub const INDENT: &str = "  ";
 
 /// Returns the terminal width as `Some(width)` or `None` if not detectable.
 /// Cached via `OnceLock` — read once at startup for use in `LogState` text-wrapping.
@@ -93,10 +99,10 @@ impl LogState {
     }
 
     fn regen_indent_prefix(&mut self) {
-        self.calculated_indent = String::with_capacity(self.indents.len() * 2);
+        self.calculated_indent = String::with_capacity(self.indents.len() * INDENT.len());
         for indent in &self.indents {
             self.calculated_indent
-                .push_str(indent.as_ref().map(|s| s.as_str()).unwrap_or("  "))
+                .push_str(indent.as_ref().map(|s| s.as_str()).unwrap_or(INDENT))
         }
         self.max_width =
             terminal_width_opt().map(|w| w - WRAP_PADDING - self.calculated_indent.len());

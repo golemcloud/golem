@@ -28,10 +28,7 @@ use base64::prelude::BASE64_STANDARD;
 use chrono::DateTime;
 
 use colored::Colorize;
-use comfy_table::{
-    Cell, CellAlignment, Color as ComfyColor, ColumnConstraint, ContentArrangement,
-    Table as ComfyTable,
-};
+use comfy_table::Color as ComfyColor;
 use golem_common::model::component::ComponentName;
 use golem_common::model::oplog::{
     MultipartPartData, PluginInstallationDescription, PublicAgentInvocation,
@@ -70,7 +67,13 @@ impl MessageWithFields for WorkerCreateView {
 
         fields
             .fmt_field("Component name", &self.component_name, format_id)
-            .fmt_field("Agent name", &self.agent_name, format_agent_name);
+            .fmt_field("Agent name", &self.agent_name, |agent_name| {
+                format_agent_id_in(
+                    &agent_name.0,
+                    colored::control::SHOULD_COLORIZE.should_colorize(),
+                    field_value_width::<Self>(),
+                )
+            });
 
         fields.build()
     }
@@ -181,7 +184,13 @@ impl MessageWithFields for WorkerGetView {
                 &self.metadata.component_revision,
                 format_id,
             )
-            .fmt_field("Agent name", &self.metadata.agent_name, format_agent_name)
+            .fmt_field("Agent name", &self.metadata.agent_name, |agent_name| {
+                format_agent_id_in(
+                    &agent_name.0,
+                    colored::control::SHOULD_COLORIZE.should_colorize(),
+                    field_value_width::<Self>(),
+                )
+            })
             .field("Created at", &self.metadata.created_at)
             .fmt_field(
                 "Component size",
@@ -306,6 +315,14 @@ impl TextOutput for AgentsMetadataResponseView {
     }
 }
 
+/// Agent-list component-name column: capped at `MAX` so it cannot eat the agent
+/// id budget, squeezable to `MIN` when ids need the room.
+const MAX_COMPONENT_NAME_WIDTH: usize = 28;
+const MIN_COMPONENT_NAME_WIDTH: usize = 12;
+
+/// Below this the agent id column is left unformatted for the table to wrap.
+const MIN_AGENT_NAME_WIDTH: usize = 24;
+
 impl AgentsMetadataResponseView {
     fn status_color(status: &AgentStatus, colorize: bool) -> ComfyColor {
         if colorize {
@@ -329,57 +346,54 @@ impl AgentsMetadataResponseView {
         colorize: bool,
         full_width: bool,
     ) -> String {
-        use comfy_table::presets::{ASCII_FULL_CONDENSED, UTF8_FULL_CONDENSED};
+        // Agent ids are self-formatted (broken at their own structure), so the
+        // column width must be known before the cells are built;
+        // `self_formatting_table` budgets it. `Range` marks the component name as
+        // the squeezable column.
+        let headers = vec![
+            Column::new("Component name")
+                .width_range(MIN_COMPONENT_NAME_WIDTH, MAX_COMPONENT_NAME_WIDTH),
+            Column::new("Agent name"),
+            Column::new("Revision").content_right(),
+            Column::new("Status").content_right(),
+            Column::new("Pending").content_right(),
+            Column::new("Created at").content(),
+        ];
 
-        let preset = if colorize {
-            UTF8_FULL_CONDENSED
-        } else {
-            ASCII_FULL_CONDENSED
+        let format_agent_id = |raw: &str, width: Option<usize>| match width {
+            Some(width) => format_agent_id_in(raw, colorize, width),
+            None => raw.to_string(),
         };
 
-        let arrangement = if full_width {
-            ContentArrangement::DynamicFullWidth
-        } else {
-            ContentArrangement::Dynamic
-        };
+        let rows = agents
+            .iter()
+            .map(|agent| {
+                vec![
+                    TableCell::new(agent.component_name.to_string()),
+                    TableCell::new(agent.agent_name.0.clone()),
+                    TableCell::new(agent.component_revision.to_string()).right(),
+                    TableCell::new(agent.status.to_string())
+                        .right()
+                        .color(Self::status_color(&agent.status, colorize)),
+                    TableCell::new(agent.pending_invocation_count.to_string()).right(),
+                    TableCell::new(agent.created_at.to_string()),
+                ]
+            })
+            .collect();
 
-        let mut table = ComfyTable::new();
-        table
-            .load_preset(preset)
-            .set_content_arrangement(arrangement)
-            .set_width(term_width)
-            .set_header(vec![
-                "Component name",
-                "Agent name",
-                "Revision",
-                "Status",
-                "Pending",
-                "Created at",
-            ]);
-
-        // Pin fixed-width columns so component_name (0) and agent_name (1) absorb surplus width
-        for col_idx in 2..=5usize {
-            table
-                .column_mut(col_idx)
-                .unwrap()
-                .set_constraint(ColumnConstraint::ContentWidth);
-        }
-
-        for agent in agents {
-            table.add_row(vec![
-                Cell::new(agent.component_name.to_string()),
-                Cell::new(agent.agent_name.0.clone()),
-                Cell::new(agent.component_revision.to_string()).set_alignment(CellAlignment::Right),
-                Cell::new(agent.status.to_string())
-                    .set_alignment(CellAlignment::Right)
-                    .fg(Self::status_color(&agent.status, colorize)),
-                Cell::new(agent.pending_invocation_count.to_string())
-                    .set_alignment(CellAlignment::Right),
-                Cell::new(agent.created_at.to_string()),
-            ]);
-        }
-
-        table.to_string()
+        self_formatting_table(SelfFormattingTableSpec {
+            preset: TablePreset::FullCondensed,
+            term_width,
+            full_width,
+            headers,
+            flex: FlexColumn {
+                index: 1,
+                min_width: MIN_AGENT_NAME_WIDTH,
+                format: &format_agent_id,
+            },
+            rows,
+        })
+        .to_string()
     }
 }
 
@@ -1317,9 +1331,9 @@ fn render_typed_schema_value_line(
     format!("{pad}  {rendered}")
 }
 
-// TODO: pretty print
-fn format_agent_name(agent_name: &RawAgentId) -> String {
-    textwrap::wrap(&agent_name.to_string(), 80).join("\n")
+/// Formats an agent id to a caller-supplied width (see `format_agent_id_for_terminal`).
+fn format_agent_id_in(agent_name: &str, colorize: bool, width: usize) -> String {
+    crate::agent_id_display::format_agent_id_for_terminal(agent_name, colorize, Some(width))
 }
 
 fn log_optional_error(pad: &str, error: &Option<String>) {
@@ -1375,6 +1389,7 @@ fn render_snapshot_data_lines(pad: &str, snapshot: &PublicSnapshotData) -> Vec<S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use comfy_table::{Cell, Table as ComfyTable};
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::invocation_context::TraceId;
     use golem_common::model::oplog::{
@@ -1387,6 +1402,81 @@ mod tests {
 
     fn timestamp() -> Timestamp {
         Timestamp::from(0)
+    }
+
+    fn agent_metadata(agent_name: &str) -> AgentMetadataView {
+        AgentMetadataView {
+            component_name: ComponentName("shop:cart".to_string()),
+            agent_name: RawAgentId(agent_name.to_string()),
+            created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
+            environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+            env: HashMap::new(),
+            default_env: HashMap::new(),
+            config: Vec::new(),
+            default_config: Vec::new(),
+            status: AgentStatus::Running,
+            component_revision: ComponentRevision::new(1).expect("valid revision"),
+            retry_count: 0,
+            pending_invocation_count: 0,
+            updates: Vec::new(),
+            created_at: timestamp(),
+            last_error: None,
+            component_size: 0,
+            total_linear_memory_size: 0,
+            exported_resource_instances: HashMap::new(),
+            source_language: SourceLanguage::Rust,
+            secret_config_paths: std::collections::BTreeSet::new(),
+        }
+    }
+
+    /// Long agent ids are pre-formatted, so they have to break at their own
+    /// structure inside the cell instead of being wrapped mid-token, without
+    /// disturbing the table layout.
+    #[test]
+    fn table_breaks_long_agent_ids_structurally() {
+        let agents = vec![
+            agent_metadata(
+                r#"ShoppingCart(user: "a-fairly-long-user-identifier", items: ["one", "two"])"#,
+            ),
+            agent_metadata(r#"Counter("short")"#),
+        ];
+
+        let table = AgentsMetadataResponseView::format_table_wide(&agents, 120, false, false);
+
+        // The indent only appears if we broke the id ourselves; the table's own
+        // wrapping would split it mid-token and would not indent.
+        assert!(
+            table.contains(r#"  user: "a-fairly-long-user-identifier","#),
+            "long id was not broken at its structure:\n{table}"
+        );
+        assert_rows_aligned(&table);
+    }
+
+    /// Agent id cells carry their own coloring, which only lines up if
+    /// comfy-table measures cell content with the ANSI escapes stripped. That
+    /// needs its `custom_styling` feature, so this fails if the feature is
+    /// dropped. The escapes are written out here because the `colored` crate
+    /// emits none while colors are globally off, as they are under tests.
+    #[test]
+    fn table_measures_cells_with_ansi_escapes_stripped() {
+        let mut table = ComfyTable::new();
+        table
+            .set_header(vec!["Agent name"])
+            .add_row(vec![Cell::new("\u{1b}[32mColored(\"id\")\u{1b}[0m")]);
+
+        assert_rows_aligned(&table.to_string());
+    }
+
+    fn assert_rows_aligned(table: &str) {
+        let widths = table
+            .lines()
+            .map(|line| strip_ansi_escapes::strip_str(line).chars().count())
+            .collect::<Vec<_>>();
+
+        assert!(
+            widths.iter().all(|width| *width == widths[0]),
+            "misaligned rows, widths {widths:?}:\n{table}"
+        );
     }
 
     fn typed_string_value(value: &str) -> TypedSchemaValue {
@@ -1643,12 +1733,11 @@ pub fn format_timestamp(timestamp: u64) -> String {
 }
 
 pub fn format_agent_name_match(agent_name_match: &AgentNameMatch) -> String {
-    let rendered_agent_name = match &agent_name_match.parsed_agent_id {
-        Some(parsed) if agent_name_match.source_language.is_known() => {
-            crate::agent_id_display::render_agent_id(parsed, &agent_name_match.source_language)
-        }
-        _ => agent_name_match.agent_name.0.clone(),
-    };
+    let rendered_agent_name = crate::agent_id_display::render_agent_id_or_raw(
+        agent_name_match.parsed_agent_id.as_ref(),
+        &agent_name_match.source_language,
+        &agent_name_match.agent_name.0,
+    );
 
     format!(
         "{}{}/{}",

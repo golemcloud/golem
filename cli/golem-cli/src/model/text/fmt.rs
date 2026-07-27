@@ -16,7 +16,9 @@ use crate::fuzzy::Match;
 pub use crate::log::log_table;
 pub use crate::log::logln;
 pub use crate::log::terminal_width;
-use crate::log::{LogColorize, LogIndent, current_indent_width, log_warn_action};
+use crate::log::{
+    INDENT, LogColorize, LogIndent, WRAP_PADDING, current_indent_width, log_warn_action,
+};
 use crate::model::app::ComponentLayerId;
 use crate::model::format::Format;
 use crate::model::masking::{Masked, MaskingConfig};
@@ -24,7 +26,9 @@ use anyhow::anyhow;
 use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
 pub use comfy_table::Table as ComfyTable;
-use comfy_table::{Cell, CellAlignment, ColumnConstraint, ContentArrangement, Width};
+use comfy_table::{
+    Cell, CellAlignment, Color as ComfyColor, ColumnConstraint, ContentArrangement, Width,
+};
 use golem_common::model::AgentStatus;
 use golem_common::model::component::{InitialAgentFile, InstalledPlugin};
 use golem_common::model::worker::TypedAgentConfigEntry;
@@ -123,6 +127,22 @@ impl<T: MessageWithFields> TextOutput for T {
     }
 }
 
+/// Columns a multi-line field value can use. `fields()` builds values before the
+/// indents they print inside exist, so all are subtracted here: the ambient
+/// indent, the view's own indent, the per-line indent of a multi-line value, and
+/// [`WRAP_PADDING`] (reaching into which gets the value wrapped again).
+pub fn field_value_width<T: MessageWithFields>() -> usize {
+    let view_indent = match T::indent_mode() {
+        MessageWithFieldsIndentMode::None => 0,
+        MessageWithFieldsIndentMode::IdentFields | MessageWithFieldsIndentMode::NestedIdentAll => {
+            INDENT.len()
+        }
+    };
+
+    (terminal_width() as usize)
+        .saturating_sub(current_indent_width() + view_indent + INDENT.len() + WRAP_PADDING)
+}
+
 fn log_message_with_fields<T: MessageWithFields>(message: String, fields: Vec<(String, String)>) {
     let _ident = match T::indent_mode() {
         MessageWithFieldsIndentMode::None => None,
@@ -154,7 +174,7 @@ fn log_message_with_fields<T: MessageWithFields>(message: String, fields: Vec<(S
         } else {
             logln(format!("{}:", T::format_field_name(name)));
             for line in lines {
-                logln(format!("  {line}"))
+                logln(format!("{INDENT}{line}"))
             }
         }
     }
@@ -533,7 +553,7 @@ impl Column {
         &self.title
     }
 
-    fn total_width_for_content_width(content_width: u16) -> u16 {
+    pub fn total_width_for_content_width(content_width: u16) -> u16 {
         content_width.saturating_add(2)
     }
 }
@@ -557,23 +577,12 @@ pub enum TablePreset {
 /// The terminal width is automatically reduced by the current log indent width so that
 /// tables render correctly when called inside an indented context.
 pub fn new_table(preset: TablePreset, headers: Vec<Column>) -> ComfyTable {
-    use comfy_table::presets::{ASCII_FULL, ASCII_FULL_CONDENSED, UTF8_FULL, UTF8_FULL_CONDENSED};
     let colorize = SHOULD_COLORIZE.should_colorize();
     let indent_width = current_indent_width();
     let term_width = (terminal_width() as usize).saturating_sub(indent_width) as u16;
     let mut table = ComfyTable::new();
     table
-        .load_preset(if colorize {
-            match preset {
-                TablePreset::Full => UTF8_FULL,
-                TablePreset::FullCondensed => UTF8_FULL_CONDENSED,
-            }
-        } else {
-            match preset {
-                TablePreset::Full => ASCII_FULL,
-                TablePreset::FullCondensed => ASCII_FULL_CONDENSED,
-            }
-        })
+        .load_preset(preset_str(preset, colorize))
         .set_content_arrangement(ContentArrangement::Dynamic)
         .set_width(term_width)
         .set_header(
@@ -584,34 +593,38 @@ pub fn new_table(preset: TablePreset, headers: Vec<Column>) -> ComfyTable {
         );
     for (i, col) in headers.iter().enumerate() {
         let column = table.column_mut(i).unwrap();
-        match col.width {
-            ColumnWidth::Auto => {}
-            ColumnWidth::Content => {
-                column.set_constraint(ColumnConstraint::ContentWidth);
-            }
-            ColumnWidth::Exact(width) => {
-                column.set_constraint(ColumnConstraint::Absolute(Width::Fixed(
-                    Column::total_width_for_content_width(width),
-                )));
-            }
-            ColumnWidth::Min(min_width) => {
-                column.set_constraint(ColumnConstraint::LowerBoundary(Width::Fixed(min_width)));
-            }
-            ColumnWidth::Max(max_width) => {
-                column.set_constraint(ColumnConstraint::UpperBoundary(Width::Fixed(max_width)));
-            }
-            ColumnWidth::Range { min, max } => {
-                column.set_constraint(ColumnConstraint::Boundaries {
-                    lower: Width::Fixed(Column::total_width_for_content_width(min)),
-                    upper: Width::Fixed(Column::total_width_for_content_width(max)),
-                });
-            }
-        }
+        apply_column_width(column, col.width);
         if col.right_aligned {
             column.set_cell_alignment(CellAlignment::Right);
         }
     }
     table
+}
+
+fn apply_column_width(column: &mut comfy_table::Column, width: ColumnWidth) {
+    match width {
+        ColumnWidth::Auto => {}
+        ColumnWidth::Content => {
+            column.set_constraint(ColumnConstraint::ContentWidth);
+        }
+        ColumnWidth::Exact(width) => {
+            column.set_constraint(ColumnConstraint::Absolute(Width::Fixed(
+                Column::total_width_for_content_width(width),
+            )));
+        }
+        ColumnWidth::Min(min_width) => {
+            column.set_constraint(ColumnConstraint::LowerBoundary(Width::Fixed(min_width)));
+        }
+        ColumnWidth::Max(max_width) => {
+            column.set_constraint(ColumnConstraint::UpperBoundary(Width::Fixed(max_width)));
+        }
+        ColumnWidth::Range { min, max } => {
+            column.set_constraint(ColumnConstraint::Boundaries {
+                lower: Width::Fixed(Column::total_width_for_content_width(min)),
+                upper: Width::Fixed(Column::total_width_for_content_width(max)),
+            });
+        }
+    }
 }
 
 pub fn new_table_full(headers: Vec<Column>) -> ComfyTable {
@@ -620,6 +633,218 @@ pub fn new_table_full(headers: Vec<Column>) -> ComfyTable {
 
 pub fn new_table_full_condensed(headers: Vec<Column>) -> ComfyTable {
     new_table(TablePreset::FullCondensed, headers)
+}
+
+/// Space a comfy-table cell reserves around its content: one column on each
+/// side. Kept in sync with [`Column::total_width_for_content_width`].
+const CELL_PADDING: usize = 2;
+
+/// One cell of a [`self_formatting_table`] row. The cell in the flex column
+/// ([`FlexColumn::index`]) carries the raw value and is reformatted to the
+/// budgeted width; every other cell is rendered from its text as-is.
+pub struct TableCell {
+    text: String,
+    align_right: bool,
+    color: Option<ComfyColor>,
+}
+
+impl TableCell {
+    /// A cell holding the given text.
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            align_right: false,
+            color: None,
+        }
+    }
+
+    pub fn right(mut self) -> Self {
+        self.align_right = true;
+        self
+    }
+
+    pub fn color(mut self, color: ComfyColor) -> Self {
+        self.color = Some(color);
+        self
+    }
+
+    fn content_width(&self) -> usize {
+        self.text.chars().count()
+    }
+}
+
+/// The self-formatting column of a [`self_formatting_table`].
+pub struct FlexColumn<'a> {
+    /// Index of the column among `headers`.
+    pub index: usize,
+    /// Smallest content width worth formatting to; below it the formatter is
+    /// called with `None` and the value rendered as-is for the engine to wrap.
+    pub min_width: usize,
+    /// Formats a raw cell value to the budgeted content width (`None` = as-is).
+    pub format: &'a dyn Fn(&str, Option<usize>) -> String,
+}
+
+/// Inputs for [`self_formatting_table`].
+pub struct SelfFormattingTableSpec<'a> {
+    pub preset: TablePreset,
+    pub term_width: u16,
+    pub full_width: bool,
+    pub headers: Vec<Column>,
+    pub flex: FlexColumn<'a>,
+    pub rows: Vec<Vec<TableCell>>,
+}
+
+/// Builds a table where one column's cells are formatted to a width the builder
+/// computes, instead of one the engine derives from the content.
+///
+/// The normal flow is content → width: cells go in, comfy-table sizes columns
+/// after. That breaks for a cell already laid out to a width (a structurally
+/// broken agent id) — the engine re-wraps it mid-token. So the flow is inverted:
+/// measure the fixed columns, budget the leftover to the flex column, format its
+/// cells to exactly that, and pin the column so the engine cannot resize it. The
+/// flex column is never wider than its longest cell needs, so it wraps only when
+/// the terminal cannot fit it and otherwise uses the full width.
+///
+/// A non-flex [`ColumnWidth::Range`] column is *soft*: capped at its upper bound,
+/// with the lower bound only the budget's shrink-to floor (no hard lower
+/// constraint, so the engine frees space for the pinned flex column). Other
+/// width kinds keep their usual meaning.
+pub fn self_formatting_table(spec: SelfFormattingTableSpec) -> ComfyTable {
+    let flex_width = flex_content_width(&spec);
+
+    let colorize = SHOULD_COLORIZE.should_colorize();
+    let mut table = ComfyTable::new();
+    table
+        .load_preset(preset_str(spec.preset, colorize))
+        .set_content_arrangement(if spec.full_width {
+            ContentArrangement::DynamicFullWidth
+        } else {
+            ContentArrangement::Dynamic
+        })
+        .set_width(spec.term_width)
+        .set_header(
+            spec.headers
+                .iter()
+                .map(|header| Cell::new(&header.title))
+                .collect::<Vec<_>>(),
+        );
+
+    for (index, header) in spec.headers.iter().enumerate() {
+        let column = table.column_mut(index).unwrap();
+        if index == spec.flex.index {
+            match flex_width {
+                // Pin it so the engine cannot shrink it and re-wrap the cells.
+                Some(width) => {
+                    column.set_constraint(ColumnConstraint::Absolute(Width::Fixed(
+                        Column::total_width_for_content_width(width as u16),
+                    )));
+                }
+                None => apply_column_width(column, header.width),
+            }
+        } else if let ColumnWidth::Range { max, .. } = header.width {
+            // Soft column: upper bound only, no hard lower one, so the engine
+            // shrinks it freely to fit the pinned flex column.
+            column.set_constraint(ColumnConstraint::UpperBoundary(Width::Fixed(
+                Column::total_width_for_content_width(max),
+            )));
+        } else {
+            apply_column_width(column, header.width);
+        }
+        if header.right_aligned {
+            column.set_cell_alignment(CellAlignment::Right);
+        }
+    }
+
+    for row in &spec.rows {
+        table.add_row(
+            row.iter()
+                .enumerate()
+                .map(|(index, cell)| {
+                    // `flex.index` is the single source of truth for which cell is
+                    // reformatted, shared with the constraint above.
+                    let text = if index == spec.flex.index {
+                        (spec.flex.format)(&cell.text, flex_width)
+                    } else {
+                        cell.text.clone()
+                    };
+                    let mut comfy = Cell::new(text);
+                    if cell.align_right {
+                        comfy = comfy.set_alignment(CellAlignment::Right);
+                    }
+                    if let Some(color) = cell.color {
+                        comfy = comfy.fg(color);
+                    }
+                    comfy
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    table
+}
+
+/// Budgeted content width for the flex column, or `None` when too little room is
+/// left to format structurally.
+///
+/// Other columns are subtracted at their content width (capped by any
+/// `Max`/`Range` upper bound); when that starves the flex column, `Range` columns
+/// are assumed to shrink to their lower bound. This assumes non-flex columns
+/// render at their content width — true for `Content`/`Exact`/`Range` but not
+/// `Min`/`Auto`, which can grow past content and overshoot.
+fn flex_content_width(spec: &SelfFormattingTableSpec) -> Option<usize> {
+    let borders = spec.headers.len() + 1;
+    let flex_min = spec.flex.min_width + CELL_PADDING;
+
+    let mut fixed_total = 0usize;
+    let mut reclaimable = 0usize;
+    for (index, header) in spec.headers.iter().enumerate() {
+        if index == spec.flex.index {
+            continue;
+        }
+        let content = column_content_width(spec, index);
+        let effective = match header.width {
+            ColumnWidth::Exact(width) => width as usize,
+            ColumnWidth::Max(max) | ColumnWidth::Range { max, .. } => content.min(max as usize),
+            _ => content,
+        } + CELL_PADDING;
+        if let ColumnWidth::Range { min, .. } = header.width {
+            reclaimable += effective.saturating_sub(min as usize + CELL_PADDING);
+        }
+        fixed_total += effective;
+    }
+
+    let mut budget = (spec.term_width as usize).checked_sub(fixed_total + borders)?;
+    if budget < flex_min {
+        budget += reclaimable.min(flex_min - budget);
+    }
+
+    // Never wider than the longest cell needs: claiming more would only pad the
+    // table out with empty space.
+    let needed = column_content_width(spec, spec.flex.index) + CELL_PADDING;
+    let budget = budget.min(needed);
+
+    (budget >= flex_min).then(|| budget - CELL_PADDING)
+}
+
+/// Widest content in a column, including its header title.
+fn column_content_width(spec: &SelfFormattingTableSpec, index: usize) -> usize {
+    spec.rows
+        .iter()
+        .filter_map(|row| row.get(index))
+        .map(TableCell::content_width)
+        .chain(std::iter::once(spec.headers[index].title.chars().count()))
+        .max()
+        .unwrap_or(0)
+}
+
+fn preset_str(preset: TablePreset, colorize: bool) -> &'static str {
+    use comfy_table::presets::{ASCII_FULL, ASCII_FULL_CONDENSED, UTF8_FULL, UTF8_FULL_CONDENSED};
+    match (preset, colorize) {
+        (TablePreset::Full, true) => UTF8_FULL,
+        (TablePreset::FullCondensed, true) => UTF8_FULL_CONDENSED,
+        (TablePreset::Full, false) => ASCII_FULL,
+        (TablePreset::FullCondensed, false) => ASCII_FULL_CONDENSED,
+    }
 }
 
 pub fn log_text_view<View: TextOutput>(view: &View) {
@@ -790,4 +1015,82 @@ pub fn format_component_applied_layers(
             None => id.name().to_string(),
         })
         .join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    fn flex_table(
+        term_width: u16,
+        component_names: &[&str],
+        ids: &[&str],
+    ) -> SelfFormattingTableSpec<'static> {
+        let headers = vec![
+            Column::new("Component name").width_range(12, 28),
+            Column::new("Agent name"),
+            Column::new("Status").content_right(),
+        ];
+        let rows = component_names
+            .iter()
+            .zip(ids)
+            .map(|(component, id)| {
+                vec![
+                    TableCell::new(component.to_string()),
+                    TableCell::new(id.to_string()),
+                    TableCell::new("Idle"),
+                ]
+            })
+            .collect();
+        SelfFormattingTableSpec {
+            preset: TablePreset::FullCondensed,
+            term_width,
+            full_width: false,
+            headers,
+            flex: FlexColumn {
+                index: 1,
+                min_width: 24,
+                format: &|raw, _| raw.to_string(),
+            },
+            rows,
+        }
+    }
+
+    /// A wide terminal gives the flex column all the leftover room, but never
+    /// more than its longest cell needs.
+    #[test]
+    fn flex_budget_fills_leftover_but_not_beyond_content() {
+        let long = "ShoppingCart(\"a-fairly-long-user-identifier\", [1, 2, 3])";
+        // Plenty of room: the column takes exactly what the longest id needs.
+        assert_eq!(
+            flex_content_width(&flex_table(
+                200,
+                &["comp:one", "comp:two"],
+                &[long, "Counter(\"x\")"]
+            )),
+            Some(long.chars().count())
+        );
+    }
+
+    /// A tight terminal squeezes the `Range` component column before the flex
+    /// column drops below its minimum.
+    #[test]
+    fn flex_budget_squeezes_range_column_when_tight() {
+        let ids = ["ShoppingCart(\"a-long-id-that-needs-wrapping-here\")"; 2];
+        let width = flex_content_width(&flex_table(70, &["a-long-component-name-x", "b"], &ids))
+            .expect("should still format");
+        assert!(width >= 24, "flex dropped below its minimum: {width}");
+    }
+
+    /// Too narrow for both columns at their floor: the flex column opts out and
+    /// the ids are left for the engine to wrap.
+    #[test]
+    fn flex_budget_gives_up_when_no_room() {
+        let ids = ["ShoppingCart(\"x\")"; 2];
+        assert_eq!(
+            flex_content_width(&flex_table(30, &["component-name-here", "b"], &ids)),
+            None
+        );
+    }
 }

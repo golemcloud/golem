@@ -314,13 +314,12 @@ impl WorkerCommandHandler {
         )
         .await?;
 
-        let display_agent_name: RawAgentId = match &agent_name_match.parsed_agent_id {
-            Some(parsed) if agent_name_match.source_language.is_known() => {
-                crate::agent_id_display::render_agent_id(parsed, &agent_name_match.source_language)
-                    .into()
-            }
-            _ => agent_name,
-        };
+        let display_agent_name: RawAgentId = crate::agent_id_display::render_agent_id_or_raw(
+            agent_name_match.parsed_agent_id.as_ref(),
+            &agent_name_match.source_language,
+            &agent_name.0,
+        )
+        .into();
 
         logln("");
         self.ctx.log_handler().log_output(WorkerCreateView {
@@ -1156,13 +1155,13 @@ impl WorkerCommandHandler {
                     .with_defaults(defaults)
                     .with_secret_config_paths(secret_config_paths);
 
-                if source_language.is_known()
-                    && let Ok(parsed) =
-                        ParsedAgentId::parse(&raw_agent_name, &worker_component.metadata)
-                {
-                    agent_view.agent_name =
-                        crate::agent_id_display::render_agent_id(&parsed, &source_language).into();
-                }
+                let parsed = ParsedAgentId::parse(&raw_agent_name, &worker_component.metadata).ok();
+                agent_view.agent_name = crate::agent_id_display::render_agent_id_or_raw(
+                    parsed.as_ref(),
+                    &source_language,
+                    &raw_agent_name,
+                )
+                .into();
 
                 view.agents
                     .push(agent_view.with_source_language(source_language));
@@ -1375,13 +1374,12 @@ impl WorkerCommandHandler {
             .with_defaults(defaults)
             .with_secret_config_paths(secret_config_paths)
             .with_source_language(agent_name_match.source_language.clone());
-        if let Some(parsed) = &agent_name_match.parsed_agent_id
-            && agent_name_match.source_language.is_known()
-        {
-            metadata_view.agent_name =
-                crate::agent_id_display::render_agent_id(parsed, &agent_name_match.source_language)
-                    .into();
-        }
+        metadata_view.agent_name = crate::agent_id_display::render_agent_id_or_raw(
+            agent_name_match.parsed_agent_id.as_ref(),
+            &agent_name_match.source_language,
+            &metadata_view.agent_name.0,
+        )
+        .into();
 
         self.ctx
             .log_handler()

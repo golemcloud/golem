@@ -290,12 +290,11 @@ impl InteractiveHandler {
         source_language: &crate::agent_id_display::SourceLanguage,
         target_revision: ComponentRevision,
     ) -> anyhow::Result<bool> {
-        let rendered_agent_name = match parsed_agent_id {
-            Some(parsed) if source_language.is_known() => {
-                crate::agent_id_display::render_agent_id(parsed, source_language)
-            }
-            _ => agent_name.0.clone(),
-        };
+        let rendered_agent_name = crate::agent_id_display::render_agent_id_or_raw(
+            parsed_agent_id,
+            source_language,
+            &agent_name.0,
+        );
         self.confirm(
             true,
             format!("Agent {}/{} will be updated to the current component revision: {}. Do you want to continue?",
