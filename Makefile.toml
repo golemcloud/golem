@@ -421,7 +421,7 @@ script = '''
 exec --fail-on-error go tool componentize-go --all-features bindings --output internal/wit --pkg-name github.com/golemcloud/golem/sdks/go/golem/internal/wit --export-pkg-name github.com/golemcloud/golem/sdks/go/golem/internal/exports --format
 
 # Works around a wit-bindgen crates/go codegen bug; see dev-tools/go-bindgen-fixup.
-exec --fail-on-error cargo run --quiet --manifest-path ../../dev-tools/Cargo.toml --bin go-bindgen-fixup -- internal/wit
+exec --fail-on-error cargo run --quiet --manifest-path ../../../dev-tools/Cargo.toml --bin go-bindgen-fixup -- internal/wit
 exec --fail-on-error gofmt -w internal/wit
 
 # The generated code is wasm-only (//go:wasmimport declarations have no bodies),
