@@ -625,6 +625,60 @@ jobs:
         run: cargo test --all-features
         working-directory: sdks/rust
 
+  build-golem-go:
+    runs-on: blacksmith
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          # Tracks the version pinned in the module (currently go 1.25.5); stock
+          # Go only — the SDK deliberately does not use TinyGo.
+          go-version-file: sdks/go/golem/go.mod
+          cache-dependency-path: sdks/go/golem/go.sum
+
+      # cargo-make drives the WIT dep sync and the go-bindgen-fixup step that the
+      # bindings regeneration runs. componentize-go itself is a pinned `go tool`
+      # (go.mod), so no wasm-tools / WASI SDK are needed here.
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          install-cargo-make: 'true'
+
+      # Regenerate the committed WIT bindings (syncs wit/deps first via the task's
+      # `wit` dependency) and fail if they drift from what's checked in — mirrors
+      # the "types are committed" gate the TS and Scala SDKs use.
+      - name: Regenerate Go WIT bindings
+        run: cargo make generate-sdk-go-bindings
+
+      - name: Verify Go WIT bindings are committed
+        run: |
+          if ! git diff --exit-code sdks/go/golem/internal/wit; then
+            echo "❌ sdks/go/golem/internal/wit differs from the committed version."
+            echo "Please run 'cargo make generate-sdk-go-bindings' and commit the result."
+            exit 1
+          fi
+
+      # The generated internal/wit bindings trip vet's unsafe.Pointer / unkeyed
+      # -field checks, so vet targets the hand-written package; the whole tree is
+      # compiled for the real target below instead.
+      - name: Vet (host)
+        working-directory: sdks/go/golem
+        run: go vet .
+
+      - name: Vet (wasip1)
+        working-directory: sdks/go/golem
+        run: GOOS=wasip1 GOARCH=wasm go vet -unsafeptr=false -composites=false .
+
+      - name: Build for wasip1
+        working-directory: sdks/go/golem
+        run: GOOS=wasip1 GOARCH=wasm go build ./...
+
+      - name: Run tests
+        working-directory: sdks/go/golem
+        run: go test ./...
+
   build-golem-ts:
     runs-on: blacksmith
     steps:
