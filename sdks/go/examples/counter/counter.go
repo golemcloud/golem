@@ -13,10 +13,16 @@ var Counter = golem.DefineAgent[CounterId, CounterState](
 )
 
 var (
-	Value     = golem.DefineMethod[CounterId, golem.Unit, int64]("value", golem.Desc("Return the current value"))
+	Value = golem.DefineMethod[CounterId, golem.Unit, int64](
+		"value",
+		golem.Desc("Return the current value"),
+	)
 	Increment = golem.DefineMethod[CounterId, golem.Unit, int64]("increment")
-	Add       = golem.DefineMethod[CounterId, AddIn, int64]("add", golem.Desc("Add to the counter"))
-	Reset     = golem.DefineMethod[CounterId, golem.Unit, golem.Unit]("reset")
+	Add       = golem.DefineMethod[CounterId, AddIn, int64](
+		"add",
+		golem.Desc("Add to the counter"),
+	)
+	Reset = golem.DefineMethod[CounterId, golem.Unit, golem.Unit]("reset")
 )
 
 func init() {

@@ -99,10 +99,19 @@ var Orders = golem.DefineAgent[OrderId, OrderState](
 )
 
 var (
-	Place  = golem.DefineMethod[OrderId, PlaceIn, Order]("place", golem.Desc("Place the order"))
+	Place = golem.DefineMethod[OrderId, PlaceIn, Order](
+		"place",
+		golem.Desc("Place the order"),
+	)
 	Get    = golem.DefineMethod[OrderId, golem.Unit, Order]("get")
-	Refund = golem.DefineMethod[OrderId, RefundIn, Order]("refund", golem.Desc("Refund, recording success or failure as a value"))
-	Audit  = golem.DefineMethod[OrderId, golem.Unit, []Money]("audit", golem.Desc("Fan out to the ledger agents"))
+	Refund = golem.DefineMethod[OrderId, RefundIn, Order](
+		"refund",
+		golem.Desc("Refund, recording success or failure as a value"),
+	)
+	Audit = golem.DefineMethod[OrderId, golem.Unit, []Money](
+		"audit",
+		golem.Desc("Fan out to the ledger agents"),
+	)
 )
 
 // --- a second agent, called over RPC --------------------------------------

@@ -26,9 +26,17 @@ var Counter = golem.DefineAgent[CounterID, CounterState](
 // the published schema, the implementation below, and calls from other agents.
 var (
 	Increment = golem.DefineMethod[CounterID, golem.Unit, int64](
-		"increment", golem.Desc("Increase the count by one"))
-	Add   = golem.DefineMethod[CounterID, AddIn, int64]("add", golem.Desc("Add to the count"))
-	Value = golem.DefineMethod[CounterID, golem.Unit, int64]("value", golem.Desc("Return the current value"))
+		"increment",
+		golem.Desc("Increase the count by one"),
+	)
+	Add = golem.DefineMethod[CounterID, AddIn, int64](
+		"add",
+		golem.Desc("Add to the count"),
+	)
+	Value = golem.DefineMethod[CounterID, golem.Unit, int64](
+		"value",
+		golem.Desc("Return the current value"),
+	)
 )
 
 func init() {
