@@ -570,7 +570,7 @@ class FluentResolvedAgent {
     const databases: Array<{ name: string; bytes: Uint8Array }> = [];
     const seen = new Set<unknown>();
     for (const [k, val] of Object.entries(this.instance)) {
-      if (!isInstance(val, DatabaseSync)) continue;
+      if (!isDatabaseSync(val)) continue;
       if (seen.has(val)) {
         throw `Multiple agent fields reference the same DatabaseSync instance (field "${k}").`;
       }
@@ -608,7 +608,7 @@ class FluentResolvedAgent {
       if (typeof val === 'function') continue;
       if (k === 'config') continue;
       if (
-        isInstance(val, DatabaseSync) ||
+        isDatabaseSync(val) ||
         isInstance(val, StatementSync) ||
         isInstance(val, Session) ||
         isInstance(val, SQLTagStore)
@@ -645,7 +645,7 @@ class FluentResolvedAgent {
       for (const p of parts) {
         if (!p.name.startsWith('db:')) continue;
         const field = this.instance[p.name.slice(3)];
-        if (isInstance(field, DatabaseSync)) restoreDatabaseSync(field, p.body);
+        if (isDatabaseSync(field)) restoreDatabaseSync(field, p.body);
       }
       return;
     }
@@ -658,9 +658,13 @@ class FluentResolvedAgent {
  * Undeclared fields (`config`, `getId`, …) are stripped, so only the declared
  * state is persisted/restored; a shape mismatch throws.
  */
-/** `val instanceof Ctor`, tolerant of an undefined constructor (e.g. node:sqlite absent). */
-function isInstance(val: unknown, Ctor: unknown): boolean {
-  return typeof Ctor === 'function' && val instanceof (Ctor as new (...args: never[]) => unknown);
+function isDatabaseSync(val: unknown): val is DatabaseSync {
+  return val instanceof DatabaseSync;
+}
+
+/** `val instanceof Ctor`, including builtins whose constructors are not public. */
+function isInstance(val: unknown, Ctor: Function): boolean {
+  return typeof Ctor === 'function' && val instanceof Ctor;
 }
 
 async function validateSnapshotState(

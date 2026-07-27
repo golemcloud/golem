@@ -18,12 +18,11 @@ package golem.runtime.tool.client
 
 import golem.FutureInterop
 import golem.host.SchemaWireInterop
-import golem.host.js.{JsErr, JsOk}
 import golem.host.js.tool.JsInvocationResult
 import golem.host.js.schema.JsTypedSchemaValue
 import golem.host.js.tool.JsWasiInputStream
 import golem.runtime.tool.{JsToolInputStream, JsToolOutputStream}
-import golem.runtime.tool.host.{JsToolRpcError, ToolHostApi}
+import golem.runtime.tool.host.ToolHostApi
 import golem.schema.TypedSchemaValue
 import golem.schema.wire.SchemaWire
 import golem.tool.{ToolInputStream, ToolInvokeResult, ToolInvokerRuntime, ToolRpcFailure, ToolRpcTransport}
@@ -47,8 +46,8 @@ object ToolRpcClient {
  * The Scala.js implementation of [[ToolRpcTransport]] over the
  * `golem:tool/host@0.1.0` `tool-rpc` resource: model values are converted to
  * their wire JS shape, the call is driven through `async-invoke-and-await`'s
- * pollable (yielding the event loop while waiting), and failures are decoded
- * into the platform-neutral [[ToolRpcFailure]] model.
+ * native async result (yielding the event loop while waiting), and failures are
+ * decoded into the platform-neutral [[ToolRpcFailure]] model.
  */
 private[golem] final class JsToolRpcTransport(rpc: ToolHostApi.RawToolRpc) extends ToolRpcTransport {
 
@@ -98,31 +97,15 @@ private[golem] final class JsToolRpcTransport(rpc: ToolHostApi.RawToolRpc) exten
         )
     }
 
-  /**
-   * Drives the host `future-invoke-result` to completion; the synchronous
-   * `subscribe()`/`promise()` calls are guarded so a host/JS interop failure
-   * surfaces as a decoded failure rather than an uncaught trap.
-   */
+  /** Drives the host `future-invoke-result` to completion. */
   private def awaitFutureResult(
     futureResult: ToolHostApi.RawToolFutureInvokeResult
   ): Future[Either[ToolRpcFailure, ToolInvokeResult]] =
     try {
-      val pollable = futureResult.subscribe()
-      FutureInterop.fromPromise(pollable.promise()).map { _ =>
-        futureResult.get().toOption match {
-          case None =>
-            Left(ToolRpcFailure.ProtocolError("tool invocation completed without a result"))
-          case Some(result) =>
-            result.tag match {
-              case "ok" =>
-                decodeResult(result.asInstanceOf[JsOk[JsInvocationResult]].value)
-              case "err" =>
-                Left(ToolHostApi.decodeRpcFailure(result.asInstanceOf[JsErr[JsToolRpcError]].value))
-              case other =>
-                Left(ToolRpcFailure.ProtocolError(s"unknown invocation result tag `$other`"))
-            }
-        }
-      }
+      FutureInterop
+        .fromPromise(futureResult.get())
+        .map(result => decodeResult(result))
+        .recover { case js.JavaScriptException(e) => Left(ToolHostApi.decodeRpcFailure(e)) }
     } catch {
       case js.JavaScriptException(e) =>
         Future.successful(Left(ToolHostApi.decodeRpcFailure(e)))

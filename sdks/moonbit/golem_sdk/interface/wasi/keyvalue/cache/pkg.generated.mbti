@@ -2,9 +2,8 @@
 package "golemcloud/golem_sdk/interface/wasi/keyvalue/cache"
 
 import {
-  "golemcloud/golem_sdk/interface/wasi/io/poll",
   "golemcloud/golem_sdk/interface/wasi/keyvalue/types",
-  "golemcloud/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError",
+  "golemcloud/golem_sdk/interface/wasi/keyvalue/wasi-keyvalue-error",
 }
 
 // Values
@@ -23,23 +22,19 @@ pub fn set(String, @types.OutgoingValue, UInt?) -> FutureResult
 // Types and methods
 pub(all) struct FutureExistsResult(Int) derive(Eq, Show)
 pub fn FutureExistsResult::drop(Self) -> Unit
-pub fn FutureExistsResult::future_exists_result_get(Self) -> Result[Bool, @wasiKeyvalueError.Error_]?
-pub fn FutureExistsResult::listen_to_future_exists_result(Self) -> @poll.Pollable
+pub async fn FutureExistsResult::get(Self) -> Result[Bool, @wasi-keyvalue-error.Error_]
 
 pub(all) struct FutureGetOrSetResult(Int) derive(Eq, Show)
 pub fn FutureGetOrSetResult::drop(Self) -> Unit
-pub fn FutureGetOrSetResult::future_get_or_set_result_get(Self) -> Result[GetOrSetEntry, @wasiKeyvalueError.Error_]?
-pub fn FutureGetOrSetResult::listen_to_future_get_or_set_result(Self) -> @poll.Pollable
+pub async fn FutureGetOrSetResult::get(Self) -> Result[GetOrSetEntry, @wasi-keyvalue-error.Error_]
 
 pub(all) struct FutureGetResult(Int) derive(Eq, Show)
 pub fn FutureGetResult::drop(Self) -> Unit
-pub fn FutureGetResult::future_get_result_get(Self) -> Result[@types.IncomingValue?, @wasiKeyvalueError.Error_]?
-pub fn FutureGetResult::listen_to_future_get_result(Self) -> @poll.Pollable
+pub async fn FutureGetResult::get(Self) -> Result[@types.IncomingValue?, @wasi-keyvalue-error.Error_]
 
 pub(all) struct FutureResult(Int) derive(Eq, Show)
 pub fn FutureResult::drop(Self) -> Unit
-pub fn FutureResult::future_result_get(Self) -> Result[Unit, @wasiKeyvalueError.Error_]?
-pub fn FutureResult::listen_to_future_result(Self) -> @poll.Pollable
+pub async fn FutureResult::get(Self) -> Result[Unit, @wasi-keyvalue-error.Error_]
 
 pub(all) enum GetOrSetEntry {
   Occupied(@types.IncomingValue)

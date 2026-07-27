@@ -1,0 +1,342 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk_example1/golem_moonbit_examples"
+
+import {
+  "golemcloud/golem_sdk/config",
+  "golemcloud/golem_sdk/interface/golem/agent/common",
+  "golemcloud/golem_sdk/interface/golem/agent/host",
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/interface/wasi/clocks/system-clock",
+  "golemcloud/golem_sdk/multimodal",
+  "golemcloud/golem_sdk/rpc",
+  "golemcloud/golem_sdk/schema",
+  "golemcloud/golem_sdk/schema_model",
+  "moonbitlang/core/json",
+}
+
+// Values
+pub fn cabi_realloc(Int, Int, Int, Int) -> Int
+
+pub fn collect_app_config_overrides(AppConfigOverride, Array[String]) -> Array[@common.TypedAgentConfigValue] raise @common.AgentError
+
+pub fn collect_database_config_overrides(DatabaseConfigOverride, Array[String]) -> Array[@common.TypedAgentConfigValue] raise @common.AgentError
+
+pub fn wasmExportAsyncInitialize(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncInvoke(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncLoad(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncSave(Int, Int, Int) -> Int
+
+pub fn wasmExportDiscoverAgentTypes() -> Int
+
+pub fn wasmExportDiscoverAgentTypesPostReturn(Int) -> Unit
+
+pub fn wasmExportGetDefinition() -> Int
+
+pub fn wasmExportGetDefinitionPostReturn(Int) -> Unit
+
+pub fn wasmExportInitialize(Int) -> Int
+
+pub fn wasmExportInvoke(Int) -> Int
+
+pub fn wasmExportLoad(Int, Int, Int, Int) -> Int
+
+pub fn wasmExportSave() -> Int
+
+// Errors
+
+// Types and methods
+pub(all) struct AppConfig {
+  app_name : String
+  debug : Bool
+  api_key : @config.Secret[String]
+  db : DatabaseConfig
+}
+
+pub(all) struct AppConfigOverride {
+  app_name : String?
+  debug : Bool?
+  db : DatabaseConfigOverride?
+}
+pub fn AppConfigOverride::empty() -> Self
+
+type AuditLog
+pub fn AuditLog::add_entry(Self, String, @common.Principal) -> Unit
+pub fn AuditLog::get_creator(Self) -> String
+pub fn AuditLog::get_entries(Self) -> Array[String]
+
+pub(all) struct AuditLogClient {
+  client : @rpc.AgentClient
+}
+pub async fn AuditLogClient::add_entry(Self, String) -> Unit
+pub fn AuditLogClient::drop(Self) -> Unit
+pub fn AuditLogClient::get(String) -> Self raise @common.AgentError
+pub fn AuditLogClient::get_agent_id(Self) -> String raise @common.AgentError
+pub async fn AuditLogClient::get_creator(Self) -> String
+pub async fn AuditLogClient::get_entries(Self) -> Array[String]
+pub fn AuditLogClient::get_phantom(String, @types.Uuid) -> Self raise @common.AgentError
+pub fn AuditLogClient::new_phantom(String) -> Self raise @common.AgentError
+pub fn AuditLogClient::phantom_id(Self) -> @types.Uuid?
+pub fn AuditLogClient::schedule_add_entry(Self, @system-clock.Instant, String) -> Unit raise @common.AgentError
+pub fn AuditLogClient::schedule_cancelable_add_entry(Self, @system-clock.Instant, String) -> @host.CancellationToken raise @common.AgentError
+pub fn AuditLogClient::schedule_cancelable_get_creator(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn AuditLogClient::schedule_cancelable_get_entries(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn AuditLogClient::schedule_get_creator(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub fn AuditLogClient::schedule_get_entries(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub async fn[T] AuditLogClient::scoped(String, async (Self) -> T) -> T
+pub async fn[T] AuditLogClient::scoped_get_phantom(String, @types.Uuid, async (Self) -> T) -> T
+pub async fn[T] AuditLogClient::scoped_new_phantom(String, async (Self) -> T) -> T
+pub fn AuditLogClient::trigger_add_entry(Self, String) -> Unit raise @common.AgentError
+pub fn AuditLogClient::trigger_get_creator(Self) -> Unit raise @common.AgentError
+pub fn AuditLogClient::trigger_get_entries(Self) -> Unit raise @common.AgentError
+
+type ConfiguredAgent
+pub fn ConfiguredAgent::get_request_count(Self) -> UInt64
+pub fn ConfiguredAgent::handle_request(Self) -> Unit
+
+pub(all) struct ConfiguredAgentClient {
+  client : @rpc.AgentClient
+}
+pub fn ConfiguredAgentClient::drop(Self) -> Unit
+pub fn ConfiguredAgentClient::get() -> Self raise @common.AgentError
+pub fn ConfiguredAgentClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn ConfiguredAgentClient::get_phantom(@types.Uuid) -> Self raise @common.AgentError
+pub fn ConfiguredAgentClient::get_phantom_with_config(@types.Uuid, AppConfigOverride) -> Self raise @common.AgentError
+pub async fn ConfiguredAgentClient::get_request_count(Self) -> UInt64
+pub fn ConfiguredAgentClient::get_with_config(AppConfigOverride) -> Self raise @common.AgentError
+pub async fn ConfiguredAgentClient::handle_request(Self) -> Unit
+pub fn ConfiguredAgentClient::new_phantom() -> Self raise @common.AgentError
+pub fn ConfiguredAgentClient::new_phantom_with_config(AppConfigOverride) -> Self raise @common.AgentError
+pub fn ConfiguredAgentClient::phantom_id(Self) -> @types.Uuid?
+pub fn ConfiguredAgentClient::schedule_cancelable_get_request_count(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn ConfiguredAgentClient::schedule_cancelable_handle_request(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn ConfiguredAgentClient::schedule_get_request_count(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub fn ConfiguredAgentClient::schedule_handle_request(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub async fn[T] ConfiguredAgentClient::scoped(async (Self) -> T) -> T
+pub async fn[T] ConfiguredAgentClient::scoped_get_phantom(@types.Uuid, async (Self) -> T) -> T
+pub async fn[T] ConfiguredAgentClient::scoped_get_phantom_with_config(@types.Uuid, AppConfigOverride, async (Self) -> T) -> T
+pub async fn[T] ConfiguredAgentClient::scoped_new_phantom(async (Self) -> T) -> T
+pub async fn[T] ConfiguredAgentClient::scoped_new_phantom_with_config(AppConfigOverride, async (Self) -> T) -> T
+pub async fn[T] ConfiguredAgentClient::scoped_with_config(AppConfigOverride, async (Self) -> T) -> T
+pub fn ConfiguredAgentClient::trigger_get_request_count(Self) -> Unit raise @common.AgentError
+pub fn ConfiguredAgentClient::trigger_handle_request(Self) -> Unit raise @common.AgentError
+
+type Counter derive(ToJson, @json.FromJson)
+pub fn Counter::decrement(Self) -> Unit
+pub fn Counter::get_value(Self) -> UInt64
+pub fn Counter::increment(Self) -> Unit
+
+pub(all) struct CounterClient {
+  client : @rpc.AgentClient
+}
+pub async fn CounterClient::decrement(Self) -> Unit
+pub fn CounterClient::drop(Self) -> Unit
+pub fn CounterClient::get(String) -> Self raise @common.AgentError
+pub fn CounterClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn CounterClient::get_phantom(String, @types.Uuid) -> Self raise @common.AgentError
+pub async fn CounterClient::get_value(Self) -> UInt64
+pub async fn CounterClient::increment(Self) -> Unit
+pub fn CounterClient::new_phantom(String) -> Self raise @common.AgentError
+pub fn CounterClient::phantom_id(Self) -> @types.Uuid?
+pub fn CounterClient::schedule_cancelable_decrement(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn CounterClient::schedule_cancelable_get_value(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn CounterClient::schedule_cancelable_increment(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn CounterClient::schedule_decrement(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub fn CounterClient::schedule_get_value(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub fn CounterClient::schedule_increment(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub async fn[T] CounterClient::scoped(String, async (Self) -> T) -> T
+pub async fn[T] CounterClient::scoped_get_phantom(String, @types.Uuid, async (Self) -> T) -> T
+pub async fn[T] CounterClient::scoped_new_phantom(String, async (Self) -> T) -> T
+pub fn CounterClient::trigger_decrement(Self) -> Unit raise @common.AgentError
+pub fn CounterClient::trigger_get_value(Self) -> Unit raise @common.AgentError
+pub fn CounterClient::trigger_increment(Self) -> Unit raise @common.AgentError
+
+pub(all) struct DatabaseConfig {
+  host : String
+  port : UInt
+  timeout : UInt64
+}
+
+pub(all) struct DatabaseConfigOverride {
+  host : String?
+  port : UInt?
+  timeout : UInt64?
+}
+pub fn DatabaseConfigOverride::empty() -> Self
+
+pub(all) enum Priority {
+  Low
+  Medium
+  High
+} derive(Eq, ToJson, @json.FromJson)
+pub impl @schema.FromSchema for Priority
+pub impl @schema.IntoSchema for Priority
+
+type RpcExampleAgent
+pub async fn RpcExampleAgent::counter_rpc_example(Self) -> UInt64
+pub fn RpcExampleAgent::get_last_value(Self) -> UInt64
+pub async fn RpcExampleAgent::task_rpc_example(Self) -> UInt64
+
+pub(all) struct RpcExampleAgentClient {
+  client : @rpc.AgentClient
+}
+pub async fn RpcExampleAgentClient::counter_rpc_example(Self) -> UInt64
+pub fn RpcExampleAgentClient::drop(Self) -> Unit
+pub fn RpcExampleAgentClient::get() -> Self raise @common.AgentError
+pub fn RpcExampleAgentClient::get_agent_id(Self) -> String raise @common.AgentError
+pub async fn RpcExampleAgentClient::get_last_value(Self) -> UInt64
+pub fn RpcExampleAgentClient::get_phantom(@types.Uuid) -> Self raise @common.AgentError
+pub fn RpcExampleAgentClient::new_phantom() -> Self raise @common.AgentError
+pub fn RpcExampleAgentClient::phantom_id(Self) -> @types.Uuid?
+pub fn RpcExampleAgentClient::schedule_cancelable_counter_rpc_example(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn RpcExampleAgentClient::schedule_cancelable_get_last_value(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn RpcExampleAgentClient::schedule_cancelable_task_rpc_example(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn RpcExampleAgentClient::schedule_counter_rpc_example(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub fn RpcExampleAgentClient::schedule_get_last_value(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub fn RpcExampleAgentClient::schedule_task_rpc_example(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub async fn[T] RpcExampleAgentClient::scoped(async (Self) -> T) -> T
+pub async fn[T] RpcExampleAgentClient::scoped_get_phantom(@types.Uuid, async (Self) -> T) -> T
+pub async fn[T] RpcExampleAgentClient::scoped_new_phantom(async (Self) -> T) -> T
+pub async fn RpcExampleAgentClient::task_rpc_example(Self) -> UInt64
+pub fn RpcExampleAgentClient::trigger_counter_rpc_example(Self) -> Unit raise @common.AgentError
+pub fn RpcExampleAgentClient::trigger_get_last_value(Self) -> Unit raise @common.AgentError
+pub fn RpcExampleAgentClient::trigger_task_rpc_example(Self) -> Unit raise @common.AgentError
+
+pub(all) struct TaskInfo {
+  title : String
+  priority : Priority
+  description : String?
+} derive(ToJson, @json.FromJson)
+pub impl @schema.FromSchema for TaskInfo
+pub impl @schema.IntoSchema for TaskInfo
+
+type TaskManager derive(ToJson, @json.FromJson)
+pub fn TaskManager::add_task(Self, TaskInfo) -> UInt64
+pub fn TaskManager::get_by_priority(Self, Priority) -> Array[TaskInfo]
+pub fn TaskManager::get_tasks(Self) -> Array[TaskInfo]
+
+pub(all) struct TaskManagerClient {
+  client : @rpc.AgentClient
+}
+pub async fn TaskManagerClient::add_task(Self, TaskInfo) -> UInt64
+pub fn TaskManagerClient::drop(Self) -> Unit
+pub fn TaskManagerClient::get() -> Self raise @common.AgentError
+pub fn TaskManagerClient::get_agent_id(Self) -> String raise @common.AgentError
+pub async fn TaskManagerClient::get_by_priority(Self, Priority) -> Array[TaskInfo]
+pub fn TaskManagerClient::get_phantom(@types.Uuid) -> Self raise @common.AgentError
+pub async fn TaskManagerClient::get_tasks(Self) -> Array[TaskInfo]
+pub fn TaskManagerClient::new_phantom() -> Self raise @common.AgentError
+pub fn TaskManagerClient::phantom_id(Self) -> @types.Uuid?
+pub fn TaskManagerClient::schedule_add_task(Self, @system-clock.Instant, TaskInfo) -> Unit raise @common.AgentError
+pub fn TaskManagerClient::schedule_cancelable_add_task(Self, @system-clock.Instant, TaskInfo) -> @host.CancellationToken raise @common.AgentError
+pub fn TaskManagerClient::schedule_cancelable_get_by_priority(Self, @system-clock.Instant, Priority) -> @host.CancellationToken raise @common.AgentError
+pub fn TaskManagerClient::schedule_cancelable_get_tasks(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn TaskManagerClient::schedule_get_by_priority(Self, @system-clock.Instant, Priority) -> Unit raise @common.AgentError
+pub fn TaskManagerClient::schedule_get_tasks(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub async fn[T] TaskManagerClient::scoped(async (Self) -> T) -> T
+pub async fn[T] TaskManagerClient::scoped_get_phantom(@types.Uuid, async (Self) -> T) -> T
+pub async fn[T] TaskManagerClient::scoped_new_phantom(async (Self) -> T) -> T
+pub fn TaskManagerClient::trigger_add_task(Self, TaskInfo) -> Unit raise @common.AgentError
+pub fn TaskManagerClient::trigger_get_by_priority(Self, Priority) -> Unit raise @common.AgentError
+pub fn TaskManagerClient::trigger_get_tasks(Self) -> Unit raise @common.AgentError
+
+pub(all) enum TextOrImage {
+  Text(String)
+  Image(Bytes)
+}
+pub impl @multimodal.MultimodalModality for TextOrImage
+
+type VisionAgent
+pub fn VisionAgent::analyze(Self, @multimodal.Multimodal[TextOrImage]) -> String
+pub fn VisionAgent::describe(Self, String, @multimodal.Multimodal[TextOrImage]) -> String
+pub fn VisionAgent::echo(Self, @multimodal.Multimodal[TextOrImage]) -> @multimodal.Multimodal[TextOrImage]
+pub fn VisionAgent::get_count(Self) -> UInt64
+
+pub(all) struct VisionAgentClient {
+  client : @rpc.AgentClient
+}
+pub async fn VisionAgentClient::analyze(Self, @multimodal.Multimodal[TextOrImage]) -> String
+pub async fn VisionAgentClient::describe(Self, String, @multimodal.Multimodal[TextOrImage]) -> String
+pub fn VisionAgentClient::drop(Self) -> Unit
+pub async fn VisionAgentClient::echo(Self, @multimodal.Multimodal[TextOrImage]) -> @multimodal.Multimodal[TextOrImage]
+pub fn VisionAgentClient::get() -> Self raise @common.AgentError
+pub fn VisionAgentClient::get_agent_id(Self) -> String raise @common.AgentError
+pub async fn VisionAgentClient::get_count(Self) -> UInt64
+pub fn VisionAgentClient::get_phantom(@types.Uuid) -> Self raise @common.AgentError
+pub fn VisionAgentClient::new_phantom() -> Self raise @common.AgentError
+pub fn VisionAgentClient::phantom_id(Self) -> @types.Uuid?
+pub fn VisionAgentClient::schedule_analyze(Self, @system-clock.Instant, @multimodal.Multimodal[TextOrImage]) -> Unit raise @common.AgentError
+pub fn VisionAgentClient::schedule_cancelable_analyze(Self, @system-clock.Instant, @multimodal.Multimodal[TextOrImage]) -> @host.CancellationToken raise @common.AgentError
+pub fn VisionAgentClient::schedule_cancelable_describe(Self, @system-clock.Instant, String, @multimodal.Multimodal[TextOrImage]) -> @host.CancellationToken raise @common.AgentError
+pub fn VisionAgentClient::schedule_cancelable_echo(Self, @system-clock.Instant, @multimodal.Multimodal[TextOrImage]) -> @host.CancellationToken raise @common.AgentError
+pub fn VisionAgentClient::schedule_cancelable_get_count(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn VisionAgentClient::schedule_describe(Self, @system-clock.Instant, String, @multimodal.Multimodal[TextOrImage]) -> Unit raise @common.AgentError
+pub fn VisionAgentClient::schedule_echo(Self, @system-clock.Instant, @multimodal.Multimodal[TextOrImage]) -> Unit raise @common.AgentError
+pub fn VisionAgentClient::schedule_get_count(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub async fn[T] VisionAgentClient::scoped(async (Self) -> T) -> T
+pub async fn[T] VisionAgentClient::scoped_get_phantom(@types.Uuid, async (Self) -> T) -> T
+pub async fn[T] VisionAgentClient::scoped_new_phantom(async (Self) -> T) -> T
+pub fn VisionAgentClient::trigger_analyze(Self, @multimodal.Multimodal[TextOrImage]) -> Unit raise @common.AgentError
+pub fn VisionAgentClient::trigger_describe(Self, String, @multimodal.Multimodal[TextOrImage]) -> Unit raise @common.AgentError
+pub fn VisionAgentClient::trigger_echo(Self, @multimodal.Multimodal[TextOrImage]) -> Unit raise @common.AgentError
+pub fn VisionAgentClient::trigger_get_count(Self) -> Unit raise @common.AgentError
+
+pub(all) struct WeatherAgent {
+  city : String
+  mut last_temperature : Double
+}
+pub fn WeatherAgent::get_temperature(Self, String) -> Double
+pub fn WeatherAgent::set_temperature(Self, Double, String) -> String
+
+pub(all) struct WeatherAgentClient {
+  client : @rpc.AgentClient
+}
+pub fn WeatherAgentClient::drop(Self) -> Unit
+pub fn WeatherAgentClient::get(String) -> Self raise @common.AgentError
+pub fn WeatherAgentClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn WeatherAgentClient::get_phantom(String, @types.Uuid) -> Self raise @common.AgentError
+pub async fn WeatherAgentClient::get_temperature(Self, String) -> Double
+pub fn WeatherAgentClient::new_phantom(String) -> Self raise @common.AgentError
+pub fn WeatherAgentClient::phantom_id(Self) -> @types.Uuid?
+pub fn WeatherAgentClient::schedule_cancelable_get_temperature(Self, @system-clock.Instant, String) -> @host.CancellationToken raise @common.AgentError
+pub fn WeatherAgentClient::schedule_cancelable_set_temperature(Self, @system-clock.Instant, Double, String) -> @host.CancellationToken raise @common.AgentError
+pub fn WeatherAgentClient::schedule_get_temperature(Self, @system-clock.Instant, String) -> Unit raise @common.AgentError
+pub fn WeatherAgentClient::schedule_set_temperature(Self, @system-clock.Instant, Double, String) -> Unit raise @common.AgentError
+pub async fn[T] WeatherAgentClient::scoped(String, async (Self) -> T) -> T
+pub async fn[T] WeatherAgentClient::scoped_get_phantom(String, @types.Uuid, async (Self) -> T) -> T
+pub async fn[T] WeatherAgentClient::scoped_new_phantom(String, async (Self) -> T) -> T
+pub async fn WeatherAgentClient::set_temperature(Self, Double, String) -> String
+pub fn WeatherAgentClient::trigger_get_temperature(Self, String) -> Unit raise @common.AgentError
+pub fn WeatherAgentClient::trigger_set_temperature(Self, Double, String) -> Unit raise @common.AgentError
+
+type WebhookAgent
+pub fn WebhookAgent::get_last_payload(Self) -> String
+pub async fn WebhookAgent::wait_for_webhook(Self) -> String
+
+pub(all) struct WebhookAgentClient {
+  client : @rpc.AgentClient
+}
+pub fn WebhookAgentClient::drop(Self) -> Unit
+pub fn WebhookAgentClient::get(String) -> Self raise @common.AgentError
+pub fn WebhookAgentClient::get_agent_id(Self) -> String raise @common.AgentError
+pub async fn WebhookAgentClient::get_last_payload(Self) -> String
+pub fn WebhookAgentClient::get_phantom(String, @types.Uuid) -> Self raise @common.AgentError
+pub fn WebhookAgentClient::new_phantom(String) -> Self raise @common.AgentError
+pub fn WebhookAgentClient::phantom_id(Self) -> @types.Uuid?
+pub fn WebhookAgentClient::schedule_cancelable_get_last_payload(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn WebhookAgentClient::schedule_cancelable_wait_for_webhook(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn WebhookAgentClient::schedule_get_last_payload(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub fn WebhookAgentClient::schedule_wait_for_webhook(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub async fn[T] WebhookAgentClient::scoped(String, async (Self) -> T) -> T
+pub async fn[T] WebhookAgentClient::scoped_get_phantom(String, @types.Uuid, async (Self) -> T) -> T
+pub async fn[T] WebhookAgentClient::scoped_new_phantom(String, async (Self) -> T) -> T
+pub fn WebhookAgentClient::trigger_get_last_payload(Self) -> Unit raise @common.AgentError
+pub fn WebhookAgentClient::trigger_wait_for_webhook(Self) -> Unit raise @common.AgentError
+pub async fn WebhookAgentClient::wait_for_webhook(Self) -> String
+
+// Type aliases
+
+// Traits
+

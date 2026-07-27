@@ -36,7 +36,7 @@ use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorEr
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::component::Component;
 use golem_worker_executor::durable_host::{
-    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
+    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState, SnapshotBoundaryBlocker,
 };
 use golem_worker_executor::model::{
     AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType,
@@ -78,7 +78,6 @@ use golem_worker_executor::workerctx::{
     StatusManagement, UpdateManagement, WorkerCtx,
 };
 use std::collections::HashSet;
-use std::future::Future;
 use std::sync::{Arc, RwLock, Weak};
 use uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
@@ -96,6 +95,18 @@ impl DurableWorkerCtxView<DebugContext> for DebugContext {
 
     fn durable_ctx_mut(&mut self) -> &mut DurableWorkerCtx<DebugContext> {
         &mut self.durable_ctx
+    }
+}
+
+impl wasmtime_wasi::WasiView for DebugContext {
+    fn ctx(&mut self) -> wasmtime_wasi::WasiCtxView<'_> {
+        self.durable_ctx.ctx()
+    }
+}
+
+impl wasmtime_wasi_http::p3::WasiHttpView for DebugContext {
+    fn http(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
+        self.durable_ctx.as_wasi_http_view_p3()
     }
 }
 
@@ -253,6 +264,14 @@ impl InvocationHooks for DebugContext {
         self.durable_ctx.get_current_retry_point().await
     }
 
+    fn current_in_atomic_region(&self) -> bool {
+        self.durable_ctx.current_in_atomic_region()
+    }
+
+    fn current_atomic_region_had_side_effects(&self) -> bool {
+        self.durable_ctx.current_atomic_region_had_side_effects()
+    }
+
     fn enter_read_only_mode(&mut self, method_name: String) {
         self.durable_ctx.enter_read_only_mode(method_name)
     }
@@ -264,6 +283,10 @@ impl InvocationHooks for DebugContext {
 
 #[async_trait]
 impl UpdateManagement for DebugContext {
+    fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker> {
+        self.durable_ctx.snapshot_boundary_blocker()
+    }
+
     fn begin_call_snapshotting_function(&mut self) {
         self.durable_ctx.begin_call_snapshotting_function()
     }
@@ -343,7 +366,6 @@ impl ResourceLimiterAsync for DebugContext {
         if delta > 0 {
             self.durable_ctx
                 .increase_memory(delta)
-                .await
                 .map_err(wasmtime::Error::from_anyhow)?;
             Ok(true)
         } else {
@@ -410,7 +432,7 @@ impl HostWasmRpc for DebugContext {
     async fn schedule_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+        scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
     ) -> anyhow::Result<ScheduledInvocationReceipt> {
@@ -422,7 +444,7 @@ impl HostWasmRpc for DebugContext {
     async fn schedule_cancelable_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+        scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
     ) -> anyhow::Result<CancelableScheduledInvocationReceipt> {
@@ -437,28 +459,8 @@ impl HostWasmRpc for DebugContext {
 }
 
 impl HostFutureInvokeResult for DebugContext {
-    async fn subscribe(
-        &mut self,
-        self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Resource<wasmtime_wasi::p2::DynPollable>> {
-        HostFutureInvokeResult::subscribe(&mut self.durable_ctx, self_).await
-    }
-
-    async fn get(
-        &mut self,
-        self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<
-        Option<Result<Option<golem_schema::schema::wit::wire::SchemaValueTree>, RpcError>>,
-    > {
-        HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
-    }
-
     async fn cancel(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         HostFutureInvokeResult::cancel(&mut self.durable_ctx, this).await
-    }
-
-    async fn drop(&mut self, rep: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
-        HostFutureInvokeResult::drop(&mut self.durable_ctx, rep).await
     }
 }
 
@@ -472,21 +474,12 @@ impl HostCancellationToken for DebugContext {
     }
 }
 
-impl wasmtime_wasi::p2::bindings::cli::environment::Host for DebugContext {
-    fn get_environment(
-        &mut self,
-    ) -> impl Future<Output = wasmtime::Result<Vec<(String, String)>>> + Send {
-        wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(&mut self.durable_ctx)
-    }
-
-    fn get_arguments(&mut self) -> impl Future<Output = wasmtime::Result<Vec<String>>> + Send {
-        wasmtime_wasi::p2::bindings::cli::environment::Host::get_arguments(&mut self.durable_ctx)
-    }
-
-    fn initial_cwd(&mut self) -> impl Future<Output = wasmtime::Result<Option<String>>> + Send {
-        wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd(&mut self.durable_ctx)
-    }
-}
+// NOTE: `cli::environment` needs no debug-specific override on either WASI ABI. Both the P2 host
+// (`DurableWorkerCtx`'s `cli::environment::Host` impl, wired directly into the shared linker) and
+// the P3 host (`DurableP3View`'s `environment::Host` impl) resolve the guest-visible environment
+// through `DurableWorkerCtx::build_enriched_environment`, which is a pure function of the
+// persisted worker metadata — so a debug replay sees exactly the environment the original worker
+// saw.
 
 #[async_trait]
 impl InvocationContextManagement for DebugContext {
@@ -545,6 +538,12 @@ impl WorkerCtx for DebugContext {
     type PublicState = PublicDurableWorkerState<Self>;
 
     const LOG_EVENT_EMIT_BEHAVIOUR: LogEventEmitBehaviour = LogEventEmitBehaviour::Always;
+
+    // A debugging session must never perform real side effects: an incomplete durable call
+    // (committed `Start` with no terminal before the replay target) is surfaced as an explicit
+    // error instead of being repaired by live re-execution. The debug oplog also discards all
+    // writes, so a repaired call's `End` could never be persisted anyway.
+    const ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS: bool = false;
 
     async fn create(
         _account_id: AccountId,

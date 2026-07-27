@@ -28,7 +28,7 @@ pub impl @tool.ToolErrorSchema for CanonicalGrepError with error_cases() {
       },
     ])
   } catch{
-    __golem_error => 
+    __golem_error =>
       Err(@tool.ToolBuildError::schema_model(__golem_error.to_string()))
   }
 }
@@ -109,7 +109,7 @@ pub impl @tool.ToolErrorSchema for CanonicalCommitError with error_cases() {
       },
     ])
   } catch{
-    __golem_error => 
+    __golem_error =>
       Err(@tool.ToolBuildError::schema_model(__golem_error.to_string()))
   }
 }
@@ -194,7 +194,7 @@ pub impl @tool.ToolErrorSchema for CanonicalLogError with error_cases() {
       },
     ])
   } catch{
-    __golem_error => 
+    __golem_error =>
       Err(@tool.ToolBuildError::schema_model(__golem_error.to_string()))
   }
 }
@@ -261,7 +261,7 @@ pub impl @tool.ToolErrorSchema for CanonicalRemoteError with error_cases() {
       },
     ])
   } catch{
-    __golem_error => 
+    __golem_error =>
       Err(@tool.ToolBuildError::schema_model(__golem_error.to_string()))
   }
 }
@@ -313,7 +313,7 @@ pub impl @tool.ToolErrorSchema for CanonicalSetUrlError with error_cases() {
       },
     ])
   } catch{
-    __golem_error => 
+    __golem_error =>
       Err(@tool.ToolBuildError::schema_model(__golem_error.to_string()))
   }
 }
@@ -365,7 +365,7 @@ pub impl @tool.ToolErrorSchema for CanonicalStashError with error_cases() {
       },
     ])
   } catch{
-    __golem_error => 
+    __golem_error =>
       Err(@tool.ToolBuildError::schema_model(__golem_error.to_string()))
   }
 }
@@ -751,11 +751,11 @@ fn __golem_tool_def_CanonicalGrep() -> @tool.ToolDef {
 fn __golem_tool_invoke_CanonicalGrep(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
-  __golem_stdin : @streams.InputStream?,
+  __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalGrep()
-  let __golem_index = 
+  let __golem_index =
     match __golem_def.command_index_by_path(__golem_command_path) {
       Some(__golem_index) => __golem_index
       None => {
@@ -840,7 +840,7 @@ fn __golem_tool_invoke_CanonicalGrep(
           )
         }
       }
-      let stdout = @tool.get_stdout()
+      let (__golem_stdout, stdout) = @tool.new_stdout()
       match CanonicalGrep::canonical_grep(
         case_sensitive,
         color,
@@ -856,7 +856,7 @@ fn __golem_tool_invoke_CanonicalGrep(
             try {
               @tool.invocation_result_value_with_stdout(
                 __golem_value,
-                @tool.get_stdout(),
+                __golem_stdout,
               )
             } catch{
               error => return Err(error)
@@ -881,7 +881,7 @@ fn __golem_tool_invoke_CanonicalGrep(
               return Err(
                 @toolCommon.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error.to_string(
-                    
+
                   ),
                 ),
               )
@@ -971,7 +971,7 @@ fn __golem_tool_invoke_CanonicalGrep(
               return Err(
                 @toolCommon.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error.to_string(
-                    
+
                   ),
                 ),
               )
@@ -1619,11 +1619,11 @@ fn __golem_tool_def_CanonicalGit() -> @tool.ToolDef {
 fn __golem_tool_invoke_CanonicalGit(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
-  __golem_stdin : @streams.InputStream?,
+  __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalGit()
-  let __golem_index = 
+  let __golem_index =
     match __golem_def.command_index_by_path(__golem_command_path) {
       Some(__golem_index) => __golem_index
       None => {
@@ -1778,7 +1778,7 @@ fn __golem_tool_invoke_CanonicalGit(
           )
         }
         Err(error) => {
-          let payload = 
+          let payload =
             match CanonicalCommitError::to_error_payload_value(error) {
               Ok(payload) => payload
               Err(encode_error) => {
@@ -1796,7 +1796,7 @@ fn __golem_tool_invoke_CanonicalGit(
               return Err(
                 @toolCommon.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error.to_string(
-                    
+
                   ),
                 ),
               )
@@ -1936,7 +1936,7 @@ fn __golem_tool_invoke_CanonicalGit(
               return Err(
                 @toolCommon.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error.to_string(
-                    
+
                   ),
                 ),
               )
@@ -2274,11 +2274,11 @@ fn __golem_tool_def_CanonicalRemote() -> @tool.ToolDef {
 fn __golem_tool_invoke_CanonicalRemote(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
-  __golem_stdin : @streams.InputStream?,
+  __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalRemote()
-  let __golem_index = 
+  let __golem_index =
     match __golem_def.command_index_by_path(__golem_command_path) {
       Some(__golem_index) => __golem_index
       None => {
@@ -2365,7 +2365,7 @@ fn __golem_tool_invoke_CanonicalRemote(
       match CanonicalRemote::add(verbose, name, url, track, master, tags, fetch) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
         Err(error) => {
-          let payload = 
+          let payload =
             match CanonicalRemoteError::to_error_payload_value(error) {
               Ok(payload) => payload
               Err(encode_error) => {
@@ -2383,7 +2383,7 @@ fn __golem_tool_invoke_CanonicalRemote(
               return Err(
                 @toolCommon.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error.to_string(
-                    
+
                   ),
                 ),
               )
@@ -2406,7 +2406,7 @@ fn __golem_tool_invoke_CanonicalRemote(
       match CanonicalRemote::remove(name) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
         Err(error) => {
-          let payload = 
+          let payload =
             match CanonicalRemoteError::to_error_payload_value(error) {
               Ok(payload) => payload
               Err(encode_error) => {
@@ -2424,7 +2424,7 @@ fn __golem_tool_invoke_CanonicalRemote(
               return Err(
                 @toolCommon.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error.to_string(
-                    
+
                   ),
                 ),
               )
@@ -2492,7 +2492,7 @@ fn __golem_tool_invoke_CanonicalRemote(
       match CanonicalRemote::set_url(name, newurl, oldurl, push, add, delete) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
         Err(error) => {
-          let payload = 
+          let payload =
             match CanonicalSetUrlError::to_error_payload_value(error) {
               Ok(payload) => payload
               Err(encode_error) => {
@@ -2510,7 +2510,7 @@ fn __golem_tool_invoke_CanonicalRemote(
               return Err(
                 @toolCommon.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error.to_string(
-                    
+
                   ),
                 ),
               )
@@ -2743,11 +2743,11 @@ fn __golem_tool_def_CanonicalStash() -> @tool.ToolDef {
 fn __golem_tool_invoke_CanonicalStash(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
-  __golem_stdin : @streams.InputStream?,
+  __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalStash()
-  let __golem_index = 
+  let __golem_index =
     match __golem_def.command_index_by_path(__golem_command_path) {
       Some(__golem_index) => __golem_index
       None => {
@@ -2815,7 +2815,7 @@ fn __golem_tool_invoke_CanonicalStash(
               return Err(
                 @toolCommon.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error.to_string(
-                    
+
                   ),
                 ),
               )
@@ -2864,7 +2864,7 @@ fn __golem_tool_invoke_CanonicalStash(
               return Err(
                 @toolCommon.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error.to_string(
-                    
+
                   ),
                 ),
               )
@@ -2913,7 +2913,7 @@ fn __golem_tool_invoke_CanonicalStash(
               return Err(
                 @toolCommon.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error.to_string(
-                    
+
                   ),
                 ),
               )
@@ -3005,11 +3005,11 @@ fn __golem_tool_def_CanonicalBigBound() -> @tool.ToolDef {
 fn __golem_tool_invoke_CanonicalBigBound(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
-  __golem_stdin : @streams.InputStream?,
+  __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalBigBound()
-  let __golem_index = 
+  let __golem_index =
     match __golem_def.command_index_by_path(__golem_command_path) {
       Some(__golem_index) => __golem_index
       None => {
@@ -3059,7 +3059,7 @@ fn __golem_tool_invoke_CanonicalBigBound(
               return Err(
                 @toolCommon.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error.to_string(
-                    
+
                   ),
                 ),
               )
@@ -3100,4 +3100,3 @@ fn init {
     error => abort("failed to register generated tools: " + repr(error))
   }
 }
-

@@ -94,6 +94,11 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 );
             }
         }
+        PublicOplogEntry::CompletionDiscarded(params) => {
+            let _ = writeln!(result, "COMPLETION DISCARDED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(result, "{pad}start index:       {}", params.start_index);
+        }
         PublicOplogEntry::AgentInvocationStarted(params) => {
             let _ = writeln!(result, "AGENT INVOCATION STARTED");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
@@ -478,6 +483,21 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             );
             let _ = writeln!(result, "{pad}card id:           {}", params.card_id);
             let _ = writeln!(result, "{pad}reason:            {:?}", params.reason);
+        }
+        PublicOplogEntry::HostStreamFrame(params) => {
+            let _ = writeln!(result, "HOST STREAM FRAME");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}parent start index: {}",
+                params.parent_start_index
+            );
+            let _ = writeln!(result, "{pad}kind:              {:?}", params.kind);
+            let _ = writeln!(
+                result,
+                "{pad}payload:           {}",
+                typed_schema_value_to_string(&params.payload)
+            );
         }
     }
 

@@ -2,7 +2,7 @@
 package "golemcloud/golem_sdk/interface/wasi/blobstore/types"
 
 import {
-  "golemcloud/golem_sdk/interface/wasi/io/streams",
+  "golemcloud/golem_sdk/async-core",
 }
 
 // Values
@@ -17,7 +17,7 @@ pub(all) struct ContainerMetadata {
 
 pub(all) struct IncomingValue(Int) derive(Eq, Show)
 pub fn IncomingValue::drop(Self) -> Unit
-pub fn IncomingValue::incoming_value_consume_async(Self) -> Result[@streams.InputStream, String]
+pub fn IncomingValue::incoming_value_consume_async(Self) -> Result[@async-core.Stream[Byte], String]
 pub fn IncomingValue::incoming_value_consume_sync(Self) -> Result[FixedArray[Byte], String]
 pub fn IncomingValue::size(Self) -> UInt64
 
@@ -36,7 +36,7 @@ pub(all) struct ObjectMetadata {
 pub(all) struct OutgoingValue(Int) derive(Eq, Show)
 pub fn OutgoingValue::drop(Self) -> Unit
 pub fn OutgoingValue::new_outgoing_value() -> Self
-pub fn OutgoingValue::outgoing_value_write_body(Self) -> Result[@streams.OutputStream, Unit]
+pub fn OutgoingValue::outgoing_value_write_body(Self, @async-core.Stream[Byte]) -> Result[Unit, Unit]
 
 // Type aliases
 

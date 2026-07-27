@@ -582,6 +582,14 @@ impl TextOutput for PublicOplogEntry {
                     ));
                 }
             }
+            PublicOplogEntry::CompletionDiscarded(params) => {
+                logln(format_message_highlight("COMPLETION DISCARDED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!("{pad}start index:       {}", params.start_index));
+            }
             PublicOplogEntry::AgentInvocationStarted(params) => {
                 log_agent_invocation(
                     AgentInvocationRenderKind::Started,
@@ -1076,6 +1084,25 @@ impl TextOutput for PublicOplogEntry {
                 logln(format!(
                     "{pad}card id:           {}",
                     format_id(&params.card_id)
+                ));
+            }
+            PublicOplogEntry::HostStreamFrame(params) => {
+                logln(format_message_highlight("HOST STREAM FRAME"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}parent start index: {}",
+                    params.parent_start_index
+                ));
+                logln(format!(
+                    "{pad}kind:              {}",
+                    format_id(&format!("{:?}", params.kind))
+                ));
+                logln(format!(
+                    "{pad}payload:           {}",
+                    typed_schema_value_to_string(&params.payload)
                 ));
             }
             PublicOplogEntry::CardExpired(params) => {

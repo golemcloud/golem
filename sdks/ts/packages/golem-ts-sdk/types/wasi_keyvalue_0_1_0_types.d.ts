@@ -2,7 +2,6 @@
  * A generic keyvalue interface for WASI.
  */
 declare module 'wasi:keyvalue/types@0.1.0' {
-  import * as wasiIo023Streams from 'wasi:io/streams@0.2.3';
   import * as wasiKeyvalue010WasiKeyvalueError from 'wasi:keyvalue/wasi-keyvalue-error@0.1.0';
   export class Bucket {
     /**
@@ -15,17 +14,19 @@ declare module 'wasi:keyvalue/types@0.1.0' {
   export class OutgoingValue {
     static newOutgoingValue(): OutgoingValue;
     /**
-     * Writes the value to the output-stream asynchronously.
+     * Writes the value asynchronously by consuming the given `stream<u8>`:
+     * the caller keeps the writable end and the host appends every received
+     * byte to the outgoing value's body.
      * If any other error occurs, it returns an `Err(error)`.
      * @throws Error
      */
-    outgoingValueWriteBodyAsync(): OutgoingValueBodyAsync;
+    outgoingValueWriteBodyAsync(data: AsyncIterable<number>): void;
     /**
-     * Writes the value to the output-stream synchronously.
+     * Writes the value synchronously.
      * If any other error occurs, it returns an `Err(error)`.
      * @throws Error
      */
-    outgoingValueWriteBodySync(value: OutgoingValueBodySync): void;
+    outgoingValueWriteBodySync(value: Uint8Array): void;
   }
   export class IncomingValue {
     /**
@@ -33,13 +34,13 @@ declare module 'wasi:keyvalue/types@0.1.0' {
      * If any other error occurs, it returns an `Err(error)`.
      * @throws Error
      */
-    incomingValueConsumeSync(): IncomingValueSyncBody;
+    incomingValueConsumeSync(): Uint8Array;
     /**
-     * Consumes the value asynchronously and returns the value as an `input-stream`.
+     * Consumes the value asynchronously and returns the value as a `stream<u8>`.
      * If any other error occurs, it returns an `Err(error)`.
      * @throws Error
      */
-    incomingValueConsumeAsync(): IncomingValueAsyncBody;
+    incomingValueConsumeAsync(): AsyncIterable<number>;
     /**
      * The size of the value in bytes.
      * If the size is unknown or unavailable, this function returns an `Err(error)`.
@@ -47,17 +48,11 @@ declare module 'wasi:keyvalue/types@0.1.0' {
      */
     incomingValueSize(): bigint;
   }
-  export type InputStream = wasiIo023Streams.InputStream;
-  export type OutputStream = wasiIo023Streams.OutputStream;
   export type Error = wasiKeyvalue010WasiKeyvalueError.Error;
   /**
    * A key is a unique identifier for a value in a bucket. The key is used to
    * retrieve the value from the bucket.
    */
   export type Key = string;
-  export type OutgoingValueBodyAsync = OutputStream;
-  export type OutgoingValueBodySync = Uint8Array;
-  export type IncomingValueAsyncBody = InputStream;
-  export type IncomingValueSyncBody = Uint8Array;
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

@@ -3,7 +3,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 rust_test_apps=("oplog-processor" "host-api-tests" "http-tests" "initial-file-system" "agent-counters" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability" "agent-sdk-rust" "agent-invocation-context" "agent-mcp")
-ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-rpc")
+ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc")
 benchmark_apps=("benchmarks")
 
 RUST_CHUNKS=3 # Number of chunks to split rust apps into for parallel CI builds
@@ -109,7 +109,7 @@ for arg in "$@"; do
   esac
 done
 
-if [ "$check_only" = true ] && ([ "$clean_only" = true ] || [ "$rebuild" = true ]); then
+if [ "$check_only" = true ] && { [ "$clean_only" = true ] || [ "$rebuild" = true ]; }; then
   echo "'check' mode cannot be combined with 'clean' or 'rebuild'" >&2
   exit 1
 fi
@@ -211,6 +211,7 @@ if [[ "$group" =~ ^rust-([0-9]+)$ ]]; then
     echo "Invalid rust chunk: $chunk_idx (expected 1..$RUST_CHUNKS)" >&2
     exit 1
   fi
+  chunk_apps=()
   get_chunk chunk_apps rust_test_apps "$chunk_idx" "$RUST_CHUNKS"
   echo "Rust chunk $chunk_idx/$RUST_CHUNKS: ${chunk_apps[*]}"
   build_rust_apps "${chunk_apps[@]}"

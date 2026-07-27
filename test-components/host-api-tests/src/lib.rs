@@ -12,6 +12,7 @@ pub mod key_value;
 pub mod logging;
 pub mod networking;
 pub mod quota_api;
+pub mod raw_http;
 pub mod raw_wasi_http;
 pub mod relational_databases;
 pub mod snapshot_card_recovery;

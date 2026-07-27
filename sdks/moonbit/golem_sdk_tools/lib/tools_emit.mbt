@@ -1692,7 +1692,7 @@ fn emit_invocation_value(command : ToolCommandInfo, value : String) -> String {
     Some(_) =>
       "Ok(@tool.invocation_result_value_with_stdout(" +
       value +
-      ", @tool.get_stdout()" +
+      ", __golem_stdout" +
       ") catch { error => return Err(error) })"
     None =>
       "Ok(@tool.invocation_result_value(" +
@@ -1704,7 +1704,7 @@ fn emit_invocation_value(command : ToolCommandInfo, value : String) -> String {
 ///|
 fn emit_empty_invocation(command : ToolCommandInfo) -> String {
   match output_stream_source(command) {
-    Some(_) => "Ok(@tool.invocation_result_stdout(@tool.get_stdout()))"
+    Some(_) => "Ok(@tool.invocation_result_stdout(__golem_stdout))"
     None => "Ok(@tool.invocation_result_empty())"
   }
 }
@@ -1807,7 +1807,7 @@ fn emit_invoker(
   buf.write_string(
     "///|\nfn " +
     name +
-    "(__golem_command_path : Array[String], __golem_input : @types.TypedSchemaValue, __golem_stdin : @streams.InputStream?, __golem_principal : @tool.Principal) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {\n  let __golem_def = " +
+    "(__golem_command_path : Array[String], __golem_input : @types.TypedSchemaValue, __golem_stdin : @asyncCore.Stream[Byte]?, __golem_principal : @tool.Principal) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {\n  let __golem_def = " +
     descriptor_name(tool) +
     "()\n  let __golem_index = match __golem_def.command_index_by_path(__golem_command_path) {\n    Some(__golem_index) => __golem_index\n    None => return Err(@toolCommon.ToolError::InvalidCommandPath(__golem_command_path))\n  }\n  let __golem_decoded = @tool.decode_canonical_input(__golem_def, __golem_index, __golem_input, \"" +
     escape_string_lit(context) +
@@ -1865,7 +1865,9 @@ fn emit_invoker(
         }
         Hidden(OutputStream) => {
           buf.write_string(
-            "      let " + arg.source + " = @tool.get_stdout()\n",
+            "      let (__golem_stdout, " +
+            arg.source +
+            ") = @tool.new_stdout()\n",
           )
           call_args.push(arg.source)
         }
@@ -2175,7 +2177,11 @@ fn emit_tool_client_method(
     .map(arg => {
       arg.source +
       " : " +
-      emit_type(arg.type_.unwrap_or(Simple("@streams.InputStream")))
+      emit_type(
+        arg.type_.unwrap_or(
+          Parameterized("@asyncCore.Stream", [Simple("Byte")]),
+        ),
+      )
     })
     .join(", ")
   let error = command.error_type.map(emit_type).unwrap_or("@tool.NoToolError")
@@ -2183,15 +2189,15 @@ fn emit_tool_client_method(
   let has_stdout = output_stream_source(command) is Some(_)
   let client_success = if has_stdout {
     if is_unit(command.success_type) {
-      "@streams.OutputStream"
+      "@asyncCore.Stream[Byte]"
     } else {
-      "(" + success + ", @streams.OutputStream)"
+      "(" + success + ", @asyncCore.Stream[Byte])"
     }
   } else {
     success
   }
   buf.write_string(
-    "///|\npub fn " +
+    "///|\npub async fn " +
     receiver +
     "::" +
     command.source_name +

@@ -251,7 +251,7 @@ impl ScheduleEmitter for ScheduleEmitterImpl {
             .collect();
         let target = ScheduleCounterClient::get(target_name);
         target.schedule_poll(Datetime {
-            seconds,
+            seconds: i64::try_from(seconds).expect("schedule timestamp exceeds i64 range"),
             nanoseconds,
         });
     }

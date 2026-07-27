@@ -28,11 +28,14 @@ use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::agent::wit::decode_agent_error_rejecting_quota_with;
 use golem_common::schema::agent::{AgentTypeSchema, FieldSource, InputSchema};
-use golem_common::schema::validation::value::validate_record_fields;
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::schema_type::SchemaType;
+use golem_common::schema::validation::value::{validate_record_fields, validate_value};
 use golem_schema::schema::wit::wire as core_wire;
 use golem_schema::schema::wit::{decode_value_with, encode_value_with};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use tracing::{Instrument, Level, debug, span};
+use wasmtime::component::Accessor;
 use wasmtime::{AsContextMut, StoreContextMut};
 
 /// Describes how an invocation is being executed with respect to the oplog.
@@ -136,6 +139,13 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 
     store.data_mut().set_running();
 
+    // Arm the optional per-invocation wall-clock deadline (`limits.max_invocation_duration`).
+    // When it fires, a synthetic interrupt wakes every cooperative host park point and traps
+    // executing wasm via the epoch callback; the resulting `InvokeResult::Interrupted` is
+    // converted below into a typed timeout failure, so the timeout follows the normal
+    // `TrapType::Error` retry handling instead of leaving the worker externally `Interrupted`.
+    let deadline = store.data().durable_ctx().arm_invocation_deadline();
+
     // If the invocation targets a read-only AgentMethod, enable the read-only invocation
     // strictness for the duration of the call. We restore the mode on every exit path:
     // normal `Ok` / `Err` returns from the wasmtime call site as well as panics that
@@ -159,9 +169,149 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         Err(payload) => std::panic::resume_unwind(payload),
     };
 
+    let call_result = apply_invocation_deadline(&mut store, deadline, call_result).await;
+
     store.data().set_suspended();
 
     call_result
+}
+
+/// Converts the synthetic interrupt raised by an exceeded invocation deadline into a typed
+/// timeout failure at the invocation boundary.
+///
+/// The deadline (see [`crate::durable_host::InvocationDeadline`]) wakes cooperative host park
+/// points and the epoch callback through the same signal a real interrupt uses, so the guest
+/// call unwinds as `InvokeResult::Interrupted`. Here — and only here — that synthetic unwind is
+/// replaced with an `InvokeResult::Failed` carrying a timeout error, which flows through the
+/// regular `TrapType::Error` retry handling (no `AgentInvocationFinished` is written and the
+/// invocation is retried per policy — the same contract as a crash).
+///
+/// First cause wins: a genuine external interrupt sets `ExecutionStatus::Interrupting`, which
+/// persists until the invocation settles, so if one arrived the result is left as a real
+/// interrupt even when the deadline also fired.
+async fn apply_invocation_deadline<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    deadline: crate::durable_host::InvocationDeadline,
+    call_result: Result<InvokeResult, WorkerExecutorError>,
+) -> Result<InvokeResult, WorkerExecutorError> {
+    if !deadline.exceeded() || store.data().durable_ctx().is_interrupting() {
+        return call_result;
+    }
+    match call_result {
+        Ok(InvokeResult::Interrupted {
+            consumed_fuel,
+            interrupt_kind: InterruptKind::Interrupt(_),
+        }) => {
+            let retry_from = store.data().get_current_retry_point().await;
+            let in_atomic_region = store.data().current_in_atomic_region();
+            let atomic_region_had_side_effects =
+                store.data().current_atomic_region_had_side_effects();
+            Ok(InvokeResult::Failed {
+                consumed_fuel,
+                error: OplogAgentError::InternalError(format!(
+                    "invocation exceeded the configured maximum invocation duration of {:?}",
+                    deadline
+                        .duration()
+                        .expect("an exceeded deadline always has a configured duration")
+                )),
+                retry_from,
+                in_atomic_region,
+                atomic_region_had_side_effects,
+                semantic_trap_retry_override: None,
+            })
+        }
+        other => other,
+    }
+}
+
+/// Pure settlement predicate for [`run_guest_call_settled`]: an invocation's tail work is
+/// settled when no tracked spawned store task is active (every one has finished or parked at a
+/// safe park point) and no task holds an open replay-cursor transaction.
+fn tail_work_settled(active_spawned_tasks: usize, replay_cursor_open: bool) -> bool {
+    active_spawned_tasks == 0 && !replay_cursor_open
+}
+
+/// Runs a guest export call on the store's event loop, draining Golem-spawned tail work before
+/// returning.
+///
+/// Plain `run_concurrent` returns as soon as the root future resolves, while store-spawned
+/// durable tasks (HTTP body recorders, TCP stream drivers, stdio/filesystem consumers) may still
+/// be active — their durable `Start`/`End` entries would then land after (or never before)
+/// `AgentInvocationFinished`, breaking positional replay. This wrapper uses
+/// `run_concurrent_and_settle`: after the root future completes, the event loop keeps running
+/// until, at an idle observation point (all runnable host futures polled, no queued work, no
+/// remaining guest tasks), no tracked task is active — every Golem-spawned store task has either
+/// finished or parked at a designated safe park point (a wait on future guest action, which may
+/// legitimately span invocations). Safe-parked tasks are left parked in the store.
+///
+/// Settlement additionally requires that no task holds an open replay-cursor transaction: a task
+/// suspended inside one keeps the fair cursor lock held, which would deadlock the cursor reads
+/// the completion path performs outside the event loop (e.g. reading `AgentInvocationFinished`
+/// after a replayed invocation). Tracked tasks park only outside cursor transactions, so this is
+/// a redundant safety net that keeps the invariant explicit even if a future task's accounting
+/// regresses.
+///
+/// The drain phase is bounded by `limits.tail_work_settle_timeout`. It normally settles as soon as
+/// the tasks' pending durable appends and I/O complete; the bound only fires when such work is
+/// stuck (e.g. an unresponsive peer without its own timeout). Hitting it cooperatively interrupts
+/// the store tasks and fails the guest call like a trap after they unwind: no unfinished event-loop
+/// future is dropped, no `AgentInvocationFinished` entry is written, and normal retry handling
+/// replays any calls left incomplete — the same contract as a crash at this point.
+///
+/// The event loop future itself is never dropped while unfinished: durable `CallHandle`s owned
+/// by parked host futures are not cancellation-safe (`NotCancellable` handles panic when dropped
+/// unfinished, and even `Cancellable` drops may leave terminal oplog effects unwritten).
+/// External cancellation — worker interruption and the optional max-invocation-duration limit —
+/// is instead delivered *cooperatively*: every blocking host park point races the worker's
+/// interrupt signal, abandons its durable call handles for the trap, and unwinds the event loop
+/// with the interrupt from within.
+async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    fun: impl AsyncFnOnce(&Accessor<Ctx>) -> R,
+) -> wasmtime::Result<R> {
+    let tracker = store.data().durable_ctx().tail_work_tracker();
+    let tracker_for_error = tracker.clone();
+    let drain_started = std::sync::Arc::new(tokio::sync::Notify::new());
+    let fun = {
+        let drain_started = drain_started.clone();
+        async move |accessor: &Accessor<Ctx>| {
+            let result = fun(accessor).await;
+            // The root future has completed: everything from here on is the (bounded) drain
+            // phase. Arm the timeout here rather than in the settlement predicate — the
+            // predicate is only consulted at idle observation points, which are never reached
+            // if e.g. a guest task lingers, and the drain must stay bounded even then.
+            drain_started.notify_one();
+            result
+        }
+    };
+    let mut settled = move |store: StoreContextMut<'_, Ctx>| {
+        let active = tracker.active_count();
+        let replay_cursor_open = store
+            .data()
+            .durable_ctx()
+            .has_open_replay_cursor_transaction();
+        tracing::debug!(
+            "invocation tail-work settlement check: {active} spawned task(s) active, replay cursor open: {replay_cursor_open}"
+        );
+        tail_work_settled(active, replay_cursor_open)
+    };
+    let tail_work_deadline = store
+        .data()
+        .durable_ctx()
+        .arm_tail_work_deadline(drain_started);
+    let result = store
+        .as_context_mut()
+        .run_concurrent_and_settle(fun, &mut settled)
+        .await;
+    if tail_work_deadline.exceeded() && !store.data().durable_ctx().is_interrupting() {
+        let timeout = tail_work_deadline.duration();
+        Err(wasmtime::Error::msg(format!(
+            "invocation tail work did not settle within {timeout:?}: {} spawned task(s) still active",
+            tracker_for_error.active_count()
+        )))
+    } else {
+        result
+    }
 }
 
 /// Dispatches a single lowered invocation to the matching typed guest export
@@ -182,9 +332,13 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         } => {
             let guest = load_agent_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = guest
-                .call_initialize(&mut *store, &agent_type, &input, &principal)
-                .await;
+            let result = run_guest_call_settled(store, async |accessor| {
+                guest
+                    .call_initialize(accessor, agent_type, input, principal)
+                    .await
+            })
+            .await
+            .and_then(|result| result);
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
@@ -200,17 +354,23 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             method_name,
             input,
             principal,
+            expected_output,
         } => {
             let guest = load_agent_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = guest
-                .call_invoke(&mut *store, &method_name, &input, &principal)
-                .await;
+            let result = run_guest_call_settled(store, async |accessor| {
+                guest
+                    .call_invoke(accessor, method_name, input, principal)
+                    .await
+            })
+            .await
+            .and_then(|result| result);
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
                 Ok(Ok(maybe_output)) => {
                     let output = decode_invoke_output(store, maybe_output)?;
+                    validate_invoke_output(display_name, &expected_output, &output)?;
                     Ok(InvokeResult::Succeeded {
                         consumed_fuel,
                         result: AgentInvocationResult::AgentMethod { output },
@@ -223,7 +383,10 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         PreparedCall::SaveSnapshot => {
             let guest = load_save_snapshot_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = guest.call_save(&mut *store).await;
+            let result =
+                run_guest_call_settled(store, async |accessor| guest.call_save(accessor).await)
+                    .await
+                    .and_then(|result| result);
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
@@ -239,7 +402,11 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         PreparedCall::LoadSnapshot { snapshot } => {
             let guest = load_load_snapshot_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = guest.call_load(&mut *store, &snapshot).await;
+            let result = run_guest_call_settled(store, async |accessor| {
+                guest.call_load(accessor, snapshot).await
+            })
+            .await
+            .and_then(|result| result);
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
@@ -261,18 +428,22 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         } => {
             let guest = load_oplog_processor_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = guest
-                .call_process(
-                    &mut *store,
-                    account_info,
-                    &config,
-                    component_id,
-                    &agent_id,
-                    &metadata,
-                    first_entry_index,
-                    &entries,
-                )
-                .await;
+            let result = run_guest_call_settled(store, async |accessor| {
+                guest
+                    .call_process(
+                        accessor,
+                        account_info,
+                        config,
+                        component_id,
+                        agent_id,
+                        metadata,
+                        first_entry_index,
+                        entries,
+                    )
+                    .await
+            })
+            .await
+            .and_then(|result| result);
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
@@ -312,9 +483,18 @@ async fn invoke_result_from_trap<Ctx: WorkerCtx>(
     err: wasmtime::Error,
 ) -> InvokeResult {
     let retry_from = store.data().get_current_retry_point().await;
+    let in_atomic_region = store.data().current_in_atomic_region();
+    let atomic_region_had_side_effects = store.data().current_atomic_region_had_side_effects();
     let agent_mode = store.data().agent_mode();
     let err: anyhow::Error = err.into();
-    InvokeResult::from_error::<Ctx>(consumed_fuel, &err, retry_from, agent_mode)
+    InvokeResult::from_error::<Ctx>(
+        consumed_fuel,
+        &err,
+        retry_from,
+        in_atomic_region,
+        atomic_region_had_side_effects,
+        agent_mode,
+    )
 }
 
 /// Maps a guest-returned `agent-error` (the `Err` arm of `initialize` /
@@ -341,6 +521,8 @@ fn invoke_result_from_agent_error<Ctx: WorkerCtx>(
         consumed_fuel,
         error: OplogAgentError::InternalError(agent_error.to_string()),
         retry_from: OplogIndex::INITIAL,
+        in_atomic_region: false,
+        atomic_region_had_side_effects: false,
         semantic_trap_retry_override: None,
     })
 }
@@ -366,6 +548,41 @@ fn decode_invoke_output<Ctx: WorkerCtx>(
             WorkerExecutorError::runtime(format!("Failed to decode agent method output: {e}"))
         }),
     }
+}
+
+/// Declared output shape of an agent method, carried from [`lower_invocation`]
+/// (where the agent type and method are resolved) to [`dispatch_call`] (where
+/// the guest's returned value is validated against it).
+#[derive(Debug)]
+pub struct ExpectedInvokeOutput {
+    /// The agent type's shared definition graph; `SchemaType::Ref` nodes in
+    /// [`root`](Self::root) resolve against its defs (the graph's own root is
+    /// a placeholder — see [`AgentTypeSchema::schema`]).
+    graph: SchemaGraph,
+    /// The method's declared output type; the canonical empty tuple for
+    /// `unit` outputs (see [`decode_invoke_output`]).
+    root: SchemaType,
+}
+
+/// Validates the decoded output of an agent method invocation against the
+/// method's declared output schema, so a guest returning a mismatched value
+/// fails deterministically at the invocation boundary instead of surfacing
+/// later as a confusing shape mismatch in a consumer of the result.
+fn validate_invoke_output(
+    method_name: &str,
+    expected: &ExpectedInvokeOutput,
+    output: &SchemaValue,
+) -> Result<(), WorkerExecutorError> {
+    validate_value(&expected.graph, &expected.root, output).map_err(|errors| {
+        WorkerExecutorError::runtime(format!(
+            "Agent method '{method_name}' returned a value that does not match its declared output schema: {}",
+            errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+        ))
+    })
 }
 
 /// Per-instance cache of typed guest export handles.
@@ -484,6 +701,13 @@ pub enum InvokeResult {
         consumed_fuel: u64,
         error: OplogAgentError,
         retry_from: OplogIndex,
+        /// Whether the trapping call was inside an atomic region (membership). Round-tripped via
+        /// `as_trap_type` into `TrapType::Error` so the post-trap recovery decision uses the call's
+        /// own region rather than "any region currently active".
+        in_atomic_region: bool,
+        /// Whether the trapping call's atomic region had recorded side effects. Round-tripped into
+        /// the persisted `OplogEntry::Error.inside_atomic_region`.
+        atomic_region_had_side_effects: bool,
         /// Ephemeral semantic-retry override extracted from the failing
         /// `anyhow::Error` chain. Round-tripped via `as_trap_type` so the
         /// post-trap recovery path can honour it.
@@ -506,10 +730,18 @@ impl InvokeResult {
     pub fn from_error<Ctx: WorkerCtx>(
         consumed_fuel: u64,
         error: &anyhow::Error,
-        retry_from: OplogIndex,
+        fallback_retry_from: OplogIndex,
+        fallback_in_atomic_region: bool,
+        fallback_atomic_region_had_side_effects: bool,
         agent_mode: AgentMode,
     ) -> Self {
-        match TrapType::from_error::<Ctx>(error, retry_from, agent_mode) {
+        match TrapType::from_error::<Ctx>(
+            error,
+            fallback_retry_from,
+            fallback_in_atomic_region,
+            fallback_atomic_region_had_side_effects,
+            agent_mode,
+        ) {
             TrapType::Interrupt(kind) => InvokeResult::Interrupted {
                 consumed_fuel,
                 interrupt_kind: kind,
@@ -518,11 +750,15 @@ impl InvokeResult {
             TrapType::Error {
                 error,
                 retry_from,
+                in_atomic_region,
+                atomic_region_had_side_effects,
                 semantic_trap_retry_override,
             } => InvokeResult::Failed {
                 consumed_fuel,
                 error,
                 retry_from,
+                in_atomic_region,
+                atomic_region_had_side_effects,
                 semantic_trap_retry_override,
             },
         }
@@ -542,11 +778,15 @@ impl InvokeResult {
             InvokeResult::Failed {
                 error,
                 retry_from,
+                in_atomic_region,
+                atomic_region_had_side_effects,
                 semantic_trap_retry_override,
                 ..
             } => Some(TrapType::Error {
                 error: error.clone(),
                 retry_from: *retry_from,
+                in_atomic_region: *in_atomic_region,
+                atomic_region_had_side_effects: *atomic_region_had_side_effects,
                 semantic_trap_retry_override: semantic_trap_retry_override.clone(),
             }),
             InvokeResult::Interrupted { interrupt_kind, .. } => {
@@ -593,6 +833,7 @@ enum LoweredCall {
         method_name: String,
         input: SchemaValue,
         principal: golem_agent::common::Principal,
+        expected_output: Box<ExpectedInvokeOutput>,
     },
     SaveSnapshot,
     LoadSnapshot {
@@ -624,6 +865,7 @@ enum PreparedCall {
         method_name: String,
         input: core_wire::SchemaValueTree,
         principal: golem_agent::common::Principal,
+        expected_output: Box<ExpectedInvokeOutput>,
     },
     SaveSnapshot,
     LoadSnapshot {
@@ -674,6 +916,7 @@ fn materialize_call<Ctx: WorkerCtx>(
             method_name,
             input,
             principal,
+            expected_output,
         } => {
             let input =
                 encode_value_with(&input, store.data_mut().durable_ctx_mut()).map_err(|e| {
@@ -685,6 +928,7 @@ fn materialize_call<Ctx: WorkerCtx>(
                 method_name,
                 input,
                 principal,
+                expected_output,
             }
         }
         LoweredCall::SaveSnapshot => PreparedCall::SaveSnapshot,
@@ -763,6 +1007,14 @@ pub fn lower_invocation(
                 &method_name,
             )?;
 
+            let expected_output = Box::new(ExpectedInvokeOutput {
+                graph: agent_type.schema.clone(),
+                root: match method.output_schema.schema() {
+                    Some(ty) => ty.clone(),
+                    None => SchemaType::tuple(Vec::new()),
+                },
+            });
+
             Ok(LoweredInvocation {
                 display_name: method_name.clone(),
                 read_only_method,
@@ -770,6 +1022,7 @@ pub fn lower_invocation(
                     method_name,
                     input,
                     principal: principal.into(),
+                    expected_output,
                 },
             })
         }
@@ -1057,5 +1310,110 @@ mod tests {
             err.to_string().contains("invalid input parameter value"),
             "unexpected error: {err}"
         );
+    }
+
+    // --- validate_invoke_output ---
+
+    fn unit_expected_output() -> ExpectedInvokeOutput {
+        ExpectedInvokeOutput {
+            graph: SchemaGraph::empty(),
+            root: SchemaType::tuple(Vec::new()),
+        }
+    }
+
+    #[test]
+    fn unit_output_accepts_canonical_empty_tuple() {
+        let output = SchemaValue::Tuple {
+            elements: Vec::new(),
+        };
+        validate_invoke_output(METHOD_NAME, &unit_expected_output(), &output)
+            .expect("empty tuple must satisfy a unit output schema");
+    }
+
+    #[test]
+    fn unit_output_rejects_non_unit_value() {
+        let Err(err) =
+            validate_invoke_output(METHOD_NAME, &unit_expected_output(), &SchemaValue::U32(1))
+        else {
+            panic!("non-unit value for a unit output schema must be rejected");
+        };
+        assert!(
+            err.to_string()
+                .contains("does not match its declared output schema"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn declared_output_accepts_matching_value() {
+        let expected = ExpectedInvokeOutput {
+            graph: SchemaGraph::empty(),
+            root: SchemaType::u32(),
+        };
+        validate_invoke_output(METHOD_NAME, &expected, &SchemaValue::U32(42))
+            .expect("matching value must pass output validation");
+    }
+
+    #[test]
+    fn declared_output_rejects_mismatched_value() {
+        let expected = ExpectedInvokeOutput {
+            graph: SchemaGraph::empty(),
+            root: SchemaType::u32(),
+        };
+        let Err(err) = validate_invoke_output(METHOD_NAME, &expected, &SchemaValue::Bool(true))
+        else {
+            panic!("mismatched output value must be rejected");
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains(METHOD_NAME)
+                && message.contains("does not match its declared output schema"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn declared_output_resolves_refs_through_the_agent_graph() {
+        use golem_common::schema::graph::SchemaTypeDef;
+        use golem_common::schema::metadata::TypeId;
+
+        let expected = ExpectedInvokeOutput {
+            graph: SchemaGraph {
+                defs: vec![SchemaTypeDef {
+                    id: TypeId::new("Answer"),
+                    name: None,
+                    body: SchemaType::u32(),
+                }],
+                root: SchemaType::record(Vec::new()),
+            },
+            root: SchemaType::ref_to(TypeId::new("Answer")),
+        };
+        validate_invoke_output(METHOD_NAME, &expected, &SchemaValue::U32(42))
+            .expect("ref output must resolve through the agent graph");
+        assert!(
+            validate_invoke_output(METHOD_NAME, &expected, &SchemaValue::Bool(true)).is_err(),
+            "mismatched ref output must be rejected"
+        );
+    }
+
+    #[test]
+    fn tail_work_settlement_truth_table() {
+        let cases = [
+            // (active_spawned_tasks, replay_cursor_open, expected)
+            (0, false, true),
+            // An active spawned task (pending durable append or I/O) blocks settlement.
+            (1, false, false),
+            (3, false, false),
+            // An open replay-cursor transaction blocks settlement even with no active task.
+            (0, true, false),
+            (2, true, false),
+        ];
+        for (active_spawned_tasks, replay_cursor_open, expected) in cases {
+            assert_eq!(
+                tail_work_settled(active_spawned_tasks, replay_cursor_open),
+                expected,
+                "active_spawned_tasks: {active_spawned_tasks}, replay_cursor_open: {replay_cursor_open}"
+            );
+        }
     }
 }

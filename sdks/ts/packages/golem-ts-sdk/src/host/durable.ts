@@ -17,7 +17,8 @@ import {
 
 import type { OplogIndex } from 'golem:api/oplog@1.5.0';
 
-import { compileSchema, type FluentCodec } from '../fluent/schema/adapter';
+import { compileSchema } from '../fluent/schema/adapter';
+import type { FluentCodec } from '../fluent/schema/codec';
 import { buildResultCodec } from '../fluent/schema/result';
 import { StandardSchemaV1 } from '../fluent/schema/standardSchema';
 import { typedSchemaValueFromWit, typedSchemaValueToWit } from '../internal/schema-model';

@@ -744,12 +744,11 @@ mod tests {
                             {
                                 return agent_id_is_shadowed;
                             }
-                            if let syn::Stmt::Local(local) = stmt {
-                                if let syn::Pat::Ident(pat_ident) = &local.pat {
-                                    if pat_ident.ident == "agent_id" {
-                                        agent_id_is_shadowed = true;
-                                    }
-                                }
+                            if let syn::Stmt::Local(local) = stmt
+                                && let syn::Pat::Ident(pat_ident) = &local.pat
+                                && pat_ident.ident == "agent_id"
+                            {
+                                agent_id_is_shadowed = true;
                             }
                         }
                         false
@@ -932,7 +931,7 @@ fn generate_method_code(
             rpc_result.unwrap_or_else(|e| panic!("rpc call to trigger {} failed: {:?}", #remote_token, e));
         }
 
-        pub fn #schedule_name(#(#input_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) {
+        pub fn #schedule_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) {
             #encode_input
 
             self.wasm_rpc.schedule_invocation(
@@ -942,7 +941,7 @@ fn generate_method_code(
             );
         }
 
-        pub fn #schedule_cancelable_name(#(#input_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) -> golem_rust::golem_agentic::golem::agent::host::CancellationToken {
+        pub fn #schedule_cancelable_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> golem_rust::golem_agentic::golem::agent::host::CancellationToken {
             #encode_input
 
             self.wasm_rpc.schedule_cancelable_invocation(
@@ -972,12 +971,12 @@ fn generate_method_code(
                 .unwrap_or_else(|e| panic!("rpc call to trigger {} failed: {:?}", #remote_token, e))
         }
 
-        pub fn #schedule_name(#(#input_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) -> golem_rust::golem_agentic::golem::agent::host::InvocationMetadata {
+        pub fn #schedule_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> golem_rust::golem_agentic::golem::agent::host::InvocationMetadata {
             #encode_input
             self.wasm_rpc.schedule_invocation(#scheduled_time_param, #remote_token, input).metadata
         }
 
-        pub fn #schedule_cancelable_name(#(#input_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) -> golem_rust::golem_agentic::golem::agent::host::CancelableScheduledInvocationReceipt {
+        pub fn #schedule_cancelable_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> golem_rust::golem_agentic::golem::agent::host::CancelableScheduledInvocationReceipt {
             #encode_input
             let receipt = self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #remote_token, input);
             receipt

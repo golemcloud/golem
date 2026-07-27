@@ -117,7 +117,7 @@ declare module 'golem:core/types@2.0.0' {
   /**
    * Open registry; unknown roles fall back to structural handling.
    */
-  export type Role = 
+  export type Role =
   /** `list<variant<…>>` whose elements are interchangeable modalities. */
   {
     tag: 'multimodal'
@@ -187,7 +187,7 @@ declare module 'golem:core/types@2.0.0' {
    * carry canonical IEEE-754 `f64` bits (NaN/inf rejected, -0.0 normalized);
    * comparisons decode the bits to `f64` and compare numerically.
    */
-  export type NumericBound = 
+  export type NumericBound =
   {
     tag: 'signed'
     val: bigint
@@ -273,7 +273,7 @@ declare module 'golem:core/types@2.0.0' {
   /**
    * How the decoder identifies that a value belongs to a given union branch.
    */
-  export type DiscriminatorRule = 
+  export type DiscriminatorRule =
   /** String value starts with this prefix (e.g. `"ssh://"`). */
   {
     tag: 'prefix'
@@ -378,7 +378,7 @@ declare module 'golem:core/types@2.0.0' {
    *     `"kind"` field picks the variant, an MCP content block whose
    *     `"type"` field picks the part shape, …).
    */
-  export type SchemaTypeBody = 
+  export type SchemaTypeBody =
   /** --- Reference to a named definition in the same `schema-graph` --- */
   {
     tag: 'ref-type'
@@ -575,7 +575,7 @@ declare module 'golem:core/types@2.0.0' {
    * inner option allows `result<_, _>` cases whose ok/err type is unit (no
    * payload).
    */
-  export type ResultValuePayload = 
+  export type ResultValuePayload =
   {
     tag: 'ok-value'
     val: ValueNodeIndex | undefined
@@ -614,7 +614,7 @@ declare module 'golem:core/types@2.0.0' {
      */
     body: ValueNodeIndex;
   };
-  export type SchemaValueNode = 
+  export type SchemaValueNode =
   /** Primitives */
   {
     tag: 'bool-value'

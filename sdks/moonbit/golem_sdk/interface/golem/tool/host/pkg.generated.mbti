@@ -2,10 +2,9 @@
 package "golemcloud/golem_sdk/interface/golem/tool/host"
 
 import {
+  "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/golem/tool/common",
-  "golemcloud/golem_sdk/interface/wasi/io/poll",
-  "golemcloud/golem_sdk/interface/wasi/io/streams",
 }
 
 // Values
@@ -26,8 +25,7 @@ pub(all) suberror RpcError {
 pub(all) struct FutureInvokeResult(Int) derive(Eq, Show)
 pub fn FutureInvokeResult::cancel(Self) -> Unit
 pub fn FutureInvokeResult::drop(Self) -> Unit
-pub fn FutureInvokeResult::get(Self) -> Result[@common.InvocationResult, RpcError]?
-pub fn FutureInvokeResult::subscribe(Self) -> @poll.Pollable
+pub async fn FutureInvokeResult::get(Self) -> Result[@common.InvocationResult, RpcError]
 
 pub(all) struct RegisteredTool {
   definition : @common.Tool
@@ -35,13 +33,12 @@ pub(all) struct RegisteredTool {
 } derive(Eq, Show)
 
 pub(all) struct ToolRpc(Int) derive(Eq, Show)
-pub fn ToolRpc::async_invoke_and_await(Self, Array[String], @types.TypedSchemaValue, @streams.InputStream?) -> FutureInvokeResult
+pub fn ToolRpc::async_invoke_and_await(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?) -> FutureInvokeResult
 pub fn ToolRpc::drop(Self) -> Unit
-pub fn ToolRpc::invoke(Self, Array[String], @types.TypedSchemaValue, @streams.InputStream?) -> Result[Unit, RpcError]
-pub fn ToolRpc::invoke_and_await(Self, Array[String], @types.TypedSchemaValue, @streams.InputStream?) -> Result[@common.InvocationResult, RpcError]
+pub fn ToolRpc::invoke(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?) -> Result[Unit, RpcError]
+pub async fn ToolRpc::invoke_and_await(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?) -> Result[@common.InvocationResult, RpcError]
 pub fn ToolRpc::tool_rpc(String) -> Self
 
 // Type aliases
 
 // Traits
-

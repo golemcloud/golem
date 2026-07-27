@@ -31,8 +31,9 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::dsl::{drain_connection, stdout_event_matching, stdout_events};
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start, start_customized, start_with_redis_storage,
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, start, start_customized, start_with_overrides,
+    start_with_redis_storage,
 };
 use pretty_assertions::assert_eq;
 use redis::Commands;
@@ -168,6 +169,71 @@ async fn interruption(
     assert!(result.is_err());
     let err_msg = format!("{}", result.err().unwrap());
     assert!(err_msg.contains("Interrupted via the Golem API"));
+    Ok(())
+}
+
+/// A guest invocation exceeding the configured `limits.max_invocation_duration` is aborted and
+/// fails like a trap: no invocation-finished marker is written and normal retry handling
+/// applies. With a single-attempt retry policy the worker ends up `Failed` and the awaiting
+/// client observes the timeout error.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn max_invocation_duration_aborts_long_running_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.limits.max_invocation_duration = Some(Duration::from_secs(2));
+            config.retry = RetryConfig {
+                max_attempts: 1,
+                min_delay: Duration::from_millis(10),
+                max_delay: Duration::from_millis(10),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "max-invocation-duration-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // An invocation well under the limit succeeds normally.
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+
+    // `interruption` sleeps for ~10 seconds in 100ms steps, well over the 2s limit.
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "interruption", data_value!())
+        .await;
+
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.err().unwrap());
+    assert!(
+        err_msg.contains("maximum invocation duration"),
+        "Expected the max invocation duration error, got: {err_msg}"
+    );
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Failed, Duration::from_secs(10))
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
     Ok(())
 }
 
@@ -538,10 +604,6 @@ async fn promise(
 
     let promise_data = crate::raw_params(vec![promise_id_value.clone()]);
 
-    let poll1 = executor
-        .invoke_and_await_agent(&component, &agent_id, "poll_promise", promise_data.clone())
-        .await;
-
     let executor_clone = executor.clone();
     let component_clone = component.clone();
     let agent_id_clone = agent_id.clone();
@@ -588,10 +650,6 @@ async fn promise(
 
     let result = fiber.await??;
 
-    let poll2 = executor
-        .invoke_and_await_agent(&component, &agent_id, "poll_promise", promise_data)
-        .await;
-
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     let result_value = result
@@ -604,22 +662,95 @@ async fn promise(
         }
     );
 
-    let poll1_value = poll1?
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn p3_promise_suspend_survives_executor_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("GolemHostApi", "p3-promise-restart");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let promise_id_value = executor
+        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+        .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
-    assert_eq!(poll1_value, SchemaValue::Option { inner: None });
 
-    let poll2_value = poll2?
+    let promise_data = crate::raw_params(vec![promise_id_value.clone()]);
+    let await_key = IdempotencyKey::fresh();
+
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &agent_id,
+            &await_key,
+            "await_promise",
+            promise_data.clone(),
+        )
+        .await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
+        .await?;
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
+        .await?;
+
+    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: worker_id.clone(),
+                oplog_idx,
+            },
+            vec![42],
+        )
+        .await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &await_key,
+            "await_promise",
+            promise_data,
+        )
+        .await?;
+
+    let result_value = result
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
     assert_eq!(
-        poll2_value,
-        SchemaValue::Option {
-            inner: Some(Box::new(SchemaValue::List {
-                elements: vec![SchemaValue::U8(42)],
-            }))
+        result_value,
+        SchemaValue::List {
+            elements: vec![SchemaValue::U8(42)]
         }
     );
+
     Ok(())
 }
 
@@ -1525,7 +1656,7 @@ async fn get_worker_metadata(
     )?
     .len();
     assert_eq!(metadata2.component_size, component_file_size);
-    assert_eq!(metadata2.total_linear_memory_size, 2097152);
+    assert_eq!(metadata2.total_linear_memory_size, 1966080);
     Ok(())
 }
 

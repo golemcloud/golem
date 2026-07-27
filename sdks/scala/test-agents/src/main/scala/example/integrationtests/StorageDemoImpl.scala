@@ -21,6 +21,7 @@ import golem.wasi.{Blobstore, Config, KeyValue}
 
 import scala.annotation.unused
 import scala.concurrent.Future
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
 @agentImplementation()
 final class StorageDemoImpl(@unused private val name: String) extends StorageDemo {
@@ -59,7 +60,7 @@ final class StorageDemoImpl(@unused private val name: String) extends StorageDem
     sb.toString()
   }
 
-  override def blobstoreDemo(): Future[String] = Future.successful {
+  override def blobstoreDemo(): Future[String] = {
     val sb = new StringBuilder
     sb.append("=== Blobstore Demo ===\n")
 
@@ -82,31 +83,32 @@ final class StorageDemoImpl(@unused private val name: String) extends StorageDem
     val data: Array[Byte] = container.getData("test-object.txt", 0L, testData.length.toLong)
     sb.append(s"getData: '${new String(data, "UTF-8")}'\n")
 
-    val objects: List[String] = container.listObjects()
-    sb.append(s"listObjects: ${objects.mkString(", ")}\n")
+    container.listObjects().map { objects =>
+      sb.append(s"listObjects: ${objects.mkString(", ")}\n")
 
-    container.deleteObject("test-object.txt")
-    sb.append(s"deleteObject done, hasObject now = ${container.hasObject("test-object.txt")}\n")
+      container.deleteObject("test-object.txt")
+      sb.append(s"deleteObject done, hasObject now = ${container.hasObject("test-object.txt")}\n")
 
-    container.writeData("obj1.txt", "a".getBytes)
-    container.writeData("obj2.txt", "b".getBytes)
-    container.deleteObjects(List("obj1.txt", "obj2.txt"))
-    sb.append("Bulk delete done.\n")
+      container.writeData("obj1.txt", "a".getBytes)
+      container.writeData("obj2.txt", "b".getBytes)
+      container.deleteObjects(List("obj1.txt", "obj2.txt"))
+      sb.append("Bulk delete done.\n")
 
-    container.clear()
-    sb.append("Container cleared.\n")
+      container.clear()
+      sb.append("Container cleared.\n")
 
-    val existsAfter: Boolean = Blobstore.containerExists("demo-container")
-    sb.append(s"containerExists('demo-container') = $existsAfter\n")
+      val existsAfter: Boolean = Blobstore.containerExists("demo-container")
+      sb.append(s"containerExists('demo-container') = $existsAfter\n")
 
-    val src  = Blobstore.ObjectId("demo-container", "src-obj")
-    val dest = Blobstore.ObjectId("demo-container", "dest-obj")
-    sb.append(s"ObjectId types: src=$src dest=$dest\n")
+      val src  = Blobstore.ObjectId("demo-container", "src-obj")
+      val dest = Blobstore.ObjectId("demo-container", "dest-obj")
+      sb.append(s"ObjectId types: src=$src dest=$dest\n")
 
-    Blobstore.deleteContainer("demo-container")
-    sb.append("Container deleted.\n")
+      Blobstore.deleteContainer("demo-container")
+      sb.append("Container deleted.\n")
 
-    sb.toString()
+      sb.toString()
+    }
   }
 
   override def configDemo(): Future[String] = Future.successful {

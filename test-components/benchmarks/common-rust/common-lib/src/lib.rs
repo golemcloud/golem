@@ -1,4 +1,4 @@
-use golem_rust::{with_persistence_level, PersistenceLevel};
+use golem_rust::{PersistenceLevel, with_persistence_level};
 
 pub fn cpu_intensive(length: u32) -> u32 {
     let length = length as usize;
@@ -42,7 +42,8 @@ pub fn oplog_heavy(length: u32, persistence_on: bool, commit: bool) -> u32 {
 
         for _i in 0..length {
             let mut buf = [0u8; 4];
-            wstd::rand::get_random_bytes(&mut buf);
+            let bytes = golem_rust::wasip3::random::random::get_random_bytes(buf.len() as u64);
+            buf.copy_from_slice(&bytes);
             let value = u32::from_le_bytes(buf);
             result ^= value;
 

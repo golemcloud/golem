@@ -3,7 +3,6 @@ package "golemcloud/golem_sdk/interface/golem/api/host"
 
 import {
   "golemcloud/golem_sdk/interface/golem/core/types",
-  "golemcloud/golem_sdk/interface/wasi/io/poll",
 }
 
 // Values
@@ -176,8 +175,7 @@ pub fn GetAgents::get_next(Self) -> Array[AgentMetadata]?
 
 pub(all) struct GetPromiseResult(Int) derive(Eq, Show)
 pub fn GetPromiseResult::drop(Self) -> Unit
-pub fn GetPromiseResult::get(Self) -> FixedArray[Byte]?
-pub fn GetPromiseResult::subscribe(Self) -> @poll.Pollable
+pub async fn GetPromiseResult::get(Self) -> FixedArray[Byte]
 
 pub(all) enum PersistenceLevel {
   PersistNothing
