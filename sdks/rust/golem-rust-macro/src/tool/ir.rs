@@ -50,7 +50,7 @@ pub struct CommandIr {
     pub annotations: Option<CommandAnnotationsIr>,
     /// `#[command(subtree = path::To::Trait)]`, if this method grafts a subtree.
     pub subtree: Option<SubtreeIr>,
-    /// Whether the trait method is async; generated guest dispatch blocks on async methods.
+    /// Whether the trait method is async; generated guest dispatch awaits async methods.
     pub is_async: bool,
     /// Typed method parameters, in declaration order (the `&self` receiver is
     /// excluded). Metadata synthesis projects these onto positionals/options/flags/streams

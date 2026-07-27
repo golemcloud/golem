@@ -21,17 +21,17 @@ use golem_common::model::oplog::public_oplog_entry::{
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
     CancelledParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
     CardInstalledParams, CardRevokedParams, ChangePersistenceLevelParams,
-    CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
-    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
-    InterruptedParams, JumpParams, LogParams, ManualUpdateParameters, NoOpParams,
-    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PluginInstallationDescription, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, StringAttributeValue,
-    SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
+    CommittedRemoteTransactionParams, CompletionDiscardedParams, CreateParams,
+    CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams,
+    EndParams, ErrorParams, ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams,
+    FinishSpanParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
+    LogParams, ManualUpdateParameters, NoOpParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttributeValue, PublicDurableFunctionType, PublicSpanData,
+    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
+    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
     WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
@@ -52,17 +52,17 @@ use golem_schema::schema::wit::{
 };
 
 /// Encode a public-oplog [`TypedSchemaValue`] into the `golem:core@2.0.0` WIT
-/// wire form used by the oplog-processor plugin interface.
-///
-/// The oplog-processor boundary is untrusted: host-managed capability nodes
-/// (quota tokens, secrets) are redacted to plain strings before encoding rather
-/// than minting live owned handles or leaking trusted snapshots. After
-/// redaction the typed value contains no capability nodes, so the pure encoder
-/// cannot fail.
-fn encode_public_typed_schema_value(value: TypedSchemaValue) -> wire::TypedSchemaValue {
+/// wire form used by the oplog-processor plugin interface. Public-oplog
+/// values are redacted before encoding so host-managed secrets and quota
+/// capabilities cannot cross this untrusted boundary. Encoding remains
+/// fallible so malformed schema/value pairs surface as conversion errors.
+fn encode_public_typed_schema_value(
+    value: TypedSchemaValue,
+) -> Result<wire::TypedSchemaValue, String> {
     let value = redact_host_managed_typed_value(value);
-    encode_typed(&value)
-        .expect("public oplog TypedSchemaValue must be encodable as core@2.0.0 WIT after redaction")
+    encode_typed(&value).map_err(|e| {
+        format!("public oplog TypedSchemaValue is not encodable as golem:core@2.0.0 WIT: {e}")
+    })
 }
 
 fn encode_untyped_schema_value(value: SchemaValue) -> Result<wire::SchemaValueTree, String> {
@@ -186,9 +186,11 @@ pub(crate) fn reject_quota_handles_in_oplog_entries<
     }
 }
 
-impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
-    fn from(value: PublicOplogEntry) -> Self {
-        match value {
+impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
+    type Error = String;
+
+    fn try_from(value: PublicOplogEntry) -> Result<Self, String> {
+        Ok(match value {
             PublicOplogEntry::Create(CreateParams {
                 timestamp,
                 agent_id,
@@ -224,11 +226,13 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                     .collect(),
                 local_agent_config: local_agent_config
                     .into_iter()
-                    .map(|lac| oplog::LocalAgentConfigEntry {
-                        path: lac.path,
-                        value: encode_public_typed_schema_value(lac.value),
+                    .map(|lac| {
+                        Ok(oplog::LocalAgentConfigEntry {
+                            path: lac.path,
+                            value: encode_public_typed_schema_value(lac.value)?,
+                        })
                     })
-                    .collect(),
+                    .collect::<Result<Vec<_>, String>>()?,
                 original_phantom_id: original_phantom_id.map(|id| id.into()),
                 instance_id: instance_id.into(),
             }),
@@ -242,7 +246,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 timestamp: timestamp.into(),
                 parent_start_index: parent_start_index.map(|c| c.into()),
                 function_name,
-                request: request.map(encode_public_typed_schema_value),
+                request: request.map(encode_public_typed_schema_value).transpose()?,
                 durable_function_type: wrapped_function_type.into(),
             }),
             PublicOplogEntry::End(EndParams {
@@ -253,7 +257,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
             }) => Self::End(oplog::EndParameters {
                 timestamp: timestamp.into(),
                 start_index: start_index.into(),
-                response: response.map(encode_public_typed_schema_value),
+                response: response.map(encode_public_typed_schema_value).transpose()?,
                 forced_commit,
             }),
             PublicOplogEntry::Cancelled(CancelledParams {
@@ -263,14 +267,21 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
             }) => Self::Cancelled(oplog::CancelledParameters {
                 timestamp: timestamp.into(),
                 start_index: start_index.into(),
-                partial: partial.map(encode_public_typed_schema_value),
+                partial: partial.map(encode_public_typed_schema_value).transpose()?,
+            }),
+            PublicOplogEntry::CompletionDiscarded(CompletionDiscardedParams {
+                timestamp,
+                start_index,
+            }) => Self::CompletionDiscarded(oplog::CompletionDiscardedParameters {
+                timestamp: timestamp.into(),
+                start_index: start_index.into(),
             }),
             PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
                 timestamp,
                 invocation,
             }) => Self::AgentInvocationStarted(oplog::AgentInvocationStartedParameters {
                 timestamp: timestamp.into(),
-                invocation: invocation.into(),
+                invocation: invocation.try_into()?,
             }),
             PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
                 timestamp,
@@ -280,7 +291,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 component_revision,
             }) => Self::AgentInvocationFinished(oplog::AgentInvocationFinishedParameters {
                 timestamp: timestamp.into(),
-                result: result.into(),
+                result: result.try_into()?,
                 method_name,
                 consumed_fuel,
                 component_revision: component_revision.get(),
@@ -333,7 +344,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 invocation,
             }) => Self::PendingAgentInvocation(oplog::PendingAgentInvocationParameters {
                 timestamp: timestamp.into(),
-                invocation: invocation.into(),
+                invocation: invocation.try_into()?,
             }),
             PublicOplogEntry::PendingUpdate(PendingUpdateParams {
                 timestamp,
@@ -612,6 +623,35 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 card_id: card_id_to_wit(card_id),
                 reason: card_install_failure_to_wit(reason),
             }),
+            PublicOplogEntry::HostStreamFrame(HostStreamFrameParams {
+                timestamp,
+                parent_start_index,
+                kind,
+                payload,
+            }) => Self::HostStreamFrame(oplog::HostStreamFrameParameters {
+                timestamp: timestamp.into(),
+                parent_start_index: parent_start_index.into(),
+                kind: kind.into(),
+                payload: encode_public_typed_schema_value(payload)?,
+            }),
+        })
+    }
+}
+
+impl From<golem_common::model::oplog::HostStreamKind> for oplog::HostStreamKind {
+    fn from(value: golem_common::model::oplog::HostStreamKind) -> Self {
+        match value {
+            golem_common::model::oplog::HostStreamKind::P3HttpRequestBody => {
+                Self::P3HttpRequestBody
+            }
+        }
+    }
+}
+
+impl From<oplog::HostStreamKind> for golem_common::model::oplog::HostStreamKind {
+    fn from(value: oplog::HostStreamKind) -> Self {
+        match value {
+            oplog::HostStreamKind::P3HttpRequestBody => Self::P3HttpRequestBody,
         }
     }
 }
@@ -663,15 +703,17 @@ impl From<golem_common::model::oplog::LogLevel> for oplog::LogLevel {
     }
 }
 
-impl From<PublicAgentInvocation> for oplog::AgentInvocation {
-    fn from(value: PublicAgentInvocation) -> Self {
-        match value {
+impl TryFrom<PublicAgentInvocation> for oplog::AgentInvocation {
+    type Error = String;
+
+    fn try_from(value: PublicAgentInvocation) -> Result<Self, Self::Error> {
+        Ok(match value {
             PublicAgentInvocation::AgentInitialization(params) => {
                 Self::AgentInitialization(oplog::AgentInitializationParameters {
                     idempotency_key: params.idempotency_key.value,
                     constructor_parameters: encode_public_typed_schema_value(
                         params.constructor_parameters,
-                    ),
+                    )?,
                     trace_id: params.trace_id.to_string(),
                     trace_states: params.trace_states,
                     invocation_context: params
@@ -685,7 +727,7 @@ impl From<PublicAgentInvocation> for oplog::AgentInvocation {
                 Self::AgentMethodInvocation(oplog::AgentMethodInvocationParameters {
                     idempotency_key: params.idempotency_key.value,
                     method_name: params.method_name,
-                    function_input: encode_public_typed_schema_value(params.function_input),
+                    function_input: encode_public_typed_schema_value(params.function_input)?,
                     trace_id: params.trace_id.to_string(),
                     trace_states: params.trace_states,
                     invocation_context: params
@@ -721,22 +763,24 @@ impl From<PublicAgentInvocation> for oplog::AgentInvocation {
                     target_revision: target_revision.into(),
                 })
             }
-        }
+        })
     }
 }
 
-impl From<PublicAgentInvocationResult> for oplog::AgentInvocationResult {
-    fn from(value: PublicAgentInvocationResult) -> Self {
-        match value {
+impl TryFrom<PublicAgentInvocationResult> for oplog::AgentInvocationResult {
+    type Error = String;
+
+    fn try_from(value: PublicAgentInvocationResult) -> Result<Self, Self::Error> {
+        Ok(match value {
             PublicAgentInvocationResult::AgentInitialization(AgentInvocationOutputParameters {
                 output,
             }) => Self::AgentInitialization(oplog::AgentInvocationOutputParameters {
-                output: encode_public_typed_schema_value(output),
+                output: encode_public_typed_schema_value(output)?,
             }),
             PublicAgentInvocationResult::AgentMethod(AgentInvocationOutputParameters {
                 output,
             }) => Self::AgentMethod(oplog::AgentInvocationOutputParameters {
-                output: encode_public_typed_schema_value(output),
+                output: encode_public_typed_schema_value(output)?,
             }),
             PublicAgentInvocationResult::ManualUpdate(Empty {}) => Self::ManualUpdate,
             PublicAgentInvocationResult::LoadSnapshot(FallibleResultParameters { error }) => {
@@ -767,7 +811,7 @@ impl From<PublicAgentInvocationResult> for oplog::AgentInvocationResult {
                     error: result.error,
                 })
             }
-        }
+        })
     }
 }
 
@@ -837,9 +881,9 @@ impl From<Timestamp> for oplog::Timestamp {
 }
 
 fn timestamp_from_datetime(
-    dt: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+    dt: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
 ) -> Timestamp {
-    Timestamp::from(dt.seconds * 1000 + (dt.nanoseconds / 1_000_000) as u64)
+    Timestamp::from(dt.seconds.max(0) as u64 * 1000 + (dt.nanoseconds / 1_000_000) as u64)
 }
 
 fn oplog_payload_from_wit<T: desert_rust::BinaryCodec + std::fmt::Debug + Clone + PartialEq>(
@@ -1066,6 +1110,10 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 start_index: golem_common::base_model::OplogIndex::from_u64(params.start_index),
                 partial: params.partial.map(oplog_payload_from_wit),
+            }),
+            oplog::OplogEntry::CompletionDiscarded(params) => Ok(Self::CompletionDiscarded {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                start_index: golem_common::base_model::OplogIndex::from_u64(params.start_index),
             }),
             oplog::OplogEntry::AgentInvocationStarted(params) => {
                 let trace_id = golem_common::model::invocation_context::TraceId::from_string(
@@ -1383,6 +1431,14 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 ),
                 card_id: card_id_from_wit(params.card_id),
                 reason: card_install_failure_from_wit(params.reason),
+            }),
+            oplog::OplogEntry::HostStreamFrame(params) => Ok(Self::HostStreamFrame {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                parent_start_index: golem_common::base_model::OplogIndex::from_u64(
+                    params.parent_start_index,
+                ),
+                kind: params.kind.into(),
+                payload: oplog_payload_from_wit(params.payload),
             }),
         }
     }
@@ -1781,6 +1837,15 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 start_index: start_index.into(),
                 partial: partial.map(oplog_payload_to_wit).transpose()?,
             })),
+            M::CompletionDiscarded {
+                timestamp,
+                start_index,
+            } => Ok(Self::CompletionDiscarded(
+                oplog::RawCompletionDiscardedParameters {
+                    timestamp: timestamp.into(),
+                    start_index: start_index.into(),
+                },
+            )),
             M::AgentInvocationStarted {
                 timestamp,
                 idempotency_key,
@@ -1918,6 +1983,17 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                     card_id: card_id_to_wit(card_id),
                 }))
             }
+            M::HostStreamFrame {
+                timestamp,
+                parent_start_index,
+                kind,
+                payload,
+            } => Ok(Self::HostStreamFrame(oplog::RawHostStreamFrameParameters {
+                timestamp: timestamp.into(),
+                parent_start_index: parent_start_index.into(),
+                kind: kind.into(),
+                payload: oplog_payload_to_wit(payload)?,
+            })),
             M::CardEventQueued { timestamp, event } => {
                 Ok(Self::CardEventQueued(oplog::CardEventQueuedParameters {
                     timestamp: timestamp.into(),

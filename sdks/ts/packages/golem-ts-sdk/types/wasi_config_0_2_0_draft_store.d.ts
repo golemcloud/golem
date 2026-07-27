@@ -15,7 +15,7 @@ declare module 'wasi:config/store@0.2.0-draft' {
   /**
    * An error type that encapsulates the different errors that can occur fetching configuration values.
    */
-  export type Error = 
+  export type Error =
   /**
    * This indicates an error from an "upstream" config source.
    * As this could be almost _anything_ (such as Vault, Kubernetes ConfigMaps, KeyValue buckets, etc),

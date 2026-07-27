@@ -129,7 +129,7 @@ fn datetime_200ms_from_now() -> Datetime {
         .expect("Time went backwards");
     let scheduled = now + Duration::from_millis(200);
     Datetime {
-        seconds: scheduled.as_secs(),
+        seconds: scheduled.as_secs() as i64,
         nanoseconds: scheduled.subsec_nanos(),
     }
 }
@@ -590,14 +590,10 @@ impl CancelTester for CancelTesterImpl {
         let input = encode_single_parameter(5u64);
         let future = wasm_rpc.async_invoke_and_await("inc_by", input).future;
 
-        // Wait for completion
-        loop {
-            let pollable = future.subscribe();
-            golem_rust::agentic::await_pollable(pollable).await;
-            if let Some(_result) = future.get() {
-                break;
-            }
-        }
+        // Wait for completion. The P3 Golem WIT replaced `subscribe()`/pollable
+        // polling of `future-invoke-result` with an `async get()`, so we just
+        // await it directly.
+        let _ = future.get().await;
 
         // Cancel after completion - should be a no-op
         future.cancel();
@@ -622,7 +618,7 @@ fn datetime_500ms_from_now() -> Datetime {
         .expect("time went backwards");
     let at = now + Duration::from_millis(500);
     Datetime {
-        seconds: at.as_secs(),
+        seconds: at.as_secs() as i64,
         nanoseconds: at.subsec_nanos(),
     }
 }
@@ -646,12 +642,10 @@ impl HttpPollingSelfScheduler for HttpPollingSelfSchedulerImpl {
     }
 
     async fn tick(&self, host: String, port: u16) {
-        use wstd::http::{Body, Client, Request};
-
-        let req = Request::post(format!("http://{host}:{port}/ping"))
-            .body(Body::empty())
-            .unwrap();
-        let _ = Client::new().send(req).await;
+        let _ = wasi_fetch::Client::new()
+            .post(&format!("http://{host}:{port}/ping"))
+            .send()
+            .await;
 
         let me = HttpPollingSelfSchedulerClient::get(self.name.clone());
         me.schedule_tick(host, port, datetime_500ms_from_now());

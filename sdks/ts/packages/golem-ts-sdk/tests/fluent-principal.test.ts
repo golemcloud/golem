@@ -16,6 +16,7 @@ import { describe, it, expect } from 'vitest';
 import { compileSchema } from '../src/fluent/schema/adapter';
 import { s } from '../src/fluent/schema/markers';
 import { sdkPrincipalFromHost, Principal } from '../src/principal';
+import type { SchemaValue } from '../src/internal/schema-model';
 
 // `s.principal()` carries an SDK `Principal` as a WIT `principal` variant value,
 // round-tripping SDK Principal <-> SchemaValue via the host shape.
@@ -42,7 +43,7 @@ describe('fluent s.principal() marker', () => {
       },
     });
 
-    const wire = codec.toValue(input) as { tag: string; caseIndex: number };
+    const wire = codec.toValue(input) as SchemaValue & { caseIndex: number };
     expect(wire.tag).toBe('variant');
     expect(wire.caseIndex).toBe(0);
 
@@ -65,7 +66,7 @@ describe('fluent s.principal() marker', () => {
     const codec = compileSchema(s.principal());
     const input: Principal = sdkPrincipalFromHost({ tag: 'anonymous' });
 
-    const wire = codec.toValue(input) as { tag: string; caseIndex: number; payload?: unknown };
+    const wire = codec.toValue(input) as SchemaValue & { caseIndex: number; payload?: SchemaValue };
     expect(wire.caseIndex).toBe(3);
     expect(wire.payload).toBeUndefined();
 
@@ -85,7 +86,7 @@ describe('fluent s.principal() marker', () => {
       },
     });
 
-    const wire = codec.toValue(input) as { tag: string; caseIndex: number };
+    const wire = codec.toValue(input) as SchemaValue & { caseIndex: number };
     expect(wire.caseIndex).toBe(1);
 
     const decoded = codec.fromValue(wire) as Principal;
@@ -102,7 +103,7 @@ describe('fluent s.principal() marker', () => {
       val: { accountId: { uuid: { highBits: 7n, lowBits: 9n } } },
     });
 
-    const wire = codec.toValue(input) as { tag: string; caseIndex: number };
+    const wire = codec.toValue(input) as SchemaValue & { caseIndex: number };
     expect(wire.caseIndex).toBe(2);
 
     const decoded = codec.fromValue(wire) as Principal;

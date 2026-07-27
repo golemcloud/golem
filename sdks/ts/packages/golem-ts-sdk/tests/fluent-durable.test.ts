@@ -9,6 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
+import type { DurableFunctionType } from 'golem:durability/durability@1.5.0';
 
 interface OplogEntry {
   functionName: string;
@@ -70,7 +71,7 @@ async function load() {
   };
 }
 
-const baseSpec = (FunctionType: { writeRemote: unknown }) => ({
+const baseSpec = (FunctionType: { writeRemote: DurableFunctionType }) => ({
   iface: 'host-features',
   function: 'fetchQuote',
   functionType: FunctionType.writeRemote,

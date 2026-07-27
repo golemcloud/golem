@@ -95,6 +95,15 @@ const wrap = <A>(operation: string, fn: () => A): A => {
   }
 };
 
+const wrapAsync = async <A>(operation: string, fn: () => Promise<A>): Promise<A> => {
+  try {
+    return await fn();
+  } catch (cause) {
+    if (cause instanceof WebsocketError) throw cause;
+    throw new WebsocketError(cause, operation);
+  }
+};
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -125,12 +134,12 @@ export interface WebSocketHandle {
   /** Send a text (`string`) or binary (`Uint8Array`) message. */
   send(data: string | Uint8Array): void;
   /** Receive the next message, blocking until one is available. */
-  receive(): WebSocketMessage;
+  receive(): Promise<WebSocketMessage>;
   /**
    * Receive the next message, waiting up to `timeoutMs` milliseconds. Returns
    * `undefined` if the timeout expires before a message arrives.
    */
-  receiveWithTimeout(timeoutMs: number): WebSocketMessage | undefined;
+  receiveWithTimeout(timeoutMs: number): Promise<WebSocketMessage | undefined>;
   /** Send a close frame with an optional code and reason. */
   close(code?: number, reason?: string): void;
 }
@@ -150,11 +159,13 @@ const makeHandle = (conn: WsClient.WebsocketConnection): WebSocketHandle => ({
   send(data) {
     wrap('send', () => conn.send(toHostMessage(data)));
   },
-  receive() {
-    return fromHostMessage(wrap('receive', () => conn.receive()));
+  async receive() {
+    return fromHostMessage(await wrapAsync('receive', () => conn.receive()));
   },
-  receiveWithTimeout(timeoutMs) {
-    const msg = wrap('receiveWithTimeout', () => conn.receiveWithTimeout(BigInt(timeoutMs)));
+  async receiveWithTimeout(timeoutMs) {
+    const msg = await wrapAsync('receiveWithTimeout', () =>
+      conn.receiveWithTimeout(BigInt(timeoutMs)),
+    );
     return msg === undefined ? undefined : fromHostMessage(msg);
   },
   close(code, reason) {

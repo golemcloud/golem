@@ -347,12 +347,11 @@ impl RustToolBridgeGenerator {
         }
         let stdin_expr = match &body.stdin {
             Some(stdin) if stdin.required => {
-                param_defs.push(quote! { stdin: golem_rust::wasip2::io::streams::InputStream });
+                param_defs.push(quote! { stdin: golem_rust::agentic::InputStream });
                 quote! { Some(stdin) }
             }
             Some(_) => {
-                param_defs
-                    .push(quote! { stdin: Option<golem_rust::wasip2::io::streams::InputStream> });
+                param_defs.push(quote! { stdin: Option<golem_rust::agentic::InputStream> });
                 quote! { stdin }
             }
             None => quote! { None },
@@ -399,7 +398,7 @@ impl RustToolBridgeGenerator {
                     &[#(#path_tokens),*],
                     &__input,
                     #stdin_expr,
-                )
+                ).await
             })
         } else {
             let error_ident = ident(
@@ -419,7 +418,7 @@ impl RustToolBridgeGenerator {
                         #(#decode_arms)*
                         Err("remote tool error payload did not match any declared error case".to_string())
                     },
-                )
+                ).await
             })
         }
     }
@@ -493,7 +492,7 @@ impl RustToolBridgeGenerator {
         body: &CommandBody,
         error_type: &TokenStream,
     ) -> anyhow::Result<TokenStream> {
-        let stdout = quote! { golem_rust::wasip2::io::streams::OutputStream };
+        let stdout = quote! { golem_rust::agentic::InputStream };
         let ok = match (&body.result, &body.stdout) {
             (Some(result), Some(_)) => {
                 let result_type = self.inner.type_reference(&result.type_, false)?;

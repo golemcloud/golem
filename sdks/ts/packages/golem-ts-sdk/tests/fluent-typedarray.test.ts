@@ -14,6 +14,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { compileSchema } from '../src/fluent/schema/adapter';
+import type { SchemaValue } from '../src/internal/schema-model';
 import { s } from '../src/fluent/schema/markers';
 
 // Each fluent typed-array marker → WIT `list<primN>`, decoded to the concrete subclass.
@@ -101,13 +102,15 @@ describe('fluent typed-array markers → WIT list<primN>', () => {
       expect(rootBody.element.body.tag).toBe(k.prim);
 
       const input = new (k.ctor as new (src: readonly (number | bigint)[]) => object)(k.sample);
-      const wire = codec.toValue(input) as { tag: string; elements: unknown[] };
+      const wire = codec.toValue(input) as SchemaValue & { elements: SchemaValue[] };
       expect(wire.tag).toBe('list');
       expect(wire.elements).toHaveLength(k.sample.length);
 
       const decoded = codec.fromValue(wire);
       expect(decoded).toBeInstanceOf(k.ctor);
-      expect(Array.from(decoded as Iterable<number | bigint>)).toEqual(Array.from(k.sample));
+      expect(Array.from(decoded as Iterable<number | bigint>)).toEqual(
+        Array.from(k.sample as readonly (number | bigint)[]),
+      );
     });
   }
 });

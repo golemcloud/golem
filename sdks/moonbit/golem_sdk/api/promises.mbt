@@ -2,9 +2,6 @@
 pub using @types {type PromiseId}
 
 ///|
-pub using @poll {type Pollable}
-
-///|
 /// A handle to the result of a promise. Wraps the raw WIT resource,
 /// providing idiomatic access to poll/get operations.
 pub(all) struct PromiseResult {
@@ -37,15 +34,9 @@ pub fn complete_promise(promise_id : PromiseId, data : Bytes) -> Bool {
 }
 
 ///|
-/// Returns a pollable that can be used to wait for the promise to become ready.
-pub fn PromiseResult::subscribe(self : PromiseResult) -> Pollable {
-  self.inner.subscribe()
-}
-
-///|
-/// Polls the result of the promise, returning None if it is not yet ready.
-pub fn PromiseResult::get(self : PromiseResult) -> Bytes? {
-  self.inner.get().map(fn(fixed) { Bytes::from_array(fixed[:]) })
+/// Awaits and returns the result of the promise.
+pub async fn PromiseResult::get(self : PromiseResult) -> Bytes {
+  Bytes::from_fixedarray(self.inner.get())
 }
 
 ///|
@@ -55,15 +46,11 @@ pub fn PromiseResult::drop(self : PromiseResult) -> Unit {
 }
 
 ///|
-/// Blocks until the promise is completed and returns the payload.
-/// This is a synchronous blocking call — the agent is durably suspended
+/// Awaits the promise and returns its payload. The agent is durably suspended
 /// by the Golem runtime until the promise is fulfilled.
-pub fn await_promise(promise_id : PromiseId) -> Bytes {
+pub async fn await_promise(promise_id : PromiseId) -> Bytes {
   let promise = get_promise(promise_id)
-  let pollable = promise.subscribe()
-  pollable.block()
-  let result = promise.get().unwrap()
-  pollable.drop()
+  let result = promise.get()
   promise.drop()
   result
 }

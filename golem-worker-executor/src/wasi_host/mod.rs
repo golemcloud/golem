@@ -31,8 +31,8 @@ pub fn create_linker<Ctx: WorkerCtx + Send + Sync>(
 ) -> wasmtime::Result<Linker<Ctx>> {
     let mut linker = Linker::new(engine);
 
-    let mut exit_link_options = wasmtime_wasi::p2::bindings::cli::exit::LinkOptions::default();
-    exit_link_options.cli_exit_with_code(true);
+    // Register Golem-owned wrappers for all p3 WASI and wasi-http interfaces.
+    crate::durable_host::p3::add_to_linker(&mut linker, get)?;
 
     let mut network_link_options =
         wasmtime_wasi::p2::bindings::sockets::network::LinkOptions::default();
@@ -44,7 +44,6 @@ pub fn create_linker<Ctx: WorkerCtx + Send + Sync>(
     >(&mut linker, get)?;
     wasmtime_wasi::p2::bindings::cli::exit::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
-        &exit_link_options,
         get,
     )?;
     wasmtime_wasi::p2::bindings::cli::stderr::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
@@ -170,10 +169,6 @@ pub fn create_linker<Ctx: WorkerCtx + Send + Sync>(
         &mut linker,
         get,
     )?;
-    crate::preview2::wasi::keyvalue::atomic::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
-        &mut linker,
-        get,
-    )?;
     crate::preview2::wasi::keyvalue::cache::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
         get,
@@ -258,6 +253,7 @@ pub fn create_context(
         .preopened_dir(root_dir, ".", DirPerms::all(), FilePerms::all())?
         .set_suspend(suspend_threshold, suspend_signal)
         .allow_ip_name_lookup(true)
+        .inherit_network()
         .build();
 
     Ok((wasi, io_ctx, table))

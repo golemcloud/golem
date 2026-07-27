@@ -152,18 +152,26 @@ pub fn AgentClient::phantom_id(self : AgentClient) -> @types.Uuid? {
 /// Invoke a method and await its result and final invocation metadata. The
 /// result is `None` when the output schema is `unit`, and `Some(tree)` for a
 /// single returned value.
-pub fn AgentClient::invoke_and_await(
+pub async fn AgentClient::invoke_and_await(
   self : AgentClient,
   function_name : String,
   input : @types.SchemaValueTree,
 ) -> InvocationResult[@types.SchemaValueTree?] {
-  match self.rpc.invoke_and_await(function_name, input) {
+  let invocation = self.rpc.async_invoke_and_await(function_name, input)
+  defer invocation.future.drop()
+  let result = invocation.future.get() catch {
+    e => {
+      invocation.future.cancel()
+      raise e
+    }
+  }
+  match result {
     Ok(value) => {
       let metadata : InvocationMetadata = {
-        agent_id: value.metadata.agent_id,
-        idempotency_key: value.metadata.idempotency_key,
+        agent_id: invocation.metadata.agent_id,
+        idempotency_key: invocation.metadata.idempotency_key,
       }
-      { metadata, value: value.result }
+      { metadata, value }
     }
     Err(e) => panic_on_rpc_error(e)
   }
@@ -185,7 +193,7 @@ pub fn AgentClient::invoke(
 ///|
 pub fn AgentClient::schedule_invocation(
   self : AgentClient,
-  scheduled_at : @wallClock.Datetime,
+  scheduled_at : @systemClock.Instant,
   function_name : String,
   input : @types.SchemaValueTree,
 ) -> ScheduledInvocationReceipt {
@@ -201,7 +209,7 @@ pub fn AgentClient::schedule_invocation(
 ///|
 pub fn AgentClient::schedule_cancelable_invocation(
   self : AgentClient,
-  scheduled_at : @wallClock.Datetime,
+  scheduled_at : @systemClock.Instant,
   function_name : String,
   input : @types.SchemaValueTree,
 ) -> CancelableScheduledInvocationReceipt {

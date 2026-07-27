@@ -1081,8 +1081,8 @@ fn client_result_type(output: &ReturnType, has_stdout: bool) -> TokenStream {
         .map(|ty| quote! { #ty })
         .unwrap_or_else(|| quote! { ::std::convert::Infallible });
     let ok_ty = match (ok, has_stdout) {
-        (Some(ok), true) => quote! { (#ok, golem_rust::wasip2::io::streams::OutputStream) },
-        (None, true) => quote! { golem_rust::wasip2::io::streams::OutputStream },
+        (Some(ok), true) => quote! { (#ok, golem_rust::agentic::InputStream) },
+        (None, true) => quote! { golem_rust::agentic::InputStream },
         (Some(ok), false) => quote! { #ok },
         (None, false) => quote! { () },
     };
@@ -1102,7 +1102,7 @@ fn invoke_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
                     &__input,
                     #stdin_expr,
                     <#err as golem_rust::agentic::ToolErrorSchema>::from_error_payload_value,
-                )
+                ).await
             }
         },
         None => quote! {
@@ -1111,7 +1111,7 @@ fn invoke_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
                 &__command_path,
                 &__input,
                 #stdin_expr,
-            )
+            ).await
         },
     }
 }

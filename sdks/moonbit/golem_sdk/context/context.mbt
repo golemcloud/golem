@@ -1,5 +1,5 @@
 ///|
-pub using @wallClock {type Datetime}
+pub using @systemClock {type Instant}
 
 ///|
 /// A span representing a unit of work, wrapping the low-level WIT resource.
@@ -70,7 +70,7 @@ pub fn Span::set_attributes(
 
 ///|
 /// Gets the starting time of the span.
-pub fn Span::started_at(self : Span) -> Datetime {
+pub fn Span::started_at(self : Span) -> Instant {
   self.inner.started_at()
 }
 

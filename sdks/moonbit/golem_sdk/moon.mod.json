@@ -1,7 +1,6 @@
 {
   "name": "golemcloud/golem_sdk",
   "version": "0.5.1",
-  "deps": {},
   "readme": "README.mbt.md",
   "repository": "https://github.com/golemcloud/moonbit-sdk",
   "license": "Apache-2.0",

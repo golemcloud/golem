@@ -17,6 +17,7 @@ use async_trait::async_trait;
 pub use blob::BlobOplogArchiveService;
 pub use compressed::{CompressedOplogArchive, CompressedOplogArchiveService, CompressedOplogChunk};
 use desert_rust::BinaryCodec;
+use futures::future::{BoxFuture, Shared};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -40,6 +41,7 @@ pub use primary::PrimaryOplogService;
 use std::any::{Any, TypeId};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
+use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
@@ -78,7 +80,7 @@ pub trait OplogService: Debug + Send + Sync {
         agent_mode: AgentMode,
         initial_entry: OplogEntry,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog>;
 
@@ -93,7 +95,7 @@ pub trait OplogService: Debug + Send + Sync {
         agent_mode: AgentMode,
         initial_entry: OplogEntry,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog>;
 
@@ -112,7 +114,7 @@ pub trait OplogService: Debug + Send + Sync {
         agent_mode: AgentMode,
         last_oplog_index: Option<OplogIndex>,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog>;
 
@@ -296,6 +298,106 @@ pub(crate) fn next_scan_cursor(
     }
 }
 
+/// A handle to an external blob upload that [`Oplog::add_start_with_reserved_raw_payload`] started
+/// (spawned) but which may not have finished yet.
+///
+/// Cloneable so the same upload can be awaited by both the call that initiated it (before it
+/// appends its `End`) and the commit barrier in the leaf oplog's `append` (before any entry
+/// referencing the blob is persisted to indexed storage). It is `Send`, so a durable-call start can
+/// return it and hold it across awaits. A `None` inner means the payload was stored inline, or
+/// eagerly uploaded and already durable, so there is nothing to wait for.
+#[derive(Clone)]
+pub struct PendingUpload {
+    inner: Option<Shared<BoxFuture<'static, Result<(), String>>>>,
+}
+
+impl PendingUpload {
+    /// A payload that is already durable (inline, or an eager upload): waiting is a no-op.
+    pub fn already_durable() -> Self {
+        Self { inner: None }
+    }
+
+    /// A payload whose blob upload is in flight on the given shared future.
+    pub fn spawned(upload: Shared<BoxFuture<'static, Result<(), String>>>) -> Self {
+        Self {
+            inner: Some(upload),
+        }
+    }
+
+    /// Waits for the blob upload to finish, returning its result (`Ok(())` if there was nothing to
+    /// wait for).
+    pub async fn wait(&self) -> Result<(), String> {
+        match &self.inner {
+            Some(upload) => upload.clone().await,
+            None => Ok(()),
+        }
+    }
+}
+
+impl Debug for PendingUpload {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingUpload")
+            .field("pending", &self.inner.is_some())
+            .finish()
+    }
+}
+
+/// A zero-sized, `!Send` token carried inside [`ReservedPayload`] to protect the leaf oplog's
+/// `Start`-ordering critical section at compile time.
+///
+/// [`Oplog::add_start_with_reserved_raw_payload`] must, within a single non-yielding step of the
+/// leaf oplog's actor job handler, reserve the request payload, build the `Start`, and assign its
+/// index (`push`) with **no `.await` in between** — otherwise a concurrent call's `Start` could
+/// interleave and break initiation-order determinism. The leaf implementation holds this guard
+/// across that whole window. Because it is
+/// `!Send`, holding it across an `.await` makes the enclosing (`async_trait`, hence `Send`-bound)
+/// future fail to compile, so a future refactor that turns one of those synchronous steps into an
+/// awaited one is rejected by the compiler instead of silently reordering. Never add a manual
+/// `Send`/`Sync` impl.
+#[must_use = "the reserve guard must be held until the Start is pushed, then dropped"]
+pub struct ReserveGuard {
+    _not_send: PhantomData<*const ()>,
+}
+
+/// The result of [`PrimaryOplogState::reserve_raw_payload`]: a payload reference whose (possibly
+/// large) blob upload has been *started* but not awaited, the [`PendingUpload`] tracking that
+/// upload, and a [`ReserveGuard`] guarding the no-`.await` window up to the `Start` `push`.
+#[must_use = "a reserved payload must be turned into a Start within the same non-yielding actor step"]
+pub struct ReservedPayload {
+    pub raw: RawOplogPayload,
+    pub pending: PendingUpload,
+    pub guard: ReserveGuard,
+}
+
+impl ReservedPayload {
+    /// Builds a reserve result. Called by the leaf oplog from inside its actor task.
+    pub fn new(raw: RawOplogPayload, pending: PendingUpload) -> Self {
+        Self {
+            raw,
+            pending,
+            guard: ReserveGuard {
+                _not_send: PhantomData,
+            },
+        }
+    }
+}
+
+/// The result of [`Oplog::add_start_with_reserved_raw_payload`]: the appended `Start`, its assigned
+/// index, and the [`PendingUpload`] tracking its (possibly deferred) request-payload blob upload.
+#[must_use = "the pending upload must be awaited before the matching End/Cancelled is appended"]
+pub struct OrderedOplogStart {
+    /// The index assigned to the appended `Start` entry.
+    pub index: OplogIndex,
+    /// The `Start` entry exactly as appended. Wrapper layers that mirror the buffered entries (e.g.
+    /// the plugin-forwarding oplog) need it because the entry is built deep in the leaf from the
+    /// reserved payload reference.
+    pub entry: OplogEntry,
+    /// Tracks the request payload's durable write. The caller must [`PendingUpload::wait`] on it
+    /// before appending the matching `End`/`Cancelled`; the leaf oplog's `append` commit barrier is
+    /// the backstop. A no-op for inline or eagerly-uploaded payloads.
+    pub pending_upload: PendingUpload,
+}
+
 /// An open oplog providing write access
 #[async_trait]
 pub trait Oplog: Any + Debug + Send + Sync {
@@ -337,6 +439,14 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// Reads the entry at the given oplog index
     async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry>;
 
+    /// Notifies the oplog implementation that the worker's replay cursor committed a new
+    /// position: `last_replayed_index` is the index of the last replayed entry. This fires only
+    /// when replay progress is actually published (consuming an entry, skipping hint entries or
+    /// deleted regions, or switching to live mode) — speculative or random-access oplog reads
+    /// never trigger it. The default implementation ignores it; wrapper oplogs that track replay
+    /// progress (such as the debugging service's oplog) override it.
+    async fn on_replay_progress(&self, _last_replayed_index: OplogIndex) {}
+
     /// Gets the total number of entries in the oplog
     async fn length(&self) -> u64;
 
@@ -357,6 +467,46 @@ pub trait Oplog: Any + Debug + Send + Sync {
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String>;
 
+    /// Reserves a reference for a (possibly large) `serialized_request` payload, builds the call's
+    /// `Start` from that reference with the **synchronous** `build_start`, and appends it — all so
+    /// that the `Start` is ordered (its index assigned) in initiation order *before* the
+    /// (potentially slow, big) request upload finishes.
+    ///
+    /// This is the single ordering primitive for concurrent durable host calls. Its contract is
+    /// that, for any concurrent calls reaching it, the order in which their `Start` entries are
+    /// assigned indices matches the order in which they entered this method — so replay sees a
+    /// deterministic interleaving. Leaf implementations guarantee this by reserving the payload,
+    /// running `build_start`, and assigning the index within a single non-yielding step of their
+    /// actor's job handler, with **no `.await` in between** (a deferred upload is *started* there
+    /// but not awaited). Wrapper implementations must delegate without introducing an `.await`
+    /// before the inner call assigns the index (e.g. rate-limiting back-pressure must happen
+    /// *after* delegation, not before).
+    ///
+    /// The initiation-order guarantee is scoped to **replayable** (durable) oplogs — it exists
+    /// solely so replay can deterministically match concurrent calls back to their `Start`
+    /// entries. The ephemeral oplog is never replayed, so it deliberately does not provide the
+    /// guarantee: it uploads the payload eagerly (awaiting it) before appending the `Start`, and
+    /// concurrent calls' `Start` entries may interleave in upload-completion order. Do not copy
+    /// the ephemeral implementation into a replayable oplog, and do not "fix" the ephemeral one
+    /// by adding ordering machinery it cannot need.
+    ///
+    /// For replayable oplogs this method is `async` only because it round-trips through the leaf
+    /// oplog's actor and/or delegates through wrapper layers — *not* because it awaits the upload
+    /// (only the ephemeral implementation awaits its eager upload here). The returned
+    /// [`OrderedOplogStart::pending_upload`] tracks the request blob's durable write; the caller
+    /// must [`PendingUpload::wait`] on it before appending the matching `End`/`Cancelled`, with the
+    /// leaf oplog's `append` commit barrier as the backstop (so no committed entry references a
+    /// not-yet-written blob).
+    ///
+    /// This is a required method (no default) deliberately: a default `reserve` + `add` composition
+    /// would reintroduce an `.await` between reserving and ordering the `Start`, silently breaking
+    /// the determinism contract for any implementor that forgot to override it.
+    async fn add_start_with_reserved_raw_payload(
+        &self,
+        serialized_request: Vec<u8>,
+        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+    ) -> Result<OrderedOplogStart, String>;
+
     /// Switched to a different persistence level. This can be used as an optimization hint in the implementations.
     async fn switch_persistence_level(&self, mode: PersistenceLevel);
 
@@ -365,22 +515,21 @@ pub trait Oplog: Any + Debug + Send + Sync {
     ///
     /// `make_second` builds the second entry from the freshly assigned `Start`
     /// index (a durable call is identified by the `OplogIndex` of its `Start`).
-    /// Used by the legacy adapter to write a matched host-call `Start`/`End`
-    /// pair atomically. The default implementation just calls
-    /// `add` twice; concrete implementations must override to ensure no other
-    /// writer can interleave between the two appends and that no commit
-    /// threshold check fires between them, so the pair is never split across a
-    /// crash boundary.
+    /// Used by the sequential adapter (the p2 durability path, see
+    /// [`OplogOps::add_completed_host_call`]) to write a matched host-call
+    /// `Start`/`End` pair atomically.
+    ///
+    /// Implementations must ensure no other writer can interleave between the
+    /// two appends and that no commit threshold check fires between them, so
+    /// the pair is never split across a commit/crash boundary. This is a
+    /// required method (no default) deliberately: a default `add`-twice
+    /// composition would silently violate that atomicity for any implementor
+    /// that forgot to override it.
     async fn add_pair(
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
-        let first_idx = self.add(start).await;
-        let second = make_second(first_idx);
-        let second_idx = self.add(second).await;
-        (first_idx, second_idx)
-    }
+    ) -> (OplogIndex, OplogIndex);
 
     /// Like [`add_pair`](Self::add_pair) but for two already-built entries, returning a
     /// `Result` so test wrappers can inject a write failure on either entry. The default
@@ -457,7 +606,40 @@ pub trait OplogOps: Oplog {
         }
     }
 
-    /// Legacy adapter that persists a completed durable host call as a matched
+    /// Typed convenience wrapper over [`Oplog::add_start_with_reserved_raw_payload`]: serializes
+    /// `request`, then reserves its payload and appends the `Start` (built by `build_start` from the
+    /// payload reference), returning the `Start`'s index and the [`PendingUpload`] tracking the
+    /// request blob's durable write. It inherits the underlying raw method's ordering contract
+    /// (initiation order on replayable oplogs; none on ephemeral).
+    ///
+    /// The caller must `wait` on the returned [`PendingUpload`] before appending the call's
+    /// `End`/`Cancelled` (so an upload failure surfaces at the call), with the leaf oplog's `append`
+    /// commit barrier as the backstop. The ordering and durability contract lives entirely in
+    /// [`Oplog::add_start_with_reserved_raw_payload`]; this wrapper only adds typed
+    /// (de)serialization.
+    async fn add_start_with_reserved_payload<T>(
+        &self,
+        request: T,
+        build_start: impl FnOnce(OplogPayload<T>) -> OplogEntry + Send + 'static,
+    ) -> Result<(OplogIndex, PendingUpload), String>
+    where
+        T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync + 'static,
+    {
+        let bytes = serialize(&request)?;
+        let cached = Arc::new(request);
+        let ordered = self
+            .add_start_with_reserved_raw_payload(
+                bytes,
+                Box::new(move |raw| {
+                    let payload = raw.into_payload_with_cache(cached)?;
+                    Ok(build_start(payload))
+                }),
+            )
+            .await?;
+        Ok((ordered.index, ordered.pending_upload))
+    }
+
+    /// Sequential adapter that persists a completed durable host call as a matched
     /// `Start`/`End` pair.
     /// Returns `(start_idx, end_idx)`. A durable call is identified by the
     /// `OplogIndex` of its `Start`, and the `End` references it via
@@ -465,9 +647,12 @@ pub trait OplogOps: Oplog {
     /// [`Oplog::add_pair`] so no other writer can interleave between them and
     /// the pair is never split across a commit/crash boundary.
     ///
-    /// This will eventually be replaced with a recorder/`CallHandle` based API
-    /// that captures `Start` eagerly (before the side effect) and `End` (or
-    /// `Cancelled`) when the call completes.
+    /// This is the durability primitive of the sequential (p2) host-call path, a permanent
+    /// coexistence path (Rust's std imports p2), not a legacy one. Unlike the concurrent (p3)
+    /// path — which orders `Start` eagerly via
+    /// [`Oplog::add_start_with_reserved_raw_payload`] before the side effect runs — the
+    /// sequential path runs at most one host call at a time per worker, so it can record the
+    /// whole call after the effect completed, as one atomic pair.
     ///
     /// `parent_start_index` is the `Start` index of the enclosing durable scope (if any). This is
     /// an explicit parameter because the oplog cannot see the worker state's open scopes, and

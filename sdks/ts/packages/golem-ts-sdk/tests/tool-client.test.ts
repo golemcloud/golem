@@ -13,7 +13,6 @@
 // limitations under the License.
 
 import { ToolRpc, type RpcError } from 'golem:tool/host@0.1.0';
-import type { InputStream, OutputStream } from 'wasi:io/streams@0.2.3';
 import { type as arkType } from 'arktype';
 import { describe, expect, it, vi } from 'vitest';
 import * as z3 from 'zod3';
@@ -39,7 +38,7 @@ import { Bytes, s } from '../src/fluent/schema/markers';
 interface RecordedInvocation {
   readonly commandPath: readonly string[];
   readonly input: Parameters<ToolClientTransport['invokeAndAwait']>[1];
-  readonly stdin: InputStream | undefined;
+  readonly stdin: AsyncIterable<number> | undefined;
 }
 
 class FakeTransport implements ToolClientTransport {
@@ -54,7 +53,7 @@ class FakeTransport implements ToolClientTransport {
   invokeAndAwait(
     commandPath: readonly string[],
     input: Parameters<ToolClientTransport['invokeAndAwait']>[1],
-    stdin: InputStream | undefined,
+    stdin: AsyncIterable<number> | undefined,
   ): ToolClientInvocationResult | Promise<ToolClientInvocationResult> {
     const invocation = { commandPath: [...commandPath], input, stdin };
     this.invocations.push(invocation);
@@ -72,6 +71,10 @@ function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
     () => Symbol('resolved'),
     (error) => error,
   );
+}
+
+async function* bytes(...values: number[]): AsyncIterable<number> {
+  yield* values;
 }
 
 describe('fluent tool runtime client', () => {
@@ -242,8 +245,11 @@ describe('fluent tool runtime client', () => {
       body.option('constructor', z.string(), { optionalScalar: true }).returns(z.void()),
     );
     const transport = new FakeTransport(() => ({}));
+    const args = {} as { constructor?: string };
 
-    await expect(client(definition, { transport })['prototype-name']({})).resolves.toBeUndefined();
+    await expect(
+      client(definition, { transport })['prototype-name'](args),
+    ).resolves.toBeUndefined();
     expect(typedSchemaValueFromWit(transport.invocations[0].input).value).toEqual(
       v.record([v.option(undefined)]),
     );
@@ -259,7 +265,7 @@ describe('fluent tool runtime client', () => {
     const transport = new FakeTransport(() => ({}));
     const requiredClient = client(required, { transport });
     const optionalClient = client(optional, { transport });
-    const stdin = {} as InputStream;
+    const stdin = bytes(1, 2, 3);
 
     await requiredClient.required({ stdin });
     await optionalClient.optional({});
@@ -278,7 +284,7 @@ describe('fluent tool runtime client', () => {
     });
   });
 
-  it('rejects null for a required stdin resource', async () => {
+  it('rejects null for a required stdin stream', async () => {
     const definition = toolDefinition('null-stdin').body((body) =>
       body.stdin({ required: true }).returns(z.void()),
     );
@@ -290,19 +296,22 @@ describe('fluent tool runtime client', () => {
 
     expect(failure).toBeInstanceOf(ToolCallError);
     expect(failure).toMatchObject({
-      cause: { tag: 'rpc', error: { tag: 'protocol-error' } },
+      cause: {
+        tag: 'rpc',
+        error: { tag: 'protocol-error', val: expect.stringContaining('async iterable') },
+      },
     });
     expect(transport.invocations).toHaveLength(0);
   });
 
-  it('rejects a non-resource stdin before invoking the transport', async () => {
-    const definition = toolDefinition('invalid-stdin-resource').body((body) =>
+  it('rejects a non-async-iterable stdin before invoking the transport', async () => {
+    const definition = toolDefinition('invalid-stdin-stream').body((body) =>
       body.stdin({ required: true }).returns(z.void()),
     );
     const transport = new FakeTransport(() => ({}));
 
     const failure = await rejectionOf(
-      client(definition, { transport })['invalid-stdin-resource']({ stdin: 'invalid' as never }),
+      client(definition, { transport })['invalid-stdin-stream']({ stdin: 'invalid' as never }),
     );
 
     expect(failure).toBeInstanceOf(ToolCallError);
@@ -313,7 +322,7 @@ describe('fluent tool runtime client', () => {
   });
 
   it('projects structured, unit, required stdout, and optional stdout results', async () => {
-    const stdout = {} as OutputStream;
+    const stdout = bytes(4, 5, 6);
     const structured = toolDefinition('structured').body((body) => body.returns(z.string()));
     const unit = toolDefinition('unit').body((body) => body.returns(z.void()));
     const structuredStdout = toolDefinition('structured-stdout').body((body) =>
@@ -356,8 +365,8 @@ describe('fluent tool runtime client', () => {
     const definition = toolDefinition('transform').body((body) =>
       body.stdin({ required: true }).stdout({ required: true }).returns(z.string()),
     );
-    const stdin = {} as InputStream;
-    const stdout = {} as OutputStream;
+    const stdin = bytes(1, 2, 3);
+    const stdout = bytes(4, 5, 6);
     const transport = new FakeTransport(() => ({
       result: wireValue(z.string(), 'transformed'),
       stdout,
@@ -391,7 +400,7 @@ describe('fluent tool runtime client', () => {
     {
       name: 'unexpected stdout',
       definition: toolDefinition('unexpected-stdout').body((body) => body.returns(z.void())),
-      response: { stdout: {} as OutputStream },
+      response: { stdout: bytes(1) },
     },
   ])('rejects $name with a stable protocol error', async ({ definition, response }) => {
     const runtime = client(definition, { transport: new FakeTransport(() => response) }) as Record<
@@ -404,7 +413,7 @@ describe('fluent tool runtime client', () => {
     expect(failure).toMatchObject({ cause: { tag: 'rpc', error: { tag: 'protocol-error' } } });
   });
 
-  it('rejects null for a required stdout resource', async () => {
+  it('rejects null for a required stdout stream', async () => {
     const definition = toolDefinition('null-stdout').body((body) =>
       body.stdout({ required: true }).returns(z.void()),
     );
@@ -416,18 +425,21 @@ describe('fluent tool runtime client', () => {
 
     expect(failure).toBeInstanceOf(ToolCallError);
     expect(failure).toMatchObject({
-      cause: { tag: 'rpc', error: { tag: 'protocol-error' } },
+      cause: {
+        tag: 'rpc',
+        error: { tag: 'protocol-error', val: expect.stringContaining('async iterable') },
+      },
     });
   });
 
-  it('rejects a non-resource required stdout', async () => {
-    const definition = toolDefinition('invalid-stdout-resource').body((body) =>
+  it('rejects a non-async-iterable required stdout', async () => {
+    const definition = toolDefinition('invalid-stdout-stream').body((body) =>
       body.stdout({ required: true }).returns(z.void()),
     );
     const failure = await rejectionOf(
       client(definition, {
         transport: new FakeTransport(() => ({ stdout: 'invalid' as never })),
-      })['invalid-stdout-resource']({}),
+      })['invalid-stdout-stream']({}),
     );
 
     expect(failure).toBeInstanceOf(ToolCallError);
@@ -436,9 +448,10 @@ describe('fluent tool runtime client', () => {
     });
   });
 
-  it('disposes stdout when another response validation fails', async () => {
-    const dispose = vi.fn();
-    const stdout = { [Symbol.dispose]: dispose } as unknown as OutputStream;
+  it('returns the stdout iterator when another response validation fails', async () => {
+    const iterator = bytes(1, 2, 3)[Symbol.asyncIterator]();
+    const returnIterator = vi.spyOn(iterator, 'return');
+    const stdout = { [Symbol.asyncIterator]: () => iterator };
     const definition = toolDefinition('invalid-streamed-result').body((body) =>
       body.stdout({ required: true }).returns(z.string()),
     );
@@ -452,14 +465,19 @@ describe('fluent tool runtime client', () => {
     );
 
     expect(failure).toMatchObject({ cause: { tag: 'rpc', error: { tag: 'protocol-error' } } });
-    expect(dispose).toHaveBeenCalledOnce();
+    expect(returnIterator).toHaveBeenCalledOnce();
   });
 
-  it('preserves a response validation failure when disposing stdout also fails', async () => {
-    const dispose = vi.fn(() => {
-      throw { tag: 'denied', val: 'stdout disposal failed' } satisfies RpcError;
-    });
-    const stdout = { [Symbol.dispose]: dispose } as unknown as OutputStream;
+  it('preserves a response validation failure when returning stdout also fails', async () => {
+    const returnIterator = vi.fn(() =>
+      Promise.reject({ tag: 'denied', val: 'stdout return failed' } satisfies RpcError),
+    );
+    const stdout: AsyncIterable<number> = {
+      [Symbol.asyncIterator]: () => ({
+        next: async () => ({ done: false, value: 1 }),
+        return: returnIterator,
+      }),
+    };
     const definition = toolDefinition('invalid-streamed-result').body((body) =>
       body.stdout({ required: true }).returns(z.string()),
     );
@@ -472,7 +490,7 @@ describe('fluent tool runtime client', () => {
       })['invalid-streamed-result']({}),
     );
 
-    expect(dispose).toHaveBeenCalledOnce();
+    expect(returnIterator).toHaveBeenCalledOnce();
     expect(failure).toMatchObject({
       cause: { tag: 'rpc', error: { tag: 'protocol-error' } },
     });
@@ -757,7 +775,7 @@ describe('fluent tool runtime client', () => {
 
   it('lazily creates and reuses the default ToolRpc for streamless calls', async () => {
     const resultCodec = compileSchema(z.string());
-    const invokeAndAwait = vi.fn(() => ({
+    const invokeAndAwait = vi.fn((_path: string[]) => ({
       result: typedSchemaValueToWit({
         graph: resultCodec.graph,
         value: resultCodec.toValue('ok'),
@@ -779,10 +797,11 @@ describe('fluent tool runtime client', () => {
     expect(invokeAndAwait.mock.calls.every(([path]) => deepEqual(path, []))).toBe(true);
   });
 
-  it('passes raw stdin and stdout resources through the default ToolRpc', async () => {
-    const stdin = {} as InputStream;
-    const dispose = vi.fn();
-    const stdout = { [Symbol.dispose]: dispose } as unknown as OutputStream;
+  it('passes stdin and stdout async iterables through the default ToolRpc', async () => {
+    const stdin = bytes(1, 2, 3);
+    const iterator = bytes(4, 5, 6)[Symbol.asyncIterator]();
+    const returnIterator = vi.spyOn(iterator, 'return');
+    const stdout = { [Symbol.asyncIterator]: () => iterator };
     const invokeAndAwait = vi.fn(() => ({ stdout }));
     vi.mocked(ToolRpc)
       .mockClear()
@@ -796,6 +815,6 @@ describe('fluent tool runtime client', () => {
     expect(ToolRpc).toHaveBeenCalledWith('streams-host');
     expect(invokeAndAwait).toHaveBeenCalledOnce();
     expect(invokeAndAwait).toHaveBeenCalledWith([], expect.anything(), stdin);
-    expect(dispose).not.toHaveBeenCalled();
+    expect(returnIterator).not.toHaveBeenCalled();
   });
 });

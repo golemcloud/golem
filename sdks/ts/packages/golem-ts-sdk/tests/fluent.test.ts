@@ -14,7 +14,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
-import { WasmRpc } from 'golem:agent/host@2.0.0';
+import { makeAgentId, WasmRpc } from 'golem:agent/host@2.0.0';
 import type { CancellationToken, Datetime } from 'golem:agent/host@2.0.0';
 import { defineAgent } from '../src/fluent/defineAgent';
 import type { AgentSpec } from '../src/fluent/defineAgent';
@@ -564,12 +564,13 @@ describe('fluent RPC client', () => {
       id: { name: z.string() },
       methods: { ping: method({ input: {}, returns: z.void() }) },
     });
+    const makeAgentIdCalls = vi.mocked(makeAgentId).mock.calls.length;
     const client = clientFor(ephemeralDef).newPhantom({ name: 'counter' });
     const rpc = latestRpc();
     const metadata = { agentId: 'final-agent-id', idempotencyKey: 'key' };
     const future = {
       subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-      get: vi.fn().mockReturnValue({ tag: 'ok', val: undefined }),
+      get: vi.fn().mockResolvedValue(undefined),
       cancel: vi.fn(),
     };
     rpc.asyncInvokeAndAwait.mockReturnValue({ metadata, future });
@@ -581,26 +582,37 @@ describe('fluent RPC client', () => {
     expect(client.ping.trigger()).toBe(metadata);
     expect(client.ping.schedule({ seconds: 1n, nanoseconds: 0 })).toBe(receipt);
     expect(vi.mocked(WasmRpc).mock.calls.at(-1)![2]).toBeUndefined();
+    expect(vi.mocked(makeAgentId).mock.calls).toHaveLength(makeAgentIdCalls);
   });
 
   it('rejects a missing wire value for a declared single output', async () => {
     const def = defineAgent({
       name: 'MissingSingleOutputAgent',
-      id: {},
+      id: { id: s.u64() },
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
-    const client = clientFor(def)({});
+    const phantomId = new Uuid(1n, 2n);
+    const agentId = 'MissingSingleOutputAgent(1)[00000000-0000-0001-0000-000000000002]';
+    vi.mocked(makeAgentId).mockReturnValueOnce(agentId);
+    const client = clientFor(def)({ id: 1n }, phantomId);
     const rpc = latestRpc();
     rpc.asyncInvokeAndAwait.mockReturnValue({
       metadata: { agentId: 'agent-id', idempotencyKey: 'key' },
       future: {
         subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-        get: vi.fn().mockReturnValue({ tag: 'ok', val: undefined }),
+        get: vi.fn().mockResolvedValue(undefined),
         cancel: vi.fn(),
       },
     });
 
-    await expect(client.ping()).rejects.toBeInstanceOf(RemoteCallError);
+    await expect(client.ping()).rejects.toThrow(
+      `Remote agent ${agentId}.ping returned no value for a non-unit output`,
+    );
+    expect(makeAgentId).toHaveBeenLastCalledWith(
+      'MissingSingleOutputAgent',
+      vi.mocked(WasmRpc).mock.calls.at(-1)![1],
+      phantomId,
+    );
   });
 
   it('rejects a wire value whose schema tag does not match the declared output', async () => {
@@ -609,16 +621,14 @@ describe('fluent RPC client', () => {
       id: {},
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
+    vi.mocked(makeAgentId).mockReturnValueOnce('MismatchedSingleOutputAgent()');
     const client = clientFor(def)({});
     const rpc = latestRpc();
     rpc.asyncInvokeAndAwait.mockReturnValue({
       metadata: { agentId: 'agent-id', idempotencyKey: 'key' },
       future: {
         subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-        get: vi.fn().mockReturnValue({
-          tag: 'ok',
-          val: schemaValueToWit(compileSchema(z.number()).toValue(42)),
-        }),
+        get: vi.fn().mockResolvedValue(schemaValueToWit(compileSchema(z.number()).toValue(42))),
         cancel: vi.fn(),
       },
     });
@@ -632,6 +642,7 @@ describe('fluent RPC client', () => {
       id: {},
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
+    vi.mocked(makeAgentId).mockReturnValueOnce('BigintRemoteErrorAgent()');
     const client = clientFor(def)({});
     const rpc = latestRpc();
     const errorCodec = compileSchema(s.u64());
@@ -639,17 +650,14 @@ describe('fluent RPC client', () => {
       metadata: { agentId: 'agent-id', idempotencyKey: 'key' },
       future: {
         subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-        get: vi.fn().mockReturnValue({
-          tag: 'err',
+        get: vi.fn().mockRejectedValue({
+          tag: 'remote-agent-error',
           val: {
-            tag: 'remote-agent-error',
-            val: {
-              tag: 'custom-error',
-              val: typedSchemaValueToWit({
-                graph: errorCodec.graph,
-                value: errorCodec.toValue(1n),
-              }),
-            },
+            tag: 'custom-error',
+            val: typedSchemaValueToWit({
+              graph: errorCodec.graph,
+              value: errorCodec.toValue(1n),
+            }),
           },
         }),
         cancel: vi.fn(),
