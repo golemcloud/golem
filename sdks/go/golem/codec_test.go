@@ -765,3 +765,39 @@ func TestNilContainersAreNeverOptional(t *testing.T) {
 		t.Fatal("a pointer to an empty slice must encode as some(empty list)")
 	}
 }
+
+// A pinned type-id (via NameType) overrides the derived pkg.path.TypeName in a
+// recursive type's published schema-type-def, for cross-language interop.
+type pinnedNode struct {
+	Label string
+	Next  *pinnedNode
+}
+
+var _ = NameType[pinnedNode]("myapp.custom.node")
+
+func TestNameTypePinsTheDefID(t *testing.T) {
+	var g graphBuilder
+	root := g.node(compile(reflect.TypeFor[pinnedNode]()))
+	graph := g.build()
+
+	if graph.TypeNodes[root].Body.Tag() != types.SchemaTypeBodyRefType {
+		t.Fatal("recursive type should publish as a ref-type")
+	}
+	if len(graph.Defs) != 1 {
+		t.Fatalf("expected 1 def, got %d", len(graph.Defs))
+	}
+	if got := graph.Defs[0].Id; got != "myapp.custom.node" {
+		t.Fatalf("def id = %q, want the pinned %q", got, "myapp.custom.node")
+	}
+}
+
+func TestNameTypeRejectsConflicts(t *testing.T) {
+	type a struct{}
+	type b struct{}
+	NameType[a]("dup.id.one")
+	// same type, same id → idempotent (no panic)
+	NameType[a]("dup.id.one")
+	mustPanic(t, "already pinned", func() { NameType[a]("dup.id.two") }) // retag same type
+	mustPanic(t, "already pinned", func() { NameType[b]("dup.id.one") }) // reuse id
+	mustPanic(t, "non-empty", func() { NameType[struct{ X int }]("") })  // empty id
+}

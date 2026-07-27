@@ -40,7 +40,6 @@ import (
 // composite needs to know how deep it sits.
 type codec struct {
 	typ  reflect.Type
-	id   string
 	body func(*graphBuilder) types.SchemaTypeBody
 
 	// recursive marks a type reachable from itself. WIT cannot express a raw
@@ -77,7 +76,7 @@ func compile(t reflect.Type) *codec {
 		}
 		return c
 	}
-	c := &codec{typ: t, id: typeID(t), building: true}
+	c := &codec{typ: t, building: true}
 	codecCache[t] = c
 	buildCodec(c)
 	c.building = false
@@ -85,9 +84,12 @@ func compile(t reflect.Type) *codec {
 }
 
 // typeID derives the stable, language-independent identifier a named def
-// carries. Cross-language interop requires both sides to agree on it; pinning it
-// explicitly is not supported yet.
+// carries. A pinned id (via [NameType]) wins, so cross-language consumers can be
+// made to agree; otherwise it is derived from the Go type's package path + name.
 func typeID(t reflect.Type) string {
+	if id, ok := pinnedTypeIDs[t]; ok {
+		return id
+	}
 	name := t.Name()
 	if name == "" {
 		return ""

@@ -81,7 +81,10 @@ func (g *graphBuilder) refNode(c *codec) int32 {
 
 	defIdx := int32(len(g.defs))
 	g.defs = append(g.defs, types.SchemaTypeDef{
-		Id:   c.id,
+		// Resolved here, at schema-build time (get-definition) — not at compile
+		// time — so a NameType pin registered during package init is honored
+		// regardless of whether the type's codec compiled first.
+		Id:   typeID(c.typ),
 		Name: witTypes.Some(c.typ.String()),
 	})
 
