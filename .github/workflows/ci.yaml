@@ -351,6 +351,15 @@ jobs:
         working-directory: sdks/moonbit/golem_sdk_tools
         run: moon update
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          # Stock Go, tracking the version pinned in the module; componentize-go
+          # is a pinned `go tool` (go.mod) that fetches its own toolchain, so the
+          # Go SDK's CLI integration test (test_go_counter) needs only this.
+          go-version-file: sdks/go/golem/go.mod
+          cache-dependency-path: sdks/go/golem/go.sum
+
       - name: Sync WIT dependencies
         run: cargo make wit
 
