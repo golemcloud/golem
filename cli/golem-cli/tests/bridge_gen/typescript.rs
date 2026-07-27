@@ -529,7 +529,10 @@ fn guest_durable_generation_uses_sdk_runtime_surface() {
     assert!(source.contains("static newPhantom("));
     assert!(source.contains("static getWithConfig("));
     assert!(source.contains("const phantomId = base.Uuid.generate();"));
-    assert!(source.contains("base.resolveRemoteAgent(\"GuestAgent\""));
+    assert!(source.contains(
+        "base.resolveRemoteAgent(\"GuestAgent\", constructorPayload, phantomId, agentConfig, \"durable\")"
+    ));
+    assert!(source.contains("Creates a new agent instance with a fresh random phantom id."));
     assert!(source.contains("return this.resolved.agentId"));
     assert!(source.contains("invokeAndAwait("));
     assert!(source.contains("abortable(signal: AbortSignal"));
@@ -758,6 +761,12 @@ fn guest_ephemeral_generation_uses_metadata_runtime_calls() {
     assert!(source.contains("scheduleCancelableWithMetadata("));
     assert!(source.contains("const phantomId = undefined;"));
     assert!(!source.contains("base.Uuid.generate()"));
+    assert!(source.contains(
+        "base.resolveRemoteAgent(\"EphemeralGuest\", constructorPayload, phantomId, agentConfig, \"ephemeral\")"
+    ));
+    assert!(source.contains(
+        "Creates a local logical proxy; each invocation receives a fresh final identity."
+    ));
 }
 
 #[test]
@@ -801,6 +810,7 @@ fn external_generation_keeps_rest_runtime_and_name() {
     assert!(source.contains("{ kind: 'u64', value:"));
     assert!(source.contains("n.value as number"));
     assert!(!source.contains(": bigint"));
+    assert!(source.contains("Creates a new agent instance with a fresh random phantom id."));
 }
 
 #[test]

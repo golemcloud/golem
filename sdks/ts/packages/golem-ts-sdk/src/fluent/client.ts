@@ -276,6 +276,7 @@ export function clientFor<
       encodeRecord(idCodecs, id as Record<string, unknown>),
       phantomId,
       agentConfig,
+      def.mode,
     );
     const agentId = remote.agentId;
 

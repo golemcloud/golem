@@ -783,6 +783,13 @@ impl TypeScriptBridgeGenerator {
         let agent_config = naming.fresh("agentConfig");
         let resolved = naming.fresh("resolved");
 
+        if new_phantom {
+            writer.write_doc(&format!(
+                "{}\n{}",
+                self.new_phantom_description(),
+                self.agent_type.constructor.description
+            ));
+        }
         let mut method = writer.begin_static_method(name);
         if explicit_phantom {
             method.param(&phantom_id, "base.Uuid");
@@ -802,12 +809,25 @@ impl TypeScriptBridgeGenerator {
             method.write_line(format!("const {phantom_id} = undefined;"));
         }
         self.write_guest_config_encoding(&mut method, local_configs, &config_names, &agent_config)?;
+        let agent_mode = match self.agent_type.mode {
+            AgentMode::Durable => "durable",
+            AgentMode::Ephemeral => "ephemeral",
+        };
         method.write_line(format!(
-            "const {resolved} = base.resolveRemoteAgent({}, {constructor_payload}, {phantom_id}, {agent_config});",
+            "const {resolved} = base.resolveRemoteAgent({}, {constructor_payload}, {phantom_id}, {agent_config}, {agent_mode:?});",
             serde_json::to_string(self.agent_type.type_name.as_str())?,
         ));
         method.write_line(format!("return new {class_name}({resolved});"));
         Ok(())
+    }
+
+    fn new_phantom_description(&self) -> &'static str {
+        match self.agent_type.mode {
+            AgentMode::Durable => "Creates a new agent instance with a fresh random phantom id.",
+            AgentMode::Ephemeral => {
+                "Creates a local logical proxy; each invocation receives a fresh final identity."
+            }
+        }
     }
 
     fn guest_config_parameter_name(config: &AgentConfigDeclarationSchema) -> String {
@@ -1182,7 +1202,8 @@ impl TypeScriptBridgeGenerator {
     ) -> anyhow::Result<()> {
         let names = self.external_constructor_names(&[])?;
         writer.write_doc(&format!(
-            "Creates a new phantom instance of this agent\n{}",
+            "{}\n{}",
+            self.new_phantom_description(),
             self.agent_type.constructor.description
         ));
         let mut new_phantom = writer.begin_static_async_method("newPhantom");
@@ -1322,7 +1343,8 @@ impl TypeScriptBridgeGenerator {
     ) -> anyhow::Result<()> {
         let names = self.external_constructor_names(local_configs)?;
         writer.write_doc(&format!(
-            "Creates a new phantom instance of this agent with configuration\n{}",
+            "{}\n{}",
+            self.new_phantom_description(),
             self.agent_type.constructor.description
         ));
         let mut method = writer.begin_static_async_method("newPhantomWithConfig");

@@ -80,9 +80,11 @@ export function resolveRemoteAgent(
   constructorValue: SchemaValue,
   phantomId?: Uuid,
   configEntries: readonly AgentConfigEntry[] = [],
+  mode: 'durable' | 'ephemeral' = 'durable',
 ): RemoteAgentHandle {
   const constructorTree = schemaValueToWit(constructorValue);
-  const agentId = makeAgentId(agentTypeName, constructorTree, phantomId);
+  const agentId =
+    mode === 'ephemeral' ? agentTypeName : makeAgentId(agentTypeName, constructorTree, phantomId);
   const rpc = new WasmRpc(
     agentTypeName,
     constructorTree,
