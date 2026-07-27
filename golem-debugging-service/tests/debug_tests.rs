@@ -1271,10 +1271,8 @@ fn previous_index(index: OplogIndex) -> OplogIndex {
 /// recorded request value inside a serialized oplog entry without depending on its exact shape.
 fn mutate_json_strings(value: &mut serde_json::Value, from: &str, to: &str) {
     match value {
-        serde_json::Value::String(s) => {
-            if s.contains(from) {
-                *s = s.replace(from, to);
-            }
+        serde_json::Value::String(s) if s.contains(from) => {
+            *s = s.replace(from, to);
         }
         serde_json::Value::Array(items) => {
             for item in items {
