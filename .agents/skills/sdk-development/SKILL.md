@@ -233,7 +233,8 @@ Notes:
   ~1.2 GB with subdirectory-tagged modules); the only hard limit is 500 MiB on the *module zip*.
 - The mirror stores a module permanently only if it can **detect a license**, and Go has no metadata
   field for it — `sdks/go/golem/LICENSE` is the only mechanism, so it must stay in the module subtree.
-  It carries the Golem Source License, matching the TS SDK packages.
+  It carries the Apache License 2.0 (the current SDK-license direction; a later session aligns the
+  other SDKs, which still ship the Golem Source License for now).
 
 ### Local SDK overrides
 
