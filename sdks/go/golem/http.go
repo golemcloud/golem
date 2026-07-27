@@ -19,6 +19,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	httpclient "github.com/golemcloud/golem/sdks/go/golem/internal/wit/wasi_http_0_3_0_client"
 	httptypes "github.com/golemcloud/golem/sdks/go/golem/internal/wit/wasi_http_0_3_0_types"
@@ -46,6 +47,12 @@ type Transport struct{}
 
 // RoundTrip implements http.RoundTripper.
 func (Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// http.Client.Timeout and any caller context deadline both land as a
+	// context deadline on req; honor a cancellation before doing any work.
+	if err := req.Context().Err(); err != nil {
+		return nil, err
+	}
+
 	headers := httptypes.MakeFields()
 	for name, values := range req.Header {
 		for _, v := range values {
@@ -66,11 +73,24 @@ func (Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	go trailersW.Write(witTypes.Ok[witTypes.Option[*httptypes.Fields], httptypes.ErrorCode](
 		witTypes.None[*httptypes.Fields]()))
 
+	// Translate the request's deadline (where http.Client.Timeout ends up) into
+	// wasi:http request-options. One budget bounds each transport phase.
+	options := witTypes.None[*httptypes.RequestOptions]()
+	if dl, ok := req.Context().Deadline(); ok {
+		if nanos, set := timeoutFromDeadline(dl, time.Now()); set {
+			o := httptypes.MakeRequestOptions()
+			o.SetConnectTimeout(witTypes.Some(nanos))
+			o.SetFirstByteTimeout(witTypes.Some(nanos))
+			o.SetBetweenBytesTimeout(witTypes.Some(nanos))
+			options = witTypes.Some(o)
+		}
+	}
+
 	request, _ := httptypes.RequestNew(
 		headers,
 		contents,
 		trailersR,
-		witTypes.None[*httptypes.RequestOptions](),
+		options,
 	)
 
 	request.SetMethod(methodOf(req.Method))
@@ -208,6 +228,17 @@ func schemeOf(s string) httptypes.Scheme {
 	}
 }
 
+// timeoutFromDeadline returns the remaining time until deadline in nanoseconds,
+// and whether a positive budget remains. Pure (clock passed in) so it is
+// natively testable.
+func timeoutFromDeadline(deadline, now time.Time) (uint64, bool) {
+	remaining := deadline.Sub(now)
+	if remaining <= 0 {
+		return 0, false
+	}
+	return uint64(remaining.Nanoseconds()), true
+}
+
 func contentLength(h http.Header) int64 {
 	if cl := h.Get("Content-Length"); cl != "" {
 		var n int64
@@ -231,19 +262,72 @@ func headerErr(e httptypes.HeaderError) string {
 	}
 }
 
-// errorCodeString renders the wasi:http error-code enough for a Go error.
+// errorCodeString renders a wasi:http error-code into a readable message. It
+// covers the meaningful families (DNS, destination, connection, TLS,
+// request/response protocol, size/policy limits) and falls back to the tag for
+// anything else.
 func errorCodeString(e httptypes.ErrorCode) string {
 	switch e.Tag() {
+	// DNS
+	case httptypes.ErrorCodeDnsTimeout:
+		return "DNS timeout"
+	case httptypes.ErrorCodeDnsError:
+		return "DNS error"
+	// destination
 	case httptypes.ErrorCodeDestinationNotFound:
 		return "destination not found"
 	case httptypes.ErrorCodeDestinationUnavailable:
 		return "destination unavailable"
+	case httptypes.ErrorCodeDestinationIpProhibited:
+		return "destination IP prohibited"
+	case httptypes.ErrorCodeDestinationIpUnroutable:
+		return "destination IP unroutable"
+	// connection
 	case httptypes.ErrorCodeConnectionRefused:
 		return "connection refused"
 	case httptypes.ErrorCodeConnectionTerminated:
 		return "connection terminated"
 	case httptypes.ErrorCodeConnectionTimeout:
 		return "connection timeout"
+	case httptypes.ErrorCodeConnectionReadTimeout:
+		return "connection read timeout"
+	case httptypes.ErrorCodeConnectionWriteTimeout:
+		return "connection write timeout"
+	case httptypes.ErrorCodeConnectionLimitReached:
+		return "connection limit reached"
+	// TLS
+	case httptypes.ErrorCodeTlsProtocolError:
+		return "TLS protocol error"
+	case httptypes.ErrorCodeTlsCertificateError:
+		return "TLS certificate error"
+	case httptypes.ErrorCodeTlsAlertReceived:
+		return "TLS alert received"
+	// request / response protocol
+	case httptypes.ErrorCodeHttpRequestDenied:
+		return "HTTP request denied"
+	case httptypes.ErrorCodeHttpRequestUriInvalid:
+		return "HTTP request URI invalid"
+	case httptypes.ErrorCodeHttpRequestUriTooLong:
+		return "HTTP request URI too long"
+	case httptypes.ErrorCodeHttpResponseIncomplete:
+		return "HTTP response incomplete"
+	case httptypes.ErrorCodeHttpResponseTimeout:
+		return "HTTP response timeout"
+	case httptypes.ErrorCodeHttpUpgradeFailed:
+		return "HTTP upgrade failed"
+	case httptypes.ErrorCodeHttpProtocolError:
+		return "HTTP protocol error"
+	// size / policy limits
+	case httptypes.ErrorCodeHttpRequestBodySize:
+		return "HTTP request body too large"
+	case httptypes.ErrorCodeHttpResponseBodySize:
+		return "HTTP response body too large"
+	case httptypes.ErrorCodeHttpResponseHeaderSize, httptypes.ErrorCodeHttpResponseHeaderSectionSize:
+		return "HTTP response headers too large"
+	case httptypes.ErrorCodeLoopDetected:
+		return "loop detected"
+	case httptypes.ErrorCodeConfigurationError:
+		return "configuration error"
 	case httptypes.ErrorCodeInternalError:
 		return "internal error"
 	default:
