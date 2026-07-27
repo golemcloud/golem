@@ -564,6 +564,7 @@ describe('fluent RPC client', () => {
       id: { name: z.string() },
       methods: { ping: method({ input: {}, returns: z.void() }) },
     });
+    const makeAgentIdCalls = vi.mocked(makeAgentId).mock.calls.length;
     const client = clientFor(ephemeralDef).newPhantom({ name: 'counter' });
     const rpc = latestRpc();
     const metadata = { agentId: 'final-agent-id', idempotencyKey: 'key' };
@@ -581,6 +582,7 @@ describe('fluent RPC client', () => {
     expect(client.ping.trigger()).toBe(metadata);
     expect(client.ping.schedule({ seconds: 1n, nanoseconds: 0 })).toBe(receipt);
     expect(vi.mocked(WasmRpc).mock.calls.at(-1)![2]).toBeUndefined();
+    expect(vi.mocked(makeAgentId).mock.calls).toHaveLength(makeAgentIdCalls);
   });
 
   it('rejects a missing wire value for a declared single output', async () => {

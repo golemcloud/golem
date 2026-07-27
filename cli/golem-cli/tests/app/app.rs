@@ -634,6 +634,113 @@ async fn custom_scala_component_build_waits_for_agent_and_tool_guest_bridge_sdks
     );
 }
 
+#[test]
+async fn custom_typescript_component_build_waits_for_agent_and_tool_guest_bridge_sdks(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+    let producer_wasm = placeholder_component_wasm(&ctx);
+    let producer_wasm = producer_wasm.to_str().unwrap();
+    let producer_final_wasm = ctx.cwd_path_join("producer-final.wasm");
+    let consumer_final_wasm = ctx.cwd_path_join("consumer/consumer-final.wasm");
+
+    copy_placeholder_wasm(producer_wasm, &producer_final_wasm);
+
+    let agent_types: JsonValue = serde_json::from_str(
+        &fs::read_to_string(
+            crate::crate_path()
+                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let metadata = serde_json::json!({
+        "agentTypes": agent_types,
+        "tools": [echo_tool()]
+    });
+
+    let extracted_component_metadata_dir =
+        ctx.cwd_path_join("golem-temp/extracted-component-metadata");
+    fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
+    seed_extracted_metadata(
+        &ctx,
+        "app:producer",
+        &producer_final_wasm,
+        &serde_json::to_string(&metadata).unwrap(),
+    );
+    let consumer_final_wasm_hash =
+        extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
+    let consumer_extracted_component_metadata =
+        format!("app:consumer-{consumer_final_wasm_hash}.json");
+    for component_name in ["app:producer", "app:consumer"] {
+        seed_extraction_marker(&ctx, component_name);
+    }
+
+    fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
+    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: custom-typescript-guest-bridge-order
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:producer:
+                componentWasm: {producer_wasm}
+                outputWasm: producer-final.wasm
+
+              app:consumer:
+                templates: ts
+                dir: consumer
+                dependencies:
+                  agents:
+                    - app:producer/BarAgent
+                  tools:
+                    - app:producer/echo
+                buildMergeMode: replace
+                componentWasm: consumer.wasm
+                outputWasm: consumer-final.wasm
+                build:
+                  - command: test -f ../golem-temp/bridge-sdk/ts/internal/bar-agent-guest-client/package.json
+                  - command: test -f ../golem-temp/bridge-sdk/ts/internal/bar-agent-guest-client/bar-agent-guest-client.ts
+                  - command: test -f ../golem-temp/bridge-sdk/ts/internal/echo-tool-guest-client/package.json
+                  - command: test -f ../golem-temp/bridge-sdk/ts/internal/echo-tool-guest-client/echo-tool-guest-client.ts
+                  - command: cp -p {producer_wasm} consumer.wasm
+                  - command: cp -p {producer_wasm} consumer-final.wasm
+                  - command: cp ../empty-metadata.json ../golem-temp/extracted-component-metadata/{consumer_extracted_component_metadata}
+
+            bridge:
+              ts:
+                internal:
+                  agents: BarAgent
+                  tools: echo
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+
+    let outputs = ctx
+        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(
+        ctx.cwd_path_join(
+            "golem-temp/bridge-sdk/ts/internal/bar-agent-guest-client/bar-agent-guest-client.ts"
+        )
+        .exists()
+    );
+    assert!(
+        ctx.cwd_path_join(
+            "golem-temp/bridge-sdk/ts/internal/echo-tool-guest-client/echo-tool-guest-client.ts"
+        )
+        .exists()
+    );
+}
+
 fn echo_tool() -> Tool {
     let doc = |summary: &str| Doc {
         summary: summary.to_string(),
