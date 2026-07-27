@@ -38,6 +38,10 @@ type graphBuilder struct {
 	// definitions those nodes point at.
 	refs map[reflect.Type]int32
 	defs []types.SchemaTypeDef
+	// invalids collects the types this graph references that could not be
+	// compiled (see [codec.invalid]), so buildAgentType can attribute them to
+	// the agent being built.
+	invalids map[reflect.Type]string
 }
 
 // node returns the index of c's type node, adding it if absent.
@@ -47,6 +51,12 @@ type graphBuilder struct {
 // makes recursive types (a record reachable from its own fields) produce a
 // finite graph instead of overflowing the stack.
 func (g *graphBuilder) node(c *codec) int32 {
+	if c.invalid != "" {
+		if g.invalids == nil {
+			g.invalids = map[reflect.Type]string{}
+		}
+		g.invalids[c.typ] = c.invalid
+	}
 	if c.recursive {
 		return g.refNode(c)
 	}
@@ -153,8 +163,10 @@ func namedFields(g *graphBuilder, fs []fieldInfo) []common.NamedField {
 }
 
 // buildAgentType derives the full agent-type metadata reported by
-// get-definition / discover-agent-types.
-func buildAgentType(e *agentEntry) common.AgentType {
+// get-definition / discover-agent-types. The second result is the set of types
+// referenced by this agent that could not be compiled, keyed by type — empty for
+// a well-formed agent; finalize turns them into attributed definition errors.
+func buildAgentType(e *agentEntry) (common.AgentType, map[reflect.Type]string) {
 	var g graphBuilder
 
 	ctorFields := namedFields(&g, e.idFields)
@@ -176,7 +188,7 @@ func buildAgentType(e *agentEntry) common.AgentType {
 		})
 	}
 
-	return common.AgentType{
+	at := common.AgentType{
 		TypeName:       e.name,
 		Description:    e.desc,
 		SourceLanguage: "go",
@@ -192,4 +204,5 @@ func buildAgentType(e *agentEntry) common.AgentType {
 		HttpMount:    witTypes.None[common.HttpMountDetails](),
 		Snapshotting: common.MakeSnapshottingDisabled(),
 	}
+	return at, g.invalids
 }

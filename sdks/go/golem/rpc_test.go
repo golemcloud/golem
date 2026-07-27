@@ -74,7 +74,7 @@ func TestCallArgumentsAgreeWithThePublishedSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encodeInput: %v", err)
 	}
-	at := buildAgentType(registry["TestPayment"])
+	at, _ := buildAgentType(registry["TestPayment"])
 
 	var charge *common.AgentMethod
 	for i := range at.Methods {

@@ -391,7 +391,7 @@ func TestMutuallyRecursiveTypesBreakTheCycle(t *testing.T) {
 // obvious cycles.
 func TestPublishedAgentSchemasHaveNoRawCycles(t *testing.T) {
 	for _, name := range registryOrder {
-		at := buildAgentType(registry[name])
+		at, _ := buildAgentType(registry[name])
 		for _, f := range at.Constructor.InputSchema.Parameters() {
 			assertNoCycleWithoutRef(t, at.Schema, f.Schema, map[int32]bool{})
 		}
@@ -484,12 +484,49 @@ func mustPanic(t *testing.T, want string, f func()) {
 	f()
 }
 
+// mustInvalidCompile asserts that compiling rt marks the codec invalid with a
+// reason mentioning want. Unsupported types are no longer registration panics:
+// the codec is flagged and the problem is reported (attributed to the agent
+// that uses it) at discovery.
+func mustInvalidCompile(t *testing.T, want string, rt reflect.Type) {
+	t.Helper()
+	if c := compile(rt); !strings.Contains(c.invalid, want) {
+		t.Fatalf("compile(%s).invalid = %q, want substring %q", rt, c.invalid, want)
+	}
+}
+
+// withIsolatedDefs runs fn against a fresh definition-error slate (and a fresh
+// NameType pin table), restoring the prior state afterwards — so a test that
+// deliberately provokes definition errors does not pollute the shared component
+// state the good-path tests rely on.
+func withIsolatedDefs(t *testing.T, fn func()) {
+	t.Helper()
+	savedErrs, savedPins := defErrs, pinnedTypeIDs
+	defErrs, pinnedTypeIDs = nil, map[reflect.Type]string{}
+	t.Cleanup(func() { defErrs, pinnedTypeIDs = savedErrs, savedPins })
+	fn()
+}
+
+// mustRecordDefErr asserts fn records at least one new definition error
+// mentioning want.
+func mustRecordDefErr(t *testing.T, want string, fn func()) {
+	t.Helper()
+	before := len(defErrs)
+	fn()
+	for _, e := range defErrs[before:] {
+		if strings.Contains(e.Error(), want) {
+			return
+		}
+	}
+	t.Fatalf("expected a recorded definition error mentioning %q; got %v", want, defErrs[before:])
+}
+
 func TestUnsupportedTypesAreRejectedAtRegistration(t *testing.T) {
-	// Registration-time panics, not invocation-time surprises.
-	mustPanic(t, "platform-dependent width", func() { compile(reflect.TypeFor[int]()) })
-	mustPanic(t, "platform-dependent width", func() { compile(reflect.TypeFor[uint]()) })
-	mustPanic(t, "not a primitive", func() { compile(reflect.TypeFor[map[Money]string]()) })
-	mustPanic(t, "unsupported type", func() { compile(reflect.TypeFor[chan int]()) })
+	// Flagged at compile time, reported at discovery — not invocation-time surprises.
+	mustInvalidCompile(t, "platform-dependent width", reflect.TypeFor[int]())
+	mustInvalidCompile(t, "platform-dependent width", reflect.TypeFor[uint]())
+	mustInvalidCompile(t, "not a primitive", reflect.TypeFor[map[Money]string]())
+	mustInvalidCompile(t, "unsupported type", reflect.TypeFor[chan int]())
 }
 
 func TestMalformedInputIsAnErrorNotAPanic(t *testing.T) {
@@ -621,25 +658,29 @@ func TestEnumSchemaCarriesTheDeclaredNames(t *testing.T) {
 }
 
 func TestVariantAndEnumMisuseIsRejected(t *testing.T) {
-	// An interface that was never declared as a variant.
+	// An interface that was never declared as a variant: flagged at compile time.
 	type Unregistered interface{ marker() }
-	mustPanic(t, "not a registered variant", func() { compile(reflect.TypeFor[Unregistered]()) })
+	mustInvalidCompile(t, "not a registered variant", reflect.TypeFor[Unregistered]())
 
-	// A value outside the declared enum range must not be silently truncated.
+	// A value outside the declared enum range must not be silently truncated —
+	// this is an encode-time (invocation) failure, still a panic (recovered into
+	// an agent-error by the dispatcher).
 	c := compile(reflect.TypeFor[Status]())
 	mustPanic(t, "outside the declared enum range", func() {
 		encodeWith(c, reflect.ValueOf(Status(99)))
 	})
 
-	// A nil interface holds no case.
+	// A nil interface holds no case — also encode-time.
 	vc := compile(reflect.TypeFor[PaymentMethod]())
 	mustPanic(t, "must hold one of its cases", func() {
 		encodeWith(vc, reflect.ValueOf(&[]PaymentMethod{nil}[0]).Elem())
 	})
 
-	// Declaration-time validation.
-	mustPanic(t, "requires an interface type", func() { DefineVariant[Money]() })
-	mustPanic(t, "requires a named integer type", func() { DefineEnum[string]("a") })
+	// Declaration-time validation: recorded, not panicked.
+	withIsolatedDefs(t, func() {
+		mustRecordDefErr(t, "requires an interface type", func() { DefineVariant[Money]() })
+		mustRecordDefErr(t, "requires a named integer type", func() { DefineEnum[string]("a") })
+	})
 }
 
 // A decoded variant must be usable through its interface, not just structurally
@@ -794,10 +835,16 @@ func TestNameTypePinsTheDefID(t *testing.T) {
 func TestNameTypeRejectsConflicts(t *testing.T) {
 	type a struct{}
 	type b struct{}
-	NameType[a]("dup.id.one")
-	// same type, same id → idempotent (no panic)
-	NameType[a]("dup.id.one")
-	mustPanic(t, "already pinned", func() { NameType[a]("dup.id.two") }) // retag same type
-	mustPanic(t, "already pinned", func() { NameType[b]("dup.id.one") }) // reuse id
-	mustPanic(t, "non-empty", func() { NameType[struct{ X int }]("") })  // empty id
+	withIsolatedDefs(t, func() {
+		NameType[a]("dup.id.one")
+		// same type, same id → idempotent (records nothing)
+		before := len(defErrs)
+		NameType[a]("dup.id.one")
+		if len(defErrs) != before {
+			t.Fatalf("idempotent NameType recorded an error: %v", defErrs[before:])
+		}
+		mustRecordDefErr(t, "already pinned", func() { NameType[a]("dup.id.two") }) // retag same type
+		mustRecordDefErr(t, "already pinned", func() { NameType[b]("dup.id.one") }) // reuse id
+		mustRecordDefErr(t, "non-empty", func() { NameType[struct{ X int }]("") })  // empty id
+	})
 }

@@ -50,6 +50,11 @@ type codec struct {
 	// building is true while this codec's children are being compiled. Re-entry
 	// while building is exactly what identifies a recursive type.
 	building bool
+	// invalid is non-empty when the type cannot be represented (unsupported
+	// kind, platform-dependent width, unregistered variant, …). Set by
+	// markInvalid instead of panicking; the schema builder collects these per
+	// agent so the problem is attributed and reported at discovery.
+	invalid string
 
 	encode func(*valBuilder, reflect.Value) int32
 	decode func(*decoder, reflect.Value, int32) error
@@ -233,13 +238,30 @@ func buildCodec(c *codec) {
 		compileMap(c)
 
 	case reflect.Int, reflect.Uint:
-		panic(fmt.Sprintf("golem: %s has a platform-dependent width; use a sized type such as int64/uint64", c.typ))
+		markInvalid(c, "%s has a platform-dependent width; use a sized type such as int64/uint64", c.typ)
 
 	case reflect.Interface:
-		panic(fmt.Sprintf("golem: interface type %s is not a registered variant; declare it with golem.DefineVariant", c.typ))
+		markInvalid(c, "interface type %s is not a registered variant; declare it with golem.DefineVariant", c.typ)
 
 	default:
-		panic(fmt.Sprintf("golem: unsupported type %s (kind %s)", c.typ, c.typ.Kind()))
+		markInvalid(c, "unsupported type %s (kind %s)", c.typ, c.typ.Kind())
+	}
+}
+
+// markInvalid flags a type the SDK cannot represent and fills the codec with a
+// safe no-op body, so schema derivation itself does not panic. It records
+// nothing globally: the schema builder collects invalid codecs per agent
+// ([graphBuilder.invalids]) so the problem is attributed to the agent(s) that
+// actually use the type and reported at discovery — never as an init() trap, and
+// never poisoning an unrelated agent.
+func markInvalid(c *codec, format string, args ...any) {
+	c.invalid = fmt.Sprintf(format, args...)
+	c.body = func(*graphBuilder) types.SchemaTypeBody { return types.MakeSchemaTypeBodyBoolType() }
+	c.encode = func(b *valBuilder, _ reflect.Value) int32 {
+		return b.push(types.MakeSchemaValueNodeBoolValue(false))
+	}
+	c.decode = func(*decoder, reflect.Value, int32) error {
+		return fmt.Errorf("type %s could not be compiled (see agent definition errors)", c.typ)
 	}
 }
 
@@ -466,7 +488,8 @@ func compileFixedList(c *codec, elem *codec) {
 func compileMap(c *codec) {
 	kt, vt := c.typ.Key(), c.typ.Elem()
 	if !isPrimitiveKind(kt.Kind()) {
-		panic(fmt.Sprintf("golem: map key type %s is not a primitive; WIT restricts map keys to primitives", kt))
+		markInvalid(c, "map key type %s is not a primitive; WIT restricts map keys to primitives", kt)
+		return
 	}
 	key, val := compile(kt), compile(vt)
 

@@ -90,6 +90,10 @@ func toAgentError(err error) common.AgentError {
 
 func init() {
 	guestExports.Exports.Initialize = func(agentType string, input types.SchemaValueTree, _ common.Principal) witTypes.Result[witTypes.Unit, common.AgentError] {
+		finalize()
+		if msg := agentDefErrors(agentType); msg != "" {
+			return witTypes.Err[witTypes.Unit](customError("agent definition errors:\n" + msg))
+		}
 		e := registry[agentType]
 		if e == nil {
 			return witTypes.Err[witTypes.Unit](common.MakeAgentErrorInvalidType("unknown agent type: " + agentType))
@@ -128,20 +132,28 @@ func init() {
 			witTypes.Some(*out))
 	}
 
+	// GetDefinition has no error channel in the WIT. It is only valid after a
+	// successful initialize, and initialize refuses an agent with definition
+	// errors — so by the time this runs the cached type is already validated.
 	guestExports.Exports.GetDefinition = func() common.AgentType {
+		finalize()
 		if active != nil {
-			return buildAgentType(active.def)
+			return cachedType[active.def.name]
 		}
 		if len(registryOrder) > 0 {
-			return buildAgentType(registry[registryOrder[0]])
+			return cachedType[registryOrder[0]]
 		}
 		return common.AgentType{}
 	}
 
 	guestExports.Exports.DiscoverAgentTypes = func() witTypes.Result[[]common.AgentType, common.AgentError] {
+		finalize()
+		if len(defErrs) > 0 {
+			return witTypes.Err[[]common.AgentType](customError(allDefErrors()))
+		}
 		out := make([]common.AgentType, 0, len(registryOrder))
 		for _, n := range registryOrder {
-			out = append(out, buildAgentType(registry[n]))
+			out = append(out, cachedType[n])
 		}
 		return witTypes.Ok[[]common.AgentType, common.AgentError](out)
 	}

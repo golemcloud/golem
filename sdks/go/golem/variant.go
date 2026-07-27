@@ -15,7 +15,6 @@
 package golem
 
 import (
-	"fmt"
 	"reflect"
 )
 
@@ -67,28 +66,32 @@ var variantRegistry = map[reflect.Type]*variantDef{}
 // component is invoked.
 func DefineVariant[Iface any](cases ...CaseDef) *variantDef {
 	it := reflect.TypeFor[Iface]()
+	d := &variantDef{iface: it, cases: cases}
 	if it.Kind() != reflect.Interface {
-		panic(fmt.Sprintf("golem: DefineVariant requires an interface type, got %s", it))
-	}
-	if len(cases) == 0 {
-		panic(fmt.Sprintf("golem: DefineVariant[%s] needs at least one case", it))
+		recordDefErr("", "", "DefineVariant requires an interface type, got %s", it)
+		return d
 	}
 	if _, dup := variantRegistry[it]; dup {
-		panic(fmt.Sprintf("golem: variant already defined for %s", it))
+		recordDefErr("", "", "variant already defined for %s", it)
+		return d
+	}
+	if len(cases) == 0 {
+		recordDefErr("", "", "DefineVariant[%s] needs at least one case", it)
 	}
 
 	seen := map[string]bool{}
 	for _, c := range cases {
 		if !c.typ.Implements(it) && !reflect.PointerTo(c.typ).Implements(it) {
-			panic(fmt.Sprintf("golem: variant case %s (%s) does not implement %s", c.name, c.typ, it))
+			recordDefErr("", "", "variant case %s (%s) does not implement %s", c.name, c.typ, it)
 		}
 		if seen[c.name] {
-			panic(fmt.Sprintf("golem: variant %s has duplicate case name %q", it, c.name))
+			recordDefErr("", "", "variant %s has duplicate case name %q", it, c.name)
 		}
 		seen[c.name] = true
 	}
 
-	d := &variantDef{iface: it, cases: cases}
+	// Registered even with soft errors above, so downstream codec compilation
+	// resolves the interface as a variant instead of cascading a second error.
 	variantRegistry[it] = d
 	return d
 }
@@ -121,19 +124,21 @@ var enumRegistry = map[reflect.Type]*enumDef{}
 // is rejected at encode time rather than silently truncated.
 func DefineEnum[T any](names ...string) *enumDef {
 	t := reflect.TypeFor[T]()
+	d := &enumDef{typ: t, names: names}
 	switch t.Kind() {
 	case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 	default:
-		panic(fmt.Sprintf("golem: DefineEnum requires a named integer type, got %s (kind %s)", t, t.Kind()))
-	}
-	if len(names) == 0 {
-		panic(fmt.Sprintf("golem: DefineEnum[%s] needs at least one name", t))
+		recordDefErr("", "", "DefineEnum requires a named integer type, got %s (kind %s)", t, t.Kind())
+		return d
 	}
 	if _, dup := enumRegistry[t]; dup {
-		panic(fmt.Sprintf("golem: enum already defined for %s", t))
+		recordDefErr("", "", "enum already defined for %s", t)
+		return d
 	}
-	d := &enumDef{typ: t, names: names}
+	if len(names) == 0 {
+		recordDefErr("", "", "DefineEnum[%s] needs at least one name", t)
+	}
 	enumRegistry[t] = d
 	return d
 }

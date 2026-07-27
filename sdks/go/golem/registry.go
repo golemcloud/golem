@@ -15,7 +15,6 @@
 package golem
 
 import (
-	"fmt"
 	"reflect"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
@@ -110,15 +109,19 @@ func lowerFirst(s string) string {
 // Call it from a package-level var so registration happens before the component
 // is invoked.
 func DefineAgent[Id any, S any](spec Spec, init func(Id) *S) *Agent[Id, S] {
+	idType := reflect.TypeFor[Id]()
 	if spec.Name == "" {
-		panic("golem: DefineAgent requires a non-empty Spec.Name")
+		recordDefErr("", "", "DefineAgent requires a non-empty Spec.Name (Id type %s)", idType)
+		return &Agent[Id, S]{name: spec.Name}
 	}
 	if _, dup := registry[spec.Name]; dup {
-		panic("golem: agent type already defined: " + spec.Name)
+		recordDefErr(spec.Name, "", "agent type already defined")
+		return &Agent[Id, S]{name: spec.Name}
 	}
-	idType := reflect.TypeFor[Id]()
 	if idType.Kind() != reflect.Struct {
-		panic(fmt.Sprintf("golem: agent %s: Id must be a struct, got %s", spec.Name, idType))
+		// Record but still register (with no id fields) so downstream Implement
+		// calls attach rather than cascading into "unknown agent" errors.
+		recordDefErr(spec.Name, "", "Id must be a struct, got %s", idType)
 	}
 	e := &agentEntry{
 		name:     spec.Name,
@@ -165,10 +168,12 @@ func Implement[Id any, S any, In any, Out any](
 ) {
 	e := registry[a.name]
 	if e == nil {
-		panic("golem: Implement: unknown agent " + a.name)
+		recordDefErr(a.name, m.name, "Implement: unknown agent %q (was DefineAgent called?)", a.name)
+		return
 	}
 	if _, dup := e.methods[m.name]; dup {
-		panic("golem: " + a.name + ": method already implemented: " + m.name)
+		recordDefErr(a.name, m.name, "method already implemented")
+		return
 	}
 
 	// Codecs are compiled once, here at registration — not per invocation.

@@ -37,16 +37,19 @@ var pinnedTypeIDs = map[reflect.Type]string{}
 // two types, panics — an ambiguous id is a wire-compatibility bug, not a
 // tolerable one.
 func NameType[T any](id string) struct{} {
-	if id == "" {
-		panic("golem: NameType requires a non-empty type-id")
-	}
 	t := reflect.TypeFor[T]()
+	if id == "" {
+		recordDefErr("", "", "NameType[%s] requires a non-empty type-id", t)
+		return struct{}{}
+	}
 	if existing, dup := pinnedTypeIDs[t]; dup && existing != id {
-		panic("golem: type " + t.String() + " already pinned to type-id " + existing)
+		recordDefErr("", "", "type %s already pinned to type-id %q", t, existing)
+		return struct{}{}
 	}
 	for other, existing := range pinnedTypeIDs {
 		if existing == id && other != t {
-			panic("golem: type-id " + id + " already pinned to " + other.String())
+			recordDefErr("", "", "type-id %q already pinned to %s", id, other)
+			return struct{}{}
 		}
 	}
 	pinnedTypeIDs[t] = id
