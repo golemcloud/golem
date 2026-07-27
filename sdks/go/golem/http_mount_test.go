@@ -70,7 +70,11 @@ func TestParsePathErrors(t *testing.T) {
 		{"/x?y={z}", false, "query parameters are not allowed"},
 		{"/x?bad", true, "must be of the form name={field}"},
 		{"/x?a=notref", true, "must be a {field} reference"},
+		{"/x?={y}", true, "empty parameter name"},
 		{"", false, "must not be empty"},
+		{"/{a-b}", false, "invalid character"},
+		{"/{*}", false, "must not be empty"},
+		{"/{}", false, "empty {} variable"},
 	}
 	for _, c := range cases {
 		_, errs := parsePath(c.path, c.allowQ)
@@ -161,6 +165,45 @@ func TestBuildHTTPCustomVerb(t *testing.T) {
 	m := endpoints["report"][0].HttpMethod
 	if m.Tag() != common.HttpMethodCustom || m.Custom() != "REPORT" {
 		t.Errorf("verb = tag %d %q", m.Tag(), m.Custom())
+	}
+}
+
+func TestVerbConstructorsMapToWit(t *testing.T) {
+	cases := []struct {
+		ep  Endpoint
+		tag uint8
+	}{
+		{GET("/x"), common.HttpMethodGet},
+		{HEAD("/x"), common.HttpMethodHead},
+		{POST("/x"), common.HttpMethodPost},
+		{PUT("/x"), common.HttpMethodPut},
+		{DELETE("/x"), common.HttpMethodDelete},
+		{CONNECT("/x"), common.HttpMethodConnect},
+		{OPTIONS("/x"), common.HttpMethodOptions},
+		{TRACE("/x"), common.HttpMethodTrace},
+		{PATCH("/x"), common.HttpMethodPatch},
+	}
+	for _, c := range cases {
+		if got := witMethod(c.ep.method).Tag(); got != c.tag {
+			t.Errorf("%s -> tag %d, want %d", c.ep.method, got, c.tag)
+		}
+	}
+}
+
+// System-variable and catch-all segments compile on both the mount prefix and an
+// endpoint suffix.
+func TestBuildHTTPSystemVarAndCatchAllSegments(t *testing.T) {
+	e := agent("A", &Mount{Path: "/{agent-type}/{id}"}, fields("id"),
+		method("m", fields("rest"), GET("/files/{*rest}")))
+	mount, endpoints, errs := buildHTTP(e)
+	if len(errs) != 0 {
+		t.Fatalf("errs: %v", errs)
+	}
+	if got := renderSegs(mount.Some().PathPrefix); got != "/{agent-type}/{id}" {
+		t.Errorf("prefix = %q", got)
+	}
+	if got := renderSegs(endpoints["m"][0].PathSuffix); got != "/files/{*rest}" {
+		t.Errorf("suffix = %q", got)
 	}
 }
 

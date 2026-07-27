@@ -56,6 +56,30 @@ func TestAgentDefErrorsFiltersByAgentAndGlobal(t *testing.T) {
 	})
 }
 
+func TestPublicAccessors(t *testing.T) {
+	if got := (&Agent[struct{}, struct{}]{name: "N"}).Name(); got != "N" {
+		t.Errorf("Agent.Name = %q", got)
+	}
+	md := DefineMethod[struct{}, struct{}, struct{}]("m", Desc("d"), HTTP(GET("/x")))
+	if md.Name() != "m" {
+		t.Errorf("MethodDef.Name = %q", md.Name())
+	}
+	if len(md.endpoints) != 1 {
+		t.Errorf("HTTP opt: endpoints = %d, want 1", len(md.endpoints))
+	}
+	if got := (&Context[int]{agentID: "aid"}).AgentID(); got != "aid" {
+		t.Errorf("Context.AgentID = %q", got)
+	}
+}
+
+func TestDefinitionErrorsIsCleanForAValidComponent(t *testing.T) {
+	// The test package's registered agents are all well-formed, so the accessor
+	// (which triggers finalize) reports nothing.
+	if errs := DefinitionErrors(); len(errs) != 0 {
+		t.Fatalf("expected no definition errors, got %v", errs)
+	}
+}
+
 func TestAllDefErrorsReportsEveryProblem(t *testing.T) {
 	withIsolatedDefs(t, func() {
 		recordDefErr("Counter", "", "first")

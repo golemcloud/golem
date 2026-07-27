@@ -683,6 +683,32 @@ func TestVariantAndEnumMisuseIsRejected(t *testing.T) {
 	})
 }
 
+// Fixtures for the variant/enum registration-error cases below.
+type dupVar1 interface{ dv1() }
+type dupVar2 interface{ dv2() }
+type dupImpl struct{}
+
+func (dupImpl) dv2() {}
+
+type emptyVar interface{ ev() }
+type emptyEnum int32
+
+func TestVariantEnumRegistrationErrorsAreRecorded(t *testing.T) {
+	withIsolatedDefs(t, func() {
+		// Re-registering an already-declared variant/enum (Status and
+		// PaymentMethod are declared at package init).
+		mustRecordDefErr(t, "already defined", func() { DefineVariant[PaymentMethod]() })
+		mustRecordDefErr(t, "already defined", func() { DefineEnum[Status]("x") })
+		// Empty case / name lists.
+		mustRecordDefErr(t, "at least one case", func() { DefineVariant[emptyVar]() })
+		mustRecordDefErr(t, "at least one name", func() { DefineEnum[emptyEnum]() })
+		// A case that does not implement the interface, and a duplicate case name
+		// (distinct interfaces so neither trips the already-defined check).
+		mustRecordDefErr(t, "does not implement", func() { DefineVariant[dupVar1](Case[Money]("m")) })
+		mustRecordDefErr(t, "duplicate case name", func() { DefineVariant[dupVar2](Case[dupImpl]("x"), Case[dupImpl]("x")) })
+	})
+}
+
 // A decoded variant must be usable through its interface, not just structurally
 // equal — the decoder sets a concrete type into the interface slot.
 func TestDecodedVariantSatisfiesItsInterface(t *testing.T) {
