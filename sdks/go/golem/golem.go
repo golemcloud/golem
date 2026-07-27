@@ -49,6 +49,8 @@
 package golem
 
 import (
+	"time"
+
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 
 	// Links the generated wasmexport glue into the component.
@@ -76,6 +78,67 @@ func (m Mode) toWit() common.AgentMode {
 	return common.AgentModeDurable
 }
 
+// SnapshotPolicy declares whether and how often the platform snapshots an
+// agent's state. The zero value is [SnapshotDisabled]. Build one with
+// [SnapshotDefault], [SnapshotPeriodic], or [SnapshotEveryN].
+//
+// A snapshot serializes the agent's state: if the state implements
+// [Snapshotter], that is used; otherwise the exported fields are JSON-encoded
+// (see [Snapshotter] for the caveat).
+type SnapshotPolicy struct {
+	kind   snapshotKind
+	amount uint64 // periodic: nanoseconds; every-n: count
+}
+
+type snapshotKind uint8
+
+const (
+	snapDisabled snapshotKind = iota
+	snapDefault
+	snapPeriodic
+	snapEveryN
+)
+
+// SnapshotDisabled is the zero-value policy: the platform never snapshots.
+var SnapshotDisabled = SnapshotPolicy{kind: snapDisabled}
+
+// SnapshotDefault enables snapshotting at the platform's default cadence.
+var SnapshotDefault = SnapshotPolicy{kind: snapDefault}
+
+// SnapshotPeriodic snapshots on a fixed time interval.
+func SnapshotPeriodic(d time.Duration) SnapshotPolicy {
+	return SnapshotPolicy{kind: snapPeriodic, amount: uint64(d.Nanoseconds())}
+}
+
+// SnapshotEveryN snapshots every n invocations.
+func SnapshotEveryN(n uint16) SnapshotPolicy {
+	return SnapshotPolicy{kind: snapEveryN, amount: uint64(n)}
+}
+
+func (p SnapshotPolicy) toWit() common.Snapshotting {
+	switch p.kind {
+	case snapDefault:
+		return common.MakeSnapshottingEnabled(common.MakeSnapshottingConfigDefault())
+	case snapPeriodic:
+		return common.MakeSnapshottingEnabled(common.MakeSnapshottingConfigPeriodic(p.amount))
+	case snapEveryN:
+		return common.MakeSnapshottingEnabled(common.MakeSnapshottingConfigEveryNInvocation(uint16(p.amount)))
+	default:
+		return common.MakeSnapshottingDisabled()
+	}
+}
+
+// Snapshotter lets an agent's state control its own snapshot serialization.
+// Implement it on the state type (usually with a pointer receiver) when the
+// default reflective snapshot is not enough — in particular, Go reflection
+// cannot see unexported fields, so the idiomatic private state (e.g. an
+// unexported `count`) is only captured through a Snapshotter. Without one, the
+// snapshot is the JSON of the state's exported fields.
+type Snapshotter interface {
+	Save() ([]byte, error)
+	Load([]byte) error
+}
+
 // Spec is the declarative part of an agent definition.
 type Spec struct {
 	// Name is the wire-level agent type name (as seen by the platform and by
@@ -89,6 +152,9 @@ type Spec struct {
 	// platform can route requests to them. The prefix binds the Id fields; see
 	// [Mount] and attach per-method routes with [HTTP].
 	HTTP *Mount
+	// Snapshot sets the agent's snapshot policy; the zero value is
+	// [SnapshotDisabled]. See [SnapshotPolicy] and [Snapshotter].
+	Snapshot SnapshotPolicy
 }
 
 // Context is passed to every method handler. State is the agent instance's

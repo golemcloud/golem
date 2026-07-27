@@ -205,7 +205,7 @@ func (d *definitions) buildAgentType(e *agentEntry) (common.AgentType, map[refle
 		Methods:      methods,
 		Mode:         e.mode,
 		HttpMount:    witTypes.None[common.HttpMountDetails](),
-		Snapshotting: common.MakeSnapshottingDisabled(),
+		Snapshotting: e.snapshot.toWit(),
 	}
 	return at, g.invalids
 }

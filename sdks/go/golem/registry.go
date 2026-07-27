@@ -45,7 +45,8 @@ type agentEntry struct {
 	name     string
 	desc     string
 	mode     common.AgentMode
-	mount    *Mount // HTTP mount, if any
+	mount    *Mount         // HTTP mount, if any
+	snapshot SnapshotPolicy // snapshot cadence
 	idType   reflect.Type
 	idFields []fieldInfo
 	newState func(idVal reflect.Value) any
@@ -143,6 +144,7 @@ func defineAgentInto[Id any, S any](d *definitions, spec Spec, init func(Id) *S)
 		desc:     spec.Description,
 		mode:     spec.Mode.toWit(),
 		mount:    spec.HTTP,
+		snapshot: spec.Snapshot,
 		idType:   idType,
 		idFields: d.structFields(idType),
 		methods:  map[string]*methodEntry{},

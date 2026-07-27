@@ -21,7 +21,10 @@ import (
 	"reflect"
 
 	guestExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_agent_guest"
+	loadExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_api_load_snapshot"
+	saveExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_api_save_snapshot"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
+	apihost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
@@ -156,5 +159,29 @@ func init() {
 			return witTypes.Err[[]common.AgentType](customError(allDefErrors(ds)))
 		}
 		return witTypes.Ok[[]common.AgentType, common.AgentError](types)
+	}
+
+	// save/load-snapshot serialize and restore the running instance's state. save
+	// has no error channel in the WIT, so a failure there is fatal (panic); load
+	// reports failures through its result.
+	saveExports.Exports.Save = func() apihost.Snapshot {
+		if active == nil {
+			panic("golem: save-snapshot before initialize")
+		}
+		snap, err := saveState(active.state)
+		if err != nil {
+			panic("golem: snapshot save failed: " + err.Error())
+		}
+		return snap
+	}
+
+	loadExports.Exports.Load = func(snap apihost.Snapshot) witTypes.Result[witTypes.Unit, string] {
+		if active == nil {
+			return witTypes.Err[witTypes.Unit]("agent not initialized")
+		}
+		if err := loadState(active.state, snap); err != nil {
+			return witTypes.Err[witTypes.Unit](err.Error())
+		}
+		return witTypes.Ok[witTypes.Unit, string](witTypes.Unit{})
 	}
 }
