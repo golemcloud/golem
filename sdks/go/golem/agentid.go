@@ -85,7 +85,7 @@ func decodeAgentIDParams[Id any](value types.SchemaValueTree) (Id, error) {
 		return zero, fmt.Errorf("Id type %s must be a struct", idType)
 	}
 	idVal := reflect.New(idType).Elem()
-	if err := decodeParams(value, structFields(idType), idVal); err != nil {
+	if err := decodeParams(value, defs.structFields(idType), idVal); err != nil {
 		return zero, err
 	}
 	return idVal.Interface().(Id), nil

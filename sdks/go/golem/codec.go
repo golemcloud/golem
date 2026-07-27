@@ -69,8 +69,8 @@ type codec struct {
 // forever. Its function fields are still nil at that moment, but every use is
 // behind a closure that dereferences them at call time, by which point the
 // outer compile has filled them in.
-func compile(t reflect.Type) *codec {
-	if c, ok := defs.codecs[t]; ok {
+func (d *definitions) compile(t reflect.Type) *codec {
+	if c, ok := d.codecs[t]; ok {
 		if c.building {
 			// Reached t again while still compiling it: t is reachable from
 			// itself. Marking one member of each cycle is enough — its ref-type
@@ -80,8 +80,8 @@ func compile(t reflect.Type) *codec {
 		return c
 	}
 	c := &codec{typ: t, building: true}
-	defs.codecs[t] = c
-	buildCodec(c)
+	d.codecs[t] = c
+	d.buildCodec(c)
 	c.building = false
 	return c
 }
@@ -89,8 +89,8 @@ func compile(t reflect.Type) *codec {
 // typeID derives the stable, language-independent identifier a named def
 // carries. A pinned id (via [NameType]) wins, so cross-language consumers can be
 // made to agree; otherwise it is derived from the Go type's package path + name.
-func typeID(t reflect.Type) string {
-	if id, ok := defs.pins[t]; ok {
+func (d *definitions) typeID(t reflect.Type) string {
+	if id, ok := d.pins[t]; ok {
 		return id
 	}
 	name := t.Name()
@@ -103,22 +103,22 @@ func typeID(t reflect.Type) string {
 	return name
 }
 
-func buildCodec(c *codec) {
+func (d *definitions) buildCodec(c *codec) {
 	// User-declared variants and enums are looked up before the kind switch:
 	// an enum is a named integer, which would otherwise compile as a plain
 	// integer, and a variant is an interface, which has no other meaning.
-	if d, ok := defs.variants[c.typ]; ok {
-		compileVariant(c, d)
+	if vd, ok := d.variants[c.typ]; ok {
+		d.compileVariant(c, vd)
 		return
 	}
-	if d, ok := defs.enums[c.typ]; ok {
-		compileEnum(c, d)
+	if ed, ok := d.enums[c.typ]; ok {
+		compileEnum(c, ed)
 		return
 	}
 	// SDK composite types are structs, so they must be recognised before the
 	// generic struct-as-record case. The check is an interface assertion on the
 	// zero value, done once here rather than per value.
-	if sdkComposite(c) {
+	if d.sdkComposite(c) {
 		return
 	}
 
@@ -217,23 +217,23 @@ func buildCodec(c *codec) {
 			func(dst reflect.Value, n types.SchemaValueNode) { dst.SetFloat(float64(n.F32Value())) })
 
 	case reflect.Struct:
-		compileRecord(c)
+		d.compileRecord(c)
 
 	case reflect.Pointer:
 		// A pointer is Go's spelling of "optional". This is the same convention
 		// encoding/json, protobuf-go and serde use, so it should not surprise —
 		// but it does mean a *T used purely to avoid copying still publishes as
 		// option<T> to callers.
-		compileOption(c, compile(c.typ.Elem()), pointerOps(c.typ))
+		compileOption(c, d.compile(c.typ.Elem()), pointerOps(c.typ))
 
 	case reflect.Slice:
-		compileList(c, compile(c.typ.Elem()))
+		compileList(c, d.compile(c.typ.Elem()))
 
 	case reflect.Array:
-		compileFixedList(c, compile(c.typ.Elem()))
+		compileFixedList(c, d.compile(c.typ.Elem()))
 
 	case reflect.Map:
-		compileMap(c)
+		d.compileMap(c)
 
 	case reflect.Int, reflect.Uint:
 		markInvalid(c, "%s has a platform-dependent width; use a sized type such as int64/uint64", c.typ)
@@ -265,7 +265,7 @@ func markInvalid(c *codec, format string, args ...any) {
 
 // sdkComposite recognises the SDK's own composite types (Option, Result, ...)
 // and fills in c if c.typ is one of them.
-func sdkComposite(c *codec) bool {
+func (d *definitions) sdkComposite(c *codec) bool {
 	if c.typ.Kind() != reflect.Struct {
 		return false
 	}
@@ -273,14 +273,14 @@ func sdkComposite(c *codec) bool {
 
 	switch z := zero.(type) {
 	case secretish:
-		compileSecret(c, compile(z.secretElem()))
+		compileSecret(c, d.compile(z.secretElem()))
 		return true
 	case optionish:
-		compileOption(c, compile(z.optionElem()), optionValueOps())
+		compileOption(c, d.compile(z.optionElem()), optionValueOps())
 		return true
 	case resultish:
 		okT, errT := z.resultElems()
-		compileResult(c, compile(okT), compile(errT))
+		compileResult(c, d.compile(okT), d.compile(errT))
 		return true
 	}
 	return false
@@ -314,8 +314,8 @@ func scalar(
 // compileRecord handles Go structs, which lower to WIT records. Fields are
 // positional on the wire: declaration order is the order the schema reports and
 // the order values are written in.
-func compileRecord(c *codec) {
-	fields := structFields(c.typ)
+func (d *definitions) compileRecord(c *codec) {
+	fields := d.structFields(c.typ)
 
 	c.body = func(g *graphBuilder) types.SchemaTypeBody {
 		nf := make([]types.NamedFieldType, 0, len(fields))
@@ -483,13 +483,13 @@ func compileFixedList(c *codec, elem *codec) {
 	}
 }
 
-func compileMap(c *codec) {
+func (d *definitions) compileMap(c *codec) {
 	kt, vt := c.typ.Key(), c.typ.Elem()
 	if !isPrimitiveKind(kt.Kind()) {
 		markInvalid(c, "map key type %s is not a primitive; WIT restricts map keys to primitives", kt)
 		return
 	}
-	key, val := compile(kt), compile(vt)
+	key, val := d.compile(kt), d.compile(vt)
 
 	c.body = func(g *graphBuilder) types.SchemaTypeBody {
 		return types.MakeSchemaTypeBodyMapType(types.MapSpec{Key: g.node(key), Value: g.node(val)})
@@ -626,17 +626,17 @@ func compileResult(c *codec, okC, errC *codec) {
 // variants and enums
 // ---------------------------------------------------------------------------
 
-func compileVariant(c *codec, d *variantDef) {
-	caseCodecs := make([]*codec, len(d.cases))
-	byType := make(map[reflect.Type]int, len(d.cases))
-	for i, cs := range d.cases {
-		caseCodecs[i] = compile(cs.typ)
+func (d *definitions) compileVariant(c *codec, vd *variantDef) {
+	caseCodecs := make([]*codec, len(vd.cases))
+	byType := make(map[reflect.Type]int, len(vd.cases))
+	for i, cs := range vd.cases {
+		caseCodecs[i] = d.compile(cs.typ)
 		byType[cs.typ] = i
 	}
 
 	c.body = func(g *graphBuilder) types.SchemaTypeBody {
-		out := make([]types.VariantCaseType, 0, len(d.cases))
-		for i, cs := range d.cases {
+		out := make([]types.VariantCaseType, 0, len(vd.cases))
+		for i, cs := range vd.cases {
 			out = append(out, types.VariantCaseType{
 				Name:    cs.name,
 				Payload: witTypes.Some(g.node(caseCodecs[i])),
@@ -673,15 +673,15 @@ func compileVariant(c *codec, d *variantDef) {
 			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.typ)
 		}
 		p := n.VariantValue()
-		if int(p.Case) >= len(d.cases) {
-			return fmt.Errorf("%s: case index %d out of range (%d cases)", c.typ, p.Case, len(d.cases))
+		if int(p.Case) >= len(vd.cases) {
+			return fmt.Errorf("%s: case index %d out of range (%d cases)", c.typ, p.Case, len(vd.cases))
 		}
 		if p.Payload.IsNone() {
-			return fmt.Errorf("%s: case %q carries no payload", c.typ, d.cases[p.Case].name)
+			return fmt.Errorf("%s: case %q carries no payload", c.typ, vd.cases[p.Case].name)
 		}
-		out := reflect.New(d.cases[p.Case].typ).Elem()
+		out := reflect.New(vd.cases[p.Case].typ).Elem()
 		if err := caseCodecs[p.Case].decode(dec, out, p.Payload.Some()); err != nil {
-			return fmt.Errorf("%s case %q: %w", c.typ, d.cases[p.Case].name, err)
+			return fmt.Errorf("%s case %q: %w", c.typ, vd.cases[p.Case].name, err)
 		}
 		dst.Set(out)
 		return nil

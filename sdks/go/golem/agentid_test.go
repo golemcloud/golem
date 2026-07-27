@@ -17,7 +17,7 @@ type parsedID struct {
 
 func TestDecodeAgentIDParamsRoundTrip(t *testing.T) {
 	want := parsedID{Merchant: "acme", Region: 7}
-	fields := structFields(reflect.TypeFor[parsedID]())
+	fields := defs.structFields(reflect.TypeFor[parsedID]())
 	tree := encodeParams(fields, reflect.ValueOf(&want).Elem())
 
 	got, err := decodeAgentIDParams[parsedID](tree)

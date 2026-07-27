@@ -42,6 +42,9 @@ type graphBuilder struct {
 	// compiled (see [codec.invalid]), so buildAgentType can attribute them to
 	// the agent being built.
 	invalids map[reflect.Type]string
+	// d is the definition set this graph is derived for; refNode reads its pins
+	// to resolve type-ids.
+	d *definitions
 }
 
 // node returns the index of c's type node, adding it if absent.
@@ -94,7 +97,7 @@ func (g *graphBuilder) refNode(c *codec) int32 {
 		// Resolved here, at schema-build time (get-definition) — not at compile
 		// time — so a NameType pin registered during package init is honored
 		// regardless of whether the type's codec compiled first.
-		Id:   typeID(c.typ),
+		Id:   g.d.typeID(c.typ),
 		Name: witTypes.Some(c.typ.String()),
 	})
 
@@ -166,8 +169,8 @@ func namedFields(g *graphBuilder, fs []fieldInfo) []common.NamedField {
 // get-definition / discover-agent-types. The second result is the set of types
 // referenced by this agent that could not be compiled, keyed by type — empty for
 // a well-formed agent; finalize turns them into attributed definition errors.
-func buildAgentType(e *agentEntry) (common.AgentType, map[reflect.Type]string) {
-	var g graphBuilder
+func (d *definitions) buildAgentType(e *agentEntry) (common.AgentType, map[reflect.Type]string) {
+	g := graphBuilder{d: d}
 
 	ctorFields := namedFields(&g, e.idFields)
 	methods := make([]common.AgentMethod, 0, len(e.order))

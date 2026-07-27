@@ -33,21 +33,26 @@ import "reflect"
 // two types, panics — an ambiguous id is a wire-compatibility bug, not a
 // tolerable one.
 func NameType[T any](id string) struct{} {
+	return nameTypeInto[T](defs, id)
+}
+
+// nameTypeInto is the instance-scoped implementation behind NameType.
+func nameTypeInto[T any](d *definitions, id string) struct{} {
 	t := reflect.TypeFor[T]()
 	if id == "" {
-		recordDefErr("", "", "NameType[%s] requires a non-empty type-id", t)
+		d.recordErr("", "", "NameType[%s] requires a non-empty type-id", t)
 		return struct{}{}
 	}
-	if existing, dup := defs.pins[t]; dup && existing != id {
-		recordDefErr("", "", "type %s already pinned to type-id %q", t, existing)
+	if existing, dup := d.pins[t]; dup && existing != id {
+		d.recordErr("", "", "type %s already pinned to type-id %q", t, existing)
 		return struct{}{}
 	}
-	for other, existing := range defs.pins {
+	for other, existing := range d.pins {
 		if existing == id && other != t {
-			recordDefErr("", "", "type-id %q already pinned to %s", id, other)
+			d.recordErr("", "", "type-id %q already pinned to %s", id, other)
 			return struct{}{}
 		}
 	}
-	defs.pins[t] = id
+	d.pins[t] = id
 	return struct{}{}
 }

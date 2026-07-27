@@ -36,12 +36,12 @@ func TestDefinitionErrorMessageIsAttributed(t *testing.T) {
 }
 
 func TestAgentDefErrorsFiltersByAgentAndGlobal(t *testing.T) {
-	withDefs(t, func() {
-		recordDefErr("", "", "global problem")          // affects every agent
-		recordDefErr("Counter", "", "counter problem")  // only Counter
-		recordDefErr("Ledger", "add", "ledger problem") // only Ledger
+	withDefs(t, func(d *definitions) {
+		d.recordErr("", "", "global problem")          // affects every agent
+		d.recordErr("Counter", "", "counter problem")  // only Counter
+		d.recordErr("Ledger", "add", "ledger problem") // only Ledger
 
-		got := agentDefErrors("Counter")
+		got := agentDefErrors(d.errs, "Counter")
 		if !strings.Contains(got, "global problem") || !strings.Contains(got, "counter problem") {
 			t.Errorf("Counter errors missing global or own: %q", got)
 		}
@@ -50,7 +50,7 @@ func TestAgentDefErrorsFiltersByAgentAndGlobal(t *testing.T) {
 		}
 
 		// An agent with no errors of its own still inherits global ones.
-		if got := agentDefErrors("Unrelated"); !strings.Contains(got, "global problem") || strings.Contains(got, "counter problem") {
+		if got := agentDefErrors(d.errs, "Unrelated"); !strings.Contains(got, "global problem") || strings.Contains(got, "counter problem") {
 			t.Errorf("Unrelated agent errors = %q", got)
 		}
 	})
@@ -81,10 +81,10 @@ func TestDefinitionErrorsIsCleanForAValidComponent(t *testing.T) {
 }
 
 func TestAllDefErrorsReportsEveryProblem(t *testing.T) {
-	withDefs(t, func() {
-		recordDefErr("Counter", "", "first")
-		recordDefErr("Ledger", "add", "second")
-		got := allDefErrors()
+	withDefs(t, func(d *definitions) {
+		d.recordErr("Counter", "", "first")
+		d.recordErr("Ledger", "add", "second")
+		got := allDefErrors(d.errs)
 		if !strings.Contains(got, "2 agent definition error(s)") {
 			t.Errorf("missing count: %q", got)
 		}
@@ -94,25 +94,29 @@ func TestAllDefErrorsReportsEveryProblem(t *testing.T) {
 	})
 }
 
-// The whole register → finalize → publish pipeline, exercised natively in
-// isolation: a valid agent with a mounted method finalizes cleanly and publishes
-// the mount and endpoint. This is only feasible because withDefs gives each test
-// its own definition state.
+// The whole register → discover → publish pipeline, exercised natively over an
+// explicit definitions: a valid agent with a mounted method discovers cleanly and
+// publishes the mount and endpoint. This dumps exactly what discovery produces,
+// with no global state.
 func TestValidAgentFinalizesAndPublishesItsMount(t *testing.T) {
 	type Id struct{ Name string }
 	type St struct{}
 	type AddIn struct{ By int64 }
-	withDefs(t, func() {
-		a := DefineAgent[Id, St](
+	withDefs(t, func(d *definitions) {
+		a := defineAgentInto[Id, St](d,
 			Spec{Name: "Counter", HTTP: &Mount{Path: "/c/{name}"}},
 			func(Id) *St { return &St{} })
 		add := DefineMethod[Id, AddIn, int64]("add", HTTP(POST("/add?by={by}")))
-		Implement(a, add, func(*Context[St], AddIn) int64 { return 0 })
+		implementInto[Id, St, AddIn, int64](d, a, add, func(*Context[St], AddIn) int64 { return 0 })
 
-		if errs := DefinitionErrors(); len(errs) != 0 {
+		types, errs := d.discover()
+		if len(errs) != 0 {
 			t.Fatalf("a valid agent produced errors: %v", errs)
 		}
-		at := defs.cached["Counter"]
+		if len(types) != 1 {
+			t.Fatalf("expected 1 agent type, got %d", len(types))
+		}
+		at := types[0]
 		if !at.HttpMount.IsSome() {
 			t.Fatal("mount was not published")
 		}
@@ -125,17 +129,17 @@ func TestValidAgentFinalizesAndPublishesItsMount(t *testing.T) {
 	})
 }
 
-// Two registrations of the same agent name in separate withDefs blocks must both
-// succeed — proof that the isolation is real and state does not leak between
-// tests (which is what lets us write many focused registration tests).
-func TestWithDefsFullyIsolatesRegistrations(t *testing.T) {
-	register := func() []error {
+// The same agent name registered into two separate definitions both discover
+// cleanly — isolation is inherent now that registration is instance-based (no
+// shared global to leak between tests).
+func TestSeparateDefinitionsDoNotLeak(t *testing.T) {
+	register := func() []definitionError {
 		type Id struct{ Name string }
 		type St struct{}
-		var errs []error
-		withDefs(t, func() {
-			DefineAgent[Id, St](Spec{Name: "Solo"}, func(Id) *St { return &St{} })
-			errs = DefinitionErrors()
+		var errs []definitionError
+		withDefs(t, func(d *definitions) {
+			defineAgentInto[Id, St](d, Spec{Name: "Solo"}, func(Id) *St { return &St{} })
+			_, errs = d.discover()
 		})
 		return errs
 	}
@@ -143,6 +147,6 @@ func TestWithDefsFullyIsolatesRegistrations(t *testing.T) {
 		t.Fatalf("first registration: %v", e)
 	}
 	if e := register(); len(e) != 0 {
-		t.Fatalf("second registration (would be a dup without isolation): %v", e)
+		t.Fatalf("second registration: %v", e)
 	}
 }

@@ -69,7 +69,7 @@ var active *instance
 
 // structFields returns the exported fields of a struct type in declaration
 // order. Non-structs (e.g. Unit) yield no fields.
-func structFields(t reflect.Type) []fieldInfo {
+func (d *definitions) structFields(t reflect.Type) []fieldInfo {
 	var out []fieldInfo
 	if t == nil || t.Kind() != reflect.Struct {
 		return out
@@ -83,7 +83,7 @@ func structFields(t reflect.Type) []fieldInfo {
 			name:  lowerFirst(f.Name),
 			index: i,
 			typ:   f.Type,
-			codec: compile(f.Type),
+			codec: d.compile(f.Type),
 		})
 	}
 	return out
@@ -106,19 +106,27 @@ func lowerFirst(s string) string {
 // Call it from a package-level var so registration happens before the component
 // is invoked.
 func DefineAgent[Id any, S any](spec Spec, init func(Id) *S) *Agent[Id, S] {
+	return defineAgentInto[Id, S](defs, spec, init)
+}
+
+// defineAgentInto is the instance-scoped implementation. The public DefineAgent
+// wraps it against the package-global defs; tests call it with their own
+// definitions for full isolation. (It must stay a generic function — Go forbids
+// generic methods.)
+func defineAgentInto[Id any, S any](d *definitions, spec Spec, init func(Id) *S) *Agent[Id, S] {
 	idType := reflect.TypeFor[Id]()
 	if spec.Name == "" {
-		recordDefErr("", "", "DefineAgent requires a non-empty Spec.Name (Id type %s)", idType)
+		d.recordErr("", "", "DefineAgent requires a non-empty Spec.Name (Id type %s)", idType)
 		return &Agent[Id, S]{name: spec.Name}
 	}
-	if _, dup := defs.agents[spec.Name]; dup {
-		recordDefErr(spec.Name, "", "agent type already defined")
+	if _, dup := d.agents[spec.Name]; dup {
+		d.recordErr(spec.Name, "", "agent type already defined")
 		return &Agent[Id, S]{name: spec.Name}
 	}
 	if idType.Kind() != reflect.Struct {
 		// Record but still register (with no id fields) so downstream Implement
 		// calls attach rather than cascading into "unknown agent" errors.
-		recordDefErr(spec.Name, "", "Id must be a struct, got %s", idType)
+		d.recordErr(spec.Name, "", "Id must be a struct, got %s", idType)
 	}
 	e := &agentEntry{
 		name:     spec.Name,
@@ -126,18 +134,18 @@ func DefineAgent[Id any, S any](spec Spec, init func(Id) *S) *Agent[Id, S] {
 		mode:     spec.Mode.toWit(),
 		mount:    spec.HTTP,
 		idType:   idType,
-		idFields: structFields(idType),
+		idFields: d.structFields(idType),
 		methods:  map[string]*methodEntry{},
 		newState: func(idVal reflect.Value) any { return init(idVal.Interface().(Id)) },
 	}
-	defs.agents[spec.Name] = e
-	defs.order = append(defs.order, spec.Name)
+	d.agents[spec.Name] = e
+	d.order = append(d.order, spec.Name)
 	// The Id type identifies the target agent for typed calls (ClientFor), so two
 	// agents cannot share one — the second would silently shadow the first.
-	if existing, ok := defs.idToAgent[idType]; ok && existing != spec.Name {
-		recordDefErr(spec.Name, "", "Id type %s is already used by agent %q; each agent needs a distinct Id type", idType, existing)
+	if existing, ok := d.idToAgent[idType]; ok && existing != spec.Name {
+		d.recordErr(spec.Name, "", "Id type %s is already used by agent %q; each agent needs a distinct Id type", idType, existing)
 	} else {
-		defs.idToAgent[idType] = spec.Name
+		d.idToAgent[idType] = spec.Name
 	}
 	return &Agent[Id, S]{name: spec.Name}
 }
@@ -151,10 +159,10 @@ func DefineMethod[Id any, In any, Out any](name string, opts ...MethodOpt) Metho
 	for _, f := range opts {
 		f(&o)
 	}
-	if o.descCount > 1 {
-		recordDefErr("", "", "method %q: Desc set %d times (a method has one description)", name, o.descCount)
-	}
-	return MethodDef[Id, In, Out]{name: name, desc: o.desc, endpoints: o.endpoints}
+	// descCount is carried on the descriptor and validated at Implement time,
+	// where the target definitions is known — DefineMethod itself is instance
+	// independent (it just returns a descriptor).
+	return MethodDef[Id, In, Out]{name: name, desc: o.desc, descCount: o.descCount, endpoints: o.endpoints}
 }
 
 // Implement binds a handler to a method descriptor. S, In and Out are inferred
@@ -173,26 +181,39 @@ func Implement[Id any, S any, In any, Out any](
 	m MethodDef[Id, In, Out],
 	h func(*Context[S], In) Out,
 ) {
-	e := defs.agents[a.name]
+	implementInto[Id, S, In, Out](defs, a, m, h)
+}
+
+// implementInto is the instance-scoped implementation behind Implement.
+func implementInto[Id any, S any, In any, Out any](
+	d *definitions,
+	a *Agent[Id, S],
+	m MethodDef[Id, In, Out],
+	h func(*Context[S], In) Out,
+) {
+	e := d.agents[a.name]
 	if e == nil {
-		recordDefErr(a.name, m.name, "Implement: unknown agent %q (was DefineAgent called?)", a.name)
+		d.recordErr(a.name, m.name, "Implement: unknown agent %q (was DefineAgent called?)", a.name)
 		return
 	}
 	if m.name == "" {
-		recordDefErr(a.name, "", "DefineMethod requires a non-empty method name")
+		d.recordErr(a.name, "", "DefineMethod requires a non-empty method name")
 		return
 	}
+	if m.descCount > 1 {
+		d.recordErr(a.name, m.name, "method %q: Desc set %d times (a method has one description)", m.name, m.descCount)
+	}
 	if _, dup := e.methods[m.name]; dup {
-		recordDefErr(a.name, m.name, "method already implemented")
+		d.recordErr(a.name, m.name, "method already implemented")
 		return
 	}
 
 	// Codecs are compiled once, here at registration — not per invocation.
 	inType := reflect.TypeFor[In]()
 	outType := reflect.TypeFor[Out]()
-	me := &methodEntry{name: m.name, desc: m.desc, inFields: structFields(inType), endpoints: m.endpoints}
+	me := &methodEntry{name: m.name, desc: m.desc, inFields: d.structFields(inType), endpoints: m.endpoints}
 	if outType != reflect.TypeFor[Unit]() {
-		me.outCodec = compile(outType)
+		me.outCodec = d.compile(outType)
 	}
 
 	me.invoke = func(state any, agentID string, tree types.SchemaValueTree) (out *types.SchemaValueTree, err error) {

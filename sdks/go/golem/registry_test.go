@@ -42,7 +42,7 @@ func TestBindAdapters(t *testing.T) {
 }
 
 func TestStructFieldsAndLowerFirst(t *testing.T) {
-	if fs := structFields(reflect.TypeFor[int]()); len(fs) != 0 {
+	if fs := defs.structFields(reflect.TypeFor[int]()); len(fs) != 0 {
 		t.Fatalf("non-struct should yield no fields, got %d", len(fs))
 	}
 	type withUnexported struct {
@@ -50,7 +50,7 @@ func TestStructFieldsAndLowerFirst(t *testing.T) {
 		unexported int //nolint:unused // present to exercise the skip path
 	}
 	_ = withUnexported{}.unexported
-	fs := structFields(reflect.TypeFor[withUnexported]())
+	fs := defs.structFields(reflect.TypeFor[withUnexported]())
 	if len(fs) != 1 || fs[0].name != "exported" {
 		t.Fatalf("fields = %+v", fs)
 	}
@@ -62,14 +62,12 @@ func TestStructFieldsAndLowerFirst(t *testing.T) {
 func TestRegistrationErrorsAreRecorded(t *testing.T) {
 	type Id struct{ Name string }
 	type St struct{}
-	withDefs(t, func() {
-		mustRecordDefErr(t, "non-empty Spec.Name", func() {
-			DefineAgent[Id, St](Spec{}, func(Id) *St { return &St{} })
-		})
-		mustRecordDefErr(t, "unknown agent", func() {
-			Implement(&Agent[Id, St]{name: "does-not-exist"},
-				MethodDef[Id, Unit, Unit]{name: "m"},
-				func(*Context[St], Unit) Unit { return Unit{} })
-		})
+	withDefs(t, func(d *definitions) {
+		defineAgentInto[Id, St](d, Spec{}, func(Id) *St { return &St{} })
+		implementInto[Id, St, Unit, Unit](d, &Agent[Id, St]{name: "does-not-exist"},
+			MethodDef[Id, Unit, Unit]{name: "m"},
+			func(*Context[St], Unit) Unit { return Unit{} })
+		mustDefErr(t, d, "non-empty Spec.Name")
+		mustDefErr(t, d, "unknown agent")
 	})
 }

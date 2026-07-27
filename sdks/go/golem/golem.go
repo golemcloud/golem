@@ -116,6 +116,7 @@ func (a *Agent[Id, S]) Name() string { return a.name }
 type MethodDef[Id any, In any, Out any] struct {
 	name      string
 	desc      string
+	descCount int // how many times Desc was set; validated at Implement time
 	endpoints []Endpoint
 }
 

@@ -63,33 +63,38 @@ type variantDef struct {
 // Iface. Call it from a package-level var so registration happens before the
 // component is invoked.
 func DefineVariant[Iface any](cases ...CaseDef) *variantDef {
+	return defineVariantInto[Iface](defs, cases...)
+}
+
+// defineVariantInto is the instance-scoped implementation behind DefineVariant.
+func defineVariantInto[Iface any](d *definitions, cases ...CaseDef) *variantDef {
 	it := reflect.TypeFor[Iface]()
-	d := &variantDef{iface: it, cases: cases}
+	vd := &variantDef{iface: it, cases: cases}
 	if it.Kind() != reflect.Interface {
-		recordDefErr("", "", "DefineVariant requires an interface type, got %s", it)
-		return d
+		d.recordErr("", "", "DefineVariant requires an interface type, got %s", it)
+		return vd
 	}
-	if _, dup := defs.variants[it]; dup {
-		recordDefErr("", "", "variant already defined for %s", it)
-		return d
+	if _, dup := d.variants[it]; dup {
+		d.recordErr("", "", "variant already defined for %s", it)
+		return vd
 	}
 	if len(cases) == 0 {
-		recordDefErr("", "", "DefineVariant[%s] needs at least one case", it)
+		d.recordErr("", "", "DefineVariant[%s] needs at least one case", it)
 	}
 
 	seen := map[string]bool{}
 	seenType := map[reflect.Type]bool{}
 	for _, c := range cases {
 		if !c.typ.Implements(it) && !reflect.PointerTo(c.typ).Implements(it) {
-			recordDefErr("", "", "variant case %s (%s) does not implement %s", c.name, c.typ, it)
+			d.recordErr("", "", "variant case %s (%s) does not implement %s", c.name, c.typ, it)
 		}
 		if seen[c.name] {
-			recordDefErr("", "", "variant %s has duplicate case name %q", it, c.name)
+			d.recordErr("", "", "variant %s has duplicate case name %q", it, c.name)
 		}
 		if seenType[c.typ] {
 			// The wire case is chosen by the value's dynamic type, so one type
 			// cannot map to two case names unambiguously.
-			recordDefErr("", "", "variant %s uses case type %s more than once", it, c.typ)
+			d.recordErr("", "", "variant %s uses case type %s more than once", it, c.typ)
 		}
 		seen[c.name] = true
 		seenType[c.typ] = true
@@ -97,8 +102,8 @@ func DefineVariant[Iface any](cases ...CaseDef) *variantDef {
 
 	// Registered even with soft errors above, so downstream codec compilation
 	// resolves the interface as a variant instead of cascading a second error.
-	defs.variants[it] = d
-	return d
+	d.variants[it] = vd
+	return vd
 }
 
 // ---------------------------------------------------------------------------
@@ -126,22 +131,27 @@ type enumDef struct {
 // Values are positional: Status(0) is "active". A value outside 0..len(names)-1
 // is rejected at encode time rather than silently truncated.
 func DefineEnum[T any](names ...string) *enumDef {
+	return defineEnumInto[T](defs, names...)
+}
+
+// defineEnumInto is the instance-scoped implementation behind DefineEnum.
+func defineEnumInto[T any](d *definitions, names ...string) *enumDef {
 	t := reflect.TypeFor[T]()
-	d := &enumDef{typ: t, names: names}
+	ed := &enumDef{typ: t, names: names}
 	switch t.Kind() {
 	case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 	default:
-		recordDefErr("", "", "DefineEnum requires a named integer type, got %s (kind %s)", t, t.Kind())
-		return d
+		d.recordErr("", "", "DefineEnum requires a named integer type, got %s (kind %s)", t, t.Kind())
+		return ed
 	}
-	if _, dup := defs.enums[t]; dup {
-		recordDefErr("", "", "enum already defined for %s", t)
-		return d
+	if _, dup := d.enums[t]; dup {
+		d.recordErr("", "", "enum already defined for %s", t)
+		return ed
 	}
 	if len(names) == 0 {
-		recordDefErr("", "", "DefineEnum[%s] needs at least one name", t)
+		d.recordErr("", "", "DefineEnum[%s] needs at least one name", t)
 	}
-	defs.enums[t] = d
-	return d
+	d.enums[t] = ed
+	return ed
 }

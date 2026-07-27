@@ -132,7 +132,7 @@ func (m MethodDef[Id, In, Out]) encodeInput(in In) (tree types.SchemaValueTree, 
 		}
 	}()
 	inType := reflect.TypeFor[In]()
-	return encodeParams(structFields(inType), reflect.ValueOf(&in).Elem()), nil
+	return encodeParams(defs.structFields(inType), reflect.ValueOf(&in).Elem()), nil
 }
 
 // decodeOutput decodes a remote result through the LOCAL descriptor's Out codec.
@@ -152,8 +152,8 @@ func decodeOutput[Out any](target, method string, out witTypes.Option[types.Sche
 	}
 	tree := out.Some()
 	dst := reflect.New(outType).Elem()
-	d := decoder{nodes: tree.ValueNodes}
-	if err := compile(outType).decode(&d, dst, tree.Root); err != nil {
+	dec := decoder{nodes: tree.ValueNodes}
+	if err := defs.compile(outType).decode(&dec, dst, tree.Root); err != nil {
 		return zero, &RemoteCallError{
 			Target: target, Method: method, Kind: RemoteProtocol,
 			Msg: "remote returned an undecodable value: " + err.Error(),

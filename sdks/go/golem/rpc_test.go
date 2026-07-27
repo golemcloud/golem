@@ -58,7 +58,7 @@ func TestCallerEncodingMatchesCalleeDecoding(t *testing.T) {
 	}
 
 	// Decode it the way the callee's invoke path does.
-	fields := structFields(reflect.TypeFor[tChargeIn]())
+	fields := defs.structFields(reflect.TypeFor[tChargeIn]())
 	dst := reflect.New(reflect.TypeFor[tChargeIn]()).Elem()
 	if err := decodeParams(tree, fields, dst); err != nil {
 		t.Fatalf("callee could not decode the caller's arguments: %v", err)
@@ -74,7 +74,7 @@ func TestCallArgumentsAgreeWithThePublishedSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encodeInput: %v", err)
 	}
-	at, _ := buildAgentType(defs.agents["TestPayment"])
+	at, _ := defs.buildAgentType(defs.agents["TestPayment"])
 
 	var charge *common.AgentMethod
 	for i := range at.Methods {

@@ -114,13 +114,13 @@ func checkAgreement(g types.SchemaGraph, sIdx int32, tree types.SchemaValueTree,
 // decodes it back.
 func roundTrip[T any](t *testing.T, in T) T {
 	t.Helper()
-	c := compile(reflect.TypeFor[T]())
+	c := defs.compile(reflect.TypeFor[T]())
 
 	// &in, not in: reflect.ValueOf would unwrap an interface-typed T to its
 	// concrete type, which is exactly what a variant must not lose.
 	tree := encodeWith(c, reflect.ValueOf(&in).Elem())
 
-	var g graphBuilder
+	g := graphBuilder{d: defs}
 	root := g.node(c)
 	if err := checkAgreement(g.build(), root, tree, tree.Root, reflect.TypeFor[T]().String()); err != nil {
 		t.Fatalf("schema/value disagreement: %v", err)
@@ -231,8 +231,8 @@ func TestRoundTripDeeplyNestedOptionAndResult(t *testing.T) {
 // byte-identical schemas.
 func TestPointerAndOptionProduceTheSameSchema(t *testing.T) {
 	schemaOf := func(rt reflect.Type) types.SchemaGraph {
-		var g graphBuilder
-		g.node(compile(rt))
+		g := graphBuilder{d: defs}
+		g.node(defs.compile(rt))
 		return g.build()
 	}
 	ptr := schemaOf(reflect.TypeFor[*string]())
@@ -315,12 +315,12 @@ func assertNoCycleWithoutRef(t *testing.T, g types.SchemaGraph, idx int32, path 
 }
 
 func TestRecursiveTypeIsEmittedAsANamedDefNotARawCycle(t *testing.T) {
-	c := compile(reflect.TypeFor[Tree]())
+	c := defs.compile(reflect.TypeFor[Tree]())
 	if !c.recursive {
 		t.Fatal("Tree should have been detected as recursive at compile time")
 	}
 
-	var g graphBuilder
+	g := graphBuilder{d: defs}
 	root := g.node(c)
 	graph := g.build()
 
@@ -371,8 +371,8 @@ type nodeB struct {
 }
 
 func TestMutuallyRecursiveTypesBreakTheCycle(t *testing.T) {
-	var g graphBuilder
-	root := g.node(compile(reflect.TypeFor[nodeA]()))
+	g := graphBuilder{d: defs}
+	root := g.node(defs.compile(reflect.TypeFor[nodeA]()))
 	graph := g.build()
 
 	assertNoCycleWithoutRef(t, graph, root, map[int32]bool{})
@@ -391,7 +391,7 @@ func TestMutuallyRecursiveTypesBreakTheCycle(t *testing.T) {
 // obvious cycles.
 func TestPublishedAgentSchemasHaveNoRawCycles(t *testing.T) {
 	for _, name := range defs.order {
-		at, _ := buildAgentType(defs.agents[name])
+		at, _ := defs.buildAgentType(defs.agents[name])
 		for _, f := range at.Constructor.InputSchema.Parameters() {
 			assertNoCycleWithoutRef(t, at.Schema, f.Schema, map[int32]bool{})
 		}
@@ -410,9 +410,9 @@ func TestPublishedAgentSchemasHaveNoRawCycles(t *testing.T) {
 }
 
 func TestDefsAreSortedForDeterminism(t *testing.T) {
-	var g graphBuilder
-	g.node(compile(reflect.TypeFor[nodeA]()))
-	g.node(compile(reflect.TypeFor[Tree]()))
+	g := graphBuilder{d: defs}
+	g.node(defs.compile(reflect.TypeFor[nodeA]()))
+	g.node(defs.compile(reflect.TypeFor[Tree]()))
 	graph := g.build()
 
 	for i := 1; i < len(graph.Defs); i++ {
@@ -435,8 +435,8 @@ func TestSharedTypeIsEmittedOnce(t *testing.T) {
 		Left  Money
 		Right Money
 	}
-	var g graphBuilder
-	g.node(compile(reflect.TypeFor[Pair]()))
+	g := graphBuilder{d: defs}
+	g.node(defs.compile(reflect.TypeFor[Pair]()))
 	graph := g.build()
 
 	records := 0
@@ -459,7 +459,7 @@ func TestMapEncodingIsDeterministic(t *testing.T) {
 	// Go randomizes map iteration; these trees land in the oplog and are
 	// compared on replay, so encoding must be stable.
 	m := map[string]int64{"z": 1, "a": 2, "m": 3, "b": 4, "q": 5}
-	c := compile(reflect.TypeFor[map[string]int64]())
+	c := defs.compile(reflect.TypeFor[map[string]int64]())
 
 	first := encodeWith(c, reflect.ValueOf(m))
 	for range 50 {
@@ -490,23 +490,9 @@ func mustPanic(t *testing.T, want string, f func()) {
 // that uses it) at discovery.
 func mustInvalidCompile(t *testing.T, want string, rt reflect.Type) {
 	t.Helper()
-	if c := compile(rt); !strings.Contains(c.invalid, want) {
+	if c := defs.compile(rt); !strings.Contains(c.invalid, want) {
 		t.Fatalf("compile(%s).invalid = %q, want substring %q", rt, c.invalid, want)
 	}
-}
-
-// mustRecordDefErr asserts fn records at least one new definition error
-// mentioning want. Run it inside withDefs for isolation.
-func mustRecordDefErr(t *testing.T, want string, fn func()) {
-	t.Helper()
-	before := len(defs.errs)
-	fn()
-	for _, e := range defs.errs[before:] {
-		if strings.Contains(e.Error(), want) {
-			return
-		}
-	}
-	t.Fatalf("expected a recorded definition error mentioning %q; got %v", want, defs.errs[before:])
 }
 
 func TestUnsupportedTypesAreRejectedAtRegistration(t *testing.T) {
@@ -519,7 +505,7 @@ func TestUnsupportedTypesAreRejectedAtRegistration(t *testing.T) {
 
 func TestMalformedInputIsAnErrorNotAPanic(t *testing.T) {
 	// A string where a record is expected, and a truncated tree.
-	c := compile(reflect.TypeFor[Money]())
+	c := defs.compile(reflect.TypeFor[Money]())
 	tree := types.SchemaValueTree{
 		ValueNodes: []types.SchemaValueNode{types.MakeSchemaValueNodeStringValue("nope")},
 		Root:       0,
@@ -613,8 +599,8 @@ func TestRoundTripVariantAndEnum(t *testing.T) {
 }
 
 func TestVariantSchemaNamesCasesInDeclarationOrder(t *testing.T) {
-	var g graphBuilder
-	root := g.node(compile(reflect.TypeFor[PaymentMethod]()))
+	g := graphBuilder{d: defs}
+	root := g.node(defs.compile(reflect.TypeFor[PaymentMethod]()))
 	graph := g.build()
 
 	body := graph.TypeNodes[root].Body
@@ -632,8 +618,8 @@ func TestVariantSchemaNamesCasesInDeclarationOrder(t *testing.T) {
 }
 
 func TestEnumSchemaCarriesTheDeclaredNames(t *testing.T) {
-	var g graphBuilder
-	root := g.node(compile(reflect.TypeFor[Status]()))
+	g := graphBuilder{d: defs}
+	root := g.node(defs.compile(reflect.TypeFor[Status]()))
 	graph := g.build()
 
 	body := graph.TypeNodes[root].Body
@@ -653,21 +639,23 @@ func TestVariantAndEnumMisuseIsRejected(t *testing.T) {
 	// A value outside the declared enum range must not be silently truncated —
 	// this is an encode-time (invocation) failure, still a panic (recovered into
 	// an agent-error by the dispatcher).
-	c := compile(reflect.TypeFor[Status]())
+	c := defs.compile(reflect.TypeFor[Status]())
 	mustPanic(t, "outside the declared enum range", func() {
 		encodeWith(c, reflect.ValueOf(Status(99)))
 	})
 
 	// A nil interface holds no case — also encode-time.
-	vc := compile(reflect.TypeFor[PaymentMethod]())
+	vc := defs.compile(reflect.TypeFor[PaymentMethod]())
 	mustPanic(t, "must hold one of its cases", func() {
 		encodeWith(vc, reflect.ValueOf(&[]PaymentMethod{nil}[0]).Elem())
 	})
 
 	// Declaration-time validation: recorded, not panicked.
-	withDefs(t, func() {
-		mustRecordDefErr(t, "requires an interface type", func() { DefineVariant[Money]() })
-		mustRecordDefErr(t, "requires a named integer type", func() { DefineEnum[string]("a") })
+	withDefs(t, func(d *definitions) {
+		defineVariantInto[Money](d)
+		defineEnumInto[string](d, "a")
+		mustDefErr(t, d, "requires an interface type")
+		mustDefErr(t, d, "requires a named integer type")
 	})
 }
 
@@ -688,19 +676,24 @@ type emptyEnum int32
 type dupEnum int32
 
 func TestVariantEnumRegistrationErrorsAreRecorded(t *testing.T) {
-	withDefs(t, func() {
+	withDefs(t, func(d *definitions) {
 		// Re-registering an already-declared variant/enum (each on a distinct
 		// interface/type so it is a clean register-then-redefine).
-		DefineVariant[dupVar2](Case[dupImpl]("a"))
-		mustRecordDefErr(t, "already defined", func() { DefineVariant[dupVar2](Case[dupImpl]("b")) })
-		DefineEnum[dupEnum]("a")
-		mustRecordDefErr(t, "already defined", func() { DefineEnum[dupEnum]("b") })
+		defineVariantInto[dupVar2](d, Case[dupImpl]("a"))
+		defineVariantInto[dupVar2](d, Case[dupImpl]("b"))
+		defineEnumInto[dupEnum](d, "a")
+		defineEnumInto[dupEnum](d, "b")
+		mustDefErr(t, d, "already defined")
 		// Empty case / name lists.
-		mustRecordDefErr(t, "at least one case", func() { DefineVariant[emptyVar]() })
-		mustRecordDefErr(t, "at least one name", func() { DefineEnum[emptyEnum]() })
+		defineVariantInto[emptyVar](d)
+		defineEnumInto[emptyEnum](d)
+		mustDefErr(t, d, "at least one case")
+		mustDefErr(t, d, "at least one name")
 		// A case that does not implement the interface, and a duplicate case name.
-		mustRecordDefErr(t, "does not implement", func() { DefineVariant[dupVar1](Case[Money]("m")) })
-		mustRecordDefErr(t, "duplicate case name", func() { DefineVariant[dupVar3](Case[dupImpl3]("x"), Case[dupImpl3]("x")) })
+		defineVariantInto[dupVar1](d, Case[Money]("m"))
+		defineVariantInto[dupVar3](d, Case[dupImpl3]("x"), Case[dupImpl3]("x"))
+		mustDefErr(t, d, "does not implement")
+		mustDefErr(t, d, "duplicate case name")
 	})
 }
 
@@ -745,8 +738,8 @@ func TestMarkersLowerToTheirOwnWitTypes(t *testing.T) {
 		{"time.Time", reflect.TypeFor[time.Time](), types.SchemaTypeBodyDatetimeType},
 		{"time.Duration", reflect.TypeFor[time.Duration](), types.SchemaTypeBodyDurationType},
 	} {
-		var g graphBuilder
-		root := g.node(compile(tc.rt))
+		g := graphBuilder{d: defs}
+		root := g.node(defs.compile(tc.rt))
 		if got := g.build().TypeNodes[root].Body.Tag(); got != tc.want {
 			t.Errorf("%s lowered to tag %d, want %d", tc.name, got, tc.want)
 		}
@@ -768,8 +761,8 @@ func TestSecretRoundTripsAndStaysOutOfLogs(t *testing.T) {
 	}
 
 	// The schema marks it secret, while the value stays the revealed type.
-	var g graphBuilder
-	root := g.node(compile(reflect.TypeFor[Secret[string]]()))
+	g := graphBuilder{d: defs}
+	root := g.node(defs.compile(reflect.TypeFor[Secret[string]]()))
 	if tag := g.build().TypeNodes[root].Body.Tag(); tag != types.SchemaTypeBodySecretType {
 		t.Fatalf("Secret lowered to tag %d, want secret-type", tag)
 	}
@@ -783,8 +776,8 @@ func TestSecretRoundTripsAndStaysOutOfLogs(t *testing.T) {
 // through a pointer or Option[T], so there is no nil-vs-empty ambiguity.
 func TestNilContainersAreNeverOptional(t *testing.T) {
 	tagOf := func(rt reflect.Type) uint8 {
-		var g graphBuilder
-		root := g.node(compile(rt))
+		g := graphBuilder{d: defs}
+		root := g.node(defs.compile(rt))
 		return g.build().TypeNodes[root].Body.Tag()
 	}
 	for _, tc := range []struct {
@@ -805,18 +798,18 @@ func TestNilContainersAreNeverOptional(t *testing.T) {
 
 	// A nil slice encodes as an EMPTY LIST, never as none.
 	var nilSlice []string
-	tree := encodeWith(compile(reflect.TypeFor[[]string]()), reflect.ValueOf(&nilSlice).Elem())
+	tree := encodeWith(defs.compile(reflect.TypeFor[[]string]()), reflect.ValueOf(&nilSlice).Elem())
 	if n := tree.ValueNodes[tree.Root]; n.Tag() != types.SchemaValueNodeListValue || len(n.ListValue()) != 0 {
 		t.Fatalf("nil slice encoded as tag %d", n.Tag())
 	}
 	var nilMap map[string]int64
-	mt := encodeWith(compile(reflect.TypeFor[map[string]int64]()), reflect.ValueOf(&nilMap).Elem())
+	mt := encodeWith(defs.compile(reflect.TypeFor[map[string]int64]()), reflect.ValueOf(&nilMap).Elem())
 	if n := mt.ValueNodes[mt.Root]; n.Tag() != types.SchemaValueNodeMapValue || len(n.MapValue()) != 0 {
 		t.Fatalf("nil map encoded as tag %d", n.Tag())
 	}
 
 	// Only *[]T distinguishes absent from empty.
-	pc := compile(reflect.TypeFor[*[]string]())
+	pc := defs.compile(reflect.TypeFor[*[]string]())
 	var absent *[]string
 	if tr := encodeWith(pc, reflect.ValueOf(&absent).Elem()); !tr.ValueNodes[tr.Root].OptionValue().IsNone() {
 		t.Fatal("a nil *[]string must encode as none")
@@ -838,8 +831,8 @@ type pinnedNode struct {
 var _ = NameType[pinnedNode]("myapp.custom.node")
 
 func TestNameTypePinsTheDefID(t *testing.T) {
-	var g graphBuilder
-	root := g.node(compile(reflect.TypeFor[pinnedNode]()))
+	g := graphBuilder{d: defs}
+	root := g.node(defs.compile(reflect.TypeFor[pinnedNode]()))
 	graph := g.build()
 
 	if graph.TypeNodes[root].Body.Tag() != types.SchemaTypeBodyRefType {
@@ -856,16 +849,18 @@ func TestNameTypePinsTheDefID(t *testing.T) {
 func TestNameTypeRejectsConflicts(t *testing.T) {
 	type a struct{}
 	type b struct{}
-	withDefs(t, func() {
-		NameType[a]("dup.id.one")
+	withDefs(t, func(d *definitions) {
+		nameTypeInto[a](d, "dup.id.one")
 		// same type, same id → idempotent (records nothing)
-		before := len(defs.errs)
-		NameType[a]("dup.id.one")
-		if len(defs.errs) != before {
-			t.Fatalf("idempotent NameType recorded an error: %v", defs.errs[before:])
+		before := len(d.errs)
+		nameTypeInto[a](d, "dup.id.one")
+		if len(d.errs) != before {
+			t.Fatalf("idempotent NameType recorded an error: %v", d.errs[before:])
 		}
-		mustRecordDefErr(t, "already pinned", func() { NameType[a]("dup.id.two") }) // retag same type
-		mustRecordDefErr(t, "already pinned", func() { NameType[b]("dup.id.one") }) // reuse id
-		mustRecordDefErr(t, "non-empty", func() { NameType[struct{ X int }]("") })  // empty id
+		nameTypeInto[a](d, "dup.id.two") // retag same type
+		nameTypeInto[b](d, "dup.id.one") // reuse id
+		nameTypeInto[struct{ X int }](d, "")
+		mustDefErr(t, d, "already pinned")
+		mustDefErr(t, d, "non-empty")
 	})
 }

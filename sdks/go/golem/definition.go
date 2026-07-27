@@ -18,12 +18,11 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
-	"sync"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 )
 
-// Definition errors are problems found while registering or finalizing agent
+// Definition errors are problems found while registering or deriving agent
 // definitions — a bad Spec, an unsupported field type, a conflicting NameType,
 // an invalid HTTP route. They are *collected*, not panicked.
 //
@@ -54,14 +53,15 @@ func (e definitionError) Error() string {
 	}
 }
 
-// definitions holds all mutable state built up as agents, methods, types and
-// pins are declared, plus the one-time derivation cache. It lives behind a
-// single package-level pointer ([defs]) so a test can run against a fresh,
-// isolated instance by swapping that pointer — no per-global snapshotting.
+// definitions holds everything built up as agents, methods, types and pins are
+// declared. It is the explicit subject of both registration (the …Into helpers)
+// and discovery ([discover]) — so a test builds a fresh instance, registers a
+// controlled set into it, and dumps the result, with no package-global state.
 //
-// Registration runs single-goroutine at package init and the host calls the
-// guest exports single-threaded on this target, so the maps need no locking;
-// `once` guards the single derivation pass.
+// The public API (DefineAgent, …) registers into the single package-global
+// [defs]; the exports read it back. Registration runs single-goroutine at
+// package init and the host calls the exports single-threaded on this target, so
+// the maps need no locking.
 type definitions struct {
 	agents    map[string]*agentEntry
 	order     []string
@@ -70,9 +70,7 @@ type definitions struct {
 	enums     map[reflect.Type]*enumDef
 	pins      map[reflect.Type]string // NameType type-id overrides
 	codecs    map[reflect.Type]*codec // compile() memoization
-	errs      []definitionError
-	once      sync.Once
-	cached    map[string]common.AgentType
+	errs      []definitionError       // registration-phase errors (derivation adds more)
 }
 
 func newDefinitions() *definitions {
@@ -83,26 +81,96 @@ func newDefinitions() *definitions {
 		enums:     map[reflect.Type]*enumDef{},
 		pins:      map[reflect.Type]string{},
 		codecs:    map[reflect.Type]*codec{},
-		cached:    map[string]common.AgentType{},
 	}
 }
 
-// defs is the process-wide definition state the public API builds into. Tests
-// swap it for a fresh one (see the withDefs test helper) for full isolation.
+// defs is the process-wide definition state the public API builds into.
 var defs = newDefinitions()
 
-// recordDefErr appends a definition error. agent/method may be "" when the
-// problem is not attributable to one (e.g. a conflicting NameType).
-func recordDefErr(agent, method, format string, args ...any) {
-	defs.errs = append(defs.errs, definitionError{agent: agent, method: method, detail: fmt.Sprintf(format, args...)})
+// recordErr appends a registration-phase definition error. agent/method may be
+// "" when the problem is not attributable to one (e.g. a conflicting NameType).
+func (d *definitions) recordErr(agent, method, format string, args ...any) {
+	d.errs = append(d.errs, definitionError{agent: agent, method: method, detail: fmt.Sprintf(format, args...)})
+}
+
+// discover derives every agent type and collects every problem, purely: it reads
+// d but does not mutate it, so it is idempotent and safe to call repeatedly. The
+// returned errors are the registration-phase errors plus everything derivation
+// finds (unsupported types, invalid HTTP routes, intra-agent route collisions).
+func (d *definitions) discover() ([]common.AgentType, []definitionError) {
+	errs := append([]definitionError(nil), d.errs...)
+	var types []common.AgentType
+
+	for _, name := range d.order {
+		e := d.agents[name]
+		at, invalids, err := d.safeBuildAgentType(e)
+		if err != nil {
+			errs = append(errs, definitionError{agent: name, detail: err.Error()})
+			continue
+		}
+		for _, reason := range invalids {
+			// reason already names the offending type (e.g. "int has a
+			// platform-dependent width; …").
+			errs = append(errs, definitionError{agent: name, detail: reason})
+		}
+
+		// HTTP mount/endpoints: validate and compile, patching the built type
+		// with the metadata the platform routes on.
+		mount, endpoints, httpErrs := buildHTTP(e)
+		errs = append(errs, httpErrs...)
+		if mount.IsSome() {
+			at.HttpMount = mount
+			// Route collisions are checked only *within* an agent, where two
+			// methods sharing a verb+path is unconditionally ambiguous. Cross
+			// agent overlap depends on the httpApi deployment topology (agents
+			// may be mounted under different subdomains), which the SDK does not
+			// see — so, like the TS and Rust SDKs, that is left to the host.
+			routeOwners := map[string]string{}
+			prefix := mount.Some().PathPrefix
+			for _, mname := range e.order {
+				for _, det := range endpoints[mname] {
+					key := routeKey(det.HttpMethod, prefix, det.PathSuffix)
+					if prev, seen := routeOwners[key]; seen {
+						if prev == mname {
+							errs = append(errs, definitionError{name, mname, fmt.Sprintf("declares HTTP route %q more than once", key)})
+						} else {
+							errs = append(errs, definitionError{name, mname, fmt.Sprintf("HTTP route %q collides with method %q", key, prev)})
+						}
+					} else {
+						routeOwners[key] = mname
+					}
+				}
+			}
+		}
+		for i := range at.Methods {
+			if eps := endpoints[at.Methods[i].Name]; len(eps) > 0 {
+				at.Methods[i].HttpEndpoint = eps
+			}
+		}
+		types = append(types, at)
+	}
+	return types, errs
+}
+
+// safeBuildAgentType builds an agent's type metadata, converting any panic that
+// slips through (an unconverted edge case in schema derivation) into a recorded
+// error rather than a component-killing trap — the backstop for the no-trap rule.
+func (d *definitions) safeBuildAgentType(e *agentEntry) (at common.AgentType, invalids map[reflect.Type]string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("deriving agent type panicked: %v", r)
+		}
+	}()
+	at, invalids = d.buildAgentType(e)
+	return at, invalids, nil
 }
 
 // agentDefErrors returns the joined details of the errors that block a given
 // agent from being used — its own, plus any global (unattributed) ones — or ""
 // if there are none.
-func agentDefErrors(agent string) string {
+func agentDefErrors(errs []definitionError, agent string) string {
 	var msgs []string
-	for _, e := range defs.errs {
+	for _, e := range errs {
 		if e.agent == "" || e.agent == agent {
 			msgs = append(msgs, e.Error())
 		}
@@ -112,12 +180,12 @@ func agentDefErrors(agent string) string {
 
 // allDefErrors formats every collected error as one message for the wholesale
 // discover-agent-types report.
-func allDefErrors() string {
-	msgs := make([]string, 0, len(defs.errs))
-	for _, e := range defs.errs {
+func allDefErrors(errs []definitionError) string {
+	msgs := make([]string, 0, len(errs))
+	for _, e := range errs {
 		msgs = append(msgs, "  - "+e.Error())
 	}
-	return fmt.Sprintf("component has %d agent definition error(s):\n%s", len(defs.errs), strings.Join(msgs, "\n"))
+	return fmt.Sprintf("component has %d agent definition error(s):\n%s", len(errs), strings.Join(msgs, "\n"))
 }
 
 // DefinitionErrors returns every problem found while building the component's
@@ -126,76 +194,10 @@ func allDefErrors() string {
 // assert on definitions without deploying; at runtime the same errors surface
 // through discover-agent-types and initialize.
 func DefinitionErrors() []error {
-	finalize()
-	out := make([]error, len(defs.errs))
-	for i := range defs.errs {
-		out[i] = defs.errs[i]
+	_, ds := defs.discover()
+	out := make([]error, len(ds))
+	for i := range ds {
+		out[i] = ds[i]
 	}
 	return out
-}
-
-func finalize() {
-	defs.once.Do(func() {
-		for _, name := range defs.order {
-			e := defs.agents[name]
-			at, invalids, err := safeBuildAgentType(e)
-			if err != nil {
-				recordDefErr(name, "", "%s", err)
-				continue
-			}
-			for _, reason := range invalids {
-				// reason already names the offending type (e.g. "int has a
-				// platform-dependent width; …").
-				recordDefErr(name, "", "%s", reason)
-			}
-			// HTTP mount/endpoints: validate and compile, recording problems and
-			// patching the built type with the metadata the platform routes on.
-			mount, endpoints, httpErrs := buildHTTP(e)
-			defs.errs = append(defs.errs, httpErrs...)
-			if mount.IsSome() {
-				at.HttpMount = mount
-				// Route collisions are checked only *within* an agent, where two
-				// methods sharing a verb+path is unconditionally ambiguous. Cross
-				// agent overlap depends on the httpApi deployment topology (agents
-				// may be mounted under different subdomains), which the SDK does
-				// not see — so, like the TS and Rust SDKs, that is left to the host
-				// at deploy.
-				routeOwners := map[string]string{}
-				prefix := mount.Some().PathPrefix
-				for _, mname := range e.order {
-					for _, det := range endpoints[mname] {
-						key := routeKey(det.HttpMethod, prefix, det.PathSuffix)
-						if prev, seen := routeOwners[key]; seen {
-							if prev == mname {
-								recordDefErr(name, mname, "declares HTTP route %q more than once", key)
-							} else {
-								recordDefErr(name, mname, "HTTP route %q collides with method %q", key, prev)
-							}
-						} else {
-							routeOwners[key] = mname
-						}
-					}
-				}
-			}
-			for i := range at.Methods {
-				if eps := endpoints[at.Methods[i].Name]; len(eps) > 0 {
-					at.Methods[i].HttpEndpoint = eps
-				}
-			}
-			defs.cached[name] = at
-		}
-	})
-}
-
-// safeBuildAgentType builds an agent's type metadata, converting any panic that
-// slips through (an unconverted edge case in schema derivation) into a recorded
-// error rather than a component-killing trap — the backstop for the no-trap rule.
-func safeBuildAgentType(e *agentEntry) (at common.AgentType, invalids map[reflect.Type]string, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("deriving agent type panicked: %v", r)
-		}
-	}()
-	at, invalids = buildAgentType(e)
-	return at, invalids, nil
 }

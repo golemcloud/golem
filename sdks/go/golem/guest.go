@@ -90,9 +90,8 @@ func toAgentError(err error) common.AgentError {
 
 func init() {
 	guestExports.Exports.Initialize = func(agentType string, input types.SchemaValueTree, _ common.Principal) witTypes.Result[witTypes.Unit, common.AgentError] {
-		finalize()
-		if msg := agentDefErrors(agentType); msg != "" {
-			return witTypes.Err[witTypes.Unit](customError("agent definition errors:\n" + msg))
+		if _, ds := defs.discover(); agentDefErrors(ds, agentType) != "" {
+			return witTypes.Err[witTypes.Unit](customError("agent definition errors:\n" + agentDefErrors(ds, agentType)))
 		}
 		e := defs.agents[agentType]
 		if e == nil {
@@ -134,27 +133,28 @@ func init() {
 
 	// GetDefinition has no error channel in the WIT. It is only valid after a
 	// successful initialize, and initialize refuses an agent with definition
-	// errors — so by the time this runs the cached type is already validated.
+	// errors — so by the time this runs the type is already validated.
 	guestExports.Exports.GetDefinition = func() common.AgentType {
-		finalize()
+		types, _ := defs.discover()
+		want := ""
 		if active != nil {
-			return defs.cached[active.def.name]
+			want = active.def.name
+		} else if len(defs.order) > 0 {
+			want = defs.order[0]
 		}
-		if len(defs.order) > 0 {
-			return defs.cached[defs.order[0]]
+		for _, at := range types {
+			if at.TypeName == want {
+				return at
+			}
 		}
 		return common.AgentType{}
 	}
 
 	guestExports.Exports.DiscoverAgentTypes = func() witTypes.Result[[]common.AgentType, common.AgentError] {
-		finalize()
-		if len(defs.errs) > 0 {
-			return witTypes.Err[[]common.AgentType](customError(allDefErrors()))
+		types, ds := defs.discover()
+		if len(ds) > 0 {
+			return witTypes.Err[[]common.AgentType](customError(allDefErrors(ds)))
 		}
-		out := make([]common.AgentType, 0, len(defs.order))
-		for _, n := range defs.order {
-			out = append(out, defs.cached[n])
-		}
-		return witTypes.Ok[[]common.AgentType, common.AgentError](out)
+		return witTypes.Ok[[]common.AgentType, common.AgentError](types)
 	}
 }

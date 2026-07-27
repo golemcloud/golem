@@ -16,57 +16,48 @@ package golem
 
 import (
 	"strings"
-	"sync/atomic"
 	"testing"
 )
 
-// defsSwapActive enforces that only one withDefs is in effect at a time. Because
-// withDefs swaps the package-global defs, concurrent use (a test that added
-// t.Parallel(), or a nested withDefs) would corrupt state. The atomic
-// compare-and-swap makes that misuse fail deterministically and loudly — exactly
-// when it actually overlaps — instead of relying on the race detector, which
-// only catches such a race if it happens to observe the overlap.
-var defsSwapActive int32
-
-// withDefs runs fn against a fresh, isolated definition state, restoring the
-// package's real state when it returns (even on t.Fatal or panic). Isolation is
-// one pointer swap, since all registration state lives behind the single defs
-// pointer, so registration-level tests can DefineAgent/Implement freely without
-// colliding with the package's fixtures or leaking into other tests.
-//
-// Tests using withDefs must NOT call t.Parallel(): they share the global defs
-// and run sequentially by design; the guard below turns any accidental overlap
-// into an immediate failure.
-func withDefs(t *testing.T, fn func()) {
+// withDefs runs fn against a fresh, fully isolated definition set. Because
+// registration and discovery are both explicit over a *definitions, isolation is
+// just a new instance — no global swapping, no guard, and safe to parallelize.
+func withDefs(t *testing.T, fn func(d *definitions)) {
 	t.Helper()
-	if !atomic.CompareAndSwapInt32(&defsSwapActive, 0, 1) {
-		t.Fatal("withDefs is already active: it swaps the global defs and is not safe under t.Parallel() or nested use")
-	}
-	saved := defs
-	defs = newDefinitions()
-	defer func() {
-		defs = saved
-		atomic.StoreInt32(&defsSwapActive, 0)
-	}()
-	fn()
+	fn(newDefinitions())
 }
 
-func hasError(errs []error, want string) bool {
+// mustDefErr asserts that discovering d surfaces at least one definition error
+// mentioning want (registration- or derivation-phase).
+func mustDefErr(t *testing.T, d *definitions, want string) {
+	t.Helper()
+	_, errs := d.discover()
 	for _, e := range errs {
 		if strings.Contains(e.Error(), want) {
-			return true
+			return
 		}
 	}
-	return false
+	t.Fatalf("expected a definition error mentioning %q; got %v", want, errs)
+}
+
+// noDefErrs asserts d discovers cleanly.
+func noDefErrs(t *testing.T, d *definitions) {
+	t.Helper()
+	if _, errs := d.discover(); len(errs) != 0 {
+		t.Fatalf("expected no definition errors, got %v", errs)
+	}
 }
 
 // --- repeated / overwriting settings ---------------------------------------
 
 func TestMisuseRepeatedDesc(t *testing.T) {
-	withDefs(t, func() {
-		mustRecordDefErr(t, "Desc set 2 times", func() {
-			DefineMethod[struct{}, struct{}, struct{}]("m", Desc("a"), Desc("b"))
-		})
+	type Id struct{ Name string }
+	type St struct{}
+	withDefs(t, func(d *definitions) {
+		a := defineAgentInto[Id, St](d, Spec{Name: "A"}, func(Id) *St { return &St{} })
+		m := DefineMethod[Id, Unit, Unit]("m", Desc("a"), Desc("b"))
+		implementInto[Id, St, Unit, Unit](d, a, m, func(*Context[St], Unit) Unit { return Unit{} })
+		mustDefErr(t, d, "Desc set 2 times")
 	})
 }
 
@@ -85,11 +76,10 @@ func TestMisuseSharedIdType(t *testing.T) {
 	type SharedID struct{ Name string }
 	type S1 struct{}
 	type S2 struct{}
-	withDefs(t, func() {
-		DefineAgent[SharedID, S1](Spec{Name: "A1"}, func(SharedID) *S1 { return &S1{} })
-		mustRecordDefErr(t, "already used by agent", func() {
-			DefineAgent[SharedID, S2](Spec{Name: "A2"}, func(SharedID) *S2 { return &S2{} })
-		})
+	withDefs(t, func(d *definitions) {
+		defineAgentInto[SharedID, S1](d, Spec{Name: "A1"}, func(SharedID) *S1 { return &S1{} })
+		defineAgentInto[SharedID, S2](d, Spec{Name: "A2"}, func(SharedID) *S2 { return &S2{} })
+		mustDefErr(t, d, "already used by agent")
 	})
 }
 
@@ -97,20 +87,18 @@ func TestMisuseDuplicateAgentName(t *testing.T) {
 	type Id1 struct{ A string }
 	type Id2 struct{ B string }
 	type St struct{}
-	withDefs(t, func() {
-		DefineAgent[Id1, St](Spec{Name: "Dup"}, func(Id1) *St { return &St{} })
-		mustRecordDefErr(t, "already defined", func() {
-			DefineAgent[Id2, St](Spec{Name: "Dup"}, func(Id2) *St { return &St{} })
-		})
+	withDefs(t, func(d *definitions) {
+		defineAgentInto[Id1, St](d, Spec{Name: "Dup"}, func(Id1) *St { return &St{} })
+		defineAgentInto[Id2, St](d, Spec{Name: "Dup"}, func(Id2) *St { return &St{} })
+		mustDefErr(t, d, "already defined")
 	})
 }
 
 func TestMisuseNonStructId(t *testing.T) {
 	type St struct{}
-	withDefs(t, func() {
-		mustRecordDefErr(t, "must be a struct", func() {
-			DefineAgent[int, St](Spec{Name: "A"}, func(int) *St { return &St{} })
-		})
+	withDefs(t, func(d *definitions) {
+		defineAgentInto[int, St](d, Spec{Name: "A"}, func(int) *St { return &St{} })
+		mustDefErr(t, d, "must be a struct")
 	})
 }
 
@@ -119,23 +107,23 @@ func TestMisuseNonStructId(t *testing.T) {
 func TestMisuseEmptyMethodName(t *testing.T) {
 	type Id struct{ Name string }
 	type St struct{}
-	withDefs(t, func() {
-		a := DefineAgent[Id, St](Spec{Name: "A"}, func(Id) *St { return &St{} })
-		mustRecordDefErr(t, "non-empty method name", func() {
-			Implement(a, DefineMethod[Id, Unit, Unit](""), func(*Context[St], Unit) Unit { return Unit{} })
-		})
+	withDefs(t, func(d *definitions) {
+		a := defineAgentInto[Id, St](d, Spec{Name: "A"}, func(Id) *St { return &St{} })
+		implementInto[Id, St, Unit, Unit](d, a, DefineMethod[Id, Unit, Unit](""), func(*Context[St], Unit) Unit { return Unit{} })
+		mustDefErr(t, d, "non-empty method name")
 	})
 }
 
 func TestMisuseDuplicateMethod(t *testing.T) {
 	type Id struct{ Name string }
 	type St struct{}
-	withDefs(t, func() {
-		a := DefineAgent[Id, St](Spec{Name: "A"}, func(Id) *St { return &St{} })
+	withDefs(t, func(d *definitions) {
+		a := defineAgentInto[Id, St](d, Spec{Name: "A"}, func(Id) *St { return &St{} })
 		m := DefineMethod[Id, Unit, Unit]("m")
 		h := func(*Context[St], Unit) Unit { return Unit{} }
-		Implement(a, m, h)
-		mustRecordDefErr(t, "already implemented", func() { Implement(a, m, h) })
+		implementInto[Id, St, Unit, Unit](d, a, m, h)
+		implementInto[Id, St, Unit, Unit](d, a, m, h)
+		mustDefErr(t, d, "already implemented")
 	})
 }
 
@@ -145,16 +133,14 @@ func TestMisuseDuplicateRoute(t *testing.T) {
 	type Id struct{ Name string }
 	type St struct{}
 	type In struct{ X string }
-	withDefs(t, func() {
-		a := DefineAgent[Id, St](Spec{Name: "A", HTTP: &Mount{Path: "/a/{name}"}},
+	withDefs(t, func(d *definitions) {
+		a := defineAgentInto[Id, St](d, Spec{Name: "A", HTTP: &Mount{Path: "/a/{name}"}},
 			func(Id) *St { return &St{} })
 		m1 := DefineMethod[Id, In, Unit]("m1", HTTP(GET("/dup/{x}")))
 		m2 := DefineMethod[Id, In, Unit]("m2", HTTP(GET("/dup/{x}")))
-		Implement(a, m1, func(*Context[St], In) Unit { return Unit{} })
-		Implement(a, m2, func(*Context[St], In) Unit { return Unit{} })
-		if errs := DefinitionErrors(); !hasError(errs, "collides") {
-			t.Fatalf("expected a route-collision error, got %v", errs)
-		}
+		implementInto[Id, St, In, Unit](d, a, m1, func(*Context[St], In) Unit { return Unit{} })
+		implementInto[Id, St, In, Unit](d, a, m2, func(*Context[St], In) Unit { return Unit{} })
+		mustDefErr(t, d, "collides")
 	})
 }
 
@@ -166,9 +152,8 @@ type dupTypeImpl struct{}
 func (dupTypeImpl) dtv() {}
 
 func TestMisuseDuplicateCaseType(t *testing.T) {
-	withDefs(t, func() {
-		mustRecordDefErr(t, "case type", func() {
-			DefineVariant[dupTypeVar](Case[dupTypeImpl]("a"), Case[dupTypeImpl]("b"))
-		})
+	withDefs(t, func(d *definitions) {
+		defineVariantInto[dupTypeVar](d, Case[dupTypeImpl]("a"), Case[dupTypeImpl]("b"))
+		mustDefErr(t, d, "case type")
 	})
 }
