@@ -3932,19 +3932,6 @@ mod app_builder {
             self.available_options_help("profiles", "profile names", unknown, available_profiles)
         }
 
-        // TODO: atomic
-        #[allow(unused)]
-        fn available_templates(&self, _unknown: &str) -> String {
-            // TODO: atomic
-            /*self.available_options_help(
-                "templates",
-                "template names",
-                unknown,
-                self.templates.keys().map(|name| name.as_str()),
-            )*/
-            todo!()
-        }
-
         fn available_options_help<'a, I: IntoIterator<Item = &'a str>>(
             &self,
             entity_plural: &str,

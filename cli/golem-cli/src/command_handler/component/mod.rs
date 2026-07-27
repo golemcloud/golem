@@ -943,7 +943,6 @@ impl ComponentCommandHandler {
         component_name: &ComponentName,
         properties: &ComponentDeployProperties,
     ) -> anyhow::Result<diff::Component> {
-        // TODO: atomic: cache it with a TaskResultMarker?
         let component_binary_hash = {
             log_action(
                 "Calculating hash",
