@@ -46,9 +46,17 @@ import (
 type Transport struct{}
 
 // RoundTrip implements http.RoundTripper.
+//
+// Timeouts: set one with a request context deadline —
+// http.NewRequestWithContext(context.WithTimeout(...)). That deadline is
+// translated into wasi:http request-options and enforced by the host. Note that
+// http.Client.Timeout does NOT work here: the stdlib enforces it from a client
+// side timer goroutine, which can't preempt the blocking host Send on this
+// single-threaded target, and it never stamps req.Context().Deadline() for the
+// transport to read. Use a context deadline instead.
 func (Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// http.Client.Timeout and any caller context deadline both land as a
-	// context deadline on req; honor a cancellation before doing any work.
+	// A context deadline (or an already-cancelled context) lands on req; honor a
+	// cancellation before doing any work.
 	if err := req.Context().Err(); err != nil {
 		return nil, err
 	}
@@ -73,8 +81,8 @@ func (Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	go trailersW.Write(witTypes.Ok[witTypes.Option[*httptypes.Fields], httptypes.ErrorCode](
 		witTypes.None[*httptypes.Fields]()))
 
-	// Translate the request's deadline (where http.Client.Timeout ends up) into
-	// wasi:http request-options. One budget bounds each transport phase.
+	// Translate the request's context deadline into wasi:http request-options.
+	// One budget bounds each transport phase.
 	options := witTypes.None[*httptypes.RequestOptions]()
 	if dl, ok := req.Context().Deadline(); ok {
 		if nanos, set := timeoutFromDeadline(dl, time.Now()); set {
