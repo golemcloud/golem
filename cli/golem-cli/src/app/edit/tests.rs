@@ -15,7 +15,7 @@
 use crate::app::edit::cargo_toml::DependencySpec;
 use crate::app::edit::cargo_toml::{DependencyLocation, DependencyTable};
 use crate::app::edit::{
-    agents_md, cargo_toml, gitignore, golem_yaml, json, main_rs, main_ts, package_json,
+    agents_md, cargo_toml, gitignore, golem_yaml, json, main_go, main_rs, main_ts, package_json,
     tsconfig_json,
 };
 use crate::model::GuestLanguage;
@@ -872,6 +872,59 @@ import './b';
 import './b';
 "#;
     let merged = main_ts::merge_imports(current, update).unwrap();
+    assert_eq!(merged, current);
+}
+
+#[test]
+fn main_go_merge_imports_adds_new_sorted() {
+    let current = r#"package main
+
+// keep this import — it initializes the SDK runtime.
+import (
+	_ "github.com/golemcloud/golem/sdks/go/golem"
+	_ "app-counter/counter"
+)
+
+func main() {}
+"#;
+    let update = r#"package main
+
+import _ "app-counter/session"
+"#;
+    let merged = main_go::merge_imports(current, update).unwrap();
+    let expected = r#"package main
+
+// keep this import — it initializes the SDK runtime.
+import (
+	_ "app-counter/counter"
+	_ "app-counter/session"
+	_ "github.com/golemcloud/golem/sdks/go/golem"
+)
+
+func main() {}
+"#;
+    assert_eq!(merged, expected);
+    // Result is canonical gofmt: sorted, tab-indented, one group, and re-parses.
+    main_go::validate(&merged).unwrap();
+}
+
+#[test]
+fn main_go_merge_imports_dedups_and_keeps_current() {
+    let current = r#"package main
+
+import (
+	_ "app-counter/counter"
+	_ "github.com/golemcloud/golem/sdks/go/golem"
+)
+
+func main() {}
+"#;
+    // Re-applying an agent whose import is already present is a no-op.
+    let update = r#"package main
+
+import _ "app-counter/counter"
+"#;
+    let merged = main_go::merge_imports(current, update).unwrap();
     assert_eq!(merged, current);
 }
 

@@ -78,15 +78,20 @@ Only customize when the *strategy* needs to change (different backoff, give-up c
 
 ```
 golem.yaml                        # Root application manifest
-go.mod                            # One module for the whole app; pins the SDK and componentize-go
-<component>/                      # Component package (each becomes a WASM component)
+<component>/                      # Component directory (each becomes a WASM component)
   golem.yaml                      # Component manifest
-  counter.go                      # Agent definition — package main
+  go.mod                          # This component's module; pins the SDK and componentize-go
+  main.go                         # package main — the barrel: blank-imports the SDK + each agent
+  counter/                        # One package per agent
+    counter.go                    #   package counter — agent definition + init() registration
 golem-temp/                       # Build artifacts (gitignored)
 ```
 
-There is a **single Go module at the app root**. Each component directory is its own `package main`
-within that module, so components share dependencies but build to separate WASM components.
+Each component directory is **its own Go module** (its own `go.mod`), built to a separate WASM
+component. Within a component, every agent lives in its own package (`counter/counter.go` is
+`package counter`), and a single `main.go` (`package main`) blank-imports the SDK and each agent
+package so their `init()` functions register the agents. Adding an agent means adding a package and a
+blank import to `main.go`.
 
 ## Prerequisites
 
@@ -116,8 +121,12 @@ Wire names come from the SDK's declarations, not from Go identifiers:
   implementation binding and cross-agent calls.
 - Cross-agent calls hang off the descriptor (`Charge.Call(client, in)`), because Go methods cannot
   introduce type parameters.
-- `func main() {}` must exist and can be empty — the SDK wires the component exports from its `init()`.
-- Multiple agents can coexist in one component; a worker is initialized as exactly one of them.
+- `main.go` (`package main`) holds an empty `func main() {}` plus a blank import of each agent
+  package. The blank `_ "github.com/golemcloud/golem/sdks/go/golem"` import must stay — it initializes
+  the SDK runtime (e.g. HTTP) and links the component exports; do not remove it even though it looks
+  unused.
+- Multiple agents can coexist in one component (each its own package, all blank-imported by `main.go`);
+  a worker is initialized as exactly one of them.
 - Do NOT edit files under `internal/wit/` in the SDK — they are generated.
 
 ## Coding Convention

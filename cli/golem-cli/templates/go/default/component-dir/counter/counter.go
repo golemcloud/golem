@@ -1,5 +1,6 @@
-// Counter agent in Go.
-package main
+// Counter agent in Go. Each agent lives in its own package; main.go blank-imports
+// this package so its init() registers the agent with the SDK.
+package counter
 
 import "github.com/golemcloud/golem/sdks/go/golem"
 
@@ -57,6 +58,3 @@ func init() {
 }
 
 func (s *CounterState) current() int64 { return s.value }
-
-// The SDK wires the component exports from its own init(); main stays empty.
-func main() {}

@@ -19,6 +19,7 @@ pub mod gitignore;
 pub mod go_mod;
 pub mod golem_yaml;
 pub mod json;
+pub mod main_go;
 pub mod main_rs;
 pub mod main_ts;
 pub mod package_json;
