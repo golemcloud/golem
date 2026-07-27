@@ -32,18 +32,20 @@ var (
 )
 
 func init() {
-	golem.Implement(Counter, Increment, func(ctx *golem.Context[CounterState], _ golem.Unit) (int64, error) {
+	// Handlers return only their output value; signal failure by panicking (the
+	// SDK recovers it into an agent-error). Model expected outcomes as a Result.
+	golem.Implement(Counter, Increment, func(ctx *golem.Context[CounterState], _ golem.Unit) int64 {
 		ctx.State.value++
-		return ctx.State.value, nil
+		return ctx.State.value
 	})
 
-	golem.Implement(Counter, Add, func(ctx *golem.Context[CounterState], in AddIn) (int64, error) {
+	golem.Implement(Counter, Add, func(ctx *golem.Context[CounterState], in AddIn) int64 {
 		ctx.State.value += in.By
-		return ctx.State.value, nil
+		return ctx.State.value
 	})
 
 	// A handler can also be an ordinary Go method, bound with a method expression.
-	golem.Implement(Counter, Value, golem.Bind0NoErr((*CounterState).current))
+	golem.Implement(Counter, Value, golem.Bind0((*CounterState).current))
 }
 
 func (s *CounterState) current() int64 { return s.value }
