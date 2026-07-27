@@ -66,6 +66,7 @@ export * from './host/durable';
 // exported from the main entry so it is baked into the bundle injected into
 // `agent_guest.wasm` (sharing the runtime registries).
 export * from './fluent';
+export * as bridge from './bridge';
 
 let resolvedAgent: ResolvedAgent | undefined = undefined;
 let initializationPrincipal: Principal | undefined = undefined;

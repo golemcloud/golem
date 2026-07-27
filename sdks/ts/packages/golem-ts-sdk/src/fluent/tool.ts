@@ -22,11 +22,10 @@ import type {
   StreamSpec,
 } from 'golem:tool/common@0.1.0';
 import {
-  ToolRpc,
   type RpcError,
-  type ToolError,
   type TypedSchemaValue as WireTypedSchemaValue,
 } from 'golem:tool/host@0.1.0';
+import { createToolClientTransport, isRpcError } from '../bridge/tool';
 import type { Principal } from '../principal';
 import {
   type ExtendedCommandBody,
@@ -1258,7 +1257,7 @@ export function client<Definition extends AnyToolDefinition>(
   options: ToolClientOptions = {},
 ): ToolClient<Definition> {
   const tool = getExtendedToolDefinition(definition);
-  const transport = options.transport ?? new HostToolClientTransport(tool.toolName);
+  const transport = options.transport ?? createToolClientTransport(tool.toolName);
   const result: Record<string, unknown> = {};
 
   if (tool.root.body) {
@@ -1277,21 +1276,6 @@ export function client<Definition extends AnyToolDefinition>(
   });
 
   return result as ToolClient<Definition>;
-}
-
-class HostToolClientTransport implements ToolClientTransport {
-  private rpc?: ToolRpc;
-
-  constructor(private readonly toolName: string) {}
-
-  invokeAndAwait(
-    commandPath: readonly string[],
-    input: WireTypedSchemaValue,
-    stdin: AsyncIterable<number> | undefined,
-  ): Promise<ToolClientInvocationResult> {
-    this.rpc ??= new ToolRpc(this.toolName);
-    return this.rpc.invokeAndAwait([...commandPath], input, stdin);
-  }
 }
 
 function assembleToolClientNode(
@@ -1487,46 +1471,6 @@ function protocolToolCallError(message: string): ToolCallError<never> {
 
 function protocolRpcError(message: string): RpcError {
   return { tag: 'protocol-error', val: message };
-}
-
-function isRpcError(value: unknown): value is RpcError {
-  if (!isImplementationObject(value) || typeof value.tag !== 'string' || !hasOwn(value, 'val')) {
-    return false;
-  }
-  switch (value.tag) {
-    case 'protocol-error':
-    case 'denied':
-    case 'not-found':
-    case 'remote-internal-error':
-      return typeof value.val === 'string';
-    case 'remote-tool-error':
-      return isToolError(value.val);
-    default:
-      return false;
-  }
-}
-
-function isToolError(value: unknown): value is ToolError {
-  if (!isImplementationObject(value) || typeof value.tag !== 'string' || !hasOwn(value, 'val')) {
-    return false;
-  }
-  switch (value.tag) {
-    case 'invalid-tool-name':
-    case 'invalid-input':
-    case 'constraint-violation':
-    case 'invalid-result':
-      return typeof value.val === 'string';
-    case 'invalid-command-path':
-      return Array.isArray(value.val) && value.val.every((segment) => typeof segment === 'string');
-    case 'custom-error':
-      return (
-        isImplementationObject(value.val) &&
-        hasOwn(value.val, 'graph') &&
-        hasOwn(value.val, 'value')
-      );
-    default:
-      return false;
-  }
 }
 
 function formatToolCallError(cause: ToolCallErrorCause<unknown>): string {

@@ -441,16 +441,29 @@ impl OplogConstructor for CreateOplogConstructor {
         match agent_mode {
             AgentMode::Durable => {
                 let primary = if let Some(initial_entry) = self.initial_entry {
-                    self.primary
-                        .create(
-                            &self.owned_agent_id,
-                            agent_mode,
-                            initial_entry,
-                            self.initial_worker_metadata,
-                            self.last_known_status,
-                            self.execution_status,
-                        )
-                        .await
+                    if self.fresh {
+                        self.primary
+                            .create_fresh(
+                                &self.owned_agent_id,
+                                agent_mode,
+                                initial_entry,
+                                self.initial_worker_metadata,
+                                self.last_known_status,
+                                self.execution_status,
+                            )
+                            .await
+                    } else {
+                        self.primary
+                            .create(
+                                &self.owned_agent_id,
+                                agent_mode,
+                                initial_entry,
+                                self.initial_worker_metadata,
+                                self.last_known_status,
+                                self.execution_status,
+                            )
+                            .await
+                    }
                 } else {
                     self.primary
                         .open(

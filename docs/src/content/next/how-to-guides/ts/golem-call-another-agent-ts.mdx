@@ -1,13 +1,10 @@
 # Calling Another Agent (TypeScript)
 
-## Overview
+There are two typed RPC APIs. Use `clientFor` when both agents are defined in the
+same component. Use a generated guest client when the target is in another
+component (including a component written in another language).
 
-`clientFor(<AgentDefinition>)` builds a typed RPC client factory for a remote
-agent declared with `defineAgent`, enabling agent-to-agent communication over
-wasm-RPC. An awaited call blocks the calling agent until the target agent returns
-a result.
-
-## Getting a Client
+## Same Component: `clientFor`
 
 Pass the agent's **definition** (the value returned by `defineAgent`) to
 `clientFor`, then call the returned factory with the target agent's **id record**:
@@ -27,8 +24,6 @@ The id argument is the record declared in the target agent's `id: { … }` (for 
 `Counter` with `id: { name: z.string() }`, that is `{ name: 'my-counter' }`).
 This does **not** create the agent — the agent is created implicitly on its first
 invocation. If it already exists, you get a handle to the existing instance.
-
-## Awaited Call
 
 Call a method and wait for the result. Method inputs are passed as the declared
 input record (methods with an empty `input: {}` take no argument):
@@ -50,13 +45,64 @@ phantom, call `clientFor(Def).newPhantom(id)`; the returned details contain the
 typed client and generated `phantomId`, which can be saved and reused. See the
 [`golem-multi-instance-agent-ts`](/next/how-to-guides/ts/golem-multi-instance-agent-ts) guide.
 
-## Cross-Component RPC
+## Different Component: Generated Guest Client
 
-When calling agents defined in a **different component**, import that component's
-generated bridge client — the `golem build` step generates bridge SDK code for
-inter-component dependencies declared in `golem.yaml`. Agents in the **same**
-component import each other's `defineAgent` definition directly and use
-`clientFor`.
+Declare the dependency in the application-level `golem.yaml`. The CLI infers the
+consumer language from its `ts` template and generates the client before
+compiling the dependent component:
+
+```yaml
+components:
+  my-app:counter:
+    dir: counter
+    templates: rust
+  my-app:consumer:
+    dir: consumer
+    templates: ts
+    dependencies:
+      agents:
+        - my-app:counter/CounterAgent
+```
+
+The generated package is
+`golem-temp/bridge-sdk/ts/internal/counter-agent-guest-client`. From the
+`consumer` component directory, wire its source into the existing
+`tsconfig.json` (keep the component's own `src/**/*.ts` include):
+
+```json
+{
+  "compilerOptions": {
+    "paths": {
+      "counter-agent-guest-client": [
+        "../golem-temp/bridge-sdk/ts/internal/counter-agent-guest-client/counter-agent-guest-client.ts"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "../golem-temp/bridge-sdk/ts/internal/counter-agent-guest-client/*.ts"
+  ]
+}
+```
+
+Import that alias. Generated constructors flatten the target's id fields into
+parameters rather than taking an id record:
+
+```typescript
+import { CounterAgent } from 'counter-agent-guest-client';
+
+const counter = CounterAgent.get('my-counter');
+const count = await counter.increment();
+
+counter.increment.trigger();
+counter.increment.schedule(runAt);
+const cancellation = counter.increment.scheduleCancelable(runAt);
+```
+
+Every generated method supports an awaited call plus `.trigger`, `.schedule`,
+and `.scheduleCancelable`. No npm install, package path dependency, manual
+bridge-generation command, or REST client `configure()` call is needed:
+`golem build` regenerates the bridge before the consumer compiles.
 
 ## Avoiding Deadlocks
 
