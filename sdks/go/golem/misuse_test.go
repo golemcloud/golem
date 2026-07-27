@@ -16,19 +16,38 @@ package golem
 
 import (
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
+// defsSwapActive enforces that only one withDefs is in effect at a time. Because
+// withDefs swaps the package-global defs, concurrent use (a test that added
+// t.Parallel(), or a nested withDefs) would corrupt state. The atomic
+// compare-and-swap makes that misuse fail deterministically and loudly — exactly
+// when it actually overlaps — instead of relying on the race detector, which
+// only catches such a race if it happens to observe the overlap.
+var defsSwapActive int32
+
 // withDefs runs fn against a fresh, isolated definition state, restoring the
-// package's real state afterwards. Because all registration state lives behind
-// the single defs pointer, isolation is one pointer swap — registration-level
-// tests can DefineAgent/Implement freely without colliding with the package's
-// own fixtures or leaking into other tests.
+// package's real state when it returns (even on t.Fatal or panic). Isolation is
+// one pointer swap, since all registration state lives behind the single defs
+// pointer, so registration-level tests can DefineAgent/Implement freely without
+// colliding with the package's fixtures or leaking into other tests.
+//
+// Tests using withDefs must NOT call t.Parallel(): they share the global defs
+// and run sequentially by design; the guard below turns any accidental overlap
+// into an immediate failure.
 func withDefs(t *testing.T, fn func()) {
 	t.Helper()
+	if !atomic.CompareAndSwapInt32(&defsSwapActive, 0, 1) {
+		t.Fatal("withDefs is already active: it swaps the global defs and is not safe under t.Parallel() or nested use")
+	}
 	saved := defs
 	defs = newDefinitions()
-	t.Cleanup(func() { defs = saved })
+	defer func() {
+		defs = saved
+		atomic.StoreInt32(&defsSwapActive, 0)
+	}()
 	fn()
 }
 
