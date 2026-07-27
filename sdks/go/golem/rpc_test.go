@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
@@ -12,17 +13,18 @@ import (
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
-// What is testable natively, and why the rest is not.
+// The Go SDK's tests are layered (see the go-sdk-testing-strategy notes):
 //
-// `empty.s` lets a generated package COMPILE for the host, but the linker still
-// needs a definition for any `//go:wasmimport` symbol that host-arch code
-// actually references. So anything reaching a host import — Call, Trigger,
-// Schedule, CallAsync, Future.Get/Cancel, ClientFor — can only run under wasm,
-// and is covered by the component build plus the Phase 8 end-to-end tests.
-//
-// Everything the SDK itself is responsible for is pure and covered here:
-// encoding arguments, decoding results, and mapping errors. That is where the
-// bugs would be; the wrappers are a handful of straight-line calls.
+//   - Pure logic is unit-tested here, natively, under `go test`: argument
+//     encoding, result decoding, error mapping, and the small value projections.
+//     None of these functions reference a `//go:wasmimport` symbol, so they link
+//     and run on the host. We push as much logic as possible into this layer.
+//   - The wasi-touching wrappers — Call, Trigger, Schedule, CallAsync,
+//     Future.Get/Cancel, ClientFor — cannot run natively: calling one references
+//     a wasmimport symbol the host linker can't resolve (`empty.s` lets the
+//     generated package compile, but not link a referenced import). These are
+//     covered by the CLI-driven and runtime (worker-executor) integration layers
+//     instead, which build the component to wasm and run it.
 
 type tPayId struct{ Merchant string }
 type tPayState struct{ charged int64 }
@@ -200,7 +202,34 @@ func TestRemoteAgentErrorKeepsItsCause(t *testing.T) {
 	}
 }
 
-// Note: Call/Trigger/CallAsync guard against a zero Client, and Future.Get
-// guards against reuse after its owned handle is dropped. Both are straight-line
-// nil checks that cannot be exercised natively (referencing them pulls in the
-// wasmimport symbols), so they are covered by the wasip1 build and Phase 8.
+// invocationIDFrom projects the host's invocation metadata onto the SDK's
+// public InvocationID. Pure, so it is pinned here rather than left to
+// integration.
+func TestInvocationIDFromProjects(t *testing.T) {
+	got := invocationIDFrom(host.InvocationMetadata{AgentId: "agent-7", IdempotencyKey: "key-9"})
+	if got.AgentID != "agent-7" || got.IdempotencyKey != "key-9" {
+		t.Fatalf("invocationIDFrom = %+v, want {agent-7, key-9}", got)
+	}
+}
+
+// instantFrom converts a Go time into the wasi clock instant used for scheduling.
+// The interesting cases are sub-second nanoseconds and pre-epoch times, where the
+// seconds go negative while the nanoseconds stay in [0, 1e9).
+func TestInstantFromConvertsTime(t *testing.T) {
+	normal := instantFrom(time.Unix(1_700_000_000, 250_000_000))
+	if normal.Seconds != 1_700_000_000 || normal.Nanoseconds != 250_000_000 {
+		t.Fatalf("instantFrom(normal) = {%d, %d}, want {1700000000, 250000000}",
+			normal.Seconds, normal.Nanoseconds)
+	}
+
+	preEpoch := instantFrom(time.Unix(-2, 500_000_000))
+	if preEpoch.Seconds != -2 || preEpoch.Nanoseconds != 500_000_000 {
+		t.Fatalf("instantFrom(pre-epoch) = {%d, %d}, want {-2, 500000000}",
+			preEpoch.Seconds, preEpoch.Nanoseconds)
+	}
+}
+
+// Note: the zero-Client guards on Call/Trigger/CallAsync and the consumed-handle
+// guard on Future.Get are straight-line nil checks, but they cannot be exercised
+// natively — referencing the wrapper pulls in its wasmimport symbols. They are
+// covered by the integration layers.
