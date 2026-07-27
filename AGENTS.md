@@ -51,6 +51,12 @@ exec --fail-on-error ${golem} build -P release --yes
 
 Tests use [test-r](https://test-r.vigoo.dev). **Important:** Each test file must import `test_r::test` or tests will not run.
 
+Unit tests must never invoke external tools or compilers as subprocesses (for example `cargo`,
+`rustc`, `npm`, `npx`, `tsc`, `bun`, `sbt`, `scala-cli`, or `moon`). Put tests that need those
+tools in the appropriate integration test suite, such as `cli-integration-tests` for CLI and SDK
+generation checks. The unit-test CI job runs prebuilt test binaries and is intentionally kept fast;
+subprocess compilation in unit tests bypasses that design and can make the job time out.
+
 Worker executor tests, integration tests, and CLI integration tests may depend on built test components from `test-components/`. These `.wasm` artifacts are not checked into the repository anymore, so build the specific components needed by the selected tests before running them. Use the `modifying-test-components` skill for targeted rebuilds, or `rebuild-all-test-components` when a full rebuild is needed.
 
 **Do not run `cargo make test`** — it runs all tests and takes a very long time. Instead, choose the appropriate test command:

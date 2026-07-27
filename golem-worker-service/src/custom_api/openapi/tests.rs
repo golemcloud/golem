@@ -19,6 +19,7 @@ use super::HttpApiOpenApiSpec;
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour, RichRouteSecurity};
 use golem_common::base_model::agent::{BinaryType, TextType};
 use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
@@ -278,6 +279,7 @@ fn call_agent_route(
             component_id: ComponentId::new(),
             component_revision: ComponentRevision::INITIAL,
             agent_type: agent_type_name("TestAgent"),
+            agent_mode: AgentMode::Durable,
             constructor_input: CompiledInputSchema {
                 graph: SchemaGraph::empty(),
                 input_schema: InputSchema::Parameters(vec![]),

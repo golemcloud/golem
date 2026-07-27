@@ -760,8 +760,13 @@ impl TypeScriptBridgeGenerator {
         class_name: &str,
         config_var: &str,
     ) -> anyhow::Result<()> {
+        let description = if self.agent_type.mode == AgentMode::Durable {
+            "Creates a new agent instance with a fresh random phantom id."
+        } else {
+            "Creates a local logical proxy; each invocation receives a fresh final identity."
+        };
         writer.write_doc(&format!(
-            "Creates a new phantom instance of this agent\n{}",
+            "{description}\n{}",
             self.agent_type.constructor.description
         ));
         let mut new_phantom = writer.begin_static_async_method("newPhantom");
@@ -888,8 +893,13 @@ impl TypeScriptBridgeGenerator {
         config_var: &str,
         local_configs: &[&AgentConfigDeclarationSchema],
     ) -> anyhow::Result<()> {
+        let description = if self.agent_type.mode == AgentMode::Durable {
+            "Creates a new agent instance with a fresh random phantom id."
+        } else {
+            "Creates a local logical proxy; each invocation receives a fresh final identity."
+        };
         writer.write_doc(&format!(
-            "Creates a new phantom instance of this agent with configuration\n{}",
+            "{description}\n{}",
             self.agent_type.constructor.description
         ));
         let mut method = writer.begin_static_async_method("newPhantomWithConfig");
