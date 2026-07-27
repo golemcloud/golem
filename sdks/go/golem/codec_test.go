@@ -390,8 +390,8 @@ func TestMutuallyRecursiveTypesBreakTheCycle(t *testing.T) {
 // Every schema the SDK publishes must satisfy the rule, not just the ones with
 // obvious cycles.
 func TestPublishedAgentSchemasHaveNoRawCycles(t *testing.T) {
-	for _, name := range registryOrder {
-		at, _ := buildAgentType(registry[name])
+	for _, name := range defs.order {
+		at, _ := buildAgentType(defs.agents[name])
 		for _, f := range at.Constructor.InputSchema.Parameters() {
 			assertNoCycleWithoutRef(t, at.Schema, f.Schema, map[int32]bool{})
 		}
@@ -495,30 +495,18 @@ func mustInvalidCompile(t *testing.T, want string, rt reflect.Type) {
 	}
 }
 
-// withIsolatedDefs runs fn against a fresh definition-error slate (and a fresh
-// NameType pin table), restoring the prior state afterwards — so a test that
-// deliberately provokes definition errors does not pollute the shared component
-// state the good-path tests rely on.
-func withIsolatedDefs(t *testing.T, fn func()) {
-	t.Helper()
-	savedErrs, savedPins := defErrs, pinnedTypeIDs
-	defErrs, pinnedTypeIDs = nil, map[reflect.Type]string{}
-	t.Cleanup(func() { defErrs, pinnedTypeIDs = savedErrs, savedPins })
-	fn()
-}
-
 // mustRecordDefErr asserts fn records at least one new definition error
-// mentioning want.
+// mentioning want. Run it inside withDefs for isolation.
 func mustRecordDefErr(t *testing.T, want string, fn func()) {
 	t.Helper()
-	before := len(defErrs)
+	before := len(defs.errs)
 	fn()
-	for _, e := range defErrs[before:] {
+	for _, e := range defs.errs[before:] {
 		if strings.Contains(e.Error(), want) {
 			return
 		}
 	}
-	t.Fatalf("expected a recorded definition error mentioning %q; got %v", want, defErrs[before:])
+	t.Fatalf("expected a recorded definition error mentioning %q; got %v", want, defs.errs[before:])
 }
 
 func TestUnsupportedTypesAreRejectedAtRegistration(t *testing.T) {
@@ -677,7 +665,7 @@ func TestVariantAndEnumMisuseIsRejected(t *testing.T) {
 	})
 
 	// Declaration-time validation: recorded, not panicked.
-	withIsolatedDefs(t, func() {
+	withDefs(t, func() {
 		mustRecordDefErr(t, "requires an interface type", func() { DefineVariant[Money]() })
 		mustRecordDefErr(t, "requires a named integer type", func() { DefineEnum[string]("a") })
 	})
@@ -690,22 +678,29 @@ type dupImpl struct{}
 
 func (dupImpl) dv2() {}
 
+type dupVar3 interface{ dv3() }
+type dupImpl3 struct{}
+
+func (dupImpl3) dv3() {}
+
 type emptyVar interface{ ev() }
 type emptyEnum int32
+type dupEnum int32
 
 func TestVariantEnumRegistrationErrorsAreRecorded(t *testing.T) {
-	withIsolatedDefs(t, func() {
-		// Re-registering an already-declared variant/enum (Status and
-		// PaymentMethod are declared at package init).
-		mustRecordDefErr(t, "already defined", func() { DefineVariant[PaymentMethod]() })
-		mustRecordDefErr(t, "already defined", func() { DefineEnum[Status]("x") })
+	withDefs(t, func() {
+		// Re-registering an already-declared variant/enum (each on a distinct
+		// interface/type so it is a clean register-then-redefine).
+		DefineVariant[dupVar2](Case[dupImpl]("a"))
+		mustRecordDefErr(t, "already defined", func() { DefineVariant[dupVar2](Case[dupImpl]("b")) })
+		DefineEnum[dupEnum]("a")
+		mustRecordDefErr(t, "already defined", func() { DefineEnum[dupEnum]("b") })
 		// Empty case / name lists.
 		mustRecordDefErr(t, "at least one case", func() { DefineVariant[emptyVar]() })
 		mustRecordDefErr(t, "at least one name", func() { DefineEnum[emptyEnum]() })
-		// A case that does not implement the interface, and a duplicate case name
-		// (distinct interfaces so neither trips the already-defined check).
+		// A case that does not implement the interface, and a duplicate case name.
 		mustRecordDefErr(t, "does not implement", func() { DefineVariant[dupVar1](Case[Money]("m")) })
-		mustRecordDefErr(t, "duplicate case name", func() { DefineVariant[dupVar2](Case[dupImpl]("x"), Case[dupImpl]("x")) })
+		mustRecordDefErr(t, "duplicate case name", func() { DefineVariant[dupVar3](Case[dupImpl3]("x"), Case[dupImpl3]("x")) })
 	})
 }
 
@@ -861,13 +856,13 @@ func TestNameTypePinsTheDefID(t *testing.T) {
 func TestNameTypeRejectsConflicts(t *testing.T) {
 	type a struct{}
 	type b struct{}
-	withIsolatedDefs(t, func() {
+	withDefs(t, func() {
 		NameType[a]("dup.id.one")
 		// same type, same id → idempotent (records nothing)
-		before := len(defErrs)
+		before := len(defs.errs)
 		NameType[a]("dup.id.one")
-		if len(defErrs) != before {
-			t.Fatalf("idempotent NameType recorded an error: %v", defErrs[before:])
+		if len(defs.errs) != before {
+			t.Fatalf("idempotent NameType recorded an error: %v", defs.errs[before:])
 		}
 		mustRecordDefErr(t, "already pinned", func() { NameType[a]("dup.id.two") }) // retag same type
 		mustRecordDefErr(t, "already pinned", func() { NameType[b]("dup.id.one") }) // reuse id

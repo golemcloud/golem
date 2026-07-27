@@ -62,7 +62,7 @@ func TestStructFieldsAndLowerFirst(t *testing.T) {
 func TestRegistrationErrorsAreRecorded(t *testing.T) {
 	type Id struct{ Name string }
 	type St struct{}
-	withIsolatedDefs(t, func() {
+	withDefs(t, func() {
 		mustRecordDefErr(t, "non-empty Spec.Name", func() {
 			DefineAgent[Id, St](Spec{}, func(Id) *St { return &St{} })
 		})

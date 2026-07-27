@@ -59,8 +59,6 @@ type variantDef struct {
 	cases []CaseDef
 }
 
-var variantRegistry = map[reflect.Type]*variantDef{}
-
 // DefineVariant registers the closed set of types inhabiting the interface
 // Iface. Call it from a package-level var so registration happens before the
 // component is invoked.
@@ -71,7 +69,7 @@ func DefineVariant[Iface any](cases ...CaseDef) *variantDef {
 		recordDefErr("", "", "DefineVariant requires an interface type, got %s", it)
 		return d
 	}
-	if _, dup := variantRegistry[it]; dup {
+	if _, dup := defs.variants[it]; dup {
 		recordDefErr("", "", "variant already defined for %s", it)
 		return d
 	}
@@ -99,7 +97,7 @@ func DefineVariant[Iface any](cases ...CaseDef) *variantDef {
 
 	// Registered even with soft errors above, so downstream codec compilation
 	// resolves the interface as a variant instead of cascading a second error.
-	variantRegistry[it] = d
+	defs.variants[it] = d
 	return d
 }
 
@@ -114,8 +112,6 @@ type enumDef struct {
 	typ   reflect.Type
 	names []string
 }
-
-var enumRegistry = map[reflect.Type]*enumDef{}
 
 // DefineEnum registers a named integer type as a WIT enum:
 //
@@ -139,13 +135,13 @@ func DefineEnum[T any](names ...string) *enumDef {
 		recordDefErr("", "", "DefineEnum requires a named integer type, got %s (kind %s)", t, t.Kind())
 		return d
 	}
-	if _, dup := enumRegistry[t]; dup {
+	if _, dup := defs.enums[t]; dup {
 		recordDefErr("", "", "enum already defined for %s", t)
 		return d
 	}
 	if len(names) == 0 {
 		recordDefErr("", "", "DefineEnum[%s] needs at least one name", t)
 	}
-	enumRegistry[t] = d
+	defs.enums[t] = d
 	return d
 }

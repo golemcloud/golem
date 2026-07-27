@@ -60,11 +60,9 @@ type codec struct {
 	decode func(*decoder, reflect.Value, int32) error
 }
 
-// codecCache memoizes compilation. Compilation happens during registration
-// (package init), which is single-goroutine, so no locking is needed.
-var codecCache = map[reflect.Type]*codec{}
-
 // compile returns the codec for t, building it if this is the first request.
+// Results are memoized in defs.codecs (compilation runs single-goroutine at
+// registration, so no locking is needed).
 //
 // The cache entry is installed *before* the children are compiled, so a
 // self-referential type resolves to the in-progress codec rather than recursing
@@ -72,7 +70,7 @@ var codecCache = map[reflect.Type]*codec{}
 // behind a closure that dereferences them at call time, by which point the
 // outer compile has filled them in.
 func compile(t reflect.Type) *codec {
-	if c, ok := codecCache[t]; ok {
+	if c, ok := defs.codecs[t]; ok {
 		if c.building {
 			// Reached t again while still compiling it: t is reachable from
 			// itself. Marking one member of each cycle is enough — its ref-type
@@ -82,7 +80,7 @@ func compile(t reflect.Type) *codec {
 		return c
 	}
 	c := &codec{typ: t, building: true}
-	codecCache[t] = c
+	defs.codecs[t] = c
 	buildCodec(c)
 	c.building = false
 	return c
@@ -92,7 +90,7 @@ func compile(t reflect.Type) *codec {
 // carries. A pinned id (via [NameType]) wins, so cross-language consumers can be
 // made to agree; otherwise it is derived from the Go type's package path + name.
 func typeID(t reflect.Type) string {
-	if id, ok := pinnedTypeIDs[t]; ok {
+	if id, ok := defs.pins[t]; ok {
 		return id
 	}
 	name := t.Name()
@@ -109,11 +107,11 @@ func buildCodec(c *codec) {
 	// User-declared variants and enums are looked up before the kind switch:
 	// an enum is a named integer, which would otherwise compile as a plain
 	// integer, and a variant is an interface, which has no other meaning.
-	if d, ok := variantRegistry[c.typ]; ok {
+	if d, ok := defs.variants[c.typ]; ok {
 		compileVariant(c, d)
 		return
 	}
-	if d, ok := enumRegistry[c.typ]; ok {
+	if d, ok := defs.enums[c.typ]; ok {
 		compileEnum(c, d)
 		return
 	}

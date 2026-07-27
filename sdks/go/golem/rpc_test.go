@@ -74,7 +74,7 @@ func TestCallArgumentsAgreeWithThePublishedSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encodeInput: %v", err)
 	}
-	at, _ := buildAgentType(registry["TestPayment"])
+	at, _ := buildAgentType(defs.agents["TestPayment"])
 
 	var charge *common.AgentMethod
 	for i := range at.Methods {
@@ -112,7 +112,7 @@ func checkAgreement2(t *testing.T, g types.SchemaGraph, s int32, tree types.Sche
 // The constructor tree a client builds must be decodable as the target's
 // constructor parameters — otherwise the agent id would address nothing.
 func TestClientConstructorTreeMatchesTheTargetConstructor(t *testing.T) {
-	e := registry["TestPayment"]
+	e := defs.agents["TestPayment"]
 	id := tPayId{Merchant: "acme"}
 	ctor := encodeParams(e.idFields, reflect.ValueOf(&id).Elem())
 

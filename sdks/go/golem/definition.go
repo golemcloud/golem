@@ -54,15 +54,47 @@ func (e definitionError) Error() string {
 	}
 }
 
-// defErrs accumulates definition errors. Registration runs single-goroutine at
-// package init and the host calls exports single-threaded on this target, so no
-// locking is needed (same reasoning as codecCache).
-var defErrs []definitionError
+// definitions holds all mutable state built up as agents, methods, types and
+// pins are declared, plus the one-time derivation cache. It lives behind a
+// single package-level pointer ([defs]) so a test can run against a fresh,
+// isolated instance by swapping that pointer — no per-global snapshotting.
+//
+// Registration runs single-goroutine at package init and the host calls the
+// guest exports single-threaded on this target, so the maps need no locking;
+// `once` guards the single derivation pass.
+type definitions struct {
+	agents    map[string]*agentEntry
+	order     []string
+	idToAgent map[reflect.Type]string // Id type -> agent name, for ClientFor
+	variants  map[reflect.Type]*variantDef
+	enums     map[reflect.Type]*enumDef
+	pins      map[reflect.Type]string // NameType type-id overrides
+	codecs    map[reflect.Type]*codec // compile() memoization
+	errs      []definitionError
+	once      sync.Once
+	cached    map[string]common.AgentType
+}
+
+func newDefinitions() *definitions {
+	return &definitions{
+		agents:    map[string]*agentEntry{},
+		idToAgent: map[reflect.Type]string{},
+		variants:  map[reflect.Type]*variantDef{},
+		enums:     map[reflect.Type]*enumDef{},
+		pins:      map[reflect.Type]string{},
+		codecs:    map[reflect.Type]*codec{},
+		cached:    map[string]common.AgentType{},
+	}
+}
+
+// defs is the process-wide definition state the public API builds into. Tests
+// swap it for a fresh one (see the withDefs test helper) for full isolation.
+var defs = newDefinitions()
 
 // recordDefErr appends a definition error. agent/method may be "" when the
 // problem is not attributable to one (e.g. a conflicting NameType).
 func recordDefErr(agent, method, format string, args ...any) {
-	defErrs = append(defErrs, definitionError{agent: agent, method: method, detail: fmt.Sprintf(format, args...)})
+	defs.errs = append(defs.errs, definitionError{agent: agent, method: method, detail: fmt.Sprintf(format, args...)})
 }
 
 // agentDefErrors returns the joined details of the errors that block a given
@@ -70,7 +102,7 @@ func recordDefErr(agent, method, format string, args ...any) {
 // if there are none.
 func agentDefErrors(agent string) string {
 	var msgs []string
-	for _, e := range defErrs {
+	for _, e := range defs.errs {
 		if e.agent == "" || e.agent == agent {
 			msgs = append(msgs, e.Error())
 		}
@@ -81,11 +113,11 @@ func agentDefErrors(agent string) string {
 // allDefErrors formats every collected error as one message for the wholesale
 // discover-agent-types report.
 func allDefErrors() string {
-	msgs := make([]string, 0, len(defErrs))
-	for _, e := range defErrs {
+	msgs := make([]string, 0, len(defs.errs))
+	for _, e := range defs.errs {
 		msgs = append(msgs, "  - "+e.Error())
 	}
-	return fmt.Sprintf("component has %d agent definition error(s):\n%s", len(defErrs), strings.Join(msgs, "\n"))
+	return fmt.Sprintf("component has %d agent definition error(s):\n%s", len(defs.errs), strings.Join(msgs, "\n"))
 }
 
 // DefinitionErrors returns every problem found while building the component's
@@ -95,28 +127,17 @@ func allDefErrors() string {
 // through discover-agent-types and initialize.
 func DefinitionErrors() []error {
 	finalize()
-	out := make([]error, len(defErrs))
-	for i := range defErrs {
-		out[i] = defErrs[i]
+	out := make([]error, len(defs.errs))
+	for i := range defs.errs {
+		out[i] = defs.errs[i]
 	}
 	return out
 }
 
-// finalize derives every agent type once, recording (never panicking on) any
-// problem. Deferred work — schema-graph construction and, for HTTP, route
-// validation — happens here with full per-agent context, on top of the errors
-// already recorded eagerly at each Define* call.
-// finalizeOnce guards the one-time derivation. It is a *sync.Once (not a value)
-// so tests can swap in a fresh Once to reset the guard without copying the lock.
-var (
-	finalizeOnce = &sync.Once{}
-	cachedType   = map[string]common.AgentType{}
-)
-
 func finalize() {
-	finalizeOnce.Do(func() {
-		for _, name := range registryOrder {
-			e := registry[name]
+	defs.once.Do(func() {
+		for _, name := range defs.order {
+			e := defs.agents[name]
 			at, invalids, err := safeBuildAgentType(e)
 			if err != nil {
 				recordDefErr(name, "", "%s", err)
@@ -130,7 +151,7 @@ func finalize() {
 			// HTTP mount/endpoints: validate and compile, recording problems and
 			// patching the built type with the metadata the platform routes on.
 			mount, endpoints, httpErrs := buildHTTP(e)
-			defErrs = append(defErrs, httpErrs...)
+			defs.errs = append(defs.errs, httpErrs...)
 			if mount.IsSome() {
 				at.HttpMount = mount
 				// Route collisions are checked only *within* an agent, where two
@@ -161,7 +182,7 @@ func finalize() {
 					at.Methods[i].HttpEndpoint = eps
 				}
 			}
-			cachedType[name] = at
+			defs.cached[name] = at
 		}
 	})
 }

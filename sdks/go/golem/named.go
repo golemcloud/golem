@@ -16,10 +16,6 @@ package golem
 
 import "reflect"
 
-// pinnedTypeIDs overrides the derived type-id for specific Go types. Consulted
-// by typeID during codec compilation.
-var pinnedTypeIDs = map[reflect.Type]string{}
-
 // NameType pins the language-independent `type-id` for T, overriding the id
 // derived from its Go package path and name.
 //
@@ -42,16 +38,16 @@ func NameType[T any](id string) struct{} {
 		recordDefErr("", "", "NameType[%s] requires a non-empty type-id", t)
 		return struct{}{}
 	}
-	if existing, dup := pinnedTypeIDs[t]; dup && existing != id {
+	if existing, dup := defs.pins[t]; dup && existing != id {
 		recordDefErr("", "", "type %s already pinned to type-id %q", t, existing)
 		return struct{}{}
 	}
-	for other, existing := range pinnedTypeIDs {
+	for other, existing := range defs.pins {
 		if existing == id && other != t {
 			recordDefErr("", "", "type-id %q already pinned to %s", id, other)
 			return struct{}{}
 		}
 	}
-	pinnedTypeIDs[t] = id
+	defs.pins[t] = id
 	return struct{}{}
 }

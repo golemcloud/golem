@@ -62,15 +62,10 @@ type instance struct {
 	agentID string
 }
 
-var (
-	registry      = map[string]*agentEntry{}
-	registryOrder []string
-	// idTypeToAgent lets ClientFor resolve a target agent from its Id type.
-	idTypeToAgent = map[reflect.Type]string{}
-	// active is the instance this worker was initialized as, or nil before
-	// initialize() has run.
-	active *instance
-)
+// active is the running instance this worker was initialized as, or nil before
+// initialize() has run. Unlike the definition state (see [definitions]) this is
+// per-worker runtime state, so it stays a standalone package var.
+var active *instance
 
 // structFields returns the exported fields of a struct type in declaration
 // order. Non-structs (e.g. Unit) yield no fields.
@@ -116,7 +111,7 @@ func DefineAgent[Id any, S any](spec Spec, init func(Id) *S) *Agent[Id, S] {
 		recordDefErr("", "", "DefineAgent requires a non-empty Spec.Name (Id type %s)", idType)
 		return &Agent[Id, S]{name: spec.Name}
 	}
-	if _, dup := registry[spec.Name]; dup {
+	if _, dup := defs.agents[spec.Name]; dup {
 		recordDefErr(spec.Name, "", "agent type already defined")
 		return &Agent[Id, S]{name: spec.Name}
 	}
@@ -135,14 +130,14 @@ func DefineAgent[Id any, S any](spec Spec, init func(Id) *S) *Agent[Id, S] {
 		methods:  map[string]*methodEntry{},
 		newState: func(idVal reflect.Value) any { return init(idVal.Interface().(Id)) },
 	}
-	registry[spec.Name] = e
-	registryOrder = append(registryOrder, spec.Name)
+	defs.agents[spec.Name] = e
+	defs.order = append(defs.order, spec.Name)
 	// The Id type identifies the target agent for typed calls (ClientFor), so two
 	// agents cannot share one — the second would silently shadow the first.
-	if existing, ok := idTypeToAgent[idType]; ok && existing != spec.Name {
+	if existing, ok := defs.idToAgent[idType]; ok && existing != spec.Name {
 		recordDefErr(spec.Name, "", "Id type %s is already used by agent %q; each agent needs a distinct Id type", idType, existing)
 	} else {
-		idTypeToAgent[idType] = spec.Name
+		defs.idToAgent[idType] = spec.Name
 	}
 	return &Agent[Id, S]{name: spec.Name}
 }
@@ -178,7 +173,7 @@ func Implement[Id any, S any, In any, Out any](
 	m MethodDef[Id, In, Out],
 	h func(*Context[S], In) Out,
 ) {
-	e := registry[a.name]
+	e := defs.agents[a.name]
 	if e == nil {
 		recordDefErr(a.name, m.name, "Implement: unknown agent %q (was DefineAgent called?)", a.name)
 		return

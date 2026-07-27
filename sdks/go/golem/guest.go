@@ -94,7 +94,7 @@ func init() {
 		if msg := agentDefErrors(agentType); msg != "" {
 			return witTypes.Err[witTypes.Unit](customError("agent definition errors:\n" + msg))
 		}
-		e := registry[agentType]
+		e := defs.agents[agentType]
 		if e == nil {
 			return witTypes.Err[witTypes.Unit](common.MakeAgentErrorInvalidType("unknown agent type: " + agentType))
 		}
@@ -138,22 +138,22 @@ func init() {
 	guestExports.Exports.GetDefinition = func() common.AgentType {
 		finalize()
 		if active != nil {
-			return cachedType[active.def.name]
+			return defs.cached[active.def.name]
 		}
-		if len(registryOrder) > 0 {
-			return cachedType[registryOrder[0]]
+		if len(defs.order) > 0 {
+			return defs.cached[defs.order[0]]
 		}
 		return common.AgentType{}
 	}
 
 	guestExports.Exports.DiscoverAgentTypes = func() witTypes.Result[[]common.AgentType, common.AgentError] {
 		finalize()
-		if len(defErrs) > 0 {
+		if len(defs.errs) > 0 {
 			return witTypes.Err[[]common.AgentType](customError(allDefErrors()))
 		}
-		out := make([]common.AgentType, 0, len(registryOrder))
-		for _, n := range registryOrder {
-			out = append(out, cachedType[n])
+		out := make([]common.AgentType, 0, len(defs.order))
+		for _, n := range defs.order {
+			out = append(out, defs.cached[n])
 		}
 		return witTypes.Ok[[]common.AgentType, common.AgentError](out)
 	}

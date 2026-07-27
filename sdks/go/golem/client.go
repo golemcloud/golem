@@ -62,7 +62,7 @@ func WithPhantomID(id types.Uuid) ClientOpt {
 // constructor parameters — they are derived from the same Go types — so caller
 // and callee agree by construction rather than by convention.
 func ClientFor[Id any, S any](a *Agent[Id, S], id Id, opts ...ClientOpt) (Client[Id], error) {
-	e := registry[a.name]
+	e := defs.agents[a.name]
 	if e == nil {
 		return Client[Id]{}, fmt.Errorf("golem: ClientFor: unknown agent %s", a.name)
 	}
