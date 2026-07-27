@@ -137,7 +137,13 @@ func DefineAgent[Id any, S any](spec Spec, init func(Id) *S) *Agent[Id, S] {
 	}
 	registry[spec.Name] = e
 	registryOrder = append(registryOrder, spec.Name)
-	idTypeToAgent[idType] = spec.Name
+	// The Id type identifies the target agent for typed calls (ClientFor), so two
+	// agents cannot share one — the second would silently shadow the first.
+	if existing, ok := idTypeToAgent[idType]; ok && existing != spec.Name {
+		recordDefErr(spec.Name, "", "Id type %s is already used by agent %q; each agent needs a distinct Id type", idType, existing)
+	} else {
+		idTypeToAgent[idType] = spec.Name
+	}
 	return &Agent[Id, S]{name: spec.Name}
 }
 
@@ -149,6 +155,9 @@ func DefineMethod[Id any, In any, Out any](name string, opts ...MethodOpt) Metho
 	var o methodOpts
 	for _, f := range opts {
 		f(&o)
+	}
+	if o.descCount > 1 {
+		recordDefErr("", "", "method %q: Desc set %d times (a method has one description)", name, o.descCount)
 	}
 	return MethodDef[Id, In, Out]{name: name, desc: o.desc, endpoints: o.endpoints}
 }
@@ -172,6 +181,10 @@ func Implement[Id any, S any, In any, Out any](
 	e := registry[a.name]
 	if e == nil {
 		recordDefErr(a.name, m.name, "Implement: unknown agent %q (was DefineAgent called?)", a.name)
+		return
+	}
+	if m.name == "" {
+		recordDefErr(a.name, "", "DefineMethod requires a non-empty method name")
 		return
 	}
 	if _, dup := e.methods[m.name]; dup {

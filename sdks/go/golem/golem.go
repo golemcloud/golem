@@ -127,11 +127,16 @@ type MethodOpt func(*methodOpts)
 
 type methodOpts struct {
 	desc      string
+	descCount int
 	endpoints []Endpoint
 }
 
-// Desc sets a method's description, surfaced in the agent type metadata.
-func Desc(s string) MethodOpt { return func(o *methodOpts) { o.desc = s } }
+// Desc sets a method's description, surfaced in the agent type metadata. Setting
+// it more than once for the same method is a definition error, not a silent
+// overwrite.
+func Desc(s string) MethodOpt {
+	return func(o *methodOpts) { o.desc = s; o.descCount++ }
+}
 
 // HTTP exposes a method over HTTP at one or more routes (the agent must also
 // declare a [Mount] on its [Spec]). Grouping the endpoints in a single option

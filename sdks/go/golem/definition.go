@@ -106,8 +106,10 @@ func DefinitionErrors() []error {
 // problem. Deferred work — schema-graph construction and, for HTTP, route
 // validation — happens here with full per-agent context, on top of the errors
 // already recorded eagerly at each Define* call.
+// finalizeOnce guards the one-time derivation. It is a *sync.Once (not a value)
+// so tests can swap in a fresh Once to reset the guard without copying the lock.
 var (
-	finalizeOnce sync.Once
+	finalizeOnce = &sync.Once{}
 	cachedType   = map[string]common.AgentType{}
 )
 
@@ -131,6 +133,28 @@ func finalize() {
 			defErrs = append(defErrs, httpErrs...)
 			if mount.IsSome() {
 				at.HttpMount = mount
+				// Route collisions are checked only *within* an agent, where two
+				// methods sharing a verb+path is unconditionally ambiguous. Cross
+				// agent overlap depends on the httpApi deployment topology (agents
+				// may be mounted under different subdomains), which the SDK does
+				// not see — so, like the TS and Rust SDKs, that is left to the host
+				// at deploy.
+				routeOwners := map[string]string{}
+				prefix := mount.Some().PathPrefix
+				for _, mname := range e.order {
+					for _, det := range endpoints[mname] {
+						key := routeKey(det.HttpMethod, prefix, det.PathSuffix)
+						if prev, seen := routeOwners[key]; seen {
+							if prev == mname {
+								recordDefErr(name, mname, "declares HTTP route %q more than once", key)
+							} else {
+								recordDefErr(name, mname, "HTTP route %q collides with method %q", key, prev)
+							}
+						} else {
+							routeOwners[key] = mname
+						}
+					}
+				}
 			}
 			for i := range at.Methods {
 				if eps := endpoints[at.Methods[i].Name]; len(eps) > 0 {

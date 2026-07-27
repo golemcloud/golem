@@ -64,12 +64,13 @@ type Mount struct {
 // fields. Build one with a verb constructor ([GET], [POST], …) and configure it
 // with [EndpointOpt]s; a method may have several via [HTTP].
 type Endpoint struct {
-	method  string
-	path    string
-	headers []wireBind // wire header name -> input field
-	query   []wireBind // wire query name -> input field (in addition to inline ?k={f})
-	auth    *bool      // nil = inherit the mount; non-nil = override
-	cors    []string
+	method    string
+	path      string
+	headers   []wireBind // wire header name -> input field
+	query     []wireBind // wire query name -> input field (in addition to inline ?k={f})
+	auth      *bool      // nil = inherit the mount; non-nil = override
+	authCount int        // how many times EndpointAuth was applied (>1 is a misuse)
+	cors      []string
 }
 
 // wireBind maps a wire name (a header or query-parameter name) to the input
@@ -116,9 +117,11 @@ func Query(wire, field string) EndpointOpt {
 	return func(e *Endpoint) { e.query = append(e.query, wireBind{wire, field}) }
 }
 
-// EndpointAuth overrides the mount's auth requirement for this endpoint.
+// EndpointAuth overrides the mount's auth requirement for this endpoint. Setting
+// it more than once on one endpoint is a definition error, not a silent
+// overwrite.
 func EndpointAuth(required bool) EndpointOpt {
-	return func(e *Endpoint) { e.auth = &required }
+	return func(e *Endpoint) { e.auth = &required; e.authCount++ }
 }
 
 // EndpointCORS sets allowed-origin patterns for this endpoint.
@@ -374,6 +377,9 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 
 func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inKind map[string]reflect.Kind, mountVars map[string]bool) (common.HttpEndpointDetails, []string) {
 	var errs []string
+	if ep.authCount > 1 {
+		errs = append(errs, fmt.Sprintf("%s %q: EndpointAuth set %d times (an endpoint has one auth setting)", ep.method, ep.path, ep.authCount))
+	}
 	pp, perrs := parsePath(ep.path, true)
 	for _, pe := range perrs {
 		errs = append(errs, fmt.Sprintf("%s %q: %s", ep.method, ep.path, pe))
@@ -505,6 +511,60 @@ func witMethod(verb string) common.HttpMethod {
 		return common.MakeHttpMethodPatch()
 	default:
 		return common.MakeHttpMethodCustom(verb)
+	}
+}
+
+// routeKey renders a verb plus the full path (mount prefix ++ endpoint suffix)
+// into a normalized string for collision detection. Variable names are erased,
+// because the gateway matches on position — so GET /a/{x} and GET /a/{y} are the
+// same route and must not both be declared.
+func routeKey(method common.HttpMethod, prefix, suffix []common.PathSegment) string {
+	var b strings.Builder
+	b.WriteString(verbName(method))
+	for _, group := range [][]common.PathSegment{prefix, suffix} {
+		for _, s := range group {
+			b.WriteByte('/')
+			switch s.Tag() {
+			case common.PathSegmentLiteral:
+				b.WriteString(s.Literal())
+			case common.PathSegmentPathVariable:
+				b.WriteString("{}")
+			case common.PathSegmentRemainingPathVariable:
+				b.WriteString("{*}")
+			case common.PathSegmentSystemVariable:
+				if s.SystemVariable() == common.SystemVariableAgentVersion {
+					b.WriteString("{agent-version}")
+				} else {
+					b.WriteString("{agent-type}")
+				}
+			}
+		}
+	}
+	return b.String()
+}
+
+func verbName(m common.HttpMethod) string {
+	switch m.Tag() {
+	case common.HttpMethodGet:
+		return "GET"
+	case common.HttpMethodHead:
+		return "HEAD"
+	case common.HttpMethodPost:
+		return "POST"
+	case common.HttpMethodPut:
+		return "PUT"
+	case common.HttpMethodDelete:
+		return "DELETE"
+	case common.HttpMethodConnect:
+		return "CONNECT"
+	case common.HttpMethodOptions:
+		return "OPTIONS"
+	case common.HttpMethodTrace:
+		return "TRACE"
+	case common.HttpMethodPatch:
+		return "PATCH"
+	default:
+		return m.Custom()
 	}
 }
 

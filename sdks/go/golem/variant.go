@@ -80,6 +80,7 @@ func DefineVariant[Iface any](cases ...CaseDef) *variantDef {
 	}
 
 	seen := map[string]bool{}
+	seenType := map[reflect.Type]bool{}
 	for _, c := range cases {
 		if !c.typ.Implements(it) && !reflect.PointerTo(c.typ).Implements(it) {
 			recordDefErr("", "", "variant case %s (%s) does not implement %s", c.name, c.typ, it)
@@ -87,7 +88,13 @@ func DefineVariant[Iface any](cases ...CaseDef) *variantDef {
 		if seen[c.name] {
 			recordDefErr("", "", "variant %s has duplicate case name %q", it, c.name)
 		}
+		if seenType[c.typ] {
+			// The wire case is chosen by the value's dynamic type, so one type
+			// cannot map to two case names unambiguously.
+			recordDefErr("", "", "variant %s uses case type %s more than once", it, c.typ)
+		}
 		seen[c.name] = true
+		seenType[c.typ] = true
 	}
 
 	// Registered even with soft errors above, so downstream codec compilation
