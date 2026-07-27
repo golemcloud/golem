@@ -105,6 +105,10 @@ func lowerFirst(s string) string {
 //
 // Call it from a package-level var so registration happens before the component
 // is invoked.
+//
+// Thin wrapper over the package-global defs — keep all logic in
+// [defineAgentInto] so it stays testable against an explicit *definitions. See
+// [defs].
 func DefineAgent[Id any, S any](spec Spec, init func(Id) *S) *Agent[Id, S] {
 	return defineAgentInto[Id, S](defs, spec, init)
 }
@@ -127,6 +131,12 @@ func defineAgentInto[Id any, S any](d *definitions, spec Spec, init func(Id) *S)
 		// Record but still register (with no id fields) so downstream Implement
 		// calls attach rather than cascading into "unknown agent" errors.
 		d.recordErr(spec.Name, "", "Id must be a struct, got %s", idType)
+	}
+	if init == nil {
+		// Recorded, not fatal: init is only called from a successful initialize,
+		// which is gated on this agent having no definition errors — so the nil is
+		// reported at discovery rather than panicking at construction time.
+		d.recordErr(spec.Name, "", "DefineAgent requires a non-nil init function")
 	}
 	e := &agentEntry{
 		name:     spec.Name,
@@ -176,6 +186,9 @@ func DefineMethod[Id any, In any, Out any](name string, opts ...MethodOpt) Metho
 // agent-error surfaced to the caller — the worker survives). Reserve panic for
 // genuine failures; model expected, typed outcomes as a [Result] in the output.
 // Use [Must] to turn an inner (value, error) call into a panic-on-error.
+//
+// Thin wrapper over the package-global defs — keep all logic in [implementInto]
+// so it stays testable against an explicit *definitions. See [defs].
 func Implement[Id any, S any, In any, Out any](
 	a *Agent[Id, S],
 	m MethodDef[Id, In, Out],
@@ -198,6 +211,10 @@ func implementInto[Id any, S any, In any, Out any](
 	}
 	if m.name == "" {
 		d.recordErr(a.name, "", "DefineMethod requires a non-empty method name")
+		return
+	}
+	if h == nil {
+		d.recordErr(a.name, m.name, "Implement requires a non-nil handler")
 		return
 	}
 	if m.descCount > 1 {

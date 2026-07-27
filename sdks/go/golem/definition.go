@@ -85,6 +85,15 @@ func newDefinitions() *definitions {
 }
 
 // defs is the process-wide definition state the public API builds into.
+//
+// INVARIANT — keep the wrappers logic-free: the public registration functions
+// (DefineAgent, Implement, DefineVariant, DefineEnum, NameType) MUST be one-line
+// wrappers that forward to their `…Into(defs, …)` helper and nothing more. All
+// logic — validation, error recording, codec compilation, discovery — lives in
+// the instance-scoped helpers/methods so it runs against an explicit
+// *definitions and is testable in isolation (see the withDefs test helper). Any
+// logic added to a wrapper would execute only against this global and slip past
+// the per-instance tests.
 var defs = newDefinitions()
 
 // recordErr appends a registration-phase definition error. agent/method may be

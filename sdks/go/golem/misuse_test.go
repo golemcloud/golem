@@ -102,6 +102,25 @@ func TestMisuseNonStructId(t *testing.T) {
 	})
 }
 
+func TestMisuseNilInit(t *testing.T) {
+	type Id struct{ Name string }
+	type St struct{}
+	withDefs(t, func(d *definitions) {
+		defineAgentInto[Id, St](d, Spec{Name: "A"}, nil)
+		mustDefErr(t, d, "non-nil init")
+	})
+}
+
+func TestMisuseNilHandler(t *testing.T) {
+	type Id struct{ Name string }
+	type St struct{}
+	withDefs(t, func(d *definitions) {
+		a := defineAgentInto[Id, St](d, Spec{Name: "A"}, func(Id) *St { return &St{} })
+		implementInto[Id, St, Unit, Unit](d, a, DefineMethod[Id, Unit, Unit]("m"), nil)
+		mustDefErr(t, d, "non-nil handler")
+	})
+}
+
 // --- method-level misuse ----------------------------------------------------
 
 func TestMisuseEmptyMethodName(t *testing.T) {

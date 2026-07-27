@@ -62,6 +62,9 @@ type variantDef struct {
 // DefineVariant registers the closed set of types inhabiting the interface
 // Iface. Call it from a package-level var so registration happens before the
 // component is invoked.
+// Thin wrapper over the package-global defs — keep all logic in
+// [defineVariantInto] so it stays testable against an explicit *definitions.
+// See [defs].
 func DefineVariant[Iface any](cases ...CaseDef) *variantDef {
 	return defineVariantInto[Iface](defs, cases...)
 }
@@ -130,6 +133,8 @@ type enumDef struct {
 //
 // Values are positional: Status(0) is "active". A value outside 0..len(names)-1
 // is rejected at encode time rather than silently truncated.
+// Thin wrapper over the package-global defs — keep all logic in [defineEnumInto]
+// so it stays testable against an explicit *definitions. See [defs].
 func DefineEnum[T any](names ...string) *enumDef {
 	return defineEnumInto[T](defs, names...)
 }
