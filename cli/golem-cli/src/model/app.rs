@@ -2545,10 +2545,10 @@ mod app_builder {
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
-        Application, ApplicationPreload, ComponentDependency, ComponentLayer,
-        ComponentLayerApplyContext, ComponentLayerId, ComponentLayerProperties,
-        ComponentLayerPropertiesKind, ComponentPresetName, ComponentPresetSelector,
-        ComponentProperties, PartitionedComponentPresets, TEMP_DIR, WithSource,
+        APP_ENV_PRESET_PREFIX, Application, ApplicationPreload, ComponentDependency,
+        ComponentLayer, ComponentLayerApplyContext, ComponentLayerId, ComponentLayerProperties,
+        ComponentLayerPropertiesKind, ComponentPresetSelector, ComponentProperties,
+        PartitionedComponentPresets, TEMP_DIR, WithSource,
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
@@ -2870,7 +2870,11 @@ mod app_builder {
 
         raw_component_names: HashSet<String>,
         component_names_to_source_and_dir: BTreeMap<ComponentName, (PathBuf, Option<PathBuf>)>,
-        component_custom_presets: BTreeSet<ComponentPresetName>,
+        // Every custom preset name defined by any component, component template,
+        // or agent (env-scoped `app-env:` presets excluded), so environment preset
+        // references can be validated. Populated as those parts are processed, via
+        // `record_selectable_presets`.
+        custom_preset_names: BTreeSet<String>,
         component_layer_store: Store<ComponentLayer>,
 
         components:
@@ -2947,8 +2951,8 @@ mod app_builder {
                 builder.add_raw_app(&mut validation, app);
             }
 
-            // TODO: atomic: validate presets used in envs and template references
-            //               before component resolve, and skip if they are not valid
+            builder.validate_environment_preset_references(&mut validation);
+            builder.validate_selected_preset_references(&mut validation, &component_presets);
             builder.resolve_and_validate_components(&mut validation, &component_presets);
             builder.validate_unique_sources(&mut validation);
             builder.validate_http_api_deployments(&mut validation, &environments);
@@ -3096,6 +3100,7 @@ mod app_builder {
                         // agent templates/presets and flattened component fallback layers.
                         let unique_key = UniqueSourceCheckedEntityKey::Agent(agent_type_name.clone());
                         if self.add_entity_source(unique_key, &app.source) {
+                            self.record_selectable_presets(agent_properties.presets.keys());
                             self.agents.insert(
                                 agent_type_name,
                                 WithSource::new(app.source.clone(), agent_properties),
@@ -3391,12 +3396,6 @@ mod app_builder {
 
                             self.environments
                                 .insert(environment_name.clone(), environment.clone());
-                            validation.with_context(
-                                vec![("environment", environment_name.0)],
-                                |_validation| {
-                                    // TODO: atomic: validate environment
-                                },
-                            );
                         }
                     }
 
@@ -3511,6 +3510,7 @@ mod app_builder {
                         validation.add_error(err.to_string())
                     }
 
+                    self.record_selectable_presets(template.presets.keys());
                     let presets = PartitionedComponentPresets::new(template.presets);
 
                     if let Some(err) = self
@@ -3586,12 +3586,8 @@ mod app_builder {
                         validation.add_error(err.to_string())
                     }
 
+                    self.record_selectable_presets(component.presets.keys());
                     let presets = PartitionedComponentPresets::new(component.presets);
-
-                    presets.custom_presets.keys().for_each(|preset_name| {
-                        self.component_custom_presets
-                            .insert(ComponentPresetName(preset_name.clone()));
-                    });
 
                     if let Some(err) = self
                         .component_layer_store
@@ -3661,6 +3657,91 @@ mod app_builder {
                             .join(", ")
                     ))
                 })
+        }
+
+        /// Records preset names (from a component, template, or agent) that an
+        /// environment can select into [`Self::custom_preset_names`]. Env-scoped
+        /// `app-env:` presets are applied automatically rather than selected by
+        /// name, so they are excluded.
+        fn record_selectable_presets<'a>(&mut self, names: impl Iterator<Item = &'a String>) {
+            for name in names {
+                if !name.starts_with(APP_ENV_PRESET_PREFIX) {
+                    self.custom_preset_names.insert(name.clone());
+                }
+            }
+        }
+
+        /// Validates that every preset an environment declares is defined somewhere.
+        /// Preset selection (see `ComponentLayer::apply`) silently drops names it
+        /// does not recognise, so without this an environment typo would apply no
+        /// preset with no warning. The `--preset` flag is checked separately, in
+        /// [`Self::validate_selected_preset_references`].
+        fn validate_environment_preset_references(&self, validation: &mut ValidationBuilder) {
+            for (environment_name, environment) in &self.environments {
+                let referenced = environment.component_presets.clone().into_vec();
+                if referenced.is_empty() {
+                    continue;
+                }
+                validation.with_context(
+                    vec![("environment", environment_name.0.clone())],
+                    |validation| {
+                        for preset in referenced {
+                            self.validate_preset_defined(validation, &preset, None);
+                        }
+                    },
+                );
+            }
+        }
+
+        /// Validates the presets actually selected for this run. Environment presets
+        /// are covered by [`Self::validate_environment_preset_references`]; this also
+        /// catches presets given with `--preset`, which replace the environment's
+        /// list and would otherwise be silently dropped.
+        fn validate_selected_preset_references(
+            &self,
+            validation: &mut ValidationBuilder,
+            selector: &ComponentPresetSelector,
+        ) {
+            let environment_refs = self
+                .environments
+                .get(&selector.environment)
+                .map(|environment| environment.component_presets.clone().into_set())
+                .unwrap_or_default();
+
+            for preset in &selector.presets {
+                // Skip presets that came from the environment; those are already
+                // reported by validate_environment_preset_references.
+                if environment_refs.contains(&preset.0) {
+                    continue;
+                }
+                self.validate_preset_defined(validation, &preset.0, Some("--preset"));
+            }
+        }
+
+        /// Adds an error if `preset` is not a defined selectable preset name.
+        /// `selected_with` names the flag it came from, when not an environment.
+        fn validate_preset_defined(
+            &self,
+            validation: &mut ValidationBuilder,
+            preset: &str,
+            selected_with: Option<&str>,
+        ) {
+            if self.custom_preset_names.contains(preset) {
+                return;
+            }
+            let source = selected_with
+                .map(|flag| format!(" selected with {flag}"))
+                .unwrap_or_default();
+            validation.add_error(format!(
+                "Unknown preset {}{source}.\n{}",
+                preset.log_color_error_highlight(),
+                self.available_options_help(
+                    "presets",
+                    "preset names",
+                    preset,
+                    self.custom_preset_names.iter().map(String::as_str),
+                ),
+            ));
         }
 
         fn resolve_and_validate_components(
@@ -3993,6 +4074,15 @@ mod test {
                 componentWasm: dummy-component.wasm
 
             components:
+              # Defines debug/release so they are known preset names; app:main
+              # below deliberately does not define them, to exercise the fallback.
+              app:other:
+                componentWasm: other.wasm
+                presets:
+                  debug:
+                    componentWasm: other-debug.wasm
+                  release:
+                    componentWasm: other-release.wasm
               app:main:
                 templates: malbogle
                 presets:
@@ -4670,6 +4760,93 @@ mod test {
     }
 
     #[test]
+    fn environment_unknown_component_preset_is_rejected() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+                componentPresets: slow
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                presets:
+                  fast:
+                    env:
+                      MODE: fast
+        "# });
+
+        assert_eq!(errors.len(), 1, "unexpected errors: {errors:?}");
+        assert!(
+            errors[0].contains("Unknown preset") && errors[0].contains("slow"),
+            "unexpected error: {}",
+            errors[0]
+        );
+        // The available presets are listed so the user can find the right name.
+        assert!(
+            errors[0].contains("fast"),
+            "error should list available presets: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn environment_known_component_preset_is_accepted() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+                componentPresets: fast
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                presets:
+                  fast:
+                    env:
+                      MODE: fast
+        "# });
+
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    #[test]
+    fn unknown_preset_selected_with_flag_is_rejected() {
+        // A `--preset` value replaces the environment's list and would otherwise
+        // be silently dropped during selection.
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                presets:
+                  fast:
+                    env:
+                      MODE: fast
+        "# };
+
+        let errors = load_app_errors_with_selector(source, &selector("local", &["slow"]));
+
+        assert_eq!(errors.len(), 1, "unexpected errors: {errors:?}");
+        assert!(
+            errors[0].contains("Unknown preset")
+                && errors[0].contains("slow")
+                && errors[0].contains("--preset"),
+            "unexpected error: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
     fn non_rust_guest_bridge_mode_is_rejected() {
         let source = indoc! { r#"
             app: hello-app
@@ -5001,6 +5178,11 @@ mod test {
             components:
               app:main:
                 componentWasm: dummy-component.wasm
+                # 'missing' is a known preset name (so selecting it is valid), but
+                # test-agent below does not define it, exercising the fallback.
+                presets:
+                  missing:
+                    componentWasm: dummy-component.wasm
 
             agents:
               test-agent:
@@ -5709,6 +5891,13 @@ mod test {
     }
 
     fn load_app_errors(source: &str) -> Vec<String> {
+        load_app_errors_with_selector(source, &selector("local", &[]))
+    }
+
+    fn load_app_errors_with_selector(
+        source: &str,
+        selector: &ComponentPresetSelector,
+    ) -> Vec<String> {
         let tmp_dir = tempfile::tempdir().unwrap();
 
         let golem_yaml_path = tmp_dir.path().join("golem.yaml");
@@ -5736,7 +5925,7 @@ mod test {
             application_name,
             environments,
             local_server,
-            selector("local", &[]),
+            selector.clone(),
             raw_apps,
         )
         .into_product();
