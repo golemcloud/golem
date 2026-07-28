@@ -24,7 +24,8 @@
 
 use crate::model::cli_output::StructuredOutput;
 use crate::model::text::fmt::{NoTextOutput, TextOutput};
-use golem_common::model::component::ComponentName;
+use crate::model::worker::RawAgentId;
+use golem_common::model::component::{ComponentName, ComponentRevision};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -138,7 +139,7 @@ impl StructuredOutput for AgentCancelInvocationResult {
 #[serde(rename_all = "camelCase")]
 pub struct AgentRedeployResult {
     pub redeployed: bool,
-    pub components: Vec<ComponentName>,
+    pub agents: Vec<AgentRedeploymentMeta>,
 }
 
 impl NoTextOutput for AgentRedeployResult {}
@@ -146,6 +147,40 @@ impl TextOutput for AgentRedeployResult {}
 
 impl StructuredOutput for AgentRedeployResult {
     const KIND: &'static str = "agent.redeploy";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRedeploymentMeta {
+    pub component_name: ComponentName,
+    pub agent_name: RawAgentId,
+    pub from_revision: ComponentRevision,
+    pub revision: ComponentRevision,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentDeleteAllResult {
+    pub deleted: bool,
+    pub agents: Vec<AgentDeletionMeta>,
+}
+
+impl NoTextOutput for AgentDeleteAllResult {}
+impl TextOutput for AgentDeleteAllResult {}
+
+impl StructuredOutput for AgentDeleteAllResult {
+    const KIND: &'static str = "agent.delete-all";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentDeletionMeta {
+    pub component_name: ComponentName,
+    pub agent_name: RawAgentId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

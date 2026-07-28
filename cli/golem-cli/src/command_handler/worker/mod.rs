@@ -30,7 +30,7 @@ use crate::log::{
     log_warn_action, logln,
 };
 use crate::model::component::ComponentNameMatchKind;
-use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
+use crate::model::deploy::{AgentUpdateMeta, TryUpdateAllWorkersResult};
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::action_result::{
     AgentCancelInvocationResult, AgentDeleteResult, AgentFileContentsResult, AgentInterruptResult,
@@ -1304,7 +1304,26 @@ impl WorkerCommandHandler {
             }
         };
 
+        let from_revision = self
+            .worker_metadata(component.id.0, &component.component_name, &agent_name)
+            .await?
+            .map(|metadata| metadata.component_revision)
+            .unwrap_or(target_revision);
+        let meta = AgentUpdateMeta {
+            component_name: component.component_name.clone(),
+            agent_name: agent_name.clone(),
+            from_revision,
+            revision: target_revision,
+            from_version: self
+                .ctx
+                .component_handler()
+                .component_version_at(&component.id, from_revision)
+                .await,
+            version: component.metadata.root_package_version().clone(),
+        };
+
         let mut update_results = TryUpdateAllWorkersResult::default();
+        update_results.agents.push(meta);
         match self
             .update_worker(
                 &component.component_name,
@@ -1317,19 +1336,11 @@ impl WorkerCommandHandler {
             )
             .await
         {
-            Ok(()) => update_results.triggered.push(WorkerUpdateAttempt {
-                component_name: component.component_name.clone(),
-                target_revision,
-                agent_name: agent_name.0.as_str().into(),
-                error: None,
-            }),
+            Ok(()) => {}
             Err(error) => {
-                update_results.failed.push(WorkerUpdateAttempt {
-                    component_name: component.component_name.clone(),
-                    target_revision,
-                    agent_name: agent_name.0.as_str().into(),
-                    error: Some(error.to_string()),
-                });
+                update_results
+                    .errors
+                    .insert(agent_name.0.clone(), error.to_string());
                 self.ctx.log_handler().log_output(update_results)?;
                 return Err(error);
             }
@@ -1856,6 +1867,11 @@ impl WorkerCommandHandler {
         );
         let _indent = LogIndent::new();
 
+        let version = self
+            .ctx
+            .component_handler()
+            .component_version_at(component_id, target_revision)
+            .await;
         let mut update_results = TryUpdateAllWorkersResult::default();
         for worker in &workers_to_update {
             let result = self
@@ -1870,24 +1886,23 @@ impl WorkerCommandHandler {
                 )
                 .await;
 
-            match result {
-                Ok(_) => {
-                    update_results.triggered.push(WorkerUpdateAttempt {
-                        component_name: component_name.clone(),
-                        target_revision,
-                        agent_name: worker.agent_id.agent_id.as_str().into(),
-                        error: None,
-                    });
-                }
-                Err(error) => {
-                    update_results.triggered.push(WorkerUpdateAttempt {
-                        component_name: component_name.clone(),
-                        target_revision,
-                        agent_name: worker.agent_id.agent_id.as_str().into(),
-                        error: Some(error.to_string()),
-                    });
-                }
+            if let Err(error) = &result {
+                update_results
+                    .errors
+                    .insert(worker.agent_id.agent_id.clone(), error.to_string());
             }
+            update_results.agents.push(AgentUpdateMeta {
+                component_name: component_name.clone(),
+                agent_name: worker.agent_id.agent_id.as_str().into(),
+                from_revision: worker.component_revision,
+                revision: target_revision,
+                from_version: self
+                    .ctx
+                    .component_handler()
+                    .component_version_at(component_id, worker.component_revision)
+                    .await,
+                version: version.clone(),
+            });
         }
 
         if await_update {
@@ -2057,11 +2072,13 @@ impl WorkerCommandHandler {
         }
     }
 
+    /// Redeploys all agents of a component, returning each redeployed agent's id and the revision it
+    /// was running at before (its "from" revision).
     pub async fn redeploy_component_workers(
         &self,
         component_name: &ComponentName,
         component_id: &ComponentId,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Vec<(RawAgentId, ComponentRevision)>> {
         let (workers, _) = self
             .list_component_workers(component_name, component_id, None, None, None, None, false)
             .await?;
@@ -2071,7 +2088,7 @@ impl WorkerCommandHandler {
                 "Skipping",
                 format!("redeploying agents for component {component_name}, no agent found"),
             );
-            return Ok(());
+            return Ok(Vec::new());
         }
 
         log_action(
@@ -2092,19 +2109,24 @@ impl WorkerCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
+        let mut redeployed = Vec::with_capacity(workers.len());
         for worker in workers {
+            let agent_name: RawAgentId = worker.agent_id.agent_id.as_str().into();
+            let from_revision = worker.component_revision;
             self.redeploy_worker(component_name, worker).await?;
+            redeployed.push((agent_name, from_revision));
         }
 
-        Ok(())
+        Ok(redeployed)
     }
 
+    /// Deletes all agents of a component, returning the ids of the agents that were deleted.
     pub async fn delete_component_workers(
         &self,
         component_name: &ComponentName,
         component_id: &ComponentId,
         show_skip: bool,
-    ) -> anyhow::Result<usize> {
+    ) -> anyhow::Result<Vec<RawAgentId>> {
         let (workers, _) = self
             .list_component_workers(component_name, component_id, None, None, None, None, false)
             .await?;
@@ -2116,7 +2138,7 @@ impl WorkerCommandHandler {
                     format!("deleting agents for component {component_name}, no agent found"),
                 );
             }
-            return Ok(0);
+            return Ok(Vec::new());
         }
 
         log_action(
@@ -2137,11 +2159,13 @@ impl WorkerCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
+        let mut deleted = Vec::with_capacity(workers.len());
         for worker in &workers {
             self.delete_worker(component_name, worker).await?;
+            deleted.push(worker.agent_id.agent_id.as_str().into());
         }
 
-        Ok(workers.len())
+        Ok(deleted)
     }
 
     async fn redeploy_worker(

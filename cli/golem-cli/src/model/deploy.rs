@@ -1288,25 +1288,29 @@ fn mask_sensitive_key_value_for_deploy_diff(
 #[derive(Clone, Default, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TryUpdateAllWorkersResult {
-    pub triggered: Vec<WorkerUpdateAttempt>,
-    pub failed: Vec<WorkerUpdateAttempt>,
+    pub agents: Vec<AgentUpdateMeta>,
+    /// Per-agent update errors, keyed by the (environment-unique) agent id.
+    pub errors: BTreeMap<String, String>,
 }
 
 impl TryUpdateAllWorkersResult {
     pub fn extend(&mut self, other: TryUpdateAllWorkersResult) {
-        self.triggered.extend(other.triggered);
-        self.failed.extend(other.failed);
+        self.agents.extend(other.agents);
+        self.errors.extend(other.errors);
     }
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WorkerUpdateAttempt {
+pub struct AgentUpdateMeta {
     pub component_name: ComponentName,
-    pub target_revision: ComponentRevision,
     pub agent_name: RawAgentId,
+    pub from_revision: ComponentRevision,
+    pub revision: ComponentRevision,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    pub from_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 #[derive(Clone, Debug)]

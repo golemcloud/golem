@@ -351,6 +351,11 @@ mod tests {
         ),
         registry_entry!("AgentDeleteResult", "agent.delete", arb_agent_delete_result),
         registry_entry!(
+            "AgentDeleteAllResult",
+            "agent.delete-all",
+            arb_agent_delete_all_result
+        ),
+        registry_entry!(
             "AgentFileContentsResult",
             "agent.file-contents",
             arb_agent_file_contents_result
@@ -3024,31 +3029,92 @@ mod tests {
     fn arb_agent_update_result() -> OutputDocumentStrategy {
         serialized_output(
             (
-                proptest::collection::vec(arb_worker_update_attempt(), 0..5),
-                proptest::collection::vec(arb_worker_update_attempt(), 0..5),
+                proptest::collection::vec(arb_agent_update_meta(), 0..5),
+                proptest::collection::btree_map(arb_small_string(), arb_small_string(), 0..3),
             )
-                .prop_map(|(triggered, failed)| {
-                    crate::model::deploy::TryUpdateAllWorkersResult { triggered, failed }
+                .prop_map(|(agents, errors)| {
+                    crate::model::deploy::TryUpdateAllWorkersResult { agents, errors }
                 }),
         )
     }
 
-    fn arb_worker_update_attempt() -> BoxedStrategy<crate::model::deploy::WorkerUpdateAttempt> {
+    /// Shared field generator for the two identical revision-transition metas
+    /// (`AgentUpdateMeta` / `AgentRedeploymentMeta`).
+    fn arb_agent_transition_fields() -> BoxedStrategy<(
+        golem_common::model::component::ComponentName,
+        crate::model::worker::RawAgentId,
+        golem_common::model::component::ComponentRevision,
+        golem_common::model::component::ComponentRevision,
+        Option<String>,
+        Option<String>,
+    )> {
         (
             arb_small_string(),
-            arb_small_u64(),
             arb_small_string(),
+            arb_small_u64(),
+            arb_small_u64(),
+            proptest::option::of(arb_small_string()),
             proptest::option::of(arb_small_string()),
         )
-            .prop_map(|(component_name, target_revision, agent_name, error)| {
-                crate::model::deploy::WorkerUpdateAttempt {
-                    component_name: golem_common::model::component::ComponentName(component_name),
-                    target_revision: golem_common::model::component::ComponentRevision::new(
-                        target_revision,
+            .prop_map(
+                |(component_name, agent_name, from_revision, revision, from_version, version)| {
+                    (
+                        golem_common::model::component::ComponentName(component_name),
+                        crate::model::worker::RawAgentId(agent_name),
+                        golem_common::model::component::ComponentRevision::new(from_revision)
+                            .expect("generated revision should be valid"),
+                        golem_common::model::component::ComponentRevision::new(revision)
+                            .expect("generated revision should be valid"),
+                        from_version,
+                        version,
                     )
-                    .expect("generated revision should be valid"),
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_agent_update_meta() -> BoxedStrategy<crate::model::deploy::AgentUpdateMeta> {
+        arb_agent_transition_fields()
+            .prop_map(
+                |(component_name, agent_name, from_revision, revision, from_version, version)| {
+                    crate::model::deploy::AgentUpdateMeta {
+                        component_name,
+                        agent_name,
+                        from_revision,
+                        revision,
+                        from_version,
+                        version,
+                    }
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_agent_redeployment_meta()
+    -> BoxedStrategy<crate::model::text::action_result::AgentRedeploymentMeta> {
+        arb_agent_transition_fields()
+            .prop_map(
+                |(component_name, agent_name, from_revision, revision, from_version, version)| {
+                    crate::model::text::action_result::AgentRedeploymentMeta {
+                        component_name,
+                        agent_name,
+                        from_revision,
+                        revision,
+                        from_version,
+                        version,
+                    }
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_agent_deletion_meta()
+    -> BoxedStrategy<crate::model::text::action_result::AgentDeletionMeta> {
+        (arb_small_string(), arb_small_string())
+            .prop_map(|(component_name, agent_name)| {
+                crate::model::text::action_result::AgentDeletionMeta {
+                    component_name: golem_common::model::component::ComponentName(component_name),
                     agent_name: crate::model::worker::RawAgentId(agent_name),
-                    error,
                 }
             })
             .boxed()
@@ -3586,20 +3652,26 @@ mod tests {
         )
     }
 
+    fn arb_agent_delete_all_result() -> OutputDocumentStrategy {
+        serialized_output(
+            (
+                any::<bool>(),
+                proptest::collection::vec(arb_agent_deletion_meta(), 0..5),
+            )
+                .prop_map(|(deleted, agents)| {
+                    crate::model::text::action_result::AgentDeleteAllResult { deleted, agents }
+                }),
+        )
+    }
+
     fn arb_agent_redeploy_result() -> OutputDocumentStrategy {
         serialized_output(
             (
                 any::<bool>(),
-                proptest::collection::vec(arb_small_string(), 0..5),
+                proptest::collection::vec(arb_agent_redeployment_meta(), 0..5),
             )
-                .prop_map(|(redeployed, components)| {
-                    crate::model::text::action_result::AgentRedeployResult {
-                        redeployed,
-                        components: components
-                            .into_iter()
-                            .map(golem_common::model::component::ComponentName)
-                            .collect(),
-                    }
+                .prop_map(|(redeployed, agents)| {
+                    crate::model::text::action_result::AgentRedeployResult { redeployed, agents }
                 }),
         )
     }

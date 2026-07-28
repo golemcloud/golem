@@ -52,6 +52,9 @@
       "$ref": "#/definitions/agent.delete"
     },
     {
+      "$ref": "#/definitions/agent.delete-all"
+    },
+    {
       "$ref": "#/definitions/agent.file-contents"
     },
     {
@@ -1195,6 +1198,32 @@
       },
       "additionalProperties": false
     },
+    "agent.delete-all": {
+      "type": "object",
+      "description": "Single structured output document emitted by `golem deploy` when it deletes all existing agents (e.g. `--reset`).",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "deploy",
+      "required": [
+        "$type",
+        "deleted",
+        "agents"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.delete-all"
+        },
+        "deleted": {
+          "type": "boolean"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AgentDeletionMeta"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "agent.file-contents": {
       "type": "object",
       "description": "Single structured output document emitted by `golem agent file-contents`.",
@@ -1449,7 +1478,7 @@
       "required": [
         "$type",
         "redeployed",
-        "components"
+        "agents"
       ],
       "properties": {
         "$type": {
@@ -1458,10 +1487,10 @@
         "redeployed": {
           "type": "boolean"
         },
-        "components": {
+        "agents": {
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/AgentRedeploymentMeta"
           }
         }
       },
@@ -1600,23 +1629,23 @@
       "x-golem-commands": ["agent update","update-agents","component update-agents"],
       "required": [
         "$type",
-        "triggered",
-        "failed"
+        "agents",
+        "errors"
       ],
       "properties": {
         "$type": {
           "const": "agent.update"
         },
-        "triggered": {
+        "agents": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/WorkerUpdateAttempt"
+            "$ref": "#/definitions/AgentUpdateMeta"
           }
         },
-        "failed": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/WorkerUpdateAttempt"
+        "errors": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
           }
         }
       },
@@ -4136,14 +4165,38 @@
         "missed-messages"
       ]
     },
-    "WorkerUpdateAttempt": {
+    "AgentDeletionMeta": {
       "type": "object",
-      "required": ["componentName", "targetRevision", "agentName"],
+      "required": ["componentName", "agentName"],
       "properties": {
         "componentName": { "type": "string" },
-        "targetRevision": { "type": "integer", "minimum": 0 },
+        "agentName": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "AgentUpdateMeta": {
+      "type": "object",
+      "required": ["componentName", "agentName", "fromRevision", "revision"],
+      "properties": {
+        "componentName": { "type": "string" },
         "agentName": { "type": "string" },
-        "error": { "type": "string" }
+        "fromRevision": { "type": "integer", "minimum": 0 },
+        "revision": { "type": "integer", "minimum": 0 },
+        "fromVersion": { "type": "string" },
+        "version": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "AgentRedeploymentMeta": {
+      "type": "object",
+      "required": ["componentName", "agentName", "fromRevision", "revision"],
+      "properties": {
+        "componentName": { "type": "string" },
+        "agentName": { "type": "string" },
+        "fromRevision": { "type": "integer", "minimum": 0 },
+        "revision": { "type": "integer", "minimum": 0 },
+        "fromVersion": { "type": "string" },
+        "version": { "type": "string" }
       },
       "additionalProperties": false
     },
@@ -6676,6 +6729,10 @@
     {
       "type": "agent.delete",
       "rustType": "AgentDeleteResult"
+    },
+    {
+      "type": "agent.delete-all",
+      "rustType": "AgentDeleteAllResult"
     },
     {
       "type": "agent.file-contents",

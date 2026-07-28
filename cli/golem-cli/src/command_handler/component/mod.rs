@@ -41,7 +41,9 @@ use crate::model::deploy::{
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
-use crate::model::text::action_result::AgentRedeployResult;
+use crate::model::text::action_result::{
+    AgentDeleteAllResult, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
+};
 use crate::model::text::component::{
     ComponentGetView, ComponentListView, ComponentManifestTraceView,
 };
@@ -377,13 +379,9 @@ impl ComponentCommandHandler {
             update_results.extend(result);
         }
 
-        self.ctx.log_handler().log_output(update_results.clone())?;
+        self.ctx.log_handler().log_output(update_results)?;
 
-        if !update_results.failed.is_empty() {
-            bail!(NonSuccessfulExit)
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 
     pub async fn redeploy_workers_by_components(
@@ -397,20 +395,33 @@ impl ComponentCommandHandler {
         log_action("Redeploying", "existing agents");
         let _indent = LogIndent::new();
 
+        // TODO: unlike updating, redeploy is short-circuiting, should we normalize?
+        let mut agents = Vec::new();
         for component in components {
-            self.ctx
+            let redeployed = self
+                .ctx
                 .worker_handler()
                 .redeploy_component_workers(&component.component_name, &component.id)
                 .await?;
+            let version = component.metadata.root_package_version().clone();
+            for (agent_name, from_revision) in redeployed {
+                let from_version = self
+                    .component_version_at(&component.id, from_revision)
+                    .await;
+                agents.push(AgentRedeploymentMeta {
+                    component_name: component.component_name.clone(),
+                    agent_name,
+                    from_revision,
+                    revision: component.revision,
+                    from_version,
+                    version: version.clone(),
+                });
+            }
         }
 
-        // TODO: unlike updating, redeploy is short-circuiting, should we normalize?
         self.ctx.log_handler().log_output(AgentRedeployResult {
             redeployed: true,
-            components: components
-                .iter()
-                .map(|component| component.component_name.clone())
-                .collect(),
+            agents,
         })?;
 
         Ok(())
@@ -427,24 +438,35 @@ impl ComponentCommandHandler {
         // NOTE: for now we naively keep deleting in a loop until we do not find any more agents,
         //       we do so to help a bit with pending invocations or currently running worker creations,
         //       but this is not a 100% guarantee.
+        let mut agents = Vec::new();
         let mut found_any = true;
         let mut first_round = true;
         while found_any {
             found_any = false;
             for component in components {
-                let deleted_count = self
+                let deleted = self
                     .ctx
                     .worker_handler()
                     .delete_component_workers(&component.component_name, &component.id, first_round)
                     .await?;
-                if deleted_count > 0 {
+                if !deleted.is_empty() {
                     found_any = true;
+                }
+                for agent_name in deleted {
+                    agents.push(AgentDeletionMeta {
+                        component_name: component.component_name.clone(),
+                        agent_name,
+                    });
                 }
             }
             first_round = false;
         }
 
-        // TODO: json / yaml output?
+        self.ctx.log_handler().log_output(AgentDeleteAllResult {
+            deleted: true,
+            agents,
+        })?;
+
         Ok(())
     }
 
@@ -1289,6 +1311,19 @@ impl ComponentCommandHandler {
                 },
             )
             .await
+    }
+
+    /// Best-effort, cached lookup of a component's user-facing release version string at a given
+    /// revision. Returns `None` if the revision can't be fetched or has no version set.
+    pub async fn component_version_at(
+        &self,
+        component_id: &ComponentId,
+        revision: ComponentRevision,
+    ) -> Option<String> {
+        self.get_component_revision_by_id(component_id, revision)
+            .await
+            .ok()
+            .and_then(|component| component.metadata.root_package_version().clone())
     }
 
     pub async fn get_component_revision_by_id(
