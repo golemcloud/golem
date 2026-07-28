@@ -191,6 +191,10 @@ func (d *definitions) buildAgentType(e *agentEntry) (common.AgentType, map[refle
 		})
 	}
 
+	// Compute config declarations before g.build(): each adds its value type to
+	// the shared graph, and ValueType indexes into the built schema.
+	configDecls := d.buildConfigDecls(&g, e.configs)
+
 	at := common.AgentType{
 		TypeName:       e.name,
 		Description:    e.desc,
@@ -206,6 +210,7 @@ func (d *definitions) buildAgentType(e *agentEntry) (common.AgentType, map[refle
 		Mode:         e.mode,
 		HttpMount:    witTypes.None[common.HttpMountDetails](),
 		Snapshotting: e.snapshot.toWit(),
+		Config:       configDecls,
 	}
 	return at, g.invalids
 }

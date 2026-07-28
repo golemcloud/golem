@@ -47,6 +47,7 @@ type agentEntry struct {
 	mode     common.AgentMode
 	mount    *Mount         // HTTP mount, if any
 	snapshot SnapshotPolicy // snapshot cadence
+	configs  []configDecl   // declared config keys + secrets
 	idType   reflect.Type
 	idFields []fieldInfo
 	newState func(idVal reflect.Value) any

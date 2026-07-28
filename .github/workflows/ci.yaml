@@ -682,12 +682,15 @@ jobs:
             exit 1
           fi
 
-      # The generated internal/wit bindings trip vet's unsafe.Pointer / unkeyed
-      # -field checks, so vet targets the hand-written package; the whole tree is
-      # compiled for the real target below instead.
+      # Vet targets the hand-written package, not the whole generated tree. Some
+      # generated internal/wit bindings that the SDK imports directly (e.g. the
+      # golem:secrets packages) trip vet's unsafe.Pointer / unkeyed-composite
+      # checks, and `go vet .` surfaces diagnostics from direct imports — so those
+      # two checks are disabled here, matching the wasip1 vet below. All other
+      # analyzers stay on for the hand-written code.
       - name: Vet (host)
         working-directory: sdks/go/golem
-        run: go vet .
+        run: go vet -unsafeptr=false -composites=false .
 
       - name: Vet (wasip1)
         working-directory: sdks/go/golem
