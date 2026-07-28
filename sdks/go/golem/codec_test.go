@@ -751,10 +751,9 @@ func TestSecretRoundTripsAndStaysOutOfLogs(t *testing.T) {
 	if got.Reveal() != "hunter2" {
 		t.Fatalf("revealed %q", got.Reveal())
 	}
-	// The whole point: formatting must not leak the payload.
-	for _, s := range []string{
-		fmt.Sprintf("%v", got), fmt.Sprintf("%s", got), fmt.Sprintf("%#v", got),
-	} {
+	// The whole point: formatting must not leak the payload. %v/%s route through
+	// String and %#v through GoString, so exercising %v and %#v covers both.
+	for _, s := range []string{fmt.Sprintf("%v", got), fmt.Sprintf("%#v", got)} {
 		if strings.Contains(s, "hunter2") {
 			t.Fatalf("secret leaked through formatting: %s", s)
 		}

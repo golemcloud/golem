@@ -682,25 +682,18 @@ jobs:
             exit 1
           fi
 
-      # Vet targets the hand-written package, not the whole generated tree. Some
-      # generated internal/wit bindings that the SDK imports directly (e.g. the
-      # golem:secrets packages) trip vet's unsafe.Pointer / unkeyed-composite
-      # checks, and `go vet .` surfaces diagnostics from direct imports — so those
-      # two checks are disabled here, matching the wasip1 vet below. All other
-      # analyzers stay on for the hand-written code.
-      - name: Vet (host)
-        working-directory: sdks/go/golem
-        run: go vet -unsafeptr=false -composites=false .
-
-      # Enforce the idiomatic doc-comment form (a declaration's comment must start
-      # with the identifier) on the hand-written package. staticcheck's ST102x are
-      # exactly golint's comment-form checks without golint's naming/missing-comment
-      # noise; scoped to `.` so the generated internal/wit bindings are not linted.
-      - name: Doc comment form (staticcheck)
-        working-directory: sdks/go/golem
-        run: |
-          go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
-          "$(go env GOPATH)/bin/staticcheck" -checks ST1020,ST1021,ST1022 .
+      # Lint the hand-written package with golangci-lint (the standard Go
+      # meta-linter: govet, errcheck, ineffassign, staticcheck, unused + the
+      # doc-comment-form checks). Config + generated-code exclusions live in
+      # sdks/go/golem/.golangci.yml. The official action fetches a pinned binary
+      # and caches analysis — this replaces the host `go vet` step too, since its
+      # govet covers it (and the .golangci.yml exclusions handle the generated
+      # internal/wit bindings that forced the old vet flag workaround).
+      - name: Lint (golangci-lint)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12
+          working-directory: sdks/go/golem
 
       - name: Vet (wasip1)
         working-directory: sdks/go/golem

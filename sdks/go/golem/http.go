@@ -156,7 +156,7 @@ func requestBody(req *http.Request) witTypes.Option[*witTypes.StreamReader[uint8
 	}
 	w, r := httptypes.MakeStreamU8()
 	go func() {
-		defer req.Body.Close()
+		defer func() { _ = req.Body.Close() }()
 		defer w.Drop()
 		buf := make([]byte, 16*1024)
 		for {
