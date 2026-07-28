@@ -294,17 +294,17 @@ impl From<StreamArgs> for AgentLogStreamOptions {
     }
 }
 
-pub struct AgentNameMatch {
+pub struct AgentIdMatch {
     pub environment: ResolvedEnvironmentIdentity,
     pub component_name_match_kind: ComponentNameMatchKind,
     pub component_name: ComponentName,
     pub agent_type_name: AgentTypeName,
-    pub agent_name: RawAgentId,
+    pub agent_id: RawAgentId,
     pub source_language: SourceLanguage,
     pub parsed_agent_id: Option<ParsedAgentId>,
 }
 
-impl AgentNameMatch {
+impl AgentIdMatch {
     pub fn environment_reference(&self) -> Option<&EnvironmentReference> {
         match &self.environment.source {
             ResolvedEnvironmentIdentitySource::Reference(reference) => Some(reference),
@@ -312,15 +312,15 @@ impl AgentNameMatch {
         }
     }
 
-    /// Updates the canonical agent_name and the parsed form together. Use this
+    /// Updates the canonical agent_id and the parsed form together. Use this
     /// after re-canonicalizing or normalizing the agent id so that downstream
     /// display code can use the language-specific renderer.
     pub fn with_canonical_and_parsed(
         mut self,
-        agent_name: RawAgentId,
+        agent_id: RawAgentId,
         parsed_agent_id: Option<ParsedAgentId>,
     ) -> Self {
-        self.agent_name = agent_name;
+        self.agent_id = agent_id;
         self.parsed_agent_id = parsed_agent_id;
         self
     }

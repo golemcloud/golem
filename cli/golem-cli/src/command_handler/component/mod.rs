@@ -404,13 +404,13 @@ impl ComponentCommandHandler {
                 .redeploy_component_workers(&component.component_name, &component.id)
                 .await?;
             let version = component.metadata.root_package_version().clone();
-            for (agent_name, from_revision) in redeployed {
+            for (agent_id, from_revision) in redeployed {
                 let from_version = self
                     .component_version_at(&component.id, from_revision)
                     .await;
                 agents.push(AgentRedeploymentMeta {
                     component_name: component.component_name.clone(),
-                    agent_id: agent_name,
+                    agent_id,
                     from_revision,
                     revision: component.revision,
                     from_version,
@@ -452,10 +452,10 @@ impl ComponentCommandHandler {
                 if !deleted.is_empty() {
                     found_any = true;
                 }
-                for agent_name in deleted {
+                for agent_id in deleted {
                     agents.push(AgentDeletionMeta {
                         component_name: component.component_name.clone(),
-                        agent_id: agent_name,
+                        agent_id,
                     });
                 }
             }
@@ -758,10 +758,10 @@ impl ComponentCommandHandler {
         match (component, component_revision_selection) {
             (Some(component), Some(component_revision_selection)) => {
                 let revision = match component_revision_selection {
-                    ComponentRevisionSelection::ByAgentName(agent_name) => self
+                    ComponentRevisionSelection::ByAgentId(agent_id) => self
                         .ctx
                         .worker_handler()
-                        .worker_metadata(component.id.0, &component.component_name, agent_name)
+                        .worker_metadata(component.id.0, &component.component_name, agent_id)
                         .await?
                         .map(|worker_metadata| worker_metadata.component_revision),
                     ComponentRevisionSelection::ByExplicitRevision(revision) => Some(revision),
@@ -792,7 +792,7 @@ impl ComponentCommandHandler {
             (
                 app.component_names().into_iter().collect::<Vec<_>>(),
                 app.application()
-                    .agent_names()
+                    .agent_ids()
                     .cloned()
                     .collect::<BTreeSet<_>>(),
             )
@@ -817,16 +817,16 @@ impl ComponentCommandHandler {
         let unknown_declared_agents: Vec<String> = declared_agents
             .into_iter()
             .filter(|declared_agent| !exported_agents.contains_key(declared_agent))
-            .map(|agent_name| agent_name.0)
+            .map(|agent_id| agent_id.0)
             .collect();
 
         if !unknown_declared_agents.is_empty() {
             // TODO: atl: validate against resolved ATL agent set after template/preset expansion,
             // not only directly declared manifest agents.
-            for agent_name in &unknown_declared_agents {
+            for agent_id in &unknown_declared_agents {
                 log_error(format!(
                     "Manifest declares agent {} but it is not exported by any component.",
-                    agent_name.log_color_highlight()
+                    agent_id.log_color_highlight()
                 ));
             }
 
@@ -932,12 +932,12 @@ impl ComponentCommandHandler {
         }
 
         if !unused_config_by_agent.is_empty() {
-            for (agent_name, unused_keys) in &unused_config_by_agent {
+            for (agent_id, unused_keys) in &unused_config_by_agent {
                 log_warn_action(
                     "Ignoring unused config keys",
                     format!(
                         "for agent {}: {}",
-                        agent_name.0.log_color_highlight(),
+                        agent_id.0.log_color_highlight(),
                         unused_keys.join(", ")
                     ),
                 );

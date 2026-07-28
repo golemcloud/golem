@@ -725,7 +725,7 @@ impl Application {
         !self.components.is_empty()
     }
 
-    pub fn agent_names(&self) -> impl Iterator<Item = &AgentTypeName> {
+    pub fn agent_ids(&self) -> impl Iterator<Item = &AgentTypeName> {
         self.agents.keys()
     }
 
@@ -2748,8 +2748,8 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Component(component_name) => {
                     component_name.as_str().log_color_highlight().to_string()
                 }
-                UniqueSourceCheckedEntityKey::Agent(agent_name) => {
-                    agent_name.0.log_color_highlight().to_string()
+                UniqueSourceCheckedEntityKey::Agent(agent_id) => {
+                    agent_id.0.log_color_highlight().to_string()
                 }
                 UniqueSourceCheckedEntityKey::Environment(environment_name) => {
                     environment_name.0.log_color_highlight().to_string()

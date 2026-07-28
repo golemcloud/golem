@@ -199,7 +199,11 @@ impl AvailableProfileNamesHelp {
 
 impl TextOutput for AvailableProfileNamesHelp {
     fn log(&self) {
-        let mut names = self.0.iter().map(|name| name.0.as_str()).collect::<Vec<_>>();
+        let mut names = self
+            .0
+            .iter()
+            .map(|name| name.0.as_str())
+            .collect::<Vec<_>>();
         names.sort();
 
         logln(
@@ -215,7 +219,7 @@ impl TextOutput for AvailableProfileNamesHelp {
 
 pub struct AvailableFunctionNamesHelp {
     pub component_name: String,
-    pub agent_name: Option<String>,
+    pub agent_id: Option<String>,
     pub function_names: Vec<String>,
 }
 
@@ -227,7 +231,7 @@ impl AvailableFunctionNamesHelp {
     ) -> Self {
         AvailableFunctionNamesHelp {
             component_name: component.component_name.0.clone(),
-            agent_name: Some(agent_id.agent_type.0.clone()),
+            agent_id: Some(agent_id.agent_type.0.clone()),
             function_names: agent_type.methods.iter().map(|m| m.name.clone()).collect(),
         }
     }
@@ -236,12 +240,12 @@ impl AvailableFunctionNamesHelp {
 impl TextOutput for AvailableFunctionNamesHelp {
     fn log(&self) {
         if self.function_names.is_empty() {
-            match &self.agent_name {
-                Some(agent_name) => {
+            match &self.agent_id {
+                Some(agent_id) => {
                     logln(
                         format!(
                             "No methods are available for agent {}.",
-                            agent_name.underline()
+                            agent_id.underline()
                         )
                         .log_color_warn()
                         .to_string(),
@@ -261,10 +265,10 @@ impl TextOutput for AvailableFunctionNamesHelp {
             return;
         }
 
-        match &self.agent_name {
-            Some(agent_name) => {
+        match &self.agent_id {
+            Some(agent_id) => {
                 logln(
-                    format!("Available method names for agent {}:", agent_name)
+                    format!("Available method names for agent {}:", agent_id)
                         .bold()
                         .underline()
                         .to_string(),

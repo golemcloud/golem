@@ -104,13 +104,13 @@ fn parse_manifest_grants(
 }
 
 pub enum ComponentRevisionSelection<'a> {
-    ByAgentName(&'a RawAgentId),
+    ByAgentId(&'a RawAgentId),
     ByExplicitRevision(ComponentRevision),
 }
 
 impl<'a> From<&'a RawAgentId> for ComponentRevisionSelection<'a> {
     fn from(value: &'a RawAgentId) -> Self {
-        Self::ByAgentName(value)
+        Self::ByAgentId(value)
     }
 }
 
@@ -353,7 +353,7 @@ fn render_exported_agent(
         show_dummy_return_type,
         &lang,
     ));
-    let agent_name = if wrapper_naming {
+    let agent_id = if wrapper_naming {
         format!("{}.", agent.type_name.0)
     } else {
         "  ".to_string()
@@ -362,11 +362,11 @@ fn render_exported_agent(
         let output = render_output_schema(&agent.schema, &method.output_schema, &lang);
         let input = render_input_schema(&agent.schema, &method.input_schema, &lang, true);
         if output.is_empty() {
-            result.push(format!("{}{}({})", agent_name, method.name, input));
+            result.push(format!("{}{}({})", agent_id, method.name, input));
         } else {
             result.push(format!(
                 "{}{}({}) -> {}",
-                agent_name, method.name, input, output
+                agent_id, method.name, input, output
             ));
         }
     }

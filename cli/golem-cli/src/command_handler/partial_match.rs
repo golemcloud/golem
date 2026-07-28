@@ -131,22 +131,18 @@ impl ErrorHandler {
 
                 Ok(())
             }
-            GolemCliCommandPartialMatch::AgentInvokeMissingFunctionName { agent_name } => {
+            GolemCliCommandPartialMatch::AgentInvokeMissingFunctionName { agent_id } => {
                 self.ctx.silence_app_context_init().await;
                 logln("");
                 log_action(
                     "Checking",
-                    format!("provided agent ID: {}", agent_name.0.log_color_highlight()),
+                    format!("provided agent ID: {}", agent_id.0.log_color_highlight()),
                 );
-                let agent_name_match = {
+                let agent_id_match = {
                     let _indent = DecoratedIndent::new_primary(Format::Text);
-                    let agent_name_match = self
-                        .ctx
-                        .worker_handler()
-                        .match_agent_name(agent_name)
-                        .await?;
+                    let agent_id_match = self.ctx.worker_handler().match_agent_id(agent_id).await?;
 
-                    let environment_formatted = match agent_name_match.environment_reference() {
+                    let environment_formatted = match agent_id_match.environment_reference() {
                         Some(env) => {
                             format!(" environment: {} /", env.to_string().log_color_highlight())
                         }
@@ -157,9 +153,9 @@ impl ErrorHandler {
                         "[{}]{} component: {} / agent: {}, {}",
                         "ok".green(),
                         environment_formatted,
-                        agent_name_match.component_name.0.log_color_highlight(),
-                        agent_name_match.agent_name.0.log_color_highlight(),
-                        match agent_name_match.component_name_match_kind {
+                        agent_id_match.component_name.0.log_color_highlight(),
+                        agent_id_match.agent_id.0.log_color_highlight(),
+                        match agent_id_match.component_name_match_kind {
                             ComponentNameMatchKind::AppCurrentDir =>
                                 "component was selected based on current dir",
                             ComponentNameMatchKind::App =>
@@ -167,29 +163,29 @@ impl ErrorHandler {
                             ComponentNameMatchKind::Unknown => "",
                         }
                     ));
-                    agent_name_match
+                    agent_id_match
                 };
                 logln("");
                 if let Ok(Some(component)) = self
                     .ctx
                     .component_handler()
                     .resolve_component(
-                        &agent_name_match.environment,
-                        &agent_name_match.component_name,
-                        Some((&agent_name_match.agent_name).into()),
+                        &agent_id_match.environment,
+                        &agent_id_match.component_name,
+                        Some((&agent_id_match.agent_id).into()),
                     )
                     .await
                 {
-                    let canonical_agent_name = self
+                    let canonical_agent_id = self
                         .ctx
                         .worker_handler()
-                        .try_recanonicalize_agent_name(&agent_name_match.agent_name, &component);
+                        .try_recanonicalize_agent_id(&agent_id_match.agent_id, &component);
                     let agent_id = self
                         .ctx
                         .worker_handler()
                         .validate_worker_and_function_names(
                             &component,
-                            &canonical_agent_name,
+                            &canonical_agent_id,
                             None,
                         )?;
 

@@ -32,7 +32,9 @@ use golem_common::model::environment::EnvironmentName;
 use indoc::formatdoc;
 use inquire::error::InquireResult;
 use inquire::validator::{ErrorMessage, Validation};
-use inquire::{Confirm, CustomType, InquireError, MultiSelect, Password, PasswordDisplayMode, Select, Text};
+use inquire::{
+    Confirm, CustomType, InquireError, MultiSelect, Password, PasswordDisplayMode, Select, Text,
+};
 use itertools::Itertools;
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
@@ -135,7 +137,10 @@ impl InteractiveHandler {
     ) -> anyhow::Result<bool> {
         self.confirm(
             true,
-            format!("Continue with staging step ({operation} {})?", name.as_ref()),
+            format!(
+                "Continue with staging step ({operation} {})?",
+                name.as_ref()
+            ),
             None,
         )
     }
@@ -285,21 +290,21 @@ impl InteractiveHandler {
     pub fn confirm_update_to_current(
         &self,
         component_name: &ComponentName,
-        agent_name: &RawAgentId,
+        agent_id: &RawAgentId,
         parsed_agent_id: Option<&golem_common::model::agent::ParsedAgentId>,
         source_language: &crate::agent_id_display::SourceLanguage,
         target_revision: ComponentRevision,
     ) -> anyhow::Result<bool> {
-        let rendered_agent_name = crate::agent_id_display::render_agent_id_or_raw(
+        let rendered_agent_id = crate::agent_id_display::render_agent_id_or_raw(
             parsed_agent_id,
             source_language,
-            &agent_name.0,
+            &agent_id.0,
         );
         self.confirm(
             true,
             format!("Agent {}/{} will be updated to the current component revision: {}. Do you want to continue?",
                     component_name.0.log_color_highlight(),
-                    rendered_agent_name.log_color_highlight(),
+                    rendered_agent_id.log_color_highlight(),
                     target_revision.to_string().log_color_highlight()
             ),
             None,
@@ -400,11 +405,12 @@ impl InteractiveHandler {
                 .with_starting_cursor(2)
                 .prompt()?;
 
-        let static_token = Password::new("Static token for authentication (leave empty for OAuth2):")
-            .with_display_mode(PasswordDisplayMode::Masked)
-            .without_confirmation()
-            .with_help_message("Mainly for testing or custom servers")
-            .prompt()?;
+        let static_token =
+            Password::new("Static token for authentication (leave empty for OAuth2):")
+                .with_display_mode(PasswordDisplayMode::Masked)
+                .without_confirmation()
+                .with_help_message("Mainly for testing or custom servers")
+                .prompt()?;
 
         let auth = if static_token.is_empty() {
             AuthenticationConfig::empty_oauth2()

@@ -532,7 +532,7 @@ impl GolemCliCommand {
                 missing_positional_arg: "function_name",
                 to_partial_match: |args| {
                     GolemCliCommandPartialMatch::AgentInvokeMissingFunctionName {
-                        agent_name: args[0].clone().into(),
+                        agent_id: args[0].clone().into(),
                     }
                 },
             },
@@ -634,7 +634,7 @@ pub enum GolemCliCommandPartialMatch {
     ComponentHelp,
     ComponentMissingSubcommandHelp,
     AgentHelp,
-    AgentInvokeMissingFunctionName { agent_name: RawAgentId },
+    AgentInvokeMissingFunctionName { agent_id: RawAgentId },
     AgentInvokeMissingAgentName,
     ProfileSwitchMissingProfileName,
 }
@@ -1541,7 +1541,7 @@ pub mod worker {
         #[command(after_help = crate::command_examples::AGENT_FILES)]
         Files {
             #[command(flatten)]
-            agent_name: AgentIdArgs,
+            agent_id: AgentIdArgs,
             /// Absolute path inside the agent's guest filesystem (e.g. `/`,
             /// `/data`). Always starts with `/`.
             #[arg(default_value = "/")]
@@ -1556,7 +1556,7 @@ pub mod worker {
         #[command(after_help = crate::command_examples::AGENT_FILE_CONTENTS)]
         FileContents {
             #[command(flatten)]
-            agent_name: AgentIdArgs,
+            agent_id: AgentIdArgs,
             /// Absolute path inside the agent's guest filesystem (e.g.
             /// `/data/state.json`). Always starts with `/`.
             path: String,
@@ -2438,7 +2438,7 @@ pub mod server {
 
         /// Use deterministic agent filesystem directories rooted at the given
         /// path instead of random temp directories. The directory layout is:
-        ///   <root>/<environment_id>/<component_id>/<agent_name>/
+        ///   <root>/<environment_id>/<component_id>/<agent_id>/
         #[clap(long)]
         pub agent_filesystem_root: Option<PathBuf>,
     }

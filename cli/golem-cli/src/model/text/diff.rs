@@ -150,27 +150,27 @@ impl TextOutput for DeploymentDiff {
                             }
                             if !diff.agents_changes.is_empty() {
                                 logln("    - agents");
-                                for (agent_name, agent_diff) in &diff.agents_changes {
+                                for (agent_id, agent_diff) in &diff.agents_changes {
                                     match agent_diff {
                                         BTreeMapDiffValue::Create => {
                                             logln(format!(
                                                 "      - {} agent {}",
                                                 "create".green(),
-                                                agent_name.log_color_highlight()
+                                                agent_id.log_color_highlight()
                                             ));
                                         }
                                         BTreeMapDiffValue::Delete => {
                                             logln(format!(
                                                 "      - {} agent {}",
                                                 "delete".red(),
-                                                agent_name.log_color_highlight()
+                                                agent_id.log_color_highlight()
                                             ));
                                         }
                                         BTreeMapDiffValue::Update(diff) => {
                                             logln(format!(
                                                 "      - {} agent {}, changes:",
                                                 "update".yellow(),
-                                                agent_name.log_color_highlight()
+                                                agent_id.log_color_highlight()
                                             ));
                                             if diff.security_scheme_changed {
                                                 logln("        - security_scheme");
@@ -222,27 +222,27 @@ impl TextOutput for DeploymentDiff {
                             ));
                             if !diff.agents_changes.is_empty() {
                                 logln("    - agents");
-                                for (agent_name, agent_diff) in &diff.agents_changes {
+                                for (agent_id, agent_diff) in &diff.agents_changes {
                                     match agent_diff {
                                         BTreeMapDiffValue::Create => {
                                             logln(format!(
                                                 "      - {} agent {}",
                                                 "create".green(),
-                                                agent_name.log_color_highlight()
+                                                agent_id.log_color_highlight()
                                             ));
                                         }
                                         BTreeMapDiffValue::Delete => {
                                             logln(format!(
                                                 "      - {} agent {}",
                                                 "delete".red(),
-                                                agent_name.log_color_highlight()
+                                                agent_id.log_color_highlight()
                                             ));
                                         }
                                         BTreeMapDiffValue::Update(diff) => {
                                             logln(format!(
                                                 "      - {} agent {}, changes:",
                                                 "update".yellow(),
-                                                agent_name.log_color_highlight()
+                                                agent_id.log_color_highlight()
                                             ));
                                             if diff.security_scheme_changed {
                                                 logln("        - security_scheme");

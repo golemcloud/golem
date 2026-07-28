@@ -2927,14 +2927,12 @@ mod tests {
     }
 
     fn arb_agent_new_result() -> OutputDocumentStrategy {
-        serialized_output(
-            (arb_small_string(), arb_small_string()).prop_map(
-                |(component_name, agent_name)| crate::model::text::worker::WorkerCreateView {
-                    component_name: golem_common::model::component::ComponentName(component_name),
-                    agent_id: crate::model::worker::RawAgentId(agent_name),
-                },
-            ),
-        )
+        serialized_output((arb_small_string(), arb_small_string()).prop_map(
+            |(component_name, agent_id)| crate::model::text::worker::WorkerCreateView {
+                component_name: golem_common::model::component::ComponentName(component_name),
+                agent_id: crate::model::worker::RawAgentId(agent_id),
+            },
+        ))
     }
 
     fn arb_agent_oplog_result() -> OutputDocumentStrategy {
@@ -3057,10 +3055,10 @@ mod tests {
             proptest::option::of(arb_small_string()),
         )
             .prop_map(
-                |(component_name, agent_name, from_revision, revision, from_version, version)| {
+                |(component_name, agent_id, from_revision, revision, from_version, version)| {
                     (
                         golem_common::model::component::ComponentName(component_name),
-                        crate::model::worker::RawAgentId(agent_name),
+                        crate::model::worker::RawAgentId(agent_id),
                         golem_common::model::component::ComponentRevision::new(from_revision)
                             .expect("generated revision should be valid"),
                         golem_common::model::component::ComponentRevision::new(revision)
@@ -3076,10 +3074,10 @@ mod tests {
     fn arb_agent_update_meta() -> BoxedStrategy<crate::model::deploy::AgentUpdateMeta> {
         arb_agent_transition_fields()
             .prop_map(
-                |(component_name, agent_name, from_revision, revision, from_version, version)| {
+                |(component_name, agent_id, from_revision, revision, from_version, version)| {
                     crate::model::deploy::AgentUpdateMeta {
                         component_name,
-                        agent_id: agent_name,
+                        agent_id,
                         from_revision,
                         revision,
                         from_version,
@@ -3094,10 +3092,10 @@ mod tests {
     -> BoxedStrategy<crate::model::text::action_result::AgentRedeploymentMeta> {
         arb_agent_transition_fields()
             .prop_map(
-                |(component_name, agent_name, from_revision, revision, from_version, version)| {
+                |(component_name, agent_id, from_revision, revision, from_version, version)| {
                     crate::model::text::action_result::AgentRedeploymentMeta {
                         component_name,
-                        agent_id: agent_name,
+                        agent_id,
                         from_revision,
                         revision,
                         from_version,
@@ -3111,10 +3109,10 @@ mod tests {
     fn arb_agent_deletion_meta()
     -> BoxedStrategy<crate::model::text::action_result::AgentDeletionMeta> {
         (arb_small_string(), arb_small_string())
-            .prop_map(|(component_name, agent_name)| {
+            .prop_map(|(component_name, agent_id)| {
                 crate::model::text::action_result::AgentDeletionMeta {
                     component_name: golem_common::model::component::ComponentName(component_name),
-                    agent_id: crate::model::worker::RawAgentId(agent_name),
+                    agent_id: crate::model::worker::RawAgentId(agent_id),
                 }
             })
             .boxed()
@@ -3152,7 +3150,7 @@ mod tests {
             .prop_map(|(left, right)| {
                 let (
                     component_name,
-                    agent_name,
+                    agent_id,
                     created_by,
                     environment_id,
                     env,
@@ -3175,7 +3173,7 @@ mod tests {
 
                 crate::model::worker::AgentMetadataView {
                     component_name: golem_common::model::component::ComponentName(component_name),
-                    agent_id: crate::model::worker::RawAgentId(agent_name),
+                    agent_id: crate::model::worker::RawAgentId(agent_id),
                     created_by: golem_common::model::account::AccountId(
                         uuid::Uuid::parse_str(&created_by).expect("generated UUID should parse"),
                     ),

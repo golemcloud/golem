@@ -141,9 +141,9 @@ impl CardCommandHandler {
         self.ctx.silence_app_context_init().await;
 
         let worker_handler = WorkerCommandHandler::new(self.ctx.clone());
-        let agent_name_match = worker_handler.match_agent_name(agent).await?;
-        let (component, agent_name) = worker_handler
-            .component_by_agent_name_match(&agent_name_match)
+        let agent_id_match = worker_handler.match_agent_id(agent).await?;
+        let (component, agent_id) = worker_handler
+            .component_by_agent_id_match(&agent_id_match)
             .await?;
 
         let cards = self
@@ -151,7 +151,7 @@ impl CardCommandHandler {
             .golem_clients()
             .await?
             .worker
-            .get_agent_wallet(&component.id.0, &agent_name.0)
+            .get_agent_wallet(&component.id.0, &agent_id.0)
             .await
             .map_service_error()?;
 

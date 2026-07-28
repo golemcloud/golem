@@ -57,7 +57,7 @@ impl WorkerConnection {
         worker_service_url: Url,
         auth_token: TokenSecret,
         component_id: &ComponentId,
-        agent_name: String,
+        agent_id: String,
         connect_options: AgentLogStreamOptions,
         allow_insecure: bool,
         format: Format,
@@ -68,7 +68,7 @@ impl WorkerConnection {
             worker_service_url,
             auth_token.secret().to_string(),
             component_id.0,
-            agent_name,
+            agent_id,
             allow_insecure,
         )?;
         let output = WorkerStreamOutput::new(connect_options, format);
@@ -151,10 +151,10 @@ impl WorkerConnection {
         worker_service_url: Url,
         auth_token: String,
         component_id: Uuid,
-        agent_name: String,
+        agent_id: String,
         allow_insecure: bool,
     ) -> anyhow::Result<(Request, Option<Connector>)> {
-        AgentId::validate_length(&agent_name).map_err(|err| anyhow!(err))?;
+        AgentId::validate_length(&agent_id).map_err(|err| anyhow!(err))?;
 
         let mut url = worker_service_url;
 
@@ -168,7 +168,7 @@ impl WorkerConnection {
             .push("components")
             .push(&component_id.to_string())
             .push("workers")
-            .push(&agent_name)
+            .push(&agent_id)
             .push("connect");
 
         debug!(url = url.as_str(), "Worker stream connect");

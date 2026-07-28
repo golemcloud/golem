@@ -621,8 +621,8 @@ impl ApplicationContext {
 
                     for (site, deployment) in http_api_deployments {
                         logln(format!("  {}", site.to_string().log_color_highlight(),));
-                        for agent_name in deployment.value.agents.keys() {
-                            logln(format!("    {}", agent_name.as_str().log_color_highlight(),));
+                        for agent_id in deployment.value.agents.keys() {
+                            logln(format!("    {}", agent_id.as_str().log_color_highlight(),));
                         }
                     }
                     logln("");
@@ -650,8 +650,8 @@ impl ApplicationContext {
 
                 for (site, deployment) in mcp_deployments {
                     logln(format!("  {}", site.to_string().log_color_highlight(),));
-                    for agent_name in deployment.value.agents.keys() {
-                        logln(format!("    {}", agent_name.as_str().log_color_highlight(),));
+                    for agent_id in deployment.value.agents.keys() {
+                        logln(format!("    {}", agent_id.as_str().log_color_highlight(),));
                     }
                 }
                 logln("");

@@ -21,7 +21,7 @@ use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::masking::{Masked, MaskingConfig};
 use crate::model::text::fmt::*;
 use crate::model::worker::{
-    AgentMetadataView, AgentNameMatch, AgentsMetadataResponseView, RawAgentId,
+    AgentIdMatch, AgentMetadataView, AgentsMetadataResponseView, RawAgentId,
 };
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
@@ -67,9 +67,9 @@ impl MessageWithFields for WorkerCreateView {
 
         fields
             .fmt_field("Component name", &self.component_name, format_id)
-            .fmt_field("Agent ID", &self.agent_id, |agent_name| {
+            .fmt_field("Agent ID", &self.agent_id, |agent_id| {
                 format_agent_id_in(
-                    &agent_name.0,
+                    &agent_id.0,
                     colored::control::SHOULD_COLORIZE.should_colorize(),
                     field_value_width::<Self>(),
                 )
@@ -184,9 +184,9 @@ impl MessageWithFields for WorkerGetView {
                 &self.metadata.component_revision,
                 format_id,
             )
-            .fmt_field("Agent ID", &self.metadata.agent_id, |agent_name| {
+            .fmt_field("Agent ID", &self.metadata.agent_id, |agent_id| {
                 format_agent_id_in(
-                    &agent_name.0,
+                    &agent_id.0,
                     colored::control::SHOULD_COLORIZE.should_colorize(),
                     field_value_width::<Self>(),
                 )
@@ -1359,8 +1359,8 @@ fn render_typed_schema_value_line(
 }
 
 /// Formats an agent id to a caller-supplied width (see `format_agent_id_for_terminal`).
-fn format_agent_id_in(agent_name: &str, colorize: bool, width: usize) -> String {
-    crate::agent_id_display::format_agent_id_for_terminal(agent_name, colorize, Some(width))
+fn format_agent_id_in(agent_id: &str, colorize: bool, width: usize) -> String {
+    crate::agent_id_display::format_agent_id_for_terminal(agent_id, colorize, Some(width))
 }
 
 fn log_optional_error(pad: &str, error: &Option<String>) {
@@ -1431,10 +1431,10 @@ mod tests {
         Timestamp::from(0)
     }
 
-    fn agent_metadata(agent_name: &str) -> AgentMetadataView {
+    fn agent_metadata(agent_id: &str) -> AgentMetadataView {
         AgentMetadataView {
             component_name: ComponentName("shop:cart".to_string()),
-            agent_id: RawAgentId(agent_name.to_string()),
+            agent_id: RawAgentId(agent_id.to_string()),
             created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
             environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
             env: HashMap::new(),
@@ -1759,16 +1759,16 @@ pub fn format_timestamp(timestamp: u64) -> String {
     }
 }
 
-pub fn format_agent_name_match(agent_name_match: &AgentNameMatch) -> String {
-    let rendered_agent_name = crate::agent_id_display::render_agent_id_or_raw(
-        agent_name_match.parsed_agent_id.as_ref(),
-        &agent_name_match.source_language,
-        &agent_name_match.agent_name.0,
+pub fn format_agent_id_match(agent_id_match: &AgentIdMatch) -> String {
+    let rendered_agent_id = crate::agent_id_display::render_agent_id_or_raw(
+        agent_id_match.parsed_agent_id.as_ref(),
+        &agent_id_match.source_language,
+        &agent_id_match.agent_id.0,
     );
 
     format!(
         "{}{}/{}",
-        match &agent_name_match.environment_reference() {
+        match &agent_id_match.environment_reference() {
             Some(environment_reference) => {
                 match environment_reference {
                     EnvironmentReference::Environment { environment_name } => {
@@ -1800,7 +1800,7 @@ pub fn format_agent_name_match(agent_name_match: &AgentNameMatch) -> String {
             }
             None => "".to_string(),
         },
-        agent_name_match.component_name.0.blue().bold(),
-        rendered_agent_name.green().bold(),
+        agent_id_match.component_name.0.blue().bold(),
+        rendered_agent_id.green().bold(),
     )
 }
