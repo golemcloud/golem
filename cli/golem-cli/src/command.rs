@@ -302,7 +302,9 @@ impl GolemCliGlobalFlags {
             self.agent_stream_ping_interval = Some(
                 iso8601::duration(&interval)
                     .map_err(|err| {
-                        anyhow!("Failed to parse GOLEM_AGENT_STREAM_PING_INTERVAL ({interval}): {err}")
+                        anyhow!(
+                            "Failed to parse GOLEM_AGENT_STREAM_PING_INTERVAL ({interval}): {err}"
+                        )
                     })?
                     .into(),
             );
@@ -2092,8 +2094,15 @@ pub mod profile {
     use crate::command::profile::config::ProfileConfigSubcommand;
     use crate::config::ProfileName;
     use crate::model::format::Format;
-    use clap::Subcommand;
+    use clap::{Subcommand, ValueEnum};
     use url::Url;
+
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
+    #[clap(rename_all = "kebab-case")]
+    pub enum ProfileAuthMode {
+        Oauth2,
+        Static,
+    }
 
     #[allow(clippy::large_enum_variant)]
     #[derive(Debug, Subcommand)]
@@ -2115,8 +2124,14 @@ pub mod profile {
             /// Default output format for this profile
             #[arg(long, default_value_t = Format::Text)]
             default_format: Format,
-            /// Token to use for authenticating against Golem. If not provided an OAuth2 flow will be performed when authentication is needed for the first time.
-            #[arg(long)]
+            /// How the profile authenticates: `oauth2` (interactive browser login,
+            /// the default) or `static` (a pre-issued token). Defaults to `static`
+            /// when `--static-token` is given.
+            #[arg(long, value_enum, verbatim_doc_comment)]
+            auth: Option<ProfileAuthMode>,
+            /// Static authentication token (implies `--auth static`). With
+            /// `--auth static` and no token given, you are prompted for it.
+            #[arg(long, verbatim_doc_comment)]
             static_token: Option<String>,
             /// Accept invalid certificates.
             ///

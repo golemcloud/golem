@@ -29,7 +29,7 @@ If you need a custom cloud profile (e.g., for a different cloud endpoint):
 golem profile new my-cloud --url https://release.api.golem.cloud --set-active
 ```
 
-When no `--static-token` is provided, the profile uses OAuth2 (GitHub) authentication — a browser window will open on first use.
+By default (equivalently `--auth oauth2`) the profile uses OAuth2 (GitHub) authentication — a browser window will open on first use. Pass `--auth static` (or `--static-token`) for token-based auth instead.
 
 ## Step 2: Authenticate
 
@@ -87,6 +87,12 @@ Use a static token in a profile for non-interactive environments:
 
 ```shell
 golem profile new ci-cloud --url https://release.api.golem.cloud --static-token "<TOKEN_SECRET>" --set-active
+```
+
+For an interactive setup, `--auth static` (without `--static-token`) prompts for the token instead of putting it on the command line:
+
+```shell
+golem profile new my-cloud --url https://release.api.golem.cloud --auth static --set-active
 ```
 
 ## Step 5: Configure Your Application for Cloud Deployment
