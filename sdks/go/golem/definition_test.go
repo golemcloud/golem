@@ -94,7 +94,7 @@ func TestAllDefErrorsReportsEveryProblem(t *testing.T) {
 	})
 }
 
-// The whole register → discover → publish pipeline, exercised natively over an
+// TestValidAgentFinalizesAndPublishesItsMount — The whole register → discover → publish pipeline, exercised natively over an
 // explicit definitions: a valid agent with a mounted method discovers cleanly and
 // publishes the mount and endpoint. This dumps exactly what discovery produces,
 // with no global state.
@@ -129,7 +129,7 @@ func TestValidAgentFinalizesAndPublishesItsMount(t *testing.T) {
 	})
 }
 
-// The same agent name registered into two separate definitions both discover
+// TestSeparateDefinitionsDoNotLeak — The same agent name registered into two separate definitions both discover
 // cleanly — isolation is inherent now that registration is instance-based (no
 // shared global to leak between tests).
 func TestSeparateDefinitionsDoNotLeak(t *testing.T) {

@@ -21,7 +21,7 @@ import (
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 )
 
-// agentErrorToGo maps each host agent-error case onto a distinguishable Go error
+// TestAgentErrorToGoDistinguishesCases — agentErrorToGo maps each host agent-error case onto a distinguishable Go error
 // rather than flattening them into one string. Pure, so it is covered natively;
 // ClientFor, which calls it around a host import, is covered by integration.
 func TestAgentErrorToGoDistinguishesCases(t *testing.T) {

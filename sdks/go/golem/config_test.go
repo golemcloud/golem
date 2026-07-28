@@ -40,7 +40,7 @@ func cfgAgent(d *definitions) *Agent[cfgId, cfgState] {
 	)
 }
 
-// A declared local config and a secret both land in the agent-type metadata, the
+// TestConfigDeclarationsInMetadata — A declared local config and a secret both land in the agent-type metadata, the
 // secret carrying a secret(inner) value type.
 func TestConfigDeclarationsInMetadata(t *testing.T) {
 	withDefs(t, func(d *definitions) {
@@ -83,7 +83,7 @@ func TestConfigDeclarationsInMetadata(t *testing.T) {
 	})
 }
 
-// The same path must not be declared twice on one agent, even across a plain
+// TestMisuseDuplicateConfigPath — The same path must not be declared twice on one agent, even across a plain
 // config and a secret.
 func TestMisuseDuplicateConfigPath(t *testing.T) {
 	withDefs(t, func(d *definitions) {
@@ -124,7 +124,7 @@ func TestMisuseConfigUnknownAgent(t *testing.T) {
 	})
 }
 
-// decodeConfigValue decodes a get-config-value result tree through the value
+// TestConfigDecodeLocalValue — decodeConfigValue decodes a get-config-value result tree through the value
 // type's codec — the pure half of a local read.
 func TestConfigDecodeLocalValue(t *testing.T) {
 	d := newDefinitions()
@@ -141,7 +141,7 @@ func TestConfigDecodeLocalValue(t *testing.T) {
 	}
 }
 
-// extractSecretHandle pulls the secret handle out of a get-config-value result,
+// TestExtractSecretHandle — extractSecretHandle pulls the secret handle out of a get-config-value result,
 // and rejects a tree that is not a secret value — the pure half of a secret read.
 func TestExtractSecretHandle(t *testing.T) {
 	// A real *Secret can only be built by the host (its constructor pulls in a
@@ -170,7 +170,7 @@ func TestExtractSecretHandle(t *testing.T) {
 	}
 }
 
-// A config override encodes the value and, validated against the target's
+// TestConfigOverrideEncodesAndValidates — A config override encodes the value and, validated against the target's
 // declarations, becomes a typed-agent-config-value threaded into make-wasm-rpc.
 func TestConfigOverrideEncodesAndValidates(t *testing.T) {
 	withDefs(t, func(d *definitions) {
@@ -201,7 +201,7 @@ func TestConfigOverrideEncodesAndValidates(t *testing.T) {
 	})
 }
 
-// Overriding a key the target agent does not declare is rejected client-side.
+// TestConfigOverrideUndeclaredRejected — Overriding a key the target agent does not declare is rejected client-side.
 func TestConfigOverrideUndeclaredRejected(t *testing.T) {
 	withDefs(t, func(d *definitions) {
 		a := cfgAgent(d)
@@ -238,7 +238,7 @@ type demoAppConfig struct {
 	Db       demoDBConfig
 }
 
-// ConfigOf flattens a struct — nested structs into multi-segment paths, Secret
+// TestConfigOfFlattensStruct — ConfigOf flattens a struct — nested structs into multi-segment paths, Secret
 // fields into secret leaves — producing the same declarations as per-key defines.
 func TestConfigOfFlattensStruct(t *testing.T) {
 	withDefs(t, func(d *definitions) {
@@ -291,7 +291,7 @@ func TestConfigOfNonStructReported(t *testing.T) {
 	})
 }
 
-// materializeConfig assembles the struct from per-leaf reads — the pure half of
+// TestMaterializeConfig — materializeConfig assembles the struct from per-leaf reads — the pure half of
 // LoadConfig, tested with a fake reader (the real reader hits the host).
 func TestMaterializeConfig(t *testing.T) {
 	got, err := materializeConfig[demoAppConfig](func(lf configLeaf) (reflect.Value, error) {

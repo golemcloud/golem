@@ -21,7 +21,7 @@ import (
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 )
 
-// A state that controls its own serialization — the only way to capture
+// snapCustomState — A state that controls its own serialization — the only way to capture
 // unexported fields.
 type snapCustomState struct{ count int64 }
 
@@ -68,7 +68,7 @@ func TestSnapshotReflectiveDefaultCoversExportedFields(t *testing.T) {
 	}
 }
 
-// The documented caveat: without a Snapshotter, unexported fields are invisible
+// TestSnapshotReflectiveDefaultDropsUnexportedFields — The documented caveat: without a Snapshotter, unexported fields are invisible
 // to reflection and are NOT captured.
 func TestSnapshotReflectiveDefaultDropsUnexportedFields(t *testing.T) {
 	src := &struct{ count int64 }{count: 99}

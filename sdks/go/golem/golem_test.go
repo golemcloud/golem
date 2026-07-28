@@ -270,7 +270,7 @@ func TestWorkerRunsOneOfSeveralAgentTypes(t *testing.T) {
 	}
 }
 
-// Regression: a method whose declared output is an interface (a variant) must
+// tPay — Regression: a method whose declared output is an interface (a variant) must
 // keep that declared type through encoding. reflect.ValueOf on an interface
 // yields the concrete type it holds, so encoding the handler result directly
 // would look up the wrong codec.

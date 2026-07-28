@@ -47,7 +47,7 @@ func init() {
 	})
 }
 
-// The caller encodes arguments with the same codecs the callee decodes with,
+// TestCallerEncodingMatchesCalleeDecoding — The caller encodes arguments with the same codecs the callee decodes with,
 // because both are derived from the same Go types. This is the symmetry claim
 // the design rests on, and it is checkable without a host.
 func TestCallerEncodingMatchesCalleeDecoding(t *testing.T) {
@@ -70,7 +70,7 @@ func TestCallerEncodingMatchesCalleeDecoding(t *testing.T) {
 	}
 }
 
-// The encoded argument list must agree with the schema the callee publishes.
+// TestCallArgumentsAgreeWithThePublishedSchema — The encoded argument list must agree with the schema the callee publishes.
 func TestCallArgumentsAgreeWithThePublishedSchema(t *testing.T) {
 	tree, err := tCharge.encodeInput(tChargeIn{AmountCents: 7})
 	if err != nil {
@@ -111,7 +111,7 @@ func checkAgreement2(t *testing.T, g types.SchemaGraph, s int32, tree types.Sche
 	}
 }
 
-// The constructor tree a client builds must be decodable as the target's
+// TestClientConstructorTreeMatchesTheTargetConstructor — The constructor tree a client builds must be decodable as the target's
 // constructor parameters — otherwise the agent id would address nothing.
 func TestClientConstructorTreeMatchesTheTargetConstructor(t *testing.T) {
 	e := defs.agents["TestPayment"]
@@ -181,7 +181,7 @@ func TestRpcErrorsMapToDistinguishableKinds(t *testing.T) {
 	}
 }
 
-// A remote domain error must stay inspectable rather than collapsing to a string.
+// TestRemoteAgentErrorKeepsItsCause — A remote domain error must stay inspectable rather than collapsing to a string.
 func TestRemoteAgentErrorKeepsItsCause(t *testing.T) {
 	remote := common.MakeAgentErrorInvalidMethod("no such method: charge")
 	err := rpcErrorToGo("agent-1", "charge", host.MakeRpcErrorRemoteAgentError(remote))
@@ -202,7 +202,7 @@ func TestRemoteAgentErrorKeepsItsCause(t *testing.T) {
 	}
 }
 
-// invocationIDFrom projects the host's invocation metadata onto the SDK's
+// TestInvocationIDFromProjects — invocationIDFrom projects the host's invocation metadata onto the SDK's
 // public InvocationID. Pure, so it is pinned here rather than left to
 // integration.
 func TestInvocationIDFromProjects(t *testing.T) {
@@ -212,7 +212,7 @@ func TestInvocationIDFromProjects(t *testing.T) {
 	}
 }
 
-// instantFrom converts a Go time into the wasi clock instant used for scheduling.
+// TestInstantFromConvertsTime — instantFrom converts a Go time into the wasi clock instant used for scheduling.
 // The interesting cases are sub-second nanoseconds and pre-epoch times, where the
 // seconds go negative while the nanoseconds stay in [0, 1e9).
 func TestInstantFromConvertsTime(t *testing.T) {

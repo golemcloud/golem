@@ -39,7 +39,7 @@ func TestErrorCodeStringCoversFamilies(t *testing.T) {
 	}
 }
 
-// methodOf maps an HTTP method string onto the wasi method variant, defaulting a
+// TestMethodOf — methodOf maps an HTTP method string onto the wasi method variant, defaulting a
 // blank method to GET and passing anything unknown through as other(name).
 func TestMethodOf(t *testing.T) {
 	known := map[string]httptypes.Method{
@@ -68,7 +68,7 @@ func TestMethodOf(t *testing.T) {
 	}
 }
 
-// schemeOf maps a URL scheme onto the wasi scheme variant; a blank scheme
+// TestSchemeOf — schemeOf maps a URL scheme onto the wasi scheme variant; a blank scheme
 // defaults to https and anything unknown passes through as other(name).
 func TestSchemeOf(t *testing.T) {
 	if got := schemeOf("http"); got.Tag() != httptypes.MakeSchemeHttp().Tag() {
@@ -85,7 +85,7 @@ func TestSchemeOf(t *testing.T) {
 	}
 }
 
-// contentLength reads the Content-Length header, returning -1 (unknown) when it
+// TestContentLength — contentLength reads the Content-Length header, returning -1 (unknown) when it
 // is absent or unparseable.
 func TestContentLength(t *testing.T) {
 	if got := contentLength(http.Header{}); got != -1 {
@@ -99,7 +99,7 @@ func TestContentLength(t *testing.T) {
 	}
 }
 
-// headerErr renders each wasi header-error case to a readable string.
+// TestHeaderErr — headerErr renders each wasi header-error case to a readable string.
 func TestHeaderErr(t *testing.T) {
 	cases := map[httptypes.HeaderError]string{
 		httptypes.MakeHeaderErrorInvalidSyntax(): "invalid syntax",

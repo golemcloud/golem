@@ -123,8 +123,9 @@ func (m MethodDef[Id, In, Out]) CallAsync(c Client[Id], in In) (*Future[Out], er
 // encoding / decoding, shared by every call shape
 // ---------------------------------------------------------------------------
 
-// rpcInputs caches the parameter field list per In type. The callee derives the
-// same list from the same Go type, which is what keeps the two sides symmetric.
+// encodeInput encodes the In value into a parameter-list value tree. The callee
+// derives the same field list from the same Go type, which is what keeps the two
+// sides symmetric.
 func (m MethodDef[Id, In, Out]) encodeInput(in In) (tree types.SchemaValueTree, err error) {
 	defer func() {
 		if r := recover(); r != nil {

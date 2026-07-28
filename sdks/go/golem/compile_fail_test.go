@@ -21,7 +21,7 @@ import (
 	"testing"
 )
 
-// The cross-agent type-safety guarantee is only useful if it actually fails to
+// TestWrongAgentClientIsACompileError — The cross-agent type-safety guarantee is only useful if it actually fails to
 // compile. This drives `go build` over a testdata program that Calls a
 // PaymentID method with an OrderID client and asserts the type-checker rejects
 // it — turning "it's a compile error" from a comment into a test.

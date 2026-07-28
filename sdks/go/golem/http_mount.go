@@ -88,9 +88,10 @@ func newEndpoint(method, path string, opts []EndpointOpt) Endpoint {
 	return e
 }
 
-// Verb constructors. GET and HEAD are bodyless (they must bind every input
-// field, since there is no request body to carry the rest); the others carry
-// unbound fields in the body.
+// GET builds a GET endpoint; like the other verb constructors below it names an
+// HTTP method plus a path suffix. GET and HEAD are bodyless (they must bind
+// every input field, since there is no request body to carry the rest); the
+// other verbs carry unbound fields in the body.
 func GET(path string, opts ...EndpointOpt) Endpoint     { return newEndpoint("GET", path, opts) }
 func HEAD(path string, opts ...EndpointOpt) Endpoint    { return newEndpoint("HEAD", path, opts) }
 func POST(path string, opts ...EndpointOpt) Endpoint    { return newEndpoint("POST", path, opts) }

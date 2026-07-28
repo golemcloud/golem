@@ -72,8 +72,9 @@ func (o Option[T]) Unwrap() T {
 	return o.value
 }
 
-// Codec plumbing. Resolved once at compile time against the zero value, so
-// there is no per-value type switching and no unsafe field access.
+// optionish is the codec plumbing for Option, resolved once at compile time
+// against the zero value, so there is no per-value type switching and no unsafe
+// field access.
 type optionish interface {
 	optionElem() reflect.Type
 	optionGet() (reflect.Value, bool)

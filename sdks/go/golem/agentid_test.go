@@ -7,7 +7,7 @@ import (
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
 
-// The host `parse-agent-id` call can't link natively, but the decode of its
+// parsedID — The host `parse-agent-id` call can't link natively, but the decode of its
 // constructor-param value tree into the typed Id can — and is where a bug would
 // hide. Round-trip: encode an Id's fields, then decode via decodeAgentIDParams.
 type parsedID struct {

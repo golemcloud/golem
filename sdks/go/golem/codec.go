@@ -25,7 +25,7 @@ import (
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
-// A codec is everything the SDK knows about one Go type: how to describe it in
+// codec is everything the SDK knows about one Go type: how to describe it in
 // the schema graph, how to encode a value of it, and how to decode one.
 //
 // Bundling the three together is deliberate. The schema and the value tree must

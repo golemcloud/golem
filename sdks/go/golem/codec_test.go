@@ -227,7 +227,7 @@ func TestRoundTripDeeplyNestedOptionAndResult(t *testing.T) {
 	})
 }
 
-// *T and Option[T] are two spellings of the same thing, so they must produce
+// TestPointerAndOptionProduceTheSameSchema — *T and Option[T] are two spellings of the same thing, so they must produce
 // byte-identical schemas.
 func TestPointerAndOptionProduceTheSameSchema(t *testing.T) {
 	schemaOf := func(rt reflect.Type) types.SchemaGraph {
@@ -359,7 +359,7 @@ func TestRecursiveTypeIsEmittedAsANamedDefNotARawCycle(t *testing.T) {
 	})
 }
 
-// Mutually recursive types: marking one member of each cycle is enough, since
+// nodeA — Mutually recursive types: marking one member of each cycle is enough, since
 // its ref-type node breaks every path through the cycle.
 type nodeA struct {
 	Name string
@@ -387,7 +387,7 @@ func TestMutuallyRecursiveTypesBreakTheCycle(t *testing.T) {
 	})
 }
 
-// Every schema the SDK publishes must satisfy the rule, not just the ones with
+// TestPublishedAgentSchemasHaveNoRawCycles — Every schema the SDK publishes must satisfy the rule, not just the ones with
 // obvious cycles.
 func TestPublishedAgentSchemasHaveNoRawCycles(t *testing.T) {
 	for _, name := range defs.order {
@@ -522,7 +522,7 @@ func TestMalformedInputIsAnErrorNotAPanic(t *testing.T) {
 	}
 }
 
-// A nil slice and an empty slice are both an empty list on the wire, so decoding
+// TestNilSliceDecodesAsEmptySlice — A nil slice and an empty slice are both an empty list on the wire, so decoding
 // normalizes nil to empty. Unlike encoding/json — which emits null for a nil
 // slice and [] for an empty one — there is no ambiguity here: []T is ALWAYS
 // list-type and never option, so "absent" is simply not representable. Spell the
@@ -546,7 +546,7 @@ func TestNilSliceDecodesAsEmptySlice(t *testing.T) {
 // variants and enums
 // ---------------------------------------------------------------------------
 
-// A closed sum type: the unexported marker method means no type outside this
+// PaymentMethod — A closed sum type: the unexported marker method means no type outside this
 // package can join the variant.
 type PaymentMethod interface{ isPaymentMethod() }
 
@@ -659,7 +659,7 @@ func TestVariantAndEnumMisuseIsRejected(t *testing.T) {
 	})
 }
 
-// Fixtures for the variant/enum registration-error cases below.
+// dupVar1 — Fixtures for the variant/enum registration-error cases below.
 type dupVar1 interface{ dv1() }
 type dupVar2 interface{ dv2() }
 type dupImpl struct{}
@@ -697,7 +697,7 @@ func TestVariantEnumRegistrationErrorsAreRecorded(t *testing.T) {
 	})
 }
 
-// A decoded variant must be usable through its interface, not just structurally
+// TestDecodedVariantSatisfiesItsInterface — A decoded variant must be usable through its interface, not just structurally
 // equal — the decoder sets a concrete type into the interface slot.
 func TestDecodedVariantSatisfiesItsInterface(t *testing.T) {
 	got := roundTrip(t, PaymentMethod(Transfer{IBAN: "NL01"}))
@@ -772,7 +772,7 @@ func TestSecretRoundTripsAndStaysOutOfLogs(t *testing.T) {
 	}{Name: "svc", Token: NewSecret("abc")})
 }
 
-// Containers must never be modelled as optional: absence is only expressible
+// TestNilContainersAreNeverOptional — Containers must never be modelled as optional: absence is only expressible
 // through a pointer or Option[T], so there is no nil-vs-empty ambiguity.
 func TestNilContainersAreNeverOptional(t *testing.T) {
 	tagOf := func(rt reflect.Type) uint8 {
@@ -821,7 +821,7 @@ func TestNilContainersAreNeverOptional(t *testing.T) {
 	}
 }
 
-// A pinned type-id (via NameType) overrides the derived pkg.path.TypeName in a
+// pinnedNode — A pinned type-id (via NameType) overrides the derived pkg.path.TypeName in a
 // recursive type's published schema-type-def, for cross-language interop.
 type pinnedNode struct {
 	Label string

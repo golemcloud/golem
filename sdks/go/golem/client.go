@@ -25,7 +25,7 @@ import (
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
-// A Client addresses one agent instance for remote calls. It is produced by
+// Client addresses one agent instance for remote calls. It is produced by
 // [ClientFor] and consumed by the call methods on [MethodDef].
 //
 // The Id type parameter is what makes cross-agent calls type-safe: a

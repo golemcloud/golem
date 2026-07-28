@@ -190,7 +190,7 @@ func TestVerbConstructorsMapToWit(t *testing.T) {
 	}
 }
 
-// System-variable and catch-all segments compile on both the mount prefix and an
+// TestBuildHTTPSystemVarAndCatchAllSegments — System-variable and catch-all segments compile on both the mount prefix and an
 // endpoint suffix.
 func TestBuildHTTPSystemVarAndCatchAllSegments(t *testing.T) {
 	e := agent("A", &Mount{Path: "/{agent-type}/{id}"}, fields("id"),
