@@ -254,6 +254,81 @@ func secretErrorToGo(path []string, e secrets.SecretError) error {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// config-on-RPC: a caller can override a callee's local config values at client
+// creation. The value is encoded here (pure) and threaded into make-wasm-rpc by
+// ClientFor.
+// ---------------------------------------------------------------------------
+
+// configOverrideFn produces one config override, deferred so the value is
+// encoded against the definition set at client-creation time.
+type configOverrideFn func(d *definitions) (common.TypedAgentConfigValue, error)
+
+// WithConfigValue overrides a local config value on the target agent at client
+// creation (make-wasm-rpc's agent-config). The value type must match the key's,
+// and the key must be one the target agent declares — otherwise ClientFor fails.
+// Secrets are provisioned by the platform, not passed here, so only local
+// [Config] keys are overridable.
+func WithConfigValue[T any](key *Config[T], value T) ClientOpt {
+	return func(o *clientOpts) {
+		o.configs = append(o.configs, func(d *definitions) (common.TypedAgentConfigValue, error) {
+			if key == nil {
+				return common.TypedAgentConfigValue{}, fmt.Errorf("WithConfigValue: nil config key")
+			}
+			tv, err := encodeTypedValue(d, value)
+			if err != nil {
+				return common.TypedAgentConfigValue{}, err
+			}
+			return common.TypedAgentConfigValue{Path: clonePath(key.path), Value: tv}, nil
+		})
+	}
+}
+
+// buildAgentConfig encodes and validates the client's config overrides against
+// the target agent's declarations. Pure — the encode and the declared-key check
+// are both native-testable; ClientFor supplies the live definition set.
+func buildAgentConfig(d *definitions, e *agentEntry, overrides []configOverrideFn) ([]common.TypedAgentConfigValue, error) {
+	if len(overrides) == 0 {
+		return nil, nil
+	}
+	out := make([]common.TypedAgentConfigValue, 0, len(overrides))
+	for _, fn := range overrides {
+		tv, err := fn(d)
+		if err != nil {
+			return nil, err
+		}
+		if !configDeclared(e, tv.Path) {
+			return nil, fmt.Errorf("config override %v is not a declared config key on the agent", tv.Path)
+		}
+		out = append(out, tv)
+	}
+	return out, nil
+}
+
+func configDeclared(e *agentEntry, path []string) bool {
+	for _, cd := range e.configs {
+		if pathsEqual(cd.path, path) {
+			return true
+		}
+	}
+	return false
+}
+
+// encodeTypedValue encodes a Go value into a typed schema value (graph + value
+// tree) for the wire. Pure.
+func encodeTypedValue[T any](d *definitions, value T) (tv types.TypedSchemaValue, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("encoding config value: %v", r)
+		}
+	}()
+	typ := reflect.TypeFor[T]()
+	return types.TypedSchemaValue{
+		Graph: d.graphForType(typ),
+		Value: encodeWith(d.compile(typ), reflect.ValueOf(value)),
+	}, nil
+}
+
 func pathsEqual(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

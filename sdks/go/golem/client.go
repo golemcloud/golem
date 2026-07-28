@@ -48,6 +48,7 @@ type ClientOpt func(*clientOpts)
 
 type clientOpts struct {
 	phantomID witTypes.Option[types.Uuid]
+	configs   []configOverrideFn
 }
 
 // WithPhantomID addresses a specific phantom instance of the target agent.
@@ -76,6 +77,13 @@ func ClientFor[Id any, S any](a *Agent[Id, S], id Id, opts ...ClientOpt) (Client
 	idVal := reflect.ValueOf(&id).Elem()
 	ctor := encodeParams(e.idFields, idVal)
 
+	// Encode and validate any config overrides against the target's declarations
+	// before touching the host, so a mistyped or undeclared key is a clear error.
+	agentConfig, err := buildAgentConfig(defs, e, o.configs)
+	if err != nil {
+		return Client[Id]{}, fmt.Errorf("golem: ClientFor %s: %w", a.name, err)
+	}
+
 	// Resolve the id up front: it is wanted for error messages, and a failure
 	// here means the constructor parameters are wrong — better to surface that
 	// now than as an opaque not-found on the first call.
@@ -85,7 +93,7 @@ func ClientFor[Id any, S any](a *Agent[Id, S], id Id, opts ...ClientOpt) (Client
 	}
 
 	return Client[Id]{
-		rpc:       host.MakeWasmRpc(a.name, ctor, o.phantomID, nil),
+		rpc:       host.MakeWasmRpc(a.name, ctor, o.phantomID, agentConfig),
 		agentType: a.name,
 		agentID:   resolved.Ok(),
 	}, nil

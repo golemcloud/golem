@@ -168,6 +168,63 @@ func TestExtractSecretHandle(t *testing.T) {
 	}
 }
 
+// A config override encodes the value and, validated against the target's
+// declarations, becomes a typed-agent-config-value threaded into make-wasm-rpc.
+func TestConfigOverrideEncodesAndValidates(t *testing.T) {
+	withDefs(t, func(d *definitions) {
+		a := cfgAgent(d)
+		key := defineConfigInto[string](d, a, []string{"db", "url"})
+		noDefErrs(t, d)
+
+		var o clientOpts
+		WithConfigValue(key, "prod-url")(&o)
+
+		got, err := buildAgentConfig(d, d.agents["Cfg"], o.configs)
+		if err != nil {
+			t.Fatalf("buildAgentConfig: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("want 1 override, got %d", len(got))
+		}
+		if !pathsEqual(got[0].Path, []string{"db", "url"}) {
+			t.Fatalf("override path = %v", got[0].Path)
+		}
+		val, err := decodeConfigValue[string](d, got[0].Path, got[0].Value.Value)
+		if err != nil {
+			t.Fatalf("decode override value: %v", err)
+		}
+		if val != "prod-url" {
+			t.Fatalf("override value = %q, want %q", val, "prod-url")
+		}
+	})
+}
+
+// Overriding a key the target agent does not declare is rejected client-side.
+func TestConfigOverrideUndeclaredRejected(t *testing.T) {
+	withDefs(t, func(d *definitions) {
+		a := cfgAgent(d)
+		defineConfigInto[string](d, a, []string{"declared"})
+
+		undeclared := &Config[string]{path: []string{"not", "declared"}}
+		var o clientOpts
+		WithConfigValue(undeclared, "x")(&o)
+		if _, err := buildAgentConfig(d, d.agents["Cfg"], o.configs); err == nil {
+			t.Fatal("expected an error overriding an undeclared config key")
+		}
+	})
+}
+
+func TestConfigOverrideNilKey(t *testing.T) {
+	withDefs(t, func(d *definitions) {
+		cfgAgent(d)
+		var o clientOpts
+		WithConfigValue[string](nil, "x")(&o)
+		if _, err := buildAgentConfig(d, d.agents["Cfg"], o.configs); err == nil {
+			t.Fatal("expected an error for a nil config key")
+		}
+	})
+}
+
 func TestSecretErrorToGo(t *testing.T) {
 	cases := []struct {
 		name string
