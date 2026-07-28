@@ -1,3 +1,0 @@
-# Build outputs — components are built into place by componentize-go / golem build.
-*.wasm
-golem-temp/
