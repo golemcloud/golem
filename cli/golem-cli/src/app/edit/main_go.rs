@@ -26,8 +26,8 @@ pub fn validate(source: &str) -> anyhow::Result<()> {
 /// tab-indented `import (…)` group. `func main` and any comments around the
 /// import block are left untouched.
 ///
-/// Composing Go agent templates means unioning blank imports of the agent
-/// packages into one barrel `main.go`. Go's `gofmt` is strict about import
+/// Composing Go agent templates means unioning the blank imports of the agent
+/// packages into the component's single `main.go`. Go's `gofmt` is strict about import
 /// grouping and ordering, so rather than text-inserting (which would leave an
 /// unsorted block that compiles but fails a format check) we rebuild the block
 /// canonically — clean by construction, mirroring how `main_rs.rs` rewrites its

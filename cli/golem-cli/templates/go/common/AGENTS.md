@@ -81,7 +81,7 @@ golem.yaml                        # Root application manifest
 <component>/                      # Component directory (each becomes a WASM component)
   golem.yaml                      # Component manifest
   go.mod                          # This component's module; pins the SDK and componentize-go
-  main.go                         # package main — the barrel: blank-imports the SDK + each agent
+  main.go                         # package main — blank-imports the SDK + each agent package
   counter/                        # One package per agent
     counter.go                    #   package counter — agent definition + init() registration
 golem-temp/                       # Build artifacts (gitignored)
@@ -90,8 +90,9 @@ golem-temp/                       # Build artifacts (gitignored)
 Each component directory is **its own Go module** (its own `go.mod`), built to a separate WASM
 component. Within a component, every agent lives in its own package (`counter/counter.go` is
 `package counter`), and a single `main.go` (`package main`) blank-imports the SDK and each agent
-package so their `init()` functions register the agents. Adding an agent means adding a package and a
-blank import to `main.go`.
+package so their `init()` functions register the agents — the same blank-import-for-side-effects
+pattern Go uses to register database drivers (`import _ "..."`). Adding an agent means adding a package
+and a blank import to `main.go`.
 
 ## Prerequisites
 
