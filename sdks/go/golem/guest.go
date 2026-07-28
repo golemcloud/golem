@@ -107,8 +107,14 @@ func init() {
 		if err := decodeParams(input, e.idFields, idVal); err != nil {
 			return witTypes.Err[witTypes.Unit](common.MakeAgentErrorInvalidInput(err.Error()))
 		}
+		// Publish the instance before running the constructor so a constructor that
+		// reads config (via ctx.Config()) populates the same per-worker config cache
+		// the methods use. The constructor sees only its InitContext, never the
+		// not-yet-built state, so the nil state during this window is unobservable.
 		agentID := os.Getenv(agentIDEnvVar)
-		active = &instance{def: e, agentID: agentID, state: e.newState(idVal, agentID)}
+		inst := &instance{def: e, agentID: agentID}
+		active = inst
+		inst.state = e.newState(idVal, agentID)
 		return witTypes.Ok[witTypes.Unit, common.AgentError](witTypes.Unit{})
 	}
 

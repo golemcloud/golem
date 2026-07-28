@@ -62,6 +62,11 @@ type instance struct {
 	def     *agentEntry
 	state   any
 	agentID string
+	// config is the agent's materialized config (its Cfg value), cached for the
+	// worker's life on first read. Its local fields are read from the host once;
+	// its secret fields are lazy handles that re-read on Secret.Get(). nil until
+	// the first Config/InitContext.Config call.
+	config any
 }
 
 // active is the running instance this worker was initialized as, or nil before

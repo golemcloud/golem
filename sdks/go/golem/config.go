@@ -46,12 +46,15 @@ import (
 // [InitContext.Config]):
 //
 //	cfg := Shop.Config(ctx)  // ctx is the running agent's *Context[S]
-//	_ = cfg.Greeting         // local field, decoded at this read
-//	_ = cfg.APIKey.Get()     // secret field: re-reads the host each call
+//	_ = cfg.Greeting         // local field — cached (worker-lifetime), so this is fast
+//	_ = cfg.APIKey.Get()     // secret field — re-reads the host each call (live)
 //
-// Local fields are the values current at the Shop.Config(ctx) call. Secret fields
-// come back as handles that read the host on every Secret.Get(), so a *rotated*
-// secret is always observed rather than a stale snapshot.
+// Config is materialized ONCE per worker and cached, so calling Shop.Config(ctx)
+// on a hot method is near-free: local fields are read from the host on the first
+// call and reused for the worker's life. Only **secret** fields stay live — a
+// [Secret] field is a lazy handle whose [Secret.Get] re-reads the host on every
+// call, so a *rotated* secret is observed and the user decides when to read (and
+// whether to store) it.
 //
 // Each exported field of the config struct becomes a config key; nested structs
 // flatten into multi-segment paths (field names lower-cased to match
@@ -184,43 +187,62 @@ func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgTyp
 // pure and covered by native tests.
 // ---------------------------------------------------------------------------
 
-// Config materializes the agent's config from within a method, returning it or
-// panicking if the read fails. scope is the running agent's *[Context]: local
-// fields are decoded, and secret fields come back as redacting [Secret] handles.
-// Because scope must carry the agent's own state type S — and the method returns
-// the agent's own Cfg — config can be read only from within the owning agent's
-// method; there is no free-floating read. A config read failing is a hard failure
-// (a misconfiguration or host error) with no in-band recovery, so — like the
-// TS/Rust/Scala SDKs — Config fails loud: the panic is recovered by the invoke
-// dispatcher into an agent-error. Must be called inside an invocation (it calls
-// the host).
+// Config returns the agent's config from within a method. scope is the running
+// agent's *[Context]: because it carries the agent's own state type S — and the
+// method returns the agent's own Cfg — config can be read only from within the
+// owning agent's method (no free-floating read).
+//
+// The config is materialized ONCE per worker and cached (see [instance.config]),
+// so repeated calls on a hot method are near-free: its local fields are read from
+// the host on the first call and reused for the worker's life. Only its **secret**
+// fields stay live — a [Secret] field is a lazy handle whose [Secret.Get] re-reads
+// the host each call, so a rotated secret is observed and the user decides when to
+// read (and whether to store) it. A config read failing is a hard failure with no
+// in-band recovery, so — like the TS/Rust/Scala SDKs — Config fails loud: the
+// panic is recovered by the invoke dispatcher into an agent-error.
 func (a *Agent[Id, S, Cfg]) Config(scope agentScope[S]) Cfg {
 	// scope is a compile-time gate only: requiring it means the read can happen
-	// only from inside the agent's own execution. The host keys get-config-value
-	// by the running agent, so the value is resolved without threading scope on.
+	// only from inside the agent's own execution.
 	_ = scope
+	return materializeAgentConfig[Cfg]()
+}
+
+// Config reads the agent's config from within its constructor (fail-loud, like
+// [Agent.Config], and populating the same per-worker cache the methods reuse). It
+// reads config off its own context rather than the agent because naming the agent
+// in its own package-level initializer would be a self-reference.
+func (c *InitContext[Id, S, Cfg]) Config() Cfg {
+	return materializeAgentConfig[Cfg]()
+}
+
+// cachedAgentConfig returns the worker's already-materialized config, if any. It
+// is the pure cache-hit fast path — no host call — so it is safe to reference
+// from native tests (the host-backed miss path lives in materializeAgentConfig,
+// reachable only from the wasm Config methods above).
+func cachedAgentConfig[Cfg any]() (Cfg, bool) {
+	if active != nil && active.config != nil {
+		return active.config.(Cfg), true
+	}
+	var zero Cfg
+	return zero, false
+}
+
+// materializeAgentConfig returns the agent's config, materializing it once per
+// worker and caching it on the running instance. On the first call it reads the
+// local leaves from the host (secret leaves become lazy handles) and stores the
+// Cfg; later calls return the cache. Host-backed on the miss path.
+func materializeAgentConfig[Cfg any]() Cfg {
+	if cfg, ok := cachedAgentConfig[Cfg](); ok {
+		return cfg
+	}
 	cfg, err := materializeConfig[Cfg](func(lf configLeaf) (reflect.Value, error) {
 		return readConfigLeaf(defs, lf)
 	})
 	if err != nil {
 		panic(err)
 	}
-	return cfg
-}
-
-// Config reads the agent's config from within its constructor, returning it or
-// panicking if the read fails (fail-loud, like [Agent.Config]). It
-// materializes the same Cfg: local fields decoded, secret fields as redacting
-// [Secret] handles. The constructor reads config off its own context (rather than
-// the agent) because naming the agent in its own package-level initializer would
-// be a self-reference. Must be called
-// inside an invocation (it calls the host).
-func (c *InitContext[Id, S, Cfg]) Config() Cfg {
-	cfg, err := materializeConfig[Cfg](func(lf configLeaf) (reflect.Value, error) {
-		return readConfigLeaf(defs, lf)
-	})
-	if err != nil {
-		panic(err)
+	if active != nil {
+		active.config = cfg
 	}
 	return cfg
 }
