@@ -1016,7 +1016,7 @@ mod tests {
     fn sample_agent_metadata_view() -> crate::model::worker::AgentMetadataView {
         crate::model::worker::AgentMetadataView {
             component_name: golem_common::model::component::ComponentName("component".to_string()),
-            agent_name: crate::model::worker::RawAgentId("agent()".to_string()),
+            agent_id: crate::model::worker::RawAgentId("agent()".to_string()),
             created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
             environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
             env: BTreeMap::new().into_iter().collect(),
@@ -2931,7 +2931,7 @@ mod tests {
             (arb_small_string(), arb_small_string()).prop_map(
                 |(component_name, agent_name)| crate::model::text::worker::WorkerCreateView {
                     component_name: golem_common::model::component::ComponentName(component_name),
-                    agent_name: crate::model::worker::RawAgentId(agent_name),
+                    agent_id: crate::model::worker::RawAgentId(agent_name),
                 },
             ),
         )
@@ -3079,7 +3079,7 @@ mod tests {
                 |(component_name, agent_name, from_revision, revision, from_version, version)| {
                     crate::model::deploy::AgentUpdateMeta {
                         component_name,
-                        agent_name,
+                        agent_id: agent_name,
                         from_revision,
                         revision,
                         from_version,
@@ -3097,7 +3097,7 @@ mod tests {
                 |(component_name, agent_name, from_revision, revision, from_version, version)| {
                     crate::model::text::action_result::AgentRedeploymentMeta {
                         component_name,
-                        agent_name,
+                        agent_id: agent_name,
                         from_revision,
                         revision,
                         from_version,
@@ -3114,7 +3114,7 @@ mod tests {
             .prop_map(|(component_name, agent_name)| {
                 crate::model::text::action_result::AgentDeletionMeta {
                     component_name: golem_common::model::component::ComponentName(component_name),
-                    agent_name: crate::model::worker::RawAgentId(agent_name),
+                    agent_id: crate::model::worker::RawAgentId(agent_name),
                 }
             })
             .boxed()
@@ -3175,7 +3175,7 @@ mod tests {
 
                 crate::model::worker::AgentMetadataView {
                     component_name: golem_common::model::component::ComponentName(component_name),
-                    agent_name: crate::model::worker::RawAgentId(agent_name),
+                    agent_id: crate::model::worker::RawAgentId(agent_name),
                     created_by: golem_common::model::account::AccountId(
                         uuid::Uuid::parse_str(&created_by).expect("generated UUID should parse"),
                     ),
@@ -3286,7 +3286,10 @@ mod tests {
     fn arb_agent_delete_result() -> OutputDocumentStrategy {
         serialized_output(
             (any::<bool>(), arb_small_string()).prop_map(|(deleted, agent)| {
-                crate::model::text::action_result::AgentDeleteResult { deleted, agent }
+                crate::model::text::action_result::AgentDeleteResult {
+                    deleted,
+                    agent_id: agent,
+                }
             }),
         )
     }
@@ -3303,7 +3306,7 @@ mod tests {
                 .prop_map(|(saved, agent, path, output_path, bytes)| {
                     crate::model::text::action_result::AgentFileContentsResult {
                         saved,
-                        agent,
+                        agent_id: agent,
                         path,
                         output_path: output_path.into(),
                         bytes: bytes as usize,
@@ -3315,7 +3318,10 @@ mod tests {
     fn arb_agent_interrupt_result() -> OutputDocumentStrategy {
         serialized_output(
             (any::<bool>(), arb_small_string()).prop_map(|(interrupted, agent)| {
-                crate::model::text::action_result::AgentInterruptResult { interrupted, agent }
+                crate::model::text::action_result::AgentInterruptResult {
+                    interrupted,
+                    agent_id: agent,
+                }
             }),
         )
     }
@@ -3323,7 +3329,10 @@ mod tests {
     fn arb_agent_resume_result() -> OutputDocumentStrategy {
         serialized_output(
             (any::<bool>(), arb_small_string()).prop_map(|(resumed, agent)| {
-                crate::model::text::action_result::AgentResumeResult { resumed, agent }
+                crate::model::text::action_result::AgentResumeResult {
+                    resumed,
+                    agent_id: agent,
+                }
             }),
         )
     }
@@ -3331,7 +3340,10 @@ mod tests {
     fn arb_agent_simulate_crash_result() -> OutputDocumentStrategy {
         serialized_output(
             (any::<bool>(), arb_small_string()).prop_map(|(simulated, agent)| {
-                crate::model::text::action_result::AgentSimulateCrashResult { simulated, agent }
+                crate::model::text::action_result::AgentSimulateCrashResult {
+                    simulated,
+                    agent_id: agent,
+                }
             }),
         )
     }
@@ -3644,7 +3656,7 @@ mod tests {
                 |(canceled, agent, idempotency_key)| {
                     crate::model::text::action_result::AgentCancelInvocationResult {
                         canceled,
-                        agent,
+                        agent_id: agent,
                         idempotency_key,
                     }
                 },
@@ -3688,7 +3700,7 @@ mod tests {
                     |(reverted, agent, last_oplog_index, number_of_invocations)| {
                         crate::model::text::action_result::AgentRevertResult {
                             reverted,
-                            agent,
+                            agent_id: agent,
                             last_oplog_index,
                             number_of_invocations,
                         }
@@ -3708,7 +3720,7 @@ mod tests {
                 .prop_map(|(activated, agent, plugin, priority)| {
                     crate::model::text::action_result::AgentPluginToggleResult {
                         activated,
-                        agent,
+                        agent_id: agent,
                         plugin,
                         priority,
                     }

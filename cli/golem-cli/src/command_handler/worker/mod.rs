@@ -324,7 +324,7 @@ impl WorkerCommandHandler {
         logln("");
         self.ctx.log_handler().log_output(WorkerCreateView {
             component_name: agent_name_match.component_name,
-            agent_name: display_agent_name,
+            agent_id: display_agent_name,
         })?;
 
         Ok(())
@@ -680,7 +680,7 @@ impl WorkerCommandHandler {
             .log_handler()
             .log_output(AgentSimulateCrashResult {
                 simulated: true,
-                agent: agent_name.0.clone(),
+                agent_id: agent_name.0.clone(),
             })?;
 
         Ok(())
@@ -807,7 +807,7 @@ impl WorkerCommandHandler {
 
         self.ctx.log_handler().log_output(AgentRevertResult {
             reverted: true,
-            agent: agent_name.0.clone(),
+            agent_id: agent_name.0.clone(),
             last_oplog_index,
             number_of_invocations,
         })?;
@@ -854,7 +854,7 @@ impl WorkerCommandHandler {
             .log_handler()
             .log_output(AgentCancelInvocationResult {
                 canceled,
-                agent: agent_name.0,
+                agent_id: agent_name.0,
                 idempotency_key: idempotency_key.value,
             })?;
 
@@ -1156,7 +1156,7 @@ impl WorkerCommandHandler {
                     .with_secret_config_paths(secret_config_paths);
 
                 let parsed = ParsedAgentId::parse(&raw_agent_name, &worker_component.metadata).ok();
-                agent_view.agent_name = crate::agent_id_display::render_agent_id_or_raw(
+                agent_view.agent_id = crate::agent_id_display::render_agent_id_or_raw(
                     parsed.as_ref(),
                     &source_language,
                     &raw_agent_name,
@@ -1180,7 +1180,7 @@ impl WorkerCommandHandler {
             view.agents.sort_by(|a, b| {
                 a.component_name
                     .cmp(&b.component_name)
-                    .then_with(|| a.agent_name.0.cmp(&b.agent_name.0))
+                    .then_with(|| a.agent_id.0.cmp(&b.agent_id.0))
             });
         }
 
@@ -1223,7 +1223,7 @@ impl WorkerCommandHandler {
 
         self.ctx.log_handler().log_output(AgentInterruptResult {
             interrupted: true,
-            agent: agent_name.0.clone(),
+            agent_id: agent_name.0.clone(),
         })?;
 
         Ok(())
@@ -1250,7 +1250,7 @@ impl WorkerCommandHandler {
 
         self.ctx.log_handler().log_output(AgentResumeResult {
             resumed: true,
-            agent: agent_name.0.clone(),
+            agent_id: agent_name.0.clone(),
         })?;
 
         Ok(())
@@ -1311,7 +1311,7 @@ impl WorkerCommandHandler {
             .unwrap_or(target_revision);
         let meta = AgentUpdateMeta {
             component_name: component.component_name.clone(),
-            agent_name: agent_name.clone(),
+            agent_id: agent_name.clone(),
             from_revision,
             revision: target_revision,
             from_version: self
@@ -1385,10 +1385,10 @@ impl WorkerCommandHandler {
             .with_defaults(defaults)
             .with_secret_config_paths(secret_config_paths)
             .with_source_language(agent_name_match.source_language.clone());
-        metadata_view.agent_name = crate::agent_id_display::render_agent_id_or_raw(
+        metadata_view.agent_id = crate::agent_id_display::render_agent_id_or_raw(
             agent_name_match.parsed_agent_id.as_ref(),
             &agent_name_match.source_language,
-            &metadata_view.agent_name.0,
+            &metadata_view.agent_id.0,
         )
         .into();
 
@@ -1420,7 +1420,7 @@ impl WorkerCommandHandler {
 
         self.ctx.log_handler().log_output(AgentDeleteResult {
             deleted: true,
-            agent: agent_name.0.clone(),
+            agent_id: agent_name.0.clone(),
         })?;
 
         Ok(())
@@ -1557,7 +1557,7 @@ impl WorkerCommandHandler {
                 );
                 self.ctx.log_handler().log_output(AgentFileContentsResult {
                     saved: false,
-                    agent: agent_name.0.clone(),
+                    agent_id: agent_name.0.clone(),
                     path,
                     output_path: output_path.into(),
                     bytes: 0,
@@ -1574,7 +1574,7 @@ impl WorkerCommandHandler {
                 );
                 self.ctx.log_handler().log_output(AgentFileContentsResult {
                     saved: true,
-                    agent: agent_name.0.clone(),
+                    agent_id: agent_name.0.clone(),
                     path,
                     output_path: output_path.into(),
                     bytes: file_contents.len(),
@@ -1634,7 +1634,7 @@ impl WorkerCommandHandler {
 
         self.ctx.log_handler().log_output(AgentPluginToggleResult {
             activated: true,
-            agent: agent_name.0.clone(),
+            agent_id: agent_name.0.clone(),
             plugin: plugin_name.clone(),
             priority: plugin_priority,
         })?;
@@ -1685,7 +1685,7 @@ impl WorkerCommandHandler {
 
         self.ctx.log_handler().log_output(AgentPluginToggleResult {
             activated: false,
-            agent: agent_name.0.clone(),
+            agent_id: agent_name.0.clone(),
             plugin: plugin_name.clone(),
             priority: plugin_priority,
         })?;
@@ -1893,7 +1893,7 @@ impl WorkerCommandHandler {
             }
             update_results.agents.push(AgentUpdateMeta {
                 component_name: component_name.clone(),
-                agent_name: worker.agent_id.agent_id.as_str().into(),
+                agent_id: worker.agent_id.agent_id.as_str().into(),
                 from_revision: worker.component_revision,
                 revision: target_revision,
                 from_version: self

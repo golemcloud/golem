@@ -49,7 +49,7 @@ use std::fmt::Write;
 #[serde(rename_all = "camelCase")]
 pub struct WorkerCreateView {
     pub component_name: ComponentName,
-    pub agent_name: RawAgentId,
+    pub agent_id: RawAgentId,
 }
 
 impl Masked for WorkerCreateView {}
@@ -58,7 +58,7 @@ impl MessageWithFields for WorkerCreateView {
     fn message(&self) -> String {
         format!(
             "Created new agent {}",
-            format_message_highlight(&self.agent_name)
+            format_message_highlight(&self.agent_id)
         )
     }
 
@@ -67,7 +67,7 @@ impl MessageWithFields for WorkerCreateView {
 
         fields
             .fmt_field("Component name", &self.component_name, format_id)
-            .fmt_field("Agent name", &self.agent_name, |agent_name| {
+            .fmt_field("Agent ID", &self.agent_id, |agent_name| {
                 format_agent_id_in(
                     &agent_name.0,
                     colored::control::SHOULD_COLORIZE.should_colorize(),
@@ -124,7 +124,7 @@ impl MessageWithFields for WorkerGetView {
     fn message(&self) -> String {
         format!(
             "Got metadata for agent {}",
-            format_message_highlight(&self.metadata.agent_name)
+            format_message_highlight(&self.metadata.agent_id)
         )
     }
 
@@ -184,7 +184,7 @@ impl MessageWithFields for WorkerGetView {
                 &self.metadata.component_revision,
                 format_id,
             )
-            .fmt_field("Agent name", &self.metadata.agent_name, |agent_name| {
+            .fmt_field("Agent ID", &self.metadata.agent_id, |agent_name| {
                 format_agent_id_in(
                     &agent_name.0,
                     colored::control::SHOULD_COLORIZE.should_colorize(),
@@ -353,7 +353,7 @@ impl AgentsMetadataResponseView {
         let headers = vec![
             Column::new("Component name")
                 .width_range(MIN_COMPONENT_NAME_WIDTH, MAX_COMPONENT_NAME_WIDTH),
-            Column::new("Agent name"),
+            Column::new("Agent ID"),
             Column::new("Revision").content_right(),
             Column::new("Status").content_right(),
             Column::new("Pending").content_right(),
@@ -370,7 +370,7 @@ impl AgentsMetadataResponseView {
             .map(|agent| {
                 vec![
                     TableCell::new(agent.component_name.to_string()),
-                    TableCell::new(agent.agent_name.0.clone()),
+                    TableCell::new(agent.agent_id.0.clone()),
                     TableCell::new(agent.component_revision.to_string()).right(),
                     TableCell::new(agent.status.to_string())
                         .right()
@@ -1434,7 +1434,7 @@ mod tests {
     fn agent_metadata(agent_name: &str) -> AgentMetadataView {
         AgentMetadataView {
             component_name: ComponentName("shop:cart".to_string()),
-            agent_name: RawAgentId(agent_name.to_string()),
+            agent_id: RawAgentId(agent_name.to_string()),
             created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
             environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
             env: HashMap::new(),
@@ -1488,7 +1488,7 @@ mod tests {
     fn table_measures_cells_with_ansi_escapes_stripped() {
         let mut table = ComfyTable::new();
         table
-            .set_header(vec!["Agent name"])
+            .set_header(vec!["Agent ID"])
             .add_row(vec![Cell::new("\u{1b}[32mColored(\"id\")\u{1b}[0m")]);
 
         assert_rows_aligned(&table.to_string());

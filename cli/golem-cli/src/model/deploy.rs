@@ -1304,7 +1304,7 @@ impl TryUpdateAllWorkersResult {
 #[serde(rename_all = "camelCase")]
 pub struct AgentUpdateMeta {
     pub component_name: ComponentName,
-    pub agent_name: RawAgentId,
+    pub agent_id: RawAgentId,
     pub from_revision: ComponentRevision,
     pub revision: ComponentRevision,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -1029,7 +1029,7 @@ mod tests {
     ) -> SelfFormattingTableSpec<'static> {
         let headers = vec![
             Column::new("Component name").width_range(12, 28),
-            Column::new("Agent name"),
+            Column::new("Agent ID"),
             Column::new("Status").content_right(),
         ];
         let rows = component_names

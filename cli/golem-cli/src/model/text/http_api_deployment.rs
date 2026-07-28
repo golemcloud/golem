@@ -69,7 +69,7 @@ fn http_api_deployment_fields(dep: &HttpApiDeployment) -> Vec<(String, String)> 
         .fmt_field("Agents", &dep.agents, |agents| {
             let mut result = String::new();
             for (agent_name, agent_options) in agents {
-                result.push_str(&format!("- Agent name: {}", agent_name));
+                result.push_str(&format!("- Agent ID: {}", agent_name));
                 match &agent_options.security {
                     None => {}
                     Some(HttpApiDeploymentAgentSecurity::SecurityScheme(inner)) => {

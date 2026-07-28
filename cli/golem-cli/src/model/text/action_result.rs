@@ -33,7 +33,7 @@ use std::path::PathBuf;
 #[serde(rename_all = "camelCase")]
 pub struct AgentDeleteResult {
     pub deleted: bool,
-    pub agent: String,
+    pub agent_id: String,
 }
 
 impl NoTextOutput for AgentDeleteResult {}
@@ -47,7 +47,7 @@ impl StructuredOutput for AgentDeleteResult {
 #[serde(rename_all = "camelCase")]
 pub struct AgentFileContentsResult {
     pub saved: bool,
-    pub agent: String,
+    pub agent_id: String,
     pub path: String,
     pub output_path: PathBuf,
     pub bytes: usize,
@@ -64,7 +64,7 @@ impl StructuredOutput for AgentFileContentsResult {
 #[serde(rename_all = "camelCase")]
 pub struct AgentInterruptResult {
     pub interrupted: bool,
-    pub agent: String,
+    pub agent_id: String,
 }
 
 impl NoTextOutput for AgentInterruptResult {}
@@ -78,7 +78,7 @@ impl StructuredOutput for AgentInterruptResult {
 #[serde(rename_all = "camelCase")]
 pub struct AgentResumeResult {
     pub resumed: bool,
-    pub agent: String,
+    pub agent_id: String,
 }
 
 impl NoTextOutput for AgentResumeResult {}
@@ -92,7 +92,7 @@ impl StructuredOutput for AgentResumeResult {
 #[serde(rename_all = "camelCase")]
 pub struct AgentSimulateCrashResult {
     pub simulated: bool,
-    pub agent: String,
+    pub agent_id: String,
 }
 
 impl NoTextOutput for AgentSimulateCrashResult {}
@@ -106,7 +106,7 @@ impl StructuredOutput for AgentSimulateCrashResult {
 #[serde(rename_all = "camelCase")]
 pub struct AgentRevertResult {
     pub reverted: bool,
-    pub agent: String,
+    pub agent_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_oplog_index: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -124,7 +124,7 @@ impl StructuredOutput for AgentRevertResult {
 #[serde(rename_all = "camelCase")]
 pub struct AgentCancelInvocationResult {
     pub canceled: bool,
-    pub agent: String,
+    pub agent_id: String,
     pub idempotency_key: String,
 }
 
@@ -153,7 +153,7 @@ impl StructuredOutput for AgentRedeployResult {
 #[serde(rename_all = "camelCase")]
 pub struct AgentRedeploymentMeta {
     pub component_name: ComponentName,
-    pub agent_name: RawAgentId,
+    pub agent_id: RawAgentId,
     pub from_revision: ComponentRevision,
     pub revision: ComponentRevision,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -180,14 +180,14 @@ impl StructuredOutput for AgentDeleteAllResult {
 #[serde(rename_all = "camelCase")]
 pub struct AgentDeletionMeta {
     pub component_name: ComponentName,
-    pub agent_name: RawAgentId,
+    pub agent_id: RawAgentId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentPluginToggleResult {
     pub activated: bool,
-    pub agent: String,
+    pub agent_id: String,
     pub plugin: String,
     pub priority: i32,
 }

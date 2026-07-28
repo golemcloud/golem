@@ -1156,7 +1156,7 @@
       "required": [
         "$type",
         "canceled",
-        "agent",
+        "agentId",
         "idempotencyKey"
       ],
       "properties": {
@@ -1166,7 +1166,7 @@
         "canceled": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         },
         "idempotencyKey": {
@@ -1183,7 +1183,7 @@
       "required": [
         "$type",
         "deleted",
-        "agent"
+        "agentId"
       ],
       "properties": {
         "$type": {
@@ -1192,7 +1192,7 @@
         "deleted": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         }
       },
@@ -1232,7 +1232,7 @@
       "required": [
         "$type",
         "saved",
-        "agent",
+        "agentId",
         "path",
         "outputPath",
         "bytes"
@@ -1244,7 +1244,7 @@
         "saved": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         },
         "path": {
@@ -1313,7 +1313,7 @@
       "required": [
         "$type",
         "interrupted",
-        "agent"
+        "agentId"
       ],
       "properties": {
         "$type": {
@@ -1322,7 +1322,7 @@
         "interrupted": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         }
       },
@@ -1399,7 +1399,7 @@
       "required": [
         "$type",
         "componentName",
-        "agentName"
+        "agentId"
       ],
       "properties": {
         "$type": {
@@ -1408,7 +1408,7 @@
         "componentName": {
           "type": "string"
         },
-        "agentName": {
+        "agentId": {
           "type": "string"
         }
       },
@@ -1446,7 +1446,7 @@
       "required": [
         "$type",
         "activated",
-        "agent",
+        "agentId",
         "plugin",
         "priority"
       ],
@@ -1457,7 +1457,7 @@
         "activated": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         },
         "plugin": {
@@ -1504,7 +1504,7 @@
       "required": [
         "$type",
         "resumed",
-        "agent"
+        "agentId"
       ],
       "properties": {
         "$type": {
@@ -1513,7 +1513,7 @@
         "resumed": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         }
       },
@@ -1527,7 +1527,7 @@
       "required": [
         "$type",
         "reverted",
-        "agent"
+        "agentId"
       ],
       "properties": {
         "$type": {
@@ -1536,7 +1536,7 @@
         "reverted": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         },
         "lastOplogIndex": {
@@ -1558,7 +1558,7 @@
       "required": [
         "$type",
         "simulated",
-        "agent"
+        "agentId"
       ],
       "properties": {
         "$type": {
@@ -1567,7 +1567,7 @@
         "simulated": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         }
       },
@@ -3604,7 +3604,7 @@
       "type": "object",
       "required": [
         "componentName",
-        "agentName",
+        "agentId",
         "createdBy",
         "environmentId",
         "env",
@@ -3623,7 +3623,7 @@
       ],
       "properties": {
         "componentName": { "type": "string" },
-        "agentName": { "type": "string" },
+        "agentId": { "type": "string" },
         "createdBy": { "type": "string" },
         "environmentId": { "type": "string" },
         "env": { "type": "object", "additionalProperties": { "type": "string" } },
@@ -4167,19 +4167,19 @@
     },
     "AgentDeletionMeta": {
       "type": "object",
-      "required": ["componentName", "agentName"],
+      "required": ["componentName", "agentId"],
       "properties": {
         "componentName": { "type": "string" },
-        "agentName": { "type": "string" }
+        "agentId": { "type": "string" }
       },
       "additionalProperties": false
     },
     "AgentUpdateMeta": {
       "type": "object",
-      "required": ["componentName", "agentName", "fromRevision", "revision"],
+      "required": ["componentName", "agentId", "fromRevision", "revision"],
       "properties": {
         "componentName": { "type": "string" },
-        "agentName": { "type": "string" },
+        "agentId": { "type": "string" },
         "fromRevision": { "type": "integer", "minimum": 0 },
         "revision": { "type": "integer", "minimum": 0 },
         "fromVersion": { "type": "string" },
@@ -4189,10 +4189,10 @@
     },
     "AgentRedeploymentMeta": {
       "type": "object",
-      "required": ["componentName", "agentName", "fromRevision", "revision"],
+      "required": ["componentName", "agentId", "fromRevision", "revision"],
       "properties": {
         "componentName": { "type": "string" },
-        "agentName": { "type": "string" },
+        "agentId": { "type": "string" },
         "fromRevision": { "type": "integer", "minimum": 0 },
         "revision": { "type": "integer", "minimum": 0 },
         "fromVersion": { "type": "string" },

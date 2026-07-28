@@ -410,7 +410,7 @@ impl ComponentCommandHandler {
                     .await;
                 agents.push(AgentRedeploymentMeta {
                     component_name: component.component_name.clone(),
-                    agent_name,
+                    agent_id: agent_name,
                     from_revision,
                     revision: component.revision,
                     from_version,
@@ -432,7 +432,7 @@ impl ComponentCommandHandler {
             return Ok(());
         }
 
-        log_action("Deleting", "existing workers");
+        log_action("Deleting", "existing agents");
         let _indent = LogIndent::new();
 
         // NOTE: for now we naively keep deleting in a loop until we do not find any more agents,
@@ -455,7 +455,7 @@ impl ComponentCommandHandler {
                 for agent_name in deleted {
                     agents.push(AgentDeletionMeta {
                         component_name: component.component_name.clone(),
-                        agent_name,
+                        agent_id: agent_name,
                     });
                 }
             }

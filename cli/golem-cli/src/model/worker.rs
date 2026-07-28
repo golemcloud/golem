@@ -119,7 +119,7 @@ impl Display for AgentListMode {
 #[serde(rename_all = "camelCase")]
 pub struct AgentMetadataView {
     pub component_name: ComponentName,
-    pub agent_name: RawAgentId,
+    pub agent_id: RawAgentId,
     pub created_by: AccountId,
     pub environment_id: EnvironmentId,
     pub env: HashMap<String, String>,
@@ -147,7 +147,7 @@ impl From<AgentMetadata> for AgentMetadataView {
     fn from(value: AgentMetadata) -> Self {
         AgentMetadataView {
             component_name: value.component_name,
-            agent_name: value.agent_id.agent_id.into(),
+            agent_id: value.agent_id.agent_id.into(),
             created_by: value.created_by,
             environment_id: value.environment_id,
             env: value.env,
