@@ -29,9 +29,9 @@
 //	var Add = golem.DefineMethod[CounterId, AddIn, int64]("add")
 //
 //	func init() {
-//	    golem.Implement(Counter, Add, func(ctx *golem.Context[CounterState], in AddIn) (int64, error) {
+//	    golem.Implement(Counter, Add, func(ctx *golem.Context[CounterState], in AddIn) int64 {
 //	        ctx.State.count += in.By
-//	        return ctx.State.count, nil
+//	        return ctx.State.count
 //	    })
 //	}
 //
@@ -168,18 +168,17 @@ type Context[S any] struct {
 func (c *Context[S]) AgentID() string { return c.agentID }
 
 // agentScope is the unexported capability carried by a method's *[Context].
-// [AgentConfig.Get] requires it, so config can be read only from inside a running
+// [Agent.Config] requires it, so config can be read only from inside a running
 // method. The *S in the signature ties the scope to the agent's state type, so
-// one agent cannot read another agent's config handle (whose state type differs)
-// at compile time. (A constructor reads config differently — it is handed the
-// materialized config by [DefineConfiguredAgent] — so [InitContext] is not a
-// scope.)
+// one agent cannot read another agent's config (whose state type differs) at
+// compile time. (A constructor reads config off its own *[InitContext] via
+// [InitContext.Config], so it is not an agentScope.)
 type agentScope[S any] interface {
 	agentScopeState() *S
 }
 
 // agentScopeState satisfies [agentScope] for a method context. It exists only to
-// gate [AgentConfig.Get] at compile time.
+// gate [Agent.Config] at compile time.
 //
 //nolint:unused // false positive: staticcheck's unused can't trace generic-interface satisfaction (verified with a minimal repro); the compiler requires this method for agentScope[S].
 func (c *Context[S]) agentScopeState() *S { return c.State }
@@ -201,13 +200,15 @@ func (c *InitContext[Id, S, Cfg]) ID() Id { return c.id }
 // AgentID returns the raw agent id the instance is being initialized with.
 func (c *InitContext[Id, S, Cfg]) AgentID() string { return c.agentID }
 
-// Agent is the handle returned by [DefineAgent]. Id is the constructor
-// parameter type, which doubles as the agent's type-level identity; S is the
-// private state type.
-type Agent[Id any, S any] struct{ name string }
+// Agent is the handle returned by [DefineAgent] / [DefineConfiguredAgent]. Id is
+// the constructor parameter type, which doubles as the agent's type-level
+// identity; S is the private state type; Cfg is the agent's config struct
+// ([NoConfig] for a config-less agent). Cfg is carried on the handle so config
+// can be read in a method via [Agent.Config] without a separate config handle.
+type Agent[Id any, S any, Cfg any] struct{ name string }
 
 // Name returns the agent's wire-level type name.
-func (a *Agent[Id, S]) Name() string { return a.name }
+func (a *Agent[Id, S, Cfg]) Name() string { return a.name }
 
 // MethodDef is a typed method descriptor: the single source of truth shared by
 // the agent-type schema, the implementation binding, and calls from other

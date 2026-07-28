@@ -32,21 +32,24 @@ import (
 // agent's config type. This mirrors the TS SDK (config is instance-bound); there
 // are no free-floating, read-from-anywhere descriptors.
 //
-// Declare the config struct and attach it to the agent:
+// Declare the config struct and attach it to the agent with
+// [DefineConfiguredAgent]; the config type Cfg rides on the returned [Agent], so
+// there is no separate config handle:
 //
 //	type ShopConfig struct {
 //	    Greeting string
 //	    APIKey   golem.Secret[string] // a secret field, at any depth
 //	}
-//	var ShopCfg = golem.DefineConfig[ShopConfig](Shop)
+//	var Shop = golem.DefineConfiguredAgent[ShopId, ShopState, ShopConfig](spec, initShop)
 //
-// and read it from inside a method (or the constructor) via the agent's context:
+// and read it from inside a method via [Agent.Config] (or, in the constructor,
+// [InitContext.Config]):
 //
-//	cfg := ShopCfg.Get(ctx)  // ctx is the running agent's *Context[S]
-//	_ = cfg.Greeting         // local field, decoded at this Get
+//	cfg := Shop.Config(ctx)  // ctx is the running agent's *Context[S]
+//	_ = cfg.Greeting         // local field, decoded at this read
 //	_ = cfg.APIKey.Get()     // secret field: re-reads the host each call
 //
-// Local fields are the values current at the ShopCfg.Get(ctx) call. Secret fields
+// Local fields are the values current at the Shop.Config(ctx) call. Secret fields
 // come back as handles that read the host on every Secret.Get(), so a *rotated*
 // secret is always observed rather than a stale snapshot.
 //
@@ -78,40 +81,6 @@ type configDecl struct {
 // it internally; config-less agents never name it.
 type NoConfig struct{}
 
-// AgentConfig is the handle to an agent's configuration, returned by
-// [DefineConfig] and [DefineConfiguredAgent]. It carries the agent's state type
-// S and its config struct type Cfg, so the config can be read only from within
-// that agent's own execution scope (see [AgentConfig.Get]) — never free-floating.
-type AgentConfig[S any, Cfg any] struct {
-	agentName string
-}
-
-// DefineConfig attaches config type Cfg to an agent declared with [DefineAgent]
-// and returns a handle for reading it. Cfg's exported fields become the agent's
-// config keys (nested structs flatten into multi-segment paths; [Secret]-typed
-// fields at any depth become secrets). Read the values from within the agent's
-// methods via [AgentConfig.Get].
-//
-// When the constructor itself needs config, declare the agent with
-// [DefineConfiguredAgent] instead, which returns both the agent and its config
-// handle.
-func DefineConfig[Cfg any, Id any, S any](a *Agent[Id, S]) *AgentConfig[S, Cfg] {
-	return defineConfigInto[Cfg](defs, a)
-}
-
-func defineConfigInto[Cfg any, Id any, S any](d *definitions, a *Agent[Id, S]) *AgentConfig[S, Cfg] {
-	if a == nil {
-		d.recordErr("", "", "DefineConfig: declared on a nil agent")
-		return &AgentConfig[S, Cfg]{}
-	}
-	e := d.agents[a.name]
-	if e == nil {
-		d.recordErr(a.name, "", "DefineConfig: unknown agent %q (was DefineAgent called?)", a.name)
-		return &AgentConfig[S, Cfg]{agentName: a.name}
-	}
-	flattenConfigStruct(d, e, a.name, reflect.TypeFor[Cfg]())
-	return &AgentConfig[S, Cfg]{agentName: a.name}
-}
 
 func configKind(source common.AgentConfigSource) string {
 	if source == common.AgentConfigSourceSecret {
@@ -215,16 +184,17 @@ func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgTyp
 // pure and covered by native tests.
 // ---------------------------------------------------------------------------
 
-// Get materializes the agent's config from within a method, returning it or
+// Config materializes the agent's config from within a method, returning it or
 // panicking if the read fails. scope is the running agent's *[Context]: local
 // fields are decoded, and secret fields come back as redacting [Secret] handles.
-// Because scope must carry the agent's own state type S, the config cannot be
-// read outside the owning agent — there is no free-floating read. A config read
-// failing is a hard failure (a misconfiguration or host error) with no in-band
-// recovery, so — like the TS/Rust/Scala SDKs — Get fails loud: the panic is
-// recovered by the invoke dispatcher into an agent-error. Must be called inside
-// an invocation (it calls the host).
-func (c *AgentConfig[S, Cfg]) Get(scope agentScope[S]) Cfg {
+// Because scope must carry the agent's own state type S — and the method returns
+// the agent's own Cfg — config can be read only from within the owning agent's
+// method; there is no free-floating read. A config read failing is a hard failure
+// (a misconfiguration or host error) with no in-band recovery, so — like the
+// TS/Rust/Scala SDKs — Config fails loud: the panic is recovered by the invoke
+// dispatcher into an agent-error. Must be called inside an invocation (it calls
+// the host).
+func (a *Agent[Id, S, Cfg]) Config(scope agentScope[S]) Cfg {
 	// scope is a compile-time gate only: requiring it means the read can happen
 	// only from inside the agent's own execution. The host keys get-config-value
 	// by the running agent, so the value is resolved without threading scope on.
@@ -239,11 +209,11 @@ func (c *AgentConfig[S, Cfg]) Get(scope agentScope[S]) Cfg {
 }
 
 // Config reads the agent's config from within its constructor, returning it or
-// panicking if the read fails (fail-loud, like [AgentConfig.Get]). It
+// panicking if the read fails (fail-loud, like [Agent.Config]). It
 // materializes the same Cfg: local fields decoded, secret fields as redacting
-// [Secret] handles. The constructor reads config this way — off its own context —
-// rather than through the config handle, which would be a self-reference in the
-// package-level var that produces both the agent and the handle. Must be called
+// [Secret] handles. The constructor reads config off its own context (rather than
+// the agent) because naming the agent in its own package-level initializer would
+// be a self-reference. Must be called
 // inside an invocation (it calls the host).
 func (c *InitContext[Id, S, Cfg]) Config() Cfg {
 	cfg, err := materializeConfig[Cfg](func(lf configLeaf) (reflect.Value, error) {
@@ -256,8 +226,8 @@ func (c *InitContext[Id, S, Cfg]) Config() Cfg {
 }
 
 // materializeConfig assembles a Cfg value by reading each declared leaf through
-// readLeaf. Pure given readLeaf — [AgentConfig.Get] supplies the host-backed
-// reader, tests supply a fake.
+// readLeaf. Pure given readLeaf — [Agent.Config] / [InitContext.Config] supply
+// the host-backed reader, tests supply a fake.
 func materializeConfig[Cfg any](readLeaf func(lf configLeaf) (reflect.Value, error)) (Cfg, error) {
 	var zero Cfg
 	cfgType := reflect.TypeFor[Cfg]()
@@ -412,16 +382,13 @@ type configOverrideFn func(d *definitions) ([]common.TypedAgentConfigValue, erro
 
 // WithConfig supplies the callee's local config values at client creation
 // (make-wasm-rpc's agent-config), overriding what the platform would otherwise
-// provision. Pass the target agent's config handle and a Cfg value; each local
-// field is encoded as an override, validated against the target's declarations
-// by [ClientFor]. Secret fields are provisioned by the platform, not by a
-// caller, so they are skipped.
-func WithConfig[S any, Cfg any](handle *AgentConfig[S, Cfg], value Cfg) ClientOpt {
+// provision. Cfg is inferred from value; each local field is encoded as an
+// override and validated against the target agent's declarations by [ClientFor]
+// (which already names the target). Secret fields are provisioned by the
+// platform, not by a caller, so they are skipped.
+func WithConfig[Cfg any](value Cfg) ClientOpt {
 	return func(o *clientOpts) {
 		o.configs = append(o.configs, func(d *definitions) ([]common.TypedAgentConfigValue, error) {
-			if handle == nil {
-				return nil, fmt.Errorf("WithConfig: nil config handle")
-			}
 			return encodeConfigOverrides(d, value)
 		})
 	}

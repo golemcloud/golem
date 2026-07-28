@@ -39,6 +39,13 @@ func uuidFromWit(w types.Uuid) UUID {
 	return u
 }
 
+func uuidToWit(u UUID) types.Uuid {
+	return types.Uuid{
+		HighBits: binary.BigEndian.Uint64(u[0:8]),
+		LowBits:  binary.BigEndian.Uint64(u[8:16]),
+	}
+}
+
 // ParsedAgentID is the typed decomposition of an agent id string: the agent
 // type name, the constructor parameters decoded back into the Id type, and the
 // phantom id (present for phantom/ephemeral instances).

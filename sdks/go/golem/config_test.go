@@ -43,21 +43,22 @@ type demoAppConfig struct {
 	Db       demoDBConfig
 }
 
-func cfgAgent(d *definitions) *Agent[cfgId, cfgState] {
-	return defineAgentInto[cfgId, cfgState](
+// cfgConfiguredAgent registers the "Cfg" agent with config type Cfg attached (a
+// no-op constructor — the host read must stay out of the natively-linked test).
+func cfgConfiguredAgent[Cfg any](d *definitions) *Agent[cfgId, cfgState, Cfg] {
+	return defineConfiguredAgentInto[cfgId, cfgState, Cfg](
 		d,
 		Spec{Name: "Cfg"},
-		func(cfgId) *cfgState { return &cfgState{} },
+		func(*InitContext[cfgId, cfgState, Cfg]) *cfgState { return &cfgState{} },
 	)
 }
 
-// TestConfigDeclarationsInMetadata — DefineConfig flattens the agent's config
-// struct into the agent-type metadata: local fields as local declarations, the
-// secret field carrying a secret(inner) value type.
+// TestConfigDeclarationsInMetadata — DefineConfiguredAgent flattens the agent's
+// config struct into the agent-type metadata: local fields as local declarations,
+// the secret field carrying a secret(inner) value type.
 func TestConfigDeclarationsInMetadata(t *testing.T) {
 	withDefs(t, func(d *definitions) {
-		a := cfgAgent(d)
-		defineConfigInto[demoAppConfig](d, a)
+		cfgConfiguredAgent[demoAppConfig](d)
 
 		out, errs := d.discover()
 		if len(errs) != 0 {
@@ -94,60 +95,23 @@ func TestConfigDeclarationsInMetadata(t *testing.T) {
 	})
 }
 
-// TestDefineConfiguredAgentAttachesConfig — DefineConfiguredAgent registers the
-// config struct on the agent it defines, so the returned handle's fields land in
-// the metadata just like DefineConfig on a plain agent.
-func TestDefineConfiguredAgentAttachesConfig(t *testing.T) {
-	withDefs(t, func(d *definitions) {
-		defineConfiguredAgentInto[cfgId, cfgState, demoAppConfig](
-			d,
-			Spec{Name: "Cfg"},
-			// Constructor does not call ctx.Config() here — the host read must stay
-			// out of the natively-linked test binary.
-			func(*InitContext[cfgId, cfgState, demoAppConfig]) *cfgState { return &cfgState{} },
-		)
-		out, errs := d.discover()
-		if len(errs) != 0 {
-			t.Fatalf("unexpected definition errors: %v", errs)
-		}
-		if len(out[0].Config) != 3 {
-			t.Fatalf("want 3 config declarations, got %d", len(out[0].Config))
-		}
-	})
-}
-
 func TestConfigNonStructReported(t *testing.T) {
 	withDefs(t, func(d *definitions) {
-		a := cfgAgent(d)
-		defineConfigInto[int](d, a)
+		cfgConfiguredAgent[int](d)
 		mustDefErr(t, d, "must be a struct")
 	})
 }
 
-// TestMisuseDuplicateConfigPath — The same path must not be declared twice on one
-// agent, even across two config structs sharing a field name.
+// TestMisuseDuplicateConfigPath — the same path must not be recorded twice on one
+// agent. (Not reachable from a single config struct — field names are unique — so
+// the defensive check in recordConfigOn is exercised directly.)
 func TestMisuseDuplicateConfigPath(t *testing.T) {
 	withDefs(t, func(d *definitions) {
-		type dup1 struct{ Url string }
-		type dup2 struct{ Url string }
-		a := cfgAgent(d)
-		defineConfigInto[dup1](d, a)
-		defineConfigInto[dup2](d, a)
+		cfgConfiguredAgent[NoConfig](d)
+		e := d.agents["Cfg"]
+		recordConfigOn(d, e, "Cfg", common.AgentConfigSourceLocal, []string{"k"}, reflect.TypeFor[string]())
+		recordConfigOn(d, e, "Cfg", common.AgentConfigSourceLocal, []string{"k"}, reflect.TypeFor[string]())
 		mustDefErr(t, d, "declared more than once")
-	})
-}
-
-func TestConfigUnknownAgent(t *testing.T) {
-	withDefs(t, func(d *definitions) {
-		// An agent value that was never registered in d.
-		ghost := &Agent[cfgId, cfgState]{name: "Ghost"}
-		defineConfigInto[demoAppConfig](d, ghost)
-		mustDefErr(t, d, "unknown agent")
-	})
-	withDefs(t, func(d *definitions) {
-		var nilAgent *Agent[cfgId, cfgState]
-		defineConfigInto[demoAppConfig](d, nilAgent)
-		mustDefErr(t, d, "nil agent")
 	})
 }
 
@@ -257,12 +221,11 @@ func TestSecretGetIsLive(t *testing.T) {
 // and skips the platform-provisioned secret leaf.
 func TestWithConfigEncodesLocalsSkipsSecrets(t *testing.T) {
 	withDefs(t, func(d *definitions) {
-		a := cfgAgent(d)
-		handle := defineConfigInto[demoAppConfig](d, a)
+		cfgConfiguredAgent[demoAppConfig](d)
 		noDefErrs(t, d)
 
 		var o clientOpts
-		WithConfig(handle, demoAppConfig{
+		WithConfig(demoAppConfig{
 			Greeting: "hi",
 			Db:       demoDBConfig{Url: "db://prod"},
 		})(&o)
@@ -293,27 +256,17 @@ func TestWithConfigEncodesLocalsSkipsSecrets(t *testing.T) {
 }
 
 // TestWithConfigUndeclaredRejected — Overriding config against an agent that
-// declares none is rejected client-side (no key matches).
+// declares none is rejected client-side (no key matches). Encodes demoAppConfig
+// overrides directly and validates them against a no-config agent's entry.
 func TestWithConfigUndeclaredRejected(t *testing.T) {
 	withDefs(t, func(d *definitions) {
-		cfgAgent(d) // no config declared
-		handle := &AgentConfig[cfgState, demoAppConfig]{agentName: "Cfg"}
-
+		cfgConfiguredAgent[NoConfig](d) // agent "Cfg" declares no config
 		var o clientOpts
-		WithConfig(handle, demoAppConfig{Greeting: "x"})(&o)
+		o.configs = append(o.configs, func(dd *definitions) ([]common.TypedAgentConfigValue, error) {
+			return encodeConfigOverrides(dd, demoAppConfig{Greeting: "x"})
+		})
 		if _, err := buildAgentConfig(d, d.agents["Cfg"], o.configs); err == nil {
 			t.Fatal("expected an error overriding an undeclared config key")
-		}
-	})
-}
-
-func TestWithConfigNilHandle(t *testing.T) {
-	withDefs(t, func(d *definitions) {
-		cfgAgent(d)
-		var o clientOpts
-		WithConfig[cfgState, demoAppConfig](nil, demoAppConfig{})(&o)
-		if _, err := buildAgentConfig(d, d.agents["Cfg"], o.configs); err == nil {
-			t.Fatal("expected an error for a nil config handle")
 		}
 	})
 }

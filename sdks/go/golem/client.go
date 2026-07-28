@@ -38,10 +38,16 @@ type Client[Id any] struct {
 	rpc       *host.WasmRpc
 	agentType string
 	agentID   string
+	phantomID Option[UUID]
 }
 
 // AgentID returns the target's agent id, as resolved by the host.
 func (c Client[Id]) AgentID() string { return c.agentID }
+
+// PhantomID returns the phantom instance id this client addresses, or None for a
+// durable client. A [NewPhantom] client carries the freshly allocated id here
+// (re-address it later with [WithPhantomID]).
+func (c Client[Id]) PhantomID() Option[UUID] { return c.phantomID }
 
 // ClientOpt configures a client.
 type ClientOpt func(*clientOpts)
@@ -53,8 +59,8 @@ type clientOpts struct {
 
 // WithPhantomID addresses a specific phantom instance of the target agent.
 // Use [NewPhantom] to allocate a fresh one.
-func WithPhantomID(id types.Uuid) ClientOpt {
-	return func(o *clientOpts) { o.phantomID = witTypes.Some(id) }
+func WithPhantomID(id UUID) ClientOpt {
+	return func(o *clientOpts) { o.phantomID = witTypes.Some(uuidToWit(id)) }
 }
 
 // ClientFor returns a client addressing the agent instance identified by id.
@@ -62,7 +68,7 @@ func WithPhantomID(id types.Uuid) ClientOpt {
 // The id is encoded with the same codecs the target uses to decode its
 // constructor parameters — they are derived from the same Go types — so caller
 // and callee agree by construction rather than by convention.
-func ClientFor[Id any, S any](a *Agent[Id, S], id Id, opts ...ClientOpt) (Client[Id], error) {
+func ClientFor[Id any, S any, Cfg any](a *Agent[Id, S, Cfg], id Id, opts ...ClientOpt) (Client[Id], error) {
 	e := defs.agents[a.name]
 	if e == nil {
 		return Client[Id]{}, fmt.Errorf("golem: ClientFor: unknown agent %s", a.name)
@@ -92,22 +98,28 @@ func ClientFor[Id any, S any](a *Agent[Id, S], id Id, opts ...ClientOpt) (Client
 		return Client[Id]{}, fmt.Errorf("golem: ClientFor %s: %w", a.name, agentErrorToGo(resolved.Err()))
 	}
 
+	phantomID := None[UUID]()
+	if o.phantomID.IsSome() {
+		phantomID = Some(uuidFromWit(o.phantomID.Some()))
+	}
 	return Client[Id]{
 		rpc:       host.MakeWasmRpc(a.name, ctor, o.phantomID, agentConfig),
 		agentType: a.name,
 		agentID:   resolved.Ok(),
+		phantomID: phantomID,
 	}, nil
 }
 
 // NewPhantom allocates a fresh phantom instance of the target agent and returns
-// a client for it, together with the phantom id needed to address it again.
+// a client for it. The freshly allocated phantom id rides on the client — read it
+// back with [Client.PhantomID] to address the same instance again (via
+// [WithPhantomID]).
 //
 // Ephemeral agents have no durable identity, so this is the only way to obtain
 // a client for one.
-func NewPhantom[Id any, S any](a *Agent[Id, S], id Id) (Client[Id], types.Uuid, error) {
-	phantom := apiHost.GenerateIdempotencyKey()
-	c, err := ClientFor(a, id, WithPhantomID(phantom))
-	return c, phantom, err
+func NewPhantom[Id any, S any, Cfg any](a *Agent[Id, S, Cfg], id Id) (Client[Id], error) {
+	phantom := uuidFromWit(apiHost.GenerateIdempotencyKey())
+	return ClientFor(a, id, WithPhantomID(phantom))
 }
 
 // agentErrorToGo converts a host agent-error into a Go error, keeping the case

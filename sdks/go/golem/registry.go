@@ -108,47 +108,46 @@ func lowerFirst(s string) string {
 // Call it from a package-level var so registration happens before the component
 // is invoked.
 //
-// A config-less agent uses this form. To attach config, either declare it
-// separately with [DefineConfig], or — when the constructor itself needs config
-// — declare the agent with [DefineConfiguredAgent].
+// A config-less agent uses this form. To attach config — whether the constructor
+// needs it or only the methods do — declare the agent with [DefineConfiguredAgent]
+// and read it with [Agent.Config].
 //
 // This is sugar over [DefineConfiguredAgent] with [NoConfig]: the constructor
 // gets its id directly and never sees [InitContext].
-func DefineAgent[Id any, S any](spec Spec, init func(Id) *S) *Agent[Id, S] {
+func DefineAgent[Id any, S any](spec Spec, init func(Id) *S) *Agent[Id, S, NoConfig] {
 	return defineAgentInto[Id, S](defs, spec, init)
 }
 
 // defineAgentInto is the instance-scoped form of DefineAgent — sugar over
 // [defineConfiguredAgentInto] with [NoConfig], adapting the simple func(Id) *S
 // constructor. Tests call it with their own definitions for full isolation.
-func defineAgentInto[Id any, S any](d *definitions, spec Spec, init func(Id) *S) *Agent[Id, S] {
+func defineAgentInto[Id any, S any](d *definitions, spec Spec, init func(Id) *S) *Agent[Id, S, NoConfig] {
 	var cinit func(*InitContext[Id, S, NoConfig]) *S
 	if init != nil {
 		cinit = func(ctx *InitContext[Id, S, NoConfig]) *S { return init(ctx.id) }
 	}
-	agent, _ := defineConfiguredAgentInto[Id, S, NoConfig](d, spec, cinit)
-	return agent
+	return defineConfiguredAgentInto[Id, S, NoConfig](d, spec, cinit)
 }
 
-// DefineConfiguredAgent registers an agent that reads config in its constructor.
-// It attaches config type Cfg (the same flattening as [DefineConfig]) and returns
-// both the agent handle and its config handle. init receives an
+// DefineConfiguredAgent registers an agent with config type Cfg and returns its
+// handle. Cfg is carried on the handle, so config is read in a method with
+// [Agent.Config] — no separate config handle. init receives an
 // *[InitContext][Id, S, Cfg], which carries the constructor parameters
-// ([InitContext.ID]) and reads the agent's config with [InitContext.Config] —
-// off the context, not the returned handle, so the constructor does not
-// self-reference the package-level var it is being assigned to:
+// ([InitContext.ID]) and reads config with [InitContext.Config] — off the
+// context, not the returned agent, so the constructor does not self-reference the
+// package-level var it is being assigned to:
 //
-//	var Shop, ShopCfg = golem.DefineConfiguredAgent[ShopId, ShopState, ShopConfig](
+//	var Shop = golem.DefineConfiguredAgent[ShopId, ShopState, ShopConfig](
 //	    golem.Spec{Name: "Shop"},
 //	    func(ctx *golem.InitContext[ShopId, ShopState, ShopConfig]) *ShopState {
-//	        cfg := golem.Must(ctx.Config())
-//	        return &ShopState{greeting: cfg.Greeting}
+//	        return &ShopState{greeting: ctx.Config().Greeting}
 //	    },
 //	)
 //
-// Methods take *[Context] and read config with ShopCfg.Get(ctx). Agents that
-// don't need config in the constructor should use the simpler [DefineAgent].
-func DefineConfiguredAgent[Id any, S any, Cfg any](spec Spec, init func(*InitContext[Id, S, Cfg]) *S) (*Agent[Id, S], *AgentConfig[S, Cfg]) {
+// Methods take *[Context] and read config with Shop.Config(ctx). An agent whose
+// constructor does not need config can ignore the InitContext's config; an agent
+// with no config at all uses the simpler [DefineAgent].
+func DefineConfiguredAgent[Id any, S any, Cfg any](spec Spec, init func(*InitContext[Id, S, Cfg]) *S) *Agent[Id, S, Cfg] {
 	return defineConfiguredAgentInto[Id, S, Cfg](defs, spec, init)
 }
 
@@ -156,16 +155,15 @@ func DefineConfiguredAgent[Id any, S any, Cfg any](spec Spec, init func(*InitCon
 // DefineAgent and DefineConfiguredAgent. The public entry points wrap it against
 // the package-global defs; tests call it with their own definitions for full
 // isolation. (It must stay a generic function — Go forbids generic methods.)
-func defineConfiguredAgentInto[Id any, S any, Cfg any](d *definitions, spec Spec, init func(*InitContext[Id, S, Cfg]) *S) (*Agent[Id, S], *AgentConfig[S, Cfg]) {
+func defineConfiguredAgentInto[Id any, S any, Cfg any](d *definitions, spec Spec, init func(*InitContext[Id, S, Cfg]) *S) *Agent[Id, S, Cfg] {
 	idType := reflect.TypeFor[Id]()
-	cfgHandle := &AgentConfig[S, Cfg]{agentName: spec.Name}
 	if spec.Name == "" {
 		d.recordErr("", "", "DefineAgent requires a non-empty Spec.Name (Id type %s)", idType)
-		return &Agent[Id, S]{name: spec.Name}, cfgHandle
+		return &Agent[Id, S, Cfg]{name: spec.Name}
 	}
 	if _, dup := d.agents[spec.Name]; dup {
 		d.recordErr(spec.Name, "", "agent type already defined")
-		return &Agent[Id, S]{name: spec.Name}, cfgHandle
+		return &Agent[Id, S, Cfg]{name: spec.Name}
 	}
 	if idType.Kind() != reflect.Struct {
 		// Record but still register (with no id fields) so downstream Implement
@@ -190,7 +188,7 @@ func defineConfiguredAgentInto[Id any, S any, Cfg any](d *definitions, spec Spec
 		newState: func(idVal reflect.Value, agentID string) any {
 			// No host call here: the constructor reads config lazily via
 			// ctx.Config(), keeping get-config-value out of this always-linked path
-			// (it must stay reachable only from wasm, like AgentConfig.Get).
+			// (it must stay reachable only from wasm, like Agent.Config).
 			return init(&InitContext[Id, S, Cfg]{id: idVal.Interface().(Id), agentID: agentID})
 		},
 	}
@@ -207,7 +205,7 @@ func defineConfiguredAgentInto[Id any, S any, Cfg any](d *definitions, spec Spec
 	} else {
 		d.idToAgent[idType] = spec.Name
 	}
-	return &Agent[Id, S]{name: spec.Name}, cfgHandle
+	return &Agent[Id, S, Cfg]{name: spec.Name}
 }
 
 // DefineMethod declares a typed method descriptor. The type parameters are
@@ -239,18 +237,18 @@ func DefineMethod[Id any, In any, Out any](name string, opts ...MethodOpt) Metho
 //
 // Thin wrapper over the package-global defs — keep all logic in [implementInto]
 // so it stays testable against an explicit *definitions. See [defs].
-func Implement[Id any, S any, In any, Out any](
-	a *Agent[Id, S],
+func Implement[Id any, S any, Cfg any, In any, Out any](
+	a *Agent[Id, S, Cfg],
 	m MethodDef[Id, In, Out],
 	h func(*Context[S], In) Out,
 ) {
-	implementInto[Id, S, In, Out](defs, a, m, h)
+	implementInto[Id, S, Cfg, In, Out](defs, a, m, h)
 }
 
 // implementInto is the instance-scoped implementation behind Implement.
-func implementInto[Id any, S any, In any, Out any](
+func implementInto[Id any, S any, Cfg any, In any, Out any](
 	d *definitions,
-	a *Agent[Id, S],
+	a *Agent[Id, S, Cfg],
 	m MethodDef[Id, In, Out],
 	h func(*Context[S], In) Out,
 ) {

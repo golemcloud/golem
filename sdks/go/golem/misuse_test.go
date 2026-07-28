@@ -56,7 +56,7 @@ func TestMisuseRepeatedDesc(t *testing.T) {
 	withDefs(t, func(d *definitions) {
 		a := defineAgentInto[Id, St](d, Spec{Name: "A"}, func(Id) *St { return &St{} })
 		m := DefineMethod[Id, Unit, Unit]("m", Desc("a"), Desc("b"))
-		implementInto[Id, St, Unit, Unit](d, a, m, func(*Context[St], Unit) Unit { return Unit{} })
+		implementInto[Id, St, NoConfig, Unit, Unit](d, a, m, func(*Context[St], Unit) Unit { return Unit{} })
 		mustDefErr(t, d, "Desc set 2 times")
 	})
 }
@@ -116,7 +116,7 @@ func TestMisuseNilHandler(t *testing.T) {
 	type St struct{}
 	withDefs(t, func(d *definitions) {
 		a := defineAgentInto[Id, St](d, Spec{Name: "A"}, func(Id) *St { return &St{} })
-		implementInto[Id, St, Unit, Unit](d, a, DefineMethod[Id, Unit, Unit]("m"), nil)
+		implementInto[Id, St, NoConfig, Unit, Unit](d, a, DefineMethod[Id, Unit, Unit]("m"), nil)
 		mustDefErr(t, d, "non-nil handler")
 	})
 }
@@ -128,7 +128,7 @@ func TestMisuseEmptyMethodName(t *testing.T) {
 	type St struct{}
 	withDefs(t, func(d *definitions) {
 		a := defineAgentInto[Id, St](d, Spec{Name: "A"}, func(Id) *St { return &St{} })
-		implementInto[Id, St, Unit, Unit](d, a, DefineMethod[Id, Unit, Unit](""), func(*Context[St], Unit) Unit { return Unit{} })
+		implementInto[Id, St, NoConfig, Unit, Unit](d, a, DefineMethod[Id, Unit, Unit](""), func(*Context[St], Unit) Unit { return Unit{} })
 		mustDefErr(t, d, "non-empty method name")
 	})
 }
@@ -140,8 +140,8 @@ func TestMisuseDuplicateMethod(t *testing.T) {
 		a := defineAgentInto[Id, St](d, Spec{Name: "A"}, func(Id) *St { return &St{} })
 		m := DefineMethod[Id, Unit, Unit]("m")
 		h := func(*Context[St], Unit) Unit { return Unit{} }
-		implementInto[Id, St, Unit, Unit](d, a, m, h)
-		implementInto[Id, St, Unit, Unit](d, a, m, h)
+		implementInto[Id, St, NoConfig, Unit, Unit](d, a, m, h)
+		implementInto[Id, St, NoConfig, Unit, Unit](d, a, m, h)
 		mustDefErr(t, d, "already implemented")
 	})
 }
@@ -157,8 +157,8 @@ func TestMisuseDuplicateRoute(t *testing.T) {
 			func(Id) *St { return &St{} })
 		m1 := DefineMethod[Id, In, Unit]("m1", HTTP(GET("/dup/{x}")))
 		m2 := DefineMethod[Id, In, Unit]("m2", HTTP(GET("/dup/{x}")))
-		implementInto[Id, St, In, Unit](d, a, m1, func(*Context[St], In) Unit { return Unit{} })
-		implementInto[Id, St, In, Unit](d, a, m2, func(*Context[St], In) Unit { return Unit{} })
+		implementInto[Id, St, NoConfig, In, Unit](d, a, m1, func(*Context[St], In) Unit { return Unit{} })
+		implementInto[Id, St, NoConfig, In, Unit](d, a, m2, func(*Context[St], In) Unit { return Unit{} })
 		mustDefErr(t, d, "collides")
 	})
 }

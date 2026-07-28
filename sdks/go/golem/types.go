@@ -206,7 +206,7 @@ type Char rune
 type URL string
 
 // Secret is a handle to a declared config secret, obtained from the agent's
-// config ([AgentConfig.Get] / [InitContext.Config]). It lowers to the WIT secret
+// config ([Agent.Config] / [InitContext.Config]). It lowers to the WIT secret
 // type. [Secret.Get] reads the CURRENT plaintext from the host on each call, so a
 // rotated value is observed; the payload stays redacted in logs. A Secret cannot
 // be constructed from a plaintext and cannot be a method parameter or return

@@ -57,7 +57,7 @@ func TestAgentDefErrorsFiltersByAgentAndGlobal(t *testing.T) {
 }
 
 func TestPublicAccessors(t *testing.T) {
-	if got := (&Agent[struct{}, struct{}]{name: "N"}).Name(); got != "N" {
+	if got := (&Agent[struct{}, struct{}, NoConfig]{name: "N"}).Name(); got != "N" {
 		t.Errorf("Agent.Name = %q", got)
 	}
 	md := DefineMethod[struct{}, struct{}, struct{}]("m", Desc("d"), HTTP(GET("/x")))
@@ -107,7 +107,7 @@ func TestValidAgentFinalizesAndPublishesItsMount(t *testing.T) {
 			Spec{Name: "Counter", HTTP: &Mount{Path: "/c/{name}"}},
 			func(Id) *St { return &St{} })
 		add := DefineMethod[Id, AddIn, int64]("add", HTTP(POST("/add?by={by}")))
-		implementInto[Id, St, AddIn, int64](d, a, add, func(*Context[St], AddIn) int64 { return 0 })
+		implementInto[Id, St, NoConfig, AddIn, int64](d, a, add, func(*Context[St], AddIn) int64 { return 0 })
 
 		types, errs := d.discover()
 		if len(errs) != 0 {

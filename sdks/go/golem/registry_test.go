@@ -64,7 +64,7 @@ func TestRegistrationErrorsAreRecorded(t *testing.T) {
 	type St struct{}
 	withDefs(t, func(d *definitions) {
 		defineAgentInto[Id, St](d, Spec{}, func(Id) *St { return &St{} })
-		implementInto[Id, St, Unit, Unit](d, &Agent[Id, St]{name: "does-not-exist"},
+		implementInto[Id, St, NoConfig, Unit, Unit](d, &Agent[Id, St, NoConfig]{name: "does-not-exist"},
 			MethodDef[Id, Unit, Unit]{name: "m"},
 			func(*Context[St], Unit) Unit { return Unit{} })
 		mustDefErr(t, d, "non-empty Spec.Name")
