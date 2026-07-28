@@ -746,29 +746,39 @@ func TestMarkersLowerToTheirOwnWitTypes(t *testing.T) {
 	}
 }
 
-func TestSecretRoundTripsAndStaysOutOfLogs(t *testing.T) {
-	got := roundTrip(t, NewSecret("hunter2"))
-	if got.Reveal() != "hunter2" {
-		t.Fatalf("revealed %q", got.Reveal())
-	}
-	// The whole point: formatting must not leak the payload. %v/%s route through
-	// String and %#v through GoString, so exercising %v and %#v covers both.
-	for _, s := range []string{fmt.Sprintf("%v", got), fmt.Sprintf("%#v", got)} {
-		if strings.Contains(s, "hunter2") {
-			t.Fatalf("secret leaked through formatting: %s", s)
-		}
-	}
-
-	// The schema marks it secret, while the value stays the revealed type.
+// TestSecretIsConfigOnly — Secret[T] lowers to a secret(inner) schema node (for
+// config declarations), is guarded against being used as a plaintext wire value
+// (it is config-only), and never leaks its payload through formatting.
+func TestSecretIsConfigOnly(t *testing.T) {
+	// Schema side: Secret[string] lowers to a secret(inner) type node — needed for
+	// the config graph and the config-metadata declaration.
 	g := graphBuilder{d: defs}
 	root := g.node(defs.compile(reflect.TypeFor[Secret[string]]()))
 	if tag := g.build().TypeNodes[root].Body.Tag(); tag != types.SchemaTypeBodySecretType {
 		t.Fatalf("Secret lowered to tag %d, want secret-type", tag)
 	}
-	assertRoundTrip(t, "secret in a record", struct {
-		Name  string
-		Token Secret[string]
-	}{Name: "svc", Token: NewSecret("abc")})
+
+	// Value side is guarded: encoding a Secret as a wire value (e.g. as a method
+	// parameter) panics rather than shipping plaintext.
+	c := defs.compile(reflect.TypeFor[Secret[string]]())
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("encoding a Secret as a wire value should panic (config-only)")
+			}
+		}()
+		var s Secret[string]
+		encodeWith(c, reflect.ValueOf(&s).Elem())
+	}()
+
+	// Redaction: formatting must not leak the payload. %v/%s route through String,
+	// %#v through GoString.
+	s := Secret[string]{read: func() (string, error) { return "hunter2", nil }}
+	for _, out := range []string{fmt.Sprintf("%v", s), fmt.Sprintf("%#v", s)} {
+		if strings.Contains(out, "hunter2") {
+			t.Fatalf("secret leaked through formatting: %s", out)
+		}
+	}
 }
 
 // TestNilContainersAreNeverOptional — Containers must never be modelled as optional: absence is only expressible

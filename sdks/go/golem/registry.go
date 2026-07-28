@@ -50,7 +50,7 @@ type agentEntry struct {
 	configs  []configDecl   // declared config keys + secrets
 	idType   reflect.Type
 	idFields []fieldInfo
-	newState func(idVal reflect.Value) any
+	newState func(idVal reflect.Value, agentID string) any
 	methods  map[string]*methodEntry
 	order    []string
 }
@@ -108,26 +108,64 @@ func lowerFirst(s string) string {
 // Call it from a package-level var so registration happens before the component
 // is invoked.
 //
-// Thin wrapper over the package-global defs — keep all logic in
-// [defineAgentInto] so it stays testable against an explicit *definitions. See
-// [defs].
+// A config-less agent uses this form. To attach config, either declare it
+// separately with [DefineConfig], or — when the constructor itself needs config
+// — declare the agent with [DefineConfiguredAgent].
+//
+// This is sugar over [DefineConfiguredAgent] with [NoConfig]: the constructor
+// gets its id directly and never sees [InitContext].
 func DefineAgent[Id any, S any](spec Spec, init func(Id) *S) *Agent[Id, S] {
 	return defineAgentInto[Id, S](defs, spec, init)
 }
 
-// defineAgentInto is the instance-scoped implementation. The public DefineAgent
-// wraps it against the package-global defs; tests call it with their own
-// definitions for full isolation. (It must stay a generic function — Go forbids
-// generic methods.)
+// defineAgentInto is the instance-scoped form of DefineAgent — sugar over
+// [defineConfiguredAgentInto] with [NoConfig], adapting the simple func(Id) *S
+// constructor. Tests call it with their own definitions for full isolation.
 func defineAgentInto[Id any, S any](d *definitions, spec Spec, init func(Id) *S) *Agent[Id, S] {
+	var cinit func(*InitContext[Id, S, NoConfig]) *S
+	if init != nil {
+		cinit = func(ctx *InitContext[Id, S, NoConfig]) *S { return init(ctx.id) }
+	}
+	agent, _ := defineConfiguredAgentInto[Id, S, NoConfig](d, spec, cinit)
+	return agent
+}
+
+// DefineConfiguredAgent registers an agent that reads config in its constructor.
+// It attaches config type Cfg (the same flattening as [DefineConfig]) and returns
+// both the agent handle and its config handle. init receives an
+// *[InitContext][Id, S, Cfg], which carries the constructor parameters
+// ([InitContext.ID]) and reads the agent's config with [InitContext.Config] —
+// off the context, not the returned handle, so the constructor does not
+// self-reference the package-level var it is being assigned to:
+//
+//	var Shop, ShopCfg = golem.DefineConfiguredAgent[ShopId, ShopState, ShopConfig](
+//	    golem.Spec{Name: "Shop"},
+//	    func(ctx *golem.InitContext[ShopId, ShopState, ShopConfig]) *ShopState {
+//	        cfg := golem.Must(ctx.Config())
+//	        return &ShopState{greeting: cfg.Greeting}
+//	    },
+//	)
+//
+// Methods take *[Context] and read config with ShopCfg.Get(ctx). Agents that
+// don't need config in the constructor should use the simpler [DefineAgent].
+func DefineConfiguredAgent[Id any, S any, Cfg any](spec Spec, init func(*InitContext[Id, S, Cfg]) *S) (*Agent[Id, S], *AgentConfig[S, Cfg]) {
+	return defineConfiguredAgentInto[Id, S, Cfg](defs, spec, init)
+}
+
+// defineConfiguredAgentInto is the instance-scoped implementation behind both
+// DefineAgent and DefineConfiguredAgent. The public entry points wrap it against
+// the package-global defs; tests call it with their own definitions for full
+// isolation. (It must stay a generic function — Go forbids generic methods.)
+func defineConfiguredAgentInto[Id any, S any, Cfg any](d *definitions, spec Spec, init func(*InitContext[Id, S, Cfg]) *S) (*Agent[Id, S], *AgentConfig[S, Cfg]) {
 	idType := reflect.TypeFor[Id]()
+	cfgHandle := &AgentConfig[S, Cfg]{agentName: spec.Name}
 	if spec.Name == "" {
 		d.recordErr("", "", "DefineAgent requires a non-empty Spec.Name (Id type %s)", idType)
-		return &Agent[Id, S]{name: spec.Name}
+		return &Agent[Id, S]{name: spec.Name}, cfgHandle
 	}
 	if _, dup := d.agents[spec.Name]; dup {
 		d.recordErr(spec.Name, "", "agent type already defined")
-		return &Agent[Id, S]{name: spec.Name}
+		return &Agent[Id, S]{name: spec.Name}, cfgHandle
 	}
 	if idType.Kind() != reflect.Struct {
 		// Record but still register (with no id fields) so downstream Implement
@@ -149,16 +187,19 @@ func defineAgentInto[Id any, S any](d *definitions, spec Spec, init func(Id) *S)
 		idType:   idType,
 		idFields: d.structFields(idType),
 		methods:  map[string]*methodEntry{},
-		newState: func(idVal reflect.Value) any { return init(idVal.Interface().(Id)) },
+		newState: func(idVal reflect.Value, agentID string) any {
+			// No host call here: the constructor reads config lazily via
+			// ctx.Config(), keeping get-config-value out of this always-linked path
+			// (it must stay reachable only from wasm, like AgentConfig.Get).
+			return init(&InitContext[Id, S, Cfg]{id: idVal.Interface().(Id), agentID: agentID})
+		},
 	}
 	d.agents[spec.Name] = e
 	d.order = append(d.order, spec.Name)
-	// Struct-declared config (Spec.Config via ConfigOf) flattens into the same
-	// per-key declarations as DefineConfig/DefineSecret; done after registration
-	// so it records against the live entry.
-	if spec.Config.typ != nil {
-		flattenConfigStruct(d, e, spec.Name, spec.Config.typ)
-	}
+	// Attach Cfg's config surface. NoConfig (the DefineAgent path) has no fields,
+	// so this records nothing. Done after registration so it lands on the live
+	// entry.
+	flattenConfigStruct(d, e, spec.Name, reflect.TypeFor[Cfg]())
 	// The Id type identifies the target agent for typed calls (ClientFor), so two
 	// agents cannot share one — the second would silently shadow the first.
 	if existing, ok := d.idToAgent[idType]; ok && existing != spec.Name {
@@ -166,7 +207,7 @@ func defineAgentInto[Id any, S any](d *definitions, spec Spec, init func(Id) *S)
 	} else {
 		d.idToAgent[idType] = spec.Name
 	}
-	return &Agent[Id, S]{name: spec.Name}
+	return &Agent[Id, S]{name: spec.Name}, cfgHandle
 }
 
 // DefineMethod declares a typed method descriptor. The type parameters are

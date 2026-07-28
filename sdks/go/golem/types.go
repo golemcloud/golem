@@ -14,7 +14,10 @@
 
 package golem
 
-import "reflect"
+import (
+	"errors"
+	"reflect"
+)
 
 // SDK-owned counterparts of the WIT types that Go has no native spelling for.
 //
@@ -205,18 +208,33 @@ type Char rune
 // URL is a string constrained to a URL, lowering to the WIT url type.
 type URL string
 
-// Secret wraps a value whose payload must not be logged or persisted in the
-// clear. It lowers to the WIT secret type, which carries the revealed payload
-// type alongside the handle.
+// Secret is a handle to a declared config secret, obtained from the agent's
+// config ([AgentConfig.Get] / [InitContext.Config]). It lowers to the WIT secret
+// type. [Secret.Get] reads the CURRENT plaintext from the host on each call, so a
+// rotated value is observed; the payload stays redacted in logs. A Secret cannot
+// be constructed from a plaintext and cannot be a method parameter or return
+// value — it is config-only.
 type Secret[T any] struct {
-	value T
+	// read fetches the current value from the host. It is installed by config
+	// materialization (see secretBindPath); a zero-value Secret has none.
+	read func() (T, error)
 }
 
-// NewSecret wraps v as a Secret.
-func NewSecret[T any](v T) Secret[T] { return Secret[T]{value: v} }
-
-// Reveal returns the wrapped value.
-func (s Secret[T]) Reveal() T { return s.value }
+// Get reads the secret's current plaintext from the host. Because it re-reads on
+// every call, a rotated secret is observed rather than a stale snapshot. Must be
+// called inside an invocation (it calls the host).
+func (s Secret[T]) Get() (T, error) {
+	if s.read == nil {
+		// Only reachable for a zero-value Secret — one never obtained from config
+		// (e.g. `var s Secret[string]`). That is a programming mistake, not an
+		// operational state; Go cannot forbid the zero value of an exported struct,
+		// so this guard turns the otherwise-cryptic nil-closure panic into a clear
+		// message.
+		var zero T
+		return zero, errors.New("golem: Secret has no source; obtain it from the agent's config")
+	}
+	return s.read()
+}
 
 // String keeps secrets out of logs and error messages formatted with %v or %s.
 func (s Secret[T]) String() string { return "golem.Secret(redacted)" }
@@ -224,18 +242,20 @@ func (s Secret[T]) String() string { return "golem.Secret(redacted)" }
 // GoString does the same for %#v.
 func (s Secret[T]) GoString() string { return "golem.Secret(redacted)" }
 
-type secretish interface {
-	secretElem() reflect.Type
-	secretGet() reflect.Value
-}
+// secretish identifies a Secret[T] by its inner type — used for config-leaf
+// detection ([isSecretType]) and for building the secret(inner) schema node.
+type secretish interface{ secretElem() reflect.Type }
 
-type secretSetter interface{ secretSet() reflect.Value }
+// secretBinder installs the live-read closure during config materialization. It
+// is driven by reflection ([readSecretLeaf]) because the inner T is not
+// statically known there.
+type secretBinder interface{ secretBindPath(path []string) }
 
 func (s Secret[T]) secretElem() reflect.Type { return reflect.TypeFor[T]() }
 
-func (s Secret[T]) secretGet() reflect.Value { return reflect.ValueOf(&s.value).Elem() }
-
-func (s *Secret[T]) secretSet() reflect.Value { return reflect.ValueOf(&s.value).Elem() }
+func (s *Secret[T]) secretBindPath(path []string) {
+	s.read = func() (T, error) { return readSecretValue[T](defs, path) }
+}
 
 // ---------------------------------------------------------------------------
 // (value, error) bridges

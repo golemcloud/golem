@@ -107,7 +107,8 @@ func init() {
 		if err := decodeParams(input, e.idFields, idVal); err != nil {
 			return witTypes.Err[witTypes.Unit](common.MakeAgentErrorInvalidInput(err.Error()))
 		}
-		active = &instance{def: e, agentID: os.Getenv(agentIDEnvVar), state: e.newState(idVal)}
+		agentID := os.Getenv(agentIDEnvVar)
+		active = &instance{def: e, agentID: agentID, state: e.newState(idVal, agentID)}
 		return witTypes.Ok[witTypes.Unit, common.AgentError](witTypes.Unit{})
 	}
 

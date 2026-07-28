@@ -27,23 +27,38 @@ import (
 
 // Config and secrets.
 //
-// An agent declares the config keys and secrets it needs; the platform
-// provisions the values (golem.yaml config/env/envDefaults/secretDefaults + the
-// CLI), and the guest reads them at runtime. A declaration is a package-level,
-// typed descriptor tied to one agent — mirroring how methods are descriptors:
+// Config is attached to an agent as a single struct type and read only from
+// within that agent's own execution — its methods and its constructor — for that
+// agent's config type. This mirrors the TS SDK (config is instance-bound); there
+// are no free-floating, read-from-anywhere descriptors.
 //
-//	var Greeting = golem.DefineConfig[string](Counter, "greeting")
-//	var APIKey   = golem.DefineSecret[string](Counter, "api", "key")
+// Declare the config struct and attach it to the agent:
 //
-// and read inside an invocation:
+//	type ShopConfig struct {
+//	    Greeting string
+//	    APIKey   golem.Secret[string] // a secret field, at any depth
+//	}
+//	var ShopCfg = golem.DefineConfig[ShopConfig](Shop)
 //
-//	g := Greeting.Get()          // (string, error)
-//	k := APIKey.Get()            // (golem.Secret[string], error); k.Reveal() is the plaintext
+// and read it from inside a method (or the constructor) via the agent's context:
 //
-// Both flow through golem:agent/host.get-config-value, keyed by the multi-segment
-// path, and access is gated by these declarations: reading an *undeclared* key
-// traps. A required key that is unset also traps — declare the value type as a
-// pointer (e.g. DefineConfig[*string]) to read it back as nil instead.
+//	cfg := golem.Must(ShopCfg.Get(ctx))  // ctx is the running agent's *Context[S]
+//	_ = cfg.Greeting                     // local field, decoded at this Get
+//	_ = golem.Must(cfg.APIKey.Get())     // secret field: re-reads the host each call
+//
+// Local fields are the values current at the ShopCfg.Get(ctx) call. Secret fields
+// come back as handles that read the host on every Secret.Get(), so a *rotated*
+// secret is always observed rather than a stale snapshot.
+//
+// Each exported field of the config struct becomes a config key; nested structs
+// flatten into multi-segment paths (field names lower-cased to match
+// record-field naming), and any [Secret]-typed field becomes a secret. The
+// platform provisions the values (golem.yaml config/env/envDefaults/
+// secretDefaults + the CLI); the guest reads them at runtime through
+// golem:agent/host.get-config-value, keyed by the multi-segment path. Access is
+// gated by these declarations: reading an *undeclared* key traps, as does an
+// unset required key — declare a field's type as a pointer to read it back as
+// nil instead.
 //
 // The wire type-name distinction between a plain value and a secret is the schema
 // node: a secret's value type is secret(inner). A secret read returns an opaque
@@ -58,47 +73,44 @@ type configDecl struct {
 	typ    reflect.Type
 }
 
-// Config is a declared local configuration key of value type T, tied to one
-// agent. Read its value inside an invocation with [Config.Get].
-type Config[T any] struct {
-	path []string
+// NoConfig is the empty config type used by an agent that declares no config. It
+// has no fields, so it flattens to zero config declarations. [DefineAgent] uses
+// it internally; config-less agents never name it.
+type NoConfig struct{}
+
+// AgentConfig is the handle to an agent's configuration, returned by
+// [DefineConfig] and [DefineConfiguredAgent]. It carries the agent's state type
+// S and its config struct type Cfg, so the config can be read only from within
+// that agent's own execution scope (see [AgentConfig.Get]) — never free-floating.
+type AgentConfig[S any, Cfg any] struct {
+	agentName string
 }
 
-// SecretConfig is a declared secret whose revealed value has type T, tied to one
-// agent. Read the plaintext with [SecretConfig.Get] or obtain an unrevealed
-// handle with [SecretConfig.Handle].
-type SecretConfig[T any] struct {
-	path []string
+// DefineConfig attaches config type Cfg to an agent declared with [DefineAgent]
+// and returns a handle for reading it. Cfg's exported fields become the agent's
+// config keys (nested structs flatten into multi-segment paths; [Secret]-typed
+// fields at any depth become secrets). Read the values from within the agent's
+// methods via [AgentConfig.Get].
+//
+// When the constructor itself needs config, declare the agent with
+// [DefineConfiguredAgent] instead, which returns both the agent and its config
+// handle.
+func DefineConfig[Cfg any, Id any, S any](a *Agent[Id, S]) *AgentConfig[S, Cfg] {
+	return defineConfigInto[Cfg](defs, a)
 }
 
-// SecretHandle references a secret's material without revealing it, so it can be
-// handed to host capabilities (host-mediated substitution) without the guest
-// ever seeing the plaintext.
-type SecretHandle struct {
-	secret *types.Secret
-}
-
-// DefineConfig declares a local configuration key of value type T on the agent,
-// addressed by the given path. Use a pointer value type for an optional key.
-func DefineConfig[T any, Id any, S any](a *Agent[Id, S], path ...string) *Config[T] {
-	return defineConfigInto[T](defs, a, path)
-}
-
-// DefineSecret declares a secret on the agent whose revealed value has type T,
-// addressed by the given path.
-func DefineSecret[T any, Id any, S any](a *Agent[Id, S], path ...string) *SecretConfig[T] {
-	return defineSecretInto[T](defs, a, path)
-}
-
-func defineConfigInto[T any, Id any, S any](d *definitions, a *Agent[Id, S], path []string) *Config[T] {
-	recordConfigDecl(d, a, common.AgentConfigSourceLocal, path, reflect.TypeFor[T]())
-	return &Config[T]{path: clonePath(path)}
-}
-
-func defineSecretInto[T any, Id any, S any](d *definitions, a *Agent[Id, S], path []string) *SecretConfig[T] {
-	// Store the Secret[T] type so the derived schema node is secret(inner).
-	recordConfigDecl(d, a, common.AgentConfigSourceSecret, path, reflect.TypeFor[Secret[T]]())
-	return &SecretConfig[T]{path: clonePath(path)}
+func defineConfigInto[Cfg any, Id any, S any](d *definitions, a *Agent[Id, S]) *AgentConfig[S, Cfg] {
+	if a == nil {
+		d.recordErr("", "", "DefineConfig: declared on a nil agent")
+		return &AgentConfig[S, Cfg]{}
+	}
+	e := d.agents[a.name]
+	if e == nil {
+		d.recordErr(a.name, "", "DefineConfig: unknown agent %q (was DefineAgent called?)", a.name)
+		return &AgentConfig[S, Cfg]{agentName: a.name}
+	}
+	flattenConfigStruct(d, e, a.name, reflect.TypeFor[Cfg]())
+	return &AgentConfig[S, Cfg]{agentName: a.name}
 }
 
 func configKind(source common.AgentConfigSource) string {
@@ -108,25 +120,9 @@ func configKind(source common.AgentConfigSource) string {
 	return "config"
 }
 
-// recordConfigDecl resolves the agent and records a declaration on it, or
-// collects an attributed definition error. Anything not checkable at compile
-// time is reported here and surfaced at discovery, never panicked.
-func recordConfigDecl[Id any, S any](d *definitions, a *Agent[Id, S], source common.AgentConfigSource, path []string, typ reflect.Type) {
-	if a == nil {
-		d.recordErr("", "", "%s %v: declared on a nil agent", configKind(source), path)
-		return
-	}
-	e := d.agents[a.name]
-	if e == nil {
-		d.recordErr(a.name, "", "%s %v: unknown agent %q", configKind(source), path, a.name)
-		return
-	}
-	recordConfigOn(d, e, a.name, source, path, typ)
-}
-
-// recordConfigOn validates a declaration against an already-resolved entry and
-// records it. Shared by the descriptor path (recordConfigDecl) and the struct
-// path (flattenConfigStruct).
+// recordConfigOn validates a single declaration against an already-resolved
+// entry and records it. Shared by every declaration path (the flattened config
+// struct).
 func recordConfigOn(d *definitions, e *agentEntry, agentName string, source common.AgentConfigSource, path []string, typ reflect.Type) {
 	kind := configKind(source)
 	if len(path) == 0 {
@@ -149,29 +145,13 @@ func recordConfigOn(d *definitions, e *agentEntry, agentName string, source comm
 }
 
 // ---------------------------------------------------------------------------
-// struct/record authoring: declare a whole config surface from a Go struct.
-// ConfigOf flattens it into the same per-key declarations, and LoadConfig reads
-// it back into a struct value.
+// struct/record flattening: an agent's whole config surface is one Go struct.
+// configLeaves flattens it into per-key declarations, and materializeConfig
+// reads it back into a struct value.
 // ---------------------------------------------------------------------------
 
-// ConfigSpec declares an agent's config and secrets from a struct type. Build it
-// with [ConfigOf] and assign it to [Spec].Config.
-type ConfigSpec struct {
-	typ reflect.Type
-}
-
-// ConfigOf declares the agent's config and secrets from the exported fields of
-// Cfg: each field becomes a config key (nested structs flatten into
-// multi-segment paths, field names lower-cased to match record-field naming),
-// and any [Secret]-typed field becomes a secret. Read the values back with
-// [LoadConfig]. Compiles to the same declarations as per-key
-// [DefineConfig]/[DefineSecret].
-func ConfigOf[Cfg any]() ConfigSpec {
-	return ConfigSpec{typ: reflect.TypeFor[Cfg]()}
-}
-
 // configLeaf is one flattened config key discovered in a struct: its source,
-// wire path, Go type, and the field-index path to set it during LoadConfig.
+// wire path, Go type, and the field-index path to set it during materialize.
 type configLeaf struct {
 	source common.AgentConfigSource
 	path   []string
@@ -191,7 +171,7 @@ func isSecretType(t reflect.Type) bool { return t.Implements(secretishType) }
 // (materializeConfig).
 func configLeaves(cfgType reflect.Type) ([]configLeaf, error) {
 	if cfgType.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("ConfigOf requires a struct type, got %s", cfgType)
+		return nil, fmt.Errorf("config type must be a struct, got %s", cfgType)
 	}
 	var leaves []configLeaf
 	var walk func(prefix []string, idx []int, t reflect.Type)
@@ -217,7 +197,8 @@ func configLeaves(cfgType reflect.Type) ([]configLeaf, error) {
 	return leaves, nil
 }
 
-// flattenConfigStruct records every leaf of a config struct on the entry.
+// flattenConfigStruct records every leaf of a config struct on the entry. The
+// empty [NoConfig] struct yields no leaves and records nothing.
 func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgType reflect.Type) {
 	leaves, err := configLeaves(cfgType)
 	if err != nil {
@@ -229,18 +210,42 @@ func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgTyp
 	}
 }
 
-// LoadConfig reads and assembles the agent's struct-declared config into a Cfg
-// value: local fields are decoded, and secret fields are revealed and wrapped in
-// a redacting [Secret]. Must be called inside an invocation.
-func LoadConfig[Cfg any]() (Cfg, error) {
+// ---------------------------------------------------------------------------
+// runtime reads — the host calls are wasm-only; the graph build and decode are
+// pure and covered by native tests.
+// ---------------------------------------------------------------------------
+
+// Get materializes the agent's config from within the agent's execution scope.
+// scope is the running agent's *[Context] (in a method) or *[InitContext] (in
+// the constructor): local fields are decoded, and secret fields come back as
+// redacting [Secret] handles. Because scope must carry the agent's own state
+// type S, the config cannot be read outside the owning agent — there is no
+// free-floating read. Must be called inside an invocation (it calls the host).
+func (c *AgentConfig[S, Cfg]) Get(scope agentScope[S]) (Cfg, error) {
+	// scope is a compile-time gate only: requiring it means the read can happen
+	// only from inside the agent's own execution. The host keys get-config-value
+	// by the running agent, so the value is resolved without threading scope on.
+	_ = scope
+	return materializeConfig[Cfg](func(lf configLeaf) (reflect.Value, error) {
+		return readConfigLeaf(defs, lf)
+	})
+}
+
+// Config reads the agent's config from within its constructor. It materializes
+// the same Cfg as [AgentConfig.Get]: local fields decoded, secret fields as
+// redacting [Secret] handles. The constructor reads config this way — off its
+// own context — rather than through the config handle, which would be a
+// self-reference in the package-level var that produces both the agent and the
+// handle. Must be called inside an invocation (it calls the host).
+func (c *InitContext[Id, S, Cfg]) Config() (Cfg, error) {
 	return materializeConfig[Cfg](func(lf configLeaf) (reflect.Value, error) {
 		return readConfigLeaf(defs, lf)
 	})
 }
 
 // materializeConfig assembles a Cfg value by reading each declared leaf through
-// readLeaf. Pure given readLeaf — LoadConfig supplies the host-backed reader,
-// tests supply a fake.
+// readLeaf. Pure given readLeaf — [AgentConfig.Get] supplies the host-backed
+// reader, tests supply a fake.
 func materializeConfig[Cfg any](readLeaf func(lf configLeaf) (reflect.Value, error)) (Cfg, error) {
 	var zero Cfg
 	cfgType := reflect.TypeFor[Cfg]()
@@ -263,7 +268,7 @@ func materializeConfig[Cfg any](readLeaf func(lf configLeaf) (reflect.Value, err
 // a secret is fetched, revealed, and rebuilt as a Secret[T].
 func readConfigLeaf(d *definitions, lf configLeaf) (reflect.Value, error) {
 	if lf.source == common.AgentConfigSourceSecret {
-		return readSecretLeaf(d, lf)
+		return readSecretLeaf(lf)
 	}
 	tree := host.GetConfigValue(lf.path, d.graphForType(lf.typ))
 	dst := reflect.New(lf.typ).Elem()
@@ -274,30 +279,43 @@ func readConfigLeaf(d *definitions, lf configLeaf) (reflect.Value, error) {
 	return dst, nil
 }
 
-// readSecretLeaf reads a secret leaf whose Go type is Secret[T]: fetch the
-// handle, reveal it, decode the inner T, and rebuild the Secret[T].
-func readSecretLeaf(d *definitions, lf configLeaf) (reflect.Value, error) {
-	innerType := reflect.Zero(lf.typ).Interface().(secretish).secretElem()
+// readSecretLeaf builds the Secret[T] handle for a config secret leaf. It does
+// NOT touch the host here: the handle re-reads the current value lazily on each
+// [Secret.Get], so a rotated secret is observed. The bind is done by reflection
+// because the inner T is not statically known at this point. Keeping the host
+// call out of this path (it lives in the Secret's closure, reachable only from a
+// user's Secret.Get) is what lets native tests link.
+func readSecretLeaf(lf configLeaf) (reflect.Value, error) {
+	ptr := reflect.New(lf.typ) // *Secret[T]
+	ptr.Interface().(secretBinder).secretBindPath(clonePath(lf.path))
+	return ptr.Elem(), nil
+}
 
-	handleTree := host.GetConfigValue(lf.path, d.graphForType(lf.typ))
-	handle, err := extractSecretHandle(lf.path, handleTree)
+// readSecretValue fetches, reveals, and decodes a config secret's CURRENT value.
+// [Secret.Get] calls it on every access, so each read returns the latest value
+// (a fresh get-config-value mints a handle pinned to the current revision, which
+// reveal then unpacks). Host-backed — reachable only from Secret.Get, never from
+// the config-materialization path.
+func readSecretValue[T any](d *definitions, path []string) (T, error) {
+	var zero T
+	innerType := reflect.TypeFor[T]()
+
+	handleTree := host.GetConfigValue(path, d.graphForType(reflect.TypeFor[Secret[T]]()))
+	handle, err := extractSecretHandle(path, handleTree)
 	if err != nil {
-		return reflect.Value{}, err
+		return zero, err
 	}
 	res := reveal.Reveal(handle, d.graphForType(innerType))
 	if res.IsErr() {
-		return reflect.Value{}, secretErrorToGo(lf.path, res.Err())
+		return zero, secretErrorToGo(path, res.Err())
 	}
 
-	inner := reflect.New(innerType).Elem()
+	dst := reflect.New(innerType).Elem()
 	dec := decoder{nodes: res.Ok().ValueNodes}
-	if err := d.compile(innerType).decode(&dec, inner, res.Ok().Root); err != nil {
-		return reflect.Value{}, fmt.Errorf("golem/secret %v: %w", lf.path, err)
+	if err := d.compile(innerType).decode(&dec, dst, res.Ok().Root); err != nil {
+		return zero, fmt.Errorf("golem/secret %v: %w", path, err)
 	}
-
-	secretPtr := reflect.New(lf.typ) // *Secret[T]
-	secretPtr.Interface().(secretSetter).secretSet().Set(inner)
-	return secretPtr.Elem(), nil
+	return dst.Interface().(T), nil
 }
 
 // buildConfigDecls derives the agent-type config metadata, compiling each key's
@@ -317,53 +335,6 @@ func (d *definitions) buildConfigDecls(g *graphBuilder, cds []configDecl) []comm
 		})
 	}
 	return out
-}
-
-// ---------------------------------------------------------------------------
-// runtime reads — the host calls are wasm-only; the graph build and decode are
-// pure and covered by native tests.
-// ---------------------------------------------------------------------------
-
-// Get reads the current value of the config key.
-func (c *Config[T]) Get() (T, error) {
-	tree := host.GetConfigValue(c.path, defs.graphForType(reflect.TypeFor[T]()))
-	return decodeConfigValue[T](defs, c.path, tree)
-}
-
-// Get reveals and decodes the secret's current value, wrapped in a [Secret] so
-// it stays redacted in logs; call Reveal on the result for the plaintext.
-func (s *SecretConfig[T]) Get() (Secret[T], error) {
-	var zero Secret[T]
-	handle, err := s.resolve()
-	if err != nil {
-		return zero, err
-	}
-	res := reveal.Reveal(handle, defs.graphForType(reflect.TypeFor[T]()))
-	if res.IsErr() {
-		return zero, secretErrorToGo(s.path, res.Err())
-	}
-	val, err := decodeConfigValue[T](defs, s.path, res.Ok())
-	if err != nil {
-		return zero, err
-	}
-	return NewSecret(val), nil
-}
-
-// Handle returns the secret as an unrevealed handle, for passing to host
-// capabilities without the guest observing the plaintext.
-func (s *SecretConfig[T]) Handle() (SecretHandle, error) {
-	handle, err := s.resolve()
-	if err != nil {
-		return SecretHandle{}, err
-	}
-	return SecretHandle{secret: handle}, nil
-}
-
-// resolve fetches the secret handle from the host (get-config-value against a
-// secret(inner) schema).
-func (s *SecretConfig[T]) resolve() (*types.Secret, error) {
-	tree := host.GetConfigValue(s.path, defs.graphForType(reflect.TypeFor[Secret[T]]()))
-	return extractSecretHandle(s.path, tree)
 }
 
 // graphForType builds a standalone schema graph whose root is typ — the shape
@@ -418,32 +389,53 @@ func secretErrorToGo(path []string, e secrets.SecretError) error {
 
 // ---------------------------------------------------------------------------
 // config-on-RPC: a caller can override a callee's local config values at client
-// creation. The value is encoded here (pure) and threaded into make-wasm-rpc by
-// ClientFor.
+// creation. The values are encoded here (pure) and threaded into make-wasm-rpc
+// by ClientFor.
 // ---------------------------------------------------------------------------
 
-// configOverrideFn produces one config override, deferred so the value is
-// encoded against the definition set at client-creation time.
-type configOverrideFn func(d *definitions) (common.TypedAgentConfigValue, error)
+// configOverrideFn produces the config overrides for one WithConfig option,
+// deferred so the values are encoded against the definition set at
+// client-creation time.
+type configOverrideFn func(d *definitions) ([]common.TypedAgentConfigValue, error)
 
-// WithConfigValue overrides a local config value on the target agent at client
-// creation (make-wasm-rpc's agent-config). The value type must match the key's,
-// and the key must be one the target agent declares — otherwise ClientFor fails.
-// Secrets are provisioned by the platform, not passed here, so only local
-// [Config] keys are overridable.
-func WithConfigValue[T any](key *Config[T], value T) ClientOpt {
+// WithConfig supplies the callee's local config values at client creation
+// (make-wasm-rpc's agent-config), overriding what the platform would otherwise
+// provision. Pass the target agent's config handle and a Cfg value; each local
+// field is encoded as an override, validated against the target's declarations
+// by [ClientFor]. Secret fields are provisioned by the platform, not by a
+// caller, so they are skipped.
+func WithConfig[S any, Cfg any](handle *AgentConfig[S, Cfg], value Cfg) ClientOpt {
 	return func(o *clientOpts) {
-		o.configs = append(o.configs, func(d *definitions) (common.TypedAgentConfigValue, error) {
-			if key == nil {
-				return common.TypedAgentConfigValue{}, fmt.Errorf("WithConfigValue: nil config key")
+		o.configs = append(o.configs, func(d *definitions) ([]common.TypedAgentConfigValue, error) {
+			if handle == nil {
+				return nil, fmt.Errorf("WithConfig: nil config handle")
 			}
-			tv, err := encodeTypedValue(d, value)
-			if err != nil {
-				return common.TypedAgentConfigValue{}, err
-			}
-			return common.TypedAgentConfigValue{Path: clonePath(key.path), Value: tv}, nil
+			return encodeConfigOverrides(d, value)
 		})
 	}
+}
+
+// encodeConfigOverrides encodes each local leaf of a config value into a typed
+// override. Secret leaves are platform-provisioned, so they are skipped rather
+// than sent. Pure.
+func encodeConfigOverrides[Cfg any](d *definitions, value Cfg) ([]common.TypedAgentConfigValue, error) {
+	leaves, err := configLeaves(reflect.TypeFor[Cfg]())
+	if err != nil {
+		return nil, err
+	}
+	root := reflect.ValueOf(value)
+	var out []common.TypedAgentConfigValue
+	for _, lf := range leaves {
+		if lf.source == common.AgentConfigSourceSecret {
+			continue
+		}
+		tv, err := encodeReflectValue(d, root.FieldByIndex(lf.index))
+		if err != nil {
+			return nil, fmt.Errorf("config override %v: %w", lf.path, err)
+		}
+		out = append(out, common.TypedAgentConfigValue{Path: clonePath(lf.path), Value: tv})
+	}
+	return out, nil
 }
 
 // buildAgentConfig encodes and validates the client's config overrides against
@@ -453,16 +445,18 @@ func buildAgentConfig(d *definitions, e *agentEntry, overrides []configOverrideF
 	if len(overrides) == 0 {
 		return nil, nil
 	}
-	out := make([]common.TypedAgentConfigValue, 0, len(overrides))
+	var out []common.TypedAgentConfigValue
 	for _, fn := range overrides {
-		tv, err := fn(d)
+		tvs, err := fn(d)
 		if err != nil {
 			return nil, err
 		}
-		if !configDeclared(e, tv.Path) {
-			return nil, fmt.Errorf("config override %v is not a declared config key on the agent", tv.Path)
+		for _, tv := range tvs {
+			if !configDeclared(e, tv.Path) {
+				return nil, fmt.Errorf("config override %v is not a declared config key on the agent", tv.Path)
+			}
+			out = append(out, tv)
 		}
-		out = append(out, tv)
 	}
 	return out, nil
 }
@@ -476,18 +470,18 @@ func configDeclared(e *agentEntry, path []string) bool {
 	return false
 }
 
-// encodeTypedValue encodes a Go value into a typed schema value (graph + value
-// tree) for the wire. Pure.
-func encodeTypedValue[T any](d *definitions, value T) (tv types.TypedSchemaValue, err error) {
+// encodeReflectValue encodes a Go value (as a reflect.Value) into a typed schema
+// value (graph + value tree) for the wire. Pure.
+func encodeReflectValue(d *definitions, v reflect.Value) (tv types.TypedSchemaValue, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("encoding config value: %v", r)
 		}
 	}()
-	typ := reflect.TypeFor[T]()
+	typ := v.Type()
 	return types.TypedSchemaValue{
 		Graph: d.graphForType(typ),
-		Value: encodeWith(d.compile(typ), reflect.ValueOf(value)),
+		Value: encodeWith(d.compile(typ), v),
 	}, nil
 }
 

@@ -785,18 +785,24 @@ var namedTypeCodecs = map[reflect.Type]func(*codec){
 }
 
 func compileSecret(c *codec, inner *codec) {
+	// Schema side only: emit the secret(inner) type node. This is what the config
+	// graph and the config-metadata declaration need. inner is compiled so the
+	// node references the revealed type.
 	c.body = func(g *graphBuilder) types.SchemaTypeBody {
 		return types.MakeSchemaTypeBodySecretType(types.SecretSpec{
 			Inner:    g.node(inner),
 			Category: witTypes.None[string](),
 		})
 	}
-	// A secret is a transparent wrapper on the value side: the payload is
-	// encoded as its revealed type, and the schema marks it as sensitive.
-	c.encode = func(b *valBuilder, v reflect.Value) int32 {
-		return inner.encode(b, v.Interface().(secretish).secretGet())
+	// Secrets are config-only: they are read via get-config-value + reveal (see
+	// readSecretValue), never carried as plaintext in an invocation payload. Guard
+	// the wire path so using a Secret[T] as a method parameter/return fails clearly
+	// instead of silently shipping plaintext. Config never reaches these — it uses
+	// c.body for the graph and reveal for the value.
+	c.encode = func(*valBuilder, reflect.Value) int32 {
+		panic("golem: Secret[T] is config-only; it cannot be a method parameter or return value")
 	}
-	c.decode = func(d *decoder, dst reflect.Value, idx int32) error {
-		return inner.decode(d, dst.Addr().Interface().(secretSetter).secretSet(), idx)
+	c.decode = func(*decoder, reflect.Value, int32) error {
+		return fmt.Errorf("golem: Secret[T] is config-only; it cannot be a method parameter or return value")
 	}
 }
