@@ -360,6 +360,19 @@ jobs:
           go-version-file: sdks/go/golem/go.mod
           cache-dependency-path: sdks/go/golem/go.sum
 
+      - name: Cache componentize-go toolchain
+        uses: actions/cache@v5
+        with:
+          # On first `golem build` of a Go component, componentize-go downloads a
+          # full patched Go toolchain into this dir (the "will use downloaded
+          # version" build-log line) — hundreds of MB. Cache it so the Go SDK's
+          # CLI integration test doesn't re-fetch it each run. Keyed on the SDK
+          # go.sum, which tracks the pinned componentize-go version.
+          path: ~/.cache/componentize-go
+          key: componentize-go-${{ runner.os }}-${{ hashFiles('sdks/go/golem/go.sum') }}
+          restore-keys: |
+            componentize-go-${{ runner.os }}-
+
       - name: Sync WIT dependencies
         run: cargo make wit
 
