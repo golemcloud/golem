@@ -692,6 +692,16 @@ jobs:
         working-directory: sdks/go/golem
         run: go vet -unsafeptr=false -composites=false .
 
+      # Enforce the idiomatic doc-comment form (a declaration's comment must start
+      # with the identifier) on the hand-written package. staticcheck's ST102x are
+      # exactly golint's comment-form checks without golint's naming/missing-comment
+      # noise; scoped to `.` so the generated internal/wit bindings are not linted.
+      - name: Doc comment form (staticcheck)
+        working-directory: sdks/go/golem
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+          "$(go env GOPATH)/bin/staticcheck" -checks ST1020,ST1021,ST1022 .
+
       - name: Vet (wasip1)
         working-directory: sdks/go/golem
         run: GOOS=wasip1 GOARCH=wasm go vet -unsafeptr=false -composites=false .
