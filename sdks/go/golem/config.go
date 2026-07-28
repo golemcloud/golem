@@ -42,9 +42,9 @@ import (
 //
 // and read it from inside a method (or the constructor) via the agent's context:
 //
-//	cfg := golem.Must(ShopCfg.Get(ctx))  // ctx is the running agent's *Context[S]
-//	_ = cfg.Greeting                     // local field, decoded at this Get
-//	_ = golem.Must(cfg.APIKey.Get())     // secret field: re-reads the host each call
+//	cfg := ShopCfg.Get(ctx)  // ctx is the running agent's *Context[S]
+//	_ = cfg.Greeting         // local field, decoded at this Get
+//	_ = cfg.APIKey.Get()     // secret field: re-reads the host each call
 //
 // Local fields are the values current at the ShopCfg.Get(ctx) call. Secret fields
 // come back as handles that read the host on every Secret.Get(), so a *rotated*
@@ -215,32 +215,44 @@ func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgTyp
 // pure and covered by native tests.
 // ---------------------------------------------------------------------------
 
-// Get materializes the agent's config from within the agent's execution scope.
-// scope is the running agent's *[Context] (in a method) or *[InitContext] (in
-// the constructor): local fields are decoded, and secret fields come back as
-// redacting [Secret] handles. Because scope must carry the agent's own state
-// type S, the config cannot be read outside the owning agent — there is no
-// free-floating read. Must be called inside an invocation (it calls the host).
-func (c *AgentConfig[S, Cfg]) Get(scope agentScope[S]) (Cfg, error) {
+// Get materializes the agent's config from within a method, returning it or
+// panicking if the read fails. scope is the running agent's *[Context]: local
+// fields are decoded, and secret fields come back as redacting [Secret] handles.
+// Because scope must carry the agent's own state type S, the config cannot be
+// read outside the owning agent — there is no free-floating read. A config read
+// failing is a hard failure (a misconfiguration or host error) with no in-band
+// recovery, so — like the TS/Rust/Scala SDKs — Get fails loud: the panic is
+// recovered by the invoke dispatcher into an agent-error. Must be called inside
+// an invocation (it calls the host).
+func (c *AgentConfig[S, Cfg]) Get(scope agentScope[S]) Cfg {
 	// scope is a compile-time gate only: requiring it means the read can happen
 	// only from inside the agent's own execution. The host keys get-config-value
 	// by the running agent, so the value is resolved without threading scope on.
 	_ = scope
-	return materializeConfig[Cfg](func(lf configLeaf) (reflect.Value, error) {
+	cfg, err := materializeConfig[Cfg](func(lf configLeaf) (reflect.Value, error) {
 		return readConfigLeaf(defs, lf)
 	})
+	if err != nil {
+		panic(err)
+	}
+	return cfg
 }
 
-// Config reads the agent's config from within its constructor. It materializes
-// the same Cfg as [AgentConfig.Get]: local fields decoded, secret fields as
-// redacting [Secret] handles. The constructor reads config this way — off its
-// own context — rather than through the config handle, which would be a
-// self-reference in the package-level var that produces both the agent and the
-// handle. Must be called inside an invocation (it calls the host).
-func (c *InitContext[Id, S, Cfg]) Config() (Cfg, error) {
-	return materializeConfig[Cfg](func(lf configLeaf) (reflect.Value, error) {
+// Config reads the agent's config from within its constructor, returning it or
+// panicking if the read fails (fail-loud, like [AgentConfig.Get]). It
+// materializes the same Cfg: local fields decoded, secret fields as redacting
+// [Secret] handles. The constructor reads config this way — off its own context —
+// rather than through the config handle, which would be a self-reference in the
+// package-level var that produces both the agent and the handle. Must be called
+// inside an invocation (it calls the host).
+func (c *InitContext[Id, S, Cfg]) Config() Cfg {
+	cfg, err := materializeConfig[Cfg](func(lf configLeaf) (reflect.Value, error) {
 		return readConfigLeaf(defs, lf)
 	})
+	if err != nil {
+		panic(err)
+	}
+	return cfg
 }
 
 // materializeConfig assembles a Cfg value by reading each declared leaf through

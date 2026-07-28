@@ -224,27 +224,32 @@ func TestMaterializeConfig(t *testing.T) {
 	if got.Db.Url != "db://x" {
 		t.Errorf("Db.Url = %q", got.Db.Url)
 	}
-	if pw, err := got.Db.Password.Get(); err != nil || pw != "s3cr3t" {
-		t.Errorf("Db.Password.Get() = %q, %v", pw, err)
+	if pw := got.Db.Password.Get(); pw != "s3cr3t" {
+		t.Errorf("Db.Password.Get() = %q", pw)
 	}
 }
 
 // TestSecretGetIsLive — Secret.Get re-reads on every call (so a rotated secret is
-// observed, not a cached snapshot), and a zero-value Secret errors rather than
-// panicking on a nil closure.
+// observed, not a cached snapshot), and a zero-value Secret panics with a clear
+// message rather than a cryptic nil-closure dereference.
 func TestSecretGetIsLive(t *testing.T) {
 	n := 0
 	s := Secret[string]{read: func() (string, error) { n++; return fmt.Sprintf("v%d", n), nil }}
-	if a, err := s.Get(); err != nil || a != "v1" {
-		t.Fatalf("first Get = %q, %v", a, err)
+	if a := s.Get(); a != "v1" {
+		t.Fatalf("first Get = %q, want v1", a)
 	}
-	if b, _ := s.Get(); b != "v2" {
+	if b := s.Get(); b != "v2" {
 		t.Fatalf("second Get = %q, want v2 (Get must re-read, not cache)", b)
 	}
-	var zero Secret[string]
-	if _, err := zero.Get(); err == nil {
-		t.Fatal("zero-value Secret.Get should error, not nil-panic")
-	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("zero-value Secret.Get should panic")
+			}
+		}()
+		var zero Secret[string]
+		_ = zero.Get()
+	}()
 }
 
 // TestWithConfigEncodesLocalsSkipsSecrets — WithConfig encodes each local leaf of

@@ -14,10 +14,7 @@
 
 package golem
 
-import (
-	"errors"
-	"reflect"
-)
+import "reflect"
 
 // SDK-owned counterparts of the WIT types that Go has no native spelling for.
 //
@@ -220,20 +217,26 @@ type Secret[T any] struct {
 	read func() (T, error)
 }
 
-// Get reads the secret's current plaintext from the host. Because it re-reads on
-// every call, a rotated secret is observed rather than a stale snapshot. Must be
-// called inside an invocation (it calls the host).
-func (s Secret[T]) Get() (T, error) {
+// Get reads the secret's current plaintext from the host and returns it, or
+// panics if the read fails. Because it re-reads on every call, a rotated secret
+// is observed rather than a stale snapshot. A secret read failing is a hard
+// failure with no in-band recovery, so — like the TS/Rust/Scala SDKs — Get fails
+// loud: the panic is recovered by the invoke dispatcher into an agent-error. Must
+// be called inside an invocation (it calls the host).
+func (s Secret[T]) Get() T {
 	if s.read == nil {
 		// Only reachable for a zero-value Secret — one never obtained from config
 		// (e.g. `var s Secret[string]`). That is a programming mistake, not an
 		// operational state; Go cannot forbid the zero value of an exported struct,
 		// so this guard turns the otherwise-cryptic nil-closure panic into a clear
 		// message.
-		var zero T
-		return zero, errors.New("golem: Secret has no source; obtain it from the agent's config")
+		panic("golem: Secret has no source; obtain it from the agent's config")
 	}
-	return s.read()
+	v, err := s.read()
+	if err != nil {
+		panic(err)
+	}
+	return v
 }
 
 // String keeps secrets out of logs and error messages formatted with %v or %s.
