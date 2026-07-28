@@ -46,3 +46,22 @@ High-value scenarios:
 - future context switching preserves launch context for running jobs;
 - stale typed refresh results are ignored by request generation and context generation;
 - non-manifest contexts hide unavailable dev actions with reasons.
+# TUI preview verification
+
+The browser and terminal preview galleries render deterministic `TuiApp`
+stories through Ratatui's `TestBackend` and the production render tree. The
+browser representation is cell-accurate and preserves symbols, colors, and
+modifiers, although indexed colors and font metrics can vary from a real
+terminal.
+
+Use these focused checks when changing the renderer:
+
+```shell
+cargo check -p golem-cli
+cargo check -p golem-cli --features tui-preview --example tui-preview
+cargo test -p golem-cli --lib -- tui::
+```
+
+Also inspect `cargo make tui-preview` for browser reload behavior and
+`cargo make tui-preview-terminal` for story/variant switching. Use
+`cargo make tui-preview-live` only for the production provider and PTY path.

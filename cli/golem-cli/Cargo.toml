@@ -13,6 +13,7 @@ build = "build.rs"
 [features]
 default = []
 server-commands = []
+tui-preview = []
 
 [lib]
 harness = false
@@ -27,6 +28,11 @@ name = "integration"
 path = "tests/lib.rs"
 test = true
 harness = false
+
+[[example]]
+name = "tui-preview"
+path = "examples/tui-preview.rs"
+required-features = ["tui-preview"]
 
 [dependencies]
 golem-client = { workspace = true }

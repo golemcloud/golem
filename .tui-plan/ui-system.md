@@ -6,6 +6,26 @@ the target interaction model before more feature work continues.
 The document is intentionally strict. Future TUI changes must either follow
 these rules or update this document first.
 
+## Real-renderer previews
+
+TUI design work uses deterministic stories rendered by the actual Ratatui
+widget tree. Run `cargo make tui-preview` for the watched browser gallery,
+`cargo make tui-preview-terminal` for the interactive terminal gallery, or
+`cargo make tui-preview-export` for a standalone artifact under `target/`.
+
+The `Production` visual style is the only runtime style. `Quiet`, `Dense`, and
+`Ops Contrast` are preview-only candidates; accepting a candidate means
+deliberately changing `Production`, not exposing a persisted theme setting.
+Layout presets remain application state and are independent from these visual
+comparisons.
+
+Stories are synthetic, deterministic, offline render fixtures. They are useful
+for visual comparison and render regression tests, but they do not exercise
+providers or process lifecycles. Use `cargo make tui-preview-live -- <global
+flags>` to launch the checkout-built production `golem <global flags> tui`
+runtime. The watched server and terminal gallery must not be used to supervise
+the live runtime, since forced restarts could interrupt raw-mode cleanup.
+
 ## Core Model
 
 The TUI is a keyboard-first operational shell for both local development and

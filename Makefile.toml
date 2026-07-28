@@ -1365,7 +1365,36 @@ script = '''
 docker compose --project-directory log-tools/elastic down --volumes
 '''
 
+## ** TUI PREVIEW **
+
+[tasks.tui-preview]
+description = "Watch the real TUI renderer and serve the browser preview gallery"
+install_crate = "cargo-watch"
+command = "cargo"
+args = ["watch", "--watch", "cli/golem-cli/src/tui", "--watch", "cli/golem-cli/examples/tui-preview.rs", "--", "cargo", "run", "-p", "golem-cli", "--features", "tui-preview", "--example", "tui-preview", "--", "serve"]
+
+[tasks.tui-preview-terminal]
+description = "Open the deterministic TUI story gallery in the terminal"
+command = "cargo"
+args = ["run", "-p", "golem-cli", "--features", "tui-preview", "--example", "tui-preview", "--", "terminal"]
+
+[tasks.tui-preview-export]
+description = "Export a standalone real-renderer TUI gallery under target/"
+command = "cargo"
+args = ["run", "-p", "golem-cli", "--features", "tui-preview", "--example", "tui-preview", "--", "export"]
+
+[tasks.tui-preview-live]
+description = "Run the checkout-built production TUI; task arguments are global golem flags"
+script_runner = "@duckscript"
+script = '''
+args = get_env CARGO_MAKE_TASK_ARGS
+golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
+exec --fail-on-error cargo build -p golem
+exec --fail-on-error ${golem} ${args} tui
+'''
+
 ## ** INSTALL - DEBUG **
+
 [tasks.install-debug]
 description = "Install bins in debug mode"
 dependencies = ["install-golem-cli-debug", "install-golem-debug"]

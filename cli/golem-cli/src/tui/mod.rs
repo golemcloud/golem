@@ -17,8 +17,11 @@ mod context_executor;
 mod input;
 mod layout;
 mod nested_cli;
+#[cfg(feature = "tui-preview")]
+mod preview;
 mod terminal;
 pub(crate) mod terminal_screen;
+mod visual;
 
 use crate::context::Context;
 use crate::model::environment::EnvironmentReference;
@@ -31,6 +34,10 @@ use std::sync::Arc;
 use tokio::sync::oneshot;
 
 pub use app::run;
+
+#[cfg(feature = "tui-preview")]
+#[doc(hidden)]
+pub use preview::main as preview_main;
 
 enum TuiEvent {
     Terminal(Event),

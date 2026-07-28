@@ -36,6 +36,10 @@ use crate::tui::nested_cli::{
 };
 use crate::tui::terminal::TerminalGuard;
 use crate::tui::terminal_screen::TerminalScreen;
+#[cfg(feature = "tui-preview")]
+use crate::tui::visual::TuiVisualVariant;
+use crate::tui::visual::active_style;
+use crate::tui::visual::{TuiVisualStyle, with_style};
 use ansi_to_tui::IntoText;
 use crossterm::event::{
     Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
@@ -3911,52 +3915,19 @@ fn context_args_from_flags(flags: &GolemCliGlobalFlags) -> Vec<String> {
     args
 }
 
-#[derive(Clone, Copy)]
-struct TuiTheme {
-    background: Color,
-    surface: Color,
-    panel: Color,
-    panel_strong: Color,
-    border_subtle: Color,
-    border: Color,
-    text: Color,
-    text_secondary: Color,
-    text_muted: Color,
-    text_faint: Color,
-    accent: Color,
-    accent_hover: Color,
-    marker: Color,
-    success: Color,
-    error: Color,
-}
-
-impl TuiTheme {
-    fn golem_dark() -> Self {
-        Self {
-            background: Color::Rgb(10, 10, 13),
-            surface: Color::Rgb(13, 13, 18),
-            panel: Color::Rgb(20, 20, 27),
-            panel_strong: Color::Rgb(26, 26, 34),
-            border_subtle: Color::Rgb(42, 42, 53),
-            border: Color::Rgb(58, 58, 72),
-            text: Color::Rgb(237, 237, 240),
-            text_secondary: Color::Rgb(168, 168, 180),
-            text_muted: Color::Rgb(110, 110, 126),
-            text_faint: Color::Rgb(74, 74, 85),
-            accent: Color::Rgb(245, 176, 62),
-            accent_hover: Color::Rgb(255, 197, 96),
-            marker: Color::Rgb(224, 122, 61),
-            success: Color::Rgb(134, 239, 172),
-            error: Color::Rgb(224, 108, 117),
-        }
-    }
-}
-
-fn theme() -> TuiTheme {
-    TuiTheme::golem_dark()
+fn theme() -> crate::tui::visual::TuiVisualStyle {
+    active_style()
 }
 
 fn render(frame: &mut Frame<'_>, app: &TuiApp) {
+    render_styled(frame, app, &TuiVisualStyle::production());
+}
+
+fn render_styled(frame: &mut Frame<'_>, app: &TuiApp, visual: &TuiVisualStyle) {
+    with_style(visual, || render_tree(frame, app));
+}
+
+fn render_tree(frame: &mut Frame<'_>, app: &TuiApp) {
     let snapshot = layout::compute(LayoutInput {
         area: frame.area(),
         active_workspace: app.active_workspace,
@@ -4008,6 +3979,40 @@ fn render(frame: &mut Frame<'_>, app: &TuiApp) {
         TuiMode::Palette => render_palette(frame, app),
         TuiMode::Help => render_help(frame, app),
     }
+}
+
+#[cfg(feature = "tui-preview")]
+pub(super) fn render_preview_buffer(
+    story: &str,
+    variant: TuiVisualVariant,
+    width: u16,
+    height: u16,
+) -> anyhow::Result<ratatui::buffer::Buffer> {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let app = preview_story(story)?;
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend)?;
+    let visual = TuiVisualStyle::for_variant(variant);
+    terminal.draw(|frame| render_styled(frame, &app, &visual))?;
+    Ok(terminal.backend().buffer().clone())
+}
+
+#[cfg(all(feature = "tui-preview", test))]
+pub(super) fn render_production_preview_buffer(
+    story: &str,
+    width: u16,
+    height: u16,
+) -> anyhow::Result<ratatui::buffer::Buffer> {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let app = preview_story(story)?;
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend)?;
+    terminal.draw(|frame| render(frame, &app))?;
+    Ok(terminal.backend().buffer().clone())
 }
 
 fn render_home_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
@@ -6568,6 +6573,158 @@ fn action_short_label(id: TuiActionId) -> &'static str {
         TuiActionId::StartOrFocusRepl => "REPL",
         _ => action(id).label,
     }
+}
+
+#[cfg(feature = "tui-preview")]
+fn preview_story(name: &str) -> anyhow::Result<TuiApp> {
+    use crate::tui::layout::DevLayoutPreset;
+
+    let mut app = TuiApp {
+        should_quit: false,
+        active_workspace: TuiWorkspace::Home,
+        dev_focus: DevPanel::Repl,
+        mode: TuiMode::Normal,
+        palette: CommandPalette::default(),
+        command_options: CommandOptions::default(),
+        command_run: None,
+        server: LocalServerService::default(),
+        repl: ReplState::default(),
+        agents: AgentsState::default(),
+        next_command_id: 1,
+        context: TuiContextInfo {
+            application: "preview-app".into(),
+            environment: "local".into(),
+            server: "local".into(),
+            config_dir: "/preview/config".into(),
+            uses_local_server: true,
+            dev_eligible: true,
+        },
+        context_switcher: ContextSwitcherState::new(vec![TuiContextTarget {
+            key: "manifest:local".into(),
+            label: "preview-app/local".into(),
+            detail: "server: local".into(),
+            kind: TuiContextTargetKind::ManifestAppContext {
+                app: "preview-app".into(),
+                environment: "local".into(),
+            },
+            global_flags: GolemCliGlobalFlags::default(),
+            error: None,
+            is_current: true,
+        }]),
+        context_cli_args: Vec::new(),
+        selected_environment_reference: None,
+        context_executor: None,
+        auth_prompt: None,
+        layout: TuiLayoutState::default(),
+        layout_snapshot: RefCell::new(None),
+    };
+
+    let add_agents = |app: &mut TuiApp| {
+        app.agents.agents = vec![
+            AgentListItem {
+                name: "cart-1".into(),
+                component: Some("cart".into()),
+                agent_type: Some("CartAgent".into()),
+                status: Some("Running".into()),
+                raw: serde_json::json!({"region":"eu-central","revision":7}),
+            },
+            AgentListItem {
+                name: "orders-42".into(),
+                component: Some("orders".into()),
+                agent_type: Some("OrderAgent".into()),
+                status: Some("Idle".into()),
+                raw: serde_json::json!({"region":"us-east","revision":3}),
+            },
+        ];
+    };
+    let add_command = |app: &mut TuiApp, status| {
+        let mut run = CommandRun::new(
+            1,
+            CommandKind::Build,
+            vec!["build".into(), "-P".into(), "release".into()],
+            CommandOptions::default(),
+            "preview-app:local".into(),
+        );
+        run.status = status;
+        run.output.append_local_line("Building component checkout");
+        run.output.append_local_line("Compiled component in 2.4s");
+        if status == CommandStatus::Failed {
+            run.output
+                .append_local_line("error: component validation failed");
+        }
+        app.command_run = Some(run);
+    };
+
+    match name {
+        "home-idle" => {}
+        "home-active" => add_command(&mut app, CommandStatus::Running),
+        "dev-running" => {
+            app.active_workspace = TuiWorkspace::Dev;
+            add_command(&mut app, CommandStatus::Running);
+        }
+        "dev-completed" => {
+            app.active_workspace = TuiWorkspace::Dev;
+            add_command(&mut app, CommandStatus::Succeeded);
+        }
+        "dev-failed" => {
+            app.active_workspace = TuiWorkspace::Dev;
+            add_command(&mut app, CommandStatus::Failed);
+        }
+        "dev-server-drawer" => {
+            app.active_workspace = TuiWorkspace::Dev;
+            app.layout.server_drawer_open = true;
+            app.server.run.status = ServerStatus::Running;
+            app.server
+                .run
+                .output
+                .append_local_line("Listening on 127.0.0.1:9881");
+        }
+        "dev-layout-left" => {
+            app.active_workspace = TuiWorkspace::Dev;
+            app.layout.dev_preset = DevLayoutPreset::Left;
+        }
+        "dev-layout-top" => {
+            app.active_workspace = TuiWorkspace::Dev;
+            app.layout.dev_preset = DevLayoutPreset::Top;
+        }
+        "dev-layout-bottom" => {
+            app.active_workspace = TuiWorkspace::Dev;
+            app.layout.dev_preset = DevLayoutPreset::Bottom;
+        }
+        "ops-list" => {
+            app.active_workspace = TuiWorkspace::Ops;
+            app.agents.detail_visible = false;
+            add_agents(&mut app);
+        }
+        "ops-details" => {
+            app.active_workspace = TuiWorkspace::Ops;
+            add_agents(&mut app);
+        }
+        "ops-loading" => {
+            app.active_workspace = TuiWorkspace::Ops;
+            app.agents.refresh_running = true;
+        }
+        "ops-error" => {
+            app.active_workspace = TuiWorkspace::Ops;
+            app.agents.last_error = Some("preview connection refused".into());
+        }
+        "agent-inspect" => {
+            app.active_workspace = TuiWorkspace::Ops;
+            add_agents(&mut app);
+            app.agents.view_mode = AgentsViewMode::Inspect;
+            app.agents.inspect.agent_name = Some("cart-1".into());
+        }
+        "palette" => app.open_palette(),
+        "help" => app.mode = TuiMode::Help,
+        "context-picker" => app.mode = TuiMode::ContextPicker,
+        "confirmation" => app.mode = TuiMode::ContextSwitchConfirm,
+        "loading" => {
+            app.mode = TuiMode::ContextPicker;
+            app.context_switcher.environment_list_running = true;
+        }
+        _ => anyhow::bail!("unknown TUI preview story: {name}"),
+    }
+    Ok(app)
 }
 
 fn palette_actions() -> Vec<TuiAction> {
