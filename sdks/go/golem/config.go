@@ -101,41 +101,203 @@ func defineSecretInto[T any, Id any, S any](d *definitions, a *Agent[Id, S], pat
 	return &SecretConfig[T]{path: clonePath(path)}
 }
 
-// recordConfigDecl validates a declaration and records it on the agent, or
+func configKind(source common.AgentConfigSource) string {
+	if source == common.AgentConfigSourceSecret {
+		return "secret"
+	}
+	return "config"
+}
+
+// recordConfigDecl resolves the agent and records a declaration on it, or
 // collects an attributed definition error. Anything not checkable at compile
 // time is reported here and surfaced at discovery, never panicked.
 func recordConfigDecl[Id any, S any](d *definitions, a *Agent[Id, S], source common.AgentConfigSource, path []string, typ reflect.Type) {
-	kind := "config"
-	if source == common.AgentConfigSourceSecret {
-		kind = "secret"
-	}
-
 	if a == nil {
-		d.recordErr("", "", "%s %v: declared on a nil agent", kind, path)
+		d.recordErr("", "", "%s %v: declared on a nil agent", configKind(source), path)
 		return
 	}
 	e := d.agents[a.name]
 	if e == nil {
-		d.recordErr(a.name, "", "%s %v: unknown agent %q", kind, path, a.name)
+		d.recordErr(a.name, "", "%s %v: unknown agent %q", configKind(source), path, a.name)
 		return
 	}
+	recordConfigOn(d, e, a.name, source, path, typ)
+}
+
+// recordConfigOn validates a declaration against an already-resolved entry and
+// records it. Shared by the descriptor path (recordConfigDecl) and the struct
+// path (flattenConfigStruct).
+func recordConfigOn(d *definitions, e *agentEntry, agentName string, source common.AgentConfigSource, path []string, typ reflect.Type) {
+	kind := configKind(source)
 	if len(path) == 0 {
-		d.recordErr(a.name, "", "%s: declared with an empty path", kind)
+		d.recordErr(agentName, "", "%s: declared with an empty path", kind)
 		return
 	}
 	for _, seg := range path {
 		if seg == "" {
-			d.recordErr(a.name, "", "%s %v: path has an empty segment", kind, path)
+			d.recordErr(agentName, "", "%s %v: path has an empty segment", kind, path)
 			return
 		}
 	}
 	for _, cd := range e.configs {
 		if pathsEqual(cd.path, path) {
-			d.recordErr(a.name, "", "config path %v declared more than once", path)
+			d.recordErr(agentName, "", "config path %v declared more than once", path)
 			return
 		}
 	}
 	e.configs = append(e.configs, configDecl{source: source, path: clonePath(path), typ: typ})
+}
+
+// ---------------------------------------------------------------------------
+// struct/record authoring: declare a whole config surface from a Go struct.
+// ConfigOf flattens it into the same per-key declarations, and LoadConfig reads
+// it back into a struct value.
+// ---------------------------------------------------------------------------
+
+// ConfigSpec declares an agent's config and secrets from a struct type. Build it
+// with [ConfigOf] and assign it to [Spec].Config.
+type ConfigSpec struct {
+	typ reflect.Type
+}
+
+// ConfigOf declares the agent's config and secrets from the exported fields of
+// Cfg: each field becomes a config key (nested structs flatten into
+// multi-segment paths, field names lower-cased to match record-field naming),
+// and any [Secret]-typed field becomes a secret. Read the values back with
+// [LoadConfig]. Compiles to the same declarations as per-key
+// [DefineConfig]/[DefineSecret].
+func ConfigOf[Cfg any]() ConfigSpec {
+	return ConfigSpec{typ: reflect.TypeFor[Cfg]()}
+}
+
+// configLeaf is one flattened config key discovered in a struct: its source,
+// wire path, Go type, and the field-index path to set it during LoadConfig.
+type configLeaf struct {
+	source common.AgentConfigSource
+	path   []string
+	typ    reflect.Type
+	index  []int
+}
+
+var secretishType = reflect.TypeOf((*secretish)(nil)).Elem()
+
+// isSecretType reports whether t is a golem.Secret[...] (the only type that
+// implements the unexported secret interface), which flattens as a secret leaf.
+func isSecretType(t reflect.Type) bool { return t.Implements(secretishType) }
+
+// configLeaves flattens a config struct into its leaves. A Secret field is a
+// secret leaf; a plain (non-secret) struct field recurses; everything else is a
+// local leaf. Pure — shared by declaration (flattenConfigStruct) and read
+// (materializeConfig).
+func configLeaves(cfgType reflect.Type) ([]configLeaf, error) {
+	if cfgType.Kind() != reflect.Struct {
+		return nil, fmt.Errorf("ConfigOf requires a struct type, got %s", cfgType)
+	}
+	var leaves []configLeaf
+	var walk func(prefix []string, idx []int, t reflect.Type)
+	walk = func(prefix []string, idx []int, t reflect.Type) {
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			if !f.IsExported() {
+				continue
+			}
+			path := append(clonePath(prefix), lowerFirst(f.Name))
+			index := append(append([]int(nil), idx...), i)
+			switch {
+			case isSecretType(f.Type):
+				leaves = append(leaves, configLeaf{common.AgentConfigSourceSecret, path, f.Type, index})
+			case f.Type.Kind() == reflect.Struct:
+				walk(path, index, f.Type)
+			default:
+				leaves = append(leaves, configLeaf{common.AgentConfigSourceLocal, path, f.Type, index})
+			}
+		}
+	}
+	walk(nil, nil, cfgType)
+	return leaves, nil
+}
+
+// flattenConfigStruct records every leaf of a config struct on the entry.
+func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgType reflect.Type) {
+	leaves, err := configLeaves(cfgType)
+	if err != nil {
+		d.recordErr(agentName, "", "config: %v", err)
+		return
+	}
+	for _, lf := range leaves {
+		recordConfigOn(d, e, agentName, lf.source, lf.path, lf.typ)
+	}
+}
+
+// LoadConfig reads and assembles the agent's struct-declared config into a Cfg
+// value: local fields are decoded, and secret fields are revealed and wrapped in
+// a redacting [Secret]. Must be called inside an invocation.
+func LoadConfig[Cfg any]() (Cfg, error) {
+	return materializeConfig[Cfg](func(lf configLeaf) (reflect.Value, error) {
+		return readConfigLeaf(defs, lf)
+	})
+}
+
+// materializeConfig assembles a Cfg value by reading each declared leaf through
+// readLeaf. Pure given readLeaf — LoadConfig supplies the host-backed reader,
+// tests supply a fake.
+func materializeConfig[Cfg any](readLeaf func(lf configLeaf) (reflect.Value, error)) (Cfg, error) {
+	var zero Cfg
+	cfgType := reflect.TypeFor[Cfg]()
+	leaves, err := configLeaves(cfgType)
+	if err != nil {
+		return zero, err
+	}
+	out := reflect.New(cfgType).Elem()
+	for _, lf := range leaves {
+		v, err := readLeaf(lf)
+		if err != nil {
+			return zero, err
+		}
+		out.FieldByIndex(lf.index).Set(v)
+	}
+	return out.Interface().(Cfg), nil
+}
+
+// readConfigLeaf reads one leaf from the host: a local value is decoded directly;
+// a secret is fetched, revealed, and rebuilt as a Secret[T].
+func readConfigLeaf(d *definitions, lf configLeaf) (reflect.Value, error) {
+	if lf.source == common.AgentConfigSourceSecret {
+		return readSecretLeaf(d, lf)
+	}
+	tree := host.GetConfigValue(lf.path, d.graphForType(lf.typ))
+	dst := reflect.New(lf.typ).Elem()
+	dec := decoder{nodes: tree.ValueNodes}
+	if err := d.compile(lf.typ).decode(&dec, dst, tree.Root); err != nil {
+		return reflect.Value{}, fmt.Errorf("golem/config %v: %w", lf.path, err)
+	}
+	return dst, nil
+}
+
+// readSecretLeaf reads a secret leaf whose Go type is Secret[T]: fetch the
+// handle, reveal it, decode the inner T, and rebuild the Secret[T].
+func readSecretLeaf(d *definitions, lf configLeaf) (reflect.Value, error) {
+	innerType := reflect.Zero(lf.typ).Interface().(secretish).secretElem()
+
+	handleTree := host.GetConfigValue(lf.path, d.graphForType(lf.typ))
+	handle, err := extractSecretHandle(lf.path, handleTree)
+	if err != nil {
+		return reflect.Value{}, err
+	}
+	res := reveal.Reveal(handle, d.graphForType(innerType))
+	if res.IsErr() {
+		return reflect.Value{}, secretErrorToGo(lf.path, res.Err())
+	}
+
+	inner := reflect.New(innerType).Elem()
+	dec := decoder{nodes: res.Ok().ValueNodes}
+	if err := d.compile(innerType).decode(&dec, inner, res.Ok().Root); err != nil {
+		return reflect.Value{}, fmt.Errorf("golem/secret %v: %w", lf.path, err)
+	}
+
+	secretPtr := reflect.New(lf.typ) // *Secret[T]
+	secretPtr.Interface().(secretSetter).secretSet().Set(inner)
+	return secretPtr.Elem(), nil
 }
 
 // buildConfigDecls derives the agent-type config metadata, compiling each key's

@@ -155,6 +155,10 @@ type Spec struct {
 	// Snapshot sets the agent's snapshot policy; the zero value is
 	// [SnapshotDisabled]. See [SnapshotPolicy] and [Snapshotter].
 	Snapshot SnapshotPolicy
+	// Config declares the agent's config keys and secrets from a struct type; see
+	// [ConfigOf] and [LoadConfig]. The zero value declares none. This is
+	// equivalent to declaring each key with [DefineConfig]/[DefineSecret].
+	Config ConfigSpec
 }
 
 // Context is passed to every method handler. State is the agent instance's

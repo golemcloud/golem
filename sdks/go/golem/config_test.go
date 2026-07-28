@@ -15,6 +15,8 @@
 package golem
 
 import (
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -223,6 +225,99 @@ func TestConfigOverrideNilKey(t *testing.T) {
 			t.Fatal("expected an error for a nil config key")
 		}
 	})
+}
+
+// --- struct/record authoring (ConfigOf / LoadConfig) ---
+
+type demoDBConfig struct {
+	Url      string
+	Password Secret[string]
+}
+type demoAppConfig struct {
+	Greeting string
+	Db       demoDBConfig
+}
+
+// ConfigOf flattens a struct — nested structs into multi-segment paths, Secret
+// fields into secret leaves — producing the same declarations as per-key defines.
+func TestConfigOfFlattensStruct(t *testing.T) {
+	withDefs(t, func(d *definitions) {
+		defineAgentInto[cfgId, cfgState](
+			d,
+			Spec{Name: "Cfg", Config: ConfigOf[demoAppConfig]()},
+			func(cfgId) *cfgState { return &cfgState{} },
+		)
+		out, errs := d.discover()
+		if len(errs) != 0 {
+			t.Fatalf("unexpected definition errors: %v", errs)
+		}
+		at := out[0]
+
+		want := map[string]common.AgentConfigSource{
+			"greeting":    common.AgentConfigSourceLocal,
+			"db/url":      common.AgentConfigSourceLocal,
+			"db/password": common.AgentConfigSourceSecret,
+		}
+		if len(at.Config) != len(want) {
+			t.Fatalf("want %d declarations, got %d: %+v", len(want), len(at.Config), at.Config)
+		}
+		for _, dcl := range at.Config {
+			key := strings.Join(dcl.Path, "/")
+			src, ok := want[key]
+			if !ok {
+				t.Errorf("unexpected config path %q", key)
+				continue
+			}
+			if dcl.Source != src {
+				t.Errorf("%s: source = %d, want %d", key, dcl.Source, src)
+			}
+			if src == common.AgentConfigSourceSecret {
+				if body := at.Schema.TypeNodes[dcl.ValueType].Body; body.Tag() != types.SchemaTypeBodySecretType {
+					t.Errorf("%s: value type tag = %d, want secret", key, body.Tag())
+				}
+			}
+		}
+	})
+}
+
+func TestConfigOfNonStructReported(t *testing.T) {
+	withDefs(t, func(d *definitions) {
+		defineAgentInto[cfgId, cfgState](
+			d,
+			Spec{Name: "Cfg", Config: ConfigOf[int]()},
+			func(cfgId) *cfgState { return &cfgState{} },
+		)
+		mustDefErr(t, d, "requires a struct")
+	})
+}
+
+// materializeConfig assembles the struct from per-leaf reads — the pure half of
+// LoadConfig, tested with a fake reader (the real reader hits the host).
+func TestMaterializeConfig(t *testing.T) {
+	got, err := materializeConfig[demoAppConfig](func(lf configLeaf) (reflect.Value, error) {
+		switch strings.Join(lf.path, "/") {
+		case "greeting":
+			return reflect.ValueOf("hello"), nil
+		case "db/url":
+			return reflect.ValueOf("db://x"), nil
+		case "db/password":
+			return reflect.ValueOf(NewSecret("s3cr3t")), nil
+		default:
+			return reflect.Value{}, fmt.Errorf("unexpected leaf %v", lf.path)
+		}
+	})
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	if got.Greeting != "hello" {
+		t.Errorf("Greeting = %q", got.Greeting)
+	}
+	if got.Db.Url != "db://x" {
+		t.Errorf("Db.Url = %q", got.Db.Url)
+	}
+	if got.Db.Password.Reveal() != "s3cr3t" {
+		t.Errorf("Db.Password = %q", got.Db.Password.Reveal())
+	}
 }
 
 func TestSecretErrorToGo(t *testing.T) {

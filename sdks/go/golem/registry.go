@@ -153,6 +153,12 @@ func defineAgentInto[Id any, S any](d *definitions, spec Spec, init func(Id) *S)
 	}
 	d.agents[spec.Name] = e
 	d.order = append(d.order, spec.Name)
+	// Struct-declared config (Spec.Config via ConfigOf) flattens into the same
+	// per-key declarations as DefineConfig/DefineSecret; done after registration
+	// so it records against the live entry.
+	if spec.Config.typ != nil {
+		flattenConfigStruct(d, e, spec.Name, spec.Config.typ)
+	}
 	// The Id type identifies the target agent for typed calls (ClientFor), so two
 	// agents cannot share one — the second would silently shadow the first.
 	if existing, ok := d.idToAgent[idType]; ok && existing != spec.Name {
