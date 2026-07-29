@@ -28,7 +28,7 @@ use std::fmt::{Display, Formatter};
 use std::fs::{File, OpenOptions, create_dir_all};
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 use std::time::Duration;
 use url::Url;
 use uuid::Uuid;
@@ -46,6 +46,9 @@ pub const CLOUD_MCP_DOMAIN: &str = "mcps.golem.cloud";
 const BUILTIN_LOCAL_URL_ENV: &str = "GOLEM_BUILTIN_LOCAL_URL";
 const PROFILE_NAME_LOCAL: &str = "local";
 const PROFILE_NAME_CLOUD: &str = "cloud";
+
+static DEFAULT_LOCAL_URL_PARSED: LazyLock<Url> =
+    LazyLock::new(|| Url::parse(DEFAULT_LOCAL_URL).expect("Failed to parse DEFAULT_LOCAL_URL"));
 
 struct BuiltinLocalUrlState {
     url: Url,
@@ -66,7 +69,7 @@ fn builtin_local_url_state() -> &'static BuiltinLocalUrlState {
         }
 
         BuiltinLocalUrlState {
-            url: Url::parse(DEFAULT_LOCAL_URL).expect("Failed to parse DEFAULT_LOCAL_URL"),
+            url: DEFAULT_LOCAL_URL_PARSED.clone(),
             uses_default: true,
         }
     })
@@ -77,7 +80,7 @@ pub fn builtin_local_url() -> Url {
 }
 
 pub(crate) fn is_standard_builtin_local_url(url: &Url) -> bool {
-    url == &Url::parse(DEFAULT_LOCAL_URL).expect("Failed to parse DEFAULT_LOCAL_URL")
+    url == &*DEFAULT_LOCAL_URL_PARSED
 }
 
 pub(crate) fn resolved_builtin_local_url(
@@ -399,12 +402,6 @@ impl From<&Profile> for ClientConfig {
     }
 }
 
-impl From<&Server> for ClientConfig {
-    fn from(server: &Server) -> Self {
-        Self::from_server(server, &builtin_local_url())
-    }
-}
-
 impl ClientConfig {
     pub(crate) fn from_manifest_environment(environment: &Environment, local_url: &Url) -> Self {
         match environment.server.as_ref() {
@@ -470,7 +467,7 @@ mod tests {
     use test_r::test;
 
     fn default_local_url() -> Url {
-        Url::parse(DEFAULT_LOCAL_URL).unwrap()
+        DEFAULT_LOCAL_URL_PARSED.clone()
     }
 
     #[test]
