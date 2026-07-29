@@ -27,72 +27,83 @@ import (
 
 // Cross-agent calls hang off the method descriptor rather than the client:
 //
-//	res, err := Charge.Call(pay, ChargeIn{AmountCents: 500})
+//	res := Charge.Call(pay, ChargeIn{AmountCents: 500})
 //
 // Go methods cannot introduce type parameters, so a Client[Id] could never have
 // a Call[In, Out] method. The descriptor already binds In and Out, and shares Id
 // with the client — which is what makes aiming a method at the wrong agent a
 // compile error.
+//
+// The RPC methods are FAIL-LOUD: they return the value and panic on an infra
+// failure (a [RemoteCallError] — the callee failed, or was unreachable after the
+// runtime exhausted its retries). This matches Golem's exactly-once model — the
+// runtime handles transient failures and replays deterministically, so a failure
+// that reaches the guest is terminal; the documented way to "rely on" the
+// automatic retry is to let it propagate. Model *expected* outcomes as a [Result]
+// in the method's output instead. To degrade gracefully on a non-critical call
+// (rare), wrap it and recover the [RemoteCallError].
 
-// Call invokes the method and waits for its result.
+// Call invokes the method and waits for its result, panicking on an infra failure.
 //
 // This maps to the synchronous `invoke-and-await` import, so it blocks the whole
 // component until the remote returns. To have several calls in flight at once,
 // use [MethodDef.CallAsync].
-func (m MethodDef[Id, In, Out]) Call(c Client[Id], in In) (Out, error) {
-	var zero Out
+func (m MethodDef[Id, In, Out]) Call(c Client[Id], in In) Out {
 	if c.rpc == nil {
-		return zero, fmt.Errorf("golem: %s: called on a zero Client", m.name)
+		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
 	}
-
 	tree, err := m.encodeInput(in)
 	if err != nil {
-		return zero, err
+		panic(err)
 	}
-
 	res := c.rpc.InvokeAndAwait(m.name, tree)
 	if res.IsErr() {
-		return zero, rpcErrorToGo(c.agentID, m.name, res.Err())
+		panic(rpcErrorToGo(c.agentID, m.name, res.Err()))
 	}
-	return decodeOutput[Out](c.agentID, m.name, res.Ok().Result)
+	out, err := decodeOutput[Out](c.agentID, m.name, res.Ok().Result)
+	if err != nil {
+		panic(err)
+	}
+	return out
 }
 
 // Trigger invokes the method without waiting for a result, returning the
-// invocation's identity. Failures after the invocation is accepted are not
-// reported here.
-func (m MethodDef[Id, In, Out]) Trigger(c Client[Id], in In) (InvocationID, error) {
+// invocation's identity (panicking on an infra failure). Failures after the
+// invocation is accepted are not reported here.
+func (m MethodDef[Id, In, Out]) Trigger(c Client[Id], in In) InvocationID {
 	if c.rpc == nil {
-		return InvocationID{}, fmt.Errorf("golem: %s: called on a zero Client", m.name)
+		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
 	}
 	tree, err := m.encodeInput(in)
 	if err != nil {
-		return InvocationID{}, err
+		panic(err)
 	}
 	res := c.rpc.Invoke(m.name, tree)
 	if res.IsErr() {
-		return InvocationID{}, rpcErrorToGo(c.agentID, m.name, res.Err())
+		panic(rpcErrorToGo(c.agentID, m.name, res.Err()))
 	}
-	return invocationIDFrom(res.Ok()), nil
+	return invocationIDFrom(res.Ok())
 }
 
 // Schedule arranges for the method to be invoked at the given time and returns a
-// token that can cancel it beforehand.
-func (m MethodDef[Id, In, Out]) Schedule(c Client[Id], at time.Time, in In) (*ScheduledInvocation, error) {
+// token that can cancel it beforehand (panicking on an infra failure).
+func (m MethodDef[Id, In, Out]) Schedule(c Client[Id], at time.Time, in In) *ScheduledInvocation {
 	if c.rpc == nil {
-		return nil, fmt.Errorf("golem: %s: called on a zero Client", m.name)
+		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
 	}
 	tree, err := m.encodeInput(in)
 	if err != nil {
-		return nil, err
+		panic(err)
 	}
 	receipt := c.rpc.ScheduleCancelableInvocation(instantFrom(at), m.name, tree)
 	return &ScheduledInvocation{
 		ID:    invocationIDFrom(receipt.Metadata),
 		token: receipt.CancellationToken,
-	}, nil
+	}
 }
 
-// CallAsync starts the invocation and returns immediately with a future.
+// CallAsync starts the invocation and returns immediately with a future
+// (panicking on an infra failure at start).
 //
 // This is the only way to have several invocations in flight: `invoke-and-await`
 // is a synchronous import and blocks the component, whereas the future's Get is
@@ -102,13 +113,13 @@ func (m MethodDef[Id, In, Out]) Schedule(c Client[Id], at time.Time, in In) (*Sc
 // Note the platform contract: a single target instance handles one invocation at
 // a time, so fanning out to the SAME agent instance does not run in parallel.
 // Concurrency is across DIFFERENT targets.
-func (m MethodDef[Id, In, Out]) CallAsync(c Client[Id], in In) (*Future[Out], error) {
+func (m MethodDef[Id, In, Out]) CallAsync(c Client[Id], in In) *Future[Out] {
 	if c.rpc == nil {
-		return nil, fmt.Errorf("golem: %s: called on a zero Client", m.name)
+		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
 	}
 	tree, err := m.encodeInput(in)
 	if err != nil {
-		return nil, err
+		panic(err)
 	}
 	inv := c.rpc.AsyncInvokeAndAwait(m.name, tree)
 	return &Future[Out]{
@@ -116,7 +127,7 @@ func (m MethodDef[Id, In, Out]) CallAsync(c Client[Id], in In) (*Future[Out], er
 		fut:    inv.Future,
 		method: m.name,
 		target: c.agentID,
-	}, nil
+	}
 }
 
 // ---------------------------------------------------------------------------

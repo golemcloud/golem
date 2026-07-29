@@ -63,15 +63,20 @@ func WithPhantomID(id UUID) ClientOpt {
 	return func(o *clientOpts) { o.phantomID = witTypes.Some(uuidToWit(id)) }
 }
 
-// ClientFor returns a client addressing the agent instance identified by id.
+// ClientFor returns a client addressing the agent instance identified by id, or
+// panics if the target can't be resolved (unknown agent, a bad config override,
+// or invalid constructor parameters). Client creation failing is a programming/
+// configuration error with no in-band recovery, so — like the TS/Rust/Scala SDKs
+// — it fails loud: the panic is recovered by the invoke dispatcher into an
+// agent-error.
 //
 // The id is encoded with the same codecs the target uses to decode its
 // constructor parameters — they are derived from the same Go types — so caller
 // and callee agree by construction rather than by convention.
-func ClientFor[Id any, S any, Cfg any](a *Agent[Id, S, Cfg], id Id, opts ...ClientOpt) (Client[Id], error) {
+func ClientFor[Id any, S any, Cfg any](a *Agent[Id, S, Cfg], id Id, opts ...ClientOpt) Client[Id] {
 	e := defs.agents[a.name]
 	if e == nil {
-		return Client[Id]{}, fmt.Errorf("golem: ClientFor: unknown agent %s", a.name)
+		panic(fmt.Errorf("golem: ClientFor: unknown agent %s", a.name))
 	}
 
 	var o clientOpts
@@ -87,7 +92,7 @@ func ClientFor[Id any, S any, Cfg any](a *Agent[Id, S, Cfg], id Id, opts ...Clie
 	// before touching the host, so a mistyped or undeclared key is a clear error.
 	agentConfig, err := buildAgentConfig(defs, e, o.configs)
 	if err != nil {
-		return Client[Id]{}, fmt.Errorf("golem: ClientFor %s: %w", a.name, err)
+		panic(fmt.Errorf("golem: ClientFor %s: %w", a.name, err))
 	}
 
 	// Resolve the id up front: it is wanted for error messages, and a failure
@@ -95,7 +100,7 @@ func ClientFor[Id any, S any, Cfg any](a *Agent[Id, S, Cfg], id Id, opts ...Clie
 	// now than as an opaque not-found on the first call.
 	resolved := host.MakeAgentId(a.name, ctor, o.phantomID)
 	if resolved.IsErr() {
-		return Client[Id]{}, fmt.Errorf("golem: ClientFor %s: %w", a.name, agentErrorToGo(resolved.Err()))
+		panic(fmt.Errorf("golem: ClientFor %s: %w", a.name, agentErrorToGo(resolved.Err())))
 	}
 
 	phantomID := None[UUID]()
@@ -107,17 +112,17 @@ func ClientFor[Id any, S any, Cfg any](a *Agent[Id, S, Cfg], id Id, opts ...Clie
 		agentType: a.name,
 		agentID:   resolved.Ok(),
 		phantomID: phantomID,
-	}, nil
+	}
 }
 
 // NewPhantom allocates a fresh phantom instance of the target agent and returns
-// a client for it. The freshly allocated phantom id rides on the client — read it
-// back with [Client.PhantomID] to address the same instance again (via
-// [WithPhantomID]).
+// a client for it (panicking on failure, like [ClientFor]). The freshly allocated
+// phantom id rides on the client — read it back with [Client.PhantomID] to
+// address the same instance again (via [WithPhantomID]).
 //
 // Ephemeral agents have no durable identity, so this is the only way to obtain
 // a client for one.
-func NewPhantom[Id any, S any, Cfg any](a *Agent[Id, S, Cfg], id Id) (Client[Id], error) {
+func NewPhantom[Id any, S any, Cfg any](a *Agent[Id, S, Cfg], id Id) Client[Id] {
 	phantom := uuidFromWit(apiHost.GenerateIdempotencyKey())
 	return ClientFor(a, id, WithPhantomID(phantom))
 }
