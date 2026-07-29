@@ -24,6 +24,15 @@ import (
 // implements; the durability semantics are guaranteed by the executor, and these
 // are thin, fail-loud wrappers (a host failure traps and surfaces as an
 // agent-error, matching the RPC/promise surface — no in-band error return).
+//
+// Concurrency: these knobs are worker-GLOBAL (the runtime has no per-task scope).
+// Golem runs an agent single-threaded with cooperative task-switching only at
+// await points (RPC, promise, sleep). An atomic region or a WithPersistenceLevel/
+// WithIdempotenceMode scope is therefore safe only when it does not await while
+// other goroutines run concurrently; nesting on a single logical flow is fine.
+// Do not hold such a scope open across a concurrent await (e.g. a CallAsync
+// fan-out) — for concurrency, distribute work across agent instances. Per-
+// goroutine isolation is not achievable because the host state is global.
 
 // Atomically runs f as an atomic region: on normal return the region commits, so
 // on a later replay it is treated as a single completed step. If f panics, the

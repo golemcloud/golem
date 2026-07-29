@@ -35,6 +35,13 @@ import (
 // step failures as the error arm of the step's [Result]; a panic (an infra
 // failure) leaves the atomic region open so the runtime replays it, matching the
 // fail-loud model used elsewhere in the SDK.
+//
+// Concurrency: a transaction opens a worker-GLOBAL atomic region (Golem has no
+// per-task scope). Because the agent runs single-threaded with cooperative
+// task-switching only at await points, keep the whole transaction on one logical
+// flow — do not run concurrent goroutines that perform durable side effects while
+// a transaction is open, or their operations fall inside its region. See the
+// concurrency note in durability.go.
 
 // Operation is a compensable step: an action paired with the rollback to undo it.
 // compensate receives both the original input and the output execute produced, and
