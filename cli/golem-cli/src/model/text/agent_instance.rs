@@ -14,7 +14,7 @@
 
 use crate::agent_id_display::SourceLanguage;
 use crate::log::{LogColorize, logln};
-use crate::model::agent_instance::{
+use crate::model::agent::{
     AgentIdMatch, AgentMetadataView, AgentsMetadataResponseView, RawAgentId,
 };
 use crate::model::cli_output::StructuredOutput;

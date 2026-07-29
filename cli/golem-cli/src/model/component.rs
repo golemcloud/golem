@@ -14,7 +14,7 @@
 
 use crate::agent_id_display::SourceLanguage;
 use crate::agent_id_display::render_type_for_language;
-use crate::model::agent_instance::RawAgentId;
+use crate::model::agent::RawAgentId;
 use crate::model::app_raw;
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::masking::{

@@ -20,7 +20,6 @@ use crate::model::environment::{
 };
 use crate::model::masking::{Masked, MaskingConfig, mask_agent_config_entries, mask_sensitive_map};
 use clap::ValueEnum;
-use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::account::AccountId;
@@ -268,10 +267,6 @@ impl Masked for AgentsMetadataResponseView {
             .collect::<anyhow::Result<Vec<_>>>()?;
         Ok(self)
     }
-}
-
-pub trait HasVerbosity {
-    fn verbosity(&self) -> Verbosity;
 }
 
 #[derive(Debug, Clone)]

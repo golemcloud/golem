@@ -13,5 +13,8 @@
 // limitations under the License.
 
 pub mod extraction;
+pub mod instance;
 pub mod stream;
 pub mod view;
+
+pub use instance::*;

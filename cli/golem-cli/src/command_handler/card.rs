@@ -19,7 +19,7 @@ use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
 use crate::log::log_warn_action;
-use crate::model::agent_instance::RawAgentId;
+use crate::model::agent::RawAgentId;
 use crate::model::text::card::{CardGetView, CardListView, CardRevokeResult};
 use anyhow::bail;
 use golem_client::api::{CardClient, WorkerClient};

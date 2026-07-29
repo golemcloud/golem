@@ -14,7 +14,7 @@
 
 use crate::command_handler::agent::parse_worker_error;
 use crate::command_handler::agent::stream_output::AgentStreamOutput;
-use crate::model::agent_instance::AgentLogStreamOptions;
+use crate::model::agent::AgentLogStreamOptions;
 use crate::model::format::Format;
 use anyhow::{Context, anyhow};
 use bytes::Bytes;

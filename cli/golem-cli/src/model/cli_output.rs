@@ -902,7 +902,7 @@ mod tests {
 
     #[test]
     fn agent_list_structured_output_masks_secret_config_paths() {
-        let output = crate::model::agent_instance::AgentsMetadataResponseView {
+        let output = crate::model::agent::AgentsMetadataResponseView {
             agents: vec![sample_agent_metadata_view()],
             cursors: BTreeMap::new(),
         };
@@ -1013,10 +1013,10 @@ mod tests {
         }
     }
 
-    fn sample_agent_metadata_view() -> crate::model::agent_instance::AgentMetadataView {
-        crate::model::agent_instance::AgentMetadataView {
+    fn sample_agent_metadata_view() -> crate::model::agent::AgentMetadataView {
+        crate::model::agent::AgentMetadataView {
             component_name: golem_common::model::component::ComponentName("component".to_string()),
-            agent_id: crate::model::agent_instance::RawAgentId("agent()".to_string()),
+            agent_id: crate::model::agent::RawAgentId("agent()".to_string()),
             created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
             environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
             env: BTreeMap::new().into_iter().collect(),
@@ -2917,9 +2917,12 @@ mod tests {
             proptest::collection::vec(arb_agent_metadata_view(), 0..5),
             proptest::collection::btree_map(arb_small_string(), arb_small_string(), 0..4),
         )
-            .prop_map(|(agents, cursors)| {
-                crate::model::agent_instance::AgentsMetadataResponseView { agents, cursors }
-            })
+            .prop_map(
+                |(agents, cursors)| crate::model::agent::AgentsMetadataResponseView {
+                    agents,
+                    cursors,
+                },
+            )
             .prop_map(|output| {
                 to_structured_output_value(output).expect("generated DTO should serialize")
             })
@@ -2930,7 +2933,7 @@ mod tests {
         serialized_output((arb_small_string(), arb_small_string()).prop_map(
             |(component_name, agent_id)| crate::model::text::agent_instance::AgentCreateView {
                 component_name: golem_common::model::component::ComponentName(component_name),
-                agent_id: crate::model::agent_instance::RawAgentId(agent_id),
+                agent_id: crate::model::agent::RawAgentId(agent_id),
             },
         ))
     }
@@ -3040,7 +3043,7 @@ mod tests {
     /// (`AgentUpdateMeta` / `AgentRedeploymentMeta`).
     fn arb_agent_transition_fields() -> BoxedStrategy<(
         golem_common::model::component::ComponentName,
-        crate::model::agent_instance::RawAgentId,
+        crate::model::agent::RawAgentId,
         golem_common::model::component::ComponentRevision,
         golem_common::model::component::ComponentRevision,
         Option<String>,
@@ -3058,7 +3061,7 @@ mod tests {
                 |(component_name, agent_id, from_revision, revision, from_version, version)| {
                     (
                         golem_common::model::component::ComponentName(component_name),
-                        crate::model::agent_instance::RawAgentId(agent_id),
+                        crate::model::agent::RawAgentId(agent_id),
                         golem_common::model::component::ComponentRevision::new(from_revision)
                             .expect("generated revision should be valid"),
                         golem_common::model::component::ComponentRevision::new(revision)
@@ -3112,13 +3115,13 @@ mod tests {
             .prop_map(|(component_name, agent_id)| {
                 crate::model::text::action_result::AgentDeletionMeta {
                     component_name: golem_common::model::component::ComponentName(component_name),
-                    agent_id: crate::model::agent_instance::RawAgentId(agent_id),
+                    agent_id: crate::model::agent::RawAgentId(agent_id),
                 }
             })
             .boxed()
     }
 
-    fn arb_agent_metadata_view() -> BoxedStrategy<crate::model::agent_instance::AgentMetadataView> {
+    fn arb_agent_metadata_view() -> BoxedStrategy<crate::model::agent::AgentMetadataView> {
         (
             (
                 arb_small_string(),
@@ -3171,9 +3174,9 @@ mod tests {
                     exported_resource_instances,
                 ) = right;
 
-                crate::model::agent_instance::AgentMetadataView {
+                crate::model::agent::AgentMetadataView {
                     component_name: golem_common::model::component::ComponentName(component_name),
-                    agent_id: crate::model::agent_instance::RawAgentId(agent_id),
+                    agent_id: crate::model::agent::RawAgentId(agent_id),
                     created_by: golem_common::model::account::AccountId(
                         uuid::Uuid::parse_str(&created_by).expect("generated UUID should parse"),
                     ),

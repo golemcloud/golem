@@ -25,7 +25,7 @@ use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
 use crate::log::{LogColorize, LogIndent, log_action, log_error, log_warn_action, logln};
 use crate::model::GuestLanguage;
-use crate::model::agent_instance::AgentUpdateMode;
+use crate::model::agent::AgentUpdateMode;
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::app_raw;

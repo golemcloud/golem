@@ -17,7 +17,7 @@ use crate::config::{AuthenticationConfig, Profile, ProfileConfig, ProfileName};
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::{LogColorize, log_error, log_warn, log_warn_action, logln};
-use crate::model::agent_instance::RawAgentId;
+use crate::model::agent::RawAgentId;
 use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
 use anyhow::bail;

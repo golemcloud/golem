@@ -50,7 +50,7 @@ use chrono::{DateTime, Utc};
 use colored::Colorize;
 
 use crate::agent_id_display::SourceLanguage;
-use crate::model::agent_instance::{
+use crate::model::agent::{
     AgentIdMatch, AgentListMode, AgentMetadata, AgentMetadataView, AgentUpdateMode,
     AgentsMetadataResponseView, RawAgentId,
 };
