@@ -588,8 +588,12 @@ pub const SERVER_RUN: &str = "Examples:
   golem-cli server run --ports-file ./ports.json";
 
 pub const SERVER_CLEAN: &str = "Examples:
-  # Wipe the local server's persistent data directory
-  golem-cli server clean";
+  # Wipe the data directory of the discovered application manifest
+  # (localServer.dataDir), or the platform default if no manifest is found
+  golem-cli server clean
+
+  # Ignore any discovered manifest and wipe the platform default data directory
+  golem-cli server clean -X";
 
 // Account commands ---------------------------------------------------------------------------------
 
