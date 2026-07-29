@@ -422,7 +422,7 @@ impl AppCommandHandler {
         Ok(())
     }
 
-    pub async fn cmd_update_workers(
+    pub async fn cmd_update_agents(
         &self,
         component_names: Vec<ComponentName>,
         update_mode: AgentUpdateMode,
@@ -435,13 +435,13 @@ impl AppCommandHandler {
         let components = self.components_for_deploy_args().await?;
         self.ctx
             .component_handler()
-            .update_workers_by_components(&components, update_mode, await_update, disable_wakeup)
+            .update_agents_by_components(&components, update_mode, await_update, disable_wakeup)
             .await?;
 
         Ok(())
     }
 
-    pub async fn cmd_redeploy_workers(
+    pub async fn cmd_redeploy_agents(
         &self,
         component_names: Vec<ComponentName>,
     ) -> anyhow::Result<()> {
@@ -451,7 +451,7 @@ impl AppCommandHandler {
         let components = self.components_for_deploy_args().await?;
         self.ctx
             .component_handler()
-            .redeploy_workers_by_components(&components)
+            .redeploy_agents_by_components(&components)
             .await?;
 
         Ok(())
@@ -2295,21 +2295,21 @@ impl AppCommandHandler {
         if let Some(update_mode) = post_deploy_args.update_agents_mode(env_deploy_args) {
             self.ctx
                 .component_handler()
-                .update_workers_by_components(&components, update_mode, true, false)
+                .update_agents_by_components(&components, update_mode, true, false)
                 .await
                 .map(|()| PostDeploySummary::AgentUpdateOk)
                 .map_err(PostDeployError::AgentUpdateError)
         } else if post_deploy_args.redeploy_agents(env_deploy_args) {
             self.ctx
                 .component_handler()
-                .redeploy_workers_by_components(&components)
+                .redeploy_agents_by_components(&components)
                 .await
                 .map(|()| PostDeploySummary::AgentRedeployOk)
                 .map_err(PostDeployError::AgentRedeployError)
         } else if post_deploy_args.delete_agents(env_deploy_args) {
             self.ctx
                 .component_handler()
-                .delete_workers(&components)
+                .delete_agents(&components)
                 .await
                 .map(|()| PostDeploySummary::AgentDeleteOk)
                 .map_err(PostDeployError::AgentDeleteError)

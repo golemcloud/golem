@@ -274,7 +274,7 @@ impl AgentCommandHandler {
             .await?;
 
         let agent_id = agent_id_match.agent_id.clone();
-        let agent_id = match self.validate_worker_and_function_names(&component, &agent_id, None)? {
+        let agent_id = match self.validate_agent_and_function_names(&component, &agent_id, None)? {
             Some((agent_id, agent_type)) => {
                 // `normalize_public_agent_id` may auto-generate a phantom
                 // UUID for ephemeral agents, changing the canonical form.
@@ -376,7 +376,7 @@ impl AgentCommandHandler {
         // First, validate without the function name. The agent name was
         // already canonicalized when the `AgentIdMatch` was constructed.
         let agent_id_and_type =
-            self.validate_worker_and_function_names(&component, &agent_id_match.agent_id, None)?;
+            self.validate_agent_and_function_names(&component, &agent_id_match.agent_id, None)?;
 
         let (agent_id, agent_type) =
             agent_id_and_type.ok_or_else(|| anyhow!("Agent invoke requires an agent component"))?;
@@ -1068,7 +1068,7 @@ impl AgentCommandHandler {
 
         for component in components {
             let (workers, component_scan_cursor) = self
-                .list_component_workers(
+                .list_component_agents(
                     &component.component_name,
                     &component.id,
                     Some(filters),
@@ -1779,7 +1779,7 @@ impl AgentCommandHandler {
         Ok(())
     }
 
-    pub async fn update_component_workers(
+    pub async fn update_component_agents(
         &self,
         component_name: &ComponentName,
         component_id: &ComponentId,
@@ -1795,7 +1795,7 @@ impl AgentCommandHandler {
             AgentFilter::new_revision(FilterComparator::Less, target_revision).to_string(),
         ];
         let (workers_to_update, _) = self
-            .list_component_workers(
+            .list_component_agents(
                 component_name,
                 component_id,
                 Some(&agent_filters),
@@ -2028,13 +2028,13 @@ impl AgentCommandHandler {
 
     /// Redeploys all agents of a component, returning each redeployed agent's id and the revision it
     /// was running at before (its "from" revision).
-    pub async fn redeploy_component_workers(
+    pub async fn redeploy_component_agents(
         &self,
         component_name: &ComponentName,
         component_id: &ComponentId,
     ) -> anyhow::Result<Vec<(RawAgentId, ComponentRevision)>> {
         let (workers, _) = self
-            .list_component_workers(component_name, component_id, None, None, None, None, false)
+            .list_component_agents(component_name, component_id, None, None, None, None, false)
             .await?;
 
         if workers.is_empty() {
@@ -2075,14 +2075,14 @@ impl AgentCommandHandler {
     }
 
     /// Deletes all agents of a component, returning the ids of the agents that were deleted.
-    pub async fn delete_component_workers(
+    pub async fn delete_component_agents(
         &self,
         component_name: &ComponentName,
         component_id: &ComponentId,
         show_skip: bool,
     ) -> anyhow::Result<Vec<RawAgentId>> {
         let (workers, _) = self
-            .list_component_workers(component_name, component_id, None, None, None, None, false)
+            .list_component_agents(component_name, component_id, None, None, None, None, false)
             .await?;
 
         if workers.is_empty() {
@@ -2181,7 +2181,7 @@ impl AgentCommandHandler {
         Ok(())
     }
 
-    pub async fn list_component_workers(
+    pub async fn list_component_agents(
         &self,
         component_name: &ComponentName,
         component_id: &ComponentId,
@@ -2559,7 +2559,7 @@ impl AgentCommandHandler {
                     validated("environment", value)
                 }
 
-                fn validated_worker(value: &str) -> anyhow::Result<String> {
+                fn validated_agent(value: &str) -> anyhow::Result<String> {
                     Ok(non_empty("agent", value)?.to_string())
                 }
 
@@ -2569,14 +2569,14 @@ impl AgentCommandHandler {
                             Some(EnvironmentReference::Environment {
                                 environment_name: validated_environment(segments[0])?,
                             }),
-                            validated_worker(segments[1])?,
+                            validated_agent(segments[1])?,
                         ),
                         3 => (
                             Some(EnvironmentReference::ApplicationEnvironment {
                                 application_name: validated_application(segments[0])?,
                                 environment_name: validated_environment(segments[1])?,
                             }),
-                            validated_worker(segments[2])?,
+                            validated_agent(segments[2])?,
                         ),
                         4 => (
                             Some(EnvironmentReference::AccountApplicationEnvironment {
@@ -2584,7 +2584,7 @@ impl AgentCommandHandler {
                                 application_name: validated_application(segments[1])?,
                                 environment_name: validated_environment(segments[2])?,
                             }),
-                            validated_worker(segments[3])?,
+                            validated_agent(segments[3])?,
                         ),
                         other => panic!("Unexpected segment count: {other}"),
                     };
@@ -2614,7 +2614,7 @@ impl AgentCommandHandler {
         }
     }
 
-    pub fn validate_worker_and_function_names(
+    pub fn validate_agent_and_function_names(
         &self,
         component: &ComponentDto,
         agent_id: &RawAgentId,

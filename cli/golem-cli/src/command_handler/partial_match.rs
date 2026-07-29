@@ -140,7 +140,7 @@ impl ErrorHandler {
                 );
                 let agent_id_match = {
                     let _indent = DecoratedIndent::new_primary(Format::Text);
-                    let agent_id_match = self.ctx.worker_handler().match_agent_id(agent_id).await?;
+                    let agent_id_match = self.ctx.agent_handler().match_agent_id(agent_id).await?;
 
                     let environment_formatted = match agent_id_match.environment_reference() {
                         Some(env) => {
@@ -178,16 +178,13 @@ impl ErrorHandler {
                 {
                     let canonical_agent_id = self
                         .ctx
-                        .worker_handler()
+                        .agent_handler()
                         .try_recanonicalize_agent_id(&agent_id_match.agent_id, &component);
-                    let agent_id = self
-                        .ctx
-                        .worker_handler()
-                        .validate_worker_and_function_names(
-                            &component,
-                            &canonical_agent_id,
-                            None,
-                        )?;
+                    let agent_id = self.ctx.agent_handler().validate_agent_and_function_names(
+                        &component,
+                        &canonical_agent_id,
+                        None,
+                    )?;
 
                     if let Some((agent_id, agent_type)) = agent_id.as_ref() {
                         log_text_view(&AvailableFunctionNamesHelp::new_agent(

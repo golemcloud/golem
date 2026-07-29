@@ -350,7 +350,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     ctx.get_or_init()
                         .await?
                         .app_handler()
-                        .cmd_update_workers(
+                        .cmd_update_agents(
                             component_name.component_name,
                             update_mode,
                             r#await,
@@ -362,7 +362,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     ctx.get_or_init()
                         .await?
                         .app_handler()
-                        .cmd_redeploy_workers(component_name.component_name)
+                        .cmd_redeploy_agents(component_name.component_name)
                         .await
                 }
                 GolemCliSubcommand::Exec { subcommand } => {
@@ -391,7 +391,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 GolemCliSubcommand::Agent { subcommand } => {
                     ctx.get_or_init()
                         .await?
-                        .worker_handler()
+                        .agent_handler()
                         .handle_command(subcommand)
                         .await
                 }
@@ -592,7 +592,7 @@ pub trait Handlers {
     fn profile_config_handler(&self) -> ProfileConfigCommandHandler;
     fn profile_handler(&self) -> ProfileCommandHandler;
     fn repl_handler(&self) -> ReplHandler;
-    fn worker_handler(&self) -> AgentCommandHandler;
+    fn agent_handler(&self) -> AgentCommandHandler;
 }
 
 impl Handlers for Arc<Context> {
@@ -687,7 +687,7 @@ impl Handlers for Arc<Context> {
         ReplHandler::new(self.clone())
     }
 
-    fn worker_handler(&self) -> AgentCommandHandler {
+    fn agent_handler(&self) -> AgentCommandHandler {
         AgentCommandHandler::new(self.clone())
     }
 }

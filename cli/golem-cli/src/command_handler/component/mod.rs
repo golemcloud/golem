@@ -101,7 +101,7 @@ impl ComponentCommandHandler {
                     r#await,
                     disable_wakeup,
                 } => {
-                    self.cmd_update_workers(
+                    self.cmd_update_agents(
                         component_name.component_name,
                         update_mode,
                         r#await,
@@ -110,7 +110,7 @@ impl ComponentCommandHandler {
                     .await
                 }
                 ComponentSubcommand::RedeployAgents { component_name } => {
-                    self.cmd_redeploy_workers(component_name.component_name)
+                    self.cmd_redeploy_agents(component_name.component_name)
                         .await
                 }
                 ComponentSubcommand::ManifestTrace { component_name } => {
@@ -244,7 +244,7 @@ impl ComponentCommandHandler {
         Ok(())
     }
 
-    async fn cmd_update_workers(
+    async fn cmd_update_agents(
         &self,
         component_name: Option<ComponentName>,
         update_mode: AgentUpdateMode,
@@ -252,18 +252,18 @@ impl ComponentCommandHandler {
         disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         let components = self.components_for_deploy_args(component_name).await?;
-        self.update_workers_by_components(&components, update_mode, await_update, disable_wakeup)
+        self.update_agents_by_components(&components, update_mode, await_update, disable_wakeup)
             .await?;
 
         Ok(())
     }
 
-    async fn cmd_redeploy_workers(
+    async fn cmd_redeploy_agents(
         &self,
         component_name: Option<ComponentName>,
     ) -> anyhow::Result<()> {
         let components = self.components_for_deploy_args(component_name).await?;
-        self.redeploy_workers_by_components(&components).await?;
+        self.redeploy_agents_by_components(&components).await?;
 
         Ok(())
     }
@@ -348,7 +348,7 @@ impl ComponentCommandHandler {
         Ok(())
     }
 
-    pub async fn update_workers_by_components(
+    pub async fn update_agents_by_components(
         &self,
         components: &[ComponentDto],
         update: AgentUpdateMode,
@@ -366,8 +366,8 @@ impl ComponentCommandHandler {
         for component in components {
             let result = self
                 .ctx
-                .worker_handler()
-                .update_component_workers(
+                .agent_handler()
+                .update_component_agents(
                     &component.component_name,
                     &component.id,
                     update,
@@ -384,7 +384,7 @@ impl ComponentCommandHandler {
         Ok(())
     }
 
-    pub async fn redeploy_workers_by_components(
+    pub async fn redeploy_agents_by_components(
         &self,
         components: &[ComponentDto],
     ) -> anyhow::Result<()> {
@@ -400,8 +400,8 @@ impl ComponentCommandHandler {
         for component in components {
             let redeployed = self
                 .ctx
-                .worker_handler()
-                .redeploy_component_workers(&component.component_name, &component.id)
+                .agent_handler()
+                .redeploy_component_agents(&component.component_name, &component.id)
                 .await?;
             let version = component.metadata.root_package_version().clone();
             for (agent_id, from_revision) in redeployed {
@@ -427,7 +427,7 @@ impl ComponentCommandHandler {
         Ok(())
     }
 
-    pub async fn delete_workers(&self, components: &[ComponentDto]) -> anyhow::Result<()> {
+    pub async fn delete_agents(&self, components: &[ComponentDto]) -> anyhow::Result<()> {
         if components.is_empty() {
             return Ok(());
         }
@@ -446,8 +446,8 @@ impl ComponentCommandHandler {
             for component in components {
                 let deleted = self
                     .ctx
-                    .worker_handler()
-                    .delete_component_workers(&component.component_name, &component.id, first_round)
+                    .agent_handler()
+                    .delete_component_agents(&component.component_name, &component.id, first_round)
                     .await?;
                 if !deleted.is_empty() {
                     found_any = true;
@@ -760,7 +760,7 @@ impl ComponentCommandHandler {
                 let revision = match component_revision_selection {
                     ComponentRevisionSelection::ByAgentId(agent_id) => self
                         .ctx
-                        .worker_handler()
+                        .agent_handler()
                         .worker_metadata(component.id.0, &component.component_name, agent_id)
                         .await?
                         .map(|worker_metadata| worker_metadata.component_revision),

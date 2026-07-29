@@ -140,9 +140,9 @@ impl CardCommandHandler {
     async fn cmd_list_agent_wallet(&self, agent: RawAgentId) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
-        let worker_handler = AgentCommandHandler::new(self.ctx.clone());
-        let agent_id_match = worker_handler.match_agent_id(agent).await?;
-        let (component, agent_id) = worker_handler
+        let agent_handler = AgentCommandHandler::new(self.ctx.clone());
+        let agent_id_match = agent_handler.match_agent_id(agent).await?;
+        let (component, agent_id) = agent_handler
             .component_by_agent_id_match(&agent_id_match)
             .await?;
 
