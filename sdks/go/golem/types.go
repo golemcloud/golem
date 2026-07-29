@@ -14,7 +14,10 @@
 
 package golem
 
-import "reflect"
+import (
+	"fmt"
+	"reflect"
+)
 
 // SDK-owned counterparts of the WIT types that Go has no native spelling for.
 //
@@ -134,25 +137,42 @@ func (r Result[Ok, Err]) IsOk() bool { return !r.isErr }
 // IsErr reports whether the Result is a failure.
 func (r Result[Ok, Err]) IsErr() bool { return r.isErr }
 
-// Ok returns the success value, panicking if the Result is a failure. Check
-// IsOk first, or use Get.
+// Ok returns the typed success value, panicking (with the Err payload) if the
+// Result is a failure. Check IsOk first, use the typed [Result.Err], or use
+// [Result.Get] to bridge to (value, error).
 func (r Result[Ok, Err]) Ok() Ok {
 	if r.isErr {
-		panic("golem: Ok on a failed Result")
+		panic(fmt.Errorf("golem: Result.Ok() on a failed Result: %v", r.err))
 	}
 	return r.ok
 }
 
-// Err returns the failure value, panicking if the Result is a success.
+// Err returns the typed failure value, panicking if the Result is a success.
 func (r Result[Ok, Err]) Err() Err {
 	if !r.isErr {
-		panic("golem: Err on a successful Result")
+		panic("golem: Result.Err() on a successful Result")
 	}
 	return r.err
 }
 
-// Get returns the success value and whether the Result succeeded.
-func (r Result[Ok, Err]) Get() (Ok, bool) { return r.ok, !r.isErr }
+// Get bridges the Result to idiomatic Go (value, error): it returns the success
+// value and a nil error, or the zero value and an error carrying the Err arm. A
+// data-typed Err (string, struct, enum) is wrapped in a [ResultError] that keeps
+// the typed payload recoverable via [errors.As]; an Err that already implements
+// error is returned as-is. Compose with [Must] to treat the failure as fatal:
+//
+//	total, err := ledger.Record.Call(l, in).Get()  // handle
+//	total := golem.Must(ledger.Record.Call(l, in).Get())  // or fail-loud
+//
+// Use the typed [Result.Ok]/[Result.Err] instead when you want the Err value in
+// its own type rather than as an error.
+func (r Result[Ok, Err]) Get() (Ok, error) {
+	if r.isErr {
+		var zero Ok
+		return zero, asGoError(r.err)
+	}
+	return r.ok, nil
+}
 
 // OkOr returns the success value if present, otherwise def.
 func (r Result[Ok, Err]) OkOr(def Ok) Ok {
@@ -160,6 +180,26 @@ func (r Result[Ok, Err]) OkOr(def Ok) Ok {
 		return def
 	}
 	return r.ok
+}
+
+// ResultError adapts a data-typed Err arm (one that is not itself an error) into
+// a Go error, so [Result.Get] can bridge to (value, error) without flattening the
+// typed payload — recover it with [errors.As]:
+//
+//	_, err := res.Get()
+//	var re *golem.ResultError[string]
+//	if errors.As(err, &re) { use(re.Value) }
+type ResultError[E any] struct{ Value E }
+
+func (e *ResultError[E]) Error() string { return fmt.Sprintf("%v", e.Value) }
+
+// asGoError turns an Err-arm value into a Go error: the value itself if it already
+// implements error, otherwise a ResultError wrapper preserving the typed payload.
+func asGoError[E any](e E) error {
+	if err, ok := any(e).(error); ok {
+		return err
+	}
+	return &ResultError[E]{Value: e}
 }
 
 type resultish interface {

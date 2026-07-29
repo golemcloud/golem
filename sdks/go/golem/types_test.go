@@ -49,8 +49,8 @@ func TestResultHelpers(t *testing.T) {
 	if !ok.IsOk() || ok.IsErr() || ok.Ok() != 3 || ok.OkOr(9) != 3 {
 		t.Fatal("Ok result")
 	}
-	if v, good := ok.Get(); !good || v != 3 {
-		t.Fatalf("Get = %d,%v", v, good)
+	if v, err := ok.Get(); err != nil || v != 3 {
+		t.Fatalf("Get = %d,%v", v, err)
 	}
 
 	er := Err[int, string]("boom")
@@ -58,8 +58,32 @@ func TestResultHelpers(t *testing.T) {
 		t.Fatal("Err result")
 	}
 
-	mustPanic(t, "Ok on a failed Result", func() { er.Ok() })
-	mustPanic(t, "Err on a successful Result", func() { ok.Err() })
+	mustPanic(t, "Result.Ok() on a failed Result", func() { er.Ok() })
+	mustPanic(t, "Result.Err() on a successful Result", func() { ok.Err() })
+}
+
+// TestResultGetBridgesToError — Get returns (value, error): nil error on Ok, and
+// on Err a ResultError carrying the typed payload (recoverable via errors.As).
+func TestResultGetBridgesToError(t *testing.T) {
+	if v, err := Ok[int, string](3).Get(); err != nil || v != 3 {
+		t.Fatalf("Ok.Get() = %d, %v", v, err)
+	}
+
+	_, err := Err[int, string]("boom").Get()
+	if err == nil || err.Error() != "boom" {
+		t.Fatalf("Err.Get() error = %v", err)
+	}
+	var re *ResultError[string]
+	if !errors.As(err, &re) || re.Value != "boom" {
+		t.Fatalf("errors.As did not recover the typed payload: %v", err)
+	}
+
+	// An Err arm that already implements error is passed through unwrapped.
+	sentinel := errors.New("native")
+	_, err = Err[int, error](sentinel).Get()
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("native-error Err arm should pass through: %v", err)
+	}
 }
 
 func TestBridges(t *testing.T) {
