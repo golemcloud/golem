@@ -761,7 +761,7 @@ impl ComponentCommandHandler {
                     ComponentRevisionSelection::ByAgentId(agent_id) => self
                         .ctx
                         .agent_handler()
-                        .worker_metadata(component.id.0, &component.component_name, agent_id)
+                        .agent_metadata(component.id.0, &component.component_name, agent_id)
                         .await?
                         .map(|worker_metadata| worker_metadata.component_revision),
                     ComponentRevisionSelection::ByExplicitRevision(revision) => Some(revision),

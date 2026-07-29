@@ -292,7 +292,7 @@ impl AgentCommandHandler {
             format!("new agent {}", format_agent_id_match(&agent_id_match)),
         );
 
-        self.new_worker(
+        self.new_agent(
             component.id.0,
             agent_id.0.clone(),
             env.into_iter().collect(),
@@ -648,7 +648,7 @@ impl AgentCommandHandler {
             format!("for agent {}", format_agent_id_match(&agent_id_match)),
         );
 
-        self.interrupt_worker(&component, &agent_id, true).await?;
+        self.interrupt_agent(&component, &agent_id, true).await?;
 
         log_action(
             "Simulated crash",
@@ -1184,7 +1184,7 @@ impl AgentCommandHandler {
             format!("agent {}", format_agent_id_match(&agent_id_match)),
         );
 
-        self.interrupt_worker(&component, &agent_id, false).await?;
+        self.interrupt_agent(&component, &agent_id, false).await?;
 
         log_action(
             "Interrupted",
@@ -1209,7 +1209,7 @@ impl AgentCommandHandler {
             format!("agent {}", format_agent_id_match(&agent_id_match)),
         );
 
-        self.resume_worker(&component, &agent_id).await?;
+        self.resume_agent(&component, &agent_id).await?;
 
         log_action(
             "Resumed",
@@ -1271,7 +1271,7 @@ impl AgentCommandHandler {
         };
 
         let from_revision = self
-            .worker_metadata(component.id.0, &component.component_name, &agent_id)
+            .agent_metadata(component.id.0, &component.component_name, &agent_id)
             .await?
             .map(|metadata| metadata.component_revision)
             .unwrap_or(target_revision);
@@ -1291,7 +1291,7 @@ impl AgentCommandHandler {
         let mut update_results = TryUpdateAllWorkersResult::default();
         update_results.agents.push(meta);
         match self
-            .update_worker(
+            .update_agent(
                 &component.component_name,
                 &component.id,
                 &agent_id.0,
@@ -1724,7 +1724,7 @@ impl AgentCommandHandler {
         }
     }
 
-    async fn new_worker(
+    async fn new_agent(
         &self,
         component_id: Uuid,
         agent_id: String,
@@ -1750,7 +1750,7 @@ impl AgentCommandHandler {
         Ok(())
     }
 
-    pub async fn worker_metadata(
+    pub async fn agent_metadata(
         &self,
         component_id: Uuid,
         component_name: &ComponentName,
@@ -1829,7 +1829,7 @@ impl AgentCommandHandler {
         let mut update_results = TryUpdateAllWorkersResult::default();
         for worker in &workers_to_update {
             let result = self
-                .update_worker(
+                .update_agent(
                     component_name,
                     &worker.agent_id.component_id,
                     &worker.agent_id.agent_id,
@@ -1874,7 +1874,7 @@ impl AgentCommandHandler {
         Ok(update_results)
     }
 
-    async fn update_worker(
+    async fn update_agent(
         &self,
         component_name: &ComponentName,
         component_id: &ComponentId,
@@ -2067,7 +2067,7 @@ impl AgentCommandHandler {
         for worker in workers {
             let agent_id: RawAgentId = worker.agent_id.agent_id.as_str().into();
             let from_revision = worker.component_revision;
-            self.redeploy_worker(component_name, worker).await?;
+            self.redeploy_agent(component_name, worker).await?;
             redeployed.push((agent_id, from_revision));
         }
 
@@ -2115,14 +2115,14 @@ impl AgentCommandHandler {
 
         let mut deleted = Vec::with_capacity(workers.len());
         for worker in &workers {
-            self.delete_worker(component_name, worker).await?;
+            self.delete_agent(component_name, worker).await?;
             deleted.push(worker.agent_id.agent_id.as_str().into());
         }
 
         Ok(deleted)
     }
 
-    async fn redeploy_worker(
+    async fn redeploy_agent(
         &self,
         component_name: &ComponentName,
         worker_metadata: AgentMetadata,
@@ -2137,7 +2137,7 @@ impl AgentCommandHandler {
         );
         let _indent = LogIndent::new();
 
-        self.delete_worker(component_name, &worker_metadata).await?;
+        self.delete_agent(component_name, &worker_metadata).await?;
 
         log_action(
             "Recreating",
@@ -2147,7 +2147,7 @@ impl AgentCommandHandler {
                 worker_metadata.agent_id.agent_id.bold().green(),
             ),
         );
-        self.new_worker(
+        self.new_agent(
             worker_metadata.agent_id.component_id.0,
             worker_metadata.agent_id.agent_id,
             worker_metadata.env,
@@ -2159,7 +2159,7 @@ impl AgentCommandHandler {
         Ok(())
     }
 
-    pub async fn delete_worker(
+    pub async fn delete_agent(
         &self,
         component_name: &ComponentName,
         worker_metadata: &AgentMetadata,
@@ -2387,7 +2387,7 @@ pub(crate) fn try_recanonicalize_agent_id_with_parsed(
 }
 
 impl AgentCommandHandler {
-    async fn resume_worker(
+    async fn resume_agent(
         &self,
         component: &ComponentDto,
         agent_id: &RawAgentId,
@@ -2404,7 +2404,7 @@ impl AgentCommandHandler {
         Ok(())
     }
 
-    async fn interrupt_worker(
+    async fn interrupt_agent(
         &self,
         component: &ComponentDto,
         agent_id: &RawAgentId,
