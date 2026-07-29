@@ -14,7 +14,7 @@
 
 use crate::command::card::CardSubcommand;
 use crate::command_handler::Handlers;
-use crate::command_handler::worker::AgentCommandHandler;
+use crate::command_handler::agent::AgentCommandHandler;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;

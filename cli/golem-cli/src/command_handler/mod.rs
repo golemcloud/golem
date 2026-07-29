@@ -23,6 +23,7 @@ use crate::command::{
     GolemCliSubcommand,
 };
 use crate::command_handler::account::AccountCommandHandler;
+use crate::command_handler::agent::AgentCommandHandler;
 use crate::command_handler::api::ApiCommandHandler;
 use crate::command_handler::api::deployment::ApiDeploymentCommandHandler;
 use crate::command_handler::api::domain::ApiDomainCommandHandler;
@@ -41,7 +42,6 @@ use crate::command_handler::plugin::PluginCommandHandler;
 use crate::command_handler::profile::ProfileCommandHandler;
 use crate::command_handler::profile::config::ProfileConfigCommandHandler;
 use crate::command_handler::repl::ReplHandler;
-use crate::command_handler::worker::AgentCommandHandler;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, PipedExitCode};
 use crate::log::{Output, log_anyhow_error, logln, set_log_output};
@@ -60,6 +60,7 @@ use std::sync::Arc;
 use tracing::{Level, debug};
 
 mod account;
+mod agent;
 mod api;
 mod api_token;
 mod app;
@@ -77,7 +78,6 @@ mod resource_definition;
 mod retry_policy;
 mod secret;
 pub(crate) mod template;
-mod worker;
 
 // NOTE: We are explicitly not using #[async_trait] here to be able to NOT have a Send bound
 // on the `handler_server_commands` method. Having a Send bound there causes "Send is not generic enough"

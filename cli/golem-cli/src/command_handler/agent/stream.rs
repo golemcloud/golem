@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command_handler::worker::parse_worker_error;
-use crate::command_handler::worker::stream_output::AgentStreamOutput;
+use crate::command_handler::agent::parse_worker_error;
+use crate::command_handler::agent::stream_output::AgentStreamOutput;
 use crate::model::format::Format;
 use crate::model::worker::AgentLogStreamOptions;
 use anyhow::{Context, anyhow};

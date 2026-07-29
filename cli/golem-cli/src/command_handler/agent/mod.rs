@@ -20,7 +20,7 @@ use crate::command::shared_args::{
 };
 use crate::command::worker::AgentSubcommand;
 use crate::command_handler::Handlers;
-use crate::command_handler::worker::stream::AgentConnection;
+use crate::command_handler::agent::stream::AgentConnection;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::{MapServiceError, ServiceError};
