@@ -5,7 +5,7 @@ import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
 // TYPED state schema — only the schema-declared fields of `this` (here `count`)
 // are serialized — plus a policy for WHEN to snapshot (every 5 invocations). On
 // recovery the executor restores `count` from the last snapshot and replays the
-// oplog tail. This is the declarative fluent replacement for overriding
+// oplog tail. This is the declarative replacement for overriding
 // `save`/`loadSnapshot` in the decorator SDK.
 export const CounterWithSnapshot = defineAgent({
   name: 'CounterWithSnapshot',

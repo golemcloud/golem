@@ -65,7 +65,7 @@ cargo clippy
 
 ### Packages
 
-Build order matters: `golem-ts-types-core` → `golem-ts-typegen` → `golem-ts-sdk`
+Build order matters: `golem-ts-sdk` → `golem-ts-bridge` → `golem-ts-repl`.
 
 ### Building
 

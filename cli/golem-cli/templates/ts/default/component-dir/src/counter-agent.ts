@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
-// A minimal durable counter agent in the fluent (Standard Schema) SDK:
+// A minimal durable counter agent in the schema-driven TypeScript SDK:
 // `defineAgent(...)` declares the contract, `.implement(...)` supplies handlers
 // whose `this` is bound to the state returned by `init`.
 export const CounterAgent = defineAgent({

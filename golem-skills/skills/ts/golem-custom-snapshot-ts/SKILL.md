@@ -5,7 +5,7 @@ description: "Enabling snapshot-based recovery and implementing custom snapshot 
 
 # Custom Snapshots in TypeScript
 
-Golem agents can opt into snapshotting to support manual (snapshot-based) updates and snapshot-based recovery. In the fluent SDK this is configured declaratively with the `snapshotting` option on `defineAgent(...)`, and — when you need full control over the bytes — with a `snapshot: { save, load }` block on `.implement(...)`.
+Golem agents can opt into snapshotting to support manual (snapshot-based) updates and snapshot-based recovery. In the TypeScript SDK this is configured declaratively with the `snapshotting` option on `defineAgent(...)`, and — when you need full control over the bytes — with a `snapshot: { save, load }` block on `.implement(...)`.
 
 ## When to Use Snapshotting
 
@@ -49,7 +49,7 @@ The policy controls **when** a snapshot is taken. It can be given directly (`sna
 
 ## Typed State Snapshotting (recommended)
 
-Give `snapshotting` a `state` schema to snapshot **only the schema-declared fields** of your state — typed and scoped, so scratch/ephemeral fields are not persisted. On recovery the executor restores those fields from the last snapshot and replays the oplog tail. This is the declarative fluent replacement for overriding `save`/`loadSnapshot`.
+Give `snapshotting` a `state` schema to snapshot **only the schema-declared fields** of your state — typed and scoped, so scratch/ephemeral fields are not persisted. On recovery the executor restores those fields from the last snapshot and replays the oplog tail. This is the declarative replacement for overriding `save`/`loadSnapshot`.
 
 ```typescript
 export const CounterAgentImpl = CounterAgent.implement({

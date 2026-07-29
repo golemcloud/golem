@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { FluentCodec } from '../../fluent/schema/codec';
+import type { SchemaCodec } from '../../schema/codec';
 import {
   assertSchemaValueRepresentable,
   cloneSchemaValue,
@@ -51,14 +51,14 @@ import {
 } from './model';
 
 interface ValueScopeEntry {
-  readonly codec?: FluentCodec;
+  readonly codec?: SchemaCodec;
   readonly mode?: ValueIsMode;
 }
 
 /** Validate all producer-owned invariants of a normalized extended tool tree. */
 export function validateExtendedTool(tool: ExtendedToolType): void {
   validateTreeShape(tool.root);
-  const codecs: FluentCodec[] = [];
+  const codecs: SchemaCodec[] = [];
   visitCommand(tool.root, [], codecs);
   try {
     mergeGraphDefs(codecs.map((codec) => codec.graph));
@@ -90,7 +90,7 @@ function validateTreeShape(root: ExtendedCommandNode): void {
 function visitCommand(
   node: ExtendedCommandNode,
   ancestorGlobals: readonly ExtendedGlobals[],
-  codecs: FluentCodec[],
+  codecs: SchemaCodec[],
 ): void {
   checkIdentifier('command name', node.name);
   node.aliases.forEach((alias) => checkIdentifier('command alias', alias));
@@ -105,7 +105,7 @@ function visitCommand(
 function validateGlobals(
   globals: ExtendedGlobals,
   ancestors: readonly ExtendedGlobals[],
-  codecs: FluentCodec[],
+  codecs: SchemaCodec[],
 ): void {
   const names = new Set<string>();
   const shorts = new Set<string>();
@@ -123,7 +123,7 @@ function validateGlobals(
 function validateBody(
   body: ExtendedCommandBody,
   inScopeGlobals: readonly ExtendedGlobals[],
-  codecs: FluentCodec[],
+  codecs: SchemaCodec[],
 ): void {
   const names = new Set<string>();
   const shorts = new Set<string>();
@@ -238,7 +238,7 @@ function validateBody(
   });
 }
 
-function validateOption(option: ExtendedOptionSpec, codecs: FluentCodec[]): void {
+function validateOption(option: ExtendedOptionSpec, codecs: SchemaCodec[]): void {
   checkIdentifier('option long name', option.long);
   option.aliases.forEach((alias) => checkIdentifier('option alias', alias));
   switch (option.shape.tag) {
@@ -315,7 +315,7 @@ function validateFlag(flag: ExtendedGlobals['flags'][number]): void {
 function validateConstraint(
   constraint: ExtendedConstraint,
   scope: ReadonlyMap<string, ValueScopeEntry>,
-  codecs: FluentCodec[],
+  codecs: SchemaCodec[],
 ): void {
   switch (constraint.tag) {
     case 'requires-all':
@@ -343,7 +343,7 @@ function validateConstraint(
 function validateRef(
   ref: ExtendedRef,
   scope: ReadonlyMap<string, ValueScopeEntry>,
-  codecs: FluentCodec[],
+  codecs: SchemaCodec[],
 ): void {
   const entry = scope.get(ref.name);
   if (!entry) {
@@ -366,7 +366,7 @@ function validateRef(
       `value-is literal for argument "${ref.name}" was not resolved during normalization`,
     );
   }
-  let candidates: FluentCodec[];
+  let candidates: SchemaCodec[];
   try {
     candidates = valueIsCodecs(entry.codec, entry.mode);
   } catch {
@@ -390,7 +390,7 @@ function validateRef(
 
 function validateCodecValue(
   value: CodecValue,
-  expected: FluentCodec,
+  expected: SchemaCodec,
   code: 'default-type-mismatch' | 'value-is-type-mismatch',
 ): void {
   if (!deepEqual(value.codec.graph, expected.graph)) {
@@ -546,7 +546,7 @@ function invalidMetadata(kind: string, value: unknown): never {
   toolBuildError('invalid-metadata-value', `invalid ${kind}: ${String(value)}`);
 }
 
-function validateCodec(codec: FluentCodec, position: string): void {
+function validateCodec(codec: SchemaCodec, position: string): void {
   const error = validateSchemaGraph(codec.graph)[0];
   if (!error) return;
   toolBuildError(schemaErrorCode(error), `schema at ${position}: ${error.message}`);
@@ -558,7 +558,7 @@ function schemaErrorCode(
   return error.code === 'dangling-ref' ? 'unresolved-type-ref' : 'ill-formed-schema';
 }
 
-function rejectVariantInput(codec: FluentCodec, name: string): void {
+function rejectVariantInput(codec: SchemaCodec, name: string): void {
   if (graphReachesVariant(codec.graph, codec.graph.root, new Set())) {
     toolBuildError(
       'variant-in-input-position',
@@ -1010,7 +1010,7 @@ export type SourceValueResult =
   | { readonly tag: 'invalid' };
 
 /** Apply a codec's synchronous Standard Schema validation, preserving transformed output. */
-export function parseSourceValue(codec: FluentCodec, value: unknown): SourceValueResult {
+export function parseSourceValue(codec: SchemaCodec, value: unknown): SourceValueResult {
   if (!codec.sourceSchema) {
     if (codec.listItem && Array.isArray(value)) {
       const items: unknown[] = [];

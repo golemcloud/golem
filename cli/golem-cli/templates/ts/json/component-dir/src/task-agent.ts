@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
 
-// A task manager showing JSON object I/O in the fluent SDK: the method inputs and
+// A task manager showing JSON object I/O in the TypeScript SDK: the method inputs and
 // return values are Zod object schemas, so the whole `Task` record round-trips
 // across the wire. The agent also mounts an HTTP surface — one endpoint per
 // method via `http.mount(...)` on the agent and `method({ http: ... })`.

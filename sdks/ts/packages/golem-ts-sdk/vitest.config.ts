@@ -29,9 +29,9 @@ export default defineConfig({
         __dirname,
         'types/golem_secrets_0_1_0_reveal.d.ts',
       ),
-      // Host bindings used by the fluent typed surfaces. Type-only at test time —
+      // Host bindings used by the typed surfaces. Type-only at test time —
       // the surfaces only call them inside functions, so importing the package
-      // barrel resolves without the live WASM host. (fluent-io.test.ts vi.mocks
+      // barrel resolves without the live WASM host. (io.test.ts vi.mocks
       // these with in-memory fakes for its runtime tests.)
       'wasi:keyvalue/eventual@0.1.0': path.resolve(
         __dirname,
