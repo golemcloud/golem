@@ -59,7 +59,10 @@ impl CommandHandlerHooks for ServerCommandHandler {
 
                 Ok(())
             }
-            ServerSubcommand::Clean => clean_data_dir(&default_data_dir()?).await,
+            ServerSubcommand::Clean => {
+                let data_dir = data_dir_from_local_server(ctx.manifest_local_server())?;
+                clean_data_dir(&data_dir).await
+            }
         }
     }
 
@@ -114,6 +117,15 @@ fn launch_args_from_run_args_and_manifest(
     launch_args_from_run_args_and_local_server(args, ctx.manifest_local_server())
 }
 
+fn data_dir_from_local_server(
+    local_server: Option<&ResolvedLocalServer>,
+) -> anyhow::Result<PathBuf> {
+    match local_server.and_then(|manifest| manifest.data_dir.clone()) {
+        Some(data_dir) => Ok(data_dir),
+        None => default_data_dir(),
+    }
+}
+
 fn launch_args_from_run_args_and_local_server(
     args: &RunArgs,
     local_server: Option<&ResolvedLocalServer>,
@@ -140,12 +152,10 @@ fn launch_args_from_run_args_and_local_server(
             .ports_file
             .clone()
             .or_else(|| local_server.and_then(|manifest| manifest.ports_file.clone())),
-        data_dir: args
-            .data_dir
-            .clone()
-            .or_else(|| local_server.and_then(|manifest| manifest.data_dir.clone()))
-            .map(Ok)
-            .unwrap_or_else(default_data_dir)?,
+        data_dir: match &args.data_dir {
+            Some(data_dir) => data_dir.clone(),
+            None => data_dir_from_local_server(local_server)?,
+        },
         agent_filesystem_root: args
             .agent_filesystem_root
             .clone()

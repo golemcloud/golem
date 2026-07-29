@@ -461,7 +461,9 @@ Concepts:
     `golem.yaml`).
 
     Commands that do not require an application (e.g. `profile`,
-    `account`, `server`, `completion`, `output-schema`) ignore manifest discovery.
+    `account`, `completion`, `output-schema`) ignore manifest discovery.
+    `server run` and `server clean` use `localServer` settings from the
+    discovered manifest; pass `-X` to use global defaults instead.
 
   Non-interactive use (for agents and CI)
     Pass `-Y`/`--yes` to auto-confirm destructive prompts and

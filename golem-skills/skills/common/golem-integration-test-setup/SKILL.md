@@ -236,10 +236,10 @@ secretDefaults:
 After the suite finishes:
 
 1. Send `SIGINT` / `SIGTERM` to the `golem server run` process.
-2. Optionally run `golem server clean --data-dir ./tests/fixtures/data` to wipe state, or just delete the directory.
+2. Optionally define `localServer.dataDir: ./tests/fixtures/data` in the test manifest and run `golem server clean` to wipe state, or just delete the directory.
 3. Remove `tests/fixtures/ports.json`.
 
-Do **not** rely on `golem server clean` with the *default* data directory from a test — that would delete the developer's local development state. Always pass `--data-dir` explicitly.
+Do **not** run `golem server clean -X` from a test — that would delete the developer's default local development state. Keep test data isolated with manifest `localServer.dataDir`.
 
 ## End-to-End Skeleton
 

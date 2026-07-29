@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::app_raw::{BuiltinServer, Server};
+use crate::model::app_raw::{BuiltinServer, Environment, Server};
 use crate::model::format::Format;
 use anyhow::{Context, anyhow, bail};
 use chrono::{DateTime, Utc};
@@ -76,8 +76,46 @@ pub fn builtin_local_url() -> Url {
     builtin_local_url_state().url.clone()
 }
 
-pub fn uses_default_builtin_local_url() -> bool {
-    builtin_local_url_state().uses_default
+pub(crate) fn is_standard_builtin_local_url(url: &Url) -> bool {
+    url == &Url::parse(DEFAULT_LOCAL_URL).expect("Failed to parse DEFAULT_LOCAL_URL")
+}
+
+pub(crate) fn resolved_builtin_local_url(
+    router_addr: Option<&str>,
+    router_port: Option<u16>,
+) -> anyhow::Result<Url> {
+    let state = builtin_local_url_state();
+    resolve_builtin_local_url(&state.url, state.uses_default, router_addr, router_port)
+}
+
+fn resolve_builtin_local_url(
+    base_url: &Url,
+    uses_default: bool,
+    router_addr: Option<&str>,
+    router_port: Option<u16>,
+) -> anyhow::Result<Url> {
+    if !uses_default {
+        return Ok(base_url.clone());
+    }
+
+    let mut url = base_url.clone();
+    if let Some(router_addr) = router_addr {
+        let bind_addr = router_addr
+            .parse::<std::net::Ipv4Addr>()
+            .map_err(|_| anyhow!("Invalid localServer.routerAddr: {router_addr}"))?;
+        let connect_addr = if bind_addr.is_unspecified() {
+            std::net::Ipv4Addr::LOCALHOST
+        } else {
+            bind_addr
+        };
+        url.set_host(Some(&connect_addr.to_string()))
+            .map_err(|_| anyhow!("Invalid localServer.routerAddr: {router_addr}"))?;
+    }
+    if let Some(router_port) = router_port {
+        url.set_port(Some(router_port))
+            .map_err(|_| anyhow!("Invalid localServer.routerPort: {router_port}"))?;
+    }
+    Ok(url)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -363,6 +401,19 @@ impl From<&Profile> for ClientConfig {
 
 impl From<&Server> for ClientConfig {
     fn from(server: &Server) -> Self {
+        Self::from_server(server, &builtin_local_url())
+    }
+}
+
+impl ClientConfig {
+    pub(crate) fn from_manifest_environment(environment: &Environment, local_url: &Url) -> Self {
+        match environment.server.as_ref() {
+            Some(server) => Self::from_server(server, local_url),
+            None => Self::from_server(&Server::Builtin(BuiltinServer::Local), local_url),
+        }
+    }
+
+    pub(crate) fn from_server(server: &Server, local_url: &Url) -> Self {
         struct BaseConfig {
             registry_url: Url,
             worker_url: Url,
@@ -376,8 +427,8 @@ impl From<&Server> for ClientConfig {
         } = match server {
             Server::Builtin(builtin) => match builtin {
                 BuiltinServer::Local => BaseConfig {
-                    registry_url: builtin_local_url(),
-                    worker_url: builtin_local_url(),
+                    registry_url: local_url.clone(),
+                    worker_url: local_url.clone(),
                     allow_insecure: false,
                 },
                 BuiltinServer::Cloud => {
@@ -410,6 +461,91 @@ impl From<&Server> for ClientConfig {
                 allow_insecure,
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    fn default_local_url() -> Url {
+        Url::parse(DEFAULT_LOCAL_URL).unwrap()
+    }
+
+    #[test]
+    fn local_url_uses_manifest_router_settings() {
+        let url =
+            resolve_builtin_local_url(&default_local_url(), true, Some("192.0.2.10"), Some(9891))
+                .unwrap();
+
+        assert_eq!(url.as_str(), "http://192.0.2.10:9891/");
+    }
+
+    #[test]
+    fn local_url_translates_unspecified_bind_address() {
+        let url =
+            resolve_builtin_local_url(&default_local_url(), true, Some("0.0.0.0"), Some(9891))
+                .unwrap();
+
+        assert_eq!(url.as_str(), "http://127.0.0.1:9891/");
+    }
+
+    #[test]
+    fn local_url_keeps_defaults_without_manifest_overrides() {
+        let url = resolve_builtin_local_url(&default_local_url(), true, None, None).unwrap();
+
+        assert_eq!(url.as_str(), "http://localhost:9881/");
+    }
+
+    #[test]
+    fn explicit_local_url_override_wins_over_manifest() {
+        let override_url = Url::parse("http://custom-host:1234").unwrap();
+        let url = resolve_builtin_local_url(&override_url, false, Some("192.0.2.10"), Some(9891))
+            .unwrap();
+
+        assert_eq!(url, override_url);
+    }
+
+    #[test]
+    fn invalid_manifest_router_address_is_rejected() {
+        let error = resolve_builtin_local_url(
+            &default_local_url(),
+            true,
+            Some("not a valid host"),
+            Some(9891),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("localServer.routerAddr"));
+    }
+
+    #[test]
+    fn cloud_client_ignores_local_url() {
+        let local_url = Url::parse("http://192.0.2.10:9891").unwrap();
+        let client = ClientConfig::from_server(&Server::Builtin(BuiltinServer::Cloud), &local_url);
+
+        let cloud_url = Url::parse(DEFAULT_CLOUD_URL).unwrap();
+        assert_eq!(client.registry_url, cloud_url);
+        assert_eq!(client.worker_url, cloud_url);
+    }
+
+    #[test]
+    fn custom_client_ignores_local_url() {
+        let local_url = Url::parse("http://192.0.2.10:9891").unwrap();
+        let custom_url = Url::parse("http://custom-server:1234").unwrap();
+        let server = Server::Custom(Box::new(crate::model::app_raw::CustomServer {
+            url: custom_url.clone(),
+            worker_url: None,
+            allow_insecure: Some(true),
+            auth: crate::model::app_raw::CustomServerAuth::Static {
+                static_token: "token".to_string(),
+            },
+        }));
+        let client = ClientConfig::from_server(&server, &local_url);
+
+        assert_eq!(client.registry_url, custom_url);
+        assert_eq!(client.worker_url, custom_url);
     }
 }
 

@@ -472,6 +472,7 @@ impl TestContext {
 
         let mut child = Command::new(&self.golem_cli_path)
             .args(args)
+            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
             .envs(&self.env)
             .current_dir(&working_dir)
             .stdout(Stdio::piped())
@@ -518,7 +519,11 @@ impl TestContext {
 
         tokio::task::spawn_blocking(move || {
             let mut command = std::process::Command::new(golem_cli_path);
-            command.current_dir(working_dir).envs(env).args(args);
+            command
+                .current_dir(working_dir)
+                .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+                .envs(env)
+                .args(args);
             // The session runs in a PTY; ensure a capable terminal type so terminal
             // features like readline tab completion are not disabled (e.g. when the
             // parent environment has TERM=dumb or TERM unset).
