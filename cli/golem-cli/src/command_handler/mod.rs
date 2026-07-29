@@ -41,7 +41,7 @@ use crate::command_handler::plugin::PluginCommandHandler;
 use crate::command_handler::profile::ProfileCommandHandler;
 use crate::command_handler::profile::config::ProfileConfigCommandHandler;
 use crate::command_handler::repl::ReplHandler;
-use crate::command_handler::worker::WorkerCommandHandler;
+use crate::command_handler::worker::AgentCommandHandler;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, PipedExitCode};
 use crate::log::{Output, log_anyhow_error, logln, set_log_output};
@@ -592,7 +592,7 @@ pub trait Handlers {
     fn profile_config_handler(&self) -> ProfileConfigCommandHandler;
     fn profile_handler(&self) -> ProfileCommandHandler;
     fn repl_handler(&self) -> ReplHandler;
-    fn worker_handler(&self) -> WorkerCommandHandler;
+    fn worker_handler(&self) -> AgentCommandHandler;
 }
 
 impl Handlers for Arc<Context> {
@@ -687,8 +687,8 @@ impl Handlers for Arc<Context> {
         ReplHandler::new(self.clone())
     }
 
-    fn worker_handler(&self) -> WorkerCommandHandler {
-        WorkerCommandHandler::new(self.clone())
+    fn worker_handler(&self) -> AgentCommandHandler {
+        AgentCommandHandler::new(self.clone())
     }
 }
 

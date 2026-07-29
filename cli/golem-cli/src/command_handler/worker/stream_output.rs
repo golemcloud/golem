@@ -28,13 +28,13 @@ use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite;
 
 #[derive(Clone)]
-pub struct WorkerStreamOutput {
-    state: Arc<Mutex<WorkerStreamOutputState>>,
+pub struct AgentStreamOutput {
+    state: Arc<Mutex<AgentStreamOutputState>>,
     options: AgentLogStreamOptions,
     format: Format,
 }
 
-struct WorkerStreamOutputState {
+struct AgentStreamOutputState {
     pub last_stdout_timestamp: Timestamp,
     pub stdout: String,
     pub last_stderr_timestamp: Timestamp,
@@ -43,10 +43,10 @@ struct WorkerStreamOutputState {
     pub last_timestamp_hashes: HashSet<u64>,
 }
 
-impl WorkerStreamOutput {
+impl AgentStreamOutput {
     pub fn new(options: AgentLogStreamOptions, format: Format) -> Self {
-        WorkerStreamOutput {
-            state: Arc::new(Mutex::new(WorkerStreamOutputState {
+        AgentStreamOutput {
+            state: Arc::new(Mutex::new(AgentStreamOutputState {
                 last_stdout_timestamp: Timestamp::now_utc(),
                 stdout: String::new(),
                 last_stderr_timestamp: Timestamp::now_utc(),
@@ -257,7 +257,7 @@ impl WorkerStreamOutput {
 
     async fn check_already_seen(
         &self,
-        state: &mut WorkerStreamOutputState,
+        state: &mut AgentStreamOutputState,
         timestamp: Timestamp,
         message: &str,
     ) -> bool {

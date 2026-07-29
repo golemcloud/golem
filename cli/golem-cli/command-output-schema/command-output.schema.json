@@ -6740,11 +6740,11 @@
     },
     {
       "type": "agent.files",
-      "rustType": "WorkerFilesView"
+      "rustType": "AgentFilesView"
     },
     {
       "type": "agent.get",
-      "rustType": "WorkerGetView"
+      "rustType": "AgentGetView"
     },
     {
       "type": "agent.interrupt",
@@ -6760,7 +6760,7 @@
     },
     {
       "type": "agent.new",
-      "rustType": "WorkerCreateView"
+      "rustType": "AgentCreateView"
     },
     {
       "type": "agent.oplog",

@@ -47,14 +47,14 @@ use std::fmt::Write;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WorkerCreateView {
+pub struct AgentCreateView {
     pub component_name: ComponentName,
     pub agent_id: RawAgentId,
 }
 
-impl Masked for WorkerCreateView {}
+impl Masked for AgentCreateView {}
 
-impl MessageWithFields for WorkerCreateView {
+impl MessageWithFields for AgentCreateView {
     fn message(&self) -> String {
         format!(
             "Created new agent {}",
@@ -79,24 +79,24 @@ impl MessageWithFields for WorkerCreateView {
     }
 }
 
-impl StructuredOutput for WorkerCreateView {
+impl StructuredOutput for AgentCreateView {
     const KIND: &'static str = "agent.new";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WorkerGetView {
+pub struct AgentGetView {
     pub metadata: AgentMetadataView,
     pub precise: bool,
 }
 
-impl WorkerGetView {
+impl AgentGetView {
     pub fn from_metadata(metadata: AgentMetadataView, precise: bool) -> Self {
         Self { metadata, precise }
     }
 }
 
-impl Masked for WorkerGetView {
+impl Masked for AgentGetView {
     fn masked(mut self, config: MaskingConfig) -> anyhow::Result<Self> {
         self.metadata = self.metadata.masked(config)?;
         Ok(self)
@@ -120,7 +120,7 @@ fn to_sorted_btree_map(map: &HashMap<String, String>) -> BTreeMap<String, String
     map.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
 }
 
-impl MessageWithFields for WorkerGetView {
+impl MessageWithFields for AgentGetView {
     fn message(&self) -> String {
         format!(
             "Got metadata for agent {}",
@@ -256,7 +256,7 @@ impl MessageWithFields for WorkerGetView {
     }
 }
 
-impl StructuredOutput for WorkerGetView {
+impl StructuredOutput for AgentGetView {
     const KIND: &'static str = "agent.get";
 
     fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
@@ -1706,11 +1706,11 @@ mod tests {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WorkerFilesView {
+pub struct AgentFilesView {
     pub nodes: Vec<FileNodeView>,
 }
 
-impl StructuredOutput for WorkerFilesView {
+impl StructuredOutput for AgentFilesView {
     const KIND: &'static str = "agent.files";
 }
 
@@ -1724,7 +1724,7 @@ pub struct FileNodeView {
     pub size: u64,
 }
 
-impl TextOutput for WorkerFilesView {
+impl TextOutput for AgentFilesView {
     fn log(&self) {
         if self.nodes.is_empty() {
             logln("No files found.");

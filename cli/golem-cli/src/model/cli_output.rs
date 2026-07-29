@@ -360,8 +360,8 @@ mod tests {
             "agent.file-contents",
             arb_agent_file_contents_result
         ),
-        registry_entry!("WorkerFilesView", "agent.files", arb_agent_files_result),
-        registry_entry!("WorkerGetView", "agent.get", arb_agent_get_result),
+        registry_entry!("AgentFilesView", "agent.files", arb_agent_files_result),
+        registry_entry!("AgentGetView", "agent.get", arb_agent_get_result),
         registry_entry!(
             "AgentInterruptResult",
             "agent.interrupt",
@@ -373,7 +373,7 @@ mod tests {
             "agent.list",
             arb_agent_list_result
         ),
-        registry_entry!("WorkerCreateView", "agent.new", arb_agent_new_result),
+        registry_entry!("AgentCreateView", "agent.new", arb_agent_new_result),
         registry_entry!("AgentOplogEntryView", "agent.oplog", arb_agent_oplog_result),
         registry_entry!(
             "AgentPluginToggleResult",
@@ -920,7 +920,7 @@ mod tests {
 
     #[test]
     fn agent_get_structured_output_masks_secret_config_paths() {
-        let value = hidden_structured_output(crate::model::text::worker::WorkerGetView {
+        let value = hidden_structured_output(crate::model::text::worker::AgentGetView {
             metadata: sample_agent_metadata_view(),
             precise: true,
         });
@@ -2851,7 +2851,7 @@ mod tests {
     fn arb_agent_files_result() -> OutputDocumentStrategy {
         serialized_output(
             proptest::collection::vec(arb_file_node(), 0..6)
-                .prop_map(|nodes| crate::model::text::worker::WorkerFilesView { nodes }),
+                .prop_map(|nodes| crate::model::text::worker::AgentFilesView { nodes }),
         )
     }
 
@@ -2877,7 +2877,7 @@ mod tests {
 
     fn arb_agent_get_result() -> OutputDocumentStrategy {
         serialized_output((arb_agent_metadata_view(), any::<bool>()).prop_map(
-            |(metadata, precise)| crate::model::text::worker::WorkerGetView { metadata, precise },
+            |(metadata, precise)| crate::model::text::worker::AgentGetView { metadata, precise },
         ))
     }
 
@@ -2928,7 +2928,7 @@ mod tests {
 
     fn arb_agent_new_result() -> OutputDocumentStrategy {
         serialized_output((arb_small_string(), arb_small_string()).prop_map(
-            |(component_name, agent_id)| crate::model::text::worker::WorkerCreateView {
+            |(component_name, agent_id)| crate::model::text::worker::AgentCreateView {
                 component_name: golem_common::model::component::ComponentName(component_name),
                 agent_id: crate::model::worker::RawAgentId(agent_id),
             },

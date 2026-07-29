@@ -20,7 +20,7 @@ use crate::command::shared_args::{
 };
 use crate::command::worker::AgentSubcommand;
 use crate::command_handler::Handlers;
-use crate::command_handler::worker::stream::WorkerConnection;
+use crate::command_handler::worker::stream::AgentConnection;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::{MapServiceError, ServiceError};
@@ -42,7 +42,7 @@ use crate::model::text::help::{
     ParameterErrorTableView,
 };
 use crate::model::text::worker::{
-    AgentOplogEntryView, FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView,
+    AgentCreateView, AgentFilesView, AgentGetView, AgentOplogEntryView, FileNodeView,
     format_agent_id_match, format_timestamp,
 };
 use anyhow::{Context as AnyhowContext, anyhow, bail};
@@ -97,11 +97,11 @@ use tokio::time::{sleep, timeout};
 use tracing::debug;
 use uuid::Uuid;
 
-pub struct WorkerCommandHandler {
+pub struct AgentCommandHandler {
     ctx: Arc<Context>,
 }
 
-impl WorkerCommandHandler {
+impl AgentCommandHandler {
     pub fn new(ctx: Arc<Context>) -> Self {
         Self { ctx }
     }
@@ -308,7 +308,7 @@ impl WorkerCommandHandler {
         .into();
 
         logln("");
-        self.ctx.log_handler().log_output(WorkerCreateView {
+        self.ctx.log_handler().log_output(AgentCreateView {
             component_name: agent_id_match.component_name,
             agent_id: display_agent_id,
         })?;
@@ -475,7 +475,7 @@ impl WorkerCommandHandler {
         )?;
 
         let mut connect_handle = if !no_stream {
-            let connection = WorkerConnection::new(
+            let connection = AgentConnection::new(
                 self.ctx.worker_service_url().clone(),
                 self.ctx.auth_token().await?,
                 &component.id,
@@ -562,7 +562,7 @@ impl WorkerCommandHandler {
             format!("to agent {}", format_agent_id_match(&agent_id_match)),
         );
 
-        let connection = WorkerConnection::new(
+        let connection = AgentConnection::new(
             self.ctx.worker_service_url().clone(),
             self.ctx.auth_token().await?,
             &component.id,
@@ -620,7 +620,7 @@ impl WorkerCommandHandler {
         )?;
         let agent_id = RawAgentId(agent_id.to_string());
 
-        let connection = WorkerConnection::new(
+        let connection = AgentConnection::new(
             self.ctx.worker_service_url().clone(),
             self.ctx.auth_token().await?,
             &agent_type.implemented_by.component_id,
@@ -1358,7 +1358,7 @@ impl WorkerCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_output(WorkerGetView::from_metadata(metadata_view, true))?;
+            .log_output(AgentGetView::from_metadata(metadata_view, true))?;
 
         Ok(())
     }
@@ -1423,8 +1423,8 @@ impl WorkerCommandHandler {
             }
         };
 
-        // Convert nodes to WorkerFilesView with human-readable timestamps
-        let view = WorkerFilesView {
+        // Convert nodes to AgentFilesView with human-readable timestamps
+        let view = AgentFilesView {
             nodes: nodes
                 .nodes
                 .into_iter()
@@ -2386,7 +2386,7 @@ pub(crate) fn try_recanonicalize_agent_id_with_parsed(
     (RawAgentId(new_id), parsed)
 }
 
-impl WorkerCommandHandler {
+impl AgentCommandHandler {
     async fn resume_worker(
         &self,
         component: &ComponentDto,

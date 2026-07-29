@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::command_handler::worker::parse_worker_error;
-use crate::command_handler::worker::stream_output::WorkerStreamOutput;
+use crate::command_handler::worker::stream_output::AgentStreamOutput;
 use crate::model::format::Format;
 use crate::model::worker::AgentLogStreamOptions;
 use anyhow::{Context, anyhow};
@@ -41,17 +41,17 @@ use tracing::{debug, error, info, trace};
 use url::Url;
 use uuid::Uuid;
 
-pub struct WorkerConnection {
+pub struct AgentConnection {
     request: Request,
     connector: Option<Connector>,
-    output: WorkerStreamOutput,
+    output: AgentStreamOutput,
     idempotency_key: Option<IdempotencyKey>,
     last_seen_idempotency_key: Arc<Mutex<Option<IdempotencyKey>>>,
     goal_reached: Arc<AtomicBool>,
     ping_interval: Duration,
 }
 
-impl WorkerConnection {
+impl AgentConnection {
     /// Initializes a worker stream. Use `run_forever` to connect and output worker events.
     pub async fn new(
         worker_service_url: Url,
@@ -63,7 +63,7 @@ impl WorkerConnection {
         format: Format,
         ping_interval: Duration,
         idempotency_key: Option<IdempotencyKey>,
-    ) -> anyhow::Result<WorkerConnection> {
+    ) -> anyhow::Result<AgentConnection> {
         let (request, connector) = Self::create_request(
             worker_service_url,
             auth_token.secret().to_string(),
@@ -71,7 +71,7 @@ impl WorkerConnection {
             agent_id,
             allow_insecure,
         )?;
-        let output = WorkerStreamOutput::new(connect_options, format);
+        let output = AgentStreamOutput::new(connect_options, format);
 
         let last_seen_idempotency_key = Arc::new(Mutex::new(None));
         let goal_reached = Arc::new(AtomicBool::new(false));
@@ -224,7 +224,7 @@ impl WorkerConnection {
 
     async fn read_loop(
         read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
-        output: WorkerStreamOutput,
+        output: AgentStreamOutput,
         last_seen_idempotency_key: Arc<Mutex<Option<IdempotencyKey>>>,
         idempotency_key_to_look_for: Option<IdempotencyKey>,
         goal_reached: Arc<AtomicBool>,
