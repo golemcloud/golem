@@ -112,7 +112,7 @@ localServer:
   dataDir: .golem/data
 ```
 
-`routerAddr` and `routerPort` define where the built-in local preset is reachable: `golem server run` binds the server there, and other `golem` commands connect there. When the server binds to `0.0.0.0`, commands connect through `127.0.0.1`. Setting only `portsFile` records the selected ports but does not request free ports. Explicit CLI flags such as `--router-port`, `--custom-request-port`, `--mcp-port`, `--ports-file`, and `--data-dir` override the manifest values for `server run`.
+`routerAddr` and `routerPort` define where the built-in local preset is reachable: `golem server run` binds the server there, and other `golem` commands connect there. `routerAddr` must be an IPv4 address literal; host names are not supported. When the server binds to `0.0.0.0`, commands connect through `127.0.0.1`. Setting only `portsFile` records the selected ports but does not request free ports. Explicit CLI flags such as `--router-port`, `--custom-request-port`, `--mcp-port`, `--ports-file`, and `--data-dir` override the manifest values for `server run`.
 
 #### Warning: `--agent-filesystem-root`
 

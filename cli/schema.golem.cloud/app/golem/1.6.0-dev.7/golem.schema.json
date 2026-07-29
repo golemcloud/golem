@@ -882,7 +882,7 @@
       "properties": {
         "routerAddr": {
           "type": "string",
-          "description": "Address where `golem server run` serves the built-in local preset's main API. Other `golem` commands targeting the preset connect to this address; `0.0.0.0` is translated to `127.0.0.1` when connecting."
+          "description": "Address where `golem server run` serves the built-in local preset's main API. Other `golem` commands targeting the preset connect to this address; `0.0.0.0` is translated to `127.0.0.1` when connecting. Must be an IPv4 address literal, such as `0.0.0.0` or `127.0.0.1`; host names are not supported."
         },
         "routerPort": {
           "type": "integer",

@@ -125,7 +125,7 @@ Available naming related string transforming functions:
   <Field meta={{
     path: "localServer.routerAddr",
   }}>
-    ***Optional bind address*** for the built-in local preset's main API. `golem server run` binds to this address, and other `golem` commands targeting the preset connect to it. When it is `0.0.0.0`, commands connect through `127.0.0.1`. Defaults to `0.0.0.0` for binding and `localhost` for connections.
+    ***Optional bind address*** for the built-in local preset's main API. `golem server run` binds to this address, and other `golem` commands targeting the preset connect to it. When it is `0.0.0.0`, commands connect through `127.0.0.1`. Must be an IPv4 address literal; host names are not supported. Defaults to `0.0.0.0` for binding and `localhost` for connections.
   </Field>
 
   <Field meta={{
