@@ -119,19 +119,19 @@ Available naming related string transforming functions:
   <Field meta={{
     path: "localServer",
   }}>
-    ***Optional local server defaults*** used by `golem server run` and by local deployment subdomain expansion. CLI flags passed to `golem server run` override these values. Path values are resolved relative to the manifest that declares `localServer`. Do not set manifest ports to `0`; port `0` is only allowed when passed directly as a `golem server run` port flag.
+    ***Optional local server configuration*** that defines where the built-in local preset lives. `golem server run` uses it to bind the local server, other `golem` commands targeting the preset use it to connect, `golem server clean` uses it to locate stored state, and local deployment subdomain expansion uses the relevant ports. CLI flags passed to `golem server run` override these values. Path values are resolved relative to the manifest that declares `localServer`. Do not set manifest ports to `0`; port `0` is only allowed when passed directly as a `golem server run` port flag.
   </Field>
 
   <Field meta={{
     path: "localServer.routerAddr",
   }}>
-    ***Optional bind address*** for the local server's main API. Defaults to `0.0.0.0`.
+    ***Optional bind address*** for the built-in local preset's main API. `golem server run` binds to this address, and other `golem` commands targeting the preset connect to it. When it is `0.0.0.0`, commands connect through `127.0.0.1`. Must be an IPv4 address literal; host names are not supported. Defaults to `0.0.0.0` for binding and `localhost` for connections.
   </Field>
 
   <Field meta={{
     path: "localServer.routerPort",
   }}>
-    ***Optional port*** for the local server's main API. Defaults to `9881`. Do not set this to `0` in the manifest; use `--router-port 0` directly with `golem server run` when you need an OS-assigned free port.
+    ***Optional port*** for the built-in local preset's main API. `golem server run` binds to this port, and other `golem` commands targeting the preset connect to it. Defaults to `9881`. Do not set this to `0` in the manifest; use `--router-port 0` directly with `golem server run` when you need an OS-assigned free port.
   </Field>
 
   <Field meta={{
@@ -155,7 +155,7 @@ Available naming related string transforming functions:
   <Field meta={{
     path: "localServer.dataDir",
   }}>
-    ***Optional directory*** used for local server data. Defaults to `$XDG_STATE_HOME/golem`.
+    ***Optional directory*** used by `golem server run` and removed by `golem server clean` or `golem server run --clean`. Before deleting it, the CLI displays the resolved absolute path and asks for confirmation; pass `-Y` or `--yes` only after verifying the target. Filesystem roots are always rejected. Defaults to `$XDG_STATE_HOME/golem`. Pass `-X` to `server clean` to ignore the manifest and clean the platform default.
   </Field>
 
   <Field meta={{
