@@ -1067,7 +1067,7 @@ impl AgentCommandHandler {
         let mut view = AgentsMetadataResponseView::default();
 
         for component in components {
-            let (workers, component_scan_cursor) = self
+            let (agents, component_scan_cursor) = self
                 .list_component_agents(
                     &component.component_name,
                     &component.id,
@@ -1079,15 +1079,15 @@ impl AgentCommandHandler {
                 )
                 .await?;
 
-            for worker in workers {
-                let raw_agent_id = worker.agent_id.agent_id.clone();
+            for agent in agents {
+                let raw_agent_id = agent.agent_id.agent_id.clone();
 
-                let worker_component = self
+                let agent_component = self
                     .ctx
                     .component_handler()
                     .get_component_revision_by_id(
-                        &worker.agent_id.component_id,
-                        worker.component_revision,
+                        &agent.agent_id.component_id,
+                        agent.component_revision,
                     )
                     .await?;
 
@@ -1095,7 +1095,7 @@ impl AgentCommandHandler {
                     ParsedAgentId::parse_agent_type_name(&raw_agent_id).ok();
 
                 let defaults = parsed_agent_type_name.as_ref().and_then(|agent_type_name| {
-                    worker_component
+                    agent_component
                         .metadata
                         .agent_type_provision_configs()
                         .get(agent_type_name)
@@ -1105,7 +1105,7 @@ impl AgentCommandHandler {
                 let source_language = parsed_agent_type_name
                     .as_ref()
                     .and_then(|type_name| {
-                        worker_component
+                        agent_component
                             .metadata
                             .agent_types()
                             .iter()
@@ -1118,17 +1118,17 @@ impl AgentCommandHandler {
                     .as_ref()
                     .map(|agent_type_name| {
                         secret_config_paths_for_agent_type(
-                            worker_component.metadata.agent_types(),
+                            agent_component.metadata.agent_types(),
                             agent_type_name,
                         )
                     })
                     .unwrap_or_default();
 
-                let mut agent_view = AgentMetadataView::from(worker)
+                let mut agent_view = AgentMetadataView::from(agent)
                     .with_defaults(defaults)
                     .with_secret_config_paths(secret_config_paths);
 
-                let parsed = ParsedAgentId::parse(&raw_agent_id, &worker_component.metadata).ok();
+                let parsed = ParsedAgentId::parse(&raw_agent_id, &agent_component.metadata).ok();
                 agent_view.agent_id = crate::agent_id_display::render_agent_id_or_raw(
                     parsed.as_ref(),
                     &source_language,
@@ -1794,7 +1794,7 @@ impl AgentCommandHandler {
             // only consider agents in previous revisions that can be upgraded
             AgentFilter::new_revision(FilterComparator::Less, target_revision).to_string(),
         ];
-        let (workers_to_update, _) = self
+        let (agents_to_update, _) = self
             .list_component_agents(
                 component_name,
                 component_id,
@@ -1806,7 +1806,7 @@ impl AgentCommandHandler {
             )
             .await?;
 
-        if workers_to_update.is_empty() {
+        if agents_to_update.is_empty() {
             return Ok(TryUpdateAllWorkersResult::default());
         }
 
@@ -1814,7 +1814,7 @@ impl AgentCommandHandler {
             "Updating",
             format!(
                 "all agents ({}) for component {} to revision {}",
-                workers_to_update.len().to_string().log_color_highlight(),
+                agents_to_update.len().to_string().log_color_highlight(),
                 component_name.0.blue().bold(),
                 target_revision.to_string().log_color_highlight()
             ),
@@ -1827,12 +1827,12 @@ impl AgentCommandHandler {
             .component_version_at(component_id, target_revision)
             .await;
         let mut update_results = TryUpdateAllWorkersResult::default();
-        for worker in &workers_to_update {
+        for agent in &agents_to_update {
             let result = self
                 .update_agent(
                     component_name,
-                    &worker.agent_id.component_id,
-                    &worker.agent_id.agent_id,
+                    &agent.agent_id.component_id,
+                    &agent.agent_id.agent_id,
                     update_mode,
                     target_revision,
                     false,
@@ -1843,28 +1843,28 @@ impl AgentCommandHandler {
             if let Err(error) = &result {
                 update_results
                     .errors
-                    .insert(worker.agent_id.agent_id.clone(), error.to_string());
+                    .insert(agent.agent_id.agent_id.clone(), error.to_string());
             }
             update_results.agents.push(AgentUpdateMeta {
                 component_name: component_name.clone(),
-                agent_id: worker.agent_id.agent_id.as_str().into(),
-                from_revision: worker.component_revision,
+                agent_id: agent.agent_id.agent_id.as_str().into(),
+                from_revision: agent.component_revision,
                 revision: target_revision,
                 from_version: self
                     .ctx
                     .component_handler()
-                    .component_version_at(component_id, worker.component_revision)
+                    .component_version_at(component_id, agent.component_revision)
                     .await,
                 version: version.clone(),
             });
         }
 
         if await_update {
-            for worker in workers_to_update {
+            for agent in agents_to_update {
                 let _ = self
                     .await_update_result(
-                        &worker.agent_id.component_id,
-                        &worker.agent_id.agent_id,
+                        &agent.agent_id.component_id,
+                        &agent.agent_id.agent_id,
                         target_revision,
                     )
                     .await;
@@ -2033,11 +2033,11 @@ impl AgentCommandHandler {
         component_name: &ComponentName,
         component_id: &ComponentId,
     ) -> anyhow::Result<Vec<(RawAgentId, ComponentRevision)>> {
-        let (workers, _) = self
+        let (agents, _) = self
             .list_component_agents(component_name, component_id, None, None, None, None, false)
             .await?;
 
-        if workers.is_empty() {
+        if agents.is_empty() {
             log_warn_action(
                 "Skipping",
                 format!("redeploying agents for component {component_name}, no agent found"),
@@ -2049,7 +2049,7 @@ impl AgentCommandHandler {
             "Redeploying",
             format!(
                 "all agents ({}) for component {}",
-                workers.len().to_string().log_color_highlight(),
+                agents.len().to_string().log_color_highlight(),
                 component_name.0.blue().bold(),
             ),
         );
@@ -2058,16 +2058,16 @@ impl AgentCommandHandler {
         if !self
             .ctx
             .interactive_handler()
-            .confirm_redeploy_agents(workers.len())?
+            .confirm_redeploy_agents(agents.len())?
         {
             bail!(NonSuccessfulExit);
         }
 
-        let mut redeployed = Vec::with_capacity(workers.len());
-        for worker in workers {
-            let agent_id: RawAgentId = worker.agent_id.agent_id.as_str().into();
-            let from_revision = worker.component_revision;
-            self.redeploy_agent(component_name, worker).await?;
+        let mut redeployed = Vec::with_capacity(agents.len());
+        for agent in agents {
+            let agent_id: RawAgentId = agent.agent_id.agent_id.as_str().into();
+            let from_revision = agent.component_revision;
+            self.redeploy_agent(component_name, agent).await?;
             redeployed.push((agent_id, from_revision));
         }
 
@@ -2081,11 +2081,11 @@ impl AgentCommandHandler {
         component_id: &ComponentId,
         show_skip: bool,
     ) -> anyhow::Result<Vec<RawAgentId>> {
-        let (workers, _) = self
+        let (agents, _) = self
             .list_component_agents(component_name, component_id, None, None, None, None, false)
             .await?;
 
-        if workers.is_empty() {
+        if agents.is_empty() {
             if show_skip {
                 log_warn_action(
                     "Skipping",
@@ -2099,7 +2099,7 @@ impl AgentCommandHandler {
             "Deleting",
             format!(
                 "all agents ({}) for component {}",
-                workers.len().to_string().log_color_highlight(),
+                agents.len().to_string().log_color_highlight(),
                 component_name.0.blue().bold(),
             ),
         );
@@ -2108,15 +2108,15 @@ impl AgentCommandHandler {
         if !self
             .ctx
             .interactive_handler()
-            .confirm_deleting_agents(workers.len())?
+            .confirm_deleting_agents(agents.len())?
         {
             bail!(NonSuccessfulExit);
         }
 
-        let mut deleted = Vec::with_capacity(workers.len());
-        for worker in &workers {
-            self.delete_agent(component_name, worker).await?;
-            deleted.push(worker.agent_id.agent_id.as_str().into());
+        let mut deleted = Vec::with_capacity(agents.len());
+        for agent in &agents {
+            self.delete_agent(component_name, agent).await?;
+            deleted.push(agent.agent_id.agent_id.as_str().into());
         }
 
         Ok(deleted)
@@ -2125,33 +2125,33 @@ impl AgentCommandHandler {
     async fn redeploy_agent(
         &self,
         component_name: &ComponentName,
-        worker_metadata: AgentMetadata,
+        agent_metadata: AgentMetadata,
     ) -> anyhow::Result<()> {
         log_warn_action(
             "Redeploying",
             format!(
                 "agent {}/{} to current version",
                 component_name.0.bold().blue(),
-                worker_metadata.agent_id.agent_id.bold().green(),
+                agent_metadata.agent_id.agent_id.bold().green(),
             ),
         );
         let _indent = LogIndent::new();
 
-        self.delete_agent(component_name, &worker_metadata).await?;
+        self.delete_agent(component_name, &agent_metadata).await?;
 
         log_action(
             "Recreating",
             format!(
                 "agent {}/{}",
                 component_name.0.bold().blue(),
-                worker_metadata.agent_id.agent_id.bold().green(),
+                agent_metadata.agent_id.agent_id.bold().green(),
             ),
         );
         self.new_agent(
-            worker_metadata.agent_id.component_id.0,
-            worker_metadata.agent_id.agent_id,
-            worker_metadata.env,
-            worker_metadata.config,
+            agent_metadata.agent_id.component_id.0,
+            agent_metadata.agent_id.agent_id,
+            agent_metadata.env,
+            agent_metadata.config,
         )
         .await?;
         log_action("Recreated", "agent");
@@ -2162,19 +2162,19 @@ impl AgentCommandHandler {
     pub async fn delete_agent(
         &self,
         component_name: &ComponentName,
-        worker_metadata: &AgentMetadata,
+        agent_metadata: &AgentMetadata,
     ) -> anyhow::Result<()> {
         log_warn_action(
             "Deleting",
             format!(
                 "agent {}/{}",
                 component_name.0.bold().blue(),
-                worker_metadata.agent_id.agent_id.bold().green(),
+                agent_metadata.agent_id.agent_id.bold().green(),
             ),
         );
         self.delete(
-            worker_metadata.agent_id.component_id.0,
-            &worker_metadata.agent_id.agent_id,
+            agent_metadata.agent_id.component_id.0,
+            &agent_metadata.agent_id.agent_id,
         )
         .await?;
         log_action("Deleted", "agent");
@@ -2192,7 +2192,7 @@ impl AgentCommandHandler {
         precise: bool,
     ) -> anyhow::Result<(Vec<AgentMetadata>, Option<ScanCursor>)> {
         let clients = self.ctx.golem_clients().await?;
-        let mut workers = Vec::<AgentMetadata>::new();
+        let mut agents = Vec::<AgentMetadata>::new();
         let mut final_result_cursor = Option::<ScanCursor>::None;
 
         // The structured `find_workers_metadata` POST endpoint is used for all
@@ -2231,7 +2231,7 @@ impl AgentCommandHandler {
                     .await
                     .map_service_error()?;
 
-                workers.extend(
+                agents.extend(
                     results
                         .workers
                         .into_iter()
@@ -2254,7 +2254,7 @@ impl AgentCommandHandler {
             }
         }
 
-        Ok((workers, final_result_cursor))
+        Ok((agents, final_result_cursor))
     }
 
     pub(crate) async fn component_by_agent_id_match(
