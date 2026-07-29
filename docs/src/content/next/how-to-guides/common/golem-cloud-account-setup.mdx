@@ -67,7 +67,7 @@ golem -C account new "Team Account" "team@example.com"              # Create add
 
 ## Step 4: Create and Manage API Tokens
 
-For programmatic access (CI/CD, scripts), create static API tokens:
+Create static API tokens:
 
 ```shell
 golem -C api-token list                                             # List existing tokens
@@ -78,13 +78,13 @@ golem -C api-token delete <TOKEN_ID>                                # Delete a t
 
 `golem api-token new` prints the token secret once, including when using structured output such as `--format json`. Store that value securely; it cannot be retrieved later.
 
-Use a static token in a profile for non-interactive environments:
+Use a static token in a profile:
 
 ```shell
-golem profile new ci-cloud --url https://release.api.golem.cloud --static-token "<TOKEN_SECRET>" --set-active
+golem profile new token-cloud --url https://release.api.golem.cloud --static-token "<TOKEN_SECRET>" --set-active
 ```
 
-For an interactive setup, `--auth static` (without `--static-token`) prompts for the token instead of putting it on the command line:
+`--auth static` without `--static-token` prompts for the token (masked) instead of putting it on the command line:
 
 ```shell
 golem profile new my-cloud --url https://release.api.golem.cloud --auth static --set-active

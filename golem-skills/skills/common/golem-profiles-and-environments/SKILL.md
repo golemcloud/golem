@@ -44,7 +44,7 @@ Profiles are global CLI configuration stored in `~/.golem/config.json`. They def
 golem profile new                          # Interactive setup
 golem profile new my-staging --url https://staging.example.com                 # OAuth2 (default)
 golem profile new my-staging --url https://staging.example.com --auth static   # static token (prompted, masked)
-golem profile new my-staging --url https://staging.example.com --static-token "..."  # static token inline (scripts)
+golem profile new my-staging --url https://staging.example.com --static-token "..."  # static token inline
 golem profile list                         # List all profiles
 golem profile switch my-staging            # Set active profile
 golem profile get                          # Show active profile
