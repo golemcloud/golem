@@ -9,8 +9,6 @@
 declare module 'golem:tool/host@0.1.0' {
   import * as golemCore200Types from 'golem:core/types@2.0.0';
   import * as golemTool010Common from 'golem:tool/common@0.1.0';
-  import * as wasiIo023Poll from 'wasi:io/poll@0.2.3';
-  import * as wasiIo023Streams from 'wasi:io/streams@0.2.3';
   /**
    * Returns every tool **the calling agent has access to** in
    * the current environment, per the manifest's per-env and
@@ -38,16 +36,18 @@ declare module 'golem:tool/host@0.1.0' {
     /**
      * @throws RpcError
      */
-    invokeAndAwait(commandPath: string[], input: TypedSchemaValue, stdin: InputStream | undefined): InvocationResult;
+    invokeAndAwait(commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<number> | undefined): Promise<InvocationResult>;
     /**
      * @throws RpcError
      */
-    invoke(commandPath: string[], input: TypedSchemaValue, stdin: InputStream | undefined): void;
-    asyncInvokeAndAwait(commandPath: string[], input: TypedSchemaValue, stdin: InputStream | undefined): FutureInvokeResult;
+    invoke(commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<number> | undefined): void;
+    asyncInvokeAndAwait(commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<number> | undefined): FutureInvokeResult;
   }
   export class FutureInvokeResult {
-    subscribe(): Pollable;
-    get(): Result<InvocationResult, RpcError> | undefined;
+    /**
+     * @throws RpcError
+     */
+    get(): Promise<InvocationResult>;
     cancel(): void;
   }
   export type Tool = golemTool010Common.Tool;
@@ -55,8 +55,6 @@ declare module 'golem:tool/host@0.1.0' {
   export type InvocationResult = golemTool010Common.InvocationResult;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
   export type ComponentId = golemCore200Types.ComponentId;
-  export type InputStream = wasiIo023Streams.InputStream;
-  export type Pollable = wasiIo023Poll.Pollable;
   /**
    * A tool registered in the environment, addressable by name from
    * any agent or other tool. `definition` carries the full metadata;
@@ -71,7 +69,7 @@ declare module 'golem:tool/host@0.1.0' {
     definition: Tool;
     implementedBy: ComponentId;
   };
-  export type RpcError = 
+  export type RpcError =
   {
     tag: 'protocol-error'
     val: string

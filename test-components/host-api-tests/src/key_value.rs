@@ -2,7 +2,7 @@ use golem_rust::bindings::wasi::keyvalue::eventual::{
     Bucket, OutgoingValue, delete, exists, get, set,
 };
 use golem_rust::bindings::wasi::keyvalue::eventual_batch::{delete_many, get_many, keys, set_many};
-use golem_rust::{agent_definition, agent_implementation};
+use golem_rust::{agent_definition, agent_implementation, wit_stream};
 
 #[agent_definition]
 pub trait KeyValue {
@@ -14,6 +14,7 @@ pub trait KeyValue {
     fn get_keys(&self, bucket: String) -> Vec<String>;
     fn get_many(&self, bucket: String, keys: Vec<String>) -> Option<Vec<Vec<u8>>>;
     fn set(&self, bucket: String, key: String, value: Vec<u8>);
+    async fn set_using_async_body(&self, bucket: String, key: String, value: Vec<u8>);
     fn set_many(&self, bucket: String, key_values: Vec<(String, Vec<u8>)>);
 }
 
@@ -77,10 +78,7 @@ impl KeyValue for KeyValueImpl {
 
                 let mut result = Vec::new();
                 for maybe_value in maybe_values {
-                    match maybe_value {
-                        Some(value) => result.push(value),
-                        None => return None,
-                    }
+                    result.push(maybe_value?);
                 }
                 Some(result)
             }
@@ -97,6 +95,33 @@ impl KeyValue for KeyValueImpl {
         outgoing_value
             .outgoing_value_write_body_sync(&value)
             .unwrap();
+        set(&bucket, &key, &outgoing_value).unwrap()
+    }
+
+    /// Writes the value into the outgoing value's body in multiple chunks using
+    /// the WASI P3 stream-based `outgoing-value-write-body-async` function: the
+    /// guest creates a `stream<u8>`, hands the readable end to the host, then
+    /// writes the bytes into the writable end.
+    async fn set_using_async_body(&self, bucket: String, key: String, value: Vec<u8>) {
+        let bucket = Bucket::open_bucket(&bucket).unwrap();
+        let outgoing_value = OutgoingValue::new_outgoing_value();
+        let (mut writer, reader) = wit_stream::new::<u8>();
+        outgoing_value
+            .outgoing_value_write_body_async(reader)
+            .unwrap();
+        let mid = value.len() / 2;
+        let (first, second) = value.split_at(mid);
+        let remaining = writer.write_all(first.to_vec()).await;
+        assert!(
+            remaining.is_empty(),
+            "host did not consume the first body chunk"
+        );
+        let remaining = writer.write_all(second.to_vec()).await;
+        assert!(
+            remaining.is_empty(),
+            "host did not consume the second body chunk"
+        );
+        drop(writer);
         set(&bucket, &key, &outgoing_value).unwrap()
     }
 

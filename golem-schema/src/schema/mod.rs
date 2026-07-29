@@ -25,6 +25,7 @@ pub mod multimodal;
 pub mod protobuf;
 pub mod schema_type;
 pub mod schema_value;
+pub mod tool;
 pub mod unstructured;
 pub mod validation;
 #[cfg(all(

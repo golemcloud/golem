@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::card::CardRepoError;
 use super::deployment::DeployRepoError;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
@@ -45,6 +46,8 @@ pub enum ComponentRepoError {
     ConcurrentModification,
     #[error("Version already exists: {version}")]
     VersionAlreadyExists { version: String },
+    #[error(transparent)]
+    CardRepoError(#[from] CardRepoError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }

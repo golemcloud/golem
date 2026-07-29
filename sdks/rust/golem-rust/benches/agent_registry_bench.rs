@@ -18,9 +18,12 @@
 //! which are called per-parameter during every agent invoke/initiate call.
 //!
 //! Run with:
-//!   cd sdks/rust && cargo test -p golem-rust --features export_golem_agentic --test agent_registry_bench -- --nocapture
+//!   cd sdks/rust && cargo bench -p golem-rust --features export_golem_agentic --bench agent_registry_bench
 
-test_r::enable!();
+#[cfg(feature = "export_golem_agentic")]
+fn main() {
+    bench::bench_agent_registry_lookups();
+}
 
 #[cfg(feature = "export_golem_agentic")]
 mod bench {
@@ -32,7 +35,6 @@ mod bench {
     use golem_rust::golem_agentic::golem::agent::common::{AgentMode, Snapshotting};
     use std::hint::black_box;
     use std::time::Instant;
-    use test_r::test;
 
     fn make_schema_graph() -> golem_rust::schema::SchemaGraph {
         golem_rust::schema::try_into_schema_graph::<String>()
@@ -116,8 +118,7 @@ mod bench {
         elapsed
     }
 
-    #[test]
-    fn bench_agent_registry_lookups() {
+    pub(super) fn bench_agent_registry_lookups() {
         const METHODS: usize = 10;
         const PARAMS: usize = 5;
         const ITERATIONS: usize = 100_000;

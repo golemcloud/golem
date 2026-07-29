@@ -20,8 +20,6 @@ cargo make build-release  # Full release build
 cargo build -p <crate>    # Build specific crate
 ```
 
-Always run `cargo make build` before starting work to ensure all dependencies are compiled.
-
 **Note:** The SDKs in `sdks/` are not part of the main build flow. Load `sdk-development` when working on the Rust or TypeScript SDKs, `golem-scala-development` when working on the Scala SDK, and see `sdks/moonbit/AGENTS.md` when working on the MoonBit SDK.
 
 **Note:** The user-facing documentation site (deployed at [learn.golem.cloud](https://learn.golem.cloud)) lives under `docs/` and is a Next.js / Nextra project built with Bun — see `docs/AGENTS.md`. It is built and deployed by a dedicated workflow (`.github/workflows/docs.yaml`); the main `ci.yaml` skips runs on docs-only changes.
@@ -50,6 +48,12 @@ exec --fail-on-error ${golem} build -P release --yes
 ## Testing
 
 Tests use [test-r](https://test-r.vigoo.dev). **Important:** Each test file must import `test_r::test` or tests will not run.
+
+Unit tests must never invoke external tools or compilers as subprocesses (for example `cargo`,
+`rustc`, `npm`, `npx`, `tsc`, `bun`, `sbt`, `scala-cli`, or `moon`). Put tests that need those
+tools in the appropriate integration test suite, such as `cli-integration-tests` for CLI and SDK
+generation checks. The unit-test CI job runs prebuilt test binaries and is intentionally kept fast;
+subprocess compilation in unit tests bypasses that design and can make the job time out.
 
 Worker executor tests, integration tests, and CLI integration tests may depend on built test components from `test-components/`. These `.wasm` artifacts are not checked into the repository anymore, so build the specific components needed by the selected tests before running them. Use the `modifying-test-components` skill for targeted rebuilds, or `rebuild-all-test-components` when a full rebuild is needed.
 

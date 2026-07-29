@@ -1,0 +1,275 @@
+---
+name: golem-integration-test-setup
+description: "Setting up a dedicated Golem environment for integration testing. Use when adding integration tests for a Golem application, configuring a throwaway local server for tests, isolating test state from local development, or wiring up CI to run end-to-end tests against a real Golem server."
+---
+
+# Setting Up a Golem Environment for Integration Testing
+
+Integration tests for a Golem application typically need:
+
+- a **clean, isolated Golem server** that does not share state with local development or other test runs
+- a **dedicated environment** in `golem.yaml` so tests can deploy and target their own configuration
+- **non-interactive deploys** so the test harness can drive `golem deploy` without prompts
+- **predictable or discoverable ports** so the test runner knows where to send HTTP / MCP / gRPC requests
+
+This skill describes the recommended way to wire all of this together.
+
+## Recommended Layout
+
+```
+my-app/
+├── golem.yaml
+├── components/...
+└── tests/
+    ├── integration/
+    │   └── ...                   # Test sources
+    └── fixtures/
+        ├── data/                 # Server data dir (gitignored)
+        ├── ports.json            # Written by `golem server run --ports-file`
+        └── golem-server.log
+```
+
+Add the test fixture paths to `.gitignore`:
+
+```gitignore
+tests/fixtures/data/
+tests/fixtures/ports.json
+tests/fixtures/golem-server.log
+```
+
+## 1. Add a Test Environment to `golem.yaml`
+
+Add a dedicated environment (commonly named `test` or `integration`) alongside `local` and `cloud`. Point it at the built-in `local` server, activate test-specific presets, and turn on the CLI options that make deploys non-interactive.
+
+```yaml
+environments:
+  local:
+    default: true
+    server: local
+    componentPresets: dev
+
+  test:
+    server: local                  # Tests run against a local `golem server`
+    componentPresets: test         # Activate the "test" preset on every component/agent
+    cli:
+      format: json                 # Machine-readable CLI output for the test harness
+      autoConfirm: true            # Skip interactive prompts (equivalent to --yes)
+      reset: true                  # Always start from a clean deployment (equivalent to --reset)
+    deployment:
+      compatibilityCheck: false    # Speed up deploys during tests
+      versionCheck: false
+
+  cloud:
+    server: cloud
+    componentPresets: prod
+```
+
+Key choices:
+
+- **`server: local`** — tests run against a local server you start and stop yourself, never against `cloud`.
+- **`cli.autoConfirm: true` and `cli.reset: true`** — every `golem -E test deploy` becomes equivalent to `golem deploy --yes --reset`, deleting any leftover agents from a previous test run before redeploying.
+- **`cli.format: json`** — lets the test harness parse CLI output reliably.
+- **`deployment.compatibilityCheck: false` / `versionCheck: false`** — these checks are valuable in production but slow down rapid test iteration on a throwaway server.
+
+## 2. Add a `test` Preset to Components and Agents
+
+Use a component/agent preset to inject test-only configuration: shorter timeouts, in-memory fakes, test API keys, debug logging, etc. The `componentPresets: test` line in the environment activates it.
+
+```yaml
+componentTemplates:
+  shared:
+    env:
+      LOG_LEVEL: info
+    presets:
+      dev:
+        env:
+          LOG_LEVEL: debug
+      test:
+        env:
+          LOG_LEVEL: debug
+          GOLEM_ENV: test
+
+agents:
+  MyAgent:
+    env:
+      CACHE_TTL: "300"
+      EXTERNAL_API_URL: "https://api.example.com"
+    presets:
+      test:
+        env:
+          CACHE_TTL: "1"           # Effectively disable caching in tests
+          EXTERNAL_API_URL: "http://localhost:0"   # Overridden at test-runtime
+```
+
+> **Naming guideline:** prefer distinct preset names (`dev`, `test`, `release`) over reusing environment names. See `golem-profiles-and-environments` for the rationale.
+
+## 3. Start an Isolated Local Server for the Test Run
+
+Always run the test server with its own data directory and let it pick free ports. This guarantees that:
+
+- Tests never collide with a developer's local server (which uses the platform-specific default data dir and ports `9881` / `9006` / `9007`).
+- Multiple test runs (locally or in CI) can execute in parallel.
+- Each test run starts from a known empty state.
+
+```shell
+golem server run \
+  --data-dir ./tests/fixtures/data \
+  --router-port 0 \
+  --custom-request-port 0 \
+  --mcp-port 0 \
+  --ports-file ./tests/fixtures/ports.json \
+  --clean
+```
+
+| Flag | Why it matters for tests |
+|------|--------------------------|
+| `--data-dir <path>` | Keep test state out of the developer's default data directory |
+| `--clean` | Wipe the data directory before starting so each run is reproducible |
+| `--router-port 0` (and friends) | Let the OS assign free ports — works in parallel CI |
+| `--ports-file <path>` | Server writes the actual bound ports here once it is fully ready |
+
+The server runs in the foreground and blocks the terminal — start it as a background process from the test harness and tear it down after the suite finishes.
+
+> **Only the `golem` binary supports `golem server`** — `golem-cli` does not.
+
+## 4. Wait for the Server, Then Read the Ports
+
+The `--ports-file` is written **atomically once all services are ready**, so polling for its existence is a reliable readiness signal. After it appears, parse it to discover the ports:
+
+```json
+{
+  "routerPort": 51823,
+  "customRequestPort": 51824,
+  "mcpPort": 51825
+}
+```
+
+| Field | Used for |
+|-------|----------|
+| `routerPort` | `golem deploy`, `golem agent invoke`, gRPC / management API |
+| `customRequestPort` | HTTP API endpoints exposed by the application |
+| `mcpPort` | MCP server requests |
+
+When you deploy through manifest `subdomain` entries, keep the test environment on the built-in local server and use stable nonzero local ports:
+
+```yaml
+localServer:
+  routerPort: 9881
+  customRequestPort: 9006
+  mcpPort: 9007
+
+environments:
+  test:
+    server: local
+    componentPresets: test
+    cli:
+      autoConfirm: true
+      reset: true
+```
+
+`customRequestPort` and `mcpPort` make deployment `subdomain` values resolve to the configured HTTP API and MCP ports instead of the defaults. Do not set any manifest `localServer` port field to `0`; port `0` is only allowed when passed directly as a `golem server run` port flag.
+
+If it helps the test workflow to keep local server settings separate from the main manifest, use an included manifest fragment:
+
+```yaml
+includes:
+  - golem-local-server.yaml
+```
+
+Then define `localServer` in `golem-local-server.yaml`:
+
+```yaml
+localServer:
+  routerPort: 9881
+  customRequestPort: 9006
+  mcpPort: 9007
+  portsFile: .golem/ports.json
+  dataDir: .golem/data
+```
+
+`localServer` is a singleton across all manifest sources, so define it either in the main manifest or in the included file, not both. Include paths are relative to the manifest that declares `includes`; `localServer` path fields are relative to the manifest that declares `localServer`. If you load manifests explicitly with `--app`, pass every relevant manifest file because `includes` are only followed during normal auto-discovered manifest loading.
+
+## 5. Deploy Against the Test Environment
+
+From the application root, target the test environment by name:
+
+```shell
+golem -E test deploy
+```
+
+Because the environment sets `cli.autoConfirm: true` and `cli.reset: true`, this is equivalent to `golem deploy --yes --reset` — every test run gets a freshly redeployed application with no agents carried over from earlier runs.
+
+For faster iteration during test development, reuse the same server process across multiple deploys; `--reset` only deletes the agents and environment on the server, not the server itself.
+
+## 6. Send Requests From Tests
+
+Inside the test code, invoke agents either via the CLI or by calling the HTTP / MCP endpoints directly:
+
+- **Management / invocation API** — `http://localhost:<routerPort>` (also where `golem -E test agent invoke ...` connects).
+- **HTTP API endpoints** — `http://<deployment-subdomain>.localhost:<customRequestPort>/<your-route>`, for example `http://test-api.localhost:<customRequestPort>/<your-route>`.
+- **MCP** — `http://<deployment-subdomain>.localhost:<mcpPort>/mcp`, for example `http://test-mcp.localhost:<mcpPort>/mcp`.
+
+Use the `httpApi.deployments.test`, `mcp.deployments.test`, `secretDefaults.test`, and `retryPolicyDefaults.test` sections of `golem.yaml` to provide test-specific routing and configuration; these sections are keyed by environment name.
+
+```yaml
+httpApi:
+  deployments:
+    test:
+      - subdomain: test-api  # resolves to test-api.localhost:<customRequestPort>
+        agents:
+          MyAgent: {}
+
+mcp:
+  deployments:
+    test:
+      - subdomain: test-mcp  # resolves to test-mcp.localhost:<mcpPort>
+        agents:
+          MyAgent: {}
+
+secretDefaults:
+  test:
+    apiKey: "test-key"
+```
+
+## 7. Tear Down
+
+After the suite finishes:
+
+1. Send `SIGINT` / `SIGTERM` to the `golem server run` process.
+2. Optionally run `golem server clean --data-dir ./tests/fixtures/data` to wipe state, or just delete the directory.
+3. Remove `tests/fixtures/ports.json`.
+
+Do **not** rely on `golem server clean` with the *default* data directory from a test — that would delete the developer's local development state. Always pass `--data-dir` explicitly.
+
+## End-to-End Skeleton
+
+Pseudocode for a typical test harness:
+
+```text
+1. mkdir -p tests/fixtures/data
+2. spawn: golem server run --data-dir tests/fixtures/data \
+                          --router-port 0 --custom-request-port 0 --mcp-port 0 \
+                          --ports-file tests/fixtures/ports.json --clean
+3. wait until tests/fixtures/ports.json exists
+4. read ports from ports.json for direct runtime URLs
+5. deploy through a local environment configured with stable nonzero manifest ports when the test needs deployment subdomains
+6. run integration tests, using either stable subdomain URLs or direct discovered-port URLs
+7. terminate the server process and clean up tests/fixtures/data
+```
+
+## Common Pitfalls
+
+- **Sharing state with local dev** — forgetting `--data-dir` makes tests delete or pollute the developer's default data directory. Always pass `--data-dir` for tests.
+- **Race against startup** — sending requests before the server is ready. Use the `--ports-file` as the readiness signal; do not just `sleep`.
+- **Forgetting `cli.reset: true` (or `--reset`)** — old agents survive across test runs and silently serve stale code.
+- **Hard-coded ports in CI** — two test jobs on the same runner collide. Always bind to port `0` and read `ports.json`.
+- **Missing test preset** — without activating a `test` preset, agents run with production environment variables and external endpoints.
+- **Pointing `server:` at `cloud`** — never set the test environment to `cloud`. Tests should run against an isolated local server only.
+
+## Related Skills
+
+- Load `golem-local-dev-server` for the full reference of `golem server` flags and the data directory layout
+- Load `golem-profiles-and-environments` for how environments, presets, and profiles interact
+- Load `golem-edit-manifest` for the complete `golem.yaml` field reference
+- Load `golem-deploy` for deployment command details and flags
+- Load `golem-test-crash-recovery` for testing durable execution and crash recovery

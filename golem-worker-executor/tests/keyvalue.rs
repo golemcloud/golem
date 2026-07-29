@@ -98,6 +98,76 @@ async fn readwrite_get_returns_the_value_that_was_set(
 
 #[test]
 #[tracing::instrument]
+async fn readwrite_get_returns_the_value_that_was_set_using_async_body(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("KeyValue", "key-value-service-async-body-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let bucket = format!("{}-key-value-service-async-body-1-bucket", component.id);
+    let value = vec![1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8];
+    let expected = SchemaValue::Option {
+        inner: Some(Box::new(SchemaValue::List {
+            elements: value.iter().map(|byte| SchemaValue::U8(*byte)).collect(),
+        })),
+    };
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "set_using_async_body",
+            data_value!(bucket.clone(), "key", value.clone()),
+        )
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get",
+            data_value!(bucket.clone(), "key"),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    assert_eq!(result, expected);
+
+    // Crash the worker so the next invocation replays the recorded oplog first,
+    // verifying that the stream-based body write followed by the durable set is
+    // replay-stable
+    executor.simulated_crash(&worker_id).await?;
+
+    let result_after_crash = executor
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!(bucket, "key"))
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    assert_eq!(result_after_crash, expected);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn readwrite_get_fails_if_the_value_was_not_set(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

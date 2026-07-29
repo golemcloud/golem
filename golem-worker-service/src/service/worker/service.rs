@@ -28,11 +28,13 @@ use golem_api_grpc::proto::golem::worker::InvocationContext;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
-    AgentMode, AgentTypeName, GolemUserPrincipal, ParsedAgentId, Principal,
+    AgentMode, AgentTypeName, GolemUserPrincipal, InvocationFreshnessDisposition, ParsedAgentId,
+    Principal, ephemeral_invocation_phantom_id,
 };
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
     AgentMethodName, AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
+    StoredCard,
 };
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, PluginPriority,
@@ -72,6 +74,97 @@ fn build_public_agent_id(
         component_id,
         agent_id: agent_id.to_string(),
     })
+}
+
+fn build_public_invocation_agent_id(
+    component_id: ComponentId,
+    agent_type_name: AgentTypeName,
+    constructor_parameters: TypedSchemaValue,
+    phantom_id: Option<uuid::Uuid>,
+) -> WorkerResult<AgentId> {
+    let agent_id = ParsedAgentId::try_new(agent_type_name, constructor_parameters, phantom_id)
+        .map_err(|err| {
+            WorkerServiceError::TypeChecker(format!("Agent ID formatting error: {err}"))
+        })?;
+
+    Ok(AgentId {
+        component_id,
+        agent_id: agent_id.to_string(),
+    })
+}
+
+fn normalize_agent_invocation_identity(
+    component: &Component,
+    agent_id: &AgentId,
+    idempotency_key: Option<IdempotencyKey>,
+    allow_derived_ephemeral_phantom: bool,
+    observation_only: bool,
+    freshness_disposition: InvocationFreshnessDisposition,
+) -> WorkerResult<(AgentId, IdempotencyKey, InvocationFreshnessDisposition)> {
+    let key_was_supplied = idempotency_key.is_some();
+    let idempotency_key = idempotency_key.unwrap_or_else(IdempotencyKey::fresh);
+
+    let Ok(parsed_agent_id) = ParsedAgentId::parse(&agent_id.agent_id, &component.metadata) else {
+        return Ok((agent_id.clone(), idempotency_key, freshness_disposition));
+    };
+    let Some(agent_type) = component
+        .metadata
+        .find_agent_type_by_name_ref(&parsed_agent_id.agent_type)
+    else {
+        return Ok((agent_id.clone(), idempotency_key, freshness_disposition));
+    };
+
+    if agent_type.mode != AgentMode::Ephemeral {
+        return Ok((agent_id.clone(), idempotency_key, freshness_disposition));
+    }
+
+    if parsed_agent_id.phantom_id.is_some() {
+        if observation_only {
+            return Ok((
+                agent_id.clone(),
+                idempotency_key,
+                InvocationFreshnessDisposition::MayExist,
+            ));
+        }
+        if !allow_derived_ephemeral_phantom {
+            crate::metrics::record_ephemeral_explicit_phantom_invocation_rejection();
+            return Err(WorkerServiceError::TypeChecker(
+                "An ephemeral invocation cannot select a phantom ID; use the agent ID returned by an invocation only for observation and control operations"
+                    .to_string(),
+            ));
+        }
+        // This capability is only valid when a trusted internal caller forwards
+        // both an invocation-derived phantom and the supplied key that derived it.
+        if !key_was_supplied
+            || parsed_agent_id.phantom_id != Some(ephemeral_invocation_phantom_id(&idempotency_key))
+        {
+            crate::metrics::record_ephemeral_derived_phantom_mismatch_rejection();
+            return Err(WorkerServiceError::TypeChecker(
+                "The ephemeral invocation phantom ID does not match the identity derived from the invocation's idempotency key"
+                    .to_string(),
+            ));
+        }
+    }
+
+    let parsed_agent_id =
+        ParsedAgentId::try_new(parsed_agent_id.agent_type, parsed_agent_id.parameters, None)
+            .and_then(|logical_agent_id| {
+                logical_agent_id.with_ephemeral_invocation_phantom(&idempotency_key)
+            })
+            .map_err(|err| {
+                WorkerServiceError::TypeChecker(format!("Agent ID formatting error: {err}"))
+            })?;
+    let final_agent_id = AgentId::from_agent_id(agent_id.component_id, &parsed_agent_id)
+        .map_err(WorkerServiceError::TypeChecker)?;
+    let freshness_disposition =
+        if freshness_disposition == InvocationFreshnessDisposition::KnownFresh || !key_was_supplied
+        {
+            InvocationFreshnessDisposition::KnownFresh
+        } else {
+            InvocationFreshnessDisposition::MayExist
+        };
+
+    Ok((final_agent_id, idempotency_key, freshness_disposition))
 }
 
 fn agent_verb_for_invocation_mode(mode: i32) -> AgentVerb {
@@ -570,6 +663,34 @@ impl WorkerService {
         Ok(nodes)
     }
 
+    pub async fn get_agent_wallet(
+        &self,
+        agent_id: &AgentId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Vec<StoredCard>> {
+        let component = self
+            .component_service
+            .get_current_by_id(agent_id.component_id)
+            .await?;
+
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::View,
+            AgentResourcePattern::Any,
+        )?;
+
+        self.worker_client
+            .get_agent_wallet(
+                agent_id,
+                component.environment_id,
+                component.account_id,
+                auth_ctx,
+            )
+            .await
+    }
+
     pub async fn get_file_contents(
         &self,
         agent_id: &AgentId,
@@ -808,55 +929,116 @@ impl WorkerService {
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
         invocation_context: Option<InvocationContext>,
+        allow_derived_ephemeral_phantom: bool,
+        freshness_disposition: InvocationFreshnessDisposition,
+        config: Vec<AgentConfigEntryDto>,
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
         known_environment_id: Option<EnvironmentId>,
     ) -> WorkerResult<AgentInvocationOutput> {
-        let environment_id = match known_environment_id {
-            Some(id) => id,
-            None => {
-                self.component_service
-                    .get_current_by_id(agent_id.component_id)
-                    .await?
-                    .environment_id
-            }
-        };
-
         let component = self
             .component_service
             .get_current_by_id(agent_id.component_id)
             .await?;
-        authorize_agent_permission(
-            &auth_ctx,
+        let environment_id = known_environment_id.unwrap_or(component.environment_id);
+        let account_id = component.account_id;
+        self.dispatch_agent_invocation(
             &component,
             agent_id,
-            agent_verb_for_invocation_mode(mode),
-            method_name
-                .as_ref()
-                .map(|method_name| {
-                    AgentResourcePattern::Method(AgentMethodName(method_name.clone()))
-                })
-                .unwrap_or(AgentResourcePattern::Any),
-        )?;
+            method_name.clone(),
+            method_parameters,
+            mode,
+            schedule_at,
+            idempotency_key,
+            invocation_context,
+            allow_derived_ephemeral_phantom,
+            freshness_disposition,
+            config,
+            environment_id,
+            account_id,
+            auth_ctx.clone(),
+            principal,
+            |final_agent_id| {
+                authorize_agent_permission(
+                    &auth_ctx,
+                    &component,
+                    final_agent_id,
+                    agent_verb_for_invocation_mode(mode),
+                    method_name
+                        .as_ref()
+                        .map(|method_name| {
+                            AgentResourcePattern::Method(AgentMethodName(method_name.clone()))
+                        })
+                        .unwrap_or(AgentResourcePattern::Any),
+                )
+            },
+        )
+        .await
+    }
 
-        self.worker_client
-            .invoke_agent(
+    /// Shared invocation-dispatch core: normalizes the invocation identity,
+    /// authorizes against the final agent id, dispatches to the executor, and
+    /// backfills the final identity into the invocation output.
+    #[allow(clippy::too_many_arguments)]
+    async fn dispatch_agent_invocation(
+        &self,
+        component: &Component,
+        agent_id: &AgentId,
+        method_name: Option<String>,
+        method_parameters: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
+        mode: i32,
+        schedule_at: Option<::prost_types::Timestamp>,
+        idempotency_key: Option<IdempotencyKey>,
+        invocation_context: Option<InvocationContext>,
+        allow_derived_ephemeral_phantom: bool,
+        freshness_disposition: InvocationFreshnessDisposition,
+        config: Vec<AgentConfigEntryDto>,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx,
+        principal: golem_api_grpc::proto::golem::component::Principal,
+        authorize: impl FnOnce(&AgentId) -> WorkerResult<()>,
+    ) -> WorkerResult<AgentInvocationOutput> {
+        let observation_only =
+            mode == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32;
+        let (agent_id, idempotency_key, mut freshness_disposition) =
+            normalize_agent_invocation_identity(
+                component,
                 agent_id,
+                idempotency_key,
+                allow_derived_ephemeral_phantom,
+                observation_only,
+                freshness_disposition,
+            )?;
+        if observation_only {
+            freshness_disposition = InvocationFreshnessDisposition::MayExist;
+        }
+        authorize(&agent_id)?;
+
+        let mut output = self
+            .worker_client
+            .invoke_agent(
+                &agent_id,
                 method_name,
                 method_parameters,
                 mode,
                 schedule_at,
-                idempotency_key,
+                Some(idempotency_key.clone()),
                 invocation_context,
+                freshness_disposition,
+                config,
                 environment_id,
-                component.account_id,
+                account_id,
                 auth_ctx,
                 principal,
             )
-            .await
+            .await?;
+        output.agent_id.get_or_insert(agent_id);
+        output.idempotency_key.get_or_insert(idempotency_key);
+        Ok(output)
     }
 
-    /// REST/JSON path: resolves agent via registry, converts JSON parameters, then creates the agent.
+    /// REST path: resolves the agent via the registry, validates its parameters, then creates it.
     pub async fn create_agent_rest(
         &self,
         request: CreateAgentRequest,
@@ -924,7 +1106,7 @@ impl WorkerService {
         })
     }
 
-    /// REST/JSON path: resolves agent via registry, converts JSON parameters, then delegates.
+    /// REST path: resolves the agent via the registry, validates its parameters, then delegates.
     pub async fn invoke_agent_rest(
         &self,
         request: AgentInvocationRequest,
@@ -986,13 +1168,19 @@ impl WorkerService {
             ))
         })?;
 
-        let agent_id = build_public_agent_id(
+        let agent_id = build_public_invocation_agent_id(
             component_id,
             request.agent_type_name.clone(),
             constructor_parameters,
             request.phantom_id,
-            agent_type.mode,
         )?;
+        let component = self
+            .component_service
+            .get_revision(
+                component_id,
+                registered_agent_type.implemented_by.component_revision,
+            )
+            .await?;
 
         let component_name = registered_agent_type.implemented_by.component_name.clone();
         let component_owner_account_id = registered_agent_type.implemented_by.account_id;
@@ -1047,35 +1235,48 @@ impl WorkerService {
         let method_name = request.method_name.clone();
         let agent_type_name = request.agent_type_name.clone();
 
-        auth.authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
-            owner: AgentOwnerPattern::Agent {
-                account: component_owner_account_email,
-                application: request.app_name,
-                environment: request.env_name,
-                component: ComponentName(component_name),
-                agent: AgentOwnerLeafPattern::Agent(agent_id.agent_id.clone()),
-            },
-            verb: Some(AgentVerb::Invoke),
-            resource: AgentResourcePattern::Method(AgentMethodName(method_name.clone())),
-        }))
-        .map_err(AuthServiceError::from)?;
-
         let output = self
-            .worker_client
-            .invoke_agent(
+            .dispatch_agent_invocation(
+                &component,
                 &agent_id,
                 Some(method_name.clone()),
                 Some(proto_method_parameters),
                 proto_mode,
                 proto_schedule_at,
-                request.idempotency_key,
+                request.idempotency_key.clone(),
                 None,
+                false,
+                InvocationFreshnessDisposition::MayExist,
+                request.config,
                 environment_id,
                 component_owner_account_id,
-                auth,
+                auth.clone(),
                 principal,
+                |final_agent_id| {
+                    auth.authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
+                        owner: AgentOwnerPattern::Agent {
+                            account: component_owner_account_email,
+                            application: request.app_name,
+                            environment: request.env_name,
+                            component: ComponentName(component_name),
+                            agent: AgentOwnerLeafPattern::Agent(final_agent_id.agent_id.clone()),
+                        },
+                        verb: Some(AgentVerb::Invoke),
+                        resource: AgentResourcePattern::Method(AgentMethodName(
+                            method_name.clone(),
+                        )),
+                    }))
+                    .map_err(AuthServiceError::from)
+                    .map_err(WorkerServiceError::from)
+                },
             )
             .await?;
+
+        let response_agent_id = output.agent_id.clone().unwrap_or_else(|| agent_id.clone());
+        let response_idempotency_key = output
+            .idempotency_key
+            .clone()
+            .ok_or_else(|| WorkerServiceError::Internal("Missing idempotency key".to_string()))?;
 
         match output.result {
             golem_common::model::AgentInvocationResult::AgentMethod {
@@ -1113,13 +1314,15 @@ impl WorkerService {
                     .unwrap_or_else(|| SchemaType::tuple(Vec::new()));
                 let typed_output = TypedSchemaValue::new(output_graph, output_value);
                 Ok(AgentInvocationResult {
-                    agent_id: agent_id.clone(),
+                    agent_id: response_agent_id,
+                    idempotency_key: response_idempotency_key,
                     result: Some(typed_output),
                     component_revision: Some(decode_revision),
                 })
             }
             _ => Ok(AgentInvocationResult {
-                agent_id,
+                agent_id: response_agent_id,
+                idempotency_key: response_idempotency_key,
                 result: None,
                 component_revision: output.component_revision,
             }),
@@ -1129,13 +1332,16 @@ impl WorkerService {
 
 #[cfg(test)]
 mod tests {
-    use super::{WorkerService, agent_verb_for_invocation_mode};
+    use super::{
+        WorkerService, agent_verb_for_invocation_mode, build_public_agent_id,
+        build_public_invocation_agent_id, normalize_agent_invocation_identity,
+    };
     use crate::api::agents::{AgentInvocationMode, AgentInvocationRequest, CreateAgentRequest};
     use crate::service::agent_resolution_cache::AgentResolutionCache;
     use crate::service::auth::{AuthService, AuthServiceError};
     use crate::service::component::{ComponentService, ComponentServiceError};
     use crate::service::limit::{LimitService, LimitServiceError};
-    use crate::service::worker::{WorkerClient, WorkerResult, WorkerStream};
+    use crate::service::worker::{WorkerClient, WorkerResult, WorkerServiceError, WorkerStream};
     use async_trait::async_trait;
     use bytes::Bytes;
     use chrono::Utc;
@@ -1146,11 +1352,12 @@ mod tests {
     use golem_common::model::Empty;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::{
-        AgentMode, AgentTypeName, HttpEndpointDetails, RegisteredAgentType,
-        RegisteredAgentTypeImplementer, ResolvedAgentType, Snapshotting,
+        AgentMode, AgentTypeName, HttpEndpointDetails, InvocationFreshnessDisposition,
+        ParsedAgentId, Principal, RegisteredAgentType, RegisteredAgentTypeImplementer,
+        ResolvedAgentType, Snapshotting, ephemeral_invocation_phantom_id,
     };
     use golem_common::model::application::{ApplicationId, ApplicationName};
-    use golem_common::model::card::AgentVerb;
+    use golem_common::model::card::{AgentVerb, StoredCard};
     use golem_common::model::component::{
         CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, PluginPriority,
     };
@@ -1163,7 +1370,7 @@ mod tests {
     use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
     use golem_common::schema::{
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
-        SchemaGraph,
+        SchemaGraph, SchemaValue,
     };
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
     use golem_service_base::model::auth::AuthCtx;
@@ -1175,6 +1382,217 @@ mod tests {
     use std::time::Duration;
     use test_r::test;
     use uuid::Uuid;
+
+    fn empty_constructor_parameters() -> golem_common::schema::TypedSchemaValue {
+        golem_common::schema::TypedSchemaValue::new(
+            SchemaGraph::anonymous(golem_common::schema::SchemaType::record(vec![])),
+            golem_common::schema::SchemaValue::Record { fields: vec![] },
+        )
+    }
+
+    struct TestAgentTypeResolver(AgentMode);
+
+    impl golem_common::model::agent::AgentTypeSchemaResolver for TestAgentTypeResolver {
+        fn resolve_agent_type_schema_by_name(
+            &self,
+            name: &AgentTypeName,
+        ) -> Result<AgentTypeSchema, String> {
+            Ok(test_agent_type(name.clone(), self.0))
+        }
+    }
+
+    #[test]
+    fn public_ephemeral_agent_id_gets_automatic_phantom() {
+        let id = build_public_agent_id(
+            ComponentId::new(),
+            AgentTypeName("test".into()),
+            empty_constructor_parameters(),
+            None,
+            AgentMode::Ephemeral,
+        )
+        .unwrap();
+
+        assert!(
+            ParsedAgentId::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Ephemeral))
+                .unwrap()
+                .phantom_id
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn public_durable_agent_id_does_not_get_automatic_phantom() {
+        let id = build_public_agent_id(
+            ComponentId::new(),
+            AgentTypeName("test".into()),
+            empty_constructor_parameters(),
+            None,
+            AgentMode::Durable,
+        )
+        .unwrap();
+
+        assert!(
+            ParsedAgentId::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Durable))
+                .unwrap()
+                .phantom_id
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn public_agent_id_preserves_supplied_phantom() {
+        let phantom = Uuid::new_v4();
+        let id = build_public_agent_id(
+            ComponentId::new(),
+            AgentTypeName("test".into()),
+            empty_constructor_parameters(),
+            Some(phantom),
+            AgentMode::Ephemeral,
+        )
+        .unwrap();
+
+        assert_eq!(
+            ParsedAgentId::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Ephemeral))
+                .unwrap()
+                .phantom_id,
+            Some(phantom)
+        );
+    }
+
+    #[test]
+    fn public_durable_agent_id_preserves_supplied_phantom() {
+        let phantom = Uuid::new_v4();
+        let id = build_public_agent_id(
+            ComponentId::new(),
+            AgentTypeName("test".into()),
+            empty_constructor_parameters(),
+            Some(phantom),
+            AgentMode::Durable,
+        )
+        .unwrap();
+
+        assert_eq!(
+            ParsedAgentId::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Durable))
+                .unwrap()
+                .phantom_id,
+            Some(phantom)
+        );
+    }
+
+    #[test]
+    fn generated_ephemeral_phantom_not_matching_the_invocation_identity_is_rejected() {
+        let component_id = ComponentId::new();
+        let environment_id = EnvironmentId::new();
+        let account_id = AccountId::new();
+        let component_revision = ComponentRevision::INITIAL;
+        let agent_type_name = AgentTypeName("test".to_string());
+        let original_phantom = Uuid::new_v4();
+        let agent_id = build_public_agent_id(
+            component_id,
+            agent_type_name.clone(),
+            empty_constructor_parameters(),
+            Some(original_phantom),
+            AgentMode::Ephemeral,
+        )
+        .unwrap();
+        let component = test_component(
+            component_id,
+            environment_id,
+            account_id,
+            component_revision,
+            test_agent_type(agent_type_name, AgentMode::Ephemeral),
+        );
+
+        let result = normalize_agent_invocation_identity(
+            &component,
+            &agent_id,
+            None,
+            true,
+            false,
+            InvocationFreshnessDisposition::MayExist,
+        );
+
+        assert!(matches!(result, Err(WorkerServiceError::TypeChecker(_))));
+    }
+
+    #[test]
+    fn generated_ephemeral_phantom_matching_the_invocation_identity_is_accepted() {
+        let component_id = ComponentId::new();
+        let environment_id = EnvironmentId::new();
+        let account_id = AccountId::new();
+        let component_revision = ComponentRevision::INITIAL;
+        let agent_type_name = AgentTypeName("test".to_string());
+        let idempotency_key = IdempotencyKey::fresh();
+        let derived_phantom = ephemeral_invocation_phantom_id(&idempotency_key);
+        let agent_id = build_public_agent_id(
+            component_id,
+            agent_type_name.clone(),
+            empty_constructor_parameters(),
+            Some(derived_phantom),
+            AgentMode::Ephemeral,
+        )
+        .unwrap();
+        let component = test_component(
+            component_id,
+            environment_id,
+            account_id,
+            component_revision,
+            test_agent_type(agent_type_name, AgentMode::Ephemeral),
+        );
+
+        let (final_agent_id, final_idempotency_key, freshness_disposition) =
+            normalize_agent_invocation_identity(
+                &component,
+                &agent_id,
+                Some(idempotency_key.clone()),
+                true,
+                false,
+                InvocationFreshnessDisposition::KnownFresh,
+            )
+            .unwrap();
+
+        assert_eq!(phantom_id(&final_agent_id), Some(derived_phantom));
+        assert_eq!(final_idempotency_key, idempotency_key);
+        assert_eq!(
+            freshness_disposition,
+            InvocationFreshnessDisposition::KnownFresh
+        );
+    }
+
+    #[test]
+    fn matching_ephemeral_phantom_requires_explicit_capability() {
+        let component_id = ComponentId::new();
+        let environment_id = EnvironmentId::new();
+        let account_id = AccountId::new();
+        let agent_type_name = AgentTypeName("test".to_string());
+        let idempotency_key = IdempotencyKey::fresh();
+        let agent_id = build_public_agent_id(
+            component_id,
+            agent_type_name.clone(),
+            empty_constructor_parameters(),
+            Some(ephemeral_invocation_phantom_id(&idempotency_key)),
+            AgentMode::Ephemeral,
+        )
+        .unwrap();
+        let component = test_component(
+            component_id,
+            environment_id,
+            account_id,
+            ComponentRevision::INITIAL,
+            test_agent_type(agent_type_name, AgentMode::Ephemeral),
+        );
+
+        let result = normalize_agent_invocation_identity(
+            &component,
+            &agent_id,
+            Some(idempotency_key),
+            false,
+            false,
+            InvocationFreshnessDisposition::MayExist,
+        );
+
+        assert!(matches!(result, Err(WorkerServiceError::TypeChecker(_))));
+    }
 
     #[derive(Clone)]
     struct TestRegistryService {
@@ -1424,7 +1842,7 @@ mod tests {
 
     struct RecordingWorkerClient {
         created_agent_ids: Mutex<Vec<AgentId>>,
-        invoked_agent_ids: Mutex<Vec<AgentId>>,
+        invocations: Mutex<Vec<(AgentId, IdempotencyKey, InvocationFreshnessDisposition)>>,
         invocation_output: AgentInvocationOutput,
     }
 
@@ -1432,7 +1850,7 @@ mod tests {
         fn new(invocation_output: AgentInvocationOutput) -> Self {
             Self {
                 created_agent_ids: Mutex::new(Vec::new()),
-                invoked_agent_ids: Mutex::new(Vec::new()),
+                invocations: Mutex::new(Vec::new()),
                 invocation_output,
             }
         }
@@ -1442,7 +1860,11 @@ mod tests {
         }
 
         fn invoked_agent_id(&self) -> AgentId {
-            self.invoked_agent_ids.lock().unwrap()[0].clone()
+            self.invocations.lock().unwrap()[0].0.clone()
+        }
+
+        fn invocations(&self) -> Vec<(AgentId, IdempotencyKey, InvocationFreshnessDisposition)> {
+            self.invocations.lock().unwrap().clone()
         }
     }
 
@@ -1581,6 +2003,16 @@ mod tests {
             unimplemented!()
         }
 
+        async fn get_agent_wallet(
+            &self,
+            _: &AgentId,
+            _: EnvironmentId,
+            _: AccountId,
+            _: AuthCtx,
+        ) -> WorkerResult<Vec<StoredCard>> {
+            unimplemented!()
+        }
+
         async fn get_file_contents(
             &self,
             _: &AgentId,
@@ -1653,17 +2085,20 @@ mod tests {
             _: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
             _: i32,
             _: Option<::prost_types::Timestamp>,
-            _: Option<IdempotencyKey>,
+            idempotency_key: Option<IdempotencyKey>,
             _: Option<InvocationContext>,
+            freshness_disposition: InvocationFreshnessDisposition,
+            _: Vec<AgentConfigEntryDto>,
             _: EnvironmentId,
             _: AccountId,
             _: AuthCtx,
             _: golem_api_grpc::proto::golem::component::Principal,
         ) -> WorkerResult<AgentInvocationOutput> {
-            self.invoked_agent_ids
-                .lock()
-                .unwrap()
-                .push(agent_id.clone());
+            self.invocations.lock().unwrap().push((
+                agent_id.clone(),
+                idempotency_key.expect("worker service should supply an idempotency key"),
+                freshness_disposition,
+            ));
             Ok(self.invocation_output.clone())
         }
 
@@ -1712,6 +2147,8 @@ mod tests {
                 consumed_fuel: None,
                 invocation_status: None,
                 component_revision: Some(component_revision),
+                agent_id: None,
+                idempotency_key: None,
                 oplog_index: None,
                 agent_fingerprint: None,
             }));
@@ -1772,6 +2209,7 @@ mod tests {
                 agent_type_name: self.agent_type_name.clone(),
                 parameters: empty_json_tuple(),
                 phantom_id: None,
+                config: vec![],
                 method_name: "run".to_string(),
                 method_parameters: empty_json_tuple(),
                 mode: AgentInvocationMode::Await,
@@ -1854,11 +2292,8 @@ mod tests {
         }
     }
 
-    fn empty_json_tuple() -> serde_json::Value {
-        // Schema-native `SchemaValue::Record { fields: [] }` (adjacently tagged
-        // `kind`/`value`), i.e. the empty parameter record the REST invoke path
-        // now expects.
-        serde_json::json!({ "kind": "record", "value": { "fields": [] } })
+    fn empty_json_tuple() -> SchemaValue {
+        SchemaValue::Record { fields: vec![] }
     }
 
     fn phantom_id(agent_id: &AgentId) -> Option<Uuid> {
@@ -1922,6 +2357,134 @@ mod tests {
         );
         assert_eq!(response.agent_id, harness.worker_client.invoked_agent_id());
         assert!(phantom_id(&response.agent_id).is_some());
+        let invocations = harness.worker_client.invocations();
+        assert_eq!(invocations.len(), 1);
+        assert_eq!(response.idempotency_key, invocations[0].1);
+        assert_eq!(invocations[0].2, InvocationFreshnessDisposition::KnownFresh);
+        assert_eq!(
+            phantom_id(&invocations[0].0),
+            Some(ephemeral_invocation_phantom_id(&invocations[0].1))
+        );
+    }
+
+    #[test]
+    async fn ephemeral_rest_invocations_get_fresh_identities_per_request() {
+        let harness = RestHarness::new(AgentMode::Ephemeral);
+
+        let first = harness
+            .worker_service
+            .invoke_agent_rest(harness.invoke_request(), AuthCtx::system())
+            .await
+            .unwrap();
+        let second = harness
+            .worker_service
+            .invoke_agent_rest(harness.invoke_request(), AuthCtx::system())
+            .await
+            .unwrap();
+
+        let invocations = harness.worker_client.invocations();
+        assert_eq!(invocations.len(), 2);
+        assert_ne!(invocations[0].1, invocations[1].1);
+        assert_ne!(invocations[0].0, invocations[1].0);
+        assert_eq!(first.agent_id, invocations[0].0);
+        assert_eq!(first.idempotency_key, invocations[0].1);
+        assert_eq!(second.agent_id, invocations[1].0);
+        assert_eq!(second.idempotency_key, invocations[1].1);
+        assert!(
+            invocations
+                .iter()
+                .all(|invocation| invocation.2 == InvocationFreshnessDisposition::KnownFresh)
+        );
+    }
+
+    #[test]
+    async fn caller_supplied_key_derives_stable_ephemeral_identity_conservatively() {
+        let harness = RestHarness::new(AgentMode::Ephemeral);
+        let idempotency_key = IdempotencyKey::new("caller-selected-key".to_string());
+        let mut request = harness.invoke_request();
+        request.idempotency_key = Some(idempotency_key.clone());
+
+        harness
+            .worker_service
+            .invoke_agent_rest(request.clone(), AuthCtx::system())
+            .await
+            .unwrap();
+        harness
+            .worker_service
+            .invoke_agent_rest(request, AuthCtx::system())
+            .await
+            .unwrap();
+
+        let invocations = harness.worker_client.invocations();
+        assert_eq!(invocations.len(), 2);
+        assert_eq!(invocations[0].0, invocations[1].0);
+        assert_eq!(invocations[0].1, idempotency_key);
+        assert_eq!(invocations[1].1, idempotency_key);
+        assert!(
+            invocations
+                .iter()
+                .all(|invocation| invocation.2 == InvocationFreshnessDisposition::MayExist)
+        );
+    }
+
+    #[test]
+    async fn explicit_ephemeral_phantom_is_rejected_for_invocation() {
+        let harness = RestHarness::new(AgentMode::Ephemeral);
+        let explicit_phantom = Uuid::new_v4();
+        let mut request = harness.invoke_request();
+        request.phantom_id = Some(explicit_phantom);
+
+        let result = harness
+            .worker_service
+            .invoke_agent_rest(request, AuthCtx::system())
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(WorkerServiceError::TypeChecker(message))
+                if message.starts_with("An ephemeral invocation cannot select a phantom ID")
+        ));
+        assert!(harness.worker_client.invocations().is_empty());
+    }
+
+    #[test]
+    async fn ephemeral_lookup_accepts_the_final_invocation_identity() {
+        let harness = RestHarness::new(AgentMode::Ephemeral);
+        let final_phantom_id = Uuid::new_v4();
+        let idempotency_key = IdempotencyKey::fresh();
+        let agent_id = build_public_invocation_agent_id(
+            harness.component_id,
+            harness.agent_type_name.clone(),
+            empty_constructor_parameters(),
+            Some(final_phantom_id),
+        )
+        .unwrap();
+
+        harness
+            .worker_service
+            .invoke_agent(
+                &agent_id,
+                None,
+                None,
+                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
+                None,
+                Some(idempotency_key.clone()),
+                None,
+                false,
+                InvocationFreshnessDisposition::MayExist,
+                Vec::new(),
+                AuthCtx::system(),
+                Principal::anonymous().into(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let invocations = harness.worker_client.invocations();
+        assert_eq!(invocations.len(), 1);
+        assert_eq!(invocations[0].0, agent_id);
+        assert_eq!(invocations[0].1, idempotency_key);
+        assert_eq!(invocations[0].2, InvocationFreshnessDisposition::MayExist);
     }
 
     #[test]

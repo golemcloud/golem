@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use golem_rust::agentic::{BaseAgent, MultimodalAdvanced, Multimodal, UnstructuredBinary, UnstructuredText};
 use golem_rust::{agent_definition, agent_implementation, description};
-use golem_rust::wasip2::clocks::wall_clock::Datetime;
+use golem_rust::ScheduledTime;
 
 use model::*;
 
@@ -129,7 +129,7 @@ impl FooAgent for FooAgentImpl {
     }
 
     async fn fun_string_later(&self, string: String) {
-        self.client.schedule_fun_string(string, Datetime { seconds: 1, nanoseconds: 1 });
+        self.client.schedule_fun_string(string, ScheduledTime { seconds: 1, nanoseconds: 1 });
     }
 
     async fn fun_u8(&mut self, number: u8) -> u8 {

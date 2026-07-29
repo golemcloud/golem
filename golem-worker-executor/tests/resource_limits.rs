@@ -186,11 +186,14 @@ async fn concurrent_agent_limit_waits_for_running_agent_to_finish(
     let context = TestContext::new(last_unique_id);
     let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
 
-    // HTTP server that gates its /poll response behind a Notify.
+    // HTTP server that gates its /poll response behind a zero-permit semaphore.
     // HttpClient2.start_polling polls GET /poll until the body equals "done".
-    // By holding the Notify unreleased we keep a1 in the Running state
-    // for as long as needed, preventing eviction and holding the only permit.
-    let gate = std::sync::Arc::new(tokio::sync::Notify::new());
+    // The handler blocks acquiring a permit, so by withholding the permit we keep
+    // a1 in the Running state for as long as needed, preventing eviction and
+    // holding the only permit. A semaphore is used rather than a Notify so the
+    // release is not sensitive to whether the request's waiter is registered
+    // before the release call.
+    let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
     let gate_clone = gate.clone();
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
     let port = listener.local_addr()?.port();
@@ -200,7 +203,10 @@ async fn concurrent_agent_limit_waits_for_running_agent_to_finish(
             get(move || {
                 let gate = gate_clone.clone();
                 async move {
-                    gate.notified().await;
+                    gate.acquire()
+                        .await
+                        .expect("gate semaphore closed")
+                        .forget();
                     "done".to_string()
                 }
             }),
@@ -259,7 +265,7 @@ async fn concurrent_agent_limit_waits_for_running_agent_to_finish(
     // Release the gate — a1's poll loop returns "done", its invocation
     // completes, and its permit is returned to the semaphore via Drop.
     // This unblocks a2 from WaitingForPermit.
-    gate.notify_waiters();
+    gate.add_permits(1);
 
     // Wait for a1 to become Idle (invocation done, permit released).
     executor
@@ -320,7 +326,13 @@ async fn concurrent_agent_idle_releases_permit(
     let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
 
     // --- HTTP gate: keeps a1 provably Running until we release it. ---
-    let gate = std::sync::Arc::new(tokio::sync::Notify::new());
+    // A zero-permit semaphore is used rather than a Notify so the release is not
+    // sensitive to whether the request's waiter is registered before the release
+    // call: a permit added before the handler reaches `acquire` is simply waiting
+    // for it. The handler blocks on `acquire` and only returns once the test adds
+    // a permit, so a1 stays Running (blocked in /poll) until then regardless of
+    // how the runner schedules the tasks.
+    let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
     let gate_clone = gate.clone();
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
     let port = listener.local_addr()?.port();
@@ -330,7 +342,12 @@ async fn concurrent_agent_idle_releases_permit(
             get(move || {
                 let gate = gate_clone.clone();
                 async move {
-                    gate.notified().await;
+                    // Consume one permit permanently so a single added permit
+                    // releases exactly one poll, not a recycled one.
+                    gate.acquire()
+                        .await
+                        .expect("gate semaphore closed")
+                        .forget();
                     "done".to_string()
                 }
             }),
@@ -387,7 +404,7 @@ async fn concurrent_agent_idle_releases_permit(
     // Release the gate. a1's poll returns "done", invocation completes, a1 goes Idle.
     // With the fix: Idle transition drops the permit → semaphore notifies a2 → a2 starts.
     // With the bug: a1 stays Idle but holds permit → a2 remains blocked forever.
-    gate.notify_waiters();
+    gate.add_permits(1);
 
     // a2 should now be unblocked (fix) or remain stuck (bug).
     // Give it 15 seconds — well beyond what starting a counter agent takes.

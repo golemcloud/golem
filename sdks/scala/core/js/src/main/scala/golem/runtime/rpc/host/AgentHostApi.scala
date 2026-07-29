@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -25,7 +25,7 @@ import scala.annotation.unused
 import scala.scalajs.js
 import scala.scalajs.js.BigInt
 import scala.scalajs.js.JSConverters._
-import scala.scalajs.js.annotation.{JSImport, JSName}
+import scala.scalajs.js.annotation.JSImport
 import scala.scalajs.js.typedarray.Uint8Array
 
 object AgentHostApi {
@@ -67,26 +67,7 @@ object AgentHostApi {
 
   @js.native
   trait GetPromiseResultHandle extends js.Object {
-    def subscribe(): Pollable = js.native
-
-    /**
-     * Returns `Uint8Array` if the promise is completed, or `undefined` if not
-     * yet.
-     */
-    def get(): js.UndefOr[Uint8Array] = js.native
-  }
-
-  @js.native
-  trait Pollable extends js.Object {
-    def ready(): Boolean = js.native
-
-    def block(): Unit = js.native
-
-    /**
-     * Converts this WASI pollable into a JS Promise that resolves when ready.
-     */
-    @JSName("promise")
-    def promise(): js.Promise[Unit] = js.native
+    def get(): js.Promise[Uint8Array] = js.native
   }
 
   final case class AgentIdParts(agentTypeName: String, payload: JsTypedSchemaValue, phantom: Option[Uuid])

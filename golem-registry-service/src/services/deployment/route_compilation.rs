@@ -200,6 +200,7 @@ pub fn add_agent_method_http_routes(
                     component_id: implementer.component_id,
                     component_revision: implementer.component_revision,
                     agent_type: agent.type_name.clone(),
+                    agent_mode: agent.mode,
                     method_name: agent_method.name.clone(),
                     phantom: http_mount.phantom_agent || agent.mode == AgentMode::Ephemeral,
                     constructor_input: constructor_input.clone(),
@@ -880,7 +881,7 @@ mod tests {
         }
     }
 
-    fn compiled_phantom_flag(mode: AgentMode, phantom_agent: bool) -> bool {
+    fn compiled_call_agent_behaviour(mode: AgentMode, phantom_agent: bool) -> CallAgentBehaviour {
         let environment_id = EnvironmentId(Uuid::new_v4());
         let environment = test_environment(environment_id);
         let deployment = test_deployment(environment_id);
@@ -921,7 +922,7 @@ mod tests {
             panic!("expected call-agent route");
         };
 
-        call_agent.phantom
+        call_agent
     }
 
     fn test_deployment_with_openapi(openapi_endpoint: &str) -> HttpApiDeployment {
@@ -1060,6 +1061,7 @@ mod tests {
                     component_revision:
                         golem_common::model::component::ComponentRevision::try_from(0u64).unwrap(),
                     agent_type: AgentTypeName("note-agent".to_string()),
+                    agent_mode: AgentMode::Durable,
                     constructor_input: empty_compiled_input(),
                     constructor_parameters: vec![],
                     phantom: false,
@@ -1096,6 +1098,7 @@ mod tests {
                     component_revision:
                         golem_common::model::component::ComponentRevision::try_from(0u64).unwrap(),
                     agent_type: AgentTypeName("note-agent".to_string()),
+                    agent_mode: AgentMode::Durable,
                     constructor_input: empty_compiled_input(),
                     constructor_parameters: vec![],
                     phantom: false,
@@ -1163,12 +1166,16 @@ mod tests {
 
     #[test]
     fn ephemeral_agents_force_http_routes_to_be_phantom() {
-        assert!(compiled_phantom_flag(AgentMode::Ephemeral, false));
+        let behaviour = compiled_call_agent_behaviour(AgentMode::Ephemeral, false);
+        assert!(behaviour.phantom);
+        assert_eq!(behaviour.agent_mode, AgentMode::Ephemeral);
     }
 
     #[test]
     fn durable_agents_keep_explicit_http_phantom_flag() {
-        assert!(compiled_phantom_flag(AgentMode::Durable, true));
+        let behaviour = compiled_call_agent_behaviour(AgentMode::Durable, true);
+        assert!(behaviour.phantom);
+        assert_eq!(behaviour.agent_mode, AgentMode::Durable);
     }
 
     fn run_route_compilation_for_warnings(agent: AgentTypeSchema) -> Vec<DeployValidationWarning> {

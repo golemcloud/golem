@@ -19,33 +19,52 @@ The first step of calling a remote agent is creating a _client_ for it by specif
 In the following example, we have two agents defined; a weather agent with a constructor parameter identifying a location, and another example agent creating and calling this weather agent.
 
         ```typescript
-        @agent()
-        class WeatherAgent extends BaseAgent {
-            constructor(location: string) {
-                super();
-                // ...
-            }
+        import { z } from 'zod';
+        import { defineAgent, method, clientFor } from '@golemcloud/golem-ts-sdk';
 
-            @description("Gets the current weather")
-            async currentWeather(): Promise<string> {
-                // ...
-            }
-        }
+        export const WeatherAgent = defineAgent({
+            name: 'WeatherAgent',
+            id: { location: z.string() },
+            methods: {
+                currentWeather: method({
+                    input: {},
+                    returns: z.string(),
+                    description: "Gets the current weather",
+                }),
+            },
+        });
 
-        @agent()
-        class ExampleAgent extends BaseAgent {
-            constructor() {
-                super();
-            }
+        export const WeatherAgentImpl = WeatherAgent.implement({
+            init: () => ({}),
+            methods: {
+                currentWeather() {
+                    // ...
+                    return "";
+                },
+            },
+        });
 
-            async run() {
-                const weatherInLondon = WeatherAgent.get("London")
-                // ...
-            }
-        }
+        export const ExampleAgent = defineAgent({
+            name: 'ExampleAgent',
+            id: {},
+            methods: {
+                run: method({ input: {}, returns: z.string() }),
+            },
+        });
+
+        export const ExampleAgentImpl = ExampleAgent.implement({
+            init: () => ({}),
+            methods: {
+                async run() {
+                    const weatherInLondon = clientFor(WeatherAgent)({ location: "London" });
+                    // ...
+                    return "";
+                },
+            },
+        });
         ```
 
-        Here `weatherInLondon` is the client for calling a remote `WeatherAgent` - it exposes the agent methods, such as `currentWeather` as its own methods.
+        Here `weatherInLondon` is the client for calling a remote `WeatherAgent`, obtained with `clientFor(WeatherAgent)` and the target agent's id record - it exposes the agent methods, such as `currentWeather` as its own methods.
     </Tabs.Tab>
 
     <Tabs.Tab>
@@ -200,7 +219,7 @@ Phantom agents are created through Agent-to-Agent communication or [forking](for
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
   <Tabs.Tab>
   ```typescript
-  const phantomAgent = WeatherAgent.newPhantom("London")
+  const { client: phantomAgent, phantomId } = clientFor(WeatherAgent).newPhantom({ location: "London" });
   ```
   </Tabs.Tab>
   <Tabs.Tab>
@@ -225,9 +244,8 @@ If we know the **phantom ID** of an agent, we can create a client targeting an e
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
   <Tabs.Tab>
   ```typescript
-  const phantomAgent = WeatherAgent.newPhantom("London")
-  const phantomId = (await phantomAgent.phantomId())!;
-  const samePhantomAgent = WeatherAgent.getPhantom(phantomId, "London");
+  const { client: phantomAgent, phantomId } = clientFor(WeatherAgent).newPhantom({ location: "London" });
+  const samePhantomAgent = clientFor(WeatherAgent)({ location: "London" }, phantomId);
   ```
   </Tabs.Tab>
   <Tabs.Tab>
@@ -290,8 +308,8 @@ It is possible to trigger the remote execution of an agent method without awaiti
     To trigger an agent method and return immediately, use the `trigger` method exposed on each remote method in the client:
 
     ```typescript
-    const remoteAgent = BackgroundTaskAgent.get(backgroundJobId);
-    remoteAgent.runTask.trigger("hello", 1234);
+    const remoteAgent = clientFor(BackgroundTaskAgent)({ jobId: backgroundJobId });
+    remoteAgent.runTask.trigger({ message: "hello", count: 1234 });
     ```
     </Tabs.Tab>
 
@@ -333,8 +351,8 @@ An advanced case of triggering the execution of an agent method is to **schedule
     Similar to `.trigger`, there is a `.schedule` method as well on each remote agent method in the client:
 
     ```typescript
-    const remoteAgent = BackgroundTaskAgent.get(backgroundJobId);
-    remoteAgent.runTask.schedule({ seconds: 60n, nanoseconds: 0 }, "hello", 1234);
+    const remoteAgent = clientFor(BackgroundTaskAgent)({ jobId: backgroundJobId });
+    remoteAgent.runTask.schedule({ seconds: 60n, nanoseconds: 0 }, { message: "hello", count: 1234 });
     ```
 
     Here the first parameter is a `Datetime` object, with seconds and nanoseconds fields representing the UNIX Epoch time when the method should be executed. In TypeScript, `seconds` is a `bigint`. The rest of the parameters are the same as for the original method.

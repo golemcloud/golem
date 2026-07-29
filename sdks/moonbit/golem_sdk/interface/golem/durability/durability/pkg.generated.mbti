@@ -5,8 +5,7 @@ import {
   "golemcloud/golem_sdk/interface/golem/api/host",
   "golemcloud/golem_sdk/interface/golem/api/oplog",
   "golemcloud/golem_sdk/interface/golem/core/types",
-  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
-  "golemcloud/golem_sdk/interface/wasi/io/poll",
+  "golemcloud/golem_sdk/interface/wasi/clocks/system-clock",
 }
 
 // Values
@@ -30,12 +29,6 @@ pub(all) struct DurableExecutionState {
   persistence_level : @host.PersistenceLevel
 } derive(Eq, Show)
 
-pub(all) struct LazyInitializedPollable(Int) derive(Eq, Show)
-pub fn LazyInitializedPollable::drop(Self) -> Unit
-pub fn LazyInitializedPollable::lazy_initialized_pollable() -> Self
-pub fn LazyInitializedPollable::set(Self, @poll.Pollable) -> Unit
-pub fn LazyInitializedPollable::subscribe(Self) -> @poll.Pollable
-
 pub(all) enum OplogEntryVersion {
   V1
   V2
@@ -44,7 +37,7 @@ pub fn OplogEntryVersion::from(Int) -> Self
 pub fn OplogEntryVersion::ordinal(Self) -> Int
 
 pub(all) struct PersistedDurableFunctionInvocation {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   function_name : String
   response : @types.TypedSchemaValue
   function_type : @oplog.WrappedFunctionType

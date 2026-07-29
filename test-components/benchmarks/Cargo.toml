@@ -3,4 +3,3 @@ members = ["common-rust/common-lib", "benchmark-agent-rust"]
 
 [workspace.dependencies]
 golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
-wstd = { version = "=0.6.5", features = ["default", "json"] }

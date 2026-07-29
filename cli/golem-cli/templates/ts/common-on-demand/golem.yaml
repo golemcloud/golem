@@ -6,21 +6,6 @@ componentTemplates:
       optimized:
         default: true
         build:
-        - command: npx tsc --project "{{ componentDir }}" --noEmit false --emitDeclarationOnly --declaration --outFile "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
-          sources:
-          - "{{ componentDir }}/src"
-          - "{{ componentDir }}/tsconfig.json"
-          - "{{ appRootDir }}/package.json"
-          targets:
-          - "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
-        - command: npx --no golem-typegen "{{ componentDir }}/tsconfig.json" --files "{{ componentDir }}/src/**/*.ts"
-          dir: "{{ golemTempDir }}/ts-metadata/{{ component_name | to_kebab_case }}"
-          sources:
-          - "{{ componentDir }}/src"
-          - "{{ componentDir }}/tsconfig.json"
-          - "{{ appRootDir }}/package.json"
-          targets:
-          - .metadata
         - command: npx --no rollup -- -c "{{ golemTempDir }}/common/ts/rollup.config.component.mjs"
           dir: "{{ componentDir }}"
           env:
@@ -32,7 +17,6 @@ componentTemplates:
           - "{{ golemTempDir }}/common/ts/rollup.config.component.mjs"
           - "{{ componentDir }}/tsconfig.json"
           - "{{ appRootDir }}/package.json"
-          - "{{ golemTempDir }}/ts-metadata/{{ component_name | to_kebab_case }}"
           targets:
           - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
         - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm"
@@ -44,21 +28,6 @@ componentTemplates:
         outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
       quick:
         build:
-        - command: npx tsc --project "{{ componentDir }}" --noEmit false --emitDeclarationOnly --declaration --outFile "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
-          sources:
-          - "{{ componentDir }}/src"
-          - "{{ componentDir }}/tsconfig.json"
-          - "{{ appRootDir }}/package.json"
-          targets:
-          - "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
-        - command: npx --no golem-typegen "{{ componentDir }}/tsconfig.json" --files "{{ componentDir }}/src/**/*.ts"
-          dir: "{{ golemTempDir }}/ts-metadata/{{ component_name | to_kebab_case }}"
-          sources:
-          - "{{ componentDir }}/src"
-          - "{{ componentDir }}/tsconfig.json"
-          - "{{ appRootDir }}/package.json"
-          targets:
-          - .metadata
         - command: npx --no rollup -- -c "{{ golemTempDir }}/common/ts/rollup.config.component.mjs"
           dir: "{{ componentDir }}"
           env:
@@ -70,7 +39,6 @@ componentTemplates:
           - "{{ golemTempDir }}/common/ts/rollup.config.component.mjs"
           - "{{ componentDir }}/tsconfig.json"
           - "{{ appRootDir }}/package.json"
-          - "{{ golemTempDir }}/ts-metadata/{{ component_name | to_kebab_case }}"
           targets:
           - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
         - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm"

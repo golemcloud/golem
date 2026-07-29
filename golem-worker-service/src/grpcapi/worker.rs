@@ -14,7 +14,7 @@
 
 use super::error::WorkerTraceErrorKind;
 use super::{bad_request_error, validate_protobuf_agent_id};
-use crate::service::worker::WorkerService;
+use crate::service::worker::{WorkerService, WorkerServiceError};
 use golem_api_grpc::proto::golem::common::Empty;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
@@ -28,6 +28,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     launch_new_worker_response, process_oplog_entries_response, resume_worker_response,
     revert_worker_response, update_worker_response,
 };
+use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentConfigEntryDto;
@@ -39,6 +40,32 @@ use golem_service_base::model::auth::AuthCtx;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
+
+/// The only way to turn a wire-level freshness disposition into the internal
+/// [`InvocationFreshnessDisposition`]. Decoding and trust-sanitization are
+/// deliberately fused into a single function so that no gRPC entry point can
+/// accept a `KnownFresh` claim from the wire without going through the
+/// trusted-caller check: `KnownFresh` allows the executor to skip the
+/// ephemeral existence check, so it must never be honored for external
+/// callers.
+fn sanitize_invocation_freshness_disposition(
+    wire_value: i32,
+    trusted_internal_caller: bool,
+) -> InvocationFreshnessDisposition {
+    let decoded = if wire_value
+        == golem_api_grpc::proto::golem::worker::v1::InvocationFreshnessDisposition::KnownFresh
+            as i32
+    {
+        InvocationFreshnessDisposition::KnownFresh
+    } else {
+        InvocationFreshnessDisposition::MayExist
+    };
+    if trusted_internal_caller {
+        decoded
+    } else {
+        InvocationFreshnessDisposition::MayExist
+    }
+}
 
 pub struct WorkerGrpcApi {
     worker_service: Arc<WorkerService>,
@@ -455,6 +482,13 @@ impl WorkerGrpcApi {
         &self,
         request: InvokeAgentRequest,
     ) -> Result<InvokeAgentSuccess, GrpcAgentError> {
+        let config = request
+            .config
+            .iter()
+            .cloned()
+            .map(|entry| entry.try_into().map_err(WorkerServiceError::TypeChecker))
+            .collect::<Result<Vec<_>, _>>()?;
+
         let is_lookup =
             request.mode() == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup;
 
@@ -463,6 +497,11 @@ impl WorkerGrpcApi {
             .ok_or(bad_request_error("auth_ctx not found"))?
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
+        let trusted_internal_caller = matches!(&auth, AuthCtx::System | AuthCtx::Agent(_));
+        let freshness_disposition = sanitize_invocation_freshness_disposition(
+            request.freshness_disposition,
+            trusted_internal_caller,
+        );
 
         let agent_id = validate_protobuf_agent_id(request.agent_id)?;
 
@@ -499,6 +538,9 @@ impl WorkerGrpcApi {
                 request.schedule_at,
                 request.idempotency_key.map(|k| k.into()),
                 request.context,
+                trusted_internal_caller,
+                freshness_disposition,
+                config,
                 auth,
                 principal,
                 environment_id,
@@ -521,6 +563,8 @@ impl WorkerGrpcApi {
             status: proto_status,
             oplog_index: output.oplog_index.map(u64::from),
             agent_fingerprint: output.agent_fingerprint.map(|fp| fp.0.into()),
+            agent_id: output.agent_id.map(Into::into),
+            idempotency_key: output.idempotency_key.map(Into::into),
         })
     }
 
@@ -603,5 +647,43 @@ impl WorkerGrpcApi {
             .await?;
 
         Ok(canceled)
+    }
+}
+
+#[cfg(test)]
+mod freshness_tests {
+    use super::sanitize_invocation_freshness_disposition;
+    use golem_common::model::agent::InvocationFreshnessDisposition;
+    use test_r::test;
+
+    const KNOWN_FRESH_WIRE: i32 =
+        golem_api_grpc::proto::golem::worker::v1::InvocationFreshnessDisposition::KnownFresh as i32;
+
+    #[test]
+    fn invocation_freshness_defaults_unknown_values_to_may_exist() {
+        assert_eq!(
+            sanitize_invocation_freshness_disposition(0, true),
+            InvocationFreshnessDisposition::MayExist
+        );
+        assert_eq!(
+            sanitize_invocation_freshness_disposition(i32::MAX, true),
+            InvocationFreshnessDisposition::MayExist
+        );
+    }
+
+    #[test]
+    fn invocation_freshness_preserves_known_fresh_for_trusted_callers() {
+        assert_eq!(
+            sanitize_invocation_freshness_disposition(KNOWN_FRESH_WIRE, true),
+            InvocationFreshnessDisposition::KnownFresh
+        );
+    }
+
+    #[test]
+    fn invocation_freshness_is_downgraded_for_untrusted_callers() {
+        assert_eq!(
+            sanitize_invocation_freshness_disposition(KNOWN_FRESH_WIRE, false),
+            InvocationFreshnessDisposition::MayExist
+        );
     }
 }

@@ -2,24 +2,21 @@
  * Types used by blobstore
  */
 declare module 'wasi:blobstore/types' {
-  import * as wasiIo023Streams from 'wasi:io/streams@0.2.3';
   export class OutgoingValue {
     static newOutgoingValue(): OutgoingValue;
-    outgoingValueWriteBody(): OutputStream;
+    outgoingValueWriteBody(data: AsyncIterable<number>): void;
   }
   export class IncomingValue {
     /**
      * @throws Error
      */
-    incomingValueConsumeSync(): IncomingValueSyncBody;
+    incomingValueConsumeSync(): Uint8Array;
     /**
      * @throws Error
      */
-    incomingValueConsumeAsync(): IncomingValueAsyncBody;
+    incomingValueConsumeAsync(): AsyncIterable<number>;
     size(): bigint;
   }
-  export type InputStream = wasiIo023Streams.InputStream;
-  export type OutputStream = wasiIo023Streams.OutputStream;
   /**
    * name of a container, a collection of objects.
    * The container name may be any valid UTF-8 string.
@@ -70,7 +67,5 @@ declare module 'wasi:blobstore/types' {
     container: ContainerName;
     object: ObjectName;
   };
-  export type IncomingValueAsyncBody = InputStream;
-  export type IncomingValueSyncBody = Uint8Array;
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

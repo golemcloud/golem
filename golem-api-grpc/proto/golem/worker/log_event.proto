@@ -14,6 +14,8 @@ message LogEvent {
     InvocationFinished invocation_finished = 5;
     ClientLagged client_lagged = 6;
     PluginError plugin_error = 7;
+    SnapshotRecoverySucceeded snapshot_recovery_succeeded = 8;
+    SnapshotRecoveryFailed snapshot_recovery_failed = 9;
   }
 }
 
@@ -59,6 +61,17 @@ message PluginError {
   google.protobuf.Timestamp timestamp = 1;
   string plugin_name = 2;
   string message = 3;
+}
+
+message SnapshotRecoverySucceeded {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 snapshot_index = 2;
+}
+
+message SnapshotRecoveryFailed {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 snapshot_index = 2;
+  string error = 3;
 }
 
 /**

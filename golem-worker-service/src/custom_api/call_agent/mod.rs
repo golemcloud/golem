@@ -30,8 +30,10 @@ use super::{ParsedRequestBody, RouteExecutionResult};
 use crate::service::worker::WorkerService;
 use anyhow::anyhow;
 use golem_common::model::OplogIndex;
-use golem_common::model::agent::{OidcPrincipal, ParsedAgentId, Principal, ReadOnlyConfig};
-use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey};
+use golem_common::model::agent::{
+    AgentMode, OidcPrincipal, ParsedAgentId, Principal, ReadOnlyConfig,
+};
+use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::schema::unstructured::wrap_unstructured_inline_for_schema;
 use golem_common::schema::{BinaryValuePayload, SchemaValue, TextValuePayload, TypedSchemaValue};
 use golem_service_base::custom_api::{
@@ -59,7 +61,18 @@ impl CallAgentHandler {
         resolved_route: &ResolvedRouteEntry,
         behaviour: &CallAgentBehaviour,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
-        let agent_id = self.build_agent_id(resolved_route, behaviour)?;
+        // Phantom routes address a fresh agent instance on every call. For
+        // durable agents this requires generating a random phantom id here;
+        // for ephemeral agents the final per-invocation phantom identity is
+        // derived downstream from the invocation's idempotency key, so the
+        // target is addressed by its logical agent id.
+        let phantom_id = if behaviour.phantom {
+            (behaviour.agent_mode == AgentMode::Durable).then(Uuid::new_v4)
+        } else {
+            None
+        };
+
+        let agent_id = self.build_agent_id(resolved_route, behaviour, phantom_id)?;
 
         let request_method = request.underlying.method().clone();
 
@@ -113,8 +126,11 @@ impl CallAgentHandler {
                 Some(proto_method_parameters),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 None,
-                Some(IdempotencyKey::fresh()),
+                None,
                 invocation_context,
+                false,
+                golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+                Vec::new(),
                 AuthCtx::System,
                 proto_principal,
                 Some(resolved_route.route.environment_id),
@@ -253,13 +269,13 @@ impl CallAgentHandler {
         &self,
         resolved_route: &ResolvedRouteEntry,
         behaviour: &CallAgentBehaviour,
+        phantom_id: Option<Uuid>,
     ) -> Result<AgentId, RequestHandlerError> {
         let CallAgentBehaviour {
             component_id,
             agent_type,
             constructor_input,
             constructor_parameters,
-            phantom,
             ..
         } = behaviour;
 
@@ -287,8 +303,6 @@ impl CallAgentHandler {
             constructor_input.graph.clone(),
             SchemaValue::Record { fields },
         );
-
-        let phantom_id = phantom.then(Uuid::new_v4);
 
         let agent_id = ParsedAgentId::try_new(agent_type.clone(), parameters, phantom_id)
             .map_err(|e| RequestHandlerError::AgentResponseTypeMismatch { error: e })?;

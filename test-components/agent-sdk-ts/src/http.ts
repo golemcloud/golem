@@ -1,258 +1,373 @@
+import { z } from "zod";
 import {
-    BaseAgent,
-    Result,
-    agent,
-    endpoint,
-    UnstructuredBinary,
-    Principal,
-    createWebhook
-} from '@golemcloud/golem-ts-sdk';
+  defineAgent,
+  method,
+  http,
+  s,
+  Result,
+  createWebhook,
+} from "@golemcloud/golem-ts-sdk";
 
-// Response interfaces for comprehensive HTTP method testing
-interface ResourceUpdate {
-  name?: string;
-  description?: string;
-  enabled?: boolean;
-}
+// Response schemas for comprehensive HTTP method testing
+const ResourceUpdate = z.object({
+  name: z.string().optional(),
+  description: z.string().optional(),
+  enabled: z.boolean().optional(),
+});
 
-interface ResourceResponse {
-  id: string;
-  updated: boolean;
-  method: string;
-}
+const ResourceResponse = z.object({
+  id: z.string(),
+  updated: z.boolean(),
+  method: z.string(),
+});
 
-@agent({
-  mount: '/http-agents/{agentName}',
-})
-class HttpAgent extends BaseAgent {
+export const HttpAgent = defineAgent({
+  name: "HttpAgent",
+  id: { agentName: z.string() },
+  http: http.mount("/http-agents/{agentName}"),
+  methods: {
+    stringPathVar: method({
+      input: { pathVar: z.string() },
+      returns: z.object({ value: z.string() }),
+      http: http.get("/string-path-var/{pathVar}"),
+    }),
 
-  constructor(readonly agentName: string) {
-      super();
-  }
+    multiPathVars: method({
+      input: { first: z.string(), second: z.string() },
+      returns: z.object({ joined: z.string() }),
+      http: http.get("/multi-path-vars/{first}/{second}"),
+    }),
 
-  @endpoint({ get: "/string-path-var/{pathVar}" })
-  stringPathVar(pathVar: string): { value: string } {
-    return { value: pathVar  }
-  }
+    remainingPath: method({
+      input: { tail: z.string() },
+      returns: z.object({ tail: z.string() }),
+      http: http.get("/rest/{*tail}"),
+    }),
 
-  @endpoint({ get: "/multi-path-vars/{first}/{second}" })
-  multiPathVars(first: string, second: string): { joined: string } {
-    return { joined: `${first}:${second}` }
-  }
+    pathAndQuery: method({
+      input: { itemId: z.string(), limit: z.number() },
+      returns: z.object({ id: z.string(), limit: z.number() }),
+      http: http.get("/path-and-query/{itemId}?limit={limit}"),
+    }),
 
-  @endpoint({ get: "/rest/{*tail}" })
-  remainingPath(tail: string): { tail: string } {
-    return { tail }
-  }
+    pathAndHeader: method({
+      input: { resourceId: z.string(), requestId: z.string() },
+      returns: z.object({ resourceId: z.string(), requestId: z.string() }),
+      http: http.get("/path-and-header/{resourceId}", {
+        headers: { "x-request-id": "requestId" } as const,
+      }),
+    }),
 
-  @endpoint({ get: "/path-and-query/{itemId}?limit={limit}" })
-  pathAndQuery(itemId: string, limit: number): { id: string; limit: number } {
-    return { id: itemId, limit }
-  }
+    jsonBody: method({
+      input: { id: z.string(), name: z.string(), count: z.number() },
+      returns: z.object({ ok: z.boolean() }),
+      http: http.post("/json-body/{id}"),
+    }),
 
-  @endpoint({
-    get: "/path-and-header/{resourceId}",
-    headers: { "x-request-id" : "requestId" }
-  })
-  pathAndHeader(
-    resourceId: string,
-    requestId: string
-  ): { resourceId: string; requestId: string } {
-    return { resourceId, requestId }
-  }
+    unrestrictedUnstructuredBinary: method({
+      input: { bucket: z.string(), payload: s.unstructuredBinary() },
+      returns: z.number(),
+      http: http.post("/unrestricted-unstructured-binary/{bucket}"),
+    }),
 
-  @endpoint({ post: "/json-body/{id}" })
-  jsonBody(
-    id: string,
-    name: string,
-    count: number
-  ): { ok: boolean } {
-    return { ok: true }
-  }
+    restrictedUnstructuredBinary: method({
+      input: {
+        bucket: z.string(),
+        payload: s.unstructuredBinary({ mimeTypes: ["image/gif"] }),
+      },
+      returns: z.number(),
+      http: http.post("/restricted-unstructured-binary/{bucket}"),
+    }),
 
-  @endpoint({ post: "/unrestricted-unstructured-binary/{bucket}" })
-  unrestrictedUnstructuredBinary(
-    bucket: string,
-    payload: UnstructuredBinary
-  ): number {
-    if (payload.tag === 'url') {
-      return -1
-    } else {
-      return payload.val.byteLength
-    }
-  }
+    noContent: method({
+      input: {},
+      returns: z.void(),
+      http: http.get("/resp/no-content"),
+    }),
 
-  @endpoint({ post: "/restricted-unstructured-binary/{bucket}" })
-  restrictedUnstructuredBinary(
-    bucket: string,
-    payload: UnstructuredBinary<["image/gif"]>
-  ): number {
-    if (payload.tag === 'url') {
-      return -1
-    } else {
-      return payload.val.byteLength
-    }
-  }
+    jsonResponse: method({
+      input: {},
+      returns: z.object({ value: z.string() }),
+      http: http.get("/resp/json"),
+    }),
 
-  @endpoint({ get: "/resp/no-content" })
-  noContent() { }
+    optionalResponse: method({
+      input: { found: z.boolean() },
+      returns: z.object({ value: z.string() }).optional(),
+      http: http.get("/resp/optional/{found}"),
+    }),
 
-  @endpoint({ get: "/resp/json" })
-  jsonResponse(): { value: string } {
-    return { value: "ok" };
-  }
+    resultOkOrErr: method({
+      input: { ok: z.boolean() },
+      returns: s.result(
+        z.object({ value: z.string() }),
+        z.object({ error: z.string() }),
+      ),
+      http: http.get("/resp/result-json-json/{ok}"),
+    }),
 
-  @endpoint({ get: "/resp/optional/{found}" })
-  optionalResponse(found: boolean): { value: string } | undefined {
-    return found ? { value: "yes" } : undefined ;
-  }
+    resultVoidErr: method({
+      input: {},
+      returns: s.result(z.void(), z.object({ error: z.string() })),
+      http: http.post("/resp/result-void-json"),
+    }),
 
-  @endpoint({ get: "/resp/result-json-json/{ok}" })
-  resultOkOrErr(ok: boolean): Result<{ value: string }, { error: string }> {
-    return ok
-      ? Result.ok({ value: "ok" })
-      : Result.err({ error: "boom" });
-  }
+    resultJsonVoid: method({
+      input: {},
+      returns: s.result(z.object({ value: z.string() }), z.void()),
+      http: http.get("/resp/result-json-void"),
+    }),
 
-  @endpoint({ post: "/resp/result-void-json" })
-  resultVoidErr(): Result<void, { error: string }> {
-    return Result.err({ error: "fail" })
-  }
+    binaryResponse: method({
+      input: {},
+      returns: s.unstructuredBinary(),
+      http: http.get("/resp/binary"),
+    }),
 
-  @endpoint({ get: "/resp/result-json-void" })
-  resultJsonVoid(): Result<{ value: string }, void> {
-    return Result.ok({ value: "ok" })
-  }
+    patchResource: method({
+      input: { id: z.string(), update: ResourceUpdate },
+      returns: ResourceResponse,
+      http: http.patch("/resource/{id}"),
+    }),
 
-  @endpoint({ get: "/resp/binary" })
-  binaryResponse(): UnstructuredBinary {
-    return UnstructuredBinary.fromInline(new Uint8Array([1, 2, 3, 4]), 'application/octet-stream')
-  }
+    patchPartial: method({
+      input: { id: z.string() },
+      returns: ResourceResponse,
+      http: http.patch("/resource/{id}/partial"),
+    }),
+  },
+});
 
-  // PATCH method endpoints
-  @endpoint({ patch: "/resource/{id}" })
-  patchResource(id: string, update: ResourceUpdate): ResourceResponse {
-    return {
-      id: id,
-      updated: true,
-      method: "PATCH"
-    };
-  }
+export const HttpAgentImpl = HttpAgent.implement({
+  init: ({ id }) => ({ agentName: id.agentName }),
+  methods: {
+    stringPathVar({ pathVar }) {
+      return { value: pathVar };
+    },
+    multiPathVars({ first, second }) {
+      return { joined: `${first}:${second}` };
+    },
+    remainingPath({ tail }) {
+      return { tail };
+    },
+    pathAndQuery({ itemId, limit }) {
+      return { id: itemId, limit };
+    },
+    pathAndHeader({ resourceId, requestId }) {
+      return { resourceId, requestId };
+    },
+    jsonBody({ id, name, count }) {
+      return { ok: true };
+    },
+    unrestrictedUnstructuredBinary({ bucket, payload }) {
+      if (payload.tag === "url") {
+        return -1;
+      } else {
+        return payload.val.byteLength;
+      }
+    },
+    restrictedUnstructuredBinary({ bucket, payload }) {
+      if (payload.tag === "url") {
+        return -1;
+      } else {
+        return payload.val.byteLength;
+      }
+    },
+    noContent() {},
+    jsonResponse() {
+      return { value: "ok" };
+    },
+    optionalResponse({ found }) {
+      return found ? { value: "yes" } : undefined;
+    },
+    resultOkOrErr({ ok }) {
+      return ok ? Result.ok({ value: "ok" }) : Result.err({ error: "boom" });
+    },
+    resultVoidErr() {
+      return Result.err({ error: "fail" });
+    },
+    resultJsonVoid() {
+      return Result.ok({ value: "ok" });
+    },
+    binaryResponse() {
+      return {
+        tag: "inline" as const,
+        val: new Uint8Array([1, 2, 3, 4]),
+        mimeType: "application/octet-stream",
+      };
+    },
+    patchResource({ id, update }) {
+      return {
+        id: id,
+        updated: true,
+        method: "PATCH",
+      };
+    },
+    patchPartial({ id }) {
+      return {
+        id: id,
+        updated: true,
+        method: "PATCH",
+      };
+    },
+  },
+});
 
-  @endpoint({ patch: "/resource/{id}/partial" })
-  patchPartial(id: string): ResourceResponse {
-    return {
-      id: id,
-      updated: true,
-      method: "PATCH"
-    };
-  }
-}
+export const CorsAgent = defineAgent({
+  name: "CorsAgent",
+  id: { agentName: z.string() },
+  http: http.mount("/cors-agents/{agentName}", {
+    cors: ["https://mount.example.com"],
+  }),
+  methods: {
+    // GET endpoint adds additional CORS on top of mount
+    wildcard: method({
+      input: {},
+      returns: z.object({ ok: z.boolean() }),
+      http: http.get("/wildcard", { cors: ["*"] }), // union with mount CORS
+    }),
 
-@agent({
-  mount: '/cors-agents/{agentName}',
-  cors: ["https://mount.example.com"]
-})
-class CorsAgent extends BaseAgent {
+    // GET endpoint inherits mount CORS if empty
+    inherited: method({
+      input: {},
+      returns: z.object({ ok: z.boolean() }),
+      http: http.get("/inherited"),
+    }),
 
-  constructor(readonly agentName: string) {
-    super();
-  }
+    // POST endpoint requiring preflight
+    preflight: method({
+      input: { body: z.object({ name: z.string() }) },
+      returns: z.object({ received: z.string() }),
+      http: http.post("/preflight-required", {
+        cors: ["https://app.example.com"],
+      }),
+    }),
+  },
+});
 
-  // GET endpoint adds additional CORS on top of mount
-  @endpoint({
-    get: "/wildcard",
-    cors: ["*"]  // union with mount CORS
-  })
-  wildcard(): { ok: boolean } {
-    return { ok: true };
-  }
+export const CorsAgentImpl = CorsAgent.implement({
+  init: ({ id }) => ({ agentName: id.agentName }),
+  methods: {
+    wildcard() {
+      return { ok: true };
+    },
+    inherited() {
+      return { ok: true };
+    },
+    preflight({ body }) {
+      return { received: body.name };
+    },
+  },
+});
 
-  // GET endpoint inherits mount CORS if empty
-  @endpoint({
-    get: "/inherited"
-  })
-  inherited(): { ok: boolean } {
-    return { ok: true };
-  }
+// PrincipalAgent — echoes the caller `Principal` back as a WIT `principal`
+// variant value. Matches the base/decorator SDK exactly: each method declares a
+// bare `s.principal()` PARAMETER (`caller`), which is auto-injected — the host
+// supplies the per-call caller principal (WIT `field-source.auto-injected`), so
+// it consumes no wire field and is NOT bound from the HTTP path/query/header.
+// The handler returns it as `s.principal()` data. No phantom-agent workaround.
+// Exercised by `custom_api/agent_http_principal_ts.rs`.
+export const PrincipalAgent = defineAgent({
+  name: "PrincipalAgent",
+  id: { agentName: z.string() },
+  http: http.mount("/principal-agent/{agentName}"),
+  methods: {
+    // only the auto-injected principal
+    echoPrincipal: method({
+      input: { caller: s.principal() },
+      returns: z.object({ value: s.principal() }),
+      http: http.get("/echo-principal"),
+    }),
 
-  // POST endpoint requiring preflight
-  @endpoint({
-    post: "/preflight-required",
-    cors: ["https://app.example.com"]
-  })
-  preflight(body: { name: string }): { received: string } {
-    return { received: body.name };
-  }
-}
+    // Principal alongside foo / bar bound from the path
+    echoPrincipal2: method({
+      input: { foo: z.string(), bar: z.number(), caller: s.principal() },
+      returns: z.object({
+        value: s.principal(),
+        foo: z.string(),
+        bar: z.number(),
+      }),
+      http: http.get("/echo-principal-mid/{foo}/{bar}"),
+    }),
 
-@agent({
-  mount: '/webhook-agents/{agentName}',
-  webhookSuffix: '/webhook-agent'
-})
-class WebhookAgent extends BaseAgent {
-  testServerUrl: string = "";
+    echoPrincipal3: method({
+      input: { foo: z.string(), bar: z.number(), caller: s.principal() },
+      returns: z.object({
+        value: s.principal(),
+        foo: z.string(),
+        bar: z.number(),
+      }),
+      http: http.get("/echo-principal-last/{foo}/{bar}"),
+    }),
 
-  constructor(readonly agentName: string) {
-    super();
-  }
+    authedPrincipal: method({
+      input: { caller: s.principal() },
+      returns: z.object({ value: s.principal() }),
+      http: http.get("/authed-principal", { auth: true }),
+    }),
+  },
+});
 
-  @endpoint({
-    post: "/set-test-server-url",
-  })
-  setTestServerUrl(testServerUrl: string) {
-    this.testServerUrl = testServerUrl
-  }
+export const PrincipalAgentImpl = PrincipalAgent.implement({
+  init: ({ id }) => ({ agentName: id.agentName }),
+  methods: {
+    echoPrincipal({ caller }) {
+      return { value: caller };
+    },
+    echoPrincipal2({ foo, bar, caller }) {
+      return { value: caller, foo, bar };
+    },
+    echoPrincipal3({ foo, bar, caller }) {
+      return { value: caller, foo, bar };
+    },
+    authedPrincipal({ caller }) {
+      return { value: caller };
+    },
+  },
+});
 
-  // Webhook callback dance
-  @endpoint({
-    post: "/test-webhook",
-  })
-  async testWebhook(): Promise<{ payloadLength: number }> {
-    const webhook = createWebhook();
-    await fetch(this.testServerUrl!, {
-        method: 'POST',
+export const WebhookAgent = defineAgent({
+  name: "WebhookAgent",
+  id: { agentName: z.string() },
+  http: http.mount("/webhook-agents/{agentName}", {
+    webhookSuffix: "/webhook-agent",
+  }),
+  methods: {
+    setTestServerUrl: method({
+      input: { testServerUrl: z.string() },
+      returns: z.void(),
+      http: http.post("/set-test-server-url"),
+    }),
+
+    // Webhook callback dance
+    testWebhook: method({
+      input: {},
+      returns: z.object({ payloadLength: z.number() }),
+      http: http.post("/test-webhook"),
+    }),
+  },
+});
+
+export const WebhookAgentImpl = WebhookAgent.implement({
+  init: () => ({ testServerUrl: "" }),
+  methods: {
+    setTestServerUrl({ testServerUrl }) {
+      this.testServerUrl = testServerUrl;
+    },
+    async testWebhook() {
+      const webhook = createWebhook();
+      await fetch(this.testServerUrl!, {
+        method: "POST",
         headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json'
+          Accept: "application/json",
+          "Content-Type": "application/json",
         },
-        body: JSON.stringify({ webhookUrl: webhook.getUrl() })
+        body: JSON.stringify({ webhookUrl: webhook.getUrl() }),
       });
 
-    const data = await webhook;
+      const data = await webhook;
 
-    return { payloadLength: data.bytes().byteLength };
-  }
-}
-
-@agent({
-  mount: '/principal-agent/{agentName}',
-})
-class PrincipalAgent extends BaseAgent {
-  constructor(readonly agentName: string) {
-    super();
-  }
-
-  // only Principal
-  @endpoint({ get: "/echo-principal" })
-  echoPrincipal(principal: Principal): { value: Principal } {
-    return { value: principal }
-  }
-
-  // Principal in between
-  @endpoint({ get: "/echo-principal-mid/{foo}/{bar}" })
-  echoPrincipal2(foo: string, principal: Principal, bar: number): {value: Principal, foo: string, bar: number} {
-    return {value: principal,  foo: foo, bar: bar};
-  }
-
-  // Principal at the end
-  @endpoint({ get: "/echo-principal-last/{foo}/{bar}" })
-  echoPrincipal3(foo: string, bar: number, principal: Principal): {value: Principal, foo: string, bar: number} {
-    return {value: principal, foo, bar};
-  }
-
-  @endpoint({ get: "/authed-principal", auth: true })
-  authedPrincipal(principal: Principal): { value: Principal } {
-    return { value: principal }
-  }
-}
+      return { payloadLength: data.bytes().byteLength };
+    },
+  },
+});

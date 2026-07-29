@@ -1,0 +1,8 @@
+warnings = "-44"
+
+import {
+  "golemcloud/golem_sdk/async-core",
+  "golemcloud/golem_sdk/interface/wasi/http/types",
+}
+
+supported_targets = "+wasm"

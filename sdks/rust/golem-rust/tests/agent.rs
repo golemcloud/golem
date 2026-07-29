@@ -32,12 +32,11 @@ mod tests {
     use golem_rust::{
         AllowedLanguages, AllowedMimeTypes, ConfigSchema, FromSchema, IntoSchema, MultimodalSchema,
     };
-    use golem_rust::{SchemaType, SchemaValue};
+    use golem_rust::{ScheduledTime, SchemaType, SchemaValue};
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent};
     use golem_rust_macro::{description, endpoint, prompt, read_only};
     use std::fmt::Debug;
     use test_r::test;
-    use wasip2::clocks::wall_clock::Datetime;
 
     fn schema_value<T: IntoSchema>(value: T) -> SchemaValue {
         value.to_value()
@@ -507,7 +506,7 @@ mod tests {
             let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
             client.schedule_echo(
                 string,
-                Datetime {
+                ScheduledTime {
                     seconds: 1,
                     nanoseconds: 1,
                 },
@@ -588,7 +587,7 @@ mod tests {
     }
 
     #[test]
-    fn test_aliased_agent_implementation_uses_canonical_agent_name() {
+    async fn test_aliased_agent_implementation_uses_canonical_agent_name() {
         use golem_rust::agentic::{get_agent_type_by_name, with_agent_initiator};
 
         AliasedAgentImplementation::__register_agent_type();
@@ -603,7 +602,7 @@ mod tests {
         assert_eq!(agent.get_definition().type_name, canonical_name.0);
 
         let initiator_registered_under_canonical_name =
-            with_agent_initiator(|_| async { true }, &canonical_name);
+            with_agent_initiator(|_| async { true }, &canonical_name).await;
         assert!(initiator_registered_under_canonical_name);
     }
 
@@ -639,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn base_agent_invoke_accepts_multimodal_schema_value_inside_parameter_record() {
+    async fn base_agent_invoke_accepts_multimodal_schema_value_inside_parameter_record() {
         EchoImpl::__register_agent_type();
 
         let mut agent = EchoImpl::new(
@@ -657,15 +656,17 @@ mod tests {
         .convert_to_schema_value()
         .unwrap();
 
-        let output = wstd::runtime::block_on(agent.invoke(
-            "echo_multimodal_advanced".to_string(),
-            SchemaValue::Record {
-                fields: vec![input],
-            },
-            Principal::Anonymous,
-        ))
-        .unwrap()
-        .unwrap();
+        let output = agent
+            .invoke(
+                "echo_multimodal_advanced".to_string(),
+                SchemaValue::Record {
+                    fields: vec![input],
+                },
+                Principal::Anonymous,
+            )
+            .await
+            .unwrap()
+            .unwrap();
 
         let SchemaValue::List { elements } = output else {
             panic!("expected multimodal output schema list")
@@ -681,7 +682,7 @@ mod tests {
     }
 
     #[test]
-    fn base_agent_invoke_rejects_extra_parameter_record_fields() {
+    async fn base_agent_invoke_rejects_extra_parameter_record_fields() {
         EchoImpl::__register_agent_type();
 
         let mut agent = EchoImpl::new(
@@ -693,16 +694,18 @@ mod tests {
             },
         );
 
-        let result = wstd::runtime::block_on(agent.invoke(
-            "echo".to_string(),
-            SchemaValue::Record {
-                fields: vec![
-                    SchemaValue::String("hello".to_string()),
-                    SchemaValue::String("extra".to_string()),
-                ],
-            },
-            Principal::Anonymous,
-        ));
+        let result = agent
+            .invoke(
+                "echo".to_string(),
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("hello".to_string()),
+                        SchemaValue::String("extra".to_string()),
+                    ],
+                },
+                Principal::Anonymous,
+            )
+            .await;
 
         assert!(result.is_err());
     }
@@ -1435,7 +1438,7 @@ mod tests {
     }
 
     #[test]
-    fn test_custom_snapshot_agent_uses_custom_methods() {
+    async fn test_custom_snapshot_agent_uses_custom_methods() {
         use golem_rust::agentic::BaseAgent;
 
         let mut agent = CustomSnapshotAgentImpl {
@@ -1443,14 +1446,14 @@ mod tests {
         };
 
         // save_snapshot_base should use the custom method and return octet-stream
-        let save_result = wstd::runtime::block_on(agent.save_snapshot_base());
+        let save_result = agent.save_snapshot_base().await;
         assert!(save_result.is_ok());
         let snapshot = save_result.unwrap();
         assert_eq!(snapshot.mime_type, "application/octet-stream");
         assert_eq!(snapshot.data, b"hello-world");
 
         // load_snapshot_base should use the custom method
-        let load_result = wstd::runtime::block_on(agent.load_snapshot_base(b"new-data".to_vec()));
+        let load_result = agent.load_snapshot_base(b"new-data".to_vec()).await;
         assert!(load_result.is_ok());
         assert_eq!(agent.data, "new-data");
     }

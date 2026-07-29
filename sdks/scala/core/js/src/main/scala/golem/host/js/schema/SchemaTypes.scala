@@ -76,6 +76,8 @@ sealed trait JsRole extends js.Object {
 }
 object JsRole {
   def multimodal: JsRole          = JsShape.tagOnly[JsRole]("multimodal")
+  def unstructuredText: JsRole    = JsShape.tagOnly[JsRole]("unstructured-text")
+  def unstructuredBinary: JsRole  = JsShape.tagOnly[JsRole]("unstructured-binary")
   def other(name: String): JsRole = JsShape.tagged[JsRole]("other", name)
 }
 

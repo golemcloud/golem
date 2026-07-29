@@ -120,6 +120,8 @@ impl LogNotification {
                 message,
             }),
             InternalWorkerEvent::PluginError { .. } => None,
+            InternalWorkerEvent::SnapshotRecoverySucceeded { .. } => None,
+            InternalWorkerEvent::SnapshotRecoveryFailed { .. } => None,
         }
     }
 }

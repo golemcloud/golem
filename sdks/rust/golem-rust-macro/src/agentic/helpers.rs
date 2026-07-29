@@ -15,35 +15,6 @@
 use syn::visit_mut::VisitMut;
 use syn::{ReturnType, Type};
 
-pub struct FunctionOutputInfo {
-    pub async_ness: Asyncness,
-    pub is_unit: bool,
-}
-
-impl FunctionOutputInfo {
-    pub fn from_signature(sig: &syn::Signature) -> FunctionOutputInfo {
-        let function_kind = get_asyncness(sig);
-
-        let is_unit = match &sig.output {
-            ReturnType::Type(_, ty) => match &**ty {
-                Type::Tuple(tuple) => tuple.elems.is_empty(),
-                _ => false,
-            },
-            _ => true,
-        };
-
-        FunctionOutputInfo {
-            async_ness: function_kind,
-            is_unit,
-        }
-    }
-}
-
-pub enum Asyncness {
-    Future,
-    Immediate,
-}
-
 pub fn is_constructor_method(sig: &syn::Signature, agent_impl_type: Option<&str>) -> bool {
     match &sig.output {
         ReturnType::Type(_, ty) => match &**ty {
@@ -59,18 +30,6 @@ pub fn is_constructor_method(sig: &syn::Signature, agent_impl_type: Option<&str>
             _ => false,
         },
         _ => false,
-    }
-}
-
-pub fn is_static_method(sig: &syn::Signature) -> bool {
-    sig.receiver().is_none()
-}
-
-pub fn get_asyncness(sig: &syn::Signature) -> Asyncness {
-    if sig.asyncness.is_some() {
-        Asyncness::Future
-    } else {
-        Asyncness::Immediate
     }
 }
 

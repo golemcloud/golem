@@ -296,6 +296,10 @@ export function schemaGraphToWit(graph: SchemaGraph): WitSchemaGraph {
   return new GraphEncoder(graph.defs).encodeGraphRoot(graph.root);
 }
 
+/**
+ * Decode a Component Model carrier. Generated static JSON uses the separate
+ * trusted-format decoder `schemaGraphFromJson`.
+ */
 export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
   const nodes = wit.typeNodes;
   const witDefs = wit.defs;
@@ -455,7 +459,7 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
 
 // Inclusive ranges for the WIT integer scalars, used by the encode preflight to
 // reject out-of-range values before any owned handle is moved (see
-// `preflightValue`). These mirror the Component Model boundary, which would
+// `assertSchemaValueRepresentable`). These mirror the Component Model boundary, which would
 // otherwise throw *after* a sibling quota-token handle was already transferred.
 const INT_RANGES: Record<string, readonly [number, number]> = {
   s8: [-128, 127],
@@ -476,6 +480,17 @@ function checkIntRange(tag: keyof typeof INT_RANGES, value: number): void {
   }
 }
 
+function assertDenseModelArray(value: unknown, name: string): asserts value is unknown[] {
+  if (!Array.isArray(value)) {
+    throw new SchemaEncodeError(`${name} must be an array`);
+  }
+  for (let i = 0; i < value.length; i++) {
+    if (!(i in value)) {
+      throw new SchemaEncodeError(`${name} must be a dense array`);
+    }
+  }
+}
+
 /**
  * Validate every node of `value` *before* {@link schemaValueToWit} moves any
  * owned `quota-token` handle, so a value tree that the WIT boundary would reject
@@ -483,14 +498,14 @@ function checkIntRange(tag: keyof typeof INT_RANGES, value: number): void {
  *
  * This enforces the same invariants the Component Model boundary and the host
  * decoder enforce — narrow-integer ranges, valid `s64`/`u64` magnitudes, a
- * single-code-point non-surrogate `char`, and a `datetime` whose nanoseconds are
- * in `[0, 1_000_000_000)` — plus that every owned `quota-token` is still present
- * and that no underlying owned resource appears more than once. Handles are
- * deduplicated by the identity of the underlying owned resource (peeked without
- * consuming), not merely by holder identity, so two holders that somehow wrap
- * the same resource are also rejected.
+ * single-code-point non-surrogate `char`, a signed-`s64` duration, and a
+ * `datetime` whose nanoseconds are in `[0, 1_000_000_000)` — plus that every
+ * owned `quota-token` is still present and that no underlying owned resource
+ * appears more than once. Handles are deduplicated by the identity of the
+ * underlying owned resource (peeked without consuming), not merely by holder
+ * identity, so two holders that somehow wrap the same resource are also rejected.
  */
-function preflightValue(value: SchemaValue): void {
+export function assertSchemaValueRepresentable(value: SchemaValue): void {
   const seen = new Set<unknown>();
   const visit = (v: SchemaValue): void => {
     switch (v.tag) {
@@ -503,13 +518,28 @@ function preflightValue(value: SchemaValue): void {
         checkIntRange(v.tag, v.value);
         return;
       case 's64':
-        if (v.value < S64_MIN || v.value > S64_MAX) {
+        if (typeof v.value !== 'bigint' || v.value < S64_MIN || v.value > S64_MAX) {
           throw new SchemaEncodeError(`s64 value out of range: ${v.value}`);
         }
         return;
       case 'u64':
-        if (v.value < 0n || v.value > U64_MAX) {
+        if (typeof v.value !== 'bigint' || v.value < 0n || v.value > U64_MAX) {
           throw new SchemaEncodeError(`u64 value out of range: ${v.value}`);
+        }
+        return;
+      case 'bool':
+        if (typeof (v as { value: unknown }).value !== 'boolean') {
+          throw new SchemaEncodeError(
+            `bool value must be a boolean: ${String((v as { value: unknown }).value)}`,
+          );
+        }
+        return;
+      case 'f32':
+      case 'f64':
+        if (typeof (v as { value: unknown }).value !== 'number') {
+          throw new SchemaEncodeError(
+            `${v.tag} value must be a number: ${String((v as { value: unknown }).value)}`,
+          );
         }
         return;
       case 'char': {
@@ -522,6 +552,15 @@ function preflightValue(value: SchemaValue): void {
         }
         return;
       }
+      case 'string':
+      case 'path':
+      case 'url':
+        if (typeof (v as { value: unknown }).value !== 'string') {
+          throw new SchemaEncodeError(
+            `${v.tag} value must be a string: ${String((v as { value: unknown }).value)}`,
+          );
+        }
+        return;
       case 'datetime': {
         const ns = v.value.nanoseconds;
         if (!Number.isInteger(ns) || ns < 0 || ns >= 1_000_000_000) {
@@ -529,11 +568,24 @@ function preflightValue(value: SchemaValue): void {
             `invalid datetime value: nanoseconds must be in [0, 1_000_000_000), got ${ns}`,
           );
         }
-        if (v.value.seconds < S64_MIN || v.value.seconds > S64_MAX) {
+        if (
+          typeof v.value.seconds !== 'bigint' ||
+          v.value.seconds < S64_MIN ||
+          v.value.seconds > S64_MAX
+        ) {
           throw new SchemaEncodeError(`datetime seconds out of range: ${v.value.seconds}`);
         }
         return;
       }
+      case 'duration':
+        if (
+          typeof v.nanoseconds !== 'bigint' ||
+          v.nanoseconds < S64_MIN ||
+          v.nanoseconds > S64_MAX
+        ) {
+          throw new SchemaEncodeError(`duration nanoseconds out of range: ${v.nanoseconds}`);
+        }
+        return;
       case 'secret': {
         if (!(v.handle instanceof GuestSecretHandle)) {
           throw new SchemaEncodeError('secret value contains an invalid secret handle');
@@ -574,17 +626,30 @@ function preflightValue(value: SchemaValue): void {
         return;
       }
       case 'record':
+        assertDenseModelArray(v.fields, 'record fields');
         v.fields.forEach(visit);
         return;
       case 'variant':
+        checkIntRange('u32', v.caseIndex);
         if (v.payload !== undefined) visit(v.payload);
+        return;
+      case 'enum':
+        checkIntRange('u32', v.caseIndex);
+        return;
+      case 'flags':
+        assertDenseModelArray(v.flags, 'flags');
+        if (v.flags.some((flag) => typeof flag !== 'boolean')) {
+          throw new SchemaEncodeError('flags value must be a boolean array');
+        }
         return;
       case 'tuple':
       case 'list':
       case 'fixed-list':
+        assertDenseModelArray(v.elements, `${v.tag} elements`);
         v.elements.forEach(visit);
         return;
       case 'map':
+        assertDenseModelArray(v.entries, 'map entries');
         v.entries.forEach((e) => {
           visit(e.key);
           visit(e.value);
@@ -597,24 +662,45 @@ function preflightValue(value: SchemaValue): void {
         if (v.result.value !== undefined) visit(v.result.value);
         return;
       case 'union':
+        if (typeof v.unionTag !== 'string') {
+          throw new SchemaEncodeError(`union tag must be a string: ${String(v.unionTag)}`);
+        }
         visit(v.body);
         return;
-      // Valid leaves with no encode-time validation. They are listed explicitly
-      // (rather than falling through to `default`) so that an unknown tag is
-      // rejected here, before any sibling `quota-token` handle is taken, instead
-      // of later in `emitNode` after the move.
-      case 'bool':
-      case 'f32':
-      case 'f64':
-      case 'string':
-      case 'enum':
-      case 'flags':
       case 'text':
+        if (
+          typeof v.text !== 'string' ||
+          (v.language !== undefined && typeof v.language !== 'string')
+        ) {
+          throw new SchemaEncodeError('text value must contain string text and language values');
+        }
+        return;
       case 'binary':
-      case 'path':
-      case 'url':
-      case 'duration':
+        if (
+          !(v.bytes instanceof Uint8Array) ||
+          (v.mimeType !== undefined && typeof v.mimeType !== 'string')
+        ) {
+          throw new SchemaEncodeError(
+            'binary value must contain Uint8Array bytes and a string MIME type',
+          );
+        }
+        return;
       case 'quantity':
+        if (
+          typeof v.value !== 'object' ||
+          v.value === null ||
+          typeof v.value.mantissa !== 'bigint' ||
+          v.value.mantissa < S64_MIN ||
+          v.value.mantissa > S64_MAX ||
+          !Number.isInteger(v.value.scale) ||
+          v.value.scale < INT_RANGES.s32[0] ||
+          v.value.scale > INT_RANGES.s32[1] ||
+          typeof v.value.unit !== 'string'
+        ) {
+          throw new SchemaEncodeError(
+            'quantity value is not representable as s64, s32, and string',
+          );
+        }
         return;
       default:
         throw new SchemaEncodeError(`unknown schema value tag '${(v as { tag: string }).tag}'`);
@@ -624,7 +710,7 @@ function preflightValue(value: SchemaValue): void {
 }
 
 export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
-  preflightValue(value);
+  assertSchemaValueRepresentable(value);
   const valueNodes: WitSchemaValueNode[] = [];
 
   function emit(v: SchemaValue): ValueNodeIndex {
@@ -748,18 +834,67 @@ export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
 }
 
 /**
- * Validate a flat value tree by reference, mirroring exactly the failures the
- * lifting walk in {@link schemaValueFromWit} can raise — out-of-range or cyclic
- * node indices, unknown node / result-payload tags, and the affine quota rules
- * (each owned `quota-token` handle node reachable from the root exactly once) —
- * without lifting anything. After this succeeds the lifting walk cannot fail, so
- * an owned handle is never stranded in a discarded partial value.
+ * Validate a flat value tree by reference without lifting or mutating handles.
+ * For reachable nodes, this checks dense carrier payloads and the cross-node
+ * invariants and domains that lifting relies on. Across the whole node array it
+ * enforces handle/object safety; unreachable nodes otherwise receive shape and
+ * handle-safety checks only. If this returns, the lifting walk cannot fail
+ * because of carrier structure. Any new lift-time invariant must be mirrored
+ * here.
  *
  * This intentionally duplicates the structure of `fromNode` below; the two must
  * be kept in sync (a new node kind must be handled in both, or it will be
  * reported as an unknown tag here).
  */
 export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNodeIndex): void {
+  function fail(message: string): never {
+    throw new SchemaDecodeError(message);
+  }
+
+  function object(value: unknown, name: string): Record<string, unknown> {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return fail(`${name} must be an object`);
+    }
+    return value as Record<string, unknown>;
+  }
+
+  function array(value: unknown, name: string): unknown[] {
+    if (!Array.isArray(value)) return fail(`${name} must be an array`);
+    for (let i = 0; i < value.length; i++) {
+      if (!(i in value)) fail(`${name} must be a dense array`);
+    }
+    return value;
+  }
+
+  function string(value: unknown, name: string): void {
+    if (typeof value !== 'string') fail(`${name} must be a string`);
+  }
+
+  function number(value: unknown, name: string): void {
+    if (typeof value !== 'number') fail(`${name} must be a number`);
+  }
+
+  function integer(value: unknown, name: string, min: number, max: number): void {
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+      fail(`${name} must be an integer in [${min}, ${max}]`);
+    }
+  }
+
+  function rangedBigint(value: unknown, name: string, min: bigint, max: bigint): void {
+    if (typeof value !== 'bigint' || value < min || value > max) {
+      fail(`${name} must be a bigint in [${min}, ${max}]`);
+    }
+  }
+
+  function index(value: unknown, name: string): ValueNodeIndex {
+    integer(value, name, 0, 0xffff_ffff);
+    return value as ValueNodeIndex;
+  }
+
+  function optionalString(value: unknown, name: string): void {
+    if (value !== undefined) string(value, name);
+  }
+
   const onPath = new Uint8Array(nodes.length);
   const secretReached = new Set<number>();
   // Indices of `quota-token-handle` nodes already reached. An owned handle is
@@ -771,7 +906,8 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
   const seenRaw = new Set<unknown>();
 
   function walk(idx: ValueNodeIndex): void {
-    if (idx < 0 || idx >= nodes.length) {
+    index(idx, 'value node index');
+    if (idx >= nodes.length) {
       throw new SchemaDecodeError(`value node index out of range: ${idx} (nodes: ${nodes.length})`);
     }
     if (onPath[idx] === 1) {
@@ -783,31 +919,101 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
   }
 
   function walkNode(idx: number, n: WitSchemaValueNode): void {
+    if (typeof n !== 'object' || n === null) fail(`value node at index ${idx} must be an object`);
     switch (n.tag) {
-      // Leaves with no children and no lift-time validation.
       case 'bool-value':
+        if (typeof n.val !== 'boolean') fail('bool-value.val must be a boolean');
+        return;
       case 's8-value':
+        integer(n.val, 's8-value.val', -0x80, 0x7f);
+        return;
       case 's16-value':
+        integer(n.val, 's16-value.val', -0x8000, 0x7fff);
+        return;
       case 's32-value':
+        integer(n.val, 's32-value.val', -0x8000_0000, 0x7fff_ffff);
+        return;
       case 's64-value':
+        rangedBigint(n.val, 's64-value.val', -(1n << 63n), (1n << 63n) - 1n);
+        return;
       case 'u8-value':
+        integer(n.val, 'u8-value.val', 0, 0xff);
+        return;
       case 'u16-value':
+        integer(n.val, 'u16-value.val', 0, 0xffff);
+        return;
       case 'u32-value':
+        integer(n.val, 'u32-value.val', 0, 0xffff_ffff);
+        return;
       case 'u64-value':
+        rangedBigint(n.val, 'u64-value.val', 0n, (1n << 64n) - 1n);
+        return;
       case 'f32-value':
       case 'f64-value':
+        number(n.val, `${n.tag}.val`);
+        return;
       case 'char-value':
+        string(n.val, 'char-value.val');
+        if (
+          [...n.val].length !== 1 ||
+          (n.val.length === 1 && n.val.charCodeAt(0) >= 0xd800 && n.val.charCodeAt(0) <= 0xdfff)
+        ) {
+          fail('char-value.val must contain one Unicode scalar');
+        }
+        return;
       case 'string-value':
-      case 'enum-value':
-      case 'flags-value':
-      case 'text-value':
-      case 'binary-value':
       case 'path-value':
       case 'url-value':
-      case 'datetime-value':
-      case 'duration-value':
-      case 'quantity-value-node':
+        string(n.val, `${n.tag}.val`);
         return;
+      case 'enum-value':
+        integer(n.val, 'enum-value.val', 0, 0xffff_ffff);
+        return;
+      case 'flags-value':
+        array(n.val, 'flags-value.val').forEach((flag) => {
+          if (typeof flag !== 'boolean') fail('flags-value.val entries must be booleans');
+        });
+        return;
+      case 'text-value': {
+        const val = object(n.val, 'text-value.val');
+        string(val.text, 'text-value.val.text');
+        optionalString(val.language, 'text-value.val.language');
+        return;
+      }
+      case 'binary-value': {
+        const val = object(n.val, 'binary-value.val');
+        if (!(val.bytes instanceof Uint8Array)) fail('binary-value.val.bytes must be a Uint8Array');
+        optionalString(val.mimeType, 'binary-value.val.mimeType');
+        return;
+      }
+      case 'datetime-value': {
+        const val = object(n.val, 'datetime-value.val');
+        rangedBigint(val.seconds, 'datetime-value.val.seconds', -(1n << 63n), (1n << 63n) - 1n);
+        integer(val.nanoseconds, 'datetime-value.val.nanoseconds', 0, 999_999_999);
+        return;
+      }
+      case 'duration-value': {
+        const val = object(n.val, 'duration-value.val');
+        rangedBigint(
+          val.nanoseconds,
+          'duration-value.val.nanoseconds',
+          -(1n << 63n),
+          (1n << 63n) - 1n,
+        );
+        return;
+      }
+      case 'quantity-value-node': {
+        const val = object(n.val, 'quantity-value-node.val');
+        rangedBigint(
+          val.mantissa,
+          'quantity-value-node.val.mantissa',
+          -(1n << 63n),
+          (1n << 63n) - 1n,
+        );
+        integer(val.scale, 'quantity-value-node.val.scale', -0x8000_0000, 0x7fff_ffff);
+        string(val.unit, 'quantity-value-node.val.unit');
+        return;
+      }
       case 'secret-value': {
         if (secretReached.has(idx)) {
           throw new SchemaDecodeError('secret handle referenced more than once');
@@ -824,31 +1030,39 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
         return;
       }
       case 'record-value':
-        n.val.forEach(walk);
+        array(n.val, 'record-value.val').forEach((child, i) =>
+          walk(index(child, `record-value.val[${i}]`)),
+        );
         return;
-      case 'variant-value':
-        if (n.val.payload !== undefined) walk(n.val.payload);
+      case 'variant-value': {
+        const val = object(n.val, 'variant-value.val');
+        integer(val.case_, 'variant-value.val.case_', 0, 0xffff_ffff);
+        if (val.payload !== undefined) walk(index(val.payload, 'variant-value.val.payload'));
         return;
+      }
       case 'tuple-value':
       case 'list-value':
       case 'fixed-list-value':
-        n.val.forEach(walk);
+        array(n.val, `${n.tag}.val`).forEach((child, i) =>
+          walk(index(child, `${n.tag}.val[${i}]`)),
+        );
         return;
       case 'map-value':
-        n.val.forEach((e) => {
-          walk(e.key);
-          walk(e.value);
+        array(n.val, 'map-value.val').forEach((entry, i) => {
+          const e = object(entry, `map-value.val[${i}]`);
+          walk(index(e.key, `map-value.val[${i}].key`));
+          walk(index(e.value, `map-value.val[${i}].value`));
         });
         return;
       case 'option-value':
-        if (n.val !== undefined) walk(n.val);
+        if (n.val !== undefined) walk(index(n.val, 'option-value.val'));
         return;
       case 'result-value': {
-        const r = n.val;
+        const r = object(n.val, 'result-value.val');
         switch (r.tag) {
           case 'ok-value':
           case 'err-value':
-            if (r.val !== undefined) walk(r.val);
+            if (r.val !== undefined) walk(index(r.val, `result-value.val.${r.tag}`));
             return;
           default:
             throw new SchemaDecodeError(
@@ -856,9 +1070,12 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
             );
         }
       }
-      case 'union-value':
-        walk(n.val.body);
+      case 'union-value': {
+        const val = object(n.val, 'union-value.val');
+        string(val.tag, 'union-value.val.tag');
+        walk(index(val.body, 'union-value.val.body'));
         return;
+      }
       case 'quota-token-handle': {
         if (quotaReached.has(idx)) {
           throw new SchemaDecodeError('quota-token handle referenced more than once');
@@ -889,10 +1106,14 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
   // Every owned handle must be reachable from the root exactly once; an
   // unreferenced one makes the tree malformed.
   for (let i = 0; i < nodes.length; i++) {
-    if (nodes[i].tag === 'secret-value' && !secretReached.has(i)) {
+    const node = nodes[i];
+    if (typeof node !== 'object' || node === null || Array.isArray(node)) {
+      throw new SchemaDecodeError(`value node at index ${i} must be an object`);
+    }
+    if (node.tag === 'secret-value' && !secretReached.has(i)) {
       throw new SchemaDecodeError(`secret handle not referenced from the root: ${i}`);
     }
-    if (nodes[i].tag === 'quota-token-handle' && !quotaReached.has(i)) {
+    if (node.tag === 'quota-token-handle' && !quotaReached.has(i)) {
       throw new SchemaDecodeError(`quota-token handle not referenced from the root: ${i}`);
     }
   }
@@ -1027,6 +1248,16 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
       case 'url-value':
         return { tag: 'url', value: n.val };
       case 'datetime-value':
+        if (
+          typeof n.val.seconds !== 'bigint' ||
+          !Number.isInteger(n.val.nanoseconds) ||
+          n.val.nanoseconds < 0 ||
+          n.val.nanoseconds >= 1_000_000_000
+        ) {
+          throw new SchemaDecodeError(
+            'datetime-value requires bigint seconds and integer nanoseconds in [0, 1000000000)',
+          );
+        }
         return { tag: 'datetime', value: n.val };
       case 'duration-value':
         return { tag: 'duration', nanoseconds: n.val.nanoseconds };
@@ -1097,6 +1328,7 @@ export function drainUnconsumedQuotaHandles(nodes: WitSchemaValueNode[]): number
   let first: number | undefined;
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i];
+    if (typeof node !== 'object' || node === null || Array.isArray(node)) continue;
     if (node.tag === 'quota-token-handle' && (node as { val: unknown }).val !== undefined) {
       if (first === undefined) first = i;
       (node as { val: unknown }).val = undefined;
@@ -1113,6 +1345,23 @@ export function typedSchemaValueToWit(tv: TypedSchemaValue): WitTypedSchemaValue
   return { graph: schemaGraphToWit(tv.graph), value: schemaValueToWit(tv.value) };
 }
 
+/**
+ * Validate a wire typed schema value without lifting or mutating any owned
+ * resources. This combines graph decoding with {@link preflightWitValueTree}
+ * so it mirrors the structural checks required before full decoding.
+ */
+export function preflightWitTypedSchemaValue(wit: WitTypedSchemaValue): void {
+  schemaGraphFromWit(wit.graph);
+  preflightWitValueTree(wit.value.valueNodes, wit.value.root);
+}
+
 export function typedSchemaValueFromWit(wit: WitTypedSchemaValue): TypedSchemaValue {
-  return { graph: schemaGraphFromWit(wit.graph), value: schemaValueFromWit(wit.value) };
+  let graph: SchemaGraph;
+  try {
+    graph = schemaGraphFromWit(wit.graph);
+  } catch (error) {
+    drainUnconsumedQuotaHandles(wit.value.valueNodes);
+    throw error;
+  }
+  return { graph, value: schemaValueFromWit(wit.value) };
 }

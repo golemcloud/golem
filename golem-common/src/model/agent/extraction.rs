@@ -16,41 +16,131 @@ use crate::model::agent::AgentError;
 use crate::model::parsed_function_name::ParsedFunctionName;
 use crate::schema::agent::AgentTypeSchema;
 use crate::schema::agent::wit::{decode_agent_error_rejecting_quota_with, decode_agent_type, wire};
+use crate::schema::tool::Tool;
+use crate::schema::tool::validation::validate_tool;
+use crate::schema::tool::wit::{decode_tool, wire as tool_wire};
 use anyhow::anyhow;
 use golem_schema::schema::wit::{
     QuotaTokenHandleDropper, QuotaTokenHandleRep, SecretHandleDropper, SecretHandleRep,
 };
+use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, trace};
 use wasmtime::component::types::{ComponentInstance, ComponentItem};
 use wasmtime::component::{
-    Component, Func, Instance, Linker, LinkerInstance, ResourceTable, ResourceType, Type,
+    Component, Func, Instance, Linker, LinkerInstance, ResourceTable, ResourceType,
 };
 use wasmtime::{AsContextMut, Engine, Store};
 use wasmtime_wasi::cli::StdoutStream;
 use wasmtime_wasi::p2::pipe;
 use wasmtime_wasi::{IoCtx, IoData, IoView, WasiCtx, WasiCtxView, WasiView};
-const INTERFACE_NAME: &str = "golem:agent/guest@2.0.0";
-const FUNCTION_NAME: &str = "discover-agent-types";
+use wasmtime_wasi_http::WasiHttpCtx;
+use wasmtime_wasi_http::p2::{WasiHttpCtxView, WasiHttpView, default_hooks};
 
-/// Extracts the implemented agent types from the given WASM component, assuming it implements the `golem:agent/guest` interface.
-/// Optionally fails if the component does not implement the agent interfaces, otherwise returns an empty agent type set for such components.
+const AGENT_INTERFACE_NAME: &str = "golem:agent/guest@2.0.0";
+const AGENT_FUNCTION_NAME: &str = "discover-agent-types";
+const TOOL_INTERFACE_NAME: &str = "golem:tool/guest@0.1.0";
+const TOOL_FUNCTION_NAME: &str = "discover-tools";
+
+/// Metadata discovered from a WASM component in a single instantiation:
+/// the agent types returned by `golem:agent/guest.discover-agent-types` and
+/// the tools returned by `golem:tool/guest.discover-tools`. Either list is
+/// empty when the component does not export the corresponding interface.
 ///
-/// Returns the schema-native [`AgentTypeSchema`] model. This is the canonical
-/// extraction path: it does not downgrade to the legacy `AgentType`, so it
-/// preserves capability types (`QuotaToken`, `Secret`) and rich scalars that
-/// the legacy schema model cannot represent.
-pub async fn extract_agent_type_schemas_with_streams(
+/// Serializes as `{"agentTypes": [...], "tools": [...]}`. Deserialization also
+/// accepts a bare agent type array (with an empty tool list), the format
+/// extracted-metadata JSON files used before tools were bundled into the
+/// extraction.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractedComponentMetadata {
+    pub agent_types: Vec<AgentTypeSchema>,
+    pub tools: Vec<Tool>,
+}
+
+impl<'de> Deserialize<'de> for ExtractedComponentMetadata {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Metadata {
+            agent_types: Vec<AgentTypeSchema>,
+            #[serde(default)]
+            tools: Vec<Tool>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Metadata(Metadata),
+            AgentTypes(Vec<AgentTypeSchema>),
+        }
+
+        Ok(match Repr::deserialize(deserializer)? {
+            Repr::Metadata(metadata) => ExtractedComponentMetadata {
+                agent_types: metadata.agent_types,
+                tools: metadata.tools,
+            },
+            Repr::AgentTypes(agent_types) => ExtractedComponentMetadata {
+                agent_types,
+                tools: Vec::new(),
+            },
+        })
+    }
+}
+
+/// Extracts the agent types and tools implemented by the given WASM component
+/// using a single component instantiation.
+///
+/// Agent types come from `golem:agent/guest.discover-agent-types`; if the
+/// component does not export that interface the extraction either fails
+/// (`fail_on_missing_discover_method`) or yields an empty agent type list.
+/// Tools come from `golem:tool/guest.discover-tools` and are always optional:
+/// components without the tool guest interface yield an empty tool list.
+///
+/// Returns the schema-native [`AgentTypeSchema`] and [`Tool`] models. This is
+/// the canonical extraction path: it does not downgrade to the legacy
+/// `AgentType`, so it preserves capability types (`QuotaToken`, `Secret`) and
+/// rich scalars that the legacy schema model cannot represent.
+pub async fn extract_component_metadata_with_streams(
     wasm_path: &Path,
     stdout: Option<impl StdoutStream + 'static>,
     stderr: Option<impl StdoutStream + 'static>,
     fail_on_missing_discover_method: bool,
     enable_fs_cache: bool,
-) -> anyhow::Result<Vec<AgentTypeSchema>> {
+) -> anyhow::Result<ExtractedComponentMetadata> {
+    extract_component_metadata_impl(
+        wasm_path,
+        stdout,
+        stderr,
+        fail_on_missing_discover_method,
+        enable_fs_cache,
+        true,
+    )
+    .await
+}
+
+async fn extract_component_metadata_impl(
+    wasm_path: &Path,
+    stdout: Option<impl StdoutStream + 'static>,
+    stderr: Option<impl StdoutStream + 'static>,
+    fail_on_missing_discover_method: bool,
+    enable_fs_cache: bool,
+    include_tools: bool,
+) -> anyhow::Result<ExtractedComponentMetadata> {
     let mut config = wasmtime::Config::default();
     config.wasm_multi_value(true);
     config.wasm_component_model(true);
+    // Required for WASI p3: enables the async ABI (stream<T>, future<T>,
+    // async lift/lower, error-context). Without this, components that use
+    // any p3 async builtins fail to parse via `Component::from_file`.
+    config.wasm_component_model_async(true);
+    config.wasm_component_model_error_context(true);
     config.epoch_interruption(true);
     config.consume_fuel(true);
     config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Enable);
@@ -69,6 +159,20 @@ pub async fn extract_agent_type_schemas_with_streams(
         &mut linker,
         &wasmtime_wasi::p2::bindings::LinkOptions::default(),
     )?;
+    // WASI P3 interfaces are imported by components built against the newer
+    // WASI snapshots (e.g. `wasi:cli/environment@0.3.0-rc-...`). The p2 linker
+    // above only satisfies p2 imports; this adds the p3 ones so mixed
+    // p2/p3 components instantiate cleanly.
+    wasmtime_wasi::p3::add_to_linker(&mut linker)?;
+    // `wasi:http` is not covered by either `wasmtime_wasi::p2::add_to_linker_*`
+    // or `wasmtime_wasi::p3::add_to_linker`; the p2 http interfaces are added
+    // explicitly here. P3 `wasi:http` — like every other import outside the
+    // allowlist in `dynamic_import` — is satisfied by the mock instances
+    // registered below, which fail loudly if actually invoked: agent
+    // discovery must never perform real HTTP calls. Because shadowing is
+    // allowed and `dynamic_import` runs after these static registrations,
+    // the mocks take precedence for the interfaces they cover.
+    wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
 
     let mut builder = WasiCtx::builder();
 
@@ -90,6 +194,7 @@ pub async fn extract_agent_type_schemas_with_streams(
         table: Arc::new(Mutex::new(ResourceTable::new())),
         wasi: Arc::new(Mutex::new(wasi)),
         io: Arc::new(Mutex::new(io)),
+        wasi_http: WasiHttpCtx::new(),
     };
 
     let component = Component::from_file(&engine, wasm_path)?;
@@ -101,7 +206,7 @@ pub async fn extract_agent_type_schemas_with_streams(
     let component_type = component.component_type();
     for (name, item) in component_type.imports(&engine) {
         let name = name.to_string();
-        match item {
+        match item.ty {
             ComponentItem::ComponentFunc(_) => {}
             ComponentItem::CoreFunc(_) => {}
             ComponentItem::Module(_) => {}
@@ -117,18 +222,83 @@ pub async fn extract_agent_type_schemas_with_streams(
     debug!("Instantiating component");
     let instance = linker.instantiate_async(&mut store, &component).await?;
 
-    let func = if let Some(func) = find_discover_function(&mut store, &instance) {
-        func
+    let agent_types = if let Some(func) = find_exported_function(
+        &mut store,
+        &instance,
+        AGENT_INTERFACE_NAME,
+        AGENT_FUNCTION_NAME,
+    ) {
+        discover_agent_types(&mut store, func).await?
     } else if fail_on_missing_discover_method {
         return Err(anyhow!(
-            "Function {FUNCTION_NAME} not found in interface {INTERFACE_NAME}"
+            "Function {AGENT_FUNCTION_NAME} not found in interface {AGENT_INTERFACE_NAME}"
         ));
     } else {
-        return Ok(Vec::new());
+        Vec::new()
     };
 
+    let tools = if !include_tools {
+        Vec::new()
+    } else if let Some(func) = find_exported_function(
+        &mut store,
+        &instance,
+        TOOL_INTERFACE_NAME,
+        TOOL_FUNCTION_NAME,
+    ) {
+        discover_tools(&mut store, func).await?
+    } else {
+        Vec::new()
+    };
+
+    Ok(ExtractedComponentMetadata { agent_types, tools })
+}
+
+/// Same as [`extract_component_metadata_with_streams`], but extracts only the
+/// agent types: `golem:tool/guest.discover-tools` is not called, so invalid
+/// tool metadata does not fail agent-type-only extraction.
+pub async fn extract_agent_type_schemas_with_streams(
+    wasm_path: &Path,
+    stdout: Option<impl StdoutStream + 'static>,
+    stderr: Option<impl StdoutStream + 'static>,
+    fail_on_missing_discover_method: bool,
+    enable_fs_cache: bool,
+) -> anyhow::Result<Vec<AgentTypeSchema>> {
+    let metadata: Pin<
+        Box<dyn Future<Output = anyhow::Result<ExtractedComponentMetadata>> + Send + '_>,
+    > = Box::pin(extract_component_metadata_impl(
+        wasm_path,
+        stdout,
+        stderr,
+        fail_on_missing_discover_method,
+        enable_fs_cache,
+        false,
+    ));
+    Ok(metadata.await?.agent_types)
+}
+
+/// Same as [`extract_agent_type_schemas_with_streams`], but inherits stdout and
+/// stderr from the current process.
+pub async fn extract_agent_type_schemas(
+    wasm_path: &Path,
+    fail_on_missing_discover_method: bool,
+    enable_fs_cache: bool,
+) -> anyhow::Result<Vec<AgentTypeSchema>> {
+    extract_agent_type_schemas_with_streams(
+        wasm_path,
+        None::<pipe::MemoryOutputPipe>,
+        None::<pipe::MemoryOutputPipe>,
+        fail_on_missing_discover_method,
+        enable_fs_cache,
+    )
+    .await
+}
+
+async fn discover_agent_types(
+    store: &mut Store<Host>,
+    func: Func,
+) -> anyhow::Result<Vec<AgentTypeSchema>> {
     let typed_func = func
-        .typed::<(), (Result<Vec<wire::AgentType>, wire::AgentError>,)>(&mut store)
+        .typed::<(), (Result<Vec<wire::AgentType>, wire::AgentError>,)>(&mut *store)
         .map_err(|e| {
             anyhow::anyhow!(
         "The component's golem:agent/guest interface does not match the expected type signature. \
@@ -138,7 +308,7 @@ pub async fn extract_agent_type_schemas_with_streams(
          to point to a compatible local SDK: {e}"
     )
         })?;
-    let results = typed_func.call_async(&mut store, ()).await?;
+    let results = typed_func.call_async(&mut *store, ()).await?;
 
     match results.0 {
         Ok(results) => {
@@ -164,27 +334,75 @@ pub async fn extract_agent_type_schemas_with_streams(
     }
 }
 
-/// Same as [`extract_agent_type_schemas_with_streams`], but inherits stdout and
-/// stderr from the current process.
-pub async fn extract_agent_type_schemas(
-    wasm_path: &Path,
-    fail_on_missing_discover_method: bool,
-    enable_fs_cache: bool,
-) -> anyhow::Result<Vec<AgentTypeSchema>> {
-    extract_agent_type_schemas_with_streams(
-        wasm_path,
-        None::<pipe::MemoryOutputPipe>,
-        None::<pipe::MemoryOutputPipe>,
-        fail_on_missing_discover_method,
-        enable_fs_cache,
+async fn discover_tools(store: &mut Store<Host>, func: Func) -> anyhow::Result<Vec<Tool>> {
+    let typed_func = func
+        .typed::<(), (Result<Vec<tool_wire::Tool>, tool_wire::ToolError>,)>(&mut *store)
+        .map_err(|e| {
+            anyhow::anyhow!(
+        "The component's golem:tool/guest interface does not match the expected type signature. \
+         This usually means the golem-rust (or golem-ts) SDK version used to build the component \
+         is incompatible with this version of golem-cli. \
+         Try updating the SDK dependency or setting GOLEM_RUST_PATH / GOLEM_TS_PACKAGES_PATH \
+         to point to a compatible local SDK: {e}"
     )
-    .await
+        })?;
+    let results = typed_func.call_async(&mut *store, ()).await?;
+
+    match results.0 {
+        Ok(results) => {
+            let mut tools: Vec<Tool> = Vec::with_capacity(results.len());
+            for wire_tool in results {
+                let tool = decode_tool(&wire_tool)
+                    .map_err(|e| anyhow!("Failed to decode discovered tool: {e}"))?;
+                if let Err(errors) = validate_tool(&tool) {
+                    let errors = errors
+                        .iter()
+                        .map(|e| e.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(anyhow!("Invalid tool returned by discover-tools: {errors}"));
+                }
+                tools.push(tool);
+            }
+            trace!("Discovered tools: {:#?}", tools);
+            Ok(tools)
+        }
+        Err(tool_error) => {
+            let message = format_wire_tool_error(&tool_error);
+            error!("Error while discovering tools: {message}");
+            Err(anyhow!(message))
+        }
+    }
 }
 
-fn find_discover_function(mut store: impl AsContextMut, instance: &Instance) -> Option<Func> {
-    let (_, exported_instance_id) = instance.get_export(&mut store, None, INTERFACE_NAME)?;
+/// Renders a wire `tool-error` returned by `discover-tools` as a message.
+/// Custom error payloads are not decoded: they are self-contained
+/// `typed-schema-value`s that may reference host resources, which discovery
+/// does not support.
+fn format_wire_tool_error(error: &tool_wire::ToolError) -> String {
+    match error {
+        tool_wire::ToolError::InvalidToolName(name) => format!("invalid tool name `{name}`"),
+        tool_wire::ToolError::InvalidCommandPath(path) => {
+            format!("invalid command path `{}`", path.join(" "))
+        }
+        tool_wire::ToolError::InvalidInput(message) => format!("invalid input: {message}"),
+        tool_wire::ToolError::ConstraintViolation(message) => {
+            format!("constraint violation: {message}")
+        }
+        tool_wire::ToolError::InvalidResult(message) => format!("invalid result: {message}"),
+        tool_wire::ToolError::CustomError(_) => "custom tool error".to_string(),
+    }
+}
+
+fn find_exported_function(
+    mut store: impl AsContextMut,
+    instance: &Instance,
+    interface_name: &str,
+    function_name: &str,
+) -> Option<Func> {
+    let (_, exported_instance_id) = instance.get_export(&mut store, None, interface_name)?;
     let (_, func_id) =
-        instance.get_export(&mut store, Some(&exported_instance_id), FUNCTION_NAME)?;
+        instance.get_export(&mut store, Some(&exported_instance_id), function_name)?;
     let func = instance.get_func(&mut store, func_id)?;
     Some(func)
 }
@@ -194,6 +412,7 @@ struct Host {
     pub table: Arc<Mutex<ResourceTable>>,
     pub wasi: Arc<Mutex<WasiCtx>>,
     pub io: Arc<Mutex<IoCtx>>,
+    pub wasi_http: WasiHttpCtx,
 }
 
 impl IoView for Host {
@@ -240,6 +459,19 @@ impl WasiView for Host {
                 .expect("IoCtx is shared and cannot be borrowed mutably")
                 .get_mut()
                 .expect("IoCtx mutex must never fail"),
+        }
+    }
+}
+
+impl WasiHttpView for Host {
+    fn http(&mut self) -> WasiHttpCtxView<'_> {
+        WasiHttpCtxView {
+            ctx: &mut self.wasi_http,
+            table: Arc::get_mut(&mut self.table)
+                .expect("ResourceTable is shared and cannot be borrowed mutably")
+                .get_mut()
+                .expect("ResourceTable mutex must never fail"),
+            hooks: default_hooks(),
         }
     }
 }
@@ -301,27 +533,25 @@ fn dynamic_import(
         Ok(())
     } else {
         let mut instance = root.instance(name)?;
-        let mut functions = Vec::new();
+        // (function_name, is_async) pairs to be mocked. Sync-ABI functions
+        // are registered via `func_new_async`; async-ABI functions (declared
+        // with `async` in WIT, lowered with `[async-lower]`) require
+        // `func_new_concurrent` because the wasmtime typecheck verifies that
+        // the host function's asyncness matches the component's.
+        let mut functions: Vec<(ParsedFunctionName, bool)> = Vec::new();
 
         for (inner_name, inner_item) in inst.exports(engine) {
             let name = name.to_owned();
             let inner_name = inner_name.to_owned();
 
-            match inner_item {
+            match inner_item.ty {
                 ComponentItem::ComponentFunc(fun) => {
-                    let param_types: Vec<Type> = fun.params().map(|(_, t)| t).collect();
-                    let result_types: Vec<Type> = fun.results().collect();
-
                     let function_name = ParsedFunctionName::parse(format!(
                         "{name}.{{{inner_name}}}"
                     ))
-                        .map_err(|err| anyhow!(format!("Unexpected linking error: {name}.{{{inner_name}}} is not a valid function name: {err}")))?;
+                    .map_err(|err| anyhow!(format!("Unexpected linking error: {name}.{{{inner_name}}} is not a valid function name: {err}")))?;
 
-                    functions.push(FunctionInfo {
-                        name: function_name,
-                        params: param_types,
-                        results: result_types,
-                    });
+                    functions.push((function_name, fun.async_()));
                 }
                 ComponentItem::CoreFunc(_) => {}
                 ComponentItem::Module(_) => {}
@@ -370,21 +600,40 @@ fn dynamic_import(
             }
         }
 
-        for function in functions {
-            instance.func_new_async(
-                &function.name.function.function_name(),
-                move |_store, _func_type, _params, _results| {
-                    let function_name = function.name.clone();
-                    Box::new(async move {
-                        error!(
-                            "External function called in get-agent-definitions: {function_name}",
-                        );
-                        Err(wasmtime::Error::msg(format!(
-                            "External function called in get-agent-definitions: {function_name}"
-                        )))
-                    })
-                },
-            )?;
+        for (function_name, is_async) in functions {
+            let function_name_for_closure = function_name.clone();
+            let function_name_str = function_name.function.function_name();
+            if is_async {
+                instance.func_new_concurrent(
+                    &function_name_str,
+                    move |_accessor, _func_type, _params, _results| {
+                        let function_name = function_name_for_closure.clone();
+                        Box::pin(async move {
+                            error!(
+                                "External function called during component metadata discovery: {function_name}",
+                            );
+                            Err(wasmtime::Error::msg(format!(
+                                "External function called during component metadata discovery: {function_name}"
+                            )))
+                        })
+                    },
+                )?;
+            } else {
+                instance.func_new_async(
+                    &function_name_str,
+                    move |_store, _func_type, _params, _results| {
+                        let function_name = function_name_for_closure.clone();
+                        Box::new(async move {
+                            error!(
+                                "External function called during component metadata discovery: {function_name}",
+                            );
+                            Err(wasmtime::Error::msg(format!(
+                                "External function called during component metadata discovery: {function_name}"
+                            )))
+                        })
+                    },
+                )?;
+            }
         }
 
         Ok(())
@@ -392,17 +641,57 @@ fn dynamic_import(
 }
 
 #[allow(unused)]
-struct MethodInfo {
-    method_name: String,
-    params: Vec<Type>,
-    results: Vec<Type>,
-}
-
-#[allow(unused)]
-struct FunctionInfo {
-    name: ParsedFunctionName,
-    params: Vec<Type>,
-    results: Vec<Type>,
-}
-
 struct ResourceEntry;
+
+#[cfg(test)]
+mod tests {
+    use super::ExtractedComponentMetadata;
+    use test_r::test;
+
+    #[test]
+    fn deserializes_component_metadata_object() {
+        let metadata: ExtractedComponentMetadata =
+            serde_json::from_str(r#"{"agentTypes": [], "tools": []}"#).unwrap();
+        assert!(metadata.agent_types.is_empty());
+        assert!(metadata.tools.is_empty());
+    }
+
+    #[test]
+    fn deserializes_component_metadata_object_without_tools() {
+        let metadata: ExtractedComponentMetadata =
+            serde_json::from_str(r#"{"agentTypes": []}"#).unwrap();
+        assert!(metadata.agent_types.is_empty());
+        assert!(metadata.tools.is_empty());
+    }
+
+    #[test]
+    fn deserializes_legacy_agent_type_array() {
+        let metadata: ExtractedComponentMetadata = serde_json::from_str("[]").unwrap();
+        assert!(metadata.agent_types.is_empty());
+        assert!(metadata.tools.is_empty());
+    }
+
+    #[test]
+    fn rejects_empty_object() {
+        assert!(serde_json::from_str::<ExtractedComponentMetadata>("{}").is_err());
+    }
+
+    #[test]
+    fn rejects_object_with_wrong_field_casing() {
+        assert!(
+            serde_json::from_str::<ExtractedComponentMetadata>(r#"{"agent_types": []}"#).is_err()
+        );
+    }
+
+    #[test]
+    fn serializes_as_camel_case_object() {
+        let metadata = ExtractedComponentMetadata {
+            agent_types: Vec::new(),
+            tools: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_string(&metadata).unwrap(),
+            r#"{"agentTypes":[],"tools":[]}"#
+        );
+    }
+}

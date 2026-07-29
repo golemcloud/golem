@@ -80,7 +80,6 @@ package golem:tool@0.1.0;
 interface common {
   use golem:core/types@2.0.0.{schema-graph, type-node-index, schema-value-tree,
     typed-schema-value};
-  use wasi:io/streams@0.2.3.{output-stream};
 
   // Top level
   record tool {
@@ -375,6 +374,6 @@ interface common {
 
   record invocation-result {
     %result: option<typed-schema-value>,
-    stdout:  option<output-stream>,
+    stdout:  option<stream<u8>>,
   }
 }

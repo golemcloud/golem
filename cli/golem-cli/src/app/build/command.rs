@@ -395,7 +395,7 @@ pub async fn execute_external_command(
                     return Err(anyhow!("Empty command!"));
                 }
 
-                ensure_common_deps_for_tool(ctx, command_tokens[0].as_str()).await?;
+                ensure_common_deps_for_tool(ctx, command_tokens[0].as_str(), &build_dir).await?;
 
                 let resolved_command =
                     resolve_command_for_execution(command_tokens[0].as_str(), Some(&build_dir))?;
@@ -432,7 +432,11 @@ fn external_command_display_name(command: &str) -> &str {
         .unwrap_or(command)
 }
 
-pub async fn ensure_common_deps_for_tool(ctx: &BuildContext<'_>, tool: &str) -> anyhow::Result<()> {
+pub async fn ensure_common_deps_for_tool(
+    ctx: &BuildContext<'_>,
+    tool: &str,
+    build_dir: &Path,
+) -> anyhow::Result<()> {
     let normalized = normalized_program_name(tool);
     match normalized.as_str() {
         "node" | "npx" => {
@@ -449,15 +453,21 @@ pub async fn ensure_common_deps_for_tool(ctx: &BuildContext<'_>, tool: &str) -> 
                 .await
         }
         _ if normalized == "moon" || tool_lives_in_mooncakes(tool) => {
-            let moon_mod_json_path = ctx.application().app_root_dir().join("moon.mod.json");
-            if !moon_mod_json_path.exists() {
+            let app_root_dir = fs::absolute_lexical_path(ctx.application().app_root_dir())?;
+            let build_dir = fs::absolute_lexical_path(build_dir)?;
+            let Some(moon_module_root) = build_dir
+                .ancestors()
+                .take_while(|dir| dir.starts_with(&app_root_dir))
+                .find(|dir| dir.join("moon.mod.json").exists())
+            else {
                 return Ok(());
-            }
+            };
 
-            let app_root_dir = ctx.application().app_root_dir().to_path_buf();
+            let moon_module_root = moon_module_root.to_path_buf();
+            let ensure_key = format!("moon:{}", moon_module_root.display());
             ctx.tools_with_ensured_common_deps()
-                .ensure_common_deps_for_tool_once("moon", || async {
-                    ensure_moon_dependencies(ctx, &app_root_dir).await
+                .ensure_common_deps_for_tool_once(&ensure_key, || async {
+                    ensure_moon_dependencies(ctx, &moon_module_root).await
                 })
                 .await
         }
@@ -550,6 +560,7 @@ async fn ensure_moon_dependencies(
     let marker = TaskResultMarker::new(
         &ctx.application().task_result_marker_dir(),
         MoonInstallDepsMarkerHash {
+            moon_module_root: app_root_dir,
             moon_mod_json_hash: &moon_mod_json_hash,
         },
     )?;

@@ -1,8 +1,10 @@
 use crate::Tracing;
 use crate::app::{TestContext, cmd, flag};
 
+use golem_cli::bridge_gen::BridgeMode;
 use golem_cli::fs;
 use golem_cli::model::GuestLanguage;
+use golem_cli::model::app::BridgeSdkTargetKind;
 use golem_cli::model::text::agent::AgentTypeListView;
 use golem_cli::model::text::template::TemplateListView;
 use strum::IntoEnumIterator;
@@ -80,7 +82,9 @@ async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
 
     // Checking bridge SDK generation for all agents and languages, one by one
     let mut failed_bridge_sdks = vec![];
-    for language in GuestLanguage::iter().filter(|l| l.supports_bridge_generation()) {
+    for language in GuestLanguage::iter()
+        .filter(|language| BridgeSdkTargetKind::Agent.supports(BridgeMode::External, *language))
+    {
         for deployed_agent_type in &deployed_agent_types {
             let output = ctx
                 .cli([

@@ -271,7 +271,14 @@ impl Services {
             deployment_service.clone(),
         ));
 
-        let card_service = Arc::new(CardService::new(repos.card_repo.clone()));
+        let card_service = Arc::new(CardService::new(
+            repos.card_repo.clone(),
+            account_service.clone(),
+            permission_share_service.clone(),
+            component_service.clone(),
+            environment_service.clone(),
+            registry_change_notifier.clone(),
+        ));
 
         let plugin_registration_service = Arc::new(PluginRegistrationService::new(
             repos.plugin_repo.clone(),
@@ -288,7 +295,6 @@ impl Services {
 
         let component_write_service = Arc::new(ComponentWriteService::new(
             repos.component_repo.clone(),
-            card_service.clone(),
             component_object_store,
             component_compilation_service.clone(),
             initial_agent_files,

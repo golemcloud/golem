@@ -79,8 +79,97 @@ fn generate_link_block_lines(exports : Array[String]) -> Array[String] {
 }
 
 ///|
-/// Updates a `moon.pkg` file's content to include or replace the `link: { ... }` block.
-/// Preserves all other content (imports, is-main, pre-build, etc.).
+priv struct PkgImportEntry {
+  path : String
+  effective_alias : String
+  indent : String
+  code_end : Int
+  has_comma : Bool
+}
+
+///|
+fn pkg_line_code(line : String) -> String {
+  let code_end = match line.find("//") {
+    Some(index) => index
+    None => line.length()
+  }
+  line.unsafe_substring(start=0, end=code_end).trim().to_owned()
+}
+
+///|
+fn find_regular_import_block(lines : Array[String]) -> (Int, Int)? {
+  let mut import_start = -1
+  for i, line in lines {
+    let code = pkg_line_code(line)
+    if import_start < 0 {
+      if code == "import {" {
+        import_start = i
+      }
+    } else if code.has_prefix("}") {
+      if code == "}" {
+        return Some((import_start, i))
+      }
+      import_start = -1
+    }
+  }
+  None
+}
+
+///|
+fn pkg_default_alias(path : String) -> String {
+  match path.rev_find("/") {
+    Some(index) =>
+      "@" + path.unsafe_substring(start=index + 1, end=path.length())
+    None => "@" + path
+  }
+}
+
+///|
+fn parse_pkg_import_entry(line : String) -> PkgImportEntry? {
+  let comment_start = match line.find("//") {
+    Some(index) => index
+    None => line.length()
+  }
+  let uncommented = line.unsafe_substring(start=0, end=comment_start)
+  let code_end = uncommented.trim_end().length()
+  let code = uncommented.trim().to_owned()
+  guard code.has_prefix("\"") else { return None }
+  let after_open = code.unsafe_substring(start=1, end=code.length())
+  let quote = match after_open.find("\"") {
+    Some(index) => index
+    None => return None
+  }
+  let path = after_open.unsafe_substring(start=0, end=quote)
+  let rest = after_open
+    .unsafe_substring(start=quote + 1, end=after_open.length())
+    .trim()
+    .to_owned()
+  let rest_without_comma = match rest.strip_suffix(",") {
+    Some(value) => value.trim().to_owned()
+    None => rest
+  }
+  let effective_alias = match rest_without_comma.rev_find("@") {
+    Some(index) =>
+      rest_without_comma
+      .unsafe_substring(start=index, end=rest_without_comma.length())
+      .trim()
+      .to_owned()
+    None => pkg_default_alias(path)
+  }
+  let indent_length = line.length() - line.trim_start().length()
+  Some({
+    path,
+    effective_alias,
+    indent: line.unsafe_substring(start=0, end=indent_length),
+    code_end,
+    has_comma: code.has_suffix(","),
+  })
+}
+
+///|
+/// Ensures a valid, formatted `moon.pkg` has the requested package in its
+/// regular import block with the requested effective alias. Test-only imports
+/// and unrelated package content are left unchanged.
 pub fn ensure_pkg_import(
   content : String,
   import_path : String,
@@ -90,41 +179,60 @@ pub fn ensure_pkg_import(
     .split("\n")
     .map(fn(sv) { sv.to_string() })
     .collect()
-  for line in lines {
-    let trimmed = line.trim()
-    if trimmed.contains(import_path) {
-      return content
-    }
-  }
-  let mut import_start = -1
-  let mut import_end = -1
-  for i = 0; i < lines.length(); i = i + 1 {
-    let trimmed = lines[i].trim()
-    if trimmed.has_prefix("import") && trimmed.contains("{") {
-      import_start = i
-    }
-    if import_start >= 0 && trimmed == "}" {
-      import_end = i
-      break
-    }
-  }
-  let result : Array[String] = []
-  if import_start >= 0 && import_end >= 0 {
-    for i = 0; i < import_end; i = i + 1 {
-      result.push(lines[i])
-    }
-    result.push("  \"\{import_path}\" \{import_alias},")
-    for i = import_end; i < lines.length(); i = i + 1 {
-      result.push(lines[i])
-    }
-  } else {
-    result.push("import {")
-    result.push("  \"\{import_path}\" \{import_alias},")
-    result.push("}")
-    result.push("")
+  let block = find_regular_import_block(lines)
+  guard block is Some((import_start, import_end)) else {
+    let result : Array[String] = [
+      "import {",
+      "  \"\{import_path}\" \{import_alias},",
+      "}",
+      "",
+    ]
     for line in lines {
       result.push(line)
     }
+    return result.join("\n")
+  }
+  let mut first_indent : String? = None
+  let mut last_entry : (Int, PkgImportEntry)? = None
+  for i in (import_start + 1)..<import_end {
+    if parse_pkg_import_entry(lines[i]) is Some(entry) {
+      if first_indent is None {
+        first_indent = Some(entry.indent)
+      }
+      last_entry = Some((i, entry))
+      if entry.path == import_path {
+        if entry.effective_alias == import_alias {
+          return content
+        }
+        let suffix = lines[i].unsafe_substring(
+          start=entry.code_end,
+          end=lines[i].length(),
+        )
+        lines[i] = entry.indent + "\"\{import_path}\" \{import_alias}," + suffix
+        return lines.join("\n")
+      }
+    }
+  }
+  if last_entry is Some((index, entry)) && !entry.has_comma {
+    let suffix = lines[index].unsafe_substring(
+      start=entry.code_end,
+      end=lines[index].length(),
+    )
+    lines[index] = lines[index].unsafe_substring(start=0, end=entry.code_end) +
+      "," +
+      suffix
+  }
+  let indent = match first_indent {
+    Some(indent) => indent
+    None => "  "
+  }
+  let result : Array[String] = []
+  for i in 0..<import_end {
+    result.push(lines[i])
+  }
+  result.push(indent + "\"\{import_path}\" \{import_alias},")
+  for i in import_end..<lines.length() {
+    result.push(lines[i])
   }
   result.join("\n")
 }

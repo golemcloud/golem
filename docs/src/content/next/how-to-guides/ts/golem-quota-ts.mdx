@@ -48,15 +48,33 @@ resourceDefaults:
 
 ## 2. Acquire a QuotaToken
 
-Acquire a `QuotaToken` once per resource, typically in the agent constructor:
+Acquire a `QuotaToken` once per resource, typically in the agent's `init` — store it on the agent state so handlers can reuse it:
 
 ```typescript
-import { acquireQuotaToken } from "@golemcloud/golem-ts-sdk";
+import { z } from 'zod';
+import { defineAgent, method, acquireQuotaToken } from '@golemcloud/golem-ts-sdk';
 
-const token = acquireQuotaToken("api-calls", 1n);
+export const ApiAgent = defineAgent({
+  name: 'ApiAgent',
+  id: { name: z.string() },
+  methods: {
+    call: method({ input: {}, returns: z.string() }),
+  },
+});
+
+export const ApiAgentImpl = ApiAgent.implement({
+  init: () => ({ token: acquireQuotaToken('api-calls', 1n) }),
+  methods: {
+    async call() {
+      // this.token is the QuotaToken acquired in init
+      // ...
+      return 'ok';
+    },
+  },
+});
 ```
 
-The second parameter is the **expected amount per reservation** (`bigint`), used for fair scheduling. For simple 1-call = 1-token rate limiting, use `1n`.
+The second parameter to `acquireQuotaToken` is the **expected amount per reservation** (`bigint`), used for fair scheduling. For simple 1-call = 1-token rate limiting, use `1n`.
 
 ## 3. Simple Rate Limiting with `withReservation`
 
@@ -88,28 +106,41 @@ const result = await withReservation(token, 4000n, async (reservation) => {
 
 For finer control, use `reserve` and `commit` directly:
 
+`token.reserve(amount)` returns a `Result<Reservation, FailedReservation>`. Inspect it with `.isOk()` / `.isErr()` and read the value with `.unwrap()` / `.unwrapErr()`:
+
 ```typescript
 const reservationResult = token.reserve(100n);
-if (reservationResult.ok) {
-  const reservation = reservationResult.value;
+if (reservationResult.isOk()) {
+  const reservation = reservationResult.unwrap();
   const result = doWork();
   reservation.commit(BigInt(result.actualUsage));
 } else {
-  console.warn("Quota unavailable:", reservationResult.error);
+  console.warn("Quota unavailable:", reservationResult.unwrapErr());
 }
 ```
 
 ## 6. Splitting Tokens for Agent-to-Agent RPC
 
-Split a portion of your quota to pass to a child agent:
+Split a portion of your quota to pass to a child agent. Call the other agent with a `clientFor(...)` client (see [`golem-call-another-agent-ts`](/next/how-to-guides/ts/golem-call-another-agent-ts)), passing the child token as an input:
 
 ```typescript
-const childToken: QuotaToken = token.split(200n);
-const childAgent = await SummarizerAgent.newPhantom();
-const summary = childAgent.summarize(text, childToken);
+import { clientFor, QuotaToken } from '@golemcloud/golem-ts-sdk';
+
+const childToken: QuotaToken = this.token.split(200n);
+const summarizer = clientFor(SummarizerAgent);
+const summary = await summarizer({ name: 'sum-1' }).summarize({ text, token: childToken });
 ```
 
-The child agent receives the `QuotaToken` as a method parameter and uses it for its own reservations. Merge returned tokens back:
+The child agent declares the token input with the `s.quotaToken()` schema marker and uses it for its own reservations:
+
+```typescript
+import { z } from 'zod';
+import { method, s } from '@golemcloud/golem-ts-sdk';
+
+summarize: method({ input: { text: z.string(), token: s.quotaToken() }, returns: z.string() }),
+```
+
+Merge returned tokens back:
 
 ```typescript
 token.merge(returnedToken);

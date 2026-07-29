@@ -35,15 +35,13 @@ use crate::base_model::agent::{
     AgentConfigSource, AgentMode, AgentTypeName, HttpEndpointDetails, HttpMountDetails,
     ReadOnlyConfig, RegisteredAgentTypeImplementer, Snapshotting,
 };
-use crate::schema::graph::{GraphIndex, SchemaGraph, SchemaTypeDef, TypedSchemaValue};
-use crate::schema::metadata::{MetadataEnvelope, TypeId};
+use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
+use crate::schema::metadata::MetadataEnvelope;
 use crate::schema::schema_type::{NamedFieldType, SchemaType};
 use crate::schema::schema_value::SchemaValue;
 use crate::schema::validation::value::validate_value;
 use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
-use std::collections::HashSet;
 use uuid::Uuid;
 
 /// Name of the synthetic single user-supplied field that carries the parts of
@@ -54,9 +52,9 @@ pub const MULTIMODAL_PARTS_FIELD_NAME: &str = "parts";
 /// agent output that has no declared field name of its own.
 pub const FALLBACK_OUTPUT_FIELD_NAME: &str = "value";
 
-/// Lift raw client JSON (a bare schema-native [`SchemaValue`]) plus an agent
-/// constructor/method [`InputSchema`] and its owning [`SchemaGraph`] into a
-/// validated [`TypedSchemaValue`].
+/// Lift a bare schema-native [`SchemaValue`] plus an agent constructor/method
+/// [`InputSchema`] and its owning [`SchemaGraph`] into a validated
+/// [`TypedSchemaValue`].
 ///
 /// The caller only provides the [`FieldSource::UserSupplied`] fields;
 /// auto-injected fields (e.g. the principal) are filled by the host out of
@@ -71,12 +69,10 @@ pub const FALLBACK_OUTPUT_FIELD_NAME: &str = "value";
 /// the agent's multi-root definition registry, which the value can never
 /// reference.
 pub fn json_input_schema_value_to_typed_schema_value(
-    json: JsonValue,
+    value: SchemaValue,
     graph: &SchemaGraph,
     input_schema: &InputSchema,
 ) -> Result<TypedSchemaValue, String> {
-    let value: SchemaValue =
-        serde_json::from_value(json).map_err(|e| format!("invalid schema value: {e}"))?;
     // Only user-supplied fields are part of the caller's input; auto-injected
     // fields (e.g. the principal) are filled by the host out of band and are
     // not present in the incoming value, so they are excluded from the record
@@ -106,6 +102,8 @@ pub fn json_input_schema_value_to_typed_schema_value(
     Ok(TypedSchemaValue::new(result_graph, value))
 }
 
+pub use crate::schema::graph::reachable_defs;
+
 /// Build a self-contained [`TypedSchemaValue`] from an already-validated
 /// [`SchemaValue`] and an explicit `root`, projecting `graph`'s definitions to
 /// exactly those reachable from `root`.
@@ -114,8 +112,8 @@ pub fn json_input_schema_value_to_typed_schema_value(
 /// `root` and only a self-contained carrier needs to be produced: it projects
 /// the reachable definition subset (see [`reachable_defs`]) instead of cloning
 /// the agent's whole multi-root `defs` registry. This is the projection half of
-/// [`json_input_schema_value_to_typed_schema_value`], without the JSON decode
-/// and validation steps.
+/// [`json_input_schema_value_to_typed_schema_value`], without the validation
+/// step.
 pub fn typed_schema_value_with_projected_defs(
     graph: &SchemaGraph,
     root: SchemaType,
@@ -123,131 +121,6 @@ pub fn typed_schema_value_with_projected_defs(
 ) -> TypedSchemaValue {
     let defs = reachable_defs(graph, &root);
     TypedSchemaValue::new(SchemaGraph { defs, root }, value)
-}
-
-/// Collect, in the source graph's definition order, the named definitions of
-/// `graph` that are transitively reachable from `root` through
-/// [`SchemaType::Ref`] indirections.
-///
-/// A [`TypedSchemaValue`] is a self-contained, single-root carrier, so its
-/// `defs` must be exactly the definitions reachable from its `root`. The source
-/// `graph` here is the agent's whole multi-root definition registry; projecting
-/// to the reachable subset honors that contract and avoids cloning defs the
-/// value can never reference.
-///
-/// Dangling refs (no matching def in `graph`) are skipped; validation of the
-/// value against the projected graph reports them. Each reachable id is emitted
-/// once, first-def-wins on duplicate ids, matching [`SchemaGraph::lookup`].
-pub fn reachable_defs<'a>(graph: &'a SchemaGraph, root: &'a SchemaType) -> Vec<SchemaTypeDef> {
-    // Seed the worklist from refs in the synthesized root. The common
-    // primitive/no-ref input returns here without building any lookup index.
-    let mut stack: Vec<&'a TypeId> = Vec::new();
-    collect_refs(root, &mut stack);
-    if stack.is_empty() {
-        return Vec::new();
-    }
-
-    let index = GraphIndex::new(graph);
-    let mut reachable: HashSet<&'a str> = HashSet::new();
-    while let Some(id) = stack.pop() {
-        if !reachable.insert(id.as_str()) {
-            continue;
-        }
-        if let Some(def) = index.lookup(id) {
-            collect_refs(&def.body, &mut stack);
-        }
-    }
-
-    // Emit reachable defs in the source graph's order. Removing each id as it is
-    // emitted yields first-def-wins on duplicate ids (matching
-    // [`SchemaGraph::lookup`]) without a second visited set.
-    graph
-        .defs
-        .iter()
-        .filter(|d| reachable.remove(d.id.as_str()))
-        .cloned()
-        .collect()
-}
-
-/// Push every [`SchemaType::Ref`] id directly contained in `ty` (descending
-/// through all structural children, but not following the refs themselves) onto
-/// `out`. All schema alternatives are visited — every variant case, every union
-/// branch, both result arms — so projection follows *schema* reachability, not
-/// the shape of any particular value.
-fn collect_refs<'a>(ty: &'a SchemaType, out: &mut Vec<&'a TypeId>) {
-    match ty {
-        SchemaType::Ref { id, .. } => out.push(id),
-        SchemaType::Record { fields, .. } => {
-            for field in fields {
-                collect_refs(&field.body, out);
-            }
-        }
-        SchemaType::Variant { cases, .. } => {
-            for case in cases {
-                if let Some(payload) = &case.payload {
-                    collect_refs(payload, out);
-                }
-            }
-        }
-        SchemaType::Tuple { elements, .. } => {
-            for element in elements {
-                collect_refs(element, out);
-            }
-        }
-        SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
-            collect_refs(element, out);
-        }
-        SchemaType::Map { key, value, .. } => {
-            collect_refs(key, out);
-            collect_refs(value, out);
-        }
-        SchemaType::Option { inner, .. } => collect_refs(inner, out),
-        SchemaType::Result { spec, .. } => {
-            if let Some(ok) = &spec.ok {
-                collect_refs(ok, out);
-            }
-            if let Some(err) = &spec.err {
-                collect_refs(err, out);
-            }
-        }
-        SchemaType::Union { spec, .. } => {
-            for branch in &spec.branches {
-                collect_refs(&branch.body, out);
-            }
-        }
-        SchemaType::Future { inner, .. } | SchemaType::Stream { inner, .. } => {
-            if let Some(inner) = inner {
-                collect_refs(inner, out);
-            }
-        }
-        SchemaType::Secret { spec, .. } => collect_refs(&spec.inner, out),
-        // Leaf nodes carrying no child `SchemaType`. Listed explicitly (no
-        // wildcard) so a future ref-bearing variant forces this match to be
-        // updated.
-        SchemaType::Bool { .. }
-        | SchemaType::S8 { .. }
-        | SchemaType::S16 { .. }
-        | SchemaType::S32 { .. }
-        | SchemaType::S64 { .. }
-        | SchemaType::U8 { .. }
-        | SchemaType::U16 { .. }
-        | SchemaType::U32 { .. }
-        | SchemaType::U64 { .. }
-        | SchemaType::F32 { .. }
-        | SchemaType::F64 { .. }
-        | SchemaType::Char { .. }
-        | SchemaType::String { .. }
-        | SchemaType::Enum { .. }
-        | SchemaType::Flags { .. }
-        | SchemaType::Text { .. }
-        | SchemaType::Binary { .. }
-        | SchemaType::Path { .. }
-        | SchemaType::Url { .. }
-        | SchemaType::Datetime { .. }
-        | SchemaType::Duration { .. }
-        | SchemaType::Quantity { .. }
-        | SchemaType::QuotaToken { .. } => {}
-    }
 }
 
 /// Input parameter list for an agent constructor or method.
@@ -625,7 +498,9 @@ impl AgentTypeSchema {
 
     /// Validates the semantic constraints of the agent type. Mirrors the legacy
     /// `AgentType::validate`: ephemeral agents must not declare read-only
-    /// methods (there is no shared state to read from).
+    /// methods (there is no shared state to read from). Additionally rejects
+    /// the WASI P3 stub types (`future`/`stream`) anywhere in the agent's
+    /// schemas — see [`reject_p3_stub_types`].
     pub fn validate(&self) -> Result<(), String> {
         if self.mode == AgentMode::Ephemeral {
             for method in &self.methods {
@@ -639,7 +514,167 @@ impl AgentTypeSchema {
                 }
             }
         }
-        Ok(())
+        reject_p3_stub_types(self)
+    }
+}
+
+/// Rejects the WASI P3 stub types (`future`/`stream`) anywhere in an agent
+/// type's schemas: shared type definitions, constructor and method inputs,
+/// method outputs, config value types, and the same positions of every
+/// dependency.
+///
+/// These types parse ([`SchemaType::Future`] / [`SchemaType::Stream`]) but
+/// have no [`SchemaValue`] representation and cannot be marshalled across the
+/// invocation boundary, so accepting them at upload time would only defer the
+/// failure to invocation time as a confusing shape mismatch. `error-context`
+/// has no [`SchemaType`] representation at all, so it cannot occur here.
+fn reject_p3_stub_types(agent_type: &AgentTypeSchema) -> Result<(), String> {
+    check_signatures_for_p3_stubs(
+        &agent_type.type_name,
+        None,
+        &agent_type.schema,
+        &agent_type.constructor,
+        &agent_type.methods,
+    )?;
+    for config in &agent_type.config {
+        if let Some(kind) = find_p3_stub(&config.value_type) {
+            return Err(p3_stub_error(
+                &agent_type.type_name,
+                &format!("config value at path '{}'", config.path.join(".")),
+                kind,
+            ));
+        }
+    }
+    for dependency in &agent_type.dependencies {
+        check_signatures_for_p3_stubs(
+            &agent_type.type_name,
+            Some(&dependency.type_name),
+            &dependency.schema,
+            &dependency.constructor,
+            &dependency.methods,
+        )?;
+    }
+    Ok(())
+}
+
+/// Checks one (graph, constructor, methods) signature set for P3 stub types.
+/// `dependency` prefixes the reported location when the set belongs to an
+/// [`AgentDependencySchema`] rather than the agent type itself.
+fn check_signatures_for_p3_stubs(
+    agent: &AgentTypeName,
+    dependency: Option<&str>,
+    graph: &SchemaGraph,
+    constructor: &AgentConstructorSchema,
+    methods: &[AgentMethodSchema],
+) -> Result<(), String> {
+    let loc = |location: String| match dependency {
+        Some(dep) => format!("dependency '{dep}' {location}"),
+        None => location,
+    };
+    for def in &graph.defs {
+        if let Some(kind) = find_p3_stub(&def.body) {
+            return Err(p3_stub_error(
+                agent,
+                &loc(format!("shared type definition '{}'", def.id)),
+                kind,
+            ));
+        }
+    }
+    for field in constructor.input_schema.fields() {
+        if let Some(kind) = find_p3_stub(&field.schema) {
+            return Err(p3_stub_error(
+                agent,
+                &loc(format!("constructor parameter '{}'", field.name)),
+                kind,
+            ));
+        }
+    }
+    for method in methods {
+        for field in method.input_schema.fields() {
+            if let Some(kind) = find_p3_stub(&field.schema) {
+                return Err(p3_stub_error(
+                    agent,
+                    &loc(format!(
+                        "method '{}' parameter '{}'",
+                        method.name, field.name
+                    )),
+                    kind,
+                ));
+            }
+        }
+        if let Some(output) = method.output_schema.schema()
+            && let Some(kind) = find_p3_stub(output)
+        {
+            return Err(p3_stub_error(
+                agent,
+                &loc(format!("method '{}' output", method.name)),
+                kind,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn p3_stub_error(agent: &AgentTypeName, location: &str, kind: &str) -> String {
+    format!(
+        "Agent type '{agent}' uses the unsupported type '{kind}' in {location}. \
+         Stream, future, and error-context types have no value representation and \
+         cannot be used in agent constructor, method, or config schemas."
+    )
+}
+
+/// Finds the first WASI P3 stub node (`future`/`stream`) in `ty`, descending
+/// through all structural children but not following refs — named definitions
+/// are scanned directly by [`check_signatures_for_p3_stubs`]. Returns the
+/// offending node's kind name.
+fn find_p3_stub(ty: &SchemaType) -> Option<&'static str> {
+    match ty {
+        SchemaType::Future { .. } => Some("future"),
+        SchemaType::Stream { .. } => Some("stream"),
+        SchemaType::Record { fields, .. } => fields.iter().find_map(|f| find_p3_stub(&f.body)),
+        SchemaType::Variant { cases, .. } => cases
+            .iter()
+            .find_map(|c| c.payload.as_ref().and_then(find_p3_stub)),
+        SchemaType::Tuple { elements, .. } => elements.iter().find_map(find_p3_stub),
+        SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
+            find_p3_stub(element)
+        }
+        SchemaType::Map { key, value, .. } => find_p3_stub(key).or_else(|| find_p3_stub(value)),
+        SchemaType::Option { inner, .. } => find_p3_stub(inner),
+        SchemaType::Result { spec, .. } => spec
+            .ok
+            .as_deref()
+            .and_then(find_p3_stub)
+            .or_else(|| spec.err.as_deref().and_then(find_p3_stub)),
+        SchemaType::Union { spec, .. } => spec.branches.iter().find_map(|b| find_p3_stub(&b.body)),
+        // Leaf nodes carrying no child `SchemaType`. Listed explicitly (no
+        // wildcard) so a future child-bearing variant forces this match to be
+        // updated.
+        SchemaType::Ref { .. }
+        | SchemaType::Bool { .. }
+        | SchemaType::S8 { .. }
+        | SchemaType::S16 { .. }
+        | SchemaType::S32 { .. }
+        | SchemaType::S64 { .. }
+        | SchemaType::U8 { .. }
+        | SchemaType::U16 { .. }
+        | SchemaType::U32 { .. }
+        | SchemaType::U64 { .. }
+        | SchemaType::F32 { .. }
+        | SchemaType::F64 { .. }
+        | SchemaType::Char { .. }
+        | SchemaType::String { .. }
+        | SchemaType::Enum { .. }
+        | SchemaType::Flags { .. }
+        | SchemaType::Text { .. }
+        | SchemaType::Binary { .. }
+        | SchemaType::Path { .. }
+        | SchemaType::Url { .. }
+        | SchemaType::Datetime { .. }
+        | SchemaType::Duration { .. }
+        | SchemaType::Quantity { .. }
+        | SchemaType::Secret { .. }
+        | SchemaType::QuotaToken { .. } => None,
     }
 }
 
@@ -661,8 +696,6 @@ pub mod bindings {
           anyhow: true,
           with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
-            "wasi:io/streams.input-stream": wasmtime_wasi::DynInputStream,
-            "wasi:io/streams.output-stream": wasmtime_wasi::DynOutputStream,
           },
           wasmtime_crate: ::wasmtime
     });

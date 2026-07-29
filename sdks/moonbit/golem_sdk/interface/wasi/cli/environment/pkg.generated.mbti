@@ -6,7 +6,7 @@ pub fn get_arguments() -> Array[String]
 
 pub fn get_environment() -> Array[(String, String)]
 
-pub fn initial_cwd() -> String?
+pub fn get_initial_cwd() -> String?
 
 // Errors
 

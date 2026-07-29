@@ -31,6 +31,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-configure-durability-rust` | Choosing between durable and ephemeral agents |
 | `golem-stateless-agent-rust` | Creating ephemeral (stateless) agents with a fresh instance per invocation |
 | `golem-annotate-agent-rust` | Adding prompt and description annotations to agent methods |
+| `golem-mark-read-only-rust` | Marking agent methods as read-only for a side-effect-free guarantee, result caching, and HTTP cache headers |
 | `golem-call-another-agent-rust` | Calling another agent and awaiting the result (RPC) |
 | `golem-call-from-external-rust` | Calling agents from external Rust applications using generated bridge SDKs |
 | `golem-fire-and-forget-rust` | Triggering an agent invocation without waiting for the result |

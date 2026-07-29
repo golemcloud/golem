@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -496,7 +496,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     assert(content.contains(""""host""""), s"should use path literal:\n$content")
   }
 
-  test("ephemeral agent without config generates getPhantom and newPhantom only") {
+  test("ephemeral agent without config generates a local metadata-bearing proxy") {
     val result = RpcCodegen.generate(
       agents = List(
         agent(
@@ -511,9 +511,11 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
 
     val content = result.files.head.content
-    assert(content.contains("def getPhantom("), s"missing getPhantom in:\n$content")
+    assert(!content.contains("def getPhantom("), s"ephemeral agent should not have getPhantom:\n$content")
     assert(content.contains("def newPhantom("), s"missing newPhantom in:\n$content")
-    assert(content.contains("generateIdempotencyKey"), s"newPhantom should generate UUID:\n$content")
+    assert(!content.contains("generateIdempotencyKey"), s"ephemeral proxy should not generate UUID:\n$content")
+    assert(content.contains("awaitWithMetadata"), s"await should return metadata:\n$content")
+    assert(content.contains("triggerWithMetadata"), s"trigger should return metadata:\n$content")
     assert(!content.contains("def get("), s"ephemeral agent should not have get:\n$content")
     assert(!content.contains("def getWithConfig("), s"ephemeral agent should not have getWithConfig:\n$content")
     assert(
@@ -526,7 +528,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
   }
 
-  test("ephemeral agent with config fields generates phantom WithConfig variants") {
+  test("ephemeral agent with config fields generates only the local WithConfig variant") {
     val cfgFields = List(
       ConfigFieldSurface(List("key"), "String")
     )
@@ -545,7 +547,10 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
 
     val content = result.files.head.content
-    assert(content.contains("def getPhantomWithConfig("), s"missing getPhantomWithConfig in:\n$content")
+    assert(
+      !content.contains("def getPhantomWithConfig("),
+      s"ephemeral agent should not have getPhantomWithConfig:\n$content"
+    )
     assert(content.contains("def newPhantomWithConfig("), s"missing newPhantomWithConfig in:\n$content")
     assert(content.contains("key: _root_.scala.Option[String] = _root_.scala.None"), s"missing key param in:\n$content")
     assert(!content.contains("def get("), s"ephemeral agent should not have get:\n$content")
@@ -645,7 +650,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
   }
 
-  test("ephemeral agent with constructor params generates getPhantom and newPhantom with unpacked params") {
+  test("ephemeral agent with constructor params generates only newPhantom with unpacked params") {
     val result = RpcCodegen.generate(
       agents = List(
         agent(
@@ -662,8 +667,8 @@ class RpcCodegenSpec extends munit.FunSuite {
 
     val content = result.files.head.content
     assert(
-      content.contains("def getPhantom(name: String, id: Int, phantom: _root_.golem.Uuid): EphAgentRemote"),
-      s"missing getPhantom with params in:\n$content"
+      !content.contains("def getPhantom("),
+      s"ephemeral agent should not accept an explicit phantom ID:\n$content"
     )
     assert(
       content.contains("def newPhantom(name: String, id: Int): EphAgentRemote"),
@@ -744,10 +749,18 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
 
     val content = result.files.head.content
-    assert(content.contains("resolveWithPhantom["), s"getPhantom should use resolveWithPhantom:\n$content")
+    assert(content.contains("AgentClientRuntime.resolve["), s"newPhantom should use resolve:\n$content")
     assert(
-      content.contains("resolveWithPhantomAndConfig["),
-      s"getPhantomWithConfig should use resolveWithPhantomAndConfig:\n$content"
+      content.contains("AgentClientRuntime.resolveWithConfig["),
+      s"newPhantomWithConfig should use resolveWithConfig:\n$content"
+    )
+    assert(
+      !content.contains("resolveWithPhantom["),
+      s"ephemeral agent should not resolve an explicit phantom ID:\n$content"
+    )
+    assert(
+      !content.contains("resolveWithPhantomAndConfig["),
+      s"ephemeral agent should not resolve an explicit phantom ID with config:\n$content"
     )
   }
 

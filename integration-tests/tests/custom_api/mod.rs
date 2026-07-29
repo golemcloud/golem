@@ -24,6 +24,14 @@ use golem_test_framework::config::EnvBasedTestDependencies;
 use test_r::inherit_test_dep;
 
 inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(
+    #[tagged_as("postgres")]
+    EnvBasedTestDependencies
+);
+inherit_test_dep!(
+    #[tagged_as("sqlite")]
+    EnvBasedTestDependencies
+);
 
 fn assert_json_content_type(response: &reqwest::Response) {
     let content_type = response

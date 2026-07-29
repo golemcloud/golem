@@ -1,0 +1,125 @@
+# Card API
+
+## List cards owned by an account.
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/cards`|GET|Yes
+
+
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+include_root|boolean|No|-
+include_permission_shares|boolean|No|-
+include_environment_defaults|boolean|No|-
+include_agent_initials|boolean|No|-
+
+
+
+**Example Response JSON**
+
+```json copy
+[
+  {
+    "type": "Concrete",
+    "cardId": "f16ba382-eb42-481a-b08f-c57bdc9aae24",
+    "parentIds": [
+      "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+    ],
+    "lowerPositive": [
+      "string"
+    ],
+    "lowerNegative": [
+      "string"
+    ],
+    "upperPositive": [
+      "string"
+    ],
+    "upperNegative": [
+      "string"
+    ],
+    "createdAt": "2019-08-24T14:15:22Z",
+    "expiresAt": "2019-08-24T14:15:22Z",
+    "systemCard": true,
+    "managedBy": {
+      "type": "AccountRoot",
+      "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9"
+    }
+  }
+]
+```
+
+## Get a card by id.
+Path|Method|Protected
+---|---|---
+`/v1/cards/{card_id}`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "type": "Concrete",
+  "cardId": "f16ba382-eb42-481a-b08f-c57bdc9aae24",
+  "parentIds": [
+    "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+  ],
+  "lowerPositive": [
+    "string"
+  ],
+  "lowerNegative": [
+    "string"
+  ],
+  "upperPositive": [
+    "string"
+  ],
+  "upperNegative": [
+    "string"
+  ],
+  "createdAt": "2019-08-24T14:15:22Z",
+  "expiresAt": "2019-08-24T14:15:22Z",
+  "systemCard": true,
+  "managedBy": {
+    "type": "AccountRoot",
+    "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9"
+  }
+}
+```
+
+## Revoke a card and all of its descendants.
+Path|Method|Protected
+---|---|---
+`/v1/cards/{card_id}`|DELETE|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "revokedCardIds": [
+    "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+  ]
+}
+```
+## Card API Errors
+Status Code|Description|Body
+---|---|---
+400|Invalid request, returning with a list of issues detected in the request|`{"code":"string","errors":["string"]}`
+401|Unauthorized request|`{"code":"string","error":"string"}`
+403|Forbidden Request|`{"code":"string","error":"string"}`
+404|Entity not found|`{"code":"string","error":"string"}`
+409||`{"code":"string","error":"string"}`
+422|Limits of the plan exceeded|`{"code":"string","error":"string"}`
+500|Internal server error|`{"code":"string","error":"string"}`

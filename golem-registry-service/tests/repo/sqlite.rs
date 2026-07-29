@@ -151,6 +151,31 @@ async fn test_environment_update_concurrently(deps: &Deps) {
 }
 
 #[test]
+async fn test_environment_default_card_ids_by_account_excludes_deleted(deps: &Deps) {
+    crate::repo::common::test_environment_default_card_ids_by_account_excludes_deleted(deps).await;
+}
+
+#[test]
+async fn test_deleted_environment_default_card_revoke_returns_not_found(deps: &Deps) {
+    crate::repo::common::test_deleted_environment_default_card_revoke_returns_not_found(deps).await;
+}
+
+#[test]
+async fn test_deleted_environment_default_card_is_not_reported_existing(deps: &Deps) {
+    crate::repo::common::test_deleted_environment_default_card_is_not_reported_existing(deps).await;
+}
+
+#[test]
+async fn test_environment_default_card_tracks_environment_rename(deps: &Deps) {
+    crate::repo::common::test_environment_default_card_tracks_environment_rename(deps).await;
+}
+
+#[test]
+async fn test_environment_default_card_tracks_application_rename(deps: &Deps) {
+    crate::repo::common::test_environment_default_card_tracks_application_rename(deps).await;
+}
+
+#[test]
 async fn test_agent_secret_get_revision_include_deleted(deps: &Deps) {
     crate::repo::common::test_agent_secret_get_revision_include_deleted(deps).await;
 }
@@ -158,6 +183,39 @@ async fn test_agent_secret_get_revision_include_deleted(deps: &Deps) {
 #[test]
 async fn test_component_stage(deps: &Deps) {
     crate::repo::common::test_component_stage(deps).await;
+}
+
+#[test]
+async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps) {
+    crate::repo::common::test_initial_permission_card_ids_by_account_are_unique(deps).await;
+}
+
+#[test]
+async fn test_agent_initial_card_removed_from_current_component_is_not_live(deps: &Deps) {
+    crate::repo::common::test_agent_initial_card_removed_from_current_component_is_not_live(deps)
+        .await;
+}
+
+#[test]
+async fn test_initial_permission_card_ids_by_account_excludes_deleted_components(deps: &Deps) {
+    crate::repo::common::test_initial_permission_card_ids_by_account_excludes_deleted_components(
+        deps,
+    )
+    .await;
+}
+
+#[test]
+async fn test_deleted_component_agent_initial_card_is_not_reported_existing(deps: &Deps) {
+    crate::repo::common::test_deleted_component_agent_initial_card_is_not_reported_existing(deps)
+        .await;
+}
+
+#[test]
+async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_revisions(deps: &Deps) {
+    crate::repo::common::test_initial_permission_card_ids_by_account_excludes_pre_recreate_revisions(
+        deps,
+    )
+    .await;
 }
 
 #[test]

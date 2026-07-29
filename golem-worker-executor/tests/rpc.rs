@@ -14,7 +14,7 @@
 
 use crate::Tracing;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{AgentStatus, PromiseId};
+use golem_common::model::{AgentStatus, IdempotencyKey, PromiseId};
 use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::schema::{FromSchema, SchemaValue};
 use golem_common::{agent_id, data_value};
@@ -671,6 +671,147 @@ async fn ephemeral_worker_invocation_via_rpc2(
 
     let value = result.into_typed::<u32>()?;
     assert_eq!(value, 1);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn ephemeral_rpc_invocations_get_distinct_final_identities(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Counter", "ephemeral_rpc_distinct_ids");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // Two sequential RPC method calls on the same ephemeral client proxy must
+    // each derive a distinct final agent identity from their own durable
+    // idempotency key.
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "ephemeral_ids_through_rpc",
+            data_value!(),
+        )
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    let (id1, id2) = result.into_typed::<(String, String)>()?;
+    assert!(!id1.is_empty());
+    assert!(!id2.is_empty());
+    assert_ne!(id1, id2);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn ephemeral_agent_self_rpc_is_allowed(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    // An ephemeral agent invoking its own logical identity via RPC is allowed:
+    // the callee is always a fresh instance with a freshly derived identity,
+    // never the caller's own invocation queue.
+    let agent_id = agent_id!("EphemeralCounter", "ephemeral_self_rpc");
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "increment_via_self_rpc",
+            data_value!(),
+        )
+        .await?;
+
+    drop(executor);
+
+    let value = result.into_typed::<u32>()?;
+    assert_eq!(value, 2);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn failed_ephemeral_invocation_retry_does_not_reexecute(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("EphemeralCounter", "ephemeral_crash_retry");
+    let idempotency_key = IdempotencyKey::fresh();
+
+    // The ephemeral agent increments a durable counter via RPC and then
+    // panics, so the durable counter observes how many times the method body
+    // actually executed.
+    let first = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &idempotency_key,
+            "increment_remote_then_fail",
+            data_value!("ephemeral_crash_retry_target"),
+        )
+        .await;
+    assert!(first.is_err());
+
+    // Retrying the failed invocation with the same idempotency key must not
+    // execute the method body again.
+    let second = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &idempotency_key,
+            "increment_remote_then_fail",
+            data_value!("ephemeral_crash_retry_target"),
+        )
+        .await;
+    assert!(second.is_err());
+
+    let target_agent_id = agent_id!("Counter", "ephemeral_crash_retry_target");
+    let count = executor
+        .invoke_and_await_agent(&component, &target_agent_id, "increment", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+
+    drop(executor);
+
+    // 1 increment from the single execution of the failing method + 1 from
+    // the observation call itself; a re-executed method body would make it 3.
+    assert_eq!(count, 2);
 
     Ok(())
 }

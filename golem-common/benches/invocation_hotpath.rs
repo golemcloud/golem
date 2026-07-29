@@ -204,14 +204,14 @@ fn ref_field_value() -> SchemaValue {
 }
 
 /// One named input-conversion scenario: a 32-def agent graph plus an input
-/// schema + matching on-wire JSON value. The cases vary how many of the graph's
+/// schema + matching schema value. The cases vary how many of the graph's
 /// defs are transitively reachable from the synthesized input record (the
 /// quantity Option 7's projection avoids cloning).
 struct JsonInputCase {
     name: &'static str,
     graph: SchemaGraph,
     input_schema: InputSchema,
-    json: serde_json::Value,
+    value: SchemaValue,
 }
 
 fn json_input_cases() -> Vec<JsonInputCase> {
@@ -219,7 +219,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
         name,
         graph: shared_graph(32),
         input_schema,
-        json: serde_json::to_value(value).unwrap(),
+        value,
     };
 
     let all_refs = {
@@ -463,19 +463,19 @@ fn bench_json_input_conversion(c: &mut Criterion) {
     for case in &cases {
         let graph = &case.graph;
         let input_schema = &case.input_schema;
-        let json = &case.json;
-        // Per-case clone-only baseline (JSON sizes differ across cases) so the
-        // JSON clone in `iter_batched` setup can be subtracted from the
+        let value = &case.value;
+        // Per-case clone-only baseline (value sizes differ across cases) so the
+        // value clone in `iter_batched` setup can be subtracted from the
         // conversion measurement.
         group.bench_function(format!("{}/clone_baseline", case.name), |b| {
-            b.iter(|| black_box(black_box(json).clone()))
+            b.iter(|| black_box(black_box(value).clone()))
         });
         group.bench_function(format!("{}/convert", case.name), |b| {
             b.iter_batched(
-                || json.clone(),
-                |json| {
+                || value.clone(),
+                |value| {
                     black_box(
-                        json_input_schema_value_to_typed_schema_value(json, graph, input_schema)
+                        json_input_schema_value_to_typed_schema_value(value, graph, input_schema)
                             .unwrap(),
                     )
                 },

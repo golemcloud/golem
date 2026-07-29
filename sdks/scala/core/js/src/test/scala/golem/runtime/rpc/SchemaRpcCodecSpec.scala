@@ -19,7 +19,7 @@ package golem.runtime.rpc
 import golem.host.SchemaWireInterop
 import golem.host.js.schema.JsSchemaValueTree
 import golem.runtime.autowire.SchemaPayload
-import golem.schema.IntoSchema
+import golem.schema._
 import golem.schema.wire.SchemaWire
 import zio.blocks.schema.Schema
 import zio.test._
@@ -117,6 +117,70 @@ object SchemaRpcCodecSpec extends ZIOSpecDefault {
           assertTrue(
             entry.path.toList == List("db", "primary"),
             SchemaRpcCodec.decodeTyped[Config](entry.value) == Right(Config("h", 2))
+          )
+        },
+        test("typedSchemaValueFromSchemaGraphJson decodes serialized rich schema graphs") {
+          val graphJson =
+            """{"root":{"kind":"path","value":{"spec":{"direction":"input","kind":"file","allowedExtensions":["txt"]}}}}"""
+          val typed = SchemaRpcCodec.typedSchemaValueFromSchemaGraphJson(graphJson, SchemaValue.PathValue("notes.txt"))
+          assertTrue(
+            typed.value == SchemaValue.PathValue("notes.txt"),
+            typed.graph.root == SchemaType(
+              SchemaTypeBody.PathType(PathSpec(PathDirection.Input, PathKind.File, None, Some(List("txt"))))
+            )
+          )
+        },
+        test("schemaGraphFromJson preserves stringified numeric-bound precision") {
+          val graphJson =
+            """{"root":{"kind":"u64","value":{"restrictions":{"min":{"kind":"unsigned","value":"18446744073709551615"},"unit":"bytes"}}}}"""
+          val graph = SchemaRpcCodec.schemaGraphFromJson(graphJson)
+          assertTrue(
+            graph.root == SchemaType(
+              SchemaTypeBody.U64Type(Some(NumericRestrictions(Some(NumericBound.Unsigned(-1L)), None, Some("bytes"))))
+            )
+          )
+        },
+        test("schemaGraphFromJson preserves unstructured roles") {
+          val graphJson =
+            """{"root":{"kind":"variant","value":{"cases":[{"name":"inline","payload":{"kind":"text","value":{"restrictions":{}}}},{"name":"url","payload":{"kind":"url","value":{"restrictions":{}}}}]},"metadata":{"role":{"tag":"unstructured-text"}}}}"""
+          assertTrue(scala.util.Try(SchemaRpcCodec.schemaGraphFromJson(graphJson)).isSuccess)
+        },
+        test("schemaGraphFromJson preserves unstructured role tags when re-encoding config graphs") {
+          val graphJson =
+            """{"root":{"kind":"variant","value":{"cases":[{"name":"inline","payload":{"kind":"text","value":{"restrictions":{}}}},{"name":"url","payload":{"kind":"url","value":{"restrictions":{}}}}],"metadata":{"role":{"tag":"unstructured-text"}}}}}"""
+          val graph   = SchemaRpcCodec.schemaGraphFromJson(graphJson)
+          val jsGraph = SchemaWireInterop.graphToJs(SchemaWire.schemaGraphToWit(graph))
+          val roleTag = jsGraph.typeNodes(jsGraph.root).metadata.role.toOption.map(_.tag)
+
+          assertTrue(roleTag == Some("unstructured-text"))
+        },
+        test("schemaGraphFromJson decodes serde-shaped schema node metadata") {
+          val graphJson =
+            """{"root":{"kind":"variant","value":{"cases":[{"name":"inline","payload":{"kind":"text","value":{"restrictions":{}}}},{"name":"url","payload":{"kind":"url","value":{"restrictions":{}}}}],"metadata":{"role":{"tag":"unstructured-text"}}}}}"""
+          val graph = SchemaRpcCodec.schemaGraphFromJson(graphJson)
+          assertTrue(graph.root.metadata.role == Some(Role.UnstructuredText))
+        },
+        test("schemaGraphFromJson keeps other role distinct from dedicated unstructured tag") {
+          val graphJson =
+            """{"root":{"kind":"string","value":{"metadata":{"role":{"tag":"other","value":"unstructured-text"}}}}}"""
+          val graph   = SchemaRpcCodec.schemaGraphFromJson(graphJson)
+          val jsGraph = SchemaWireInterop.graphToJs(SchemaWire.schemaGraphToWit(graph))
+          val role    = jsGraph.typeNodes(jsGraph.root).metadata.role.toOption
+          assertTrue(
+            graph.root.metadata.role == Some(Role.Other("unstructured-text")),
+            role.map(_.tag) == Some("other")
+          )
+        },
+        test("schemaGraphFromJson preserves large quantity mantissas") {
+          val graphJson =
+            """{"root":{"kind":"quantity","value":{"spec":{"baseUnit":"token","min":{"mantissa":"9007199254740993","scale":0,"unit":"token"}}}}}"""
+          val graph = SchemaRpcCodec.schemaGraphFromJson(graphJson)
+          assertTrue(
+            graph.root == SchemaType(
+              SchemaTypeBody.QuantityType(
+                QuantitySpec("token", min = Some(QuantityValue(9007199254740993L, 0, "token")))
+              )
+            )
           )
         }
       )

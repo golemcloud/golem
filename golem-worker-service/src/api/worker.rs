@@ -23,6 +23,7 @@ use futures::TryStreamExt;
 use golem_common::base_model::api;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::auth::TokenSecret;
+use golem_common::model::card::StoredCard;
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
@@ -707,6 +708,39 @@ impl WorkerApi {
         }))
     }
 
+    /// Get the wallet (active permission cards) of a worker.
+    ///
+    /// Activates the worker if it is not already active.
+    #[oai(
+        path = "/:component_id/workers/:agent_name/wallet",
+        method = "get",
+        operation_id = "get_agent_wallet"
+    )]
+    async fn get_agent_wallet(
+        &self,
+        component_id: Path<ComponentId>,
+        agent_name: Path<String>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<Vec<StoredCard>>> {
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let agent_id = self
+            .normalize_agent_id(component_id.0, agent_name.as_str())
+            .await?;
+
+        let record =
+            recorded_http_api_request!("get_agent_wallet", agent_id = agent_id.to_string());
+
+        let response = self
+            .worker_service
+            .get_agent_wallet(&agent_id, auth)
+            .instrument(record.span.clone())
+            .await
+            .map_err(Into::into);
+
+        record.result(response).map(Json)
+    }
+
     /// Get contents of a file in a worker
     #[oai(
         path = "/:component_id/workers/:agent_name/file-contents/:file_name",
@@ -1073,7 +1107,7 @@ impl WorkerApi {
                     api::error_code::COMPONENT_NOT_FOUND,
                     golem_common::safe(format!(
                         "Couldn't retrieve the component: {}. error: {}",
-                        &component_id,
+                        component_id,
                         error.to_safe_string()
                     )),
                 )

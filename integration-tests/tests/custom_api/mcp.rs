@@ -22,10 +22,18 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::atomic::{AtomicU64, Ordering};
-use test_r::test_dep;
+use test_r::{define_matrix_dimension, test_dep};
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(
+    #[tagged_as("postgres")]
+    EnvBasedTestDependencies
+);
+inherit_test_dep!(
+    #[tagged_as("sqlite")]
+    EnvBasedTestDependencies
+);
 
 static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -208,8 +216,7 @@ impl McpTestContext {
     }
 }
 
-#[test_dep(scope = PerWorker)]
-async fn test_context(deps: &EnvBasedTestDependencies) -> McpTestContext {
+async fn build_test_context(deps: &EnvBasedTestDependencies) -> McpTestContext {
     let user = deps.user().await.unwrap().with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user
@@ -274,9 +281,30 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> McpTestContext {
     }
 }
 
+#[test_dep(scope = PerWorker)]
+async fn test_context(deps: &EnvBasedTestDependencies) -> McpTestContext {
+    build_test_context(deps).await
+}
+
+#[test_dep(scope = PerWorker, tagged_as = "postgres")]
+async fn test_context_postgres(
+    #[tagged_as("postgres")] deps: &EnvBasedTestDependencies,
+) -> McpTestContext {
+    build_test_context(deps).await
+}
+
+#[test_dep(scope = PerWorker, tagged_as = "sqlite")]
+async fn test_context_sqlite(
+    #[tagged_as("sqlite")] deps: &EnvBasedTestDependencies,
+) -> McpTestContext {
+    build_test_context(deps).await
+}
+
+define_matrix_dimension!(db: McpTestContext -> "postgres", "sqlite");
+
 #[test]
 #[tracing::instrument]
-async fn list_tools(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn list_tools(#[dimension(db)] ctx: &McpTestContext) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
     let tools = client.list_tools().await?;
 
@@ -319,7 +347,9 @@ async fn list_tools(ctx: &McpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn call_tool_weather_agent_string(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn call_tool_weather_agent_string(
+    #[dimension(db)] ctx: &McpTestContext,
+) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
@@ -340,7 +370,9 @@ async fn call_tool_weather_agent_string(ctx: &McpTestContext) -> anyhow::Result<
 
 #[test]
 #[tracing::instrument]
-async fn call_tool_weather_agent_multimodal(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn call_tool_weather_agent_multimodal(
+    #[dimension(db)] ctx: &McpTestContext,
+) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
@@ -375,7 +407,9 @@ async fn call_tool_weather_agent_multimodal(ctx: &McpTestContext) -> anyhow::Res
 
 #[test]
 #[tracing::instrument]
-async fn call_tool_weather_agent_unstructured_text(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn call_tool_weather_agent_unstructured_text(
+    #[dimension(db)] ctx: &McpTestContext,
+) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
@@ -401,7 +435,9 @@ async fn call_tool_weather_agent_unstructured_text(ctx: &McpTestContext) -> anyh
 
 #[test]
 #[tracing::instrument]
-async fn call_tool_weather_agent_unstructured_binary(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn call_tool_weather_agent_unstructured_binary(
+    #[dimension(db)] ctx: &McpTestContext,
+) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
@@ -424,7 +460,9 @@ async fn call_tool_weather_agent_unstructured_binary(ctx: &McpTestContext) -> an
 
 #[test]
 #[tracing::instrument]
-async fn call_tool_weather_agent_component_model(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn call_tool_weather_agent_component_model(
+    #[dimension(db)] ctx: &McpTestContext,
+) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
@@ -447,7 +485,7 @@ async fn call_tool_weather_agent_component_model(ctx: &McpTestContext) -> anyhow
 
 #[test]
 #[tracing::instrument]
-async fn call_tool_singleton_string(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn call_tool_singleton_string(#[dimension(db)] ctx: &McpTestContext) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
@@ -468,7 +506,9 @@ async fn call_tool_singleton_string(ctx: &McpTestContext) -> anyhow::Result<()> 
 
 #[test]
 #[tracing::instrument]
-async fn call_tool_singleton_component_model(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn call_tool_singleton_component_model(
+    #[dimension(db)] ctx: &McpTestContext,
+) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
@@ -492,7 +532,7 @@ async fn call_tool_singleton_component_model(ctx: &McpTestContext) -> anyhow::Re
 
 #[test]
 #[tracing::instrument]
-async fn list_resources(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn list_resources(#[dimension(db)] ctx: &McpTestContext) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
     let resources = client.list_resources().await?;
 
@@ -529,7 +569,7 @@ async fn list_resources(ctx: &McpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn list_resource_templates(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn list_resource_templates(#[dimension(db)] ctx: &McpTestContext) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
     let templates = client.list_resource_templates().await?;
 
@@ -560,7 +600,7 @@ async fn list_resource_templates(ctx: &McpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn read_static_resource_string(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn read_static_resource_string(#[dimension(db)] ctx: &McpTestContext) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
@@ -583,7 +623,9 @@ async fn read_static_resource_string(ctx: &McpTestContext) -> anyhow::Result<()>
 
 #[test]
 #[tracing::instrument]
-async fn read_static_resource_unstructured_text(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn read_static_resource_unstructured_text(
+    #[dimension(db)] ctx: &McpTestContext,
+) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
@@ -606,7 +648,7 @@ async fn read_static_resource_unstructured_text(ctx: &McpTestContext) -> anyhow:
 
 #[test]
 #[tracing::instrument]
-async fn read_static_resource_binary(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn read_static_resource_binary(#[dimension(db)] ctx: &McpTestContext) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
@@ -626,7 +668,9 @@ async fn read_static_resource_binary(ctx: &McpTestContext) -> anyhow::Result<()>
 
 #[test]
 #[tracing::instrument]
-async fn read_static_resource_multimodal(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn read_static_resource_multimodal(
+    #[dimension(db)] ctx: &McpTestContext,
+) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
@@ -652,7 +696,7 @@ async fn read_static_resource_multimodal(ctx: &McpTestContext) -> anyhow::Result
 
 #[test]
 #[tracing::instrument]
-async fn read_dynamic_resource_string(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn read_dynamic_resource_string(#[dimension(db)] ctx: &McpTestContext) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
@@ -675,7 +719,7 @@ async fn read_dynamic_resource_string(ctx: &McpTestContext) -> anyhow::Result<()
 
 #[test]
 #[tracing::instrument]
-async fn read_dynamic_resource_binary(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn read_dynamic_resource_binary(#[dimension(db)] ctx: &McpTestContext) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
@@ -693,7 +737,7 @@ async fn read_dynamic_resource_binary(ctx: &McpTestContext) -> anyhow::Result<()
 
 #[test]
 #[tracing::instrument]
-async fn list_prompts(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn list_prompts(#[dimension(db)] ctx: &McpTestContext) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
     let prompts = client.list_prompts().await?;
 
@@ -719,7 +763,7 @@ async fn list_prompts(ctx: &McpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn get_prompt_agent_level(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn get_prompt_agent_level(#[dimension(db)] ctx: &McpTestContext) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
 
     let result = client.get_prompt("WeatherAgent").await?;
@@ -739,7 +783,7 @@ async fn get_prompt_agent_level(ctx: &McpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn get_prompt_method(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn get_prompt_method(#[dimension(db)] ctx: &McpTestContext) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
 
     let result = client

@@ -15,7 +15,6 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{CallHandle, NotCancellable};
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::types::SerializableDateTime;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostResponseWallClock, host_functions,
 };
@@ -40,10 +39,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     Host::now(&mut view.clocks()).await?
                 };
                 Ok(HostResponseWallClock {
-                    time: SerializableDateTime {
-                        seconds: result.seconds,
-                        nanoseconds: result.nanoseconds,
-                    },
+                    time: result.into(),
                 })
             })
             .await?;
@@ -66,10 +62,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     Host::resolution(&mut view.clocks()).await?
                 };
                 Ok(HostResponseWallClock {
-                    time: SerializableDateTime {
-                        seconds: result.seconds,
-                        nanoseconds: result.nanoseconds,
-                    },
+                    time: result.into(),
                 })
             })
             .await?;

@@ -17,7 +17,24 @@ pub trait TestDslDebugMode {
         overrides: Option<Vec<PlaybackOverride>>,
     ) -> anyhow::Result<PlaybackResult>;
 
+    /// Playback with explicit control over `ensure_invocation_boundary`, allowing tests to
+    /// target raw oplog indices that lie inside an invocation.
+    async fn playback_raw(
+        &mut self,
+        target_index: OplogIndex,
+        overrides: Option<Vec<PlaybackOverride>>,
+        ensure_invocation_boundary: bool,
+    ) -> anyhow::Result<PlaybackResult>;
+
     async fn rewind(&mut self, target_index: OplogIndex) -> anyhow::Result<RewindResult>;
+
+    /// Rewind with explicit control over `ensure_invocation_boundary`, allowing tests to
+    /// target raw oplog indices that lie inside an invocation.
+    async fn rewind_raw(
+        &mut self,
+        target_index: OplogIndex,
+        ensure_invocation_boundary: bool,
+    ) -> anyhow::Result<RewindResult>;
 
     async fn fork(
         &mut self,
@@ -62,6 +79,26 @@ impl TestDslDebugMode for DebugWorkerExecutorClient {
         self.read_jrpc_response(id).await
     }
 
+    async fn playback_raw(
+        &mut self,
+        target_index: OplogIndex,
+        overrides: Option<Vec<PlaybackOverride>>,
+        ensure_invocation_boundary: bool,
+    ) -> anyhow::Result<PlaybackResult> {
+        let id = self
+            .send_jrpc_msg(
+                "playback",
+                PlaybackParams {
+                    target_index,
+                    overrides,
+                    ensure_invocation_boundary: Some(ensure_invocation_boundary),
+                },
+            )
+            .await?;
+
+        self.read_jrpc_response(id).await
+    }
+
     async fn rewind(&mut self, target_index: OplogIndex) -> anyhow::Result<RewindResult> {
         let id = self
             .send_jrpc_msg(
@@ -69,6 +106,24 @@ impl TestDslDebugMode for DebugWorkerExecutorClient {
                 RewindParams {
                     target_index,
                     ensure_invocation_boundary: None,
+                },
+            )
+            .await?;
+
+        self.read_jrpc_response(id).await
+    }
+
+    async fn rewind_raw(
+        &mut self,
+        target_index: OplogIndex,
+        ensure_invocation_boundary: bool,
+    ) -> anyhow::Result<RewindResult> {
+        let id = self
+            .send_jrpc_msg(
+                "rewind",
+                RewindParams {
+                    target_index,
+                    ensure_invocation_boundary: Some(ensure_invocation_boundary),
                 },
             )
             .await?;

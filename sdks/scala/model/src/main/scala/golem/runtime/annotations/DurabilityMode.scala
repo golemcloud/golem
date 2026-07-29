@@ -1,11 +1,11 @@
 /*
- * Copyright 2024-2026 John A. De Goes and the ZIO Contributors
+ * Copyright 2024-2026 Golem Cloud
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
+ * Licensed under the Golem Source License v1.1 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     http://license.golem.cloud/LICENSE
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,9 +19,7 @@ package golem.runtime.annotations
 /**
  * Durability mode for agents and methods.
  *
- * This is a shared Scala ADT so it works uniformly across:
- *   - Scala 2 + Scala 3
- *   - JVM + Scala.js
+ * This is a shared Scala ADT so it works uniformly across JVM and Scala.js.
  *
  * The generated metadata uses the lower-case wire values ("durable",
  * "ephemeral").

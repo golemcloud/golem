@@ -139,7 +139,7 @@ pub fn[T] panic_with_message(context : String, message : String) -> T {
 /// Low-level trait that every agent must implement. Generated code provides
 /// `invoke` dispatch by method name.
 pub(open) trait RawAgent {
-  fn invoke(
+  async fn invoke(
     Self,
     method_name : String,
     input : @types.SchemaValueTree,

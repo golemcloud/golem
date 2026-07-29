@@ -119,7 +119,6 @@ url = { workspace = true }
 uuid = { workspace = true }
 version-compare = { workspace = true }
 vt100 = { workspace = true }
-wac-graph = { workspace = true }
 walkdir = { workspace = true }
 wax = { workspace = true }
 which = { workspace = true }
@@ -148,6 +147,7 @@ proptest = { workspace = true }
 reqwest = { workspace = true }
 syn = { workspace = true, features = ["full", "parsing"] }
 test-r = { workspace = true }
+wat = { workspace = true }
 
 [build-dependencies]
 lenient_bool = { workspace = true }

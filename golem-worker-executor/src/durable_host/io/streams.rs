@@ -15,7 +15,7 @@
 use wasmtime::component::Resource;
 use wasmtime_wasi::StreamError;
 
-use crate::durable_host::concurrent::{CallHandle, NotCancellable};
+use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
@@ -26,6 +26,7 @@ use crate::durable_host::{
 use crate::model::event::InternalWorkerEvent;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::{
+    FilesystemInputStreamRead, FilesystemInputStreamSkip, FilesystemOutputStreamCheckWrite,
     HttpTypesIncomingBodyStreamBlockingRead, HttpTypesIncomingBodyStreamBlockingSkip,
     HttpTypesIncomingBodyStreamRead, HttpTypesIncomingBodyStreamSkip,
     HttpTypesOutgoingBodyStreamBlockingFlush, HttpTypesOutgoingBodyStreamBlockingSplice,
@@ -35,7 +36,7 @@ use golem_common::model::oplog::host_functions::{
 };
 use golem_common::model::oplog::types::SerializableStreamError;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestHttpRequest, HostResponseStreamCheckWrite,
+    DurableFunctionType, HostRequestHttpRequest, HostRequestNoInput, HostResponseStreamCheckWrite,
     HostResponseStreamChunk, HostResponseStreamSkip, HostResponseStreamWriteResult,
     HostResponseStreamWriteWithBytes, HostResponseStreamWriteZeroes, OplogIndex,
 };
@@ -109,12 +110,68 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self).await
+                call.replay_expecting_completion(self)
+                    .await
+                    .map_err(StreamError::from)
             }?;
 
             end_http_request_if_closed(self, handle, &result.result).await?;
             result.result.map_err(StreamError::from)
+        } else if self.state.open_filesystem_input_streams.contains(&handle) {
+            self.observe_function_call("io::streams::input_stream", "read");
+            // The chunking of non-blocking file reads depends on host scheduling:
+            // a read may return an empty chunk while the background read task is
+            // still running, and the guest reacts by polling. To keep the guest's
+            // read/poll loop identical during replay, the length of each returned
+            // chunk is recorded (the bytes themselves are not needed, as the
+            // initial file system is restored to the same contents for replay),
+            // and replay re-reads exactly that many bytes from the file.
+            let call = CallHandle::<FilesystemInputStreamRead, NotCancellable>::start(
+                self,
+                HostRequestNoInput {},
+                DurableFunctionType::ReadLocal,
+            )
+            .await?;
+
+            if call.is_live() {
+                let result = HostInputStream::read(self.table(), self_, len).await;
+                call.complete(
+                    self,
+                    HostResponseStreamSkip {
+                        result: result
+                            .as_ref()
+                            .map(|bytes| bytes.len() as u64)
+                            .map_err(SerializableStreamError::from),
+                    },
+                )
+                .await?;
+                result
+            } else {
+                match call.replay(self).await? {
+                    CallReplayOutcome::Replayed(recorded) => match recorded.result {
+                        Ok(recorded_len) => {
+                            replay_file_stream_read(self, handle, recorded_len).await
+                        }
+                        Err(err) => Err(StreamError::from(err)),
+                    },
+                    CallReplayOutcome::Incomplete(call) => {
+                        let result = HostInputStream::read(self.table(), self_, len).await;
+                        call.complete(
+                            self,
+                            HostResponseStreamSkip {
+                                result: result
+                                    .as_ref()
+                                    .map(|bytes| bytes.len() as u64)
+                                    .map_err(SerializableStreamError::from),
+                            },
+                        )
+                        .await?;
+                        result
+                    }
+                }
+            }
         } else {
             self.observe_function_call("io::streams::input_stream", "read");
             HostInputStream::read(self.table(), self_, len).await
@@ -179,8 +236,11 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self).await
+                call.replay_expecting_completion(self)
+                    .await
+                    .map_err(StreamError::from)
             }?;
 
             end_http_request_if_closed(self, handle, &result.result).await?;
@@ -222,12 +282,69 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self).await
+                call.replay_expecting_completion(self)
+                    .await
+                    .map_err(StreamError::from)
             }?;
 
             end_http_request_if_closed(self, handle, &result.result).await?;
             result.result.map_err(StreamError::from)
+        } else if self
+            .state
+            .open_filesystem_input_streams
+            .contains(&self_.rep())
+        {
+            self.observe_function_call("io::streams::input_stream", "skip");
+            // Like `read`, the amount skipped by a non-blocking file skip depends
+            // on host scheduling, so the skipped length is recorded and replay
+            // skips exactly that many bytes from the restored file.
+            let handle = self_.rep();
+            let call = CallHandle::<FilesystemInputStreamSkip, NotCancellable>::start(
+                self,
+                HostRequestNoInput {},
+                DurableFunctionType::ReadLocal,
+            )
+            .await?;
+
+            if call.is_live() {
+                let result = HostInputStream::skip(self.table(), self_, len).await;
+                call.complete(
+                    self,
+                    HostResponseStreamSkip {
+                        result: result
+                            .as_ref()
+                            .copied()
+                            .map_err(SerializableStreamError::from),
+                    },
+                )
+                .await?;
+                result
+            } else {
+                match call.replay(self).await? {
+                    CallReplayOutcome::Replayed(recorded) => match recorded.result {
+                        Ok(recorded_len) => {
+                            replay_file_stream_skip(self, handle, recorded_len).await
+                        }
+                        Err(err) => Err(StreamError::from(err)),
+                    },
+                    CallReplayOutcome::Incomplete(call) => {
+                        let result = HostInputStream::skip(self.table(), self_, len).await;
+                        call.complete(
+                            self,
+                            HostResponseStreamSkip {
+                                result: result
+                                    .as_ref()
+                                    .copied()
+                                    .map_err(SerializableStreamError::from),
+                            },
+                        )
+                        .await?;
+                        result
+                    }
+                }
+            }
         } else {
             self.observe_function_call("io::streams::input_stream", "skip");
             HostInputStream::skip(self.table(), self_, len).await
@@ -271,8 +388,11 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self).await
+                call.replay_expecting_completion(self)
+                    .await
+                    .map_err(StreamError::from)
             }?;
             end_http_request_if_closed(self, handle, &result.result).await?;
 
@@ -285,11 +405,21 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
 
     fn subscribe(&mut self, self_: Resource<InputStream>) -> wasmtime::Result<Resource<Pollable>> {
         self.observe_function_call("io::streams::input_stream", "subscribe");
-        HostInputStream::subscribe(self.table(), self_)
+        let is_file_stream = self
+            .state
+            .open_filesystem_input_streams
+            .contains(&self_.rep());
+        let pollable = HostInputStream::subscribe(self.table(), self_)?;
+        if is_file_stream {
+            self.state.file_stream_pollables.insert(pollable.rep());
+        }
+        Ok(pollable)
     }
 
     async fn drop(&mut self, rep: Resource<InputStream>) -> wasmtime::Result<()> {
         self.observe_function_call("io::streams::input_stream", "drop");
+
+        let stream_rep = rep.rep();
 
         if is_incoming_http_body_stream(self, &rep) {
             let handle = rep.rep();
@@ -300,7 +430,13 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             }
         }
 
-        HostInputStream::drop(self.table(), rep).await
+        let result = HostInputStream::drop(self.table(), rep).await;
+        if result.is_ok() {
+            // Only unclassify after the resource is really gone: reps are recycled by the
+            // resource table, and a failed drop leaves the file stream live.
+            self.state.open_filesystem_input_streams.remove(&stream_rep);
+        }
+        result
     }
 }
 
@@ -342,16 +478,78 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self).await
-            }
-            .map_err(StreamError::from)?;
+                call.replay_expecting_completion(self)
+                    .await
+                    .map_err(StreamError::from)
+            }?;
 
             result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::output_stream", "check_write");
             let stream_rep = self_.rep();
-            let result = HostOutputStream::check_write(self.table(), self_).await;
+            let result = if self
+                .state
+                .open_filesystem_output_streams
+                .contains_key(&stream_rep)
+            {
+                // Whether check_write returns 0 or the full budget depends on
+                // whether the background write task has finished, which is host
+                // scheduling dependent. The result is recorded so the guest's
+                // check-write/poll loop is identical during replay. When a
+                // recorded non-zero budget is replayed, the real stream is first
+                // driven to readiness so that subsequent re-executed writes are
+                // permitted by its state machine.
+                let call = CallHandle::<FilesystemOutputStreamCheckWrite, NotCancellable>::start(
+                    self,
+                    HostRequestNoInput {},
+                    DurableFunctionType::ReadLocal,
+                )
+                .await?;
+
+                if call.is_live() {
+                    let result = HostOutputStream::check_write(self.table(), self_).await;
+                    call.complete(
+                        self,
+                        HostResponseStreamCheckWrite {
+                            result: result
+                                .as_ref()
+                                .copied()
+                                .map_err(SerializableStreamError::from),
+                        },
+                    )
+                    .await?;
+                    result
+                } else {
+                    match call.replay(self).await? {
+                        CallReplayOutcome::Replayed(recorded) => match recorded.result {
+                            Ok(0) => Ok(0),
+                            Ok(budget) => {
+                                self.table().get_mut(&self_)?.write_ready().await?;
+                                Ok(budget)
+                            }
+                            Err(err) => Err(StreamError::from(err)),
+                        },
+                        CallReplayOutcome::Incomplete(call) => {
+                            let result = HostOutputStream::check_write(self.table(), self_).await;
+                            call.complete(
+                                self,
+                                HostResponseStreamCheckWrite {
+                                    result: result
+                                        .as_ref()
+                                        .copied()
+                                        .map_err(SerializableStreamError::from),
+                                },
+                            )
+                            .await?;
+                            result
+                        }
+                    }
+                }
+            } else {
+                HostOutputStream::check_write(self.table(), self_).await
+            };
             if let Ok(permit) = result.as_ref() {
                 if *permit > 0 {
                     reconcile_pending_filesystem_stream_reservation(self, stream_rep).await;
@@ -410,12 +608,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
                 let replayed = call.replay_expecting_completion(self).await;
                 mark_replayed_body_write(self, state.request_handle);
-                replayed
-            }
-            .map_err(StreamError::from)?;
+                replayed.map_err(StreamError::from)
+            }?;
 
             result.result.map(|_bytes| ()).map_err(StreamError::from)
         } else {
@@ -534,12 +732,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
                 let replayed = call.replay_expecting_completion(self).await;
                 mark_replayed_body_write(self, state.request_handle);
-                replayed
-            }
-            .map_err(StreamError::from)?;
+                replayed.map_err(StreamError::from)
+            }?;
 
             result.result.map(|_bytes| ()).map_err(StreamError::from)
         } else {
@@ -591,10 +789,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self).await
-            }
-            .map_err(StreamError::from)?;
+                call.replay_expecting_completion(self)
+                    .await
+                    .map_err(StreamError::from)
+            }?;
 
             result.result.map_err(StreamError::from)
         } else {
@@ -643,10 +843,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self).await
-            }
-            .map_err(StreamError::from)?;
+                call.replay_expecting_completion(self)
+                    .await
+                    .map_err(StreamError::from)
+            }?;
 
             result.result.map_err(StreamError::from)
         } else {
@@ -672,7 +874,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 .or_default()
                 .output_stream_subscribed = true;
         }
-        HostOutputStream::subscribe(self.table(), self_)
+        let is_file_stream = self.state.open_filesystem_output_streams.contains_key(&rep);
+        let pollable = HostOutputStream::subscribe(self.table(), self_)?;
+        if is_file_stream {
+            self.state.file_stream_pollables.insert(pollable.rep());
+        }
+        Ok(pollable)
     }
 
     async fn write_zeroes(
@@ -721,12 +928,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
                 let replayed = call.replay_expecting_completion(self).await;
                 mark_replayed_body_write(self, state.request_handle);
-                replayed
-            }
-            .map_err(StreamError::from)?;
+                replayed.map_err(StreamError::from)
+            }?;
 
             result.result.map(|_| ()).map_err(StreamError::from)
         } else {
@@ -811,12 +1018,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
                 let replayed = call.replay_expecting_completion(self).await;
                 mark_replayed_body_write(self, state.request_handle);
-                replayed
-            }
-            .map_err(StreamError::from)?;
+                replayed.map_err(StreamError::from)
+            }?;
 
             result.result.map(|_| ()).map_err(StreamError::from)
         } else {
@@ -869,10 +1076,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self).await
-            }
-            .map_err(StreamError::from)?;
+                call.replay_expecting_completion(self)
+                    .await
+                    .map_err(StreamError::from)
+            }?;
 
             result.result.map_err(StreamError::from)
         } else {
@@ -936,10 +1145,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
+                .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self).await
-            }
-            .map_err(StreamError::from)?;
+                call.replay_expecting_completion(self)
+                    .await
+                    .map_err(StreamError::from)
+            }?;
 
             result.result.map_err(StreamError::from)
         } else {
@@ -972,7 +1183,11 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         }
         let result = HostOutputStream::drop(self.table(), rep).await;
         reconcile_pending_filesystem_stream_reservation(self, handle).await;
-        self.state.open_filesystem_output_streams.remove(&handle);
+        if result.is_ok() {
+            // Only unclassify after the resource is really gone: reps are recycled by the
+            // resource table, and a failed drop leaves the file stream live.
+            self.state.open_filesystem_output_streams.remove(&handle);
+        }
         result
     }
 }
@@ -1018,6 +1233,63 @@ fn get_http_output_stream_state<Ctx: WorkerCtx>(
                 "No matching HTTP output stream state for resource handle",
             ))
         })
+}
+
+/// Re-reads exactly `recorded_len` bytes from a file-backed input stream during
+/// replay, reproducing the chunk the guest received when the oplog was written.
+/// The initial file system is restored to the same contents for replay, so the
+/// bytes are re-derived from the file instead of being stored in the oplog. This
+/// also keeps the host-side stream position in sync for the transition to live
+/// execution at the end of the replay.
+async fn replay_file_stream_read<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: u32,
+    recorded_len: u64,
+) -> Result<Vec<u8>, StreamError> {
+    let mut collected: Vec<u8> = Vec::with_capacity(recorded_len as usize);
+    while (collected.len() as u64) < recorded_len {
+        let remaining = recorded_len - collected.len() as u64;
+        let stream = Resource::<InputStream>::new_borrow(handle);
+        match HostInputStream::blocking_read(ctx.table(), stream, remaining).await {
+            Ok(chunk) if !chunk.is_empty() => collected.extend_from_slice(&chunk),
+            Ok(_) | Err(StreamError::Closed) => {
+                return Err(file_stream_replay_divergence(
+                    collected.len() as u64,
+                    recorded_len,
+                ));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(collected)
+}
+
+/// Skips exactly `recorded_len` bytes on a file-backed input stream during
+/// replay, mirroring `replay_file_stream_read`.
+async fn replay_file_stream_skip<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: u32,
+    recorded_len: u64,
+) -> Result<u64, StreamError> {
+    let mut skipped = 0u64;
+    while skipped < recorded_len {
+        let remaining = recorded_len - skipped;
+        let stream = Resource::<InputStream>::new_borrow(handle);
+        match HostInputStream::blocking_skip(ctx.table(), stream, remaining).await {
+            Ok(n) if n > 0 => skipped += n,
+            Ok(_) | Err(StreamError::Closed) => {
+                return Err(file_stream_replay_divergence(skipped, recorded_len));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(skipped)
+}
+
+fn file_stream_replay_divergence(got: u64, expected: u64) -> StreamError {
+    StreamError::Trap(wasmtime::Error::msg(format!(
+        "file stream replay divergence: the file provided {got} bytes but {expected} bytes were recorded"
+    )))
 }
 
 fn is_incoming_http_body_stream<Ctx: WorkerCtx>(

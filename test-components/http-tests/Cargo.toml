@@ -20,10 +20,13 @@ golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_ag
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 time = { version = "0.3", features = ["formatting"] }
-golem-wasi-http = { version = "0.2.0", features = ["async", "json"] }
 wasi = { version = "=0.14.7+wasi-0.2.4" }
+wasi-fetch = "=0.2.0"
+# Must be the exact wit-bindgen version golem-rust generates the export glue with:
+# `spawn` shares a process-global with the export glue and silently drops the
+# spawned future when the versions differ (e.g. the one re-exported via wasip3).
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.59.0", features = ["async", "async-spawn"] }
 futures-concurrency = "7.6.3"
 futures-util = "0.3.31"
 rand = "0.9.0"
 wasi-logger = { version = "0.1.2", features = ["kv"] }
-wstd = { version = "=0.6.5", features = ["default", "json"] }

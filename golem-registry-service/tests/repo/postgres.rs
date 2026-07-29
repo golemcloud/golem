@@ -308,6 +308,41 @@ async fn test_environment_update_concurrently(#[dimension(postgres_variant)] dep
 }
 
 #[test]
+async fn test_environment_default_card_ids_by_account_excludes_deleted(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_environment_default_card_ids_by_account_excludes_deleted(deps).await;
+}
+
+#[test]
+async fn test_deleted_environment_default_card_revoke_returns_not_found(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_deleted_environment_default_card_revoke_returns_not_found(deps).await;
+}
+
+#[test]
+async fn test_deleted_environment_default_card_is_not_reported_existing(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_deleted_environment_default_card_is_not_reported_existing(deps).await;
+}
+
+#[test]
+async fn test_environment_default_card_tracks_environment_rename(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_environment_default_card_tracks_environment_rename(deps).await;
+}
+
+#[test]
+async fn test_environment_default_card_tracks_application_rename(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_environment_default_card_tracks_application_rename(deps).await;
+}
+
+#[test]
 async fn test_agent_secret_get_revision_include_deleted(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
@@ -317,6 +352,49 @@ async fn test_agent_secret_get_revision_include_deleted(
 #[test]
 async fn test_component_stage(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_component_stage(deps).await;
+}
+
+#[test]
+async fn test_initial_permission_card_ids_by_account_are_unique(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_initial_permission_card_ids_by_account_are_unique(deps).await;
+}
+
+#[test]
+async fn test_agent_initial_card_removed_from_current_component_is_not_live(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_agent_initial_card_removed_from_current_component_is_not_live(deps)
+        .await;
+}
+
+#[test]
+async fn test_initial_permission_card_ids_by_account_excludes_deleted_components(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_initial_permission_card_ids_by_account_excludes_deleted_components(
+        deps,
+    )
+    .await;
+}
+
+#[test]
+async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_deleted_component_agent_initial_card_is_not_reported_existing(deps)
+        .await;
+}
+
+#[test]
+async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_revisions(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_initial_permission_card_ids_by_account_excludes_pre_recreate_revisions(
+        deps,
+    )
+    .await;
 }
 
 #[test]

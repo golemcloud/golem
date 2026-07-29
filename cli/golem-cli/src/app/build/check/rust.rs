@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::app::build::check::{
-    DependencyFixStep, DependencyMatcherSemantics, DependencySpecCompliance,
+    DependencyFixStep, DependencyMatcherSemantics, DependencyPresence, DependencySpecCompliance,
     ExpectedDependencyKind, evaluate_dependency_spec_compliance,
 };
 use crate::app::context::BuildContext;
@@ -23,6 +23,7 @@ use crate::fs;
 use crate::model::GuestLanguage;
 use crate::sdk_overrides::{RustDependency, SdkOverrides};
 use crate::versions;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub(super) fn plan_rust_cargo_fix_steps(
@@ -38,7 +39,7 @@ pub(super) fn plan_rust_cargo_fix_steps(
         .map(|requirement| requirement.name)
         .collect::<Vec<_>>();
 
-    let mut steps = Vec::new();
+    let mut steps_by_path = BTreeMap::new();
     for component_name in ctx.application_context().selected_component_names() {
         let component = ctx.application().component(component_name);
         if component.guess_language() != Some(GuestLanguage::Rust) {
@@ -70,7 +71,7 @@ pub(super) fn plan_rust_cargo_fix_steps(
                     warnings.push(format!("{} ({})", message, cargo_toml_path.display()));
                 }
                 DependencySpecCompliance::NeedsUpdate => {
-                    if found.is_none() && !requirement.required {
+                    if found.is_none() && requirement.presence == DependencyPresence::Optional {
                         continue;
                     }
                     let update_spec =
@@ -86,16 +87,22 @@ pub(super) fn plan_rust_cargo_fix_steps(
         }
 
         if working != original {
-            steps.push(DependencyFixStep {
-                path: cargo_toml_path,
-                current: original,
-                new: working,
-            });
+            steps_by_path.insert(
+                cargo_toml_path.clone(),
+                DependencyFixStep {
+                    path: cargo_toml_path,
+                    current: original,
+                    new: working,
+                },
+            );
         }
     }
 
     if let Some((workspace_cargo_toml_path, workspace_source)) = cargo_workspace_manifest {
-        let mut working = workspace_source.clone();
+        let mut working = steps_by_path
+            .get(&workspace_cargo_toml_path)
+            .map(|step| step.new.clone())
+            .unwrap_or_else(|| workspace_source.clone());
         let specs = edit::cargo_toml::collect_dependency_specs(&workspace_source, &spec_names)?;
 
         for requirement in &requirements {
@@ -123,7 +130,7 @@ pub(super) fn plan_rust_cargo_fix_steps(
                     ));
                 }
                 DependencySpecCompliance::NeedsUpdate => {
-                    if found.is_none() && !requirement.required {
+                    if found.is_none() && requirement.presence == DependencyPresence::Optional {
                         continue;
                     }
                     let update_spec = build_cargo_update_spec(
@@ -141,15 +148,18 @@ pub(super) fn plan_rust_cargo_fix_steps(
         }
 
         if working != workspace_source {
-            steps.push(DependencyFixStep {
-                path: workspace_cargo_toml_path,
-                current: workspace_source,
-                new: working,
-            });
+            steps_by_path.insert(
+                workspace_cargo_toml_path.clone(),
+                DependencyFixStep {
+                    path: workspace_cargo_toml_path,
+                    current: workspace_source,
+                    new: working,
+                },
+            );
         }
     }
 
-    Ok(steps)
+    Ok(steps_by_path.into_values().collect())
 }
 
 fn cargo_workspace_manifest(ctx: &BuildContext<'_>) -> anyhow::Result<Option<(PathBuf, String)>> {
@@ -167,14 +177,13 @@ fn cargo_workspace_manifest(ctx: &BuildContext<'_>) -> anyhow::Result<Option<(Pa
 }
 
 fn rust_dependency_requirements(overrides: &SdkOverrides) -> Vec<CargoDependencyRequirement> {
+    use DependencyPresence::{Optional, Required};
+
     let golem_rust_expected = match overrides.golem_rust_dependency() {
         RustDependency::Path(path) => {
             ExpectedDependencyKind::ExactPath(path.to_string_lossy().to_string())
         }
-        RustDependency::Version(version) => ExpectedDependencyKind::SemanticCompatibleVersion {
-            base_version: version,
-            use_version_hint: false,
-        },
+        RustDependency::Version(version) => ExpectedDependencyKind::compatible(version),
     };
 
     let mut requirements = vec![
@@ -185,7 +194,7 @@ fn rust_dependency_requirements(overrides: &SdkOverrides) -> Vec<CargoDependency
                 features: vec!["kv".to_string()],
             },
             matcher: CargoDependencyMatcher::Exact,
-            required: false,
+            presence: Optional,
         },
         CargoDependencyRequirement {
             name: "serde",
@@ -194,7 +203,7 @@ fn rust_dependency_requirements(overrides: &SdkOverrides) -> Vec<CargoDependency
                 features: vec!["derive".to_string()],
             },
             matcher: CargoDependencyMatcher::Exact,
-            required: false,
+            presence: Optional,
         },
         CargoDependencyRequirement {
             name: "serde_json",
@@ -203,7 +212,7 @@ fn rust_dependency_requirements(overrides: &SdkOverrides) -> Vec<CargoDependency
                 features: Vec::new(),
             },
             matcher: CargoDependencyMatcher::Exact,
-            required: false,
+            presence: Optional,
         },
         CargoDependencyRequirement {
             name: "wstd",
@@ -212,7 +221,7 @@ fn rust_dependency_requirements(overrides: &SdkOverrides) -> Vec<CargoDependency
                 features: vec!["default".to_string(), "json".to_string()],
             },
             matcher: CargoDependencyMatcher::Exact,
-            required: false,
+            presence: Optional,
         },
     ];
 
@@ -234,9 +243,8 @@ fn rust_dependency_requirements(overrides: &SdkOverrides) -> Vec<CargoDependency
         expected_spec: golem_rust_expected_spec,
         matcher: CargoDependencyMatcher::Kind {
             expected: golem_rust_expected,
-            semantics: DependencyMatcherSemantics::Rust,
         },
-        required: true,
+        presence: Required,
     });
 
     requirements
@@ -244,17 +252,14 @@ fn rust_dependency_requirements(overrides: &SdkOverrides) -> Vec<CargoDependency
 
 enum CargoDependencyMatcher {
     Exact,
-    Kind {
-        expected: ExpectedDependencyKind,
-        semantics: DependencyMatcherSemantics,
-    },
+    Kind { expected: ExpectedDependencyKind },
 }
 
 struct CargoDependencyRequirement {
     name: &'static str,
     expected_spec: DependencySpec,
     matcher: CargoDependencyMatcher,
-    required: bool,
+    presence: DependencyPresence,
 }
 
 fn build_cargo_update_spec(
@@ -264,13 +269,13 @@ fn build_cargo_update_spec(
 ) -> anyhow::Result<DependencySpec> {
     let base_spec = match (&requirement.matcher, found) {
         (
-            CargoDependencyMatcher::Kind {
-                expected,
-                semantics,
-            },
+            CargoDependencyMatcher::Kind { expected },
             Some(DependencySpec::Version { version, features }),
-        ) if evaluate_dependency_spec_compliance(version, expected, *semantics)?
-            == DependencySpecCompliance::Compatible =>
+        ) if evaluate_dependency_spec_compliance(
+            version,
+            expected,
+            DependencyMatcherSemantics::Rust,
+        )? == DependencySpecCompliance::Compatible =>
         {
             DependencySpec::Version {
                 version: version.clone(),
@@ -278,15 +283,15 @@ fn build_cargo_update_spec(
             }
         }
         (
-            CargoDependencyMatcher::Kind {
-                expected,
-                semantics,
-            },
+            CargoDependencyMatcher::Kind { expected },
             Some(DependencySpec::Path { path, features }),
         ) if matches!(expected, ExpectedDependencyKind::ExactPath(expected_path)
             if path_matches_expected(path, expected_path, base_dir))
-            || evaluate_dependency_spec_compliance(path, expected, *semantics)?
-                == DependencySpecCompliance::Compatible =>
+            || evaluate_dependency_spec_compliance(
+                path,
+                expected,
+                DependencyMatcherSemantics::Rust,
+            )? == DependencySpecCompliance::Compatible =>
         {
             DependencySpec::Path {
                 path: path.clone(),
@@ -347,7 +352,7 @@ fn evaluate_cargo_dependency_compliance(
     base_dir: Option<&Path>,
 ) -> anyhow::Result<DependencySpecCompliance> {
     let Some(found) = found else {
-        return Ok(if requirement.required {
+        return Ok(if requirement.presence == DependencyPresence::Required {
             DependencySpecCompliance::NeedsUpdate
         } else {
             DependencySpecCompliance::Compatible
@@ -370,27 +375,21 @@ fn evaluate_cargo_dependency_compliance(
                 DependencySpecCompliance::NeedsUpdate
             }
         }
-        (
-            CargoDependencyMatcher::Kind {
+        (CargoDependencyMatcher::Kind { expected }, DependencySpec::Version { version, .. }) => {
+            evaluate_dependency_spec_compliance(
+                version,
                 expected,
-                semantics,
-            },
-            DependencySpec::Version { version, .. },
-        ) => evaluate_dependency_spec_compliance(version, expected, *semantics)?,
-        (
-            CargoDependencyMatcher::Kind {
-                expected,
-                semantics,
-            },
-            DependencySpec::Path { path, .. },
-        ) => {
+                DependencyMatcherSemantics::Rust,
+            )?
+        }
+        (CargoDependencyMatcher::Kind { expected }, DependencySpec::Path { path, .. }) => {
             if let ExpectedDependencyKind::ExactPath(expected_path) = expected
                 && path_matches_expected(path, expected_path, base_dir)
             {
                 return Ok(DependencySpecCompliance::Compatible);
             }
 
-            evaluate_dependency_spec_compliance(path, expected, *semantics)?
+            evaluate_dependency_spec_compliance(path, expected, DependencyMatcherSemantics::Rust)?
         }
     })
 }
@@ -436,6 +435,7 @@ mod test {
         CargoDependencyMatcher, CargoDependencyRequirement, build_cargo_update_spec,
         evaluate_cargo_dependency_compliance, rust_dependency_requirements,
     };
+    use crate::app::build::check::DependencyPresence::{Optional, Required};
     use crate::app::edit::cargo_toml::DependencySpec;
     use crate::app::template::TEMPLATES_DIR;
     use crate::sdk_overrides::sdk_overrides;
@@ -456,9 +456,8 @@ mod test {
                 expected: crate::app::build::check::ExpectedDependencyKind::ExactPath(
                     "/tmp/sdks/rust/golem-rust".to_string(),
                 ),
-                semantics: crate::app::build::check::DependencyMatcherSemantics::Rust,
             },
-            required: true,
+            presence: Required,
         };
 
         let found = DependencySpec::Path {
@@ -492,9 +491,8 @@ mod test {
                 expected: crate::app::build::check::ExpectedDependencyKind::ExactPath(
                     "/repo/sdks/rust/golem-rust".to_string(),
                 ),
-                semantics: crate::app::build::check::DependencyMatcherSemantics::Rust,
             },
-            required: true,
+            presence: Required,
         };
 
         let found = DependencySpec::Path {
@@ -613,7 +611,7 @@ mod test {
                 features: vec!["derive".to_string()],
             },
             matcher: CargoDependencyMatcher::Exact,
-            required: false,
+            presence: Optional,
         };
 
         let compliance = evaluate_cargo_dependency_compliance(None, &requirement, None).unwrap();

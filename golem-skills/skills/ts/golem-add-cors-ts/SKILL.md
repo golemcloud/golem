@@ -7,42 +7,40 @@ description: "Configuring CORS for TypeScript HTTP endpoints. Use when the user 
 
 ## Mount-Level CORS
 
-Set `cors` on `@agent()` to apply allowed origins to **all** endpoints:
+Set `cors` on the mount options of `http.mount(...)` to apply allowed origins to **all** endpoints:
 
 ```typescript
-@agent({
-  mount: '/api/{name}',
-  cors: ['https://app.example.com']
-})
-class MyAgent extends BaseAgent {
-  constructor(readonly name: string) { super(); }
+import { z } from 'zod';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
 
-  @endpoint({ get: '/data' })
-  async getData(): Promise<Data> { ... }
-  // Allows https://app.example.com
-}
+export const MyAgent = defineAgent({
+  name: 'MyAgent',
+  id: { name: z.string() },
+  http: http.mount('/api/{name}', { cors: ['https://app.example.com'] }),
+  methods: {
+    getData: method({ input: {}, returns: Data, http: http.get('/data') }),
+    // Allows https://app.example.com
+  },
+});
 ```
 
 ## Endpoint-Level CORS
 
-Set `cors` on `@endpoint()` to add allowed origins for a specific endpoint. Origins are **unioned** with mount-level CORS:
+Pass `cors` in the endpoint options (the second argument to a verb builder) to add allowed origins for a specific endpoint. Origins are **unioned** with mount-level CORS:
 
 ```typescript
-@agent({
-  mount: '/api/{name}',
-  cors: ['https://app.example.com']
-})
-class MyAgent extends BaseAgent {
-  constructor(readonly name: string) { super(); }
+export const MyAgent = defineAgent({
+  name: 'MyAgent',
+  id: { name: z.string() },
+  http: http.mount('/api/{name}', { cors: ['https://app.example.com'] }),
+  methods: {
+    getData: method({ input: {}, returns: Data, http: http.get('/data', { cors: ['*'] }) }),
+    // Allows BOTH https://app.example.com AND * (all origins)
 
-  @endpoint({ get: '/data', cors: ['*'] })
-  async getData(): Promise<Data> { ... }
-  // Allows BOTH https://app.example.com AND * (all origins)
-
-  @endpoint({ get: '/other' })
-  async getOther(): Promise<Data> { ... }
-  // Inherits mount-level: only https://app.example.com
-}
+    getOther: method({ input: {}, returns: Data, http: http.get('/other') }),
+    // Inherits mount-level: only https://app.example.com
+  },
+});
 ```
 
 ## Wildcard
@@ -50,13 +48,12 @@ class MyAgent extends BaseAgent {
 Use `'*'` to allow all origins:
 
 ```typescript
-@agent({
-  mount: '/public/{name}',
-  cors: ['*']
-})
-class PublicAgent extends BaseAgent {
-  constructor(readonly name: string) { super(); }
-}
+export const PublicAgent = defineAgent({
+  name: 'PublicAgent',
+  id: { name: z.string() },
+  http: http.mount('/public/{name}', { cors: ['*'] }),
+  methods: { /* ... */ },
+});
 ```
 
 ## CORS Preflight

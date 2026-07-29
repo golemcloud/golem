@@ -1,1 +1,1 @@
-import './task-agent';
+import './task-agent.js';

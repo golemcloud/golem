@@ -19,6 +19,7 @@ use super::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::FutureExt;
+use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
 use golem_common::serialization::{deserialize, serialize};
@@ -185,6 +186,39 @@ impl SchedulerStorage for SqliteSchedulerStorage {
                 })
             })
             .collect()
+    }
+
+    async fn count_due(
+        &self,
+        now: DateTime<Utc>,
+        assignment: &ShardAssignment,
+    ) -> Result<u64, String> {
+        if assignment.shard_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let mut shard_placeholders = String::with_capacity(assignment.shard_ids.len() * 2);
+        for index in 0..assignment.shard_ids.len() {
+            if index > 0 {
+                shard_placeholders.push(',');
+            }
+            shard_placeholders.push('?');
+        }
+        let query_sql = format!(
+            "SELECT COUNT(*) FROM scheduled_actions WHERE shard_id IN ({shard_placeholders}) AND due_at_ms <= ?;"
+        );
+        let mut query = sqlx::query_as::<_, (i64,)>(&query_sql);
+        for shard_id in &assignment.shard_ids {
+            query = query.bind(shard_id.value());
+        }
+        query = query.bind(datetime_to_millis(now));
+
+        self.pool
+            .with_ro("scheduler_storage", "count_due")
+            .fetch_one_as(query)
+            .await
+            .map(|(count,)| count as u64)
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn extend_lease(

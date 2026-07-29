@@ -18,7 +18,8 @@ use super::*;
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::schema::SchemaType;
 use golem_common::schema::agent::{InputSchema, NamedField, ParsedAgentId};
-use golem_common::schema::graph::{SchemaGraph, TypedSchemaValue};
+use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
+use golem_common::schema::metadata::TypeId;
 use golem_common::schema::schema_type::{NamedFieldType, ResultSpec, VariantCaseType};
 use golem_common::schema::schema_value::{ResultValuePayload, SchemaValue, VariantValuePayload};
 
@@ -344,6 +345,36 @@ fn source_language_from_str() {
         SourceLanguage::from("go"),
         SourceLanguage::Other("go".to_string())
     );
+}
+
+#[test]
+fn renders_anonymous_recursive_type() {
+    let type_id = TypeId::new("rec:0");
+    let graph = SchemaGraph {
+        defs: vec![SchemaTypeDef {
+            id: type_id.clone(),
+            name: None,
+            body: SchemaType::record(vec![NamedFieldType {
+                name: "children".to_string(),
+                body: SchemaType::list(SchemaType::ref_to(type_id.clone())),
+                metadata: Default::default(),
+            }]),
+        }],
+        root: SchemaType::ref_to(type_id),
+    };
+
+    for language in [
+        SourceLanguage::Rust,
+        SourceLanguage::TypeScript,
+        SourceLanguage::Scala,
+        SourceLanguage::MoonBit,
+    ] {
+        assert_eq!(
+            render_type_for_language(&language, &graph, &graph.root, true),
+            "Rec0",
+            "language: {language}"
+        );
+    }
 }
 
 #[test]

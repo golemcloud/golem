@@ -14,7 +14,7 @@
 
 use crate::app::context::{BuildContext, validated_to_anyhow};
 
-use crate::app::build::extract_agent_type::extract_and_store_agent_types;
+use crate::app::build::extract_component_metadata::extract_and_store_agent_types;
 use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{OptionalComponentNames, PostDeployArgs};
 use crate::command_handler::Handlers;

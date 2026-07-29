@@ -14,6 +14,7 @@
 
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
+use crate::services::card::{CardService, CardState};
 use crate::services::component::ComponentService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::workerctx::WorkerCtx;
@@ -26,6 +27,7 @@ use tracing::{debug, warn};
 
 pub(crate) struct WorkerExecutorRegistryInvalidationHandler<Ctx: WorkerCtx> {
     active_workers: Arc<ActiveWorkers<Ctx>>,
+    card_service: Arc<dyn CardService>,
     component_service: Arc<dyn ComponentService>,
     environment_state_service: Arc<dyn EnvironmentStateService>,
     agent_types_service: Arc<dyn AgentTypesService>,
@@ -35,6 +37,7 @@ impl<Ctx: WorkerCtx> WorkerExecutorRegistryInvalidationHandler<Ctx> {
     pub async fn run(
         registry_service: Arc<dyn RegistryService>,
         active_workers: Arc<ActiveWorkers<Ctx>>,
+        card_service: Arc<dyn CardService>,
         component_service: Arc<dyn ComponentService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_types_service: Arc<dyn AgentTypesService>,
@@ -46,12 +49,54 @@ impl<Ctx: WorkerCtx> WorkerExecutorRegistryInvalidationHandler<Ctx> {
                 Some(shutdown_token),
                 Arc::new(Self {
                     active_workers,
+                    card_service,
                     component_service,
                     environment_state_service,
                     agent_types_service,
                 }),
             )
             .await;
+    }
+
+    /// Re-validates every card currently depended on by a running worker and
+    /// propagates any revocations discovered. A `CursorExpired` event means card
+    /// revocations may have been missed, so the flushed card cache is not enough
+    /// on its own: already-running workers cached their permission as live and
+    /// would only re-check on their next replay. This re-fetches the tracked
+    /// cards (the card cache was just flushed, so `check_cards` hits the
+    /// registry) and reuses the standard revocation propagation path for any
+    /// card that is no longer live.
+    async fn reevaluate_tracked_cards(&self) {
+        let card_ids = self.active_workers.tracked_card_ids().await;
+        if card_ids.is_empty() {
+            return;
+        }
+
+        let states = match self.card_service.check_cards(card_ids).await {
+            Ok(states) => states,
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    "Failed re-validating tracked cards after cursor expiry; \
+                     running workers will re-check on their next replay"
+                );
+                return;
+            }
+        };
+
+        let revoked = states
+            .into_iter()
+            .filter(|(_, state)| *state == CardState::Revoked)
+            .map(|(card_id, _)| card_id)
+            .collect::<Vec<_>>();
+
+        if !revoked.is_empty() {
+            debug!(
+                card_count = revoked.len(),
+                "Cursor expiry re-validation found revoked cards, notifying running workers"
+            );
+            self.active_workers.notify_revoked_cards(&revoked).await;
+        }
     }
 }
 
@@ -66,6 +111,8 @@ impl<Ctx: WorkerCtx> RegistryInvalidationHandler
                 self.component_service.invalidate_all().await;
                 self.environment_state_service.invalidate_all().await;
                 self.agent_types_service.invalidate_all().await;
+                self.card_service.invalidate_all().await;
+                self.reevaluate_tracked_cards().await;
             }
             RegistryInvalidationEvent::DeploymentChanged { environment_id, .. } => {
                 debug!(
@@ -148,7 +195,8 @@ impl<Ctx: WorkerCtx> RegistryInvalidationHandler
                     card_count = card_ids.len(),
                     "Received card revocation event, recording revoked card ids"
                 );
-                self.active_workers.record_revoked_cards(&card_ids).await;
+                self.card_service.record_revoked_cards(&card_ids).await;
+                self.active_workers.notify_revoked_cards(&card_ids).await;
             }
             RegistryInvalidationEvent::ApplicationDeleted {
                 application_id,

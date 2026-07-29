@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub use crate::golem_agentic::golem::agent::common::Principal;
+pub type InputStream = wit_bindgen::StreamReader<u8>;
 pub use agent::*;
 pub use agent_config::*;
 pub use agent_initiator::*;
@@ -25,14 +26,24 @@ pub use http::*;
 pub use multimodal::*;
 pub use resolved_agent::*;
 pub use schema::*;
+pub use tool_client::*;
+pub use tool_impl::{OutputStream, new_tool_stdout};
 pub use tool_literal::*;
 pub use tool_refinement::*;
 pub use tool_registry::{
-    get_all_tools, get_extended_tool_by_name, get_tool_by_name, register_tool,
+    ToolInvokeFuture, ToolInvoker, get_all_tools, get_extended_tool_by_name, get_tool_by_name,
+    get_tool_invoker_by_name, register_tool, register_tool_invoker,
 };
 pub use unstructured_binary::*;
 pub use unstructured_text::*;
 pub use webhook::*;
+pub use wit_bindgen::spawn_local;
+
+#[derive(Debug)]
+pub struct EphemeralInvocationResult<T> {
+    pub metadata: crate::golem_agentic::golem::agent::host::InvocationMetadata,
+    pub value: T,
+}
 
 mod agent;
 mod agent_config;
@@ -49,6 +60,7 @@ mod principal_serde;
 mod resolved_agent;
 mod schema;
 pub mod snapshot_auto;
+mod tool_client;
 mod tool_impl;
 mod tool_literal;
 mod tool_refinement;

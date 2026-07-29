@@ -1,8 +1,10 @@
+warnings = "-44"
+
 import {
+  "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/agent/common",
   "golemcloud/golem_sdk/interface/golem/core/types",
-  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
-  "golemcloud/golem_sdk/interface/wasi/io/poll",
+  "golemcloud/golem_sdk/interface/wasi/clocks/system-clock",
 }
 
-warnings = "-44"
+supported_targets = "+wasm"

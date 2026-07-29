@@ -335,6 +335,9 @@ mod tests {
             "account.update",
             arb_account_update_result
         ),
+        registry_entry!("CardGetView", "card.get", arb_card_get_result),
+        registry_entry!("CardListView", "card.list", arb_card_list_result),
+        registry_entry!("CardRevokeResult", "card.revoke", arb_card_revoke_result),
         registry_entry!("AgentTypeView", "agent-type.get", arb_agent_type_get_result),
         registry_entry!(
             "AgentTypeListView",
@@ -3429,6 +3432,144 @@ mod tests {
                 },
             )
             .boxed()
+    }
+
+    fn arb_card_get_result() -> OutputDocumentStrategy {
+        serialized_output(arb_stored_card().prop_map(crate::model::text::card::CardGetView))
+    }
+
+    fn arb_card_list_result() -> OutputDocumentStrategy {
+        serialized_output(
+            proptest::collection::vec(arb_stored_card(), 0..5)
+                .prop_map(|cards| crate::model::text::card::CardListView { cards }),
+        )
+    }
+
+    fn arb_card_revoke_result() -> OutputDocumentStrategy {
+        serialized_output(proptest::collection::vec(arb_uuid(), 0..5).prop_map(
+            |revoked_card_ids| crate::model::text::card::CardRevokeResult { revoked_card_ids },
+        ))
+    }
+
+    fn arb_stored_card() -> BoxedStrategy<golem_client::model::StoredCard> {
+        prop_oneof![
+            arb_card().prop_map(golem_client::model::StoredCard::Concrete),
+            arb_client_polymorphic_card().prop_map(golem_client::model::StoredCard::Polymorphic),
+        ]
+        .boxed()
+    }
+
+    fn arb_card() -> BoxedStrategy<golem_client::model::Card> {
+        (
+            arb_uuid(),
+            proptest::collection::vec(arb_uuid(), 0..3),
+            proptest::collection::vec(arb_small_string(), 0..4),
+            proptest::collection::vec(arb_small_string(), 0..4),
+            proptest::collection::vec(arb_small_string(), 0..4),
+            proptest::collection::vec(arb_small_string(), 0..4),
+            arb_datetime(),
+            proptest::option::of(arb_datetime()),
+            proptest::bool::ANY,
+            proptest::option::of(arb_card_managed_by()),
+        )
+            .prop_map(
+                |(
+                    card_id,
+                    parent_ids,
+                    lower_positive,
+                    lower_negative,
+                    upper_positive,
+                    upper_negative,
+                    created_at,
+                    expires_at,
+                    system_card,
+                    managed_by,
+                )| golem_client::model::Card {
+                    card_id,
+                    parent_ids,
+                    lower_positive,
+                    lower_negative,
+                    upper_positive,
+                    upper_negative,
+                    created_at,
+                    expires_at,
+                    system_card,
+                    managed_by,
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_client_polymorphic_card() -> BoxedStrategy<golem_client::model::PolymorphicCard> {
+        (
+            arb_uuid(),
+            proptest::collection::vec(arb_uuid(), 0..3),
+            proptest::collection::vec(arb_small_string(), 0..4),
+            proptest::collection::vec(arb_small_string(), 0..4),
+            proptest::collection::vec(arb_small_string(), 0..4),
+            proptest::collection::vec(arb_small_string(), 0..4),
+            arb_datetime(),
+            proptest::option::of(arb_datetime()),
+            proptest::bool::ANY,
+        )
+            .prop_map(
+                |(
+                    card_id,
+                    parent_ids,
+                    lower_positive,
+                    lower_negative,
+                    upper_positive,
+                    upper_negative,
+                    created_at,
+                    expires_at,
+                    system_card,
+                )| golem_client::model::PolymorphicCard {
+                    card_id,
+                    parent_ids,
+                    lower_positive,
+                    lower_negative,
+                    upper_positive,
+                    upper_negative,
+                    created_at,
+                    expires_at,
+                    system_card,
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_card_managed_by() -> BoxedStrategy<golem_client::model::CardManagedBy> {
+        prop_oneof![
+            arb_uuid().prop_map(|account_id| {
+                golem_client::model::CardManagedBy::AccountRoot(
+                    golem_client::model::CardManagedByAccountRoot { account_id },
+                )
+            }),
+            arb_uuid().prop_map(|environment_id| {
+                golem_client::model::CardManagedBy::EnvironmentDefault(
+                    golem_client::model::CardManagedByEnvironmentDefault { environment_id },
+                )
+            }),
+            arb_uuid().prop_map(|permission_share_id| {
+                golem_client::model::CardManagedBy::PermissionShare(
+                    golem_client::model::CardManagedByPermissionShare {
+                        permission_share_id,
+                    },
+                )
+            }),
+            (arb_uuid(), arb_small_u64(), arb_small_string()).prop_map(
+                |(component_id, component_revision, agent_type)| {
+                    golem_client::model::CardManagedBy::AgentInitial(
+                        golem_client::model::CardManagedByAgentInitial {
+                            component_id,
+                            component_revision,
+                            agent_type,
+                        },
+                    )
+                }
+            ),
+        ]
+        .boxed()
     }
 
     fn arb_agent_cancel_invocation_result() -> OutputDocumentStrategy {

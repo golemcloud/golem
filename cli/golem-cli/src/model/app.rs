@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use super::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
-use crate::bridge_gen::bridge_client_directory_name;
+use crate::bridge_gen::{
+    BridgeMode, bridge_client_directory_name, tool_bridge_client_directory_name,
+};
 use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_application_preload};
@@ -38,6 +40,7 @@ use golem_common::model::environment::EnvironmentName;
 use golem_common::model::quota::{ResourceDefinitionCreation, ResourceName};
 use golem_common::model::validate_lower_kebab_case_identifier;
 use golem_common::schema::AgentTypeSchema;
+use golem_common::schema::tool::Tool;
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
     ToTitleCase, ToTrainCase, ToUpperCamelCase,
@@ -52,6 +55,7 @@ use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use strum::IntoEnumIterator;
 use url::Url;
 
 const TEMP_DIR: &str = "golem-temp";
@@ -272,12 +276,179 @@ pub enum AppBuildStep {
     GenBridge,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct ToolName(String);
+
+impl ToolName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Display for ToolName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl TryFrom<&str> for ToolName {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        if value.is_empty() {
+            Err("Tool dependency name must not be empty".to_string())
+        } else {
+            Ok(Self(value.to_string()))
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub enum ComponentDependency {
+    Agent {
+        component_name: ComponentName,
+        agent_type_name: AgentTypeName,
+    },
+    Tool {
+        component_name: ComponentName,
+        tool_name: ToolName,
+    },
+}
+
+impl ComponentDependency {
+    pub fn component_name(&self) -> &ComponentName {
+        match self {
+            ComponentDependency::Agent { component_name, .. }
+            | ComponentDependency::Tool { component_name, .. } => component_name,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BridgeSdkTarget {
     pub component_name: ComponentName,
-    pub agent_type: AgentTypeSchema,
+    pub subject: BridgeSdkTargetSubject,
     pub target_language: GuestLanguage,
+    pub bridge_mode: BridgeMode,
     pub output_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+pub enum BridgeSdkTargetSubject {
+    Agent(AgentTypeSchema),
+    Tool(Tool),
+}
+
+impl BridgeSdkTargetSubject {
+    pub fn kind(&self) -> BridgeSdkTargetKind {
+        match self {
+            BridgeSdkTargetSubject::Agent(_) => BridgeSdkTargetKind::Agent,
+            BridgeSdkTargetSubject::Tool(_) => BridgeSdkTargetKind::Tool,
+        }
+    }
+
+    pub fn display_name(&self) -> &str {
+        match self {
+            BridgeSdkTargetSubject::Agent(agent_type) => agent_type.type_name.as_str(),
+            BridgeSdkTargetSubject::Tool(tool) => tool.name().unwrap_or_default(),
+        }
+    }
+
+    pub fn as_agent(&self) -> Option<&AgentTypeSchema> {
+        match self {
+            BridgeSdkTargetSubject::Agent(agent_type) => Some(agent_type),
+            BridgeSdkTargetSubject::Tool(_) => None,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum BridgeSdkTargetKind {
+    Agent,
+    Tool,
+}
+
+impl BridgeSdkTargetKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Agent => "agent",
+            Self::Tool => "tool",
+        }
+    }
+
+    pub fn supports(self, bridge_mode: BridgeMode, language: GuestLanguage) -> bool {
+        match (self, bridge_mode, language) {
+            (
+                Self::Agent,
+                BridgeMode::External,
+                GuestLanguage::TypeScript
+                | GuestLanguage::Rust
+                | GuestLanguage::Scala
+                | GuestLanguage::MoonBit,
+            )
+            | (
+                Self::Agent,
+                BridgeMode::Guest,
+                GuestLanguage::TypeScript
+                | GuestLanguage::Rust
+                | GuestLanguage::Scala
+                | GuestLanguage::MoonBit,
+            )
+            | (
+                Self::Tool,
+                BridgeMode::Guest,
+                GuestLanguage::TypeScript
+                | GuestLanguage::Rust
+                | GuestLanguage::Scala
+                | GuestLanguage::MoonBit,
+            ) => true,
+            (
+                Self::Tool,
+                BridgeMode::External,
+                GuestLanguage::TypeScript
+                | GuestLanguage::Rust
+                | GuestLanguage::Scala
+                | GuestLanguage::MoonBit,
+            ) => false,
+        }
+    }
+
+    pub fn supported_languages(
+        self,
+        bridge_mode: BridgeMode,
+    ) -> impl Iterator<Item = GuestLanguage> {
+        GuestLanguage::iter().filter(move |language| self.supports(bridge_mode, *language))
+    }
+
+    pub fn supported_language_names(self, bridge_mode: BridgeMode) -> String {
+        self.supported_languages(bridge_mode)
+            .map(|language| language.to_string())
+            .join(", ")
+    }
+
+    pub fn support_error(self, bridge_mode: BridgeMode, language: GuestLanguage) -> Option<String> {
+        if self.supports(bridge_mode, language) {
+            return None;
+        }
+
+        let supported_language_names = self.supported_language_names(bridge_mode);
+        if supported_language_names.is_empty() {
+            Some(format!(
+                "{bridge_mode} {self} bridge SDKs are not supported yet"
+            ))
+        } else {
+            Some(format!(
+                "{bridge_mode} {self} bridge SDKs are only supported for {supported_language_names} yet; {language} is not supported"
+            ))
+        }
+    }
+}
+
+impl Display for BridgeSdkTargetKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -324,6 +495,7 @@ pub struct ApplicationPreload {
     pub application_name: WithSource<ApplicationName>,
     pub environments: BTreeMap<EnvironmentName, app_raw::Environment>,
     pub local_server: Option<WithSource<app_raw::LocalServer>>,
+    pub version: Option<WithSource<app_raw::AppVersionSource>>,
 }
 
 #[derive(Clone, Debug)]
@@ -833,24 +1005,95 @@ impl Application {
         &self.bridge_sdks.value
     }
 
+    pub fn bridge_sdks_source(&self) -> &Path {
+        &self.bridge_sdks.source
+    }
+
     pub fn bridge_sdk_dir(
         &self,
         agent_type_name: &AgentTypeName,
         language: GuestLanguage,
+        mode: BridgeMode,
     ) -> PathBuf {
-        match self
+        let output_dir = match mode {
+            BridgeMode::External => self
+                .bridge_sdks
+                .value
+                .for_language(language)
+                .and_then(|sdk| sdk.external.as_ref())
+                .and_then(|sdk| sdk.output_dir.as_ref()),
+            BridgeMode::Guest => self
+                .bridge_sdks
+                .value
+                .for_language(language)
+                .and_then(|sdk| sdk.internal.as_ref())
+                .and_then(|sdk| sdk.output_dir.as_ref()),
+        };
+
+        match output_dir {
+            Some(output_dir) => self
+                .bridge_sdks
+                .source
+                .join(output_dir)
+                .join(bridge_client_directory_name(agent_type_name, mode)),
+            None => match mode {
+                BridgeMode::External => {
+                    self.temp_dir().join("bridge-sdk").join(language.id()).join(
+                        bridge_client_directory_name(agent_type_name, BridgeMode::External),
+                    )
+                }
+                BridgeMode::Guest => self.dependency_bridge_sdk_dir(agent_type_name, language),
+            },
+        }
+    }
+
+    pub fn dependency_bridge_sdk_dir(
+        &self,
+        agent_type_name: &AgentTypeName,
+        language: GuestLanguage,
+    ) -> PathBuf {
+        self.temp_dir()
+            .join("bridge-sdk")
+            .join(language.id())
+            .join(BridgeMode::Guest.id())
+            .join(bridge_client_directory_name(
+                agent_type_name,
+                BridgeMode::Guest,
+            ))
+    }
+
+    fn dependency_tool_bridge_sdk_dir_base(&self, language: GuestLanguage) -> PathBuf {
+        self.temp_dir()
+            .join("bridge-sdk")
+            .join(language.id())
+            .join(BridgeMode::Guest.id())
+    }
+
+    pub fn tool_bridge_sdk_dir(&self, tool_name: &str, language: GuestLanguage) -> PathBuf {
+        let output_dir = self
             .bridge_sdks
             .value
             .for_language(language)
-            .and_then(|sdk| sdk.output_dir.as_ref())
-        {
-            Some(output_dir) => self.bridge_sdks.source.join(output_dir),
-            None => self
-                .temp_dir()
-                .join("bridge-sdk")
-                .join(language.id())
-                .join(bridge_client_directory_name(agent_type_name)),
+            .and_then(|sdk| sdk.internal.as_ref())
+            .and_then(|sdk| sdk.output_dir.as_ref());
+
+        match output_dir {
+            Some(output_dir) => self
+                .bridge_sdks
+                .source
+                .join(output_dir)
+                .join(tool_bridge_client_directory_name(tool_name)),
+            None => self.dependency_tool_bridge_sdk_dir(tool_name, language),
         }
+    }
+
+    pub fn dependency_tool_bridge_sdk_dir(
+        &self,
+        tool_name: &str,
+        language: GuestLanguage,
+    ) -> PathBuf {
+        self.dependency_tool_bridge_sdk_dir_base(language)
+            .join(tool_bridge_client_directory_name(tool_name))
     }
 
     pub fn repl_root_dir(&self, language: GuestLanguage) -> PathBuf {
@@ -1395,6 +1638,32 @@ impl Layer for ComponentLayer {
                     .map_err(|err| format!("Failed to render outputWasm: {}", err))?,
             );
 
+            value.dependency_agents.apply_layer(
+                id,
+                selection,
+                (
+                    VecMergeMode::Append,
+                    properties
+                        .dependency_agents
+                        .value()
+                        .render_or_clone(template_env, template_ctx)
+                        .map_err(|err| format!("Failed to render dependencies: {}", err))?,
+                ),
+            );
+
+            value.dependency_tools.apply_layer(
+                id,
+                selection,
+                (
+                    VecMergeMode::Append,
+                    properties
+                        .dependency_tools
+                        .value()
+                        .render_or_clone(template_env, template_ctx)
+                        .map_err(|err| format!("Failed to render dependencies: {}", err))?,
+                ),
+            );
+
             value.build.apply_layer(
                 id,
                 selection,
@@ -1643,13 +1912,9 @@ impl<'a> Component<'a> {
         self.final_wasm()
     }
 
-    /// File for storing extracted agent types
-    pub fn extracted_agent_types(&self, source_wasm_path: &Path) -> PathBuf {
-        self.temp_dir.join("extracted-agent-types").join(format!(
-            "{}-{}.json",
-            self.component_name.as_str(),
-            blake3::hash(source_wasm_path.display().to_string().as_bytes()).to_hex()
-        ))
+    /// File for storing extracted component metadata (agent types and tools)
+    pub fn extracted_component_metadata(&self, source_wasm_path: &Path) -> PathBuf {
+        extracted_component_metadata_path(self.temp_dir, self.component_name, source_wasm_path)
     }
 
     pub fn env(&self) -> &BTreeMap<String, String> {
@@ -1694,6 +1959,18 @@ impl<'a> Component<'a> {
     }
 }
 
+pub fn extracted_component_metadata_path(
+    temp_dir: &Path,
+    component_name: &ComponentName,
+    source_wasm_path: &Path,
+) -> PathBuf {
+    temp_dir.join("extracted-component-metadata").join(format!(
+        "{}-{}.json",
+        component_name.as_str(),
+        blake3::hash(source_wasm_path.display().to_string().as_bytes()).to_hex()
+    ))
+}
+
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentLayerProperties {
@@ -1705,6 +1982,8 @@ pub struct ComponentLayerProperties {
 
     pub component_wasm: OptionalProperty<ComponentLayer, String>,
     pub output_wasm: OptionalProperty<ComponentLayer, String>,
+    pub dependency_agents: VecProperty<ComponentLayer, app_raw::ComponentDependencyReference>,
+    pub dependency_tools: VecProperty<ComponentLayer, app_raw::ComponentDependencyReference>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     pub build: VecProperty<ComponentLayer, app_raw::BuildCommand>,
@@ -1729,6 +2008,8 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             applied_layers: vec![],
             component_wasm: value.component_wasm.into(),
             output_wasm: value.output_wasm.into(),
+            dependency_agents: value.dependencies.agents.into(),
+            dependency_tools: value.dependencies.tools.into(),
             build_merge_mode: value.build_merge_mode,
             build: value.build.into(),
             custom_commands: value.custom_commands.into(),
@@ -1749,6 +2030,8 @@ impl ComponentLayerProperties {
     pub fn compact_traces(&mut self) {
         self.component_wasm.compact_trace();
         self.output_wasm.compact_trace();
+        self.dependency_agents.compact_trace();
+        self.dependency_tools.compact_trace();
         self.build.compact_trace();
         self.custom_commands.compact_trace();
         self.clean.compact_trace();
@@ -2044,6 +2327,7 @@ pub struct ComponentProperties {
     pub component_dir: PathBuf, // Resolved canonical component path
     pub component_wasm: String,
     pub output_wasm: Option<String>,
+    pub dependencies: Vec<ComponentDependency>,
     pub build: Vec<app_raw::BuildCommand>,
     pub custom_commands: BTreeMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
@@ -2072,6 +2356,11 @@ impl ComponentProperties {
             component_dir,
             component_wasm: merged.component_wasm.value().clone().unwrap_or_default(),
             output_wasm: merged.output_wasm.value().clone(),
+            dependencies: Self::validate_dependencies(
+                validation,
+                merged.dependency_agents.value(),
+                merged.dependency_tools.value(),
+            ),
             build: merged.build.value().clone(),
             custom_commands: merged
                 .custom_commands
@@ -2097,6 +2386,44 @@ impl ComponentProperties {
         }
 
         properties
+    }
+
+    fn validate_dependencies(
+        validation: &mut ValidationBuilder,
+        agent_dependencies: &[app_raw::ComponentDependencyReference],
+        tool_dependencies: &[app_raw::ComponentDependencyReference],
+    ) -> Vec<ComponentDependency> {
+        let agents = agent_dependencies
+            .iter()
+            .filter_map(|dependency| {
+                parse_component_dependency_reference(validation, "agent", dependency).map(
+                    |(component_name, name)| ComponentDependency::Agent {
+                        component_name,
+                        agent_type_name: AgentTypeName(name),
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        let tools = tool_dependencies.iter().filter_map(|dependency| {
+            parse_component_dependency_reference(validation, "tool", dependency).map(
+                |(component_name, name)| ComponentDependency::Tool {
+                    component_name,
+                    tool_name: match ToolName::try_from(name.as_str()) {
+                        Ok(tool_name) => tool_name,
+                        Err(err) => {
+                            validation.add_error(format!(
+                                "Invalid tool dependency name: {}. {}",
+                                name.log_color_error_highlight(),
+                                err
+                            ));
+                            ToolName(name)
+                        }
+                    },
+                },
+            )
+        });
+
+        agents.into_iter().chain(tools).collect()
     }
 
     fn validate_and_normalize_env(
@@ -2127,6 +2454,48 @@ impl ComponentProperties {
                 (upper_case_key, value.to_string())
             })
             .collect()
+    }
+}
+
+fn parse_component_dependency_reference(
+    validation: &mut ValidationBuilder,
+    kind: &str,
+    dependency: &app_raw::ComponentDependencyReference,
+) -> Option<(ComponentName, String)> {
+    let (component, name) = match dependency {
+        app_raw::ComponentDependencyReference::Shortcut(shortcut) => {
+            let Some((component, name)) = shortcut.split_once('/') else {
+                validation.add_error(format!(
+                    "Invalid {kind} dependency {}. Expected 'component/name' or an object with 'component' and 'name' fields",
+                    shortcut.log_color_error_highlight(),
+                ));
+                return None;
+            };
+            (component.to_string(), name.to_string())
+        }
+        app_raw::ComponentDependencyReference::Structured(structured) => {
+            (structured.component.clone(), structured.name.clone())
+        }
+    };
+
+    if name.is_empty() {
+        validation.add_error(format!(
+            "Invalid {kind} dependency for component {}. Dependency name must not be empty",
+            component.log_color_error_highlight(),
+        ));
+        return None;
+    }
+
+    match ComponentName::try_from(component.as_str()) {
+        Ok(component_name) => Some((component_name, name)),
+        Err(err) => {
+            validation.add_error(format!(
+                "Invalid {kind} dependency component {}. {}",
+                component.log_color_error_highlight(),
+                err,
+            ));
+            None
+        }
     }
 }
 
@@ -2278,10 +2647,10 @@ mod app_builder {
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
-        Application, ApplicationPreload, ComponentLayer, ComponentLayerApplyContext,
-        ComponentLayerId, ComponentLayerProperties, ComponentLayerPropertiesKind,
-        ComponentPresetName, ComponentPresetSelector, ComponentProperties,
-        PartitionedComponentPresets, TEMP_DIR, WithSource,
+        Application, ApplicationPreload, BridgeSdkTargetKind, ComponentDependency, ComponentLayer,
+        ComponentLayerApplyContext, ComponentLayerId, ComponentLayerProperties,
+        ComponentLayerPropertiesKind, ComponentPresetName, ComponentPresetSelector,
+        ComponentProperties, PartitionedComponentPresets, TEMP_DIR, WithSource,
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
@@ -2347,6 +2716,7 @@ mod app_builder {
         ResourceDefaults(EnvironmentName),
         Bridge,
         LocalServer,
+        Version,
     }
 
     impl UniqueSourceCheckedEntityKey {
@@ -2365,6 +2735,7 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::ResourceDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::Bridge => "Bridge",
                 UniqueSourceCheckedEntityKey::LocalServer => property,
+                UniqueSourceCheckedEntityKey::Version => property,
             }
         }
 
@@ -2413,6 +2784,9 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Bridge => "bridge".log_color_highlight().to_string(),
                 UniqueSourceCheckedEntityKey::LocalServer => {
                     "localServer".log_color_highlight().to_string()
+                }
+                UniqueSourceCheckedEntityKey::Version => {
+                    "version".log_color_highlight().to_string()
                 }
             }
         }
@@ -2584,6 +2958,7 @@ mod app_builder {
         environments: IndexMap<EnvironmentName, app_raw::Environment>,
         local_server: Option<WithSource<app_raw::LocalServer>>,
         deployment_domain_local_server: Option<WithSource<app_raw::LocalServer>>,
+        version: Option<WithSource<app_raw::AppVersionSource>>,
 
         // "Consts" for component templating
         app_root_dir_str: String,
@@ -2757,6 +3132,7 @@ mod app_builder {
                 application_name,
                 environments: builder.environments.into_iter().collect(),
                 local_server: builder.local_server,
+                version: builder.version,
             })
         }
 
@@ -3001,21 +3377,21 @@ mod app_builder {
                             self.bridge_sdks =
                                 WithSource::new(app_source_dir.to_path_buf(), bridge);
 
-                            for (target_language, sdk_targets) in
-                                self.bridge_sdks.value.for_all_used_languages()
+                            for (target_language, bridge_mode, sdk_targets) in
+                                self.bridge_sdks.value.for_all_used_modes()
                             {
-                                let sdk_targets = sdk_targets
-                                    .agents
-                                    .clone()
-                                    .into_vec();
-                                let non_unique_targets = sdk_targets.iter()
+                                let agent_targets = sdk_targets.agents.clone().into_vec();
+                                let non_unique_targets = agent_targets.iter()
                                     .counts()
                                     .into_iter()
                                     .filter(|(_, count)| *count > 1)
                                     .collect::<Vec<_>>();
 
                                 validation.with_context(
-                                    vec![("bridge SDK language", target_language.to_string())],
+                                    vec![
+                                        ("bridge SDK language", target_language.to_string()),
+                                        ("bridge SDK mode", bridge_mode.to_string()),
+                                    ],
                                     |validation| {
                                         if !non_unique_targets.is_empty() {
                                             validation.add_error(format!(
@@ -3028,14 +3404,30 @@ mod app_builder {
                                             ));
                                         }
 
-                                        if sdk_targets.len() > 1 && sdk_targets.iter().any(|t| t == "*") {
+                                        if agent_targets.len() > 1 && agent_targets.iter().any(|t| t == "*") {
                                             validation.add_warn(format!(
                                                 "Including \"*\" as language target will match all agents, no need for adding other targets: {}",
-                                                sdk_targets
+                                                agent_targets
                                                     .iter()
                                                     .map(|target| target.log_color_highlight())
                                                     .join(", ")
                                             ));
+                                        }
+
+                                        if !agent_targets.is_empty()
+                                            && let Some(error) = BridgeSdkTargetKind::Agent
+                                                .support_error(bridge_mode, target_language)
+                                        {
+                                            validation.add_error(error);
+                                        }
+
+                                        if sdk_targets
+                                            .tools
+                                            .is_some_and(|tools| !tools.is_empty())
+                                            && let Some(error) = BridgeSdkTargetKind::Tool
+                                                .support_error(bridge_mode, target_language)
+                                        {
+                                            validation.add_error(error);
                                         }
                                     },
                                 );
@@ -3120,6 +3512,22 @@ mod app_builder {
                                 );
                                 self.local_server =
                                     Some(WithSource::new(app.source.clone(), local_server.clone()));
+                            }
+                        }
+                    }
+
+                    if let Some(version) = &app.application.version {
+                        match &self.version {
+                            Some(existing) => validation.add_error(format!(
+                                "{} {} is defined in multiple sources: {}, {}",
+                                UniqueSourceCheckedEntityKey::Version.entity_kind(),
+                                UniqueSourceCheckedEntityKey::Version.entity_name(),
+                                existing.source.log_color_highlight(),
+                                app.source.log_color_highlight()
+                            )),
+                            None => {
+                                self.version =
+                                    Some(WithSource::new(app.source.clone(), version.clone()));
                             }
                         }
                     }
@@ -3429,12 +3837,46 @@ mod app_builder {
                         component_dir,
                         &component_layer_properties,
                     );
+                    self.validate_component_dependencies(
+                        validation,
+                        &component_name,
+                        &component_properties.dependencies,
+                    );
                     self.components.insert(
                         component_name,
                         WithSource::new(source, (component_properties, component_layer_properties)),
                     );
                 }
                 Err(err) => validation.add_error(format!("Failed to resolve component: {err}")),
+            }
+        }
+
+        fn validate_component_dependencies(
+            &self,
+            validation: &mut ValidationBuilder,
+            component_name: &ComponentName,
+            dependencies: &[ComponentDependency],
+        ) {
+            for dependency in dependencies {
+                if dependency.component_name() == component_name {
+                    validation.add_error(format!(
+                        "Component {} cannot depend on its own guest bridge SDK",
+                        component_name.as_str().log_color_highlight(),
+                    ));
+                }
+                if !self
+                    .component_names_to_source_and_dir
+                    .contains_key(dependency.component_name())
+                {
+                    validation.add_error(format!(
+                        "Component {} depends on unknown component {}",
+                        component_name.as_str().log_color_highlight(),
+                        dependency
+                            .component_name()
+                            .as_str()
+                            .log_color_error_highlight(),
+                    ));
+                }
             }
         }
 
@@ -3583,9 +4025,11 @@ mod app_builder {
 
 #[cfg(test)]
 mod test {
+    use crate::bridge_gen::{BridgeMode, bridge_client_directory_name};
     use crate::fs;
     use crate::model::app::{
-        Application, ApplicationPreload, ComponentPresetSelector, includes_from_yaml_file,
+        Application, ApplicationPreload, ComponentDependency, ComponentPresetSelector, ToolName,
+        includes_from_yaml_file,
     };
     use crate::model::app_raw;
     use golem_common::model::agent::AgentTypeName;
@@ -3918,6 +4362,496 @@ mod test {
 
         let result = app_raw::Application::from_yaml_str(source);
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn bridge_sdk_output_dir_is_base_for_per_agent_external_targets() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              rust:
+                external:
+                  agents:
+                    - AlphaAgent
+                    - BetaAgent
+                  outputDir: bridge-sdk/rust
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
+        let alpha_agent = parse_agent_type_name("AlphaAgent");
+        let beta_agent = parse_agent_type_name("BetaAgent");
+
+        assert_eq!(
+            app.bridge_sdk_dir(
+                &alpha_agent,
+                crate::model::GuestLanguage::Rust,
+                BridgeMode::External
+            ),
+            app_tmp_dir
+                .path()
+                .join("bridge-sdk/rust")
+                .join(bridge_client_directory_name(
+                    &alpha_agent,
+                    BridgeMode::External
+                ))
+        );
+        assert_eq!(
+            app.bridge_sdk_dir(
+                &beta_agent,
+                crate::model::GuestLanguage::Rust,
+                BridgeMode::External
+            ),
+            app_tmp_dir
+                .path()
+                .join("bridge-sdk/rust")
+                .join(bridge_client_directory_name(
+                    &beta_agent,
+                    BridgeMode::External
+                ))
+        );
+    }
+
+    #[test]
+    fn bridge_sdk_output_dir_is_mode_separated_for_guest_targets() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              rust:
+                external:
+                  agents:
+                    - AlphaAgent
+                internal:
+                  agents:
+                    - AlphaAgent
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+        let alpha_agent = parse_agent_type_name("AlphaAgent");
+
+        assert_eq!(
+            app.bridge_sdk_dir(
+                &alpha_agent,
+                crate::model::GuestLanguage::Rust,
+                BridgeMode::External
+            ),
+            app.temp_dir()
+                .join("bridge-sdk")
+                .join("rust")
+                .join(bridge_client_directory_name(
+                    &alpha_agent,
+                    BridgeMode::External
+                ))
+        );
+        assert_eq!(
+            app.bridge_sdk_dir(
+                &alpha_agent,
+                crate::model::GuestLanguage::Rust,
+                BridgeMode::Guest
+            ),
+            app.temp_dir()
+                .join("bridge-sdk")
+                .join("rust")
+                .join("internal")
+                .join(bridge_client_directory_name(
+                    &alpha_agent,
+                    BridgeMode::Guest
+                ))
+        );
+    }
+
+    #[test]
+    fn bridge_sdk_output_dir_uses_guest_output_dir_as_per_agent_base() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              rust:
+                internal:
+                  agents:
+                    - AlphaAgent
+                  outputDir: bridge-sdk/rust-guest
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
+        let alpha_agent = parse_agent_type_name("AlphaAgent");
+
+        assert_eq!(
+            app.bridge_sdk_dir(
+                &alpha_agent,
+                crate::model::GuestLanguage::Rust,
+                BridgeMode::Guest
+            ),
+            app_tmp_dir
+                .path()
+                .join("bridge-sdk/rust-guest")
+                .join(bridge_client_directory_name(
+                    &alpha_agent,
+                    BridgeMode::Guest
+                ))
+        );
+    }
+
+    #[test]
+    fn bridge_sdk_guest_tools_are_accepted_and_use_tool_bridge_dir() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              rust:
+                internal:
+                  tools:
+                    - MyTool
+                  outputDir: bridge-sdk/rust-guest
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        assert_eq!(
+            app.tool_bridge_sdk_dir("MyTool", crate::model::GuestLanguage::Rust),
+            app_tmp_dir.path().join("bridge-sdk/rust-guest").join(
+                crate::bridge_gen::tool_bridge_client_directory_name("MyTool")
+            )
+        );
+
+        let used_modes = app.bridge_sdks().for_all_used_modes();
+        assert_eq!(used_modes.len(), 1);
+        assert_eq!(used_modes[0].0, crate::model::GuestLanguage::Rust);
+        assert_eq!(used_modes[0].1, BridgeMode::Guest);
+    }
+
+    #[test]
+    fn moonbit_bridge_sdk_guest_tools_are_accepted_and_use_tool_bridge_dir() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              moonbit:
+                internal:
+                  tools:
+                    - MyTool
+                  outputDir: bridge-sdk/moonbit-guest
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        assert_eq!(
+            app.tool_bridge_sdk_dir("MyTool", crate::model::GuestLanguage::MoonBit),
+            app_tmp_dir.path().join("bridge-sdk/moonbit-guest").join(
+                crate::bridge_gen::tool_bridge_client_directory_name("MyTool")
+            )
+        );
+
+        let used_modes = app.bridge_sdks().for_all_used_modes();
+        assert_eq!(used_modes.len(), 1);
+        assert_eq!(used_modes[0].0, crate::model::GuestLanguage::MoonBit);
+        assert_eq!(used_modes[0].1, BridgeMode::Guest);
+    }
+
+    #[test]
+    fn component_dependencies_are_agent_and_tool_guest_bridge_targets() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:provider:
+                componentWasm: provider.wasm
+
+              app:main:
+                componentWasm: dummy-component.wasm
+                dependencies:
+                  agents:
+                    - app:provider/ShoppingCart
+                  tools:
+                    - component: app:provider
+                      name: grep
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+        let component_name = parse_component_name("app:main");
+        let component = app.component(&component_name);
+        let dependencies = &component.properties().dependencies;
+
+        assert_eq!(
+            dependencies,
+            &vec![
+                ComponentDependency::Agent {
+                    component_name: parse_component_name("app:provider"),
+                    agent_type_name: parse_agent_type_name("ShoppingCart"),
+                },
+                ComponentDependency::Tool {
+                    component_name: parse_component_name("app:provider"),
+                    tool_name: ToolName::try_from("grep").unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn component_dependencies_reject_malformed_shortcut() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:provider:
+                componentWasm: provider.wasm
+
+              app:main:
+                componentWasm: dummy-component.wasm
+                dependencies:
+                  agents:
+                    - ShoppingCart
+        "# });
+
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("Expected 'component/name'"),
+            "unexpected error: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn component_dependencies_reject_self_dependency() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                dependencies:
+                  agents:
+                    - app:main/ShoppingCart
+        "# });
+
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("cannot depend on its own guest bridge SDK"),
+            "unexpected error: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn component_dependencies_reject_unknown_provider_component() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                dependencies:
+                  agents:
+                    - app:missing/ShoppingCart
+        "# });
+
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("depends on unknown component app:missing"),
+            "unexpected error: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn typescript_guest_bridge_mode_is_accepted() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              ts:
+                internal:
+                  agents: SomeAgent
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps =
+            vec![app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path).unwrap()];
+        let (preload, warns, errors) = Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let Some(ApplicationPreload {
+            application_name,
+            environments,
+            local_server,
+            version: _,
+        }) = preload
+        else {
+            panic!("expected Some(ApplicationPreload)")
+        };
+
+        let (_app, warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            application_name,
+            environments,
+            local_server,
+            selector("local", &[]),
+            raw_apps,
+        )
+        .into_product();
+
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+    }
+
+    #[test]
+    fn scala_guest_bridge_mode_is_accepted() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              scala:
+                internal:
+                  agents: SomeAgent
+                  outputDir: bridge/scala-guest
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        let agent_type_name = parse_agent_type_name("SomeAgent");
+        assert_eq!(
+            app.bridge_sdk_dir(
+                &agent_type_name,
+                crate::model::GuestLanguage::Scala,
+                BridgeMode::Guest
+            ),
+            app_tmp_dir
+                .path()
+                .join("bridge/scala-guest")
+                .join(bridge_client_directory_name(
+                    &agent_type_name,
+                    BridgeMode::Guest
+                ))
+        );
+    }
+
+    #[test]
+    fn typescript_guest_bridge_config_without_agents_is_accepted() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            bridge:
+              ts:
+                external:
+                  agents: ExternalAgent
+                  outputDir: bridge/ts
+                internal:
+                  outputDir: bridge/ts-guest
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps =
+            vec![app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path).unwrap()];
+        let (preload, warns, errors) = Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let Some(ApplicationPreload {
+            application_name,
+            environments,
+            local_server,
+            version: _,
+        }) = preload
+        else {
+            panic!("expected Some(ApplicationPreload)")
+        };
+
+        let (_app, warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            application_name,
+            environments,
+            local_server,
+            selector("local", &[]),
+            raw_apps,
+        )
+        .into_product();
+
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
     }
 
     #[test]
@@ -4609,6 +5543,7 @@ mod test {
             application_name,
             environments,
             local_server,
+            version: _,
         }) = app_name_and_envs
         else {
             panic!("expected Some(ApplicationPreload)")
@@ -4669,6 +5604,7 @@ mod test {
             application_name,
             environments,
             local_server,
+            version: _,
         }) = app_name_and_envs
         else {
             panic!("expected Some(ApplicationPreload)")
@@ -4726,6 +5662,7 @@ mod test {
             application_name,
             environments,
             local_server,
+            version: _,
         }) = app_name_and_envs
         else {
             panic!("expected Some(ApplicationPreload)")
@@ -4803,6 +5740,42 @@ mod test {
         load_app(source, &selector(environment, presets))
     }
 
+    fn load_app_errors(source: &str) -> Vec<String> {
+        let tmp_dir = tempfile::tempdir().unwrap();
+
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+
+        let raw_app = app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path).unwrap();
+        let raw_apps = vec![raw_app];
+
+        let (app_name_and_envs, warns, errors) =
+            Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let Some(ApplicationPreload {
+            application_name,
+            environments,
+            local_server,
+            version: _,
+        }) = app_name_and_envs
+        else {
+            panic!("expected Some(ApplicationPreload)")
+        };
+
+        let (_app, warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            application_name,
+            environments,
+            local_server,
+            selector("local", &[]),
+            raw_apps,
+        )
+        .into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        errors
+    }
+
     fn with_resolved_agent<T>(
         app: &Application,
         component_name_str: &str,
@@ -4846,6 +5819,7 @@ mod test {
             application_name,
             environments,
             local_server,
+            version: _,
         }) = app_name_and_envs
         else {
             panic!("expected Some(ApplicationPreload)")

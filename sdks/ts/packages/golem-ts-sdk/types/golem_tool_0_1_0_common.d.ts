@@ -72,12 +72,10 @@
  */
 declare module 'golem:tool/common@0.1.0' {
   import * as golemCore200Types from 'golem:core/types@2.0.0';
-  import * as wasiIo023Streams from 'wasi:io/streams@0.2.3';
   export type SchemaGraph = golemCore200Types.SchemaGraph;
   export type TypeNodeIndex = golemCore200Types.TypeNodeIndex;
   export type SchemaValueTree = golemCore200Types.SchemaValueTree;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
-  export type OutputStream = wasiIo023Streams.OutputStream;
   /**
    * Command tree
    */
@@ -106,7 +104,7 @@ declare module 'golem:tool/common@0.1.0' {
    * Resolution policy for a repeated key in a `repeatable-map` option.
    */
   export type DuplicateKeyPolicy = "reject" | "last-wins";
-  export type Repetition = 
+  export type Repetition =
   /** --inc a --inc b */
   {
     tag: 'repeated'
@@ -136,7 +134,7 @@ declare module 'golem:tool/common@0.1.0' {
     /** What happens when the same key is supplied more than once. */
     duplicateKeyPolicy: DuplicateKeyPolicy;
   };
-  export type OptionShape = 
+  export type OptionShape =
   /** Required value: --opt VALUE or --opt=VALUE. Index into `tool.schema`. */
   {
     tag: 'scalar'
@@ -172,7 +170,7 @@ declare module 'golem:tool/common@0.1.0' {
     /** If true, --no-<name> is auto-synthesized. */
     negatable: boolean;
   };
-  export type FlagShape = 
+  export type FlagShape =
   {
     tag: 'bool-flag'
     val: BoolFlagShape
@@ -193,7 +191,7 @@ declare module 'golem:tool/common@0.1.0' {
   /**
    * Constraints
    */
-  export type Ref = 
+  export type Ref =
   {
     tag: 'present'
     val: string
@@ -217,7 +215,7 @@ declare module 'golem:tool/common@0.1.0' {
     lhs: Ref[];
     rhs: Ref[];
   };
-  export type Constraint = 
+  export type Constraint =
   {
     tag: 'requires-all'
     val: Ref[]
@@ -402,7 +400,7 @@ declare module 'golem:tool/common@0.1.0' {
   /**
    * Invocation contract — shared between guest and host
    */
-  export type ToolError = 
+  export type ToolError =
   {
     tag: 'invalid-tool-name'
     val: string
@@ -442,6 +440,6 @@ declare module 'golem:tool/common@0.1.0' {
   };
   export type InvocationResult = {
     result?: TypedSchemaValue;
-    stdout?: OutputStream;
+    stdout?: AsyncIterable<number>;
   };
 }

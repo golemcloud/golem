@@ -14,66 +14,86 @@
 
 // TypeScript smoke agent for issue #3393.
 //
-// This file is intentionally a TypeScript SDK smoke: it proves the
-// @readonly() decorator variants (default until-write, principal-aware
-// via Principal parameter, ttl, and no-cache) compile, register, and are
-// emitted into the component metadata, and that the resulting component
-// builds via the QuickJS WASM injection / pre-initialization pipeline.
-// Runtime cache semantics are covered by the Rust executor tests in
-// golem-worker-executor/tests/readonly.rs and by the HTTP integration
-// tests in integration-tests/tests/custom_api/readonly_http.rs.
+// This file is intentionally a TypeScript SDK smoke: it proves the read-only
+// method variants compile, register, and are emitted into the component
+// metadata, and that the resulting component builds via the QuickJS WASM
+// injection / pre-initialization pipeline. Runtime cache semantics are covered
+// by the Rust executor tests in golem-worker-executor/tests/readonly.rs and by
+// the HTTP integration tests in integration-tests/tests/custom_api/readonly_http.rs.
+//
+// The fluent `method({ readOnly })` surface expresses every decorator-era
+// cache-policy variant: `readOnly: true` (the base default, `until-write`),
+// `readOnly: { cache: 'no-cache' }`, `readOnly: { cache: { ttlNanos } }`, and
+// per-principal caching via `readOnly: { usesPrincipal: true }` (which replaces
+// the decorator's principal-parameter-derived flag).
 
-import {
-    BaseAgent,
-    agent,
-    endpoint,
-    Principal,
-    readonly,
-} from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
 
-@agent({
-    mount: '/ts-readonly-agents/{agentName}',
-})
-class TsReadonlyAgent extends BaseAgent {
-    private count: number = 0;
-
-    constructor(readonly agentName: string) {
-        super();
-    }
-
+export const TsReadonlyAgent = defineAgent({
+  name: 'TsReadonlyAgent',
+  id: { agentName: z.string() },
+  http: http.mount('/ts-readonly-agents/{agentName}'),
+  methods: {
     // Non-read-only write, also exposed over HTTP so the TS agent could be
     // exercised end-to-end against the same fixtures as the Rust agent.
-    @endpoint({ post: '/increment' })
-    increment(): number {
-        this.count += 1;
-        return this.count;
-    }
+    increment: method({
+      input: {},
+      returns: z.number(),
+      http: http.post('/increment'),
+    }),
 
     // Default cache policy = 'until-write', principal-unaware.
-    @readonly()
-    @endpoint({ get: '/count' })
-    getCount(): number {
-        return this.count;
-    }
+    getCount: method({
+      input: {},
+      returns: z.number(),
+      readOnly: true,
+      http: http.get('/count'),
+    }),
 
-    // Principal-aware: usesPrincipal is auto-derived from the Principal
-    // parameter in the signature.
-    @readonly()
-    @endpoint({ get: '/count-for' })
-    getCountFor(principal: Principal): number {
-        return this.count;
-    }
+    // Principal-aware: the cache key includes the caller principal.
+    getCountFor: method({
+      input: {},
+      returns: z.number(),
+      readOnly: { usesPrincipal: true },
+      http: http.get('/count-for'),
+    }),
 
-    // TTL cache policy.
-    @readonly({ cache: { ttl: '2s' } })
-    @endpoint({ get: '/ttl-count' })
-    readOnlyWithTtl(): number {
-        return this.count;
-    }
+    // TTL cache policy (2s).
+    readOnlyWithTtl: method({
+      input: {},
+      returns: z.number(),
+      readOnly: { cache: { ttlNanos: 2_000_000_000n } },
+      http: http.get('/ttl-count'),
+    }),
 
     // No-cache: pure compute, no host calls, runs every invocation.
-    @readonly({ cache: 'no-cache' })
-    pureCompute(x: number, y: number): number {
-        return Math.imul(x + y, 3);
-    }
-}
+    pureCompute: method({
+      input: { x: z.number(), y: z.number() },
+      returns: z.number(),
+      readOnly: { cache: 'no-cache' },
+    }),
+  },
+});
+
+export const TsReadonlyAgentImpl = TsReadonlyAgent.implement({
+  init: () => ({ count: 0 }),
+  methods: {
+    increment() {
+      this.count += 1;
+      return this.count;
+    },
+    getCount() {
+      return this.count;
+    },
+    getCountFor() {
+      return this.count;
+    },
+    readOnlyWithTtl() {
+      return this.count;
+    },
+    pureCompute({ x, y }) {
+      return Math.imul(x + y, 3);
+    },
+  },
+});

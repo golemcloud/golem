@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
+
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use golem_worker_executor_test_utils::{
     LastUniqueId, LastUniqueIdOwner, PrecompiledComponent, WorkerExecutorTestDependencies,
@@ -26,6 +28,8 @@ pub mod agent_sdk_ts;
 pub mod api;
 pub mod blobstore;
 pub mod compatibility;
+pub mod concurrent_delivery_order;
+pub mod concurrent_runtime_events;
 pub mod durability;
 pub mod fuel;
 pub mod hot_update;

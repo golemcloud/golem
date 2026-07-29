@@ -1155,11 +1155,13 @@ This can be useful if state needs to be shared between different agents or if th
             impl OutgoingValue {
                 pub fn new_outgoing_value() -> OutgoingValue;
                 /**
-                 * Writes the value to the output-stream asynchronously.
+                 * Writes the value asynchronously by consuming the given `stream<u8>`:
+                 * the caller keeps the writable end and the host appends every received
+                 * byte to the outgoing value's body.
                  * If any other error occurs, it returns an `Err(error)`.
                  * @throws Error
                  */
-                pub fn outgoing_value_write_body_async(&self) -> Result<OutgoingValueBodyAsync, Error>;
+                pub fn outgoing_value_write_body_async(&self, data: StreamReader<u8>) -> Result<(), Error>;
                 /**
                  * Writes the value to the output-stream synchronously.
                  * If any other error occurs, it returns an `Err(error)`.
@@ -1318,9 +1320,6 @@ This can be useful if state needs to be shared between different agents or if th
 
         pub(all) struct OutgoingValue(Int) derive(Eq, Show)
         pub fn OutgoingValue::new_outgoing_value() -> Self
-        pub fn OutgoingValue::outgoing_value_write_body_async(
-          Self,
-        ) -> Result[@streams.OutputStream, @wasiKeyvalueError.Error_]
         pub fn OutgoingValue::outgoing_value_write_body_sync(
           Self,
           FixedArray[Byte],

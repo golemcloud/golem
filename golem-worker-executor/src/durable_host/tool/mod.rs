@@ -21,15 +21,13 @@
 //! and the middleware chain are layered on in later steps.
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
-use crate::preview2::InputStream;
 use crate::preview2::golem::tool::host::{
-    Host, HostFutureInvokeResult, HostToolRpc, InvocationResult, RegisteredTool, RpcError,
-    TypedSchemaValue,
+    Host, HostFutureInvokeResult, HostFutureInvokeResultWithStore, HostToolRpc,
+    HostToolRpcWithStore, InvocationResult, RegisteredTool, RpcError, TypedSchemaValue,
 };
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-use wasmtime::component::Resource;
-use wasmtime_wasi::p2::bindings::io::poll::Pollable;
+use wasmtime::component::{Accessor, HasSelf, Resource, StreamReader};
 
 const NOT_IMPLEMENTED: &str = "golem:tool/host is not yet implemented";
 
@@ -60,25 +58,12 @@ impl<Ctx: WorkerCtx> HostToolRpc for DurableWorkerCtx<Ctx> {
         Err(anyhow!(NOT_IMPLEMENTED))
     }
 
-    async fn invoke_and_await(
-        &mut self,
-        _self_: Resource<ToolRpcEntry>,
-        _command_path: Vec<String>,
-        _input: TypedSchemaValue,
-        _stdin: Option<Resource<InputStream>>,
-    ) -> anyhow::Result<Result<InvocationResult, RpcError>> {
-        self.observe_function_call("golem::tool::host::tool-rpc", "invoke-and-await");
-        Ok(Err(RpcError::RemoteInternalError(
-            NOT_IMPLEMENTED.to_string(),
-        )))
-    }
-
     async fn invoke(
         &mut self,
         _self_: Resource<ToolRpcEntry>,
         _command_path: Vec<String>,
         _input: TypedSchemaValue,
-        _stdin: Option<Resource<InputStream>>,
+        _stdin: Option<StreamReader<u8>>,
     ) -> anyhow::Result<Result<(), RpcError>> {
         self.observe_function_call("golem::tool::host::tool-rpc", "invoke");
         Ok(Err(RpcError::RemoteInternalError(
@@ -91,7 +76,7 @@ impl<Ctx: WorkerCtx> HostToolRpc for DurableWorkerCtx<Ctx> {
         _self_: Resource<ToolRpcEntry>,
         _command_path: Vec<String>,
         _input: TypedSchemaValue,
-        _stdin: Option<Resource<InputStream>>,
+        _stdin: Option<StreamReader<u8>>,
     ) -> anyhow::Result<Resource<FutureInvokeResultEntry>> {
         self.observe_function_call("golem::tool::host::tool-rpc", "async-invoke-and-await");
         Err(anyhow!(NOT_IMPLEMENTED))
@@ -104,25 +89,44 @@ impl<Ctx: WorkerCtx> HostToolRpc for DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
-    async fn subscribe(
-        &mut self,
-        _self_: Resource<FutureInvokeResultEntry>,
-    ) -> anyhow::Result<Resource<Pollable>> {
-        self.observe_function_call("golem::tool::host::future-invoke-result", "subscribe");
-        Err(anyhow!(NOT_IMPLEMENTED))
-    }
-
-    async fn get(
-        &mut self,
-        _self_: Resource<FutureInvokeResultEntry>,
-    ) -> anyhow::Result<Option<Result<InvocationResult, RpcError>>> {
-        self.observe_function_call("golem::tool::host::future-invoke-result", "get");
-        Ok(Some(Err(RpcError::RemoteInternalError(
+impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<DurableWorkerCtx<Ctx>> {
+    async fn invoke_and_await(
+        accessor: &Accessor<U, Self>,
+        _self_: Resource<ToolRpcEntry>,
+        _command_path: Vec<String>,
+        _input: TypedSchemaValue,
+        _stdin: Option<StreamReader<u8>>,
+    ) -> anyhow::Result<Result<InvocationResult, RpcError>> {
+        accessor.with(|mut access| {
+            access
+                .get()
+                .observe_function_call("golem::tool::host::tool-rpc", "invoke-and-await");
+        });
+        Ok(Err(RpcError::RemoteInternalError(
             NOT_IMPLEMENTED.to_string(),
-        ))))
+        )))
     }
+}
 
+impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
+    for HasSelf<DurableWorkerCtx<Ctx>>
+{
+    async fn get(
+        accessor: &Accessor<U, Self>,
+        _self_: Resource<FutureInvokeResultEntry>,
+    ) -> anyhow::Result<Result<InvocationResult, RpcError>> {
+        accessor.with(|mut access| {
+            access
+                .get()
+                .observe_function_call("golem::tool::host::future-invoke-result", "get");
+        });
+        Ok(Err(RpcError::RemoteInternalError(
+            NOT_IMPLEMENTED.to_string(),
+        )))
+    }
+}
+
+impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
     async fn cancel(&mut self, _self_: Resource<FutureInvokeResultEntry>) -> anyhow::Result<()> {
         self.observe_function_call("golem::tool::host::future-invoke-result", "cancel");
         Ok(())

@@ -14,10 +14,12 @@
 
 use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::multilayer::{
-    BackgroundTransferMessage, InstrumentedOplogArchive, OplogArchive, WrappedOplogArchive,
+    BackgroundTransferMessage, InstrumentedOplogArchive, MultiLayerOplogService, OplogArchive,
+    TransferFiber, WrappedOplogArchive,
 };
-use crate::services::oplog::{CommitLevel, Oplog, OplogService, downcast_oplog};
-use async_lock::Mutex;
+use crate::services::oplog::{
+    CommitLevel, Oplog, OplogService, OrderedOplogStart, PendingUpload, downcast_oplog,
+};
 use async_trait::async_trait;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::AgentMode;
@@ -28,21 +30,67 @@ use nonempty_collections::NEVec;
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use tracing::{Instrument, Level, Span, debug, info, span, warn};
 
+/// Oplog implementation for ephemeral agents, writing directly to archive layers.
+///
+/// Structured as an actor for the same reason as `PrimaryOplog` (see its doc comment): this
+/// oplog is called both from futures polled by wasmtime's store event loop and from host code
+/// running on store-keeping wasm fibers, and while such a fiber is suspended the event loop
+/// cannot poll store-polled futures (wasmtime#11869/#11870). A shared async mutex held across
+/// archive IO — or even fairly handed to a queued store-polled future — deadlocks the store, so
+/// instead the state is exclusively owned by an independent actor task and callers only await
+/// oneshot replies.
 pub struct EphemeralOplog {
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
     primary_service: Arc<dyn OplogService>,
-    state: Arc<Mutex<EphemeralOplogState>>,
+    jobs: UnboundedSender<EphemeralJob>,
+    actor: tokio::task::JoinHandle<()>,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
     transfer: UnboundedSender<BackgroundTransferMessage>,
-    transfer_fiber: Arc<StdMutex<Option<tokio::task::JoinHandle<()>>>>,
+    transfer_fiber: TransferFiber,
+    multi_layer_oplog_service: MultiLayerOplogService,
     close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
+}
+
+/// A request processed by the [`EphemeralOplog`] actor task, which exclusively owns the
+/// [`EphemeralOplogState`].
+enum EphemeralJob {
+    Add {
+        entry: OplogEntry,
+        done: tokio::sync::oneshot::Sender<OplogIndex>,
+    },
+    AddPair {
+        start: OplogEntry,
+        make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+        done: tokio::sync::oneshot::Sender<(OplogIndex, OplogIndex)>,
+    },
+    Commit {
+        done: tokio::sync::oneshot::Sender<BTreeMap<OplogIndex, OplogEntry>>,
+    },
+    CurrentIndex {
+        done: tokio::sync::oneshot::Sender<OplogIndex>,
+    },
+    LastAddedNonHintEntry {
+        done: tokio::sync::oneshot::Sender<Option<OplogIndex>>,
+    },
+    /// Snapshots the state needed for reads; the caller reads the archive layers itself, off the
+    /// actor, so large reads do not head-of-line block writes.
+    ReadSnapshot {
+        done: tokio::sync::oneshot::Sender<EphemeralReadSnapshot>,
+    },
+}
+
+/// Snapshot of the uncommitted buffer and commit watermark, used to serve reads outside the
+/// actor.
+struct EphemeralReadSnapshot {
+    buffer: Vec<OplogEntry>,
+    last_committed_idx: OplogIndex,
 }
 
 struct EphemeralOplogState {
@@ -100,7 +148,7 @@ impl EphemeralOplogState {
 
 impl EphemeralOplog {
     #[allow(clippy::too_many_arguments)]
-    pub async fn new(
+    pub(crate) async fn new(
         owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
         last_oplog_idx: OplogIndex,
@@ -108,26 +156,98 @@ impl EphemeralOplog {
         primary_service: Arc<dyn OplogService>,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
         transfer: UnboundedSender<BackgroundTransferMessage>,
-        transfer_fiber: tokio::task::JoinHandle<()>,
+        transfer_fiber: TransferFiber,
+        multi_layer_oplog_service: MultiLayerOplogService,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
         let target = lower.first().clone();
+        let mut state = EphemeralOplogState {
+            buffer: VecDeque::new(),
+            last_oplog_idx,
+            last_committed_idx: last_oplog_idx,
+            max_operations_before_commit,
+            target,
+            last_added_non_hint_entry: None,
+        };
+
+        let (jobs, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<EphemeralJob>();
+        let actor = tokio::spawn(
+            async move {
+                while let Some(job) = job_rx.recv().await {
+                    match job {
+                        EphemeralJob::Add { entry, done } => {
+                            let idx = state.add(entry).await;
+                            let _ = done.send(idx);
+                        }
+                        EphemeralJob::AddPair {
+                            start,
+                            make_second,
+                            done,
+                        } => {
+                            let first_idx = state.push(start);
+                            let second = make_second(first_idx);
+                            let second_idx = state.push(second);
+                            state.maybe_commit().await;
+                            let _ = done.send((first_idx, second_idx));
+                        }
+                        EphemeralJob::Commit { done } => {
+                            let result = state.commit().await;
+                            let _ = done.send(result);
+                        }
+                        EphemeralJob::CurrentIndex { done } => {
+                            let _ = done.send(state.last_oplog_idx);
+                        }
+                        EphemeralJob::LastAddedNonHintEntry { done } => {
+                            let _ = done.send(state.last_added_non_hint_entry);
+                        }
+                        EphemeralJob::ReadSnapshot { done } => {
+                            let _ = done.send(EphemeralReadSnapshot {
+                                buffer: state.buffer.iter().cloned().collect(),
+                                last_committed_idx: state.last_committed_idx,
+                            });
+                        }
+                    }
+                }
+            }
+            .in_current_span(),
+        );
+
         Self {
             owned_agent_id,
             agent_mode,
             primary_service,
-            state: Arc::new(Mutex::new(EphemeralOplogState {
-                buffer: VecDeque::new(),
-                last_oplog_idx,
-                last_committed_idx: last_oplog_idx,
-                max_operations_before_commit,
-                target,
-                last_added_non_hint_entry: None,
-            })),
+            jobs,
+            actor,
             lower,
             transfer,
-            transfer_fiber: Arc::new(StdMutex::new(Some(transfer_fiber))),
+            transfer_fiber,
+            multi_layer_oplog_service,
             close_fn: Some(close),
+        }
+    }
+
+    /// Enqueues a job for the actor task and awaits its reply.
+    ///
+    /// Panics if the actor task is gone: the actor is only aborted from `Drop` (when no caller
+    /// can be in flight anymore), so a missing reply means the actor itself panicked and the
+    /// oplog's state is no longer trustworthy.
+    async fn run_job<R>(
+        &self,
+        make_job: impl FnOnce(tokio::sync::oneshot::Sender<R>) -> EphemeralJob,
+    ) -> R {
+        let (done, done_rx) = tokio::sync::oneshot::channel();
+        if self.jobs.send(make_job(done)).is_err() {
+            panic!(
+                "Ephemeral oplog actor for {:?} terminated unexpectedly",
+                self.owned_agent_id
+            );
+        }
+        match done_rx.await {
+            Ok(result) => result,
+            Err(_) => panic!(
+                "Ephemeral oplog actor for {:?} dropped a request without replying",
+                self.owned_agent_id
+            ),
         }
     }
 
@@ -206,9 +326,15 @@ impl EphemeralOplog {
         owned_agent_id: OwnedAgentId,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
         rx: UnboundedReceiver<BackgroundTransferMessage>,
+        start: tokio::sync::oneshot::Receiver<()>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(
-            Self::background_transfer(owned_agent_id, lower, rx).instrument(
+            async move {
+                if start.await.is_ok() {
+                    Self::background_transfer(owned_agent_id, lower, rx).await;
+                }
+            }
+            .instrument(
                 span!(parent: None, Level::INFO, "Ephemeral oplog background transfer")
                     .follows_from(Span::current())
                     .clone(),
@@ -304,27 +430,39 @@ impl EphemeralOplog {
         account_id: golem_common::model::account::AccountId,
         entry_count_limit: u64,
         transfer_tx: &UnboundedSender<BackgroundTransferMessage>,
+        fresh: bool,
     ) -> NEVec<Arc<dyn OplogArchive + Send + Sync>> {
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
         for (i, layer) in lower_services.iter().enumerate() {
+            let raw = if fresh {
+                layer.open_fresh(owned_agent_id, agent_mode).await
+            } else {
+                layer.open(owned_agent_id, agent_mode).await
+            };
             if i != (lower_services.len().get() - 1) {
-                let raw = layer.open(owned_agent_id, agent_mode).await;
                 let instrumented = Arc::new(InstrumentedOplogArchive::new(
                     raw,
                     account_id,
                     owned_agent_id.environment_id(),
                 ));
-                lower.push(Arc::new(
+                let wrapped = if fresh {
+                    WrappedOplogArchive::new_fresh(
+                        i,
+                        instrumented,
+                        transfer_tx.clone(),
+                        entry_count_limit,
+                    )
+                } else {
                     WrappedOplogArchive::new(
                         i,
                         instrumented,
                         transfer_tx.clone(),
                         entry_count_limit,
                     )
-                    .await,
-                ));
+                    .await
+                };
+                lower.push(Arc::new(wrapped));
             } else {
-                let raw = layer.open(owned_agent_id, agent_mode).await;
                 lower.push(Arc::new(InstrumentedOplogArchive::new(
                     raw,
                     account_id,
@@ -338,12 +476,16 @@ impl EphemeralOplog {
 
 impl Drop for EphemeralOplog {
     fn drop(&mut self) {
+        self.multi_layer_oplog_service
+            .unregister_transfer(&self.owned_agent_id.agent_id, &self.transfer_fiber);
         if let Some(close_fn) = self.close_fn.take() {
             close_fn();
         }
-        if let Some(fiber) = self.transfer_fiber.lock().unwrap().take() {
-            fiber.abort();
-        }
+        self.multi_layer_oplog_service
+            .abort_transfer_in_drop(&self.transfer_fiber);
+        // In-flight `Oplog` calls borrow `self`, so at this point no caller can be awaiting a
+        // job reply anymore and aborting the actor cannot lose an observed operation.
+        self.actor.abort();
     }
 }
 
@@ -359,8 +501,7 @@ impl Debug for EphemeralOplog {
 impl Oplog for EphemeralOplog {
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
         record_oplog_call("add");
-        let mut state = self.state.lock().await;
-        state.add(entry).await
+        self.run_job(|done| EphemeralJob::Add { entry, done }).await
     }
 
     async fn add_pair(
@@ -369,12 +510,37 @@ impl Oplog for EphemeralOplog {
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
     ) -> (OplogIndex, OplogIndex) {
         record_oplog_call("add_pair");
-        let mut state = self.state.lock().await;
-        let first_idx = state.push(start);
-        let second = make_second(first_idx);
-        let second_idx = state.push(second);
-        state.maybe_commit().await;
-        (first_idx, second_idx)
+        self.run_job(|done| EphemeralJob::AddPair {
+            start,
+            make_second,
+            done,
+        })
+        .await
+    }
+
+    async fn add_start_with_reserved_raw_payload(
+        &self,
+        serialized_request: Vec<u8>,
+        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+    ) -> Result<OrderedOplogStart, String> {
+        record_oplog_call("add_start_with_reserved_raw_payload");
+        // Ephemeral oplogs are never replayed, so cross-call `Start` ordering need not be
+        // deterministic and there is no deferred-upload/commit-barrier machinery here. Upload the
+        // request payload eagerly (so it is already durable) and then append the `Start`; the
+        // returned `PendingUpload` is therefore a no-op.
+        let raw = self.upload_raw_payload(serialized_request).await?;
+        let entry = build_start(raw)?;
+        let index = self
+            .run_job(|done| EphemeralJob::Add {
+                entry: entry.clone(),
+                done,
+            })
+            .await;
+        Ok(OrderedOplogStart {
+            index,
+            entry,
+            pending_upload: PendingUpload::already_durable(),
+        })
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
@@ -389,24 +555,21 @@ impl Oplog for EphemeralOplog {
     async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
         record_oplog_call("commit");
         match level {
-            CommitLevel::Always => {
-                let mut state = self.state.lock().await;
-                state.commit().await
-            }
+            CommitLevel::Always => self.run_job(|done| EphemeralJob::Commit { done }).await,
             CommitLevel::DurableOnly => BTreeMap::new(),
         }
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
         record_oplog_call("current_oplog_index");
-        let state = self.state.lock().await;
-        state.last_oplog_idx
+        self.run_job(|done| EphemeralJob::CurrentIndex { done })
+            .await
     }
 
     async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
         record_oplog_call("last_added_non_hint_entry");
-        let state = self.state.lock().await;
-        state.last_added_non_hint_entry
+        self.run_job(|done| EphemeralJob::LastAddedNonHintEntry { done })
+            .await
     }
 
     async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
@@ -434,7 +597,12 @@ impl Oplog for EphemeralOplog {
             return BTreeMap::new();
         }
 
-        let state = self.state.lock().await;
+        // A consistent snapshot of the uncommitted buffer and commit watermark is enough: a
+        // commit that runs after the snapshot only moves entries from the buffer to the archive
+        // layers, and those entries are already present in the snapshot.
+        let snapshot = self
+            .run_job(|done| EphemeralJob::ReadSnapshot { done })
+            .await;
 
         let req_start: u64 = oplog_index.into();
         let req_end: u64 = oplog_index.range_end(n).into();
@@ -442,9 +610,9 @@ impl Oplog for EphemeralOplog {
         let mut result = BTreeMap::new();
 
         // First, fill from the in-memory buffer (uncommitted entries)
-        if !state.buffer.is_empty() {
-            let first_uncommitted: u64 = state.last_committed_idx.next().into();
-            let buffer_end: u64 = first_uncommitted + state.buffer.len() as u64 - 1;
+        if !snapshot.buffer.is_empty() {
+            let first_uncommitted: u64 = snapshot.last_committed_idx.next().into();
+            let buffer_end: u64 = first_uncommitted + snapshot.buffer.len() as u64 - 1;
 
             let overlap_start = max(req_start, first_uncommitted);
             let overlap_end = min(req_end, buffer_end);
@@ -454,7 +622,7 @@ impl Oplog for EphemeralOplog {
                 let count = (overlap_end - overlap_start + 1) as usize;
                 for i in 0..count {
                     let idx = OplogIndex::from_u64(overlap_start + i as u64);
-                    let entry = state.buffer[offset + i].clone();
+                    let entry = snapshot.buffer[offset + i].clone();
                     result.insert(idx, entry);
                 }
             }
@@ -469,7 +637,7 @@ impl Oplog for EphemeralOplog {
         // Read remaining entries from committed lower layers, stopping as soon as
         // the requested range starting at oplog_index is fully covered.
         if !full_match {
-            let committed_end: u64 = state.last_committed_idx.into();
+            let committed_end: u64 = snapshot.last_committed_idx.into();
             if committed_end >= req_start {
                 let storage_end = min(req_end, committed_end);
                 // Buffered entries always start after the committed range, so they do not reduce

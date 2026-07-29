@@ -418,8 +418,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .resolve_env_name(&component.environment_id, &registry_client)
             .await?;
 
-        let method_parameters = serde_json::to_value(params.value())
-            .map_err(|err| anyhow!("Failed to serialize method parameters: {err}"))?;
+        let method_parameters = params.value().clone();
 
         let client = self
             .deps
@@ -433,10 +432,9 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     app_name: app_name.0,
                     env_name: env_name.0,
                     agent_type_name: agent_id.agent_type.0.clone(),
-                    parameters: serde_json::to_value(agent_id.parameters.value()).map_err(
-                        |err| anyhow!("Failed to serialize constructor parameters: {err}"),
-                    )?,
+                    parameters: agent_id.parameters.value().clone(),
                     phantom_id: agent_id.phantom_id,
+                    config: None,
                     method_name: method_name.to_string(),
                     method_parameters,
                     mode: golem_client::model::AgentInvocationMode::Schedule,
@@ -485,8 +483,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .cloned()
             .unwrap_or_else(IdempotencyKey::fresh);
 
-        let method_parameters = serde_json::to_value(params.value())
-            .map_err(|err| anyhow!("Failed to serialize method parameters: {err}"))?;
+        let method_parameters = params.value().clone();
 
         let client = self
             .deps
@@ -500,10 +497,9 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     app_name: app_name.0,
                     env_name: env_name.0,
                     agent_type_name: agent_id.agent_type.0.clone(),
-                    parameters: serde_json::to_value(agent_id.parameters.value()).map_err(
-                        |err| anyhow!("Failed to serialize constructor parameters: {err}"),
-                    )?,
+                    parameters: agent_id.parameters.value().clone(),
                     phantom_id: agent_id.phantom_id,
+                    config: None,
                     method_name: method_name.to_string(),
                     method_parameters,
                     mode: golem_client::model::AgentInvocationMode::Await,

@@ -1,1 +1,1 @@
-import './counter-agent';
+import './counter-agent.js';

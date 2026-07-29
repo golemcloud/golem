@@ -6,6 +6,9 @@ let webhook_logger : @logging.Logger = @logging.with_name("webhook-agent")
 /// It creates a webhook URL, shares it, and then waits for an external
 /// system to POST data to that URL.
 #derive.agent
+#derive.mount("/webhook/{name}")
+#derive.mount_auth(false)
+#derive.mount_webhook("/events")
 struct WebhookAgent {
   name : String
   mut last_payload : String
@@ -29,7 +32,7 @@ fn WebhookAgent::new(name : String) -> WebhookAgent {
 /// Note: In a real scenario you would typically split this into two
 /// methods (one to create and return the URL, another to await),
 /// or pass the URL to another agent/system via RPC before waiting.
-pub fn WebhookAgent::wait_for_webhook(self : Self) -> String {
+pub async fn WebhookAgent::wait_for_webhook(self : Self) -> String {
   let webhook = @webhook.create()
   webhook_logger.info("Webhook created: " + webhook.url())
   let payload = webhook.wait()

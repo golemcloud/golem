@@ -1,53 +1,62 @@
 # Using MySQL from a TypeScript Agent
 
-The TypeScript SDK already includes the host module declaration for `golem:rdbms/mysql@1.5.0`.
+The fluent TypeScript SDK ships a typed MySQL helper built on the
+`golem:rdbms/mysql@1.5.0` host interface. Every operation returns a `Promise` and
+throws a typed `MySqlError` on failure.
 
 ## Imports
 
 ```ts
-import { DbConnection, type DbValue } from "golem:rdbms/mysql@1.5.0";
+import { MySql } from "@golemcloud/golem-ts-sdk";
 ```
+
+- `MySql.open(url, options?)` — open a connection.
+- `MySql.*` — explicit rich-type parameter wrappers (`MySql.varchar`, `MySql.int`, `MySql.decimal`, …).
 
 ## Open a Connection
 
 ```ts
-const conn = DbConnection.open("mysql://user:password@localhost:3306/app");
+const conn = await MySql.open("mysql://user:password@localhost:3306/app");
 ```
 
 ## Query Data
 
-MySQL placeholders use `?`.
+MySQL placeholders use `?`. Plain JS values are encoded automatically
+(string → `varchar`, integer → `int`/`bigint`, etc.); wrap a value in a `MySql.*`
+helper to pin an exact type. Rows come back as decoded `{ columnName: value }`
+records.
 
 ```ts
-const result = conn.query("SELECT ?", [{ tag: "varchar", val: "hello" } satisfies DbValue]);
-const value = result.rows[0]?.values[0];
-
-if (
-  !value ||
-  !["varchar", "text", "tinytext", "mediumtext", "longtext", "fixchar"].includes(value.tag)
-) {
-  throw new Error(`Unexpected MySQL value: ${JSON.stringify(value)}`);
-}
-
-const message = value.val;
+const result = await conn.query("SELECT ? AS message", ["hello"]);
+const message = result.rows[0]?.message as string;
 ```
 
 ## Execute Statements
 
+`execute` returns the number of affected rows.
+
 ```ts
-conn.execute("INSERT INTO notes (id, body) VALUES (?, ?)", [
-  { tag: "int", val: 1 },
-  { tag: "varchar", val: "hello" },
+const affected = await conn.execute("INSERT INTO notes (id, body) VALUES (?, ?)", [
+  1,
+  "hello",
 ]);
 ```
 
 ## Transactions
 
+Run a block inside a transaction — it commits on success and rolls back if the
+callback throws:
+
 ```ts
-const tx = conn.beginTransaction();
-tx.execute("UPDATE notes SET body = ? WHERE id = ?", [
-  { tag: "varchar", val: "updated" },
-  { tag: "int", val: 1 },
-]);
-tx.commit();
+await conn.transaction(async (tx) => {
+  tx.execute("UPDATE notes SET body = ? WHERE id = ?", ["updated", 1]);
+});
+```
+
+Or drive it manually with `begin()` / `commit()` / `rollback()`:
+
+```ts
+const tx = await conn.begin();
+tx.execute("UPDATE notes SET body = ? WHERE id = ?", ["updated", 1]);
+await tx.commit();
 ```

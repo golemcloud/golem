@@ -1,4 +1,4 @@
 {
   "type": "agent",
-  "description": "A simple agent implementing a counter with custom state snapshotting"
+  "description": "A counter agent that persists its state via snapshotting"
 }

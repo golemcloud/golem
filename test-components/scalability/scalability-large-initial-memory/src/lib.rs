@@ -12,23 +12,25 @@ pub trait LargeInitialMemoryAgent {
 
 struct LargeInitialMemoryAgentImpl {
     _name: String,
+    data: Vec<u8>,
 }
 
 #[agent_implementation]
 impl LargeInitialMemoryAgent for LargeInitialMemoryAgentImpl {
     fn new(name: String) -> Self {
-        Self { _name: name }
+        Self {
+            _name: name,
+            data: vec![0u8; DATA_SIZE],
+        }
     }
 
     fn run(&self) -> u64 {
-        // Allocate 512MB, matching the C version's static BSS allocation
-        let data = vec![0u8; DATA_SIZE];
-        println!("DATA:  {}", data.len());
-        println!("first: {}", data[0]);
-        println!("last:  {}", data[DATA_SIZE - 1]);
+        println!("DATA:  {}", self.data.len());
+        println!("first: {}", self.data[0]);
+        println!("last:  {}", self.data[DATA_SIZE - 1]);
 
         std::thread::sleep(Duration::from_secs(2));
 
-        data.len() as u64
+        self.data.len() as u64
     }
 }

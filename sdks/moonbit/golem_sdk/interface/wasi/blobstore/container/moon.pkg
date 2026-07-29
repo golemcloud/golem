@@ -1,5 +1,8 @@
+warnings = "-44"
+
 import {
+  "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/wasi/blobstore/types",
 }
 
-warnings = "-44"
+supported_targets = "+wasm"

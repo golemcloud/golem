@@ -8,7 +8,8 @@ This directory contains the TypeScript SDK for building Golem components. It's a
 
 - Node.js
 - pnpm (managed via packageManager field)
-- wasm-rquickjs-cli: `cargo install wasm-rquickjs-cli --version <VERSION>` (look up `WASM_RQUICKJS_VERSION` in `.github/workflows/ci.yaml`)
+- wasm-rquickjs-cli: install the version in `WASM_RQUICKJS_VERSION` from
+  `.github/workflows/ci.yaml` with `cargo install --locked wasm-rquickjs-cli@<VERSION>`
 
 ## Building
 
@@ -17,19 +18,11 @@ npx pnpm install         # Install dependencies
 npx pnpm run build       # Build all packages
 ```
 
-Build order is important: `golem-ts-types-core` → `golem-ts-typegen` → `golem-ts-sdk`
-
 ## Testing
 
 ```shell
 npx pnpm run test                           # Run all tests
 cd packages/golem-ts-sdk && pnpm run test   # Run tests for specific package
-```
-
-When making changes to `golem-ts-typegen` or `golem-ts-types-core`, rebuild before testing `golem-ts-sdk`:
-
-```shell
-pnpm install && pnpm run build
 ```
 
 ## Code Style
@@ -67,7 +60,8 @@ cargo make wit
 
 When `wasm-rquickjs-cli` is updated or WIT dependencies change, the agent template WASM must be rebuilt.
 
-**Requires `wasm32-wasip2` target:**
+The Preview 3 wrapper still requires the `wasm32-wasip2` Rust target because Rust does not yet
+provide a dedicated `wasm32-wasip3` target:
 
 ```shell
 rustup target add wasm32-wasip2
@@ -81,7 +75,8 @@ npx pnpm run build-agent-template
 
 **Important:** You must also run `build-agent-template` whenever you modify SDK runtime code (e.g., `baseAgent.ts`, `index.ts`, `resolvedAgent.ts`). Running `pnpm run build` alone only updates the JS bundle, but TS components use a pre-compiled `agent_guest.wasm` that embeds the SDK. Without rebuilding the template, TS components will bundle stale SDK code.
 
-**Testing local wasm-rquickjs changes:** If modifying wasm-rquickjs locally (in a separate checkout), install it from the local path:
+**Testing local wasm-rquickjs changes:** If modifying wasm-rquickjs locally (in a separate
+checkout), install it from the local path:
 
 ```shell
 cd /path/to/wasm-rquickjs

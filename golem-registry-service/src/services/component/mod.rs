@@ -30,7 +30,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::card::owner::ComponentOwnerPattern;
 use golem_common::model::card::{
-    ClassPermissionTarget, ComponentResourcePattern, ComponentVerb, PermissionTarget,
+    CardId, ClassPermissionTarget, ComponentResourcePattern, ComponentVerb, PermissionTarget,
 };
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
@@ -189,6 +189,16 @@ impl ComponentService {
         .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
         Ok(record.try_into_model()?)
+    }
+
+    pub async fn list_initial_permission_card_ids_by_account(
+        &self,
+        account_id: AccountId,
+    ) -> Result<Vec<CardId>, ComponentError> {
+        Ok(self
+            .component_repo
+            .list_initial_permission_card_ids_by_account(account_id.0)
+            .await?)
     }
 
     pub async fn list_staged_components(

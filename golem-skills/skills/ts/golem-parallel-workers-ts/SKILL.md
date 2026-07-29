@@ -9,7 +9,7 @@ description: "Fan out work to multiple parallel agents and collect results in a 
 
 Golem agents process invocations **sequentially** — a single agent cannot run work in parallel. To execute work concurrently, distribute it across **multiple agent instances**. This skill covers two approaches:
 
-1. **Child agents via `AgentClass.get(id)`** — spawn separate agent instances, dispatch work, and collect results
+1. **Child agents via `clientFor(AgentDef)(id)`** — spawn separate agent instances, dispatch work, and collect results
 2. **`fork()`** — clone the current agent at the current execution point for lightweight parallel execution
 
 ## Approach 1: Child Agent Fan-Out
@@ -19,33 +19,48 @@ Spawn child agents, call them concurrently with `Promise.all`, and aggregate res
 ### Basic Pattern
 
 ```typescript
-import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method, clientFor } from '@golemcloud/golem-ts-sdk';
 
-@agent()
-class Coordinator extends BaseAgent {
-    constructor() { super(); }
+export const Worker = defineAgent({
+    name: 'Worker',
+    id: { id: z.number() },
+    methods: {
+        process: method({ input: { data: z.string() }, returns: z.string() }),
+    },
+});
 
-    async fanOut(items: string[]): Promise<string[]> {
-        // Spawn one child per item and call concurrently
-        const promises = items.map(async (item, i) => {
-            const child = Worker.get(i);
-            return await child.process(item);
-        });
+export const WorkerImpl = Worker.implement({
+    init: ({ id }) => ({ id: id.id }),
+    methods: {
+        process({ data }) {
+            return `processed-${data}`;
+        },
+    },
+});
 
-        // Wait for all children to finish
-        return await Promise.all(promises);
-    }
-}
+// A typed RPC client factory for the remote Worker (built once, caches codecs).
+const workerClient = clientFor(Worker);
 
-@agent()
-class Worker extends BaseAgent {
-    private readonly id: number;
-    constructor(id: number) { super(); this.id = id; }
+export const Coordinator = defineAgent({
+    name: 'Coordinator',
+    id: { name: z.string() },
+    methods: {
+        fanOut: method({ input: { items: z.array(z.string()) }, returns: z.array(z.string()) }),
+    },
+});
 
-    async process(data: string): Promise<string> {
-        return `processed-${data}`;
-    }
-}
+export const CoordinatorImpl = Coordinator.implement({
+    init: () => ({}),
+    methods: {
+        async fanOut({ items }) {
+            // Spawn one child per item and call concurrently.
+            const promises = items.map((item, i) => workerClient({ id: i }).process({ data: item }));
+            // Wait for all children to finish.
+            return await Promise.all(promises);
+        },
+    },
+});
 ```
 
 ### Chunked Fan-Out
@@ -53,14 +68,12 @@ class Worker extends BaseAgent {
 When spawning many children, batch them to limit concurrency:
 
 ```typescript
-async fanOutChunked(ids: number[]): Promise<number[]> {
+async fanOutChunked({ ids }) {
     const chunks = arrayChunks(ids, 5); // Process 5 at a time
     const results: number[] = [];
 
     for (const chunk of chunks) {
-        const promises = chunk.map(async id => {
-            return await Worker.get(id).compute(id);
-        });
+        const promises = chunk.map((id) => workerClient({ id }).compute({ n: id }));
         results.push(...await Promise.all(promises));
     }
     return results;
@@ -77,49 +90,60 @@ function arrayChunks<T>(arr: T[], size: number): T[][] {
 
 ### Fire-and-Forget with Promise Collection
 
-For long-running work, trigger children with fire-and-forget and collect results via Golem promises:
+For long-running work, trigger children with `.trigger()` and collect results via
+Golem promises. A `PromiseId` is a nested record of bigints, so ship it across the
+agent boundary as a bigint-aware JSON string:
 
 ```typescript
+import { z } from 'zod';
 import {
-    BaseAgent, agent,
-    createPromise, awaitPromise, completePromise,
-    PromiseId,
+    defineAgent, method, clientFor,
+    createPromise, awaitPromise, completePromise, PromiseId,
 } from '@golemcloud/golem-ts-sdk';
 
-@agent()
-class Coordinator extends BaseAgent {
-    constructor() { super(); }
-
-    async dispatchAndCollect(regions: string[]): Promise<string[]> {
-        // Create one promise per child
-        const promiseIds = regions.map(() => createPromise());
-
-        // Fire-and-forget: trigger each child with its promise ID
-        regions.forEach((region, i) => {
-            RegionWorker.get(region).runReport.trigger(promiseIds[i]);
-        });
-
-        // Collect all results (agent suspends until each promise completes)
-        const results = await Promise.all(
-            promiseIds.map(async pid => {
-                const bytes = await awaitPromise(pid);
-                return new TextDecoder().decode(bytes);
-            })
-        );
-
-        return results;
-    }
+export function encodePromiseId(id: PromiseId): string {
+    return JSON.stringify(id, (_k, v) => (typeof v === 'bigint' ? { '#bigint': v.toString() } : v));
+}
+export function decodePromiseId(text: string): PromiseId {
+    return JSON.parse(text, (_k, v) =>
+        v && typeof v === 'object' && '#bigint' in v ? BigInt(v['#bigint']) : v,
+    ) as PromiseId;
 }
 
-@agent()
-class RegionWorker extends BaseAgent {
-    private readonly region: string;
-    constructor(region: string) { super(); this.region = region; }
+export const RegionWorker = defineAgent({
+    name: 'RegionWorker',
+    id: { region: z.string() },
+    methods: {
+        runReport: method({ input: { promiseId: z.string() }, returns: z.void() }),
+    },
+});
 
-    async runReport(promiseId: PromiseId): Promise<void> {
-        const report = `Report for ${this.region}: OK`;
-        completePromise(promiseId, new TextEncoder().encode(report));
-    }
+export const RegionWorkerImpl = RegionWorker.implement({
+    init: ({ id }) => ({ region: id.region }),
+    methods: {
+        runReport({ promiseId }) {
+            const report = `Report for ${this.region}: OK`;
+            completePromise(decodePromiseId(promiseId), new TextEncoder().encode(report));
+        },
+    },
+});
+
+const regionClient = clientFor(RegionWorker);
+
+// Inside a coordinator method handler:
+async dispatchAndCollect({ regions }) {
+    // Create one promise per child.
+    const promiseIds = regions.map(() => createPromise());
+
+    // Fire-and-forget: trigger each child with its (encoded) promise ID.
+    regions.forEach((region, i) => {
+        regionClient({ region }).runReport.trigger({ promiseId: encodePromiseId(promiseIds[i]) });
+    });
+
+    // Collect all results (the agent suspends until each promise completes).
+    return await Promise.all(
+        promiseIds.map(async (pid) => new TextDecoder().decode(await awaitPromise(pid))),
+    );
 }
 ```
 
@@ -128,12 +152,8 @@ class RegionWorker extends BaseAgent {
 Use `Promise.allSettled` to handle partial failures:
 
 ```typescript
-async fanOutWithErrors(items: string[]): Promise<{ successes: string[]; failures: string[] }> {
-    const promises = items.map(async (item, i) => {
-        const child = Worker.get(i);
-        return await child.process(item);
-    });
-
+async fanOutWithErrors({ items }) {
+    const promises = items.map((item, i) => workerClient({ id: i }).process({ data: item }));
     const settled = await Promise.allSettled(promises);
 
     const successes: string[] = [];
@@ -158,34 +178,44 @@ async fanOutWithErrors(items: string[]): Promise<{ successes: string[]; failures
 ### Basic Fork Pattern
 
 ```typescript
+import { z } from 'zod';
 import {
-    BaseAgent, agent,
+    defineAgent, method,
     fork, createPromise, awaitPromise, completePromise,
 } from '@golemcloud/golem-ts-sdk';
 
-@agent()
-class ForkAgent extends BaseAgent {
-    constructor() { super(); }
+export const ForkAgent = defineAgent({
+    name: 'ForkAgent',
+    id: { name: z.string() },
+    methods: {
+        parallelCompute: method({ input: {}, returns: z.string() }),
+    },
+});
 
-    async parallelCompute(): Promise<string> {
-        const promiseId = createPromise();
+export const ForkAgentImpl = ForkAgent.implement({
+    init: () => ({}),
+    methods: {
+        async parallelCompute() {
+            const promiseId = createPromise();
 
-        const result = fork();
-        switch (result.tag) {
-            case 'original':
-                // Wait for the forked agent to complete the promise
-                const bytes = await awaitPromise(promiseId);
-                const forkedResult = new TextDecoder().decode(bytes);
-                return `Combined: original + ${forkedResult}`;
-
-            case 'forked':
-                // Do work in the forked copy
-                const computed = "forked-result";
-                completePromise(promiseId, new TextEncoder().encode(computed));
-                return "forked done"; // This return is only seen by the forked agent
-        }
-    }
-}
+            const result = fork();
+            switch (result.tag) {
+                case 'original': {
+                    // Wait for the forked agent to complete the promise.
+                    const bytes = await awaitPromise(promiseId);
+                    const forkedResult = new TextDecoder().decode(bytes);
+                    return `Combined: original + ${forkedResult}`;
+                }
+                case 'forked': {
+                    // Do work in the forked copy.
+                    const computed = 'forked-result';
+                    completePromise(promiseId, new TextEncoder().encode(computed));
+                    return 'forked done'; // This return is only seen by the forked agent.
+                }
+            }
+        },
+    },
+});
 ```
 
 ### Multi-Fork Fan-Out
@@ -193,28 +223,23 @@ class ForkAgent extends BaseAgent {
 Fork multiple times for N-way parallelism:
 
 ```typescript
-async multiFork(n: number): Promise<string[]> {
+async multiFork({ n }) {
     const promiseIds = Array.from({ length: n }, () => createPromise());
 
     for (let i = 0; i < n; i++) {
         const result = fork();
         if (result.tag === 'forked') {
-            // Each forked agent does its slice of work
+            // Each forked agent does its slice of work.
             const output = `result-from-fork-${i}`;
             completePromise(promiseIds[i], new TextEncoder().encode(output));
-            return []; // Forked agent exits here
+            return []; // Forked agent exits here.
         }
     }
 
-    // Original agent collects all results
-    const results = await Promise.all(
-        promiseIds.map(async pid => {
-            const bytes = await awaitPromise(pid);
-            return new TextDecoder().decode(bytes);
-        })
+    // Original agent collects all results.
+    return await Promise.all(
+        promiseIds.map(async (pid) => new TextDecoder().decode(await awaitPromise(pid))),
     );
-
-    return results;
 }
 ```
 

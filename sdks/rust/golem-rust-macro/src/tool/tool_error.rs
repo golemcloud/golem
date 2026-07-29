@@ -18,7 +18,9 @@
 
 use crate::tool::doc::parse_doc_full;
 use crate::tool::helpers::{SeenKeys, expr_str, expr_u8, to_kebab_case};
-use crate::tool::ir::{ErrorKindIr, ToolErrorIr, ToolErrorPayloadIr, ToolErrorVariantIr};
+use crate::tool::ir::{
+    ErrorKindIr, ToolErrorIr, ToolErrorNoPayloadStyleIr, ToolErrorPayloadIr, ToolErrorVariantIr,
+};
 use crate::tool::synthesis::{doc_tokens, error_kind_tokens};
 use proc_macro::TokenStream;
 use quote::quote;
@@ -36,14 +38,15 @@ pub fn derive_tool_error_impl(input: TokenStream) -> TokenStream {
 /// Builds `impl golem_rust::agentic::ToolErrorSchema for <Enum>` from the IR.
 fn synthesize_tool_error(ir: &ToolErrorIr) -> TokenStream {
     let enum_ident = &ir.enum_ident;
+    let type_name = enum_ident.to_string();
     let cases = ir.variants.iter().map(|variant| {
         let name = to_kebab_case(&variant.variant_ident.to_string());
         let doc = doc_tokens(&variant.doc);
         let kind = error_kind_tokens(variant.kind);
         let exit_code = variant.exit_code;
         let payload = match &variant.payload {
-            ToolErrorPayloadIr::None => quote! { ::std::option::Option::None },
-            ToolErrorPayloadIr::Single { ty } => {
+            ToolErrorPayloadIr::None { .. } => quote! { ::std::option::Option::None },
+            ToolErrorPayloadIr::Single { ty, .. } => {
                 let position = format!("error {name} payload");
                 quote! {
                     ::std::option::Option::Some(
@@ -62,6 +65,156 @@ fn synthesize_tool_error(ir: &ToolErrorIr) -> TokenStream {
             }
         }
     });
+    let schema_cases = ir.variants.iter().map(|variant| {
+        let name = to_kebab_case(&variant.variant_ident.to_string());
+        let payload = match &variant.payload {
+            ToolErrorPayloadIr::None { .. } => quote! { ::std::option::Option::None },
+            ToolErrorPayloadIr::Single { ty, .. } => {
+                quote! { ::std::option::Option::Some(<#ty as golem_rust::IntoSchema>::register_in(__builder)) }
+            }
+        };
+        quote! {
+            golem_rust::schema::VariantCaseType {
+                name: #name.to_string(),
+                payload: #payload,
+                metadata: ::std::default::Default::default(),
+            }
+        }
+    });
+    let to_value_arms = ir.variants.iter().enumerate().map(|(idx, variant)| {
+        let variant_ident = &variant.variant_ident;
+        let idx = idx as u32;
+        match &variant.payload {
+            ToolErrorPayloadIr::None { style } => {
+                let pattern = no_payload_pattern(variant_ident, *style);
+                quote! {
+                #pattern => golem_rust::SchemaValue::Variant(
+                    golem_rust::schema::VariantValuePayload {
+                        case: #idx,
+                        payload: ::std::option::Option::None,
+                    }
+                )
+                }
+            }
+            ToolErrorPayloadIr::Single {
+                field_ident: None, ..
+            } => quote! {
+                Self::#variant_ident(__payload) => golem_rust::SchemaValue::Variant(
+                    golem_rust::schema::VariantValuePayload {
+                        case: #idx,
+                        payload: ::std::option::Option::Some(::std::boxed::Box::new(
+                            golem_rust::IntoSchema::to_value(__payload)
+                        )),
+                    }
+                )
+            },
+            ToolErrorPayloadIr::Single {
+                field_ident: Some(field_ident),
+                ..
+            } => quote! {
+                Self::#variant_ident { #field_ident } => golem_rust::SchemaValue::Variant(
+                    golem_rust::schema::VariantValuePayload {
+                        case: #idx,
+                        payload: ::std::option::Option::Some(::std::boxed::Box::new(
+                            golem_rust::IntoSchema::to_value(#field_ident)
+                        )),
+                    }
+                )
+            },
+        }
+    });
+    let from_value_arms = ir.variants.iter().enumerate().map(|(idx, variant)| {
+        let variant_ident = &variant.variant_ident;
+        let idx = idx as u32;
+        match &variant.payload {
+            ToolErrorPayloadIr::None { style } => {
+                let constructor = no_payload_constructor(variant_ident, *style);
+                quote! {
+                #idx => {
+                    if __payload.payload.is_some() {
+                        return ::std::result::Result::Err(golem_rust::schema::FromSchemaError::custom(
+                            "tool error variant unexpectedly carried a payload"
+                        ));
+                    }
+                    ::std::result::Result::Ok(#constructor)
+                }
+                }
+            }
+            ToolErrorPayloadIr::Single { ty, field_ident: None } => quote! {
+                #idx => {
+                    let __value = __payload.payload.as_deref().ok_or_else(|| {
+                        golem_rust::schema::FromSchemaError::custom("tool error variant is missing its payload")
+                    })?;
+                    ::std::result::Result::Ok(Self::#variant_ident(<#ty as golem_rust::FromSchema>::from_value(__value)?))
+                }
+            },
+            ToolErrorPayloadIr::Single { ty, field_ident: Some(field_ident) } => quote! {
+                #idx => {
+                    let __value = __payload.payload.as_deref().ok_or_else(|| {
+                        golem_rust::schema::FromSchemaError::custom("tool error variant is missing its payload")
+                    })?;
+                    ::std::result::Result::Ok(Self::#variant_ident {
+                        #field_ident: <#ty as golem_rust::FromSchema>::from_value(__value)?,
+                    })
+                }
+            },
+        }
+    });
+    let to_error_payload_arms = ir.variants.iter().map(|variant| {
+        let variant_ident = &variant.variant_ident;
+        match &variant.payload {
+            ToolErrorPayloadIr::None { style } => {
+                let pattern = no_payload_pattern(variant_ident, *style);
+                quote! {
+                #pattern => {
+                    golem_rust::IntoTypedSchemaValue::into_typed_schema_value(&())
+                        .map_err(|__err| __err.to_string())
+                }
+                }
+            }
+            ToolErrorPayloadIr::Single {
+                field_ident: None, ..
+            } => quote! {
+                Self::#variant_ident(__payload) => {
+                    golem_rust::IntoTypedSchemaValue::into_typed_schema_value(__payload)
+                        .map_err(|__err| __err.to_string())
+                }
+            },
+            ToolErrorPayloadIr::Single {
+                field_ident: Some(field_ident),
+                ..
+            } => quote! {
+                Self::#variant_ident { #field_ident } => {
+                    golem_rust::IntoTypedSchemaValue::into_typed_schema_value(#field_ident)
+                        .map_err(|__err| __err.to_string())
+                }
+            },
+        }
+    });
+    let from_error_payload_arms = ir.variants.iter().map(|variant| {
+        let variant_ident = &variant.variant_ident;
+        match &variant.payload {
+            ToolErrorPayloadIr::None { style } => {
+                let constructor = no_payload_constructor(variant_ident, *style);
+                quote! {
+                if <() as golem_rust::FromSchema>::from_value(__value.value()).is_ok() {
+                    return ::std::result::Result::Ok(#constructor);
+                }
+                }
+            }
+            ToolErrorPayloadIr::Single { ty, field_ident: None } => quote! {
+                if let ::std::result::Result::Ok(__payload) = <#ty as golem_rust::FromSchema>::from_value(__value.value()) {
+                    return ::std::result::Result::Ok(Self::#variant_ident(__payload));
+                }
+            },
+            ToolErrorPayloadIr::Single { ty, field_ident: Some(field_ident) } => quote! {
+                if let ::std::result::Result::Ok(__payload) = <#ty as golem_rust::FromSchema>::from_value(__value.value()) {
+                    return ::std::result::Result::Ok(Self::#variant_ident { #field_ident: __payload });
+                }
+            },
+        }
+    });
+    let variant_count = ir.variants.len() as u32;
     quote! {
         impl golem_rust::agentic::ToolErrorSchema for #enum_ident {
             fn error_cases() -> ::std::result::Result<
@@ -69,6 +222,78 @@ fn synthesize_tool_error(ir: &ToolErrorIr) -> TokenStream {
                 golem_rust::agentic::ToolBuildError,
             > {
                 ::std::result::Result::Ok(::std::vec![ #(#cases),* ])
+            }
+
+            fn to_error_payload_value(&self) -> ::std::result::Result<golem_rust::TypedSchemaValue, ::std::string::String> {
+                match self {
+                    #(#to_error_payload_arms),*
+                }
+            }
+
+            fn from_error_payload_value(
+                __value: golem_rust::TypedSchemaValue,
+            ) -> ::std::result::Result<Self, ::std::string::String> {
+                #(#from_error_payload_arms)*
+                ::std::result::Result::Err("remote tool error payload did not match any declared error case".to_string())
+            }
+        }
+
+        impl golem_rust::IntoSchema for #enum_ident {
+            fn type_id() -> golem_rust::schema::TypeId {
+                golem_rust::schema::TypeId::new(
+                    golem_rust::schema::conversion::normalize_type_path(::std::any::type_name::<Self>())
+                )
+            }
+
+            fn register_in(__builder: &mut golem_rust::schema::SchemaBuilder) -> golem_rust::SchemaType {
+                let __id = <Self as golem_rust::IntoSchema>::type_id();
+                if __builder.is_registered(&__id) {
+                    return golem_rust::SchemaType::Ref {
+                        id: __id,
+                        metadata: ::std::default::Default::default(),
+                    };
+                }
+                __builder.reserve(__id.clone());
+                let __body = golem_rust::SchemaType::Variant {
+                    cases: ::std::vec![ #(#schema_cases),* ],
+                    metadata: ::std::default::Default::default(),
+                };
+                __builder.commit(
+                    __id.clone(),
+                    ::std::option::Option::Some(#type_name.to_string()),
+                    ::std::default::Default::default(),
+                    __body,
+                );
+                golem_rust::SchemaType::Ref {
+                    id: __id,
+                    metadata: ::std::default::Default::default(),
+                }
+            }
+
+            fn to_value(&self) -> golem_rust::SchemaValue {
+                match self {
+                    #(#to_value_arms),*
+                }
+            }
+        }
+
+        impl golem_rust::FromSchema for #enum_ident {
+            fn from_value(__value: &golem_rust::SchemaValue) -> ::std::result::Result<Self, golem_rust::schema::FromSchemaError> {
+                match __value {
+                    golem_rust::SchemaValue::Variant(__payload) => match __payload.case {
+                        #(#from_value_arms),*,
+                        __idx => ::std::result::Result::Err(golem_rust::schema::FromSchemaError::out_of_range(
+                            __idx,
+                            #variant_count,
+                            "tool error variant",
+                        )),
+                    },
+                    __other => ::std::result::Result::Err(golem_rust::schema::FromSchemaError::shape_mismatch(
+                        "variant",
+                        golem_rust::schema::conversion::value_kind(__other),
+                        "tool error",
+                    )),
+                }
             }
         }
     }
@@ -149,19 +374,52 @@ pub fn parse_tool_error(input: &DeriveInput) -> Result<ToolErrorIr, Error> {
 /// compile error (no synthetic record is generated).
 fn parse_payload(fields: &Fields) -> Result<ToolErrorPayloadIr, Error> {
     match fields {
-        Fields::Unit => Ok(ToolErrorPayloadIr::None),
-        Fields::Unnamed(f) if f.unnamed.is_empty() => Ok(ToolErrorPayloadIr::None),
-        Fields::Named(f) if f.named.is_empty() => Ok(ToolErrorPayloadIr::None),
+        Fields::Unit => Ok(ToolErrorPayloadIr::None {
+            style: ToolErrorNoPayloadStyleIr::Unit,
+        }),
+        Fields::Unnamed(f) if f.unnamed.is_empty() => Ok(ToolErrorPayloadIr::None {
+            style: ToolErrorNoPayloadStyleIr::Tuple,
+        }),
+        Fields::Named(f) if f.named.is_empty() => Ok(ToolErrorPayloadIr::None {
+            style: ToolErrorNoPayloadStyleIr::Struct,
+        }),
         Fields::Unnamed(f) if f.unnamed.len() == 1 => Ok(ToolErrorPayloadIr::Single {
             ty: f.unnamed.first().unwrap().ty.clone(),
+            field_ident: None,
         }),
-        Fields::Named(f) if f.named.len() == 1 => Ok(ToolErrorPayloadIr::Single {
-            ty: f.named.first().unwrap().ty.clone(),
-        }),
+        Fields::Named(f) if f.named.len() == 1 => {
+            let field = f.named.first().unwrap();
+            Ok(ToolErrorPayloadIr::Single {
+                ty: field.ty.clone(),
+                field_ident: field.ident.clone(),
+            })
+        }
         other => Err(Error::new(
             other.span(),
             "a ToolError variant may have at most one field; wrap multiple values in a struct or tuple type",
         )),
+    }
+}
+
+fn no_payload_pattern(
+    variant_ident: &syn::Ident,
+    style: ToolErrorNoPayloadStyleIr,
+) -> proc_macro2::TokenStream {
+    match style {
+        ToolErrorNoPayloadStyleIr::Unit => quote! { Self::#variant_ident },
+        ToolErrorNoPayloadStyleIr::Tuple => quote! { Self::#variant_ident() },
+        ToolErrorNoPayloadStyleIr::Struct => quote! { Self::#variant_ident {} },
+    }
+}
+
+fn no_payload_constructor(
+    variant_ident: &syn::Ident,
+    style: ToolErrorNoPayloadStyleIr,
+) -> proc_macro2::TokenStream {
+    match style {
+        ToolErrorNoPayloadStyleIr::Unit => quote! { Self::#variant_ident },
+        ToolErrorNoPayloadStyleIr::Tuple => quote! { Self::#variant_ident() },
+        ToolErrorNoPayloadStyleIr::Struct => quote! { Self::#variant_ident {} },
     }
 }
 
@@ -298,7 +556,12 @@ mod tests {
             "#,
         )
         .unwrap();
-        assert_eq!(ir.variants[0].payload, ToolErrorPayloadIr::None);
+        assert_eq!(
+            ir.variants[0].payload,
+            ToolErrorPayloadIr::None {
+                style: ToolErrorNoPayloadStyleIr::Unit,
+            }
+        );
         assert!(matches!(
             ir.variants[1].payload,
             ToolErrorPayloadIr::Single { .. }

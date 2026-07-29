@@ -60,6 +60,8 @@ pub struct UntypedAgentConfigEntry {
 }
 
 declare_structs! {
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
     pub struct AgentConfigEntryDto {
         pub path: Vec<String>,
         pub value: NormalizedJsonValue

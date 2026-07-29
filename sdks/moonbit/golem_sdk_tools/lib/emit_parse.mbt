@@ -29,7 +29,15 @@ fn parse_generated_impls(
       "golem_sdk_tools: generated \{context} code failed to parse:\n",
     )
     for r in reports {
-      buf.write_string("  - \{r}\n")
+      buf.write_string(
+        "  - line " +
+        r.loc.start.lnum.to_string() +
+        ", column " +
+        r.loc.start.column().to_string() +
+        ": " +
+        r.msg +
+        "\n",
+      )
     }
     buf.write_string("--- generated source ---\n")
     buf.write_string(source)

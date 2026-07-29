@@ -25,6 +25,7 @@ use colored::Colorize;
 use golem_client::model::Account;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
+use golem_common::model::card::CardId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
@@ -305,6 +306,17 @@ impl InteractiveHandler {
                 "Are you sure you want to delete the requested account? ({}, {})",
                 account.name.log_color_highlight(),
                 account.email.as_str().log_color_highlight()
+            ),
+            None,
+        )
+    }
+
+    pub fn confirm_revoke_card(&self, card_id: CardId) -> anyhow::Result<bool> {
+        self.confirm(
+            false,
+            format!(
+                "Are you sure you want to revoke card {} and all of its descendants?",
+                card_id.to_string().log_color_highlight()
             ),
             None,
         )
@@ -733,7 +745,7 @@ fn confirm<M: AsRef<str>>(
                     "This action requires confirmation, but the current shell is non-interactive.",
                 );
                 log_error(
-                    "Re-run the same command with the '--yes' (or '-y') flag to auto-confirm.",
+                    "Re-run the same command with the '--yes' (or '-Y') flag to auto-confirm.",
                 );
                 Ok(false)
             } else {

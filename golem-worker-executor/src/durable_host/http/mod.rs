@@ -20,6 +20,7 @@ use tracing::warn;
 
 pub mod inline_retry;
 pub mod outgoing_http;
+pub(crate) mod policy;
 pub mod types;
 
 pub(crate) async fn end_http_request<Ctx: WorkerCtx>(

@@ -64,9 +64,18 @@ const BLOB_SIZE_BUCKETS: &[f64; 17] = &[
     67_108_864.0,
 ];
 
-/// Lag buckets for the scheduler: sub-second to multi-minute range.
-const SCHEDULER_LAG_BUCKETS: &[f64; 11] = &[
-    0.001, 0.01, 0.1, 1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0,
+/// Lag buckets for the scheduler. Values are dense at low latencies so Grafana
+/// quantiles distinguish normal scheduling delay from missed ticks.
+const SCHEDULER_LAG_BUCKETS: &[f64; 22] = &[
+    0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0,
+    10.0, 30.0, 60.0, 300.0, 600.0,
+];
+
+/// Tick-duration buckets for the scheduler. Values are dense at low latencies
+/// because slow ticks directly add scheduling delay.
+const SCHEDULER_TICK_DURATION_BUCKETS: &[f64; 24] = &[
+    0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0,
+    2.5, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 60.0,
 ];
 
 /// Buckets for the size of a single `memory.grow` allocation. Deliberately
@@ -672,11 +681,24 @@ pub mod scheduler {
             &["executor_id"]
         )
         .unwrap();
+        pub static ref SCHEDULER_DUE_ACTION_BACKLOG_AFTER_TICK: GaugeVec = register_gauge_vec!(
+            "scheduler_due_action_backlog_after_tick",
+            "Due scheduled actions not yet acknowledged after scheduler tick processing",
+            &["executor_id"]
+        )
+        .unwrap();
         pub static ref SCHEDULER_TICK_DURATION_SECONDS: HistogramVec = register_histogram_vec!(
             "scheduler_tick_duration_seconds",
             "Wall time of a single scheduler process() iteration",
             &["executor_id"],
-            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+            crate::metrics::SCHEDULER_TICK_DURATION_BUCKETS.to_vec()
+        )
+        .unwrap();
+        pub static ref SCHEDULED_ACTION_PROCESSING_SECONDS: HistogramVec = register_histogram_vec!(
+            "scheduled_action_processing_seconds",
+            "Time to process a claimed scheduled action before acknowledgement",
+            &["executor_id", "action_kind"],
+            crate::metrics::SCHEDULER_TICK_DURATION_BUCKETS.to_vec()
         )
         .unwrap();
         pub static ref SCHEDULED_ACTION_SIZE_BYTES: HistogramVec = register_histogram_vec!(
@@ -700,9 +722,21 @@ pub mod scheduler {
             .set(depth as f64);
     }
 
+    pub fn set_scheduler_due_action_backlog_after_tick(backlog: u64) {
+        SCHEDULER_DUE_ACTION_BACKLOG_AFTER_TICK
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .set(backlog as f64);
+    }
+
     pub fn record_scheduler_tick_duration(duration: Duration) {
         SCHEDULER_TICK_DURATION_SECONDS
             .with_label_values(&[crate::metrics::storage::executor_id()])
+            .observe(duration.as_secs_f64());
+    }
+
+    pub fn record_scheduled_action_processing(action_kind: &'static str, duration: Duration) {
+        SCHEDULED_ACTION_PROCESSING_SECONDS
+            .with_label_values(&[crate::metrics::storage::executor_id(), action_kind])
             .observe(duration.as_secs_f64());
     }
 
@@ -718,7 +752,7 @@ pub mod scheduler {
         match action {
             ScheduledAction::CompletePromise { .. } => "complete_promise",
             ScheduledAction::ArchiveOplog { .. } => "archive_oplog",
-            ScheduledAction::Invoke { .. } => "invoke",
+            ScheduledAction::Invoke { .. } | ScheduledAction::InvokeEphemeral { .. } => "invoke",
             ScheduledAction::Resume { .. } => "resume",
         }
     }
@@ -953,6 +987,7 @@ pub mod resources {
 }
 
 pub mod ephemeral {
+    use golem_common::model::agent::InvocationFreshnessDisposition;
     use lazy_static::lazy_static;
     use prometheus::*;
 
@@ -966,6 +1001,27 @@ pub mod ephemeral {
             "ephemeral_non_suspending_failure_total",
             "Number of ephemeral failures that replace suspension",
             &["reason"]
+        )
+        .unwrap();
+        static ref EPHEMERAL_INVOCATION_ATTEMPT_TOTAL: CounterVec = register_counter_vec!(
+            "ephemeral_invocation_attempt_total",
+            "Number of ephemeral invocation attempts by freshness disposition",
+            &["disposition"]
+        )
+        .unwrap();
+        static ref EPHEMERAL_KNOWN_FRESH_VALIDATION_FAILURE_TOTAL: Counter = register_counter!(
+            "ephemeral_known_fresh_validation_failure_total",
+            "Number of rejected KnownFresh invocation requests"
+        )
+        .unwrap();
+        static ref EPHEMERAL_LOWER_OPLOG_EXISTENCE_READ_TOTAL: Counter = register_counter!(
+            "ephemeral_lower_oplog_existence_read_total",
+            "Number of lower oplog existence reads for ephemeral agents"
+        )
+        .unwrap();
+        static ref EPHEMERAL_INACTIVE_INVOCATION_FAILURE_TOTAL: Counter = register_counter!(
+            "ephemeral_inactive_invocation_failure_total",
+            "Number of attempts to invoke or resume inactive ephemeral agents"
         )
         .unwrap();
     }
@@ -982,6 +1038,28 @@ pub mod ephemeral {
         EPHEMERAL_NON_SUSPENDING_FAILURE_TOTAL
             .with_label_values(&[reason])
             .inc();
+    }
+
+    pub fn record_invocation_attempt(disposition: InvocationFreshnessDisposition) {
+        let disposition = match disposition {
+            InvocationFreshnessDisposition::MayExist => "may-exist",
+            InvocationFreshnessDisposition::KnownFresh => "known-fresh",
+        };
+        EPHEMERAL_INVOCATION_ATTEMPT_TOTAL
+            .with_label_values(&[disposition])
+            .inc();
+    }
+
+    pub fn record_known_fresh_validation_failure() {
+        EPHEMERAL_KNOWN_FRESH_VALIDATION_FAILURE_TOTAL.inc();
+    }
+
+    pub fn record_lower_oplog_existence_read() {
+        EPHEMERAL_LOWER_OPLOG_EXISTENCE_READ_TOTAL.inc();
+    }
+
+    pub fn record_inactive_invocation_failure() {
+        EPHEMERAL_INACTIVE_INVOCATION_FAILURE_TOTAL.inc();
     }
 }
 

@@ -44,48 +44,61 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
         ctx.cwd_path_join(Path::new("src").join("ifs-probe-agent.ts")),
         indoc! {
             r#"
-            import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+            import { z } from 'zod';
+            import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
             import * as fs from 'node:fs';
 
-            @agent({})
-            class IfsProbeAgent extends BaseAgent {
-                constructor(name: string) {
-                    super();
-                }
+            export const IfsProbeAgent = defineAgent({
+                name: 'IfsProbeAgent',
+                id: { name: z.string() },
+                methods: {
+                    probe: method({ input: {}, returns: z.string() }),
+                },
+            });
 
-                async probe(): Promise<string> {
-                    fs.mkdirSync('/workspace/generated', { recursive: true });
-                    fs.writeFileSync('/workspace/generated/output.txt', 'generated', 'utf8');
+            export const IfsProbeAgentImpl = IfsProbeAgent.implement({
+                init: () => ({}),
+                methods: {
+                    probe() {
+                        fs.mkdirSync('/workspace/generated', { recursive: true });
+                        fs.writeFileSync('/workspace/generated/output.txt', 'generated', 'utf8');
 
-                    return JSON.stringify({
-                        keep: fs.readFileSync('/workspace/.keep', 'utf8'),
-                        nested: fs.readFileSync('/workspace/nested.txt', 'utf8'),
-                        added: fs.existsSync('/workspace/added.txt') ? fs.readFileSync('/workspace/added.txt', 'utf8') : null,
-                        removedExists: fs.existsSync('/workspace/removed.txt'),
-                        generated: fs.readFileSync('/workspace/generated/output.txt', 'utf8'),
-                    });
-                }
-            }
+                        return JSON.stringify({
+                            keep: fs.readFileSync('/workspace/.keep', 'utf8'),
+                            nested: fs.readFileSync('/workspace/nested.txt', 'utf8'),
+                            added: fs.existsSync('/workspace/added.txt') ? fs.readFileSync('/workspace/added.txt', 'utf8') : null,
+                            removedExists: fs.existsSync('/workspace/removed.txt'),
+                            generated: fs.readFileSync('/workspace/generated/output.txt', 'utf8'),
+                        });
+                    },
+                },
+            });
 
-            @agent({})
-            class SecondIfsProbeAgent extends BaseAgent {
-                constructor(name: string) {
-                    super();
-                }
+            export const SecondIfsProbeAgent = defineAgent({
+                name: 'SecondIfsProbeAgent',
+                id: { name: z.string() },
+                methods: {
+                    probe: method({ input: {}, returns: z.string() }),
+                },
+            });
 
-                async probe(): Promise<string> {
-                    fs.mkdirSync('/workspace/generated', { recursive: true });
-                    fs.writeFileSync('/workspace/generated/second-output.txt', 'second-generated', 'utf8');
+            export const SecondIfsProbeAgentImpl = SecondIfsProbeAgent.implement({
+                init: () => ({}),
+                methods: {
+                    probe() {
+                        fs.mkdirSync('/workspace/generated', { recursive: true });
+                        fs.writeFileSync('/workspace/generated/second-output.txt', 'second-generated', 'utf8');
 
-                    return JSON.stringify({
-                        keep: fs.readFileSync('/workspace/.keep', 'utf8'),
-                        nested: fs.readFileSync('/workspace/nested.txt', 'utf8'),
-                        added: fs.existsSync('/workspace/added.txt') ? fs.readFileSync('/workspace/added.txt', 'utf8') : null,
-                        removedExists: fs.existsSync('/workspace/removed.txt'),
-                        generated: fs.readFileSync('/workspace/generated/second-output.txt', 'utf8'),
-                    });
-                }
-            }
+                        return JSON.stringify({
+                            keep: fs.readFileSync('/workspace/.keep', 'utf8'),
+                            nested: fs.readFileSync('/workspace/nested.txt', 'utf8'),
+                            added: fs.existsSync('/workspace/added.txt') ? fs.readFileSync('/workspace/added.txt', 'utf8') : null,
+                            removedExists: fs.existsSync('/workspace/removed.txt'),
+                            generated: fs.readFileSync('/workspace/generated/second-output.txt', 'utf8'),
+                        });
+                    },
+                },
+            });
             "#
         },
     )
@@ -95,7 +108,7 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
         ctx.cwd_path_join(Path::new("src").join("main.ts")),
         indoc! {
             r#"
-            export * from './ifs-probe-agent';
+            import './ifs-probe-agent.js';
             "#
         },
     )

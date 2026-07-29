@@ -124,13 +124,16 @@ impl SdkOverrides {
 
     pub fn moonbit_sdk_dep(&self) -> String {
         match &self.moonbit_sdk_path {
-            Some(path) => format!(r#"{{ "path": "{path}" }}"#),
+            Some(path) => format!(
+                r#"{{ "path": {} }}"#,
+                serde_json::to_string(path).expect("serializing a string cannot fail")
+            ),
             None => {
                 let version = self
                     .moonbit_sdk_version
                     .as_deref()
                     .unwrap_or(versions::sdk::MOONBIT);
-                format!(r#""{version}""#)
+                serde_json::to_string(version).expect("serializing a string cannot fail")
             }
         }
     }
@@ -555,6 +558,20 @@ mod tests {
             .iter()
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect()
+    }
+
+    #[test]
+    fn moonbit_sdk_dependency_escapes_override_values_as_json() {
+        let path = r#"C:\sdk\"quoted\""#;
+        let overrides = SdkOverrides {
+            moonbit_sdk_path: Some(path.to_string()),
+            ..Default::default()
+        };
+
+        let dependency: serde_json::Value =
+            serde_json::from_str(&overrides.moonbit_sdk_dep()).unwrap();
+
+        assert_eq!(dependency["path"], path);
     }
 
     #[test]

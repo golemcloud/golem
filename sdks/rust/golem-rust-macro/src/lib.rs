@@ -19,6 +19,7 @@ use proc_macro2::Span;
 use crate::transaction::golem_operation_impl;
 
 mod agentic;
+mod rpc_client_common;
 mod tool;
 mod transaction;
 

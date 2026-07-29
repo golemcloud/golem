@@ -111,20 +111,10 @@ const TYPESCRIPT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
     },
 ];
 
-const TYPESCRIPT_TSCONFIG_REQUIREMENTS: &[TsConfigSettingRequirement] = &[
-    TsConfigSettingRequirement {
-        path: &["compilerOptions", "moduleResolution"],
-        expected_literal: Some("\"bundler\""),
-    },
-    TsConfigSettingRequirement {
-        path: &["compilerOptions", "experimentalDecorators"],
-        expected_literal: Some("true"),
-    },
-    TsConfigSettingRequirement {
-        path: &["compilerOptions", "emitDecoratorMetadata"],
-        expected_literal: Some("true"),
-    },
-];
+const TS_TSCONFIG_REQUIREMENTS: &[TsConfigSettingRequirement] = &[TsConfigSettingRequirement {
+    path: &["compilerOptions", "moduleResolution"],
+    expected_literal: Some("\"bundler\""),
+}];
 
 const SCALA_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
     ToolRequirement {
@@ -181,6 +171,11 @@ pub fn tool_requirements_for_language(language: GuestLanguage) -> &'static [Tool
     }
 }
 
-pub fn typescript_tsconfig_requirements() -> &'static [TsConfigSettingRequirement] {
-    TYPESCRIPT_TSCONFIG_REQUIREMENTS
+pub fn typescript_tsconfig_requirements(
+    language: GuestLanguage,
+) -> &'static [TsConfigSettingRequirement] {
+    match language {
+        GuestLanguage::TypeScript => TS_TSCONFIG_REQUIREMENTS,
+        _ => &[],
+    }
 }

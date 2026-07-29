@@ -36,7 +36,7 @@ import scala.util.control.NonFatal
  * [[DV DynamicValue]] **only** as the value accessor / reconstructor — never as
  * the source of structure.
  *
- * The engine is host-agnostic: no `js.*` imports, Scala 2.13 + 3 clean.
+ * The engine is host-agnostic and has no `js.*` imports.
  *
  * Rich types are intentionally NOT handled here (see `scala-sdk.md`, Slice 2
  * scope): the only `Schema`-bearing rich wrapper, `golem.config.Secret`, is

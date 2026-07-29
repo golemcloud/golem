@@ -17,9 +17,9 @@ use quote::{format_ident, quote};
 use syn::ItemImpl;
 
 use crate::agentic::helpers::{
-    AgentConfigAttrRemover, Asyncness, FunctionOutputInfo, get_asyncness, has_agent_config_attr,
-    has_async_trait_attr, is_constructor_method, is_static_method,
+    AgentConfigAttrRemover, has_agent_config_attr, has_async_trait_attr, is_constructor_method,
 };
+use crate::rpc_client_common::{Asyncness, FunctionOutputInfo, get_asyncness, is_static_method};
 use syn::visit_mut::VisitMut;
 
 pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {

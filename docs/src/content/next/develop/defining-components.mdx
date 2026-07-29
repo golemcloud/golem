@@ -85,15 +85,26 @@ Defining Golem agents is done using the Golem SDK, which is included in all the 
 
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
     <Tabs.Tab>
-An agent is a TypeScript class that extends `BaseAgent` and has the `@agent()` decorator:
+An agent is declared with `defineAgent(...)` and given its behaviour with `.implement(...)`:
 
 ```typescript
-import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
-@agent()
-class MyAgent extends BaseAgent {
-    // ...
-}
+export const MyAgent = defineAgent({
+    name: 'MyAgent',
+    id: { /* constructor parameters — see below */ },
+    methods: {
+        // ...
+    },
+});
+
+export const MyAgentImpl = MyAgent.implement({
+    init: () => ({ /* initial state */ }),
+    methods: {
+        // ...
+    },
+});
 ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -168,17 +179,16 @@ For example, an agent working on a particular user's particular request could be
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
     <Tabs.Tab>
 ```typescript
-@agent()
-class RequestHandler extends BaseAgent {
-    private readonly userId: string;
-    private readonly requestId: string;
+import { z } from 'zod';
+import { defineAgent } from '@golemcloud/golem-ts-sdk';
 
-    constructor(userId: string, requestId: string) {
-        super();
-        this.userId = userId;
-        this.requestId = requestId;
-    }
-}
+export const RequestHandler = defineAgent({
+    name: 'RequestHandler',
+    id: { userId: z.string(), requestId: z.string() },
+    methods: {
+        // ...
+    },
+});
 ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -220,7 +230,7 @@ An agent with a constructor like this can be identified by `request-handler("use
 
 ### Agent methods
 
-Every public method of an agent class is an **agent method**, which can be called by other remote agents, externally through Golem's invocation API, and can [also be mapped to HTTP APIs](/next/invoke/making-custom-apis).
+Every method an agent declares is an **agent method**, which can be called by other remote agents, externally through Golem's invocation API, and can [also be mapped to HTTP APIs](/next/invoke/making-custom-apis).
 
 Agent methods can (and should) be also annotated with the metadata such as `prompt` and `description`
 - `prompt` should provide information for an external AI to understand what needs to be passed to the method as parameters
@@ -233,22 +243,28 @@ The following example shows the use of how to attach these metadata to simple ag
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
     <Tabs.Tab>
 ```typescript
-type TaskDetails = { description: string; priority: number };
-type RequestHandlerStatus = {
-    status: 'success' | 'failure';
-    summary: string;
-};
+import { z } from 'zod';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
-@agent()
-class RequestHandler extends BaseAgent {
-    // ...
+const TaskDetails = z.object({ description: z.string(), priority: z.number() });
+const RequestHandlerStatus = z.object({
+    status: z.enum(['success', 'failure']),
+    summary: z.string(),
+});
 
-    @prompt("Enter new details about the task")
-    @description("Adds some more details to the request handler about the task being performed. The result is an update of the current status.")
-    async addDetails(details: TaskDetails): Promise<RequestHandlerStatus> {
-        // ...
-    }
-}
+export const RequestHandler = defineAgent({
+    name: 'RequestHandler',
+    id: { userId: z.string(), requestId: z.string() },
+    methods: {
+        addDetails: method({
+            input: { details: TaskDetails },
+            returns: RequestHandlerStatus,
+            description:
+                "Adds some more details to the request handler about the task being performed. The result is an update of the current status.",
+            promptHint: "Enter new details about the task",
+        }),
+    },
+});
 ```
     </Tabs.Tab>
 
@@ -362,7 +378,7 @@ The SDK supports a large variety of data types to be used in agent constructors 
     </Tabs.Tab>
 
     <Tabs.Tab>
-    In Scala, custom types used in constructors, method parameters, and return types need an implicit `zio.blocks.schema.Schema`. In Scala 3, this is usually done with `derives Schema` or `given Schema[T] = Schema.derived`; in Scala 2, use an `implicit val schema: Schema[T] = Schema.derived`. See the [page about data type mapping](/next/type-mapping) for more details.
+    In Scala, custom types used in constructors, method parameters, and return types need a `zio.blocks.schema.Schema`. This is usually provided with `derives Schema` or `given Schema[T] = Schema.derived`. See the [page about data type mapping](/next/type-mapping) for more details.
     </Tabs.Tab>
 
     <Tabs.Tab>
@@ -398,10 +414,14 @@ By default every agent is **durable**. To define an **ephemeral agent**, overrid
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
     <Tabs.Tab>
     ```typescript
-    @agent({ mode: 'ephemeral' })
-    class EphemeralAgent extends BaseAgent {
-      // ...
-    }
+    export const EphemeralAgent = defineAgent({
+      name: 'EphemeralAgent',
+      mode: 'ephemeral',
+      id: { name: z.string() },
+      methods: {
+        // ...
+      },
+    });
     ```
     </Tabs.Tab>
 

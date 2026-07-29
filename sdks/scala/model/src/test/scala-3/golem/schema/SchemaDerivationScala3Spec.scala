@@ -20,12 +20,7 @@ import zio.blocks.schema.Schema
 import zio.test.Assertion._
 import zio.test._
 
-/**
- * Derivation cases that need `Schema.derived` for stdlib `Either` / tuples,
- * which the zio-blocks 0.0.32 macro only supports on Scala 3 (the Scala 2.13
- * macro cannot derive these stdlib generics). The cross-version cases live in
- * [[SchemaDerivationSpec]].
- */
+/** Derivation cases for stdlib `Either` and tuples. */
 object SchemaDerivationScala3Spec extends ZIOSpecDefault {
   import SchemaTypeBody._
 

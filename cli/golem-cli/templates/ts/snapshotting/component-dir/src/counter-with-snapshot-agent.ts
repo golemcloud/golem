@@ -1,42 +1,32 @@
-import {
-    BaseAgent,
-    agent,
-    prompt,
-    description,
-    endpoint
-} from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
 
-@agent({
-  mount: "/snapshot-counters/{name}"
-})
-class CounterWithSnapshotAgent extends BaseAgent {
-    private readonly name: string;
-    private value: number = 0;
+// A counter that opts into snapshotting. The `snapshotting` option declares a
+// TYPED state schema — only the schema-declared fields of `this` (here `count`)
+// are serialized — plus a policy for WHEN to snapshot (every 5 invocations). On
+// recovery the executor restores `count` from the last snapshot and replays the
+// oplog tail. This is the declarative fluent replacement for overriding
+// `save`/`loadSnapshot` in the decorator SDK.
+export const CounterWithSnapshot = defineAgent({
+  name: 'CounterWithSnapshot',
+  id: { name: z.string() },
+  http: http.mount('/snapshot-counters/{name}'),
+  snapshotting: { state: z.object({ count: z.number() }), policy: { everyNInvocations: 5 } },
+  methods: {
+    value: method({ input: {}, returns: z.number() }),
+    increment: method({ input: {}, returns: z.number(), http: http.post('/increment') }),
+  },
+});
 
-    constructor(name: string) {
-        super();
-        this.name = name;
-    }
-
-    @prompt("Increase the count by one")
-    @description("Increases the count by one and returns the new value")
-    @endpoint({ post: "/increment" })
-    async increment(): Promise<number> {
-        this.value += 1;
-        return this.value;
-    }
-
-    override async saveSnapshot(): Promise<Uint8Array> {
-        const snapshot = new Uint8Array(4);
-        const view = new DataView(snapshot.buffer);
-        view.setUint32(0, this.value);
-        console.info(`Saved snapshot: ${this.value}`);
-        return snapshot;
-    }
-
-    override async loadSnapshot(bytes: Uint8Array): Promise<void> {
-        const view = new DataView(bytes.buffer);
-        this.value = view.getUint32(0);
-        console.info(`Loaded snapshot!: ${this.value}`);
-    }
-}
+export const CounterWithSnapshotImpl = CounterWithSnapshot.implement({
+  init: () => ({ count: 0 }),
+  methods: {
+    value() {
+      return this.count;
+    },
+    increment() {
+      this.count += 1;
+      return this.count;
+    },
+  },
+});

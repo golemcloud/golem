@@ -12,6 +12,29 @@ pub(all) struct AgentClient {
 }
 
 ///|
+pub(all) struct InvocationMetadata {
+  agent_id : String
+  idempotency_key : String
+}
+
+///|
+pub(all) struct InvocationResult[T] {
+  metadata : InvocationMetadata
+  value : T
+}
+
+///|
+pub(all) struct ScheduledInvocationReceipt {
+  metadata : InvocationMetadata
+}
+
+///|
+pub(all) struct CancelableScheduledInvocationReceipt {
+  metadata : InvocationMetadata
+  cancellation_token : @agentHost.CancellationToken
+}
+
+///|
 fn make_client(
   agent_type_name : String,
   constructor_input : @types.SchemaValueTree,
@@ -63,6 +86,25 @@ pub fn AgentClient::new_phantom_with_config(
 }
 
 ///|
+/// Creates a logical ephemeral proxy. The host assigns a fresh final phantom
+/// identity independently for every invocation.
+pub fn AgentClient::ephemeral(
+  agent_type_name : String,
+  constructor_input : @types.SchemaValueTree,
+) -> AgentClient raise @common.AgentError {
+  make_client(agent_type_name, constructor_input, None, [])
+}
+
+///|
+pub fn AgentClient::ephemeral_with_config(
+  agent_type_name : String,
+  constructor_input : @types.SchemaValueTree,
+  agent_config : Array[@common.TypedAgentConfigValue],
+) -> AgentClient raise @common.AgentError {
+  make_client(agent_type_name, constructor_input, None, agent_config)
+}
+
+///|
 pub fn AgentClient::get_phantom(
   agent_type_name : String,
   constructor_input : @types.SchemaValueTree,
@@ -107,15 +149,30 @@ pub fn AgentClient::phantom_id(self : AgentClient) -> @types.Uuid? {
 }
 
 ///|
-/// Invoke a method and await its result. Returns `None` when the method's
-/// output schema is `unit`, and `Some(tree)` for a single returned value.
-pub fn AgentClient::invoke_and_await(
+/// Invoke a method and await its result and final invocation metadata. The
+/// result is `None` when the output schema is `unit`, and `Some(tree)` for a
+/// single returned value.
+pub async fn AgentClient::invoke_and_await(
   self : AgentClient,
   function_name : String,
   input : @types.SchemaValueTree,
-) -> @types.SchemaValueTree? {
-  match self.rpc.invoke_and_await(function_name, input) {
-    Ok(result) => result
+) -> InvocationResult[@types.SchemaValueTree?] {
+  let invocation = self.rpc.async_invoke_and_await(function_name, input)
+  defer invocation.future.drop()
+  let result = invocation.future.get() catch {
+    e => {
+      invocation.future.cancel()
+      raise e
+    }
+  }
+  match result {
+    Ok(value) => {
+      let metadata : InvocationMetadata = {
+        agent_id: invocation.metadata.agent_id,
+        idempotency_key: invocation.metadata.idempotency_key,
+      }
+      { metadata, value }
+    }
     Err(e) => panic_on_rpc_error(e)
   }
 }
@@ -125,33 +182,47 @@ pub fn AgentClient::invoke(
   self : AgentClient,
   function_name : String,
   input : @types.SchemaValueTree,
-) -> Unit {
+) -> InvocationMetadata {
   match self.rpc.invoke(function_name, input) {
-    Ok(_) => ()
-    Err(e) => {
-      let _ : Unit = panic_on_rpc_error(e)
-    }
+    Ok(value) =>
+      { agent_id: value.agent_id, idempotency_key: value.idempotency_key }
+    Err(e) => panic_on_rpc_error(e)
   }
 }
 
 ///|
 pub fn AgentClient::schedule_invocation(
   self : AgentClient,
-  scheduled_at : @wallClock.Datetime,
+  scheduled_at : @systemClock.Instant,
   function_name : String,
   input : @types.SchemaValueTree,
-) -> Unit {
-  self.rpc.schedule_invocation(scheduled_at, function_name, input)
+) -> ScheduledInvocationReceipt {
+  let value = self.rpc.schedule_invocation(scheduled_at, function_name, input)
+  {
+    metadata: {
+      agent_id: value.metadata.agent_id,
+      idempotency_key: value.metadata.idempotency_key,
+    },
+  }
 }
 
 ///|
 pub fn AgentClient::schedule_cancelable_invocation(
   self : AgentClient,
-  scheduled_at : @wallClock.Datetime,
+  scheduled_at : @systemClock.Instant,
   function_name : String,
   input : @types.SchemaValueTree,
-) -> @agentHost.CancellationToken {
-  self.rpc.schedule_cancelable_invocation(scheduled_at, function_name, input)
+) -> CancelableScheduledInvocationReceipt {
+  let value = self.rpc.schedule_cancelable_invocation(
+    scheduled_at, function_name, input,
+  )
+  {
+    metadata: {
+      agent_id: value.metadata.agent_id,
+      idempotency_key: value.metadata.idempotency_key,
+    },
+    cancellation_token: value.cancellation_token,
+  }
 }
 
 ///|

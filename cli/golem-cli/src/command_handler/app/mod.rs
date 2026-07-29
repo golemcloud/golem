@@ -29,6 +29,7 @@ use crate::command_handler::app::deploy_diff::{
     RollbackEntityDetails, RollbackQuickDiff,
 };
 use crate::command_handler::app::template::TemplateHandler;
+use crate::command_handler::app::version_strategy::{ResolvedAppVersionSource, compute_version};
 use crate::context::Context;
 use crate::error::service::{MapServiceError, ServiceError};
 use crate::error::{HintError, NonSuccessfulExit};
@@ -92,6 +93,7 @@ use tracing::debug;
 
 mod deploy_diff;
 mod template;
+mod version_strategy;
 
 pub struct AppCommandHandler {
     ctx: Arc<Context>,
@@ -756,7 +758,7 @@ impl AppCommandHandler {
                 .map_err(DeployError::BuildError)?;
         }
 
-        let Some(deploy_diff) = self
+        let Some((deploy_diff, deployment_version)) = self
             .prepare_deployment(environment.clone(), config.full_diff)
             .await
             .map_err(DeployError::PrepareError)?
@@ -865,7 +867,11 @@ impl AppCommandHandler {
         }
 
         let current_deployment = self
-            .apply_staged_changes_to_environment(&deploy_diff, allow_incompatible_changes_fallback)
+            .apply_staged_changes_to_environment(
+                &deploy_diff,
+                deployment_version,
+                allow_incompatible_changes_fallback,
+            )
             .await
             .map_err(DeployError::DeployError)?;
 
@@ -883,7 +889,7 @@ impl AppCommandHandler {
         &self,
         environment: ResolvedEnvironmentIdentity,
         full_diff: bool,
-    ) -> anyhow::Result<Option<DeployDiff>> {
+    ) -> anyhow::Result<Option<(DeployDiff, DeploymentVersion)>> {
         log_action("Preparing", "deployment");
         let _indent = LogIndent::new();
 
@@ -916,6 +922,8 @@ impl AppCommandHandler {
         if deployment_is_up_to_date && !deploy_diff.has_environment_setup_work() {
             return Ok(None);
         }
+
+        let deployment_version = self.compute_deploy_version().await?;
 
         let (stage_is_same_as_current, deploy_diff) = {
             log_action("Diffing", "");
@@ -1011,6 +1019,12 @@ impl AppCommandHandler {
                         environment_setup: deploy_diff.environment_setup.as_ref(),
                     })?;
                 }
+                if deploy_diff.has_deployment_changes() && !deployment_version.0.is_empty() {
+                    log_action(
+                        "Deployment version",
+                        deployment_version.0.log_color_highlight().to_string(),
+                    );
+                }
             }
         }
 
@@ -1031,7 +1045,7 @@ impl AppCommandHandler {
             }
         }
 
-        Ok(Some(deploy_diff))
+        Ok(Some((deploy_diff, deployment_version)))
     }
 
     async fn deploy_quick_diff(
@@ -2094,9 +2108,26 @@ impl AppCommandHandler {
         Ok(())
     }
 
+    async fn compute_deploy_version(&self) -> anyhow::Result<DeploymentVersion> {
+        let Some(source) = self.ctx.manifest_version_source().cloned() else {
+            return Ok(DeploymentVersion(String::new()));
+        };
+        let resolved = ResolvedAppVersionSource::from_source(source);
+
+        let app_root = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            let app_ctx = app_ctx.some_or_err()?;
+            app_ctx.application().app_root_dir().to_path_buf()
+        };
+
+        let version = compute_version(&resolved, &app_root).await?;
+        Ok(DeploymentVersion(version))
+    }
+
     async fn apply_staged_changes_to_environment(
         &self,
         deploy_diff: &DeployDiff,
+        deployment_version: DeploymentVersion,
         allow_incompatible_changes_fallback: bool,
     ) -> anyhow::Result<CurrentDeployment> {
         let environment_setup = deploy_diff
@@ -2118,7 +2149,7 @@ impl AppCommandHandler {
                     &DeploymentCreation {
                         current_revision: deploy_diff.current_deployment_revision(),
                         expected_deployment_hash: deploy_diff.local_deployment_hash,
-                        version: DeploymentVersion("".to_string()), // TODO: atomic
+                        version: deployment_version.clone(),
                         agent_secret_defaults: if replace_incompatible_agent_secrets {
                             let mut defaults = environment_setup.agent_secret_defaults.clone();
                             defaults.extend(

@@ -22,7 +22,6 @@ use golem_rust::agentic::Principal;
 use golem_rust::{
     agent_definition, agent_implementation, create_promise, description, endpoint, read_only,
 };
-use wstd::http::{Body, Client, Request};
 
 // NOTE on the `bad_*` surface used by T9 / R4:
 //
@@ -116,7 +115,7 @@ impl ReadonlyAgent for ReadonlyAgentImpl {
     }
 
     async fn slow_increment(&mut self, ms: u64) -> u64 {
-        wstd::task::sleep(std::time::Duration::from_millis(ms).into()).await;
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(ms.saturating_mul(1_000_000)).await;
         self.count += 1;
         self.count
     }
@@ -126,7 +125,7 @@ impl ReadonlyAgent for ReadonlyAgentImpl {
     }
 
     async fn slow_read(&self, ms: u64) -> u64 {
-        wstd::task::sleep(std::time::Duration::from_millis(ms).into()).await;
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(ms.saturating_mul(1_000_000)).await;
         self.count
     }
 
@@ -155,10 +154,10 @@ impl ReadonlyAgent for ReadonlyAgentImpl {
         // Outgoing HTTP. `outgoing_handler::handle` traps with
         // `WorkerReadOnlyViolation` before the request is dispatched, so the
         // exact URL is irrelevant.
-        let request = Request::get("http://127.0.0.1:1/")
-            .body(Body::empty())
-            .unwrap();
-        let _ = Client::new().send(request).await;
+        let _ = wasi_fetch::Client::new()
+            .get("http://127.0.0.1:1/")
+            .send()
+            .await;
         self.count
     }
 }

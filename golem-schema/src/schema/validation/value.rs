@@ -1407,9 +1407,9 @@ fn resolve<'a>(index: &GraphIndex<'a>, ty: &'a SchemaType) -> Option<&'a SchemaT
                     return None;
                 }
                 hops += 1;
-                match index.lookup(id) {
-                    Some(def) => current = &def.body,
-                    None => return None,
+                {
+                    let def = index.lookup(id)?;
+                    current = &def.body
                 }
             }
             other => return Some(other),

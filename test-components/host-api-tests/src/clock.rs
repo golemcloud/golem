@@ -2,16 +2,18 @@ use futures_concurrency::prelude::*;
 use golem_rust::{agent_definition, agent_implementation};
 use std::thread;
 use std::time::Duration;
-use wstd::http::{Client, Request};
 
 #[agent_definition]
 pub trait Clock {
     fn new(name: String) -> Self;
     fn sleep(&self, secs: u64) -> Result<(), String>;
+    async fn sleep_p3(&self, secs: u64) -> bool;
     fn healthcheck(&self) -> bool;
     async fn sleep_during_request(&self, secs: u64) -> String;
     async fn sleep_during_parallel_requests(&self, secs: u64) -> String;
     async fn sleep_between_requests(&self, secs: u64, n: u64) -> String;
+    async fn jump_during_request(&self) -> String;
+    async fn p2_sleep_during_request(&self, secs: u64) -> String;
 }
 
 pub struct ClockImpl {
@@ -29,6 +31,12 @@ impl Clock for ClockImpl {
         Ok(())
     }
 
+    async fn sleep_p3(&self, secs: u64) -> bool {
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(secs.saturating_mul(1_000_000_000))
+            .await;
+        true
+    }
+
     fn healthcheck(&self) -> bool {
         true
     }
@@ -36,7 +44,10 @@ impl Clock for ClockImpl {
     async fn sleep_during_request(&self, secs: u64) -> String {
         let response = send_request();
         let timeout = async {
-            wstd::task::sleep(wstd::time::Duration::from_secs(secs)).await;
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+                secs.saturating_mul(1_000_000_000),
+            )
+            .await;
             Err("Timeout".to_string())
         };
         let (Ok(result) | Err(result)) = (response, timeout).race().await;
@@ -66,7 +77,10 @@ impl Clock for ClockImpl {
             Ok(result)
         };
         let timeout = async {
-            wstd::task::sleep(wstd::time::Duration::from_secs(secs)).await;
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+                secs.saturating_mul(1_000_000_000),
+            )
+            .await;
             Err("Timeout".to_string())
         };
         let (Ok(result) | Err(result)) = (response1, response2, response3, timeout).race().await;
@@ -77,23 +91,63 @@ impl Clock for ClockImpl {
         let mut result = String::new();
         for _ in 0..(n as usize) {
             result.push_str(&format!("{:?}\n", send_request().await));
-            wstd::task::sleep(wstd::time::Duration::from_secs(secs)).await;
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+                secs.saturating_mul(1_000_000_000),
+            )
+            .await;
         }
         result
+    }
+
+    /// Attempts to jump backwards while an HTTP request is still in flight. The jump must be
+    /// rejected by the executor because deleting the region would strand the in-flight call's
+    /// `Start` entry.
+    async fn jump_during_request(&self) -> String {
+        let target = golem_rust::get_oplog_index();
+        let request = async { send_request().await.unwrap_or_else(|err| err) };
+        let jump = async {
+            // Give the request future time to start and register its durable call
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(200_000_000).await;
+            golem_rust::set_oplog_index(target);
+            "jump-completed".to_string()
+        };
+        let (request_result, jump_result) = (request, jump).join().await;
+        format!("{request_result}, {jump_result}")
+    }
+
+    /// Blocks in a P2 sleep (`thread::sleep` goes through `wasi:io/poll@0.2.x`) while a P3 HTTP
+    /// request is still in flight. The executor must not suspend the worker while the request is
+    /// pending: a premature suspend would drop the in-flight call and re-execute the request on
+    /// resume.
+    async fn p2_sleep_during_request(&self, secs: u64) -> String {
+        let request = async { send_request().await.unwrap_or_else(|err| err) };
+        let sleep = async {
+            // Give the request future time to start and register its durable call
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(200_000_000).await;
+            thread::sleep(Duration::from_secs(secs));
+            "slept".to_string()
+        };
+        let (request_result, sleep_result) = (request, sleep).join().await;
+        format!("{request_result}, {sleep_result}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn sleep_timeout_seconds_to_nanoseconds_must_not_overflow() {
+        let overflowing_secs = std::hint::black_box(36_028_797_018_963_968u64);
+
+        let _duration_nanos = overflowing_secs.saturating_mul(1_000_000_000);
     }
 }
 
 async fn send_request() -> Result<String, String> {
     let port = std::env::var("PORT").expect("Requires a PORT env var set");
-    let request = Request::get(format!("http://localhost:{port}/simulated-slow-request"))
-        .body(())
-        .map_err(|e| e.to_string())?;
-
-    let mut response = Client::new()
-        .send(request)
+    let response = wasi_fetch::Client::new()
+        .get(&format!("http://localhost:{port}/simulated-slow-request"))
+        .send()
         .await
         .map_err(|e| e.to_string())?;
-    let body = response.body_mut();
-    let contents = body.str_contents().await.map_err(|e| e.to_string())?;
-    Ok(contents.to_string())
+    response.into_body().text().await.map_err(|e| e.to_string())
 }

@@ -780,6 +780,50 @@ Path|Method|Protected
 }
 ```
 
+## Get the wallet (active permission cards) of a worker.
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/{agent_name}/wallet`|GET|Yes
+
+Activates the worker if it is not already active.
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+[
+  {
+    "type": "Concrete",
+    "cardId": "f16ba382-eb42-481a-b08f-c57bdc9aae24",
+    "parentIds": [
+      "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+    ],
+    "lowerPositive": [
+      "string"
+    ],
+    "lowerNegative": [
+      "string"
+    ],
+    "upperPositive": [
+      "string"
+    ],
+    "upperNegative": [
+      "string"
+    ],
+    "createdAt": "2019-08-24T14:15:22Z",
+    "expiresAt": "2019-08-24T14:15:22Z",
+    "systemCard": true,
+    "managedBy": {
+      "type": "AccountRoot",
+      "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9"
+    }
+  }
+]
+```
+
 ## Get contents of a file in a worker
 Path|Method|Protected
 ---|---|---

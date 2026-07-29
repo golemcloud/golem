@@ -16,12 +16,13 @@ Add a `bridge` section to `golem.yaml`:
 ```yaml
 bridge:
   ts:
-    agents: "*"                    # Generate for all agents
-    # Or list specific agents:
-    # agents:
-    #   - MyAgent
-    #   - my-app:billing
-    outputDir: ./bridge-sdk/ts     # Optional custom output directory
+    external:
+      agents: "*"                    # Generate for all agents
+      # Or list specific agents:
+      # agents:
+      #   - MyAgent
+      #   - my-app:billing
+      outputDir: ./bridge-sdk/ts     # Optional custom output directory
 ```
 
 The `agents` field accepts `"*"` (all agents), or a list of agent type names or component names (`namespace:name`).
@@ -95,7 +96,7 @@ The `server` field supports three modes:
 
 ## Phantom Agents
 
-To create multiple agent instances with the same constructor parameters, use phantom agents:
+To create multiple agent instances that share the same identity (`id`) field values, use phantom agents:
 
 ```typescript
 import { v4 as uuidv4 } from 'uuid';

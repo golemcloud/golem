@@ -545,6 +545,19 @@ impl TryFrom<golem::worker::LogEvent> for AgentEvent {
                         message: event.message,
                     })
                 }
+                golem::worker::log_event::Event::SnapshotRecoverySucceeded(event) => {
+                    Ok(AgentEvent::SnapshotRecoverySucceeded {
+                        timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
+                        snapshot_index: OplogIndex::from_u64(event.snapshot_index),
+                    })
+                }
+                golem::worker::log_event::Event::SnapshotRecoveryFailed(event) => {
+                    Ok(AgentEvent::SnapshotRecoveryFailed {
+                        timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
+                        snapshot_index: OplogIndex::from_u64(event.snapshot_index),
+                        error: event.error,
+                    })
+                }
             },
             None => Err("Missing event".to_string()),
         }
@@ -628,6 +641,30 @@ impl TryFrom<AgentEvent> for golem::worker::LogEvent {
                         timestamp: Some(timestamp.into()),
                         plugin_name,
                         message,
+                    },
+                )),
+            }),
+            AgentEvent::SnapshotRecoverySucceeded {
+                timestamp,
+                snapshot_index,
+            } => Ok(golem::worker::LogEvent {
+                event: Some(golem::worker::log_event::Event::SnapshotRecoverySucceeded(
+                    golem::worker::SnapshotRecoverySucceeded {
+                        timestamp: Some(timestamp.into()),
+                        snapshot_index: snapshot_index.into(),
+                    },
+                )),
+            }),
+            AgentEvent::SnapshotRecoveryFailed {
+                timestamp,
+                snapshot_index,
+                error,
+            } => Ok(golem::worker::LogEvent {
+                event: Some(golem::worker::log_event::Event::SnapshotRecoveryFailed(
+                    golem::worker::SnapshotRecoveryFailed {
+                        timestamp: Some(timestamp.into()),
+                        snapshot_index: snapshot_index.into(),
+                        error,
                     },
                 )),
             }),

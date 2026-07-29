@@ -188,7 +188,7 @@ Constructor parameters (which identify the agent instance) are automatically inc
 
 ### Agent and Method Metadata
 
-Add `description` and `prompt` annotations to improve MCP discoverability:
+Add `description` and prompt metadata to improve MCP discoverability:
 
 **Rust:**
 ```rust
@@ -199,9 +199,12 @@ fn increment_by(&mut self, n: u32) -> u32;
 
 **TypeScript:**
 ```typescript
-@description("Increments the counter by n")
-@prompt("Increment by a given number")
-async incrementBy(n: number): Promise<number> { ... }
+incrementBy: method({
+  input: { n: z.number() },
+  returns: z.number(),
+  description: "Increments the counter by n",
+  promptHint: "Increment by a given number",
+}),
 ```
 
 **Scala:**
@@ -211,7 +214,7 @@ async incrementBy(n: number): Promise<number> { ... }
 def incrementBy(n: Int): Future[Int]
 ```
 
-Both annotations are optional and are included in the MCP metadata sent to clients.
+Both are optional and are included in the MCP metadata sent to clients.
 
 ## Special Data Types for MCP
 

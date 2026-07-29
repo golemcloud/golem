@@ -73,8 +73,8 @@ impl<'a> BuildContext<'a> {
         &self.application_context.config
     }
 
-    pub fn agent_types(&self) -> &crate::app::agent_types::AgentTypeRegistry {
-        self.application_context.agent_types()
+    pub fn component_metadata(&self) -> &crate::app::component_metadata::ComponentMetadataRegistry {
+        self.application_context.component_metadata()
     }
 
     pub fn build_config(&self) -> &BuildConfig {
@@ -161,7 +161,7 @@ pub struct ApplicationContext {
     loaded_with_warnings: bool,
     config: ApplicationConfig,
     application: Application,
-    agent_types: crate::app::agent_types::AgentTypeRegistry,
+    component_metadata: crate::app::component_metadata::ComponentMetadataRegistry,
     calling_working_dir: PathBuf,
     selected_component_names: BTreeSet<ComponentName>,
     tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps,
@@ -316,8 +316,8 @@ impl ApplicationContext {
         &self.application
     }
 
-    pub fn agent_types(&self) -> &crate::app::agent_types::AgentTypeRegistry {
-        &self.agent_types
+    pub fn component_metadata(&self) -> &crate::app::component_metadata::ComponentMetadataRegistry {
+        &self.component_metadata
     }
 
     pub fn new_repl_bridge_sdk_target(&self, language: GuestLanguage) -> CustomBridgeSdkTarget {
@@ -336,13 +336,14 @@ impl ApplicationContext {
     ) -> ValidatedResult<ApplicationContext> {
         let tools_with_ensured_common_deps = ToolsWithEnsuredCommonDeps::new();
         app_and_calling_working_dir.map(|(application, calling_working_dir)| {
-            let agent_types =
-                crate::app::agent_types::AgentTypeRegistry::new(config.enable_wasmtime_fs_cache);
+            let component_metadata = crate::app::component_metadata::ComponentMetadataRegistry::new(
+                config.enable_wasmtime_fs_cache,
+            );
             ApplicationContext {
                 loaded_with_warnings: false,
                 config,
                 application,
-                agent_types,
+                component_metadata,
                 calling_working_dir,
                 selected_component_names: BTreeSet::new(),
                 tools_with_ensured_common_deps,
@@ -620,7 +621,7 @@ impl ApplicationContext {
 
                     for (site, deployment) in http_api_deployments {
                         logln(format!("  {}", site.to_string().log_color_highlight(),));
-                        for (agent_name, _) in deployment.value.agents.iter() {
+                        for agent_name in deployment.value.agents.keys() {
                             logln(format!("    {}", agent_name.as_str().log_color_highlight(),));
                         }
                     }
@@ -649,7 +650,7 @@ impl ApplicationContext {
 
                 for (site, deployment) in mcp_deployments {
                     logln(format!("  {}", site.to_string().log_color_highlight(),));
-                    for (agent_name, _) in deployment.value.agents.iter() {
+                    for agent_name in deployment.value.agents.keys() {
                         logln(format!("    {}", agent_name.as_str().log_color_highlight(),));
                     }
                 }

@@ -7,29 +7,29 @@ description: "Adding saga-pattern transactions with compensation to a TypeScript
 
 ## Overview
 
-Golem supports the **saga pattern** for multi-step operations where each step has a compensation (undo) action. If a step fails, previously completed steps are automatically compensated in reverse order.
+Golem supports the **saga pattern** for multi-step operations where each step has a compensation (undo) action. If a step fails, previously completed steps are automatically compensated in reverse order. The building blocks are `compensable` (a step) and the `fallibleSaga` / `infallibleSaga` runners, all imported from `@golemcloud/golem-ts-sdk`.
 
-## Defining Operations
+## Defining Compensable Steps
 
-Each operation has an async `execute` function and an async `compensate` function:
+A step is a `Compensable` with an async `execute` and an async `compensate`. Both return the SDK `Result<T, E>` type. `compensable<In, Out, Err>(execute, compensate)` builds one:
 
 ```typescript
-import { operation, Result } from '@golemcloud/golem-ts-sdk';
+import { compensable, Result } from '@golemcloud/golem-ts-sdk';
 
-const reserveInventory = operation<string, string, string>(
+const reserveInventory = compensable<string, string, string>(
     async (sku) => {
-        // Execute: reserve the item
+        // Execute: reserve the item, returning a reservation id (or a typed error).
         const reservationId = await callInventoryApi(sku);
         return Result.ok(reservationId);
     },
     async (sku, reservationId) => {
-        // Compensate: cancel the reservation
+        // Compensate: cancel the reservation. Compensations should not throw.
         await cancelReservation(reservationId);
         return Result.ok(undefined);
     },
 );
 
-const chargePayment = operation<number, string, string>(
+const chargePayment = compensable<number, string, string>(
     async (amount) => {
         const chargeId = await callPaymentApi(amount);
         return Result.ok(chargeId);
@@ -41,42 +41,75 @@ const chargePayment = operation<number, string, string>(
 );
 ```
 
-## Fallible Transactions
+## Fallible Sagas
 
-On failure, compensates completed steps and returns the error:
+`fallibleSaga` runs steps and, if any step returns `Result.err`, compensates the already-completed steps in reverse order and reports the failure. `saga.execute(step, input)` returns the step's `Result`; return a `Result` from the saga body. The overall result is a `SagaResult<Out, Err>` (a `Result` whose error describes whether rollback completed fully or partially):
 
 ```typescript
-import { fallibleTransaction, Result } from '@golemcloud/golem-ts-sdk';
+import { fallibleSaga, Result } from '@golemcloud/golem-ts-sdk';
 
-const result = await fallibleTransaction(async (tx) => {
-    const reservation = await tx.execute(reserveInventory, "SKU-123");
+const outcome = await fallibleSaga<{ reservation: string; charge: string }, string>(async (saga) => {
+    const reservation = await saga.execute(reserveInventory, 'SKU-123');
     if (reservation.isErr()) return reservation;
 
-    const charge = await tx.execute(chargePayment, 49.99);
+    const charge = await saga.execute(chargePayment, 49.99);
     if (charge.isErr()) return charge;
 
     return Result.ok({ reservation: reservation.val, charge: charge.val });
 });
+
+// outcome.isOk()  → the saga committed
+// outcome.isErr() → outcome.val is a SagaFailure describing the error + rollback status
 ```
 
-## Infallible Transactions
+## Infallible Sagas
 
-On failure, compensates completed steps and **retries the entire transaction**:
+`infallibleSaga` runs a sequence whose steps are expected to succeed. If a step returns `Result.err`, the already-run steps' compensations run in reverse order and the **entire saga is retried**. Here `saga.execute(step, input)` returns the step's success value directly (an `err` triggers rollback + retry rather than being returned):
 
 ```typescript
-import { infallibleTransaction } from '@golemcloud/golem-ts-sdk';
+import { infallibleSaga } from '@golemcloud/golem-ts-sdk';
 
-const result = await infallibleTransaction(async (tx) => {
-    const reservation = await tx.execute(reserveInventory, "SKU-123");
-    const charge = await tx.execute(chargePayment, 49.99);
+const result = await infallibleSaga(async (saga) => {
+    const reservation = await saga.execute(reserveInventory, 'SKU-123');
+    const charge = await saga.execute(chargePayment, 49.99);
     return { reservation, charge };
 });
-// Always succeeds eventually
+// Resolves once the whole sequence succeeds.
+```
+
+## Using a Saga Inside an Agent Method
+
+```typescript
+import { z } from 'zod';
+import { defineAgent, method, compensable, fallibleSaga, Result } from '@golemcloud/golem-ts-sdk';
+
+export const OrderAgent = defineAgent({
+    name: 'OrderAgent',
+    id: { name: z.string() },
+    methods: {
+        placeOrder: method({ input: { sku: z.string(), amount: z.number() }, returns: z.boolean() }),
+    },
+});
+
+OrderAgent.implement({
+    init: () => ({}),
+    methods: {
+        async placeOrder({ sku, amount }) {
+            const outcome = await fallibleSaga<string, string>(async (saga) => {
+                const reservation = await saga.execute(reserveInventory, sku);
+                if (reservation.isErr()) return reservation;
+                return await saga.execute(chargePayment, amount);
+            });
+            return outcome.isOk();
+        },
+    },
+});
 ```
 
 ## Guidelines
 
 - Keep compensation logic idempotent — it may be called more than once
 - Compensation runs in reverse order of execution
-- Use `fallibleTransaction` when failure is an acceptable outcome
-- Use `infallibleTransaction` when the operation must eventually succeed
+- Steps signal expected failures with `Result.err`; a `throw` inside a saga is an unexpected defect and traps (the saga is retried)
+- Use `fallibleSaga` when failure is an acceptable outcome the caller should observe
+- Use `infallibleSaga` when the operation must eventually succeed (failures roll back and retry)

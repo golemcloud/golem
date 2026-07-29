@@ -1,514 +1,459 @@
-import {
-    BaseAgent,
-    Client,
-    Multimodal,
-    MultimodalAdvanced,
-    Result,
-    UnstructuredBinary,
-    UnstructuredText,
-    agent,
-    description
-} from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method, s, clientFor } from '@golemcloud/golem-ts-sdk';
 
-import * as Types from './model';
 import {
-    ObjectWithUnionWithUndefined1,
-    ObjectWithUnionWithUndefined2,
-    ObjectWithUnionWithUndefined3,
-    ObjectWithUnionWithUndefined4,
-    UnionWithLiterals,
-    UnionType,
-    TaggedUnion,
-    InterfaceType,
-    ObjectType,
-    ObjectComplexType,
-    UnionComplexType,
-    NumberType,
-    StringType,
-    BooleanType,
-    MapType,
-    TupleComplexType,
-    TupleType,
-    ListComplexType,
-    ResultLikeWithNoTag,
-    ResultLike,
-    ResultExact,
-    UnionWithOnlyLiterals, ResultLikeWithVoid,
-    Tree,
+  ObjectType,
+  ObjectComplexType,
+  UnionType,
+  UnionComplexType,
+  NumberType,
+  StringType,
+  BooleanType,
+  MapType,
+  TupleType,
+  TupleComplexType,
+  ListComplexType,
+  Tree,
+  TaggedUnion,
+  UnionWithLiterals,
+  UnionWithOnlyLiterals,
+  ObjectWithUnionWithUndefined1,
+  ObjectWithUnionWithUndefined2,
+  ObjectWithUnionWithUndefined3,
+  ObjectWithUnionWithUndefined4,
+  ResultLike,
+  ResultLikeWithNoTag,
+  ResultLikeWithVoid,
+  ResultExact,
 } from './model';
 
-
-export type InputText = { val: string, tag: "text" };
-export type InputImage = { val: Uint8Array; tag: "image" };
-
-
-@agent()
-@description("TS Code First FooAgent")
-class FooAgent extends BaseAgent {
-    readonly barAgent: Client<BarAgent>;
-
-    constructor(readonly input: string) {
-        super();
-
-        const interfaceType: InterfaceType = {
-            bigintProp: 0n,
-            booleanProp: false,
-            falseProp: false,
-            float32ArrayProp: new Float32Array(),
-            float64ArrayProp: new Float64Array(),
-            int16ArrayProp: new Int16Array(),
-            int32ArrayProp: new Int32Array(),
-            int64ArrayProp: new BigInt64Array(),
-            int8ArrayProp: new Int8Array(),
-            listObjectProp: [{a: "foo", b: 1, c: true}],
-            listProp: ["foo", "bar"],
-            mapProp: new Map<string, number>(),
-            nestedProp: {
-                n: 1
-            },
-            numberProp: 0,
-            objectComplexProp: {
-                a: "foo",
-                b: 1,
-                c: true,
-                d: {a: "foo", b: 1, c: true},
-                e: 1,
-                f: ["foo"],
-                g: [{a: "foo", b: 1, c: true}],
-                h: ["foo", 1, false],
-                i: ["foo", 1, {a: "foo", b: 1, c: true}],
-                j: new Map(),
-                k: {n: 1}
-            },
-            objectProp: {a: "foo", b: 1, c: true},
-            objectPropInlined: {a: "", b: 0, c: false},
-            optionalProp: 0,
-            stringProp: "",
-            trueProp: true,
-            tupleObjectProp: ["", 0, {a: "foo", b: 1, c: true}],
-            tupleProp: ["", 0, false],
-            uint16ArrayProp: new Uint16Array(),
-            uint32ArrayProp: new Uint32Array(),
-            uint64ArrayProp: new BigUint64Array(),
-            uint8ArrayProp: new Uint8Array(),
-            unionComplexProp: 1,
-            unionProp: true,
-            unionPropInlined: "afsal"
-        }
-
-        this.barAgent = BarAgent.get("foooo", 1);
-    }
-
-    async funAll(
-        complexType: Types.ObjectComplexType,
-        unionType: Types.UnionType,
-        unionComplexType: Types.UnionComplexType,
-        numberType: Types.NumberType,
-        stringType: Types.StringType,
-        booleanType: Types.BooleanType,
-        mapType: Types.MapType,
-        tupleComplexType: Types.TupleComplexType,
-        tupleType: Types.TupleType,
-        listComplexType: Types.ListComplexType,
-        objectType: Types.ObjectType,
-        resultLike: ResultLike,
-        resultLikeWithNoTag: ResultLikeWithNoTag,
-        unionWithNull: string | number | null,
-        objectWithUnionWithUndefined1: ObjectWithUnionWithUndefined1,
-        objectWithUnionWithUndefined2: ObjectWithUnionWithUndefined2,
-        objectWithUnionWithUndefined3: ObjectWithUnionWithUndefined3,
-        objectWithUnionWithUndefined4: ObjectWithUnionWithUndefined4,
-        optionalStringType: string | undefined,
-        optionalUnionType: UnionType | undefined,
-        taggedUnionType: TaggedUnion,
-    ): Types.PromiseType {
-        return await this.barAgent.funAll(
-            complexType,
-            unionType,
-            unionComplexType,
-            numberType,
-            stringType,
-            booleanType,
-            mapType,
-            tupleComplexType,
-            tupleType,
-            listComplexType,
-            objectType,
-            resultLike,
-            resultLikeWithNoTag,
-            unionWithNull,
-            objectWithUnionWithUndefined1,
-            objectWithUnionWithUndefined2,
-            objectWithUnionWithUndefined3,
-            objectWithUnionWithUndefined4,
-            optionalStringType,
-            optionalUnionType,
-            taggedUnionType,
-        )
-    }
-
-    async funOptional(param1: string | number | null,
-                      param2: ObjectWithUnionWithUndefined1,
-                      param3: ObjectWithUnionWithUndefined2,
-                      param4: ObjectWithUnionWithUndefined3,
-                      param5: ObjectWithUnionWithUndefined4,
-                      param6: string | undefined,
-                      param7: UnionType | undefined,) {
-
-        return this.barAgent.funOptional(
-            param1,
-            param2,
-            param3,
-            param4,
-            param5,
-            param6,
-            param7,)
-    }
-
-    async funOptionalQMark(param1: string, param2?: number, param3?: string) {
-        return this.barAgent.funOptionalQMark(
-            param1, param2, param3
-        )
-    }
-
-    async funObjectComplexType(text: ObjectComplexType): Promise<ObjectComplexType> {
-        return await this.barAgent.funObjectComplexType(text);
-    }
-
-
-    async funUnionType(unionType: UnionType): Promise<UnionType> {
-        return await this.barAgent.funUnionType(unionType);
-    }
-
-    // // Doesn't work when directly called
-    async funUnionComplexType(unionComplexType: UnionComplexType): Promise<Types.UnionComplexType> {
-        return await this.barAgent.funUnionComplexType(unionComplexType);
-    }
-
-    async funNumber(numberType: NumberType): Promise<NumberType> {
-        return await this.barAgent.funNumber(numberType);
-    }
-
-
-    async funString(stringType: StringType): Promise<Types.StringType> {
-        return await this.barAgent.funString(stringType);
-    }
-
-
-    async funBoolean(booleanType: BooleanType): Promise<Types.BooleanType> {
-        return await this.barAgent.funBoolean(booleanType);
-    }
-
-
-    async funMap(mapType: MapType): Promise<Types.MapType> {
-        return await this.barAgent.funText(mapType);
-    }
-
-    async funTaggedUnion(taggedUnionType: TaggedUnion): Promise<TaggedUnion> {
-        return await this.barAgent.funTaggedUnion(taggedUnionType);
-    }
-
-
-    async funTupleComplexType(complexType: TupleComplexType): Promise<Types.TupleComplexType> {
-        return await this.barAgent.funTupleComplexType(complexType);
-    }
-
-
-    async funTupleType(tupleType: TupleType): Promise<Types.TupleType> {
-        return await this.barAgent.funTupleType(tupleType);
-    }
-
-
-    async funListComplexType(listComplexType: ListComplexType): Promise<Types.ListComplexType> {
-        return await this.barAgent.funListComplexType(listComplexType);
-    }
-
-
-    async funObjectType(objectType: ObjectType): Promise<ObjectType> {
-        return await this.barAgent.funObjectType(objectType);
-    }
-
-
-    async funRecursive(tree: Tree): Promise<Tree> {
-        return await this.barAgent.funRecursive(tree);
-    }
-
-
-    async funUnionWithLiterals(unionWithLiterals: UnionWithLiterals): Promise<Types.UnionWithLiterals> {
-        return await this.barAgent.funUnionWithLiterals(unionWithLiterals);
-    }
-
-
-    async funUnionWithOnlyLiterals(unionWithLiterals: UnionWithOnlyLiterals): Promise<Types.UnionWithOnlyLiterals> {
-        return await this.barAgent.funUnionWithOnlyLiterals(unionWithLiterals);
-    }
-
-    async funVoidReturn(text: string): Promise<void> {
-        return await this.barAgent.funVoidReturn(text);
-    }
-
-
-    async funNullReturn(text: string): Promise<null> {
-        return await this.barAgent.funNullReturn(text);
-    }
-
-
-    async funUndefinedReturn(text: string): Promise<undefined> {
-        return await this.barAgent.funUndefinedReturn(text);
-    }
-
-    async funUnstructuredText(unstructuredText: UnstructuredText): Promise<string> {
-        return await this.barAgent.funUnstructuredText(unstructuredText);
-    }
-
-    async funUnstructuredBinary(unstructuredText: UnstructuredBinary<['application/json']>): Promise<string> {
-        return await this.barAgent.funUnstructuredBinary(unstructuredText);
-    }
-
-    async funMultimodal(multimodal: Multimodal): Promise<Multimodal> {
-        return await this.barAgent.funMultimodal(multimodal);
-    }
-
-    async funMultimodalAdvanced(multimodal: MultimodalAdvanced<InputText | InputImage>): Promise< MultimodalAdvanced<InputText | InputImage>> {
-        return await this.barAgent.funMultimodalAdvanced(multimodal);
-    }
-
-    async funEitherOptional(eitherBothOptional: ResultLikeWithNoTag): Promise<ResultLikeWithNoTag> {
-        return await this.barAgent.funResultNoTag(eitherBothOptional);
-    }
-
-    async funResultExact(either: ResultExact): Promise<ResultExact> {
-        return this.barAgent.funResultExact(either);
-    }
-
-    async funResultLike(eitherOneOptional: ResultLike): Promise<ResultLike> {
-        return await this.barAgent.funResultLike(eitherOneOptional);
-    }
-
-    async funResultLikeWithVoid(resultLikeWithVoid: ResultLikeWithVoid): Promise<ResultLikeWithVoid> {
-        return await this.barAgent.funResultLikeWithVoid(resultLikeWithVoid);
-    }
-
-    async funBuiltinResultVS(result: Result<void, string>): Promise<Result<void, string>> {
-        return await this.barAgent.funBuiltinResultVS(result);
-    }
-
-    async funBuiltinResultSV(result: Result<string, void>): Promise<Result<string, void>> {
-        return await this.barAgent.funBuiltinResultSV(result);
-    }
-
-    async funBuiltinResultSN(result: Result<string, number>): Promise<Result<string, number>> {
-        return await this.barAgent.funBuiltinResultSN(result);
-    }
-
-    async funNoReturn(text: string) {
-        return await this.barAgent.funNoReturn(text);
-    }
-
-    funArrowSync = (text: string) => {
-        return this.barAgent.funArrowSync(text);
-    };
-
-}
-
-
-@agent()
-@description("TS Code First BarAgent")
-class BarAgent extends BaseAgent {
-    constructor(
-        readonly optionalStringType: string | null,
-        readonly optionalUnionType: UnionType | null,
-    ) {
-        super();
-        this.optionalStringType = optionalStringType;
-        this.optionalUnionType = optionalUnionType;
-    }
-
-    // A function that takes all complex types
-    //  cannot determine the type
-    async funAll(
-        complexType: Types.ObjectComplexType,
-        unionType: Types.UnionType,
-        unionComplexType: Types.UnionComplexType,
-        numberType: Types.NumberType,
-        stringType: Types.StringType,
-        booleanType: Types.BooleanType,
-        mapType: Types.MapType,
-        tupleComplexType: Types.TupleComplexType,
-        tupleType: Types.TupleType,
-        listComplexType: Types.ListComplexType,
-        objectType: Types.ObjectType,
-        resultLike: ResultLike,
-        resultLikeWithNoTag: ResultLikeWithNoTag,
-        unionWithNull: string | number | null,
-        objectWithUnionWithUndefined1: ObjectWithUnionWithUndefined1,
-        objectWithUnionWithUndefined2: ObjectWithUnionWithUndefined2,
-        objectWithUnionWithUndefined3: ObjectWithUnionWithUndefined3,
-        objectWithUnionWithUndefined4: ObjectWithUnionWithUndefined4,
-        optionalStringType: string | undefined,
-        optionalUnionType: UnionType | undefined,
-        taggedUnionType: TaggedUnion,
-    ): Types.PromiseType {
-        return Promise.resolve(`Weather for is sunny!`);
-    }
-
-
-    async funOptional(param1: string | number | null,
-                      param2: ObjectWithUnionWithUndefined1,
-                      param3: ObjectWithUnionWithUndefined2,
-                      param4: ObjectWithUnionWithUndefined3,
-                      param5: ObjectWithUnionWithUndefined4,
-                      param6: string | undefined,
-                      param7: UnionType | undefined,) {
-        const concatenatedResult = {
-            param1: param1,
-            param2: param2.a,
-            param3: param3.a,
-            param4: param4.a,
-            param5: param5.a,
-            param6: param6,
-            param7: param7,
-        };
-
-        return Promise.resolve(concatenatedResult);
-    }
-
-    async funOptionalQMark(param1: string, param2?: number, param3?: string) {
-        return Promise.resolve({param1, param2, param3})
-    }
-
-    async funObjectComplexType(text: ObjectComplexType): Promise<ObjectComplexType> {
-        return text
-    }
-
-
-    async funUnionType(unionType: UnionType): Promise<UnionType> {
-        return unionType
-    }
-
-    async funUnionComplexType(unionComplexType: UnionComplexType): Promise<Types.UnionComplexType> {
-        return unionComplexType
-    }
-
-    async funNumber(numberType: NumberType): Promise<NumberType> {
-        return numberType
-    }
-
-    async funString(stringType: StringType): Promise<Types.StringType> {
-        return stringType
-    }
-
-    async funBoolean(booleanType: BooleanType): Promise<Types.BooleanType> {
-        return booleanType
-    }
-
-    async funText(mapType: MapType): Promise<Types.MapType> {
-        return mapType
-    }
-
-    async funTupleComplexType(complexType: TupleComplexType): Promise<Types.TupleComplexType> {
-        return complexType
-    }
-
-    async funTupleType(tupleType: TupleType): Promise<Types.TupleType> {
-        return tupleType
-    }
-
-    async funListComplexType(listComplexType: ListComplexType): Promise<Types.ListComplexType> {
-        return listComplexType
-    }
-
-    async funObjectType(objectType: ObjectType): Promise<ObjectType> {
-        return objectType
-    }
-
-    async funRecursive(tree: Tree): Promise<Tree> {
-        return tree
-    }
-
-    async funUnionWithLiterals(unionWithLiterals: UnionWithLiterals): Promise<Types.UnionWithLiterals> {
-        return unionWithLiterals;
-    }
-
-    async funVoidReturn(text: string): Promise<void> {
-        return undefined;
-    }
-
-    async funNullReturn(text: string): Promise<null> {
-        return null
-    }
-
-    async funUndefinedReturn(text: string): Promise<undefined> {
-        return
-    }
-
-    async funUnstructuredText(unstructuredText: UnstructuredText): Promise<string> {
-        return "foo"
-    }
-
-    async funUnstructuredBinary(unstructuredText: UnstructuredBinary<['application/json']>): Promise<string> {
-        return "foo"
-    }
-
-    async funMultimodal(multimodal: Multimodal): Promise<Multimodal> {
-        return multimodal
-    }
-
-    async funMultimodalAdvanced(multimodal: MultimodalAdvanced<InputText | InputImage>): Promise< MultimodalAdvanced<InputText | InputImage>> {
-        return multimodal
-    }
-
-    async funUnionWithOnlyLiterals(unionWithLiterals: UnionWithOnlyLiterals): Promise<Types.UnionWithOnlyLiterals> {
-        return unionWithLiterals;
-    }
-
-    async funTaggedUnion(taggedUnionType: TaggedUnion): Promise<TaggedUnion> {
-        return taggedUnionType
-    }
-
-    async funResultNoTag(eitherBothOptional: ResultLikeWithNoTag): Promise<ResultLikeWithNoTag> {
-        return eitherBothOptional
-    }
-
-    async funResultExact(either: ResultExact): Promise<ResultExact> {
-        return either
-    }
-
-    async funResultLike(eitherOneOptional: ResultLike): Promise<ResultLike> {
-        return eitherOneOptional
-    }
-
-    async funResultLikeWithVoid(resultLikeWithVoid: ResultLikeWithVoid): Promise<ResultLikeWithVoid> {
-        return resultLikeWithVoid
-    }
-
-    funBuiltinResultVS(result: Result<void, string>): Result<void, string> {
-        return result;
-    }
-
-    funBuiltinResultSV(result: Result<string, void>): Result<string, void> {
-       return result
-    }
-
-    funBuiltinResultSN(result: Result<string, number>): Result<string, number> {
-        return result;
-    }
-
-    async funNoReturn(text: string) {
-        console.log('Hello World');
-    }
-
-    funArrowSync = (text: string) => {
-        console.log('Hello World');
-    };
-}
-
-// If this class is decorated with agent, it will fail
-// This is kept here to ensure that any internal user class is not part of metadata generation.
-// See package.json for metadata generation command.
-class InternalClass {
-    async fun1(input: string): Promise<Iterator<string>> {
-        const array = ['a', 'b', 'c'];
-        return array[Symbol.iterator]();
-    }
-}
+// ---------------------------------------------------------------------------
+// Shared schema fragments
+// ---------------------------------------------------------------------------
+
+// `string | number` and its nullable form (`string | number | null`).
+const StringOrNumber = z.union([z.string(), z.number()]);
+const StringOrNumberNullable = StringOrNumber.nullable();
+
+// The built-in `Multimodal` payload: a list whose elements are either an
+// unstructured-text or unstructured-binary reference.
+const Multimodal = s.multimodal([
+  { name: 'text', schema: s.unstructuredText() },
+  { name: 'binary', schema: s.unstructuredBinary() },
+]);
+
+// `MultimodalAdvanced<InputText | InputImage>`, where InputImage carries a
+// `Uint8Array` and InputText carries a `string` (case name = the original tag).
+const MultimodalAdvanced = s.multimodal([
+  { name: 'image', schema: s.uint8Array() },
+  { name: 'text', schema: z.string() },
+]);
+
+// Return shape of `funOptional` (mirrors the object the handler assembles).
+const FunOptionalReturn = z.object({
+  param1: StringOrNumberNullable,
+  param2: z.string().optional(),
+  param3: StringOrNumber.optional(),
+  param4: StringOrNumber.optional(),
+  param5: z.string().optional(),
+  param6: z.string().optional(),
+  param7: UnionType.optional(),
+});
+
+// Return shape of `funOptionalQMark`.
+const FunOptionalQMarkReturn = z.object({
+  param1: z.string(),
+  param2: z.number().optional(),
+  param3: z.string().optional(),
+});
+
+// ---------------------------------------------------------------------------
+// Method specs shared by both agents (identical name + schema on each side).
+// The two renamed pairs (funText/funMap, funResultNoTag/funEitherOptional)
+// reuse the same underlying spec below.
+// ---------------------------------------------------------------------------
+
+const mapMethod = method({ input: { mapType: MapType }, returns: MapType });
+const resultNoTagMethod = method({
+  input: { eitherBothOptional: ResultLikeWithNoTag },
+  returns: ResultLikeWithNoTag,
+});
+
+const sharedMethods = {
+  funAll: method({
+    input: {
+      complexType: ObjectComplexType,
+      unionType: UnionType,
+      unionComplexType: UnionComplexType,
+      numberType: NumberType,
+      stringType: StringType,
+      booleanType: BooleanType,
+      mapType: MapType,
+      tupleComplexType: TupleComplexType,
+      tupleType: TupleType,
+      listComplexType: ListComplexType,
+      objectType: ObjectType,
+      resultLike: ResultLike,
+      resultLikeWithNoTag: ResultLikeWithNoTag,
+      unionWithNull: StringOrNumberNullable,
+      objectWithUnionWithUndefined1: ObjectWithUnionWithUndefined1,
+      objectWithUnionWithUndefined2: ObjectWithUnionWithUndefined2,
+      objectWithUnionWithUndefined3: ObjectWithUnionWithUndefined3,
+      objectWithUnionWithUndefined4: ObjectWithUnionWithUndefined4,
+      optionalStringType: z.string().optional(),
+      optionalUnionType: UnionType.optional(),
+      taggedUnionType: TaggedUnion,
+    },
+    returns: z.string(),
+  }),
+  funOptional: method({
+    input: {
+      param1: StringOrNumberNullable,
+      param2: ObjectWithUnionWithUndefined1,
+      param3: ObjectWithUnionWithUndefined2,
+      param4: ObjectWithUnionWithUndefined3,
+      param5: ObjectWithUnionWithUndefined4,
+      param6: z.string().optional(),
+      param7: UnionType.optional(),
+    },
+    returns: FunOptionalReturn,
+  }),
+  funOptionalQMark: method({
+    input: {
+      param1: z.string(),
+      param2: z.number().optional(),
+      param3: z.string().optional(),
+    },
+    returns: FunOptionalQMarkReturn,
+  }),
+  funObjectComplexType: method({ input: { text: ObjectComplexType }, returns: ObjectComplexType }),
+  funUnionType: method({ input: { unionType: UnionType }, returns: UnionType }),
+  funUnionComplexType: method({
+    input: { unionComplexType: UnionComplexType },
+    returns: UnionComplexType,
+  }),
+  funNumber: method({ input: { numberType: NumberType }, returns: NumberType }),
+  funString: method({ input: { stringType: StringType }, returns: StringType }),
+  funBoolean: method({ input: { booleanType: BooleanType }, returns: BooleanType }),
+  funTupleComplexType: method({
+    input: { complexType: TupleComplexType },
+    returns: TupleComplexType,
+  }),
+  funTupleType: method({ input: { tupleType: TupleType }, returns: TupleType }),
+  funListComplexType: method({
+    input: { listComplexType: ListComplexType },
+    returns: ListComplexType,
+  }),
+  funObjectType: method({ input: { objectType: ObjectType }, returns: ObjectType }),
+  funRecursive: method({ input: { tree: Tree }, returns: Tree }),
+  funUnionWithLiterals: method({
+    input: { unionWithLiterals: UnionWithLiterals },
+    returns: UnionWithLiterals,
+  }),
+  funUnionWithOnlyLiterals: method({
+    input: { unionWithLiterals: UnionWithOnlyLiterals },
+    returns: UnionWithOnlyLiterals,
+  }),
+  funTaggedUnion: method({ input: { taggedUnionType: TaggedUnion }, returns: TaggedUnion }),
+  funVoidReturn: method({ input: { text: z.string() }, returns: z.void() }),
+  funNullReturn: method({ input: { text: z.string() }, returns: z.void() }),
+  funUndefinedReturn: method({ input: { text: z.string() }, returns: z.void() }),
+  funUnstructuredText: method({
+    input: { unstructuredText: s.unstructuredText() },
+    returns: z.string(),
+  }),
+  funUnstructuredBinary: method({
+    input: { unstructuredText: s.unstructuredBinary({ mimeTypes: ['application/json'] }) },
+    returns: z.string(),
+  }),
+  funMultimodal: method({ input: { multimodal: Multimodal }, returns: Multimodal }),
+  funMultimodalAdvanced: method({
+    input: { multimodal: MultimodalAdvanced },
+    returns: MultimodalAdvanced,
+  }),
+  funResultExact: method({ input: { either: ResultExact }, returns: ResultExact }),
+  funResultLike: method({ input: { eitherOneOptional: ResultLike }, returns: ResultLike }),
+  funResultLikeWithVoid: method({
+    input: { resultLikeWithVoid: ResultLikeWithVoid },
+    returns: ResultLikeWithVoid,
+  }),
+  funBuiltinResultVS: method({
+    input: { result: s.result(z.void(), z.string()) },
+    returns: s.result(z.void(), z.string()),
+  }),
+  funBuiltinResultSV: method({
+    input: { result: s.result(z.string(), z.void()) },
+    returns: s.result(z.string(), z.void()),
+  }),
+  funBuiltinResultSN: method({
+    input: { result: s.result(z.string(), z.number()) },
+    returns: s.result(z.string(), z.number()),
+  }),
+  funNoReturn: method({ input: { text: z.string() }, returns: z.void() }),
+  funArrowSync: method({ input: { text: z.string() }, returns: z.void() }),
+};
+
+// ---------------------------------------------------------------------------
+// BarAgent — echoes each input back. `funText` and `funResultNoTag` are the
+// names FooAgent forwards `funMap` / `funEitherOptional` to.
+// ---------------------------------------------------------------------------
+
+export const BarAgent = defineAgent({
+  name: 'BarAgent',
+  description: 'TS Code First BarAgent',
+  id: {
+    optionalStringType: z.string().nullable(),
+    optionalUnionType: UnionType.nullable(),
+  },
+  methods: {
+    ...sharedMethods,
+    funText: mapMethod,
+    funResultNoTag: resultNoTagMethod,
+  },
+});
+
+export const BarAgentImpl = BarAgent.implement({
+  init: ({ id }) => ({
+    optionalStringType: id.optionalStringType,
+    optionalUnionType: id.optionalUnionType,
+  }),
+  methods: {
+    funAll() {
+      return 'Weather for is sunny!';
+    },
+    funOptional({ param1, param2, param3, param4, param5, param6, param7 }) {
+      return {
+        param1,
+        param2: param2.a,
+        param3: param3.a,
+        param4: param4.a,
+        param5: param5.a,
+        param6,
+        param7,
+      };
+    },
+    funOptionalQMark({ param1, param2, param3 }) {
+      return { param1, param2, param3 };
+    },
+    funObjectComplexType({ text }) {
+      return text;
+    },
+    funUnionType({ unionType }) {
+      return unionType;
+    },
+    funUnionComplexType({ unionComplexType }) {
+      return unionComplexType;
+    },
+    funNumber({ numberType }) {
+      return numberType;
+    },
+    funString({ stringType }) {
+      return stringType;
+    },
+    funBoolean({ booleanType }) {
+      return booleanType;
+    },
+    funText({ mapType }) {
+      return mapType;
+    },
+    funTupleComplexType({ complexType }) {
+      return complexType;
+    },
+    funTupleType({ tupleType }) {
+      return tupleType;
+    },
+    funListComplexType({ listComplexType }) {
+      return listComplexType;
+    },
+    funObjectType({ objectType }) {
+      return objectType;
+    },
+    funRecursive({ tree }) {
+      return tree;
+    },
+    funUnionWithLiterals({ unionWithLiterals }) {
+      return unionWithLiterals;
+    },
+    funUnionWithOnlyLiterals({ unionWithLiterals }) {
+      return unionWithLiterals;
+    },
+    funTaggedUnion({ taggedUnionType }) {
+      return taggedUnionType;
+    },
+    funVoidReturn() {},
+    funNullReturn() {
+      return undefined;
+    },
+    funUndefinedReturn() {},
+    funUnstructuredText() {
+      return 'foo';
+    },
+    funUnstructuredBinary() {
+      return 'foo';
+    },
+    funMultimodal({ multimodal }) {
+      return multimodal;
+    },
+    funMultimodalAdvanced({ multimodal }) {
+      return multimodal;
+    },
+    funResultNoTag({ eitherBothOptional }) {
+      return eitherBothOptional;
+    },
+    funResultExact({ either }) {
+      return either;
+    },
+    funResultLike({ eitherOneOptional }) {
+      return eitherOneOptional;
+    },
+    funResultLikeWithVoid({ resultLikeWithVoid }) {
+      return resultLikeWithVoid;
+    },
+    funBuiltinResultVS({ result }) {
+      return result;
+    },
+    funBuiltinResultSV({ result }) {
+      return result;
+    },
+    funBuiltinResultSN({ result }) {
+      return result;
+    },
+    funNoReturn() {
+      console.log('Hello World');
+    },
+    funArrowSync() {
+      console.log('Hello World');
+    },
+  },
+});
+
+// A typed RPC client factory for the remote BarAgent (mirrors `Client<BarAgent>`).
+const barAgentClient = clientFor(BarAgent);
+
+// ---------------------------------------------------------------------------
+// FooAgent — forwards every call to its BarAgent client and returns the result.
+// ---------------------------------------------------------------------------
+
+export const FooAgent = defineAgent({
+  name: 'FooAgent',
+  description: 'TS Code First FooAgent',
+  id: { input: z.string() },
+  methods: {
+    ...sharedMethods,
+    funMap: mapMethod,
+    funEitherOptional: resultNoTagMethod,
+  },
+});
+
+export const FooAgentImpl = FooAgent.implement({
+  // Build the phantom BarAgent client mirroring the old `BarAgent.get("foooo", 1)`
+  // (constructor params optionalStringType = "foooo", optionalUnionType = 1).
+  init: ({ id }) => ({
+    input: id.input,
+    barAgent: barAgentClient({ optionalStringType: 'foooo', optionalUnionType: 1 }),
+  }),
+  methods: {
+    funAll(input) {
+      return this.barAgent.funAll(input);
+    },
+    funOptional(input) {
+      return this.barAgent.funOptional(input);
+    },
+    funOptionalQMark(input) {
+      return this.barAgent.funOptionalQMark(input);
+    },
+    funObjectComplexType(input) {
+      return this.barAgent.funObjectComplexType(input);
+    },
+    funUnionType(input) {
+      return this.barAgent.funUnionType(input);
+    },
+    funUnionComplexType(input) {
+      return this.barAgent.funUnionComplexType(input);
+    },
+    funNumber(input) {
+      return this.barAgent.funNumber(input);
+    },
+    funString(input) {
+      return this.barAgent.funString(input);
+    },
+    funBoolean(input) {
+      return this.barAgent.funBoolean(input);
+    },
+    funMap(input) {
+      return this.barAgent.funText(input);
+    },
+    funTupleComplexType(input) {
+      return this.barAgent.funTupleComplexType(input);
+    },
+    funTupleType(input) {
+      return this.barAgent.funTupleType(input);
+    },
+    funListComplexType(input) {
+      return this.barAgent.funListComplexType(input);
+    },
+    funObjectType(input) {
+      return this.barAgent.funObjectType(input);
+    },
+    funRecursive(input) {
+      return this.barAgent.funRecursive(input);
+    },
+    funUnionWithLiterals(input) {
+      return this.barAgent.funUnionWithLiterals(input);
+    },
+    funUnionWithOnlyLiterals(input) {
+      return this.barAgent.funUnionWithOnlyLiterals(input);
+    },
+    funTaggedUnion(input) {
+      return this.barAgent.funTaggedUnion(input);
+    },
+    funVoidReturn(input) {
+      return this.barAgent.funVoidReturn(input);
+    },
+    funNullReturn(input) {
+      return this.barAgent.funNullReturn(input);
+    },
+    funUndefinedReturn(input) {
+      return this.barAgent.funUndefinedReturn(input);
+    },
+    funUnstructuredText(input) {
+      return this.barAgent.funUnstructuredText(input);
+    },
+    funUnstructuredBinary(input) {
+      return this.barAgent.funUnstructuredBinary(input);
+    },
+    funMultimodal(input) {
+      return this.barAgent.funMultimodal(input);
+    },
+    funMultimodalAdvanced(input) {
+      return this.barAgent.funMultimodalAdvanced(input);
+    },
+    funEitherOptional(input) {
+      return this.barAgent.funResultNoTag(input);
+    },
+    funResultExact(input) {
+      return this.barAgent.funResultExact(input);
+    },
+    funResultLike(input) {
+      return this.barAgent.funResultLike(input);
+    },
+    funResultLikeWithVoid(input) {
+      return this.barAgent.funResultLikeWithVoid(input);
+    },
+    funBuiltinResultVS(input) {
+      return this.barAgent.funBuiltinResultVS(input);
+    },
+    funBuiltinResultSV(input) {
+      return this.barAgent.funBuiltinResultSV(input);
+    },
+    funBuiltinResultSN(input) {
+      return this.barAgent.funBuiltinResultSN(input);
+    },
+    funNoReturn(input) {
+      return this.barAgent.funNoReturn(input);
+    },
+    funArrowSync(input) {
+      return this.barAgent.funArrowSync(input);
+    },
+  },
+});

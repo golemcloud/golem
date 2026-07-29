@@ -20,6 +20,9 @@ let dev_tools_path = "../golem_sdk_tools"
 let dev_sdk_path = "../golem_sdk"
 
 ///|
+let dev_sdk_version = "0.5.1"
+
+///|
 fn main {
   let args = @env.args()
   if args.length() < 2 {
@@ -91,10 +94,11 @@ fn prepare_release(sdk_version : String, tools_version : String) -> Unit raise {
 ///|
 fn revert_to_dev() -> Unit raise {
   println("==> Reverting to development mode...")
-  let path_dep = "\"golemcloud/golem_sdk\": {\n      \"path\": \"../golem_sdk\"\n    }"
+  let workspace_dep =
+    "\"golemcloud/golem_sdk\": \"\{dev_sdk_version}\""
   // 1. moon.mod.json — compute new content
   let mod_json = @fs.read_file_to_string(mod_json_path)
-  let mut m = replace_sdk_dep(mod_json, path_dep)
+  let mut m = replace_sdk_dep(mod_json, workspace_dep)
   m = remove_bin_deps(m)
   // 2. golem.yaml — swap mooncakes paths back to dev paths
   let yaml = @fs.read_file_to_string(golem_yaml_path)
@@ -106,7 +110,7 @@ fn revert_to_dev() -> Unit raise {
   // Write all files only after all transforms succeed
   @fs.write_string_to_file(mod_json_path, m)
   @fs.write_string_to_file(golem_yaml_path, y)
-  println("Done. Now in development mode (local path deps).")
+  println("Done. Now in development mode (local workspace dependency).")
 }
 
 // --- String helpers ---

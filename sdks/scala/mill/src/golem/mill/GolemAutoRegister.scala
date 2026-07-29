@@ -1,3 +1,19 @@
+/*
+ * Copyright 2024-2026 Golem Cloud
+ *
+ * Licensed under the Golem Source License v1.1 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://license.golem.cloud/LICENSE
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package golem.mill
 
 import mill.*
@@ -148,6 +164,21 @@ trait GolemAutoRegister extends ScalaJSModule {
     os.copy.over(jsFile, out)
     T.log.info(s"[golem] Wrote Scala.js bundle to $out")
     PathRef(out)
+  }
+
+  // ─── Compiler options ────────────────────────────────────────────────────────
+
+  /**
+   * Makes Scaladoc comments of already-compiled sources visible to the
+   * agent/tool macros (Symbol.docstring) by reading docs back from TASTy.
+   */
+  override def scalacOptions: T[Seq[String]] = T {
+    val docFlags = scalaVersion().split('.').toList match {
+      case "3" :: minor :: _ if minor.forall(_.isDigit) && minor.toInt >= 8 => Seq("-Xread-docs")
+      case "3" :: _                                                        => Seq("-Yread-docs")
+      case _                                                               => Nil
+    }
+    super.scalacOptions() ++ docFlags
   }
 
   // ─── Module initializer auto-configuration ──────────────────────────────────

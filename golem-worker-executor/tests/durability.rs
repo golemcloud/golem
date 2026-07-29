@@ -13,12 +13,11 @@
 // limitations under the License.
 
 use crate::Tracing;
+use axum::Router;
 use axum::extract::Query;
-use axum::response::Response;
 use axum::routing::get;
-use axum::{BoxError, Router};
-use bytes::Bytes;
-use futures::{StreamExt, stream};
+use golem_api_grpc::proto::golem::worker::LogEvent;
+use golem_common::model::AgentEvent;
 use golem_common::model::oplog::{
     MultipartPartData, OplogIndex, PublicOplogEntry, PublicSnapshotData,
 };
@@ -29,7 +28,6 @@ use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TEST_CARD_ID, TestContext, WorkerExecutorTestDependencies,
     start, start_with_snapshot_policy,
 };
-use http::StatusCode;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -37,7 +35,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test};
-use tokio::sync::Mutex;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::Instrument;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -55,6 +53,27 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
+
+async fn assert_snapshot_recovery_loaded(events: &mut UnboundedReceiver<LogEvent>) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = events.recv().await {
+            match AgentEvent::try_from(event) {
+                Ok(AgentEvent::SnapshotRecoverySucceeded { .. }) => return,
+                Ok(AgentEvent::SnapshotRecoveryFailed {
+                    snapshot_index,
+                    error,
+                    ..
+                }) => {
+                    panic!("Snapshot recovery from {snapshot_index} failed: {error}");
+                }
+                _ => {}
+            }
+        }
+        panic!("Worker event stream ended before snapshot recovery event");
+    })
+    .await
+    .expect("Timed out waiting for snapshot recovery event");
+}
 
 #[test]
 #[tracing::instrument]
@@ -134,136 +153,6 @@ async fn custom_durability_1(
     Ok(())
 }
 
-#[test]
-#[tracing::instrument]
-async fn lazy_pollable(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-
-    let host_http_port = listener.local_addr().unwrap().port();
-
-    #[derive(Deserialize)]
-    struct QueryParams {
-        idx: u32,
-    }
-
-    let (signal_tx, signal_rx) = tokio::sync::mpsc::unbounded_channel();
-    let signal_rx = Arc::new(Mutex::new(signal_rx));
-
-    let http_server = tokio::spawn(
-        async move {
-            let route = Router::new().route(
-                "/fetch",
-                get(move |query: Query<QueryParams>| async move {
-                    let idx = query.idx;
-                    tracing::info!("fetch called with: {}", idx);
-
-                    let stream = stream::iter(0..3).then(move |i| {
-                        let signal_rx = signal_rx.clone();
-                        async move {
-                            tracing::info!("fetch awaiting signal");
-                            signal_rx.lock().await.recv().await;
-                            let fragment_str = format!("chunk-{idx}-{i}\n");
-                            tracing::info!("emitting response fragment: {fragment_str}");
-                            let fragment = Bytes::from(fragment_str);
-                            Ok::<Bytes, BoxError>(fragment)
-                        }
-                    });
-
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .body(axum::body::Body::from_stream(stream))
-                        .unwrap()
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
-    );
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-    let agent_id = agent_id!("CustomDurability", "lazy-pollable-1");
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), host_http_port.to_string());
-
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
-        .await?;
-
-    signal_tx.send(()).unwrap();
-
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "lazy_pollable_init", data_value!())
-        .await?;
-
-    let s1 = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "lazy_pollable_test",
-            data_value!(1u32),
-        )
-        .await?;
-
-    signal_tx.send(()).unwrap();
-
-    let s2 = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "lazy_pollable_test",
-            data_value!(2u32),
-        )
-        .await?;
-
-    signal_tx.send(()).unwrap();
-
-    let s3 = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "lazy_pollable_test",
-            data_value!(3u32),
-        )
-        .await?;
-
-    signal_tx.send(()).unwrap();
-
-    drop(executor);
-    let executor = start(deps, &context).await?;
-
-    signal_tx.send(()).unwrap();
-
-    let s4 = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "lazy_pollable_test",
-            data_value!(3u32),
-        )
-        .await?;
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-    http_server.abort();
-
-    assert_eq!(s1.into_typed::<String>()?, "chunk-1-0\n");
-    assert_eq!(s2.into_typed::<String>()?, "chunk-1-1\n");
-    assert_eq!(s3.into_typed::<String>()?, "chunk-1-2\n");
-    assert_eq!(s4.into_typed::<String>()?, "chunk-3-0\n");
-    Ok(())
-}
-
 const SNAPSHOT_TEST_INVOCATIONS: usize = 10;
 
 #[test]
@@ -281,7 +170,7 @@ async fn automatic_snapshot_disabled(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounter", "disabled");
+    let agent_id = agent_id!("JsonSnapshotCounter", "disabled");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -327,7 +216,7 @@ async fn automatic_snapshot_every_2nd_invocation(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounter", "every-2nd");
+    let agent_id = agent_id!("JsonSnapshotCounter", "every-2nd");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -344,13 +233,33 @@ async fn automatic_snapshot_every_2nd_invocation(
         .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
         .count();
 
-    drop(executor);
-
     assert_eq!(
         snapshot_count,
         SNAPSHOT_TEST_INVOCATIONS / 2,
         "Expected a snapshot every 2 invocations"
     );
+
+    drop(executor);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 2 },
+    )
+    .await?;
+    let mut events = executor.capture_output(&worker_id).await?;
+
+    let result_after_restart = executor
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
+        .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
+
+    assert_eq!(
+        result_after_restart.into_typed::<u32>()?,
+        SNAPSHOT_TEST_INVOCATIONS as u32,
+        "Counter should be restored from the automatic snapshot after restart"
+    );
+
+    drop(executor);
     Ok(())
 }
 
@@ -376,7 +285,7 @@ async fn automatic_snapshot_periodic(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounter", "periodic");
+    let agent_id = agent_id!("JsonSnapshotCounter", "periodic");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -396,8 +305,6 @@ async fn automatic_snapshot_periodic(
         .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
         .count();
 
-    drop(executor);
-
     assert!(
         snapshot_count >= 1,
         "Expected at least 1 snapshot with periodic policy (every 2s over ~5s of invocations), got {snapshot_count}"
@@ -406,6 +313,30 @@ async fn automatic_snapshot_periodic(
         snapshot_count <= SNAPSHOT_TEST_INVOCATIONS,
         "Expected at most {SNAPSHOT_TEST_INVOCATIONS} snapshots, got {snapshot_count}"
     );
+
+    drop(executor);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::Periodic {
+            period: Duration::from_secs(2),
+        },
+    )
+    .await?;
+    let mut events = executor.capture_output(&worker_id).await?;
+
+    let result_after_restart = executor
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
+        .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
+
+    assert_eq!(
+        result_after_restart.into_typed::<u32>()?,
+        SNAPSHOT_TEST_INVOCATIONS as u32,
+        "Counter should be restored from the automatic snapshot after restart"
+    );
+
+    drop(executor);
     Ok(())
 }
 
@@ -421,7 +352,7 @@ async fn snapshot_based_recovery(
     let executor = start_with_snapshot_policy(
         deps,
         &context,
-        SnapshotPolicy::EveryNInvocation { count: 1 },
+        SnapshotPolicy::EveryNInvocation { count: 3 },
     )
     .await?;
 
@@ -434,7 +365,7 @@ async fn snapshot_based_recovery(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    for _ in 0..5 {
+    for _ in 0..105 {
         executor
             .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
             .await?;
@@ -458,31 +389,19 @@ async fn snapshot_based_recovery(
     let executor = start_with_snapshot_policy(
         deps,
         &context,
-        SnapshotPolicy::EveryNInvocation { count: 1 },
+        SnapshotPolicy::EveryNInvocation { count: 3 },
     )
     .await?;
+    let mut events = executor.capture_output(&worker_id).await?;
 
     let result_after = executor
         .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
 
     assert_eq!(
         result_before, result_after,
         "Worker state should be preserved across restart via snapshot recovery"
-    );
-
-    let was_recovered = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "was_recovered_from_snapshot",
-            data_value!(),
-        )
-        .await?;
-
-    assert!(
-        was_recovered.into_typed::<bool>()?,
-        "Worker should have been recovered from snapshot, not replayed from scratch"
     );
 
     let increment_after = executor
@@ -491,8 +410,8 @@ async fn snapshot_based_recovery(
 
     assert_eq!(
         increment_after.into_typed::<u32>()?,
-        6,
-        "Counter should continue from 6 after snapshot recovery"
+        106,
+        "Counter should continue from 106 after snapshot recovery"
     );
 
     drop(executor);
@@ -595,11 +514,11 @@ async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
         .store()
         .await?;
     let agent_id = agent_id!("SnapshotCounter", "multi-restart");
-    let _worker_id = executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    for _ in 0..3 {
+    for _ in 0..105 {
         executor
             .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
             .await?;
@@ -626,29 +545,17 @@ async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
         SnapshotPolicy::EveryNInvocation { count: 1 },
     )
     .await?;
+    let mut events = executor.capture_output(&worker_id).await?;
 
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
 
     assert_eq!(
         result.into_typed::<u32>()?,
-        6,
-        "Counter should be 6 after two rounds of 3 increments across restarts"
-    );
-
-    let was_recovered = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "was_recovered_from_snapshot",
-            data_value!(),
-        )
-        .await?;
-
-    assert!(
-        was_recovered.into_typed::<bool>()?,
-        "Worker should have been recovered from snapshot after multiple restarts"
+        108,
+        "Counter should be 108 after 105 increments, restart, then 3 more increments"
     );
 
     drop(executor);
@@ -734,10 +641,12 @@ async fn ts_default_json_snapshot_recovery(
 
     drop(executor);
     let executor = start(deps, &context).await?;
+    let mut events = executor.capture_output(&worker_id).await?;
 
     let result_after = executor
         .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
 
     assert_eq!(
         result_before, result_after,
@@ -852,10 +761,12 @@ async fn ts_default_json_snapshot_recovery_across_multiple_restarts(
 
     drop(executor);
     let executor = start(deps, &context).await?;
+    let mut events = executor.capture_output(&worker_id).await?;
 
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
 
     assert_eq!(
         result.into_typed::<f64>()?,
@@ -956,10 +867,12 @@ async fn rust_default_json_snapshot_recovery(
         SnapshotPolicy::EveryNInvocation { count: 1 },
     )
     .await?;
+    let mut events = executor.capture_output(&worker_id).await?;
 
     let result_after = executor
         .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
 
     assert_eq!(
         result_before, result_after,
@@ -1089,10 +1002,12 @@ async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
         SnapshotPolicy::EveryNInvocation { count: 1 },
     )
     .await?;
+    let mut events = executor.capture_output(&_worker_id).await?;
 
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
 
     assert_eq!(
         result.into_typed::<u32>()?,
@@ -1234,11 +1149,13 @@ async fn ts_sqlite_multipart_snapshot_recovery(
     // Restart the executor — this triggers snapshot-based recovery
     drop(executor);
     let executor = start(deps, &context).await?;
+    let mut events = executor.capture_output(&worker_id).await?;
 
     // Verify state is preserved after recovery
     let state_after = executor
         .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
         .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
 
     assert_eq!(
         state_before, state_after,

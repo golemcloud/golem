@@ -17,46 +17,25 @@ pub using @types {type FieldSizePayload}
 pub using @types {type Fields}
 
 ///|
-pub using @types {type IncomingRequest}
-
-///|
-pub using @types {type OutgoingRequest}
+pub using @types {type Request}
 
 ///|
 pub using @types {type RequestOptions}
 
 ///|
-pub using @types {type ResponseOutparam}
+pub using @types {type Response}
 
 ///|
-pub using @types {type IncomingResponse}
+pub using @types {type ErrorCode}
 
 ///|
-pub using @types {type IncomingBody}
+pub using @asyncCore {type Future}
 
 ///|
-pub using @types {type FutureTrailers}
+pub using @asyncCore {type Stream}
 
 ///|
-pub using @types {type OutgoingResponse}
-
-///|
-pub using @types {type OutgoingBody}
-
-///|
-pub using @types {type FutureIncomingResponse}
-
-///|
-pub using @streams {type InputStream}
-
-///|
-pub using @streams {type OutputStream}
-
-///|
-/// Sends an outgoing HTTP request and returns a future for the response.
-pub fn handle(
-  request : OutgoingRequest,
-  options : RequestOptions?,
-) -> Result[FutureIncomingResponse, @types.ErrorCode] {
-  @outgoingHandler.handle(request, options)
+/// Sends an outgoing HTTP request and awaits its response.
+pub async fn send(request : Request) -> Result[Response, ErrorCode] {
+  @client.send(request)
 }

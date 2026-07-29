@@ -328,6 +328,39 @@ impl WorkerConnection {
                                         .await;
                                 }
                             }
+                            AgentEvent::SnapshotRecoverySucceeded {
+                                timestamp,
+                                snapshot_index,
+                            } => {
+                                if matching {
+                                    output
+                                        .emit_log(
+                                            timestamp,
+                                            LogLevel::Info,
+                                            "snapshot-recovery".to_string(),
+                                            format!("loaded snapshot from oplog index {snapshot_index}"),
+                                        )
+                                        .await;
+                                }
+                            }
+                            AgentEvent::SnapshotRecoveryFailed {
+                                timestamp,
+                                snapshot_index,
+                                error,
+                            } => {
+                                if matching {
+                                    output
+                                        .emit_log(
+                                            timestamp,
+                                            LogLevel::Error,
+                                            "snapshot-recovery".to_string(),
+                                            format!(
+                                                "failed to load snapshot from oplog index {snapshot_index}: {error}"
+                                            ),
+                                        )
+                                        .await;
+                                }
+                            }
                             AgentEvent::ClientLagged {
                                 number_of_missed_messages,
                             } => {

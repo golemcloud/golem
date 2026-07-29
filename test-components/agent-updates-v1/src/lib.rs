@@ -1,6 +1,7 @@
 use golem_rust::agentic::Config;
+use golem_rust::wasip3::http::{client, types};
+use golem_rust::wasip3::{wit_future, wit_stream};
 use golem_rust::{ConfigSchema, agent_definition, agent_implementation, description};
-use wstd::http::{Client, Request};
 
 #[derive(ConfigSchema)]
 pub struct CounterAgentConfig {
@@ -83,7 +84,10 @@ impl UpdateTest for UpdateTestImpl {
         for _ in 0..30 {
             current += 10;
             report_f1(current).await;
-            wstd::task::sleep(wstd::time::Duration::from_millis(speed_ms)).await;
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+                speed_ms.saturating_mul(1_000_000),
+            )
+            .await;
         }
 
         self.last = current; // In v2, we replace this to current/2
@@ -92,7 +96,8 @@ impl UpdateTest for UpdateTestImpl {
 
     fn f2(&self) -> u64 {
         let mut buf = [0u8; 8];
-        wstd::rand::get_random_bytes(&mut buf);
+        let bytes = golem_rust::wasip3::random::random::get_random_bytes(buf.len() as u64);
+        buf.copy_from_slice(&bytes);
         u64::from_le_bytes(buf)
     }
 
@@ -131,20 +136,50 @@ impl RevisionEnvAgent for RevisionEnvAgentImpl {
 
 async fn report_f1(current: u64) {
     let port = std::env::var("PORT").unwrap_or("9999".to_string());
-    let url = format!("http://localhost:{port}/f1");
 
-    println!("Sending POST {url}");
+    println!("Sending POST http://localhost:{port}/f1");
 
-    let request = Request::post(&url)
-        .body(current.to_string())
-        .expect("Failed to build request");
-
-    let response = Client::new()
-        .send(request)
+    let response = send_http_post(&port, "/f1", current.to_string().into_bytes())
         .await
         .expect("Request failed");
 
-    let status = response.status();
+    let status = response.get_status_code();
+
+    drop(response);
 
     println!("Received {status}");
+}
+
+async fn send_http_post(
+    port: &str,
+    path_with_query: &str,
+    body: Vec<u8>,
+) -> Result<types::Response, types::ErrorCode> {
+    let headers = types::Fields::new();
+
+    let (mut body_tx, body_rx) = wit_stream::new();
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+
+    let (request, transmit) = types::Request::new(headers, Some(body_rx), trailers_rx, None);
+    request.set_method(&types::Method::Post).unwrap();
+    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+    request
+        .set_authority(Some(&format!("localhost:{port}")))
+        .unwrap();
+    request.set_path_with_query(Some(path_with_query)).unwrap();
+
+    let (send_result, transmit_result, ()) = futures::join!(
+        async { client::send(request).await },
+        async { transmit.await },
+        async {
+            let remaining = body_tx.write_all(body).await;
+            assert!(remaining.is_empty());
+            let _ = trailers_tx.write(Ok(None)).await;
+            drop(body_tx);
+        }
+    );
+
+    let response = send_result?;
+    transmit_result?;
+    Ok(response)
 }

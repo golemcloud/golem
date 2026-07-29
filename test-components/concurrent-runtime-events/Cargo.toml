@@ -1,0 +1,19 @@
+[package]
+name = "concurrent-runtime-events"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "0.58.0", features = ["default", "async-spawn", "inter-task-wakeup"] }
+futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+panic = "abort"
+codegen-units = 1

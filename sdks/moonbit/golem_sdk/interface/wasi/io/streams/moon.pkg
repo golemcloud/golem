@@ -1,6 +1,6 @@
+warnings = "-44"
+
 import {
   "golemcloud/golem_sdk/interface/wasi/io/error",
   "golemcloud/golem_sdk/interface/wasi/io/poll",
 }
-
-warnings = "-44"

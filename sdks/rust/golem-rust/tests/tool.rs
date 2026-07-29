@@ -17,10 +17,16 @@ test_r::enable!();
 #[cfg(test)]
 #[cfg(feature = "export_golem_agentic")]
 #[test_r::sequential]
-#[allow(clippy::disallowed_names, dead_code)]
+#[allow(
+    clippy::disallowed_names,
+    dead_code,
+    private_interfaces,
+    unused_imports
+)]
 mod tests {
     use golem_rust::agentic::{
-        ExtendedOptionShape, ExtendedToolType, ToolBuildCtx, ToolBuildError, ToolErrorSchema,
+        CanonicalInputModel, ExtendedOptionShape, ExtendedToolType, ToolBuildCtx, ToolBuildError,
+        ToolErrorSchema, get_tool_invoker_by_name,
     };
     use golem_rust::{
         FromSchema, IntoSchema, Quantity, QuantityUnit, tool_definition, tool_implementation,
@@ -31,6 +37,92 @@ mod tests {
     use std::path::Path;
     use std::process::Command;
     use test_r::test;
+
+    fn encoded_input(
+        tool: &ExtendedToolType,
+        command_path: &[&str],
+        values: Vec<golem_rust::SchemaValue>,
+    ) -> golem_rust::golem_agentic::exports::golem::tool::guest::TypedSchemaValue {
+        let path = command_path
+            .iter()
+            .map(|segment| segment.to_string())
+            .collect::<Vec<_>>();
+        let command_index = tool
+            .command_index_by_path(&path)
+            .expect("command path resolves");
+        let model = CanonicalInputModel::from_fields(tool.canonical_input_fields(command_index))
+            .expect("canonical input model builds");
+        let input = golem_rust::TypedSchemaValue::new(
+            model.record_schema,
+            golem_rust::SchemaValue::Record { fields: values },
+        );
+        golem_rust::encode_typed_schema_value(&input).expect("typed schema value encodes")
+    }
+
+    fn anonymous_principal() -> golem_rust::agentic::Principal {
+        golem_rust::agentic::Principal::Anonymous
+    }
+
+    #[tool_definition]
+    trait PrincipalAutoInjectedRoundTrip {
+        fn whoami(&self, principal: golem_rust::agentic::Principal, name: String) -> String;
+    }
+
+    #[test]
+    fn tool_descriptor_accepts_auto_injected_principal_parameters() {
+        let tool = __golem_tool_descriptor_for_PrincipalAutoInjectedRoundTrip(
+            &mut ToolBuildCtx::new(),
+        )
+        .expect("Principal is supplied by the guest invocation principal, not by the input record");
+        let command_index = tool
+            .command_index_by_path(&["whoami".to_string()])
+            .expect("whoami command exists");
+        let fields = tool.canonical_input_fields(command_index);
+
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["name"],
+            "auto-injected Principal parameters must not appear in the tool input schema",
+        );
+    }
+
+    #[test]
+    fn imported_user_principal_parameter_is_schema_input() {
+        mod user_principal_schema {
+            use golem_rust::{FromSchema, IntoSchema};
+
+            #[derive(IntoSchema, FromSchema)]
+            pub struct Principal {
+                pub id: String,
+            }
+        }
+
+        use user_principal_schema::Principal;
+
+        #[tool_definition]
+        trait LocalImportedPrincipalTool {
+            fn whoami(&self, principal: Principal, name: String) -> String;
+        }
+
+        let tool = __golem_tool_descriptor_for_LocalImportedPrincipalTool(&mut ToolBuildCtx::new())
+            .expect("an imported user Principal type is a normal schema input");
+        let command_index = tool
+            .command_index_by_path(&["whoami".to_string()])
+            .expect("whoami command exists");
+        let fields = tool.canonical_input_fields(command_index);
+
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["principal", "name"],
+            "bare/imported Principal is not enough to mark a tool parameter as auto-injected",
+        );
+    }
 
     #[derive(ToolError)]
     enum GrepError {
@@ -105,6 +197,57 @@ mod tests {
         assert_eq!(cases.len(), 2);
         assert_eq!(cases[0].name, "bad-pattern");
         assert_eq!(cases[1].name, "io");
+    }
+
+    #[test]
+    fn grep_canonical_input_record_order_matches_packed_values() {
+        let tool = descriptor::<GrepImpl>();
+        let command_index = tool
+            .command_index_by_path(&[])
+            .expect("implicit grep body is addressed by the empty path");
+        let fields = tool.canonical_input_fields(command_index);
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["case-sensitive", "pattern", "files"],
+            "canonical order is inherited/global flags before fixed positionals and tail values",
+        );
+
+        let input = encoded_input(
+            &tool,
+            &[],
+            vec![
+                golem_rust::SchemaValue::Bool(true),
+                golem_rust::SchemaValue::String("needle".to_string()),
+                golem_rust::SchemaValue::List {
+                    elements: vec![
+                        golem_rust::SchemaValue::String("src/lib.rs".to_string()),
+                        golem_rust::SchemaValue::String("tests/tool.rs".to_string()),
+                    ],
+                },
+            ],
+        );
+        let decoded = golem_rust::decode_typed_schema_value(&input).expect("input decodes");
+        let golem_rust::SchemaValue::Record { fields } = decoded.value() else {
+            panic!("typed tool input must be encoded as a positional record");
+        };
+
+        assert_eq!(fields[0], golem_rust::SchemaValue::Bool(true));
+        assert_eq!(
+            fields[1],
+            golem_rust::SchemaValue::String("needle".to_string())
+        );
+        assert_eq!(
+            fields[2],
+            golem_rust::SchemaValue::List {
+                elements: vec![
+                    golem_rust::SchemaValue::String("src/lib.rs".to_string()),
+                    golem_rust::SchemaValue::String("tests/tool.rs".to_string()),
+                ],
+            }
+        );
     }
 
     // --- subtree: git + remote ---------------------------------------------
@@ -248,6 +391,48 @@ mod tests {
         );
 
         tool.try_to_tool().expect("git tool is valid");
+    }
+
+    #[test]
+    fn git_remote_add_canonical_input_record_starts_with_inherited_global() {
+        let tool = __golem_tool_descriptor_for_Git(&mut ToolBuildCtx::new())
+            .expect("git descriptor builds");
+        let command_index = tool
+            .command_index_by_path(&["remote".to_string(), "add".to_string()])
+            .expect("remote add command exists");
+        let fields = tool.canonical_input_fields(command_index);
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["verbose", "name", "url"],
+            "grafted subtree leaf inputs must be encoded as inherited globals followed by child body fields",
+        );
+
+        let input = encoded_input(
+            &tool,
+            &["remote", "add"],
+            vec![
+                golem_rust::SchemaValue::Bool(true),
+                golem_rust::SchemaValue::String("origin".to_string()),
+                golem_rust::SchemaValue::String("https://example.invalid/repo.git".to_string()),
+            ],
+        );
+        let decoded = golem_rust::decode_typed_schema_value(&input).expect("input decodes");
+        let golem_rust::SchemaValue::Record { fields } = decoded.value() else {
+            panic!("typed tool input must be encoded as a positional record");
+        };
+
+        assert_eq!(fields[0], golem_rust::SchemaValue::Bool(true));
+        assert_eq!(
+            fields[1],
+            golem_rust::SchemaValue::String("origin".to_string())
+        );
+        assert_eq!(
+            fields[2],
+            golem_rust::SchemaValue::String("https://example.invalid/repo.git".to_string())
+        );
     }
 
     // --- multi-level subtree: inherited-global suppression at depth ---------
@@ -401,6 +586,2309 @@ mod tests {
             ),
             "expected an InheritedGlobalConflict for `verbose` on `leaf`, got {err:?}",
         );
+    }
+
+    #[tool_definition]
+    trait SameTraitGlobalRoundTrip {
+        #[arg(verbose = "global", kind = "flag")]
+        fn same_trait_global_round_trip(
+            &self,
+            verbose: bool,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        fn leaf(&self, verbose: bool, name: String) -> String;
+
+        fn fail(&self, reason: String) -> Result<String, RemoteError>;
+    }
+
+    struct SameTraitGlobalRoundTripImpl;
+
+    #[tool_implementation]
+    impl SameTraitGlobalRoundTrip for SameTraitGlobalRoundTripImpl {
+        fn same_trait_global_round_trip(
+            &self,
+            _verbose: bool,
+            _target: String,
+        ) -> Result<(), RemoteError> {
+            Ok(())
+        }
+
+        fn leaf(&self, verbose: bool, name: String) -> String {
+            format!("{verbose}:{name}")
+        }
+
+        fn fail(&self, reason: String) -> Result<String, RemoteError> {
+            Err(RemoteError::Failed(reason))
+        }
+    }
+
+    #[test]
+    async fn guest_invoke_decodes_same_trait_root_globals_and_plain_return() {
+        let tool = <SameTraitGlobalRoundTripImpl as SameTraitGlobalRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("same-trait-global-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["leaf"],
+            vec![
+                golem_rust::SchemaValue::Bool(true),
+                golem_rust::SchemaValue::String("alice".to_string()),
+            ],
+        );
+
+        let result = invoker(vec!["leaf".to_string()], input, None, anonymous_principal())
+            .await
+            .expect("guest invocation succeeds");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "true:alice");
+    }
+
+    #[test]
+    async fn guest_invoke_encodes_custom_tool_errors() {
+        let tool = <SameTraitGlobalRoundTripImpl as SameTraitGlobalRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("same-trait-global-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["fail"],
+            vec![
+                golem_rust::SchemaValue::Bool(false),
+                golem_rust::SchemaValue::String("boom".to_string()),
+            ],
+        );
+
+        let err = invoker(vec!["fail".to_string()], input, None, anonymous_principal())
+            .await
+            .expect_err("tool error is surfaced as guest ToolError");
+        let golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::CustomError(value) =
+            err
+        else {
+            panic!("expected custom tool error, got {err:?}");
+        };
+        let value = golem_rust::decode_typed_schema_value(&value).expect("custom error decodes");
+        let decoded = RemoteError::from_error_payload_value(value)
+            .expect("custom error payload decodes to the declared error enum");
+        match decoded {
+            RemoteError::Failed(reason) => assert_eq!(reason, "boom"),
+        }
+    }
+
+    #[test]
+    async fn guest_custom_tool_error_payload_matches_declared_error_case_payload_schema() {
+        let tool = <SameTraitGlobalRoundTripImpl as SameTraitGlobalRoundTrip>::__tool_descriptor();
+        let fail_index = tool
+            .command_index_by_path(&["fail".to_string()])
+            .expect("fail command exists");
+        let payload_schema = tool.commands[fail_index]
+            .body
+            .as_ref()
+            .and_then(|body| body.errors.first())
+            .and_then(|error| error.payload.as_ref())
+            .expect("RemoteError::Failed declares a payload schema");
+        assert!(
+            matches!(payload_schema.root, golem_rust::SchemaType::String { .. }),
+            "the declared error-case payload schema is String, got {:#?}",
+            payload_schema.root
+        );
+
+        let invoker = get_tool_invoker_by_name("same-trait-global-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["fail"],
+            vec![
+                golem_rust::SchemaValue::Bool(false),
+                golem_rust::SchemaValue::String("boom".to_string()),
+            ],
+        );
+
+        let err = invoker(vec!["fail".to_string()], input, None, anonymous_principal())
+            .await
+            .expect_err("tool error is surfaced as guest ToolError");
+        let golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::CustomError(value) =
+            err
+        else {
+            panic!("expected custom tool error, got {err:?}");
+        };
+        let value = golem_rust::decode_typed_schema_value(&value).expect("custom error decodes");
+        let payload = String::from_value(value.value())
+            .expect("custom-error payload must match the declared error-case payload type");
+        assert_eq!(payload, "boom");
+    }
+
+    #[derive(Debug, Eq, PartialEq, ToolError)]
+    enum AmbiguousRemoteError {
+        #[tool_error(kind = "usage-error", exit_code = 2)]
+        BadInput(String),
+        #[tool_error(kind = "runtime-error", exit_code = 1)]
+        Backend(String),
+    }
+
+    #[tool_definition]
+    trait AmbiguousErrorRoundTrip {
+        fn fail_backend(&self, reason: String) -> Result<String, AmbiguousRemoteError>;
+    }
+
+    struct AmbiguousErrorRoundTripImpl;
+
+    #[tool_implementation]
+    impl AmbiguousErrorRoundTrip for AmbiguousErrorRoundTripImpl {
+        fn fail_backend(&self, reason: String) -> Result<String, AmbiguousRemoteError> {
+            Err(AmbiguousRemoteError::Backend(reason))
+        }
+    }
+
+    #[test]
+    async fn custom_tool_error_duplicate_payload_schemas_decode_as_first_matching_case() {
+        let tool = <AmbiguousErrorRoundTripImpl as AmbiguousErrorRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("ambiguous-error-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["fail-backend"],
+            vec![golem_rust::SchemaValue::String("boom".to_string())],
+        );
+
+        let err = invoker(
+            vec!["fail-backend".to_string()],
+            input,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect_err("tool error is surfaced as guest ToolError");
+        let golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::CustomError(value) =
+            err
+        else {
+            panic!("expected custom tool error, got {err:?}");
+        };
+        let value = golem_rust::decode_typed_schema_value(&value).expect("custom error decodes");
+
+        assert_eq!(
+            AmbiguousRemoteError::from_error_payload_value(value)
+                .expect("custom error payload decodes"),
+            AmbiguousRemoteError::BadInput("boom".to_string()),
+            "the current custom-error wire shape carries only the payload, so duplicate payload schemas decode to the first matching case",
+        );
+    }
+
+    #[test]
+    async fn bug_finder_guest_custom_error_wire_value_matches_declared_case_payload() {
+        let tool = <SameTraitGlobalRoundTripImpl as SameTraitGlobalRoundTrip>::__tool_descriptor();
+        let fail_index = tool
+            .command_index_by_path(&["fail".to_string()])
+            .expect("fail command exists");
+        assert!(
+            matches!(
+                tool.commands[fail_index]
+                    .body
+                    .as_ref()
+                    .and_then(|body| body.errors.first())
+                    .and_then(|error| error.payload.as_ref())
+                    .map(|payload| &payload.root),
+                Some(golem_rust::SchemaType::String { .. })
+            ),
+            "the declared custom error case payload is String"
+        );
+
+        let invoker = get_tool_invoker_by_name("same-trait-global-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["fail"],
+            vec![
+                golem_rust::SchemaValue::Bool(false),
+                golem_rust::SchemaValue::String("declared-payload".to_string()),
+            ],
+        );
+
+        let err = invoker(vec!["fail".to_string()], input, None, anonymous_principal())
+            .await
+            .expect_err("tool error is surfaced as guest ToolError");
+        let golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::CustomError(value) =
+            err
+        else {
+            panic!("expected custom tool error, got {err:?}");
+        };
+        let value = golem_rust::decode_typed_schema_value(&value).expect("custom error decodes");
+        let payload = String::from_value(value.value())
+            .expect("custom-error wire value must match the declared error-case payload schema");
+        assert_eq!(payload, "declared-payload");
+    }
+
+    #[derive(Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+    struct CustomPlainReturn {
+        name: String,
+    }
+
+    #[tool_definition]
+    trait CustomPlainReturnRoundTrip {
+        fn custom_plain(&self, name: String) -> CustomPlainReturn;
+    }
+
+    struct CustomPlainReturnRoundTripImpl;
+
+    #[tool_implementation]
+    impl CustomPlainReturnRoundTrip for CustomPlainReturnRoundTripImpl {
+        fn custom_plain(&self, name: String) -> CustomPlainReturn {
+            CustomPlainReturn { name }
+        }
+    }
+
+    #[test]
+    async fn guest_invoke_encodes_custom_plain_return_types() {
+        let tool =
+            <CustomPlainReturnRoundTripImpl as CustomPlainReturnRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("custom-plain-return-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["custom-plain"],
+            vec![golem_rust::SchemaValue::String("custom".to_string())],
+        );
+
+        let result = invoker(
+            vec!["custom-plain".to_string()],
+            input,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect("guest invocation succeeds for a custom IntoSchema return type");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = CustomPlainReturn::from_value(result.value())
+            .expect("result schema matches return type");
+        assert_eq!(
+            value,
+            CustomPlainReturn {
+                name: "custom".to_string()
+            }
+        );
+    }
+
+    #[tool_definition]
+    trait DefaultBodyInvokeRoundTrip {
+        fn default_body_invoke_round_trip(&self, name: String) -> String {
+            format!("default:{name}")
+        }
+    }
+
+    struct DefaultBodyInvokeRoundTripImpl;
+
+    #[tool_implementation]
+    impl DefaultBodyInvokeRoundTrip for DefaultBodyInvokeRoundTripImpl {}
+
+    #[test]
+    async fn guest_invoke_dispatches_trait_default_method_bodies() {
+        let tool =
+            <DefaultBodyInvokeRoundTripImpl as DefaultBodyInvokeRoundTrip>::__tool_descriptor();
+        assert!(
+            tool.command_index_by_path(&[]).is_some(),
+            "the default method body is present in the generated descriptor"
+        );
+        let invoker = get_tool_invoker_by_name("default-body-invoke-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &[],
+            vec![golem_rust::SchemaValue::String("alice".to_string())],
+        );
+
+        let result = invoker(vec![], input, None, anonymous_principal())
+            .await
+            .expect("guest invocation dispatches the trait default method body");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "default:alice");
+    }
+
+    #[test]
+    fn stdout_tool_result_shape_compiles() {
+        let output = cargo_check_tool_crate(
+            "stdout-tool-result-shape",
+            r#"
+use golem_rust::agentic::{InputStream, InvocationResult};
+
+fn stdout(result: InvocationResult) -> Option<InputStream> {
+    result.stdout
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "tool invocation results should expose native stdout streams, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn stdout_tool_invocation_shape_compiles() {
+        let output = cargo_check_tool_crate(
+            "stdout-tool-invocation-shape",
+            r#"
+use golem_rust::agentic::OutputStream;
+use golem_rust::{tool_definition, tool_implementation, ToolError};
+
+#[derive(ToolError)]
+enum RemoteError {
+    #[tool_error(kind = "runtime-error", exit_code = 1)]
+    Failed(String),
+}
+
+#[tool_definition]
+trait StdoutTool {
+    fn run(&self, stdout: OutputStream) -> Result<(), RemoteError>;
+}
+
+struct StdoutToolImpl;
+
+#[tool_implementation]
+impl StdoutTool for StdoutToolImpl {
+    fn run(&self, mut stdout: OutputStream) -> Result<(), RemoteError> {
+        stdout.write(b"hello".to_vec());
+        Ok(())
+    }
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "stdout tool definitions should generate a P3 stream pair, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn stdout_tool_parameter_must_not_collide_with_generated_reader_local() {
+        let output = cargo_check_tool_crate(
+            "stdout-tool-generated-reader-name-collision",
+            r#"
+use golem_rust::agentic::OutputStream;
+use golem_rust::{tool_definition, tool_implementation};
+
+#[tool_definition]
+trait StdoutTool {
+    fn run(&self, __golem_stdout_reader: OutputStream);
+}
+
+struct StdoutToolImpl;
+
+#[tool_implementation]
+impl StdoutTool for StdoutToolImpl {
+    fn run(&self, mut __golem_stdout_reader: OutputStream) {
+        __golem_stdout_reader.write(b"hello".to_vec());
+    }
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "a legal tool parameter name must not collide with macro-generated stdout locals\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn stdout_tool_raw_parameter_must_not_collide_with_generated_reader_local() {
+        let output = cargo_check_tool_crate(
+            "stdout-tool-generated-reader-raw-name-collision",
+            r#"
+use golem_rust::agentic::OutputStream;
+use golem_rust::{tool_definition, tool_implementation};
+
+#[tool_definition]
+trait StdoutTool {
+    fn run(&self, r#__golem_stdout_reader: OutputStream);
+}
+
+struct StdoutToolImpl;
+
+#[tool_implementation]
+impl StdoutTool for StdoutToolImpl {
+    fn run(&self, mut r#__golem_stdout_reader: OutputStream) {
+        r#__golem_stdout_reader.write(b"hello".to_vec());
+    }
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "a legal raw tool parameter name must not collide with macro-generated stdout locals\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn async_tool_invocation_shape_compiles() {
+        let output = cargo_check_tool_crate(
+            "async-tool-invocation-shape",
+            r#"
+use golem_rust::{tool_definition, tool_implementation};
+
+#[tool_definition]
+trait AsyncTool {
+    async fn run(&self, value: String) -> String;
+}
+
+struct AsyncToolImpl;
+
+#[tool_implementation]
+impl AsyncTool for AsyncToolImpl {
+    async fn run(&self, value: String) -> String {
+        value
+    }
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "async tool definitions should use the P3 guest executor, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn async_stdout_tool_writes_do_not_deadlock() {
+        let root = std::env::temp_dir().join(format!(
+            "golem-rust-async-stdout-runtime-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after UNIX_EPOCH")
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("wit")).unwrap();
+
+        let golem_rust_path = Path::new(env!("CARGO_MANIFEST_DIR"));
+        fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                r#"[package]
+name = "async-stdout-runtime"
+version = "0.0.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+golem-rust = {{ path = {}, features = ["export_golem_agentic"] }}
+wit-bindgen = {{ git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.59.0", features = ["async", "async-spawn"] }}
+"#,
+                toml_string(golem_rust_path)
+            ),
+        )
+        .unwrap();
+        fs::write(
+            root.join("wit/repro.wit"),
+            r#"package bug-finder:async-stdout;
+
+world repro {
+  export run-direct: async func() -> string;
+  export run-detached: async func() -> string;
+  export reader-drop-is-observed: async func() -> bool;
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/lib.rs"),
+            r#"mod bindings {
+    wit_bindgen::generate!({
+        path: "wit",
+        world: "repro",
+        async: true,
+    });
+
+    use super::Component;
+    export!(Component);
+}
+
+struct Component;
+
+use golem_rust::agentic::{CanonicalInputModel, OutputStream, Principal};
+use golem_rust::{FromSchema, tool_definition, tool_implementation};
+
+#[tool_definition]
+trait AsyncStdout {
+    async fn direct(&self, stdout: OutputStream) -> String;
+    async fn detached(&self, stdout: OutputStream) -> String;
+}
+
+struct AsyncStdoutImpl;
+
+#[tool_implementation]
+impl AsyncStdout for AsyncStdoutImpl {
+    async fn direct(&self, mut stdout: OutputStream) -> String {
+        let remaining = stdout.write_all(b"hello".to_vec()).await;
+        assert!(remaining.is_empty());
+        "done".to_string()
+    }
+
+    async fn detached(&self, mut stdout: OutputStream) -> String {
+        golem_rust::agentic::spawn_local(async move {
+            let remaining = stdout.write_all(b"hello".to_vec()).await;
+            assert!(remaining.is_empty());
+        });
+        "done".to_string()
+    }
+}
+
+async fn invoke(command: &str) -> String {
+    let tool = <AsyncStdoutImpl as AsyncStdout>::__tool_descriptor();
+    let command_path = vec![command.to_string()];
+    let command_index = tool.command_index_by_path(&command_path).unwrap();
+    let model = CanonicalInputModel::from_fields(tool.canonical_input_fields(command_index)).unwrap();
+    let input = golem_rust::TypedSchemaValue::new(
+        model.record_schema,
+        golem_rust::SchemaValue::Record { fields: vec![] },
+    );
+    let input = golem_rust::encode_typed_schema_value(&input).unwrap();
+    let result = <AsyncStdoutImpl as AsyncStdout>::__tool_invoke(
+        command_path,
+        input,
+        None,
+        Principal::Anonymous,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.stdout.unwrap().collect().await, b"hello");
+    let value = golem_rust::decode_typed_schema_value(&result.result.unwrap()).unwrap();
+    String::from_value(value.value()).unwrap()
+}
+
+impl bindings::Guest for Component {
+    async fn run_direct() -> String {
+        invoke("direct").await
+    }
+
+    async fn run_detached() -> String {
+        invoke("detached").await
+    }
+
+    async fn reader_drop_is_observed() -> bool {
+        let (mut stdout, reader) = golem_rust::agentic::new_tool_stdout();
+        drop(reader);
+        stdout.write(vec![0xaa; 64]);
+
+        for byte in 0..16 {
+            wit_bindgen::yield_async().await;
+            let chunk = vec![byte; 64];
+            if stdout.write_all(chunk.clone()).await == chunk {
+                return true;
+            }
+        }
+
+        false
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let target_dir = golem_rust_path
+            .parent()
+            .expect("golem-rust crate should have an SDK workspace parent")
+            .join("target");
+        let build = Command::new("cargo")
+            .args(["build", "--quiet", "--target", "wasm32-wasip2"])
+            .env("CARGO_TARGET_DIR", &target_dir)
+            .current_dir(&root)
+            .output()
+            .expect("failed to build async stdout reproducer component");
+        assert!(
+            build.status.success(),
+            "reproducer component failed to build\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&build.stdout),
+            String::from_utf8_lossy(&build.stderr),
+        );
+
+        let component = target_dir.join("wasm32-wasip2/debug/async_stdout_runtime.wasm");
+        fs::create_dir_all(root.join("runner/src")).unwrap();
+        fs::write(
+            root.join("runner/Cargo.toml"),
+            r#"[package]
+name = "async-stdout-runner"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+tokio = { version = "1", features = ["macros", "rt", "time"] }
+wasmtime = { version = "=46.0.1", features = ["component-model", "component-model-async"] }
+wasmtime-wasi = { version = "=46.0.1", features = ["p3"] }
+"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("runner/src/main.rs"),
+            r#"use anyhow::{Context, Result, anyhow};
+use std::time::Duration;
+use wasmtime::component::types::{ComponentInstance, ComponentItem};
+use wasmtime::component::{
+    Component, Linker, LinkerInstance, ResourceTable, ResourceType,
+};
+use wasmtime::{Config, Engine, Store};
+use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+
+struct Host {
+    ctx: WasiCtx,
+    table: ResourceTable,
+}
+
+impl WasiView for Host {
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.ctx,
+            table: &mut self.table,
+        }
+    }
+}
+
+struct ResourceEntry;
+struct QuotaToken;
+struct Secret;
+
+fn define_mock_import(
+    name: &str,
+    engine: &Engine,
+    root: &mut LinkerInstance<Host>,
+    imported: &ComponentInstance,
+) -> Result<()> {
+    if name.starts_with("wasi:cli")
+        || name.starts_with("wasi:clocks")
+        || name.starts_with("wasi:filesystem")
+        || name.starts_with("wasi:io")
+        || name.starts_with("wasi:random")
+        || name.starts_with("wasi:sockets")
+    {
+        return Ok(());
+    }
+
+    let mut instance = root.instance(name)?;
+    for (item_name, item) in imported.exports(engine) {
+        match item.ty {
+            ComponentItem::ComponentFunc(function) if function.async_() => {
+                let import = format!("{name}#{item_name}");
+                instance.func_new_concurrent(
+                    item_name,
+                    move |_accessor, _function, _params, _results| {
+                        let import = import.clone();
+                        Box::pin(async move {
+                            Err(wasmtime::Error::msg(format!("unexpected call to {import}")))
+                        })
+                    },
+                )?;
+            }
+            ComponentItem::ComponentFunc(_) => {
+                let import = format!("{name}#{item_name}");
+                instance.func_new_async(
+                    item_name,
+                    move |_store, _function, _params, _results| {
+                        let import = import.clone();
+                        Box::new(async move {
+                            Err(wasmtime::Error::msg(format!("unexpected call to {import}")))
+                        })
+                    },
+                )?;
+            }
+            ComponentItem::Resource(_) => {
+                let resource_type = if item_name == "quota-token" {
+                    ResourceType::host::<QuotaToken>()
+                } else if item_name == "secret" {
+                    ResourceType::host::<Secret>()
+                } else {
+                    ResourceType::host::<ResourceEntry>()
+                };
+                instance.resource(item_name, resource_type, |_store, _rep| Ok(()))?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<()> {
+    let component_path = std::env::args().nth(1).context("missing component path")?;
+    let mut config = Config::new();
+    config.wasm_component_model_async(true);
+    config.concurrency_support(true);
+    let engine = Engine::new(&config)?;
+    let component = Component::from_file(&engine, component_path)?;
+    let mut linker = Linker::new(&engine);
+    wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+    wasmtime_wasi::p3::add_to_linker(&mut linker)?;
+    let mut root = linker.root();
+    for (name, item) in component.component_type().imports(&engine) {
+        if let ComponentItem::ComponentInstance(imported) = item.ty {
+            define_mock_import(name, &engine, &mut root, &imported)?;
+        }
+    }
+    drop(root);
+    let mut store = Store::new(
+        &engine,
+        Host {
+            ctx: WasiCtxBuilder::new().build(),
+            table: ResourceTable::new(),
+        },
+    );
+    let instance = linker.instantiate_async(&mut store, &component).await?;
+    for name in ["run-direct", "run-detached"] {
+        let run = instance.get_typed_func::<(), (String,)>(&mut store, name)?;
+        let (value,) = tokio::time::timeout(
+            Duration::from_secs(2),
+            store.run_concurrent(async |accessor| run.call_concurrent(accessor, ()).await),
+        )
+        .await
+        .map_err(|_| anyhow!("{name} timed out before returning stdout"))???;
+        if value != "done" {
+            return Err(anyhow!("{name} returned unexpected value {value:?}"));
+        }
+    }
+
+    let run = instance.get_typed_func::<(), (bool,)>(&mut store, "reader-drop-is-observed")?;
+    let (reader_drop_is_observed,) = tokio::time::timeout(
+        Duration::from_secs(2),
+        store.run_concurrent(async |accessor| run.call_concurrent(accessor, ()).await),
+    )
+    .await
+    .map_err(|_| anyhow!("reader-drop-is-observed timed out"))???;
+    if !reader_drop_is_observed {
+        return Err(anyhow!(
+            "stdout writes still reported success after the returned reader was dropped"
+        ));
+    }
+
+    Ok(())
+}
+"#,
+        )
+        .unwrap();
+        let runner_target_dir = golem_rust_path
+            .ancestors()
+            .nth(3)
+            .expect("golem-rust crate should be nested under the repository root")
+            .join("target");
+        let runner_build = Command::new("cargo")
+            .args(["build", "--quiet", "--manifest-path"])
+            .arg(root.join("runner/Cargo.toml"))
+            .env("CARGO_TARGET_DIR", &runner_target_dir)
+            .output()
+            .expect("failed to build wasmtime reproducer runner");
+        assert!(
+            runner_build.status.success(),
+            "reproducer runner failed to build\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&runner_build.stdout),
+            String::from_utf8_lossy(&runner_build.stderr),
+        );
+
+        let run = Command::new(runner_target_dir.join("debug/async-stdout-runner"))
+            .arg(&component)
+            .output()
+            .expect("failed to run reproducer component with wasmtime runner");
+        fs::remove_dir_all(&root).unwrap();
+
+        assert!(
+            run.status.success(),
+            "an async tool must return its stdout stream before the caller consumes it; invocation timed out or failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&run.stdout),
+            String::from_utf8_lossy(&run.stderr),
+        );
+    }
+
+    #[test]
+    fn generated_tool_client_requires_schema_decodable_error_type() {
+        let output = cargo_check_tool_crate(
+            "tool-client-error-schema-bound",
+            r#"
+use golem_rust::agentic::{ExtendedErrorCase, ToolBuildError, ToolErrorSchema};
+use golem_rust::{tool_definition, TypedSchemaValue};
+
+enum ManualError {
+    Failed,
+}
+
+impl ToolErrorSchema for ManualError {
+    fn error_cases() -> Result<Vec<ExtendedErrorCase>, ToolBuildError> {
+        Ok(Vec::new())
+    }
+
+    fn to_error_payload_value(&self) -> Result<TypedSchemaValue, String> {
+        todo!()
+    }
+
+    fn from_error_payload_value(_value: TypedSchemaValue) -> Result<Self, String> {
+        todo!()
+    }
+}
+
+#[tool_definition]
+trait ManualErrorTool {
+    fn run(&self) -> Result<(), ManualError>;
+}
+"#,
+        );
+
+        assert!(
+            !output.status.success(),
+            "a tool client error type that implements ToolErrorSchema but not Schema must fail to compile\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("Schema")
+                || stderr.contains("FromSchema")
+                || stderr.contains("IntoSchema"),
+            "expected the compile error to mention the schema decodability bound, got:\n{stderr}",
+        );
+    }
+
+    #[test]
+    fn bug_finder_tool_error_zero_field_payloadless_variants_compile() {
+        let output = cargo_check_tool_crate(
+            "tool-error-zero-field-payloadless-variants",
+            r#"
+use golem_rust::ToolError;
+
+#[derive(ToolError)]
+enum EmptyPayloadError {
+    #[tool_error(kind = "usage-error", exit_code = 2)]
+    EmptyTuple(),
+    #[tool_error(kind = "runtime-error", exit_code = 1)]
+    EmptyStruct {},
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "zero-field tuple/struct ToolError variants are parsed as payload-less and should compile\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn generated_tool_client_surface_shapes_compile() {
+        let output = cargo_check_tool_crate(
+            "typed-tool-client-surface-shapes",
+            r#"
+use std::convert::Infallible;
+use std::future::Future;
+use golem_rust::{tool_definition, ToolError};
+
+#[derive(ToolError)]
+enum GrepError {
+    #[tool_error(kind = "usage-error", exit_code = 2)]
+    BadPattern(String),
+}
+
+#[derive(ToolError)]
+enum RemoteError {
+    #[tool_error(kind = "runtime-error", exit_code = 1)]
+    Failed(String),
+}
+
+#[tool_definition]
+trait Grep {
+    #[arg(case_sensitive = "global", short = 'i', kind = "flag")]
+    #[arg(pattern = "positional")]
+    #[arg(files = "tail", accepts_stdio = true)]
+    fn grep(
+        &self,
+        case_sensitive: bool,
+        pattern: String,
+        files: Vec<String>,
+    ) -> Result<Vec<String>, GrepError>;
+}
+
+#[tool_definition]
+trait StreamTool {
+    fn copy(
+        &self,
+        input: golem_rust::agentic::InputStream,
+        output: golem_rust::agentic::OutputStream,
+    ) -> Result<String, RemoteError>;
+}
+
+#[tool_definition]
+trait PlainReturnTool {
+    fn version(&self) -> String;
+}
+
+#[tool_definition]
+trait Remote {
+    fn add(&self, verbose: bool, name: String, url: String) -> Result<(), RemoteError>;
+}
+
+struct RemoteSubtree;
+
+#[tool_definition]
+trait Git {
+    #[command(subtree = Remote)]
+    fn remote(&self, verbose: bool) -> RemoteSubtree;
+}
+
+fn assert_future_output<F, T>(_future: F)
+where
+    F: Future<Output = T>,
+{
+}
+
+fn check_grep_client_shape() {
+    let client = GrepClient::default();
+    assert_future_output::<_, Result<Vec<String>, golem_rust::agentic::ToolError<GrepError>>>(
+        client.grep(true, "needle".to_string(), vec!["src/lib.rs".to_string()]),
+    );
+}
+
+fn check_plain_return_uses_infallible_tool_error() {
+    let client = PlainReturnToolClient::default();
+    assert_future_output::<_, Result<String, golem_rust::agentic::ToolError<Infallible>>>(
+        client.version(),
+    );
+}
+
+fn check_stdout_is_returned_not_passed(
+    client: &StreamToolClient,
+    input: golem_rust::agentic::InputStream,
+    result: golem_rust::agentic::InvocationResult,
+) {
+    assert_future_output::<_, Result<(String, golem_rust::agentic::InputStream), golem_rust::agentic::ToolError<RemoteError>>>(
+        client.copy(input),
+    );
+    let _: Option<golem_rust::agentic::InputStream> = result.stdout;
+}
+
+fn check_subtree_client_shape() {
+    let remote = GitClient::default().remote(true);
+    assert_future_output::<_, Result<(), golem_rust::agentic::ToolError<RemoteError>>>(
+        remote.add(
+            "origin".to_string(),
+            "https://example.invalid/repo.git".to_string(),
+        ),
+    );
+
+    assert_future_output::<_, Result<(), golem_rust::agentic::ToolError<RemoteError>>>(
+        RemoteClient::default().add(
+            true,
+            "upstream".to_string(),
+            "https://example.invalid/upstream.git".to_string(),
+        ),
+    );
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "typed tool clients should expose awaitable methods with typed errors, stdout-in-result, stdin params, and subtree clients; cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_omits_alias_captured_global() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-omits-alias-captured-global",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Child {
+    fn leaf(&self, format: u32, name: String) -> String;
+}
+
+struct ChildSubtree;
+
+#[tool_definition]
+trait Parent {
+    #[arg(count = "global", aliases = ["format"])]
+    #[command(subtree = Child)]
+    fn child(&self, count: u32) -> ChildSubtree;
+}
+
+fn check_grafted_client_uses_captured_alias() {
+    let child = ParentClient::default().child(7);
+    let _ = child.leaf("alice".to_string());
+}
+
+fn check_standalone_child_keeps_full_signature() {
+    let _ = ChildClient::default().leaf(7, "alice".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "grafted typed clients should omit child parameters captured by an inherited global alias, while standalone child clients keep the full signature\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_omits_non_first_alias_captured_global() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-omits-non-first-alias-captured-global",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Child {
+    fn leaf(&self, format: u32, name: String) -> String;
+}
+
+struct ChildSubtree;
+
+#[tool_definition]
+trait Parent {
+    #[arg(count = "global", aliases = ["level", "format"])]
+    #[command(subtree = Child)]
+    fn child(&self, count: u32) -> ChildSubtree;
+}
+
+fn check_grafted_client_uses_captured_non_first_alias() {
+    let child = ParentClient::default().child(7);
+    let _ = child.leaf("alice".to_string());
+}
+
+fn check_standalone_child_keeps_full_signature() {
+    let _ = ChildClient::default().leaf(7, "alice".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "grafted typed clients should omit child parameters captured by any inherited global alias, not only the first alias, while standalone child clients keep the full signature\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_omits_child_root_alias_captured_by_primary_global() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-omits-child-root-alias-captured-by-primary-global",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Child {
+    #[arg(count = "global", aliases = ["format"])]
+    fn child(&self, count: u32, target: String) -> String;
+
+    fn leaf(&self, format: u32, name: String) -> String;
+}
+
+struct ChildSubtree;
+
+#[tool_definition]
+trait Parent {
+    #[arg(count = "global")]
+    #[command(subtree = Child)]
+    fn child(&self, count: u32) -> ChildSubtree;
+}
+
+fn check_grafted_client_uses_captured_child_root_alias() {
+    let child = ParentClient::default().child(7);
+    let _ = child.leaf("alice".to_string());
+}
+
+fn check_standalone_child_keeps_full_signature() {
+    let _ = ChildClient::default().leaf(7, "alice".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "grafted typed clients should omit child leaf parameters captured via the child root global's alias when the parent supplies that canonical global\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_omits_dispatcher_param_canonicalized_by_parent_alias() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-omits-dispatcher-param-canonicalized-by-parent-alias",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Child {
+    fn leaf(&self, count: u32, name: String) -> String;
+}
+
+struct ChildSubtree;
+
+#[tool_definition]
+trait ParentAlias {
+    #[arg(count = "global", aliases = ["format"])]
+    fn parent_alias(&self, count: u32, target: String) -> String;
+
+    #[command(subtree = Child)]
+    fn child(&self, format: u32) -> ChildSubtree;
+}
+
+fn check_grafted_client_uses_dispatcher_alias_as_inherited_count() {
+    let child = ParentAliasClient::default().child(7);
+    let _ = child.leaf("alice".to_string());
+}
+
+fn check_standalone_child_keeps_full_signature() {
+    let _ = ChildClient::default().leaf(7, "alice".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "a subtree dispatcher parameter captured via a parent root-global alias should omit child parameters matching the canonical inherited global\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_omits_parent_root_global_without_dispatcher_param() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-omits-parent-root-global-without-dispatcher-param",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Child {
+    fn leaf(&self, verbose: bool, name: String) -> String;
+}
+
+struct ChildSubtree;
+
+#[tool_definition]
+trait Parent {
+    #[arg(verbose = "global", kind = "flag")]
+    fn parent(&self, verbose: bool, target: String) -> String;
+
+    #[command(subtree = Child)]
+    fn child(&self) -> ChildSubtree;
+}
+
+fn check_grafted_client_uses_root_inherited_global() {
+    let child = ParentClient::default().child(true);
+    let _ = child.leaf("alice".to_string());
+}
+
+fn check_standalone_child_keeps_full_signature() {
+    let _ = ChildClient::default().leaf(true, "alice".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "grafted typed clients should omit child parameters captured by globals inherited from the parent root command, even when the subtree dispatcher has no own parameters\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_keeps_leaf_param_when_child_root_alias_is_deprojected() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-keeps-leaf-param-when-child-root-alias-is-deprojected",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Child {
+    #[arg(format = "global", aliases = ["count"])]
+    fn child(&self, format: u32, target: String) -> String;
+
+    fn leaf(&self, format: u32, name: String) -> String;
+}
+
+struct ChildSubtree;
+
+#[tool_definition]
+trait Parent {
+    #[arg(count = "global")]
+    #[command(subtree = Child)]
+    fn child(&self, count: u32) -> ChildSubtree;
+}
+
+fn check_deprojected_child_root_alias_does_not_omit_primary_leaf_param() {
+    let child = ParentClient::default().child(7);
+    let _ = child.leaf(9, "alice".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "when a child root global is de-projected through an alias to the inherited `count`, its primary `format` surface must not omit unrelated child leaf parameters\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_omits_non_prefix_captured_global() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-omits-non-prefix-captured-global",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Child {
+    fn leaf(&self, name: String, verbose: bool) -> String;
+}
+
+struct ChildSubtree;
+
+#[tool_definition]
+trait Parent {
+    #[command(subtree = Child)]
+    fn child(&self, verbose: bool) -> ChildSubtree;
+}
+
+fn check_grafted_client_uses_captured_non_prefix_global() {
+    let child = ParentClient::default().child(true);
+    let _ = child.leaf("alice".to_string());
+}
+
+fn check_standalone_child_keeps_full_signature() {
+    let _ = ChildClient::default().leaf("alice".to_string(), true);
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "grafted typed clients should omit inherited globals regardless of where the matching child parameter appears, while standalone child clients keep the full signature\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_wide_child_surface_still_omits_captured_global() {
+        let mut source = String::from("use golem_rust::tool_definition;\n\n");
+        source.push_str("#[tool_definition]\ntrait Child {\n");
+        source.push_str("    fn leaf(&self,\n");
+        for i in 0..17 {
+            source.push_str(&format!("        g{i}: String,\n"));
+        }
+        source.push_str("        value: String,\n    ) -> String;\n}\n\n");
+        source.push_str("struct ChildSubtree;\n\n");
+        source.push_str("#[tool_definition]\ntrait Parent {\n");
+        source.push_str("    #[arg(g0 = \"global\")]\n");
+        source.push_str("    #[command(subtree = Child)]\n");
+        source.push_str("    fn child(&self, g0: String) -> ChildSubtree;\n");
+        source.push_str("}\n\n");
+        source.push_str("fn check_grafted_client_uses_captured_global() {\n");
+        source.push_str("    let child = ParentClient::default().child(\"zero\".to_string());\n");
+        source.push_str("    let _ = child.leaf(\n");
+        for i in 1..17 {
+            source.push_str(&format!("        \"g{i}\".to_string(),\n"));
+        }
+        source.push_str("        \"value\".to_string(),\n    );\n}\n\n");
+        source.push_str("fn check_standalone_child_keeps_full_signature() {\n");
+        source.push_str("    let _ = ChildClient::default().leaf(\n");
+        for i in 0..17 {
+            source.push_str(&format!("        \"g{i}\".to_string(),\n"));
+        }
+        source.push_str("        \"value\".to_string(),\n    );\n}\n");
+
+        let output = cargo_check_tool_crate(
+            "subtree-client-wide-child-surface-omits-captured-global",
+            &source,
+        );
+
+        assert!(
+            output.status.success(),
+            "bounded omitted-surface generation should still compile valid grafted clients for wide child surfaces and omit the captured inherited global\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_wide_child_surface_omits_two_captured_globals() {
+        let mut source = String::from("use golem_rust::tool_definition;\n\n");
+        source.push_str("#[tool_definition]\ntrait Child {\n");
+        source.push_str("    fn leaf(&self,\n");
+        for i in 0..17 {
+            source.push_str(&format!("        g{i}: String,\n"));
+        }
+        source.push_str("        value: String,\n    ) -> String;\n}\n\n");
+        source.push_str("struct ChildSubtree;\n\n");
+        source.push_str("#[tool_definition]\ntrait Parent {\n");
+        source.push_str("    #[arg(g0 = \"global\")]\n");
+        source.push_str("    #[arg(g1 = \"global\")]\n");
+        source.push_str("    #[command(subtree = Child)]\n");
+        source.push_str("    fn child(&self, g0: String, g1: String) -> ChildSubtree;\n");
+        source.push_str("}\n\n");
+        source.push_str("fn check_grafted_client_uses_captured_globals() {\n");
+        source.push_str("    let child = ParentClient::default().child(\"zero\".to_string(), \"one\".to_string());\n");
+        source.push_str("    let _ = child.leaf(\n");
+        for i in 2..17 {
+            source.push_str(&format!("        \"g{i}\".to_string(),\n"));
+        }
+        source.push_str("        \"value\".to_string(),\n    );\n}\n\n");
+        source.push_str("fn check_standalone_child_keeps_full_signature() {\n");
+        source.push_str("    let _ = ChildClient::default().leaf(\n");
+        for i in 0..17 {
+            source.push_str(&format!("        \"g{i}\".to_string(),\n"));
+        }
+        source.push_str("        \"value\".to_string(),\n    );\n}\n");
+
+        let output = cargo_check_tool_crate(
+            "subtree-client-wide-child-surface-omits-two-captured-globals",
+            &source,
+        );
+
+        assert!(
+            output.status.success(),
+            "bounded omitted-surface generation should still compile valid grafted clients for wide child surfaces and omit all captured inherited globals\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_omits_reversed_order_captured_globals() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-omits-reversed-order-captured-globals",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Child {
+    fn leaf(&self, g0: String, g1: String, value: String) -> String;
+}
+
+struct ChildSubtree;
+
+#[tool_definition]
+trait Parent {
+    #[arg(g1 = "global")]
+    #[arg(g0 = "global")]
+    #[command(subtree = Child)]
+    fn child(&self, g1: String, g0: String) -> ChildSubtree;
+}
+
+fn check_grafted_client_uses_captured_globals_regardless_of_parent_order() {
+    let child = ParentClient::default().child("one".to_string(), "zero".to_string());
+    let _ = child.leaf("value".to_string());
+}
+
+fn check_standalone_child_keeps_full_signature() {
+    let _ = ChildClient::default().leaf(
+        "zero".to_string(),
+        "one".to_string(),
+        "value".to_string(),
+    );
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "grafted typed clients should omit all inherited globals regardless of whether the parent captures them in child parameter order; cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn client_duplicate_canonical_name_preserves_last_staged_value() {
+        let output = cargo_test_tool_crate_with_renamed_sdk(
+            "client-duplicate-canonical-name-last-wins",
+            r#"
+use std::cell::RefCell;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+
+thread_local! {
+    static LAST_INPUT: RefCell<Option<golem_rust::TypedSchemaValue>> = const { RefCell::new(None) };
+}
+
+mod golem_rust {
+    pub use golem_rust_actual::*;
+
+    pub mod golem_agentic {
+        pub use golem_rust_actual::golem_agentic::*;
+
+        pub mod golem {
+            pub use golem_rust_actual::golem_agentic::golem::*;
+
+            pub mod tool {
+                pub use golem_rust_actual::golem_agentic::golem::tool::*;
+
+                pub mod host {
+                    #[derive(Clone, Debug)]
+                    pub struct ToolRpc;
+
+                    impl ToolRpc {
+                        pub fn new(_name: &str) -> Self {
+                            Self
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub mod agentic {
+        pub use golem_rust_actual::agentic::*;
+
+        pub async fn invoke_and_await_infallible(
+            _rpc: &crate::golem_rust::golem_agentic::golem::tool::host::ToolRpc,
+            _command_path: &[String],
+            input: &crate::golem_rust::TypedSchemaValue,
+            _stdin: Option<crate::golem_rust::agentic::InputStream>,
+        ) -> Result<InvocationResult, ToolError<std::convert::Infallible>> {
+            crate::LAST_INPUT.with(|slot| *slot.borrow_mut() = Some(input.clone()));
+            Ok(InvocationResult {
+                result: Some(
+                    crate::golem_rust::IntoTypedSchemaValue::into_typed_schema_value(
+                        &"ok".to_string(),
+                    )
+                    .unwrap(),
+                ),
+                stdout: None,
+            })
+        }
+    }
+}
+
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait MultiAliasClientInput {
+    #[arg(count = "global", aliases = ["format", "level"])]
+    fn multi_alias_client_input(&self, count: u32, target: String);
+
+    fn leaf(&self, format: u32, level: u32, name: String) -> String;
+}
+
+fn block_on_ready<F: Future>(future: F) -> F::Output {
+    fn no_op(_: *const ()) {}
+    fn clone(_: *const ()) -> RawWaker {
+        RawWaker::new(std::ptr::null(), &VTABLE)
+    }
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
+    let waker = unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) };
+    let mut context = Context::from_waker(&waker);
+    let mut future = std::pin::pin!(future);
+    match Future::poll(Pin::as_mut(&mut future), &mut context) {
+        Poll::Ready(output) => output,
+        Poll::Pending => panic!("future unexpectedly pending"),
+    }
+}
+
+#[test]
+fn duplicate_canonical_param_uses_last_staged_value() {
+    let value = block_on_ready(
+        MultiAliasClientInputClient::default().leaf(1, 2, "alice".to_string()),
+    )
+    .expect("fake RPC returns a successful String result");
+    assert_eq!(value, "ok");
+
+    let input = LAST_INPUT
+        .with(|slot| slot.borrow_mut().take())
+        .expect("client invoked fake RPC");
+    let golem_rust::SchemaValue::Record { fields } = input.value() else {
+        panic!("expected client input to be a record");
+    };
+
+    assert_eq!(
+        fields[0],
+        golem_rust::SchemaValue::U32(2),
+        "when two client arguments map to the same canonical inherited global, the generated client must preserve the pre-optimization BTreeMap::insert overwrite semantics",
+    );
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "generated clients should preserve the pre-optimization last-write-wins behavior when multiple arguments map to the same canonical input name\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn client_duplicate_canonical_name_preserves_last_staged_value_after_prior_removal() {
+        let output = cargo_test_tool_crate_with_renamed_sdk(
+            "client-duplicate-canonical-name-last-wins-after-prior-removal",
+            r#"
+use std::cell::RefCell;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+
+thread_local! {
+    static LAST_INPUT: RefCell<Option<golem_rust::TypedSchemaValue>> = const { RefCell::new(None) };
+}
+
+mod golem_rust {
+    pub use golem_rust_actual::*;
+
+    pub mod golem_agentic {
+        pub use golem_rust_actual::golem_agentic::*;
+
+        pub mod golem {
+            pub use golem_rust_actual::golem_agentic::golem::*;
+
+            pub mod tool {
+                pub use golem_rust_actual::golem_agentic::golem::tool::*;
+
+                pub mod host {
+                    #[derive(Clone, Debug)]
+                    pub struct ToolRpc;
+
+                    impl ToolRpc {
+                        pub fn new(_name: &str) -> Self {
+                            Self
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub mod agentic {
+        pub use golem_rust_actual::agentic::*;
+
+        pub async fn invoke_and_await_infallible(
+            _rpc: &crate::golem_rust::golem_agentic::golem::tool::host::ToolRpc,
+            _command_path: &[String],
+            input: &crate::golem_rust::TypedSchemaValue,
+            _stdin: Option<crate::golem_rust::agentic::InputStream>,
+        ) -> Result<InvocationResult, ToolError<std::convert::Infallible>> {
+            crate::LAST_INPUT.with(|slot| *slot.borrow_mut() = Some(input.clone()));
+            Ok(InvocationResult {
+                result: Some(
+                    crate::golem_rust::IntoTypedSchemaValue::into_typed_schema_value(
+                        &"ok".to_string(),
+                    )
+                    .unwrap(),
+                ),
+                stdout: None,
+            })
+        }
+    }
+}
+
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait SwapRemoveLastWins {
+    #[arg(first = "global")]
+    #[arg(count = "global", aliases = ["format", "level", "depth"])]
+    fn swap_remove_last_wins(&self, first: u32, count: u32, target: String);
+
+    fn leaf(&self, name: String, format: u32, level: u32, depth: u32) -> String;
+}
+
+fn block_on_ready<F: Future>(future: F) -> F::Output {
+    fn no_op(_: *const ()) {}
+    fn clone(_: *const ()) -> RawWaker {
+        RawWaker::new(std::ptr::null(), &VTABLE)
+    }
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
+    let waker = unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) };
+    let mut context = Context::from_waker(&waker);
+    let mut future = std::pin::pin!(future);
+    match Future::poll(Pin::as_mut(&mut future), &mut context) {
+        Poll::Ready(output) => output,
+        Poll::Pending => panic!("future unexpectedly pending"),
+    }
+}
+
+#[test]
+fn duplicate_canonical_param_uses_last_staged_value_after_prior_removal() {
+    let value = block_on_ready(
+        SwapRemoveLastWinsClient::default().leaf(
+            99,
+            "alice".to_string(),
+            1,
+            2,
+            3,
+        ),
+    )
+    .expect("fake RPC returns a successful String result");
+    assert_eq!(value, "ok");
+
+    let input = LAST_INPUT
+        .with(|slot| slot.borrow_mut().take())
+        .expect("client invoked fake RPC");
+    let golem_rust::SchemaValue::Record { fields } = input.value() else {
+        panic!("expected client input to be a record");
+    };
+
+    assert_eq!(fields[0], golem_rust::SchemaValue::U32(99));
+    assert_eq!(
+        fields[1],
+        golem_rust::SchemaValue::U32(3),
+        "last staged duplicate canonical value must still win after packing an earlier canonical field",
+    );
+    assert_eq!(
+        fields[2],
+        golem_rust::SchemaValue::String("alice".to_string()),
+    );
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "generated clients should preserve last-write-wins when packing an earlier canonical field removes a staged value before a later duplicate canonical field\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_exposes_nested_subtree_methods() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-exposes-nested-subtree-methods",
+            r#"
+use golem_rust::{tool_definition, ToolError};
+
+#[derive(ToolError)]
+enum RemoteError {
+    #[tool_error(kind = "runtime-error", exit_code = 1)]
+    Failed(String),
+}
+
+#[tool_definition]
+trait Inner {
+    fn leaf(&self, verbose: bool, name: String) -> Result<(), RemoteError>;
+}
+
+struct InnerSubtree;
+struct MidSubtree;
+
+#[tool_definition]
+trait Mid {
+    #[command(subtree = Inner)]
+    fn inner(&self) -> InnerSubtree;
+}
+
+#[tool_definition]
+trait Outer {
+    #[command(subtree = Mid)]
+    fn mid(&self, verbose: bool) -> MidSubtree;
+}
+
+fn check_nested_grafted_client_shape() {
+    let mid = OuterClient::default().mid(true);
+    let inner = mid.inner();
+    let _ = inner.leaf("alice".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "typed clients for valid nested subtree descriptors should expose nested subtree wrapper methods and keep inherited captures across levels\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn subtree_client_reused_nested_subtree_wrappers_do_not_duplicate_impls() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-reused-nested-subtree-wrappers",
+            r#"
+use golem_rust::{tool_definition, ToolError};
+
+#[derive(ToolError)]
+enum RemoteError {
+    #[tool_error(kind = "runtime-error", exit_code = 1)]
+    Failed(String),
+}
+
+#[tool_definition]
+trait Inner {
+    fn leaf(&self, verbose: bool, name: String) -> Result<(), RemoteError>;
+}
+
+struct InnerSubtree;
+struct MidSubtree;
+
+#[tool_definition]
+trait Mid {
+    #[command(subtree = Inner)]
+    fn inner(&self) -> InnerSubtree;
+}
+
+#[tool_definition]
+trait FirstOuter {
+    #[command(subtree = Mid)]
+    fn mid(&self, verbose: bool) -> MidSubtree;
+}
+
+#[tool_definition]
+trait SecondOuter {
+    #[command(subtree = Mid)]
+    fn mid(&self, verbose: bool) -> MidSubtree;
+}
+
+fn check_reused_nested_grafted_client_shape() {
+    let first_inner = FirstOuterClient::default().mid(true).inner();
+    let _ = first_inner.leaf("alice".to_string());
+
+    let second_inner = SecondOuterClient::default().mid(false).inner();
+    let _ = second_inner.leaf("bob".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "reusing the same intermediate subtree under multiple parents must not emit duplicate nested wrapper impls\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_subtree_client_supports_sparse_nested_capture_set() {
+        let output = cargo_check_tool_crate(
+            "subtree-client-sparse-nested-capture-set",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Inner {
+    fn leaf(&self, verbose: bool, name: String, mode: u32) -> String;
+}
+
+struct InnerSubtree;
+struct MidSubtree;
+
+#[tool_definition]
+trait Mid {
+    #[command(subtree = Inner)]
+    fn inner(&self, mode: u32) -> InnerSubtree;
+}
+
+#[tool_definition]
+trait Outer {
+    #[command(subtree = Mid)]
+    fn mid(&self, verbose: bool) -> MidSubtree;
+}
+
+fn check_sparse_nested_capture_set() {
+    let mid = OuterClient::default().mid(true);
+    let inner = mid.inner(7);
+    let _ = inner.leaf("alice".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "nested grafted typed clients should expose leaf methods when inherited globals captured at different levels form a sparse child-parameter subset; cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[tool_definition]
+    trait ChildRoundTrip {
+        fn leaf(&self, verbose: bool, name: String) -> String;
+    }
+
+    struct ChildRoundTripSubtree;
+    struct ChildRoundTripImpl;
+
+    #[tool_implementation]
+    impl ChildRoundTrip for ChildRoundTripImpl {
+        fn leaf(&self, verbose: bool, name: String) -> String {
+            format!("child:{verbose}:{name}")
+        }
+    }
+
+    #[tool_definition]
+    trait ParentRoundTrip {
+        #[command(name = "kid", aliases = ["k"], subtree = ChildRoundTrip)]
+        fn child_round_trip(&self, verbose: bool) -> ChildRoundTripSubtree;
+    }
+
+    struct ParentRoundTripImpl;
+
+    #[tool_implementation]
+    impl ParentRoundTrip for ParentRoundTripImpl {
+        fn child_round_trip(&self, _verbose: bool) -> ChildRoundTripSubtree {
+            ChildRoundTripSubtree
+        }
+    }
+
+    #[test]
+    async fn guest_invoke_routes_grafted_subtrees_to_child_invoker() {
+        let tool = <ParentRoundTripImpl as ParentRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("parent-round-trip")
+            .expect("parent tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["kid", "leaf"],
+            vec![
+                golem_rust::SchemaValue::Bool(true),
+                golem_rust::SchemaValue::String("bob".to_string()),
+            ],
+        );
+
+        let result = invoker(
+            vec!["kid".to_string(), "leaf".to_string()],
+            input,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect("grafted subtree invocation succeeds");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "child:true:bob");
+    }
+
+    #[test]
+    async fn guest_invoke_routes_grafted_subtrees_through_command_aliases() {
+        let tool = <ParentRoundTripImpl as ParentRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("parent-round-trip")
+            .expect("parent tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["k", "leaf"],
+            vec![
+                golem_rust::SchemaValue::Bool(true),
+                golem_rust::SchemaValue::String("aliased".to_string()),
+            ],
+        );
+
+        let result = invoker(
+            vec!["k".to_string(), "leaf".to_string()],
+            input,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect("grafted subtree invocation succeeds through command aliases");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "child:true:aliased");
+    }
+
+    #[tool_definition]
+    trait AliasChildRoundTrip {
+        fn leaf(&self, format: u32, name: String) -> String;
+    }
+
+    struct AliasChildRoundTripSubtree;
+    struct AliasChildRoundTripImpl;
+
+    #[tool_implementation]
+    impl AliasChildRoundTrip for AliasChildRoundTripImpl {
+        fn leaf(&self, format: u32, name: String) -> String {
+            format!("child:{format}:{name}")
+        }
+    }
+
+    #[tool_definition]
+    trait AliasParentSubtreeRoundTrip {
+        #[arg(count = "global", aliases = ["format"])]
+        #[command(subtree = AliasChildRoundTrip)]
+        fn alias_child_round_trip(&self, count: u32) -> AliasChildRoundTripSubtree;
+    }
+
+    struct AliasParentSubtreeRoundTripImpl;
+
+    #[tool_implementation]
+    impl AliasParentSubtreeRoundTrip for AliasParentSubtreeRoundTripImpl {
+        fn alias_child_round_trip(&self, _count: u32) -> AliasChildRoundTripSubtree {
+            AliasChildRoundTripSubtree
+        }
+    }
+
+    #[test]
+    async fn guest_invoke_maps_alias_deprojected_subtree_globals_to_child_parameters() {
+        let tool =
+            <AliasParentSubtreeRoundTripImpl as AliasParentSubtreeRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("alias-parent-subtree-round-trip")
+            .expect("parent tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["alias-child-round-trip", "leaf"],
+            vec![
+                golem_rust::SchemaValue::U32(7),
+                golem_rust::SchemaValue::String("aliased-subtree".to_string()),
+            ],
+        );
+
+        let result = invoker(
+            vec!["alias-child-round-trip".to_string(), "leaf".to_string()],
+            input,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect(
+            "guest invocation maps an inherited subtree global alias back to the child parameter",
+        );
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "child:7:aliased-subtree");
+    }
+
+    #[tool_definition]
+    trait EarlierGlobalAliasParentSubtreeRoundTrip {
+        #[arg(profile = "global")]
+        fn earlier_global_alias_parent_subtree_round_trip(
+            &self,
+            profile: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[arg(count = "global", aliases = ["format"])]
+        #[command(name = "alias-child-round-trip", aliases = ["alias-child"], subtree = AliasChildRoundTrip)]
+        fn alias_child(&self, count: u32) -> AliasChildRoundTripSubtree;
+    }
+
+    struct EarlierGlobalAliasParentSubtreeRoundTripImpl;
+
+    #[tool_implementation]
+    impl EarlierGlobalAliasParentSubtreeRoundTrip for EarlierGlobalAliasParentSubtreeRoundTripImpl {
+        fn earlier_global_alias_parent_subtree_round_trip(
+            &self,
+            _profile: u32,
+            _target: String,
+        ) -> Result<(), RemoteError> {
+            Ok(())
+        }
+
+        fn alias_child(&self, _count: u32) -> AliasChildRoundTripSubtree {
+            AliasChildRoundTripSubtree
+        }
+    }
+
+    #[test]
+    async fn guest_invoke_uses_alias_mapping_not_position_for_subtree_globals() {
+        let tool = <EarlierGlobalAliasParentSubtreeRoundTripImpl as EarlierGlobalAliasParentSubtreeRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("earlier-global-alias-parent-subtree-round-trip")
+            .expect("parent tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["alias-child", "leaf"],
+            vec![
+                golem_rust::SchemaValue::U32(99),
+                golem_rust::SchemaValue::U32(7),
+                golem_rust::SchemaValue::String("aliased-subtree".to_string()),
+            ],
+        );
+
+        let result = invoker(
+            vec!["alias-child".to_string(), "leaf".to_string()],
+            input,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect("guest invocation uses alias mapping instead of same-typed absolute position");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "child:7:aliased-subtree");
+    }
+
+    #[tool_definition]
+    trait ReverseAliasChildRoundTrip {
+        #[arg(count = "option", aliases = ["format"])]
+        fn leaf(&self, count: u32, name: String) -> String;
+    }
+
+    struct ReverseAliasChildRoundTripSubtree;
+    struct ReverseAliasChildRoundTripImpl;
+
+    #[tool_implementation]
+    impl ReverseAliasChildRoundTrip for ReverseAliasChildRoundTripImpl {
+        fn leaf(&self, count: u32, name: String) -> String {
+            format!("child:{count}:{name}")
+        }
+    }
+
+    #[tool_definition]
+    trait ReverseAliasParentSubtreeRoundTrip {
+        #[arg(format = "global")]
+        #[command(subtree = ReverseAliasChildRoundTrip)]
+        fn reverse_alias_child_round_trip(&self, format: u32) -> ReverseAliasChildRoundTripSubtree;
+    }
+
+    struct ReverseAliasParentSubtreeRoundTripImpl;
+
+    #[tool_implementation]
+    impl ReverseAliasParentSubtreeRoundTrip for ReverseAliasParentSubtreeRoundTripImpl {
+        fn reverse_alias_child_round_trip(
+            &self,
+            _format: u32,
+        ) -> ReverseAliasChildRoundTripSubtree {
+            ReverseAliasChildRoundTripSubtree
+        }
+    }
+
+    #[test]
+    async fn guest_invoke_matches_child_aliases_for_subtree_globals() {
+        let tool = <ReverseAliasParentSubtreeRoundTripImpl as ReverseAliasParentSubtreeRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("reverse-alias-parent-subtree-round-trip")
+            .expect("parent tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["reverse-alias-child-round-trip", "leaf"],
+            vec![
+                golem_rust::SchemaValue::U32(7),
+                golem_rust::SchemaValue::String("reverse-alias".to_string()),
+            ],
+        );
+
+        let result = invoker(
+            vec![
+                "reverse-alias-child-round-trip".to_string(),
+                "leaf".to_string(),
+            ],
+            input,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect("guest invocation maps a child alias back to the inherited parent global");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "child:7:reverse-alias");
+    }
+
+    #[tool_definition]
+    trait ImplParameterNameRoundTrip {
+        fn leaf(&self, verbose: bool, name: String) -> String;
+    }
+
+    struct ImplParameterNameRoundTripImpl;
+
+    #[tool_implementation]
+    impl ImplParameterNameRoundTrip for ImplParameterNameRoundTripImpl {
+        fn leaf(&self, v: bool, n: String) -> String {
+            format!("{v}:{n}")
+        }
+    }
+
+    #[test]
+    async fn guest_invoke_uses_trait_parameter_names_not_impl_parameter_names() {
+        let tool =
+            <ImplParameterNameRoundTripImpl as ImplParameterNameRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("impl-parameter-name-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["leaf"],
+            vec![
+                golem_rust::SchemaValue::String("renamed".to_string()),
+                golem_rust::SchemaValue::Bool(true),
+            ],
+        );
+
+        let result = invoker(vec!["leaf".to_string()], input, None, anonymous_principal())
+            .await
+            .expect("guest invocation succeeds when impl parameter names differ from the trait");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "true:renamed");
+    }
+
+    #[tool_definition]
+    trait AliasInheritedGlobalRoundTrip {
+        #[arg(count = "global", aliases = ["format"])]
+        fn alias_inherited_global_round_trip(
+            &self,
+            count: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        fn leaf(&self, format: u32, name: String) -> String;
+    }
+
+    struct AliasInheritedGlobalRoundTripImpl;
+
+    #[tool_implementation]
+    impl AliasInheritedGlobalRoundTrip for AliasInheritedGlobalRoundTripImpl {
+        fn alias_inherited_global_round_trip(
+            &self,
+            _count: u32,
+            _target: String,
+        ) -> Result<(), RemoteError> {
+            Ok(())
+        }
+
+        fn leaf(&self, format: u32, name: String) -> String {
+            format!("{format}:{name}")
+        }
+    }
+
+    #[test]
+    async fn guest_invoke_maps_alias_deprojected_inherited_globals_to_method_parameters() {
+        let tool =
+            <AliasInheritedGlobalRoundTripImpl as AliasInheritedGlobalRoundTrip>::__tool_descriptor(
+            );
+        let invoker = get_tool_invoker_by_name("alias-inherited-global-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["leaf"],
+            vec![
+                golem_rust::SchemaValue::U32(7),
+                golem_rust::SchemaValue::String("aliased-global".to_string()),
+            ],
+        );
+
+        let result = invoker(vec!["leaf".to_string()], input, None, anonymous_principal())
+            .await
+            .expect("guest invocation maps an inherited global alias back to the method parameter");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "7:aliased-global");
+    }
+
+    #[tool_definition]
+    trait ReverseAliasInheritedGlobalRoundTrip {
+        #[arg(format = "global")]
+        fn reverse_alias_inherited_global_round_trip(
+            &self,
+            format: u32,
+            target: String,
+        ) -> Result<(), RemoteError>;
+
+        #[arg(count = "option", aliases = ["format"])]
+        fn leaf(&self, count: u32, name: String) -> String;
+    }
+
+    struct ReverseAliasInheritedGlobalRoundTripImpl;
+
+    #[tool_implementation]
+    impl ReverseAliasInheritedGlobalRoundTrip for ReverseAliasInheritedGlobalRoundTripImpl {
+        fn reverse_alias_inherited_global_round_trip(
+            &self,
+            _format: u32,
+            _target: String,
+        ) -> Result<(), RemoteError> {
+            Ok(())
+        }
+
+        fn leaf(&self, count: u32, name: String) -> String {
+            format!("{count}:{name}")
+        }
+    }
+
+    #[test]
+    async fn guest_invoke_matches_child_aliases_for_same_trait_inherited_globals() {
+        let tool = <ReverseAliasInheritedGlobalRoundTripImpl as ReverseAliasInheritedGlobalRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("reverse-alias-inherited-global-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["leaf"],
+            vec![
+                golem_rust::SchemaValue::U32(7),
+                golem_rust::SchemaValue::String("reverse-alias-global".to_string()),
+            ],
+        );
+
+        let result = invoker(vec!["leaf".to_string()], input, None, anonymous_principal())
+            .await
+            .expect("guest invocation maps a child alias back to the same-trait inherited global");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "7:reverse-alias-global");
+    }
+
+    #[tool_definition]
+    trait RootBodyAliasDoesNotDeprojectRoundTrip {
+        #[arg(count = "option", aliases = ["format"])]
+        fn root_body_alias_does_not_deproject_round_trip(
+            &self,
+            count: u32,
+        ) -> Result<(), RemoteError>;
+
+        fn leaf(&self, format: u32, name: String) -> String;
+    }
+
+    struct RootBodyAliasDoesNotDeprojectRoundTripImpl;
+
+    #[tool_implementation]
+    impl RootBodyAliasDoesNotDeprojectRoundTrip for RootBodyAliasDoesNotDeprojectRoundTripImpl {
+        fn root_body_alias_does_not_deproject_round_trip(
+            &self,
+            _count: u32,
+        ) -> Result<(), RemoteError> {
+            Ok(())
+        }
+
+        fn leaf(&self, format: u32, name: String) -> String {
+            format!("{format}:{name}")
+        }
+    }
+
+    #[test]
+    async fn guest_invoke_does_not_deproject_root_body_aliases() {
+        let tool = <RootBodyAliasDoesNotDeprojectRoundTripImpl as RootBodyAliasDoesNotDeprojectRoundTrip>::__tool_descriptor();
+        let invoker = get_tool_invoker_by_name("root-body-alias-does-not-deproject-round-trip")
+            .expect("tool implementation registers an invoker");
+        let input = encoded_input(
+            &tool,
+            &["leaf"],
+            vec![
+                golem_rust::SchemaValue::U32(7),
+                golem_rust::SchemaValue::String("leaf-value".to_string()),
+            ],
+        );
+
+        let result = invoker(vec!["leaf".to_string()], input, None, anonymous_principal())
+            .await
+            .expect("root body aliases are not inherited by sibling commands");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "7:leaf-value");
     }
 
     struct Meters;
@@ -3645,7 +6133,7 @@ impl BadTool for BadToolImpl {
             "stream-arg-attr",
             r#"
 use golem_rust::{tool_definition, tool_implementation, ToolError};
-use golem_rust::wasip2::io::streams::InputStream;
+use golem_rust::agentic::InputStream;
 
 #[derive(ToolError)]
 enum BadError {
@@ -3673,6 +6161,452 @@ impl BadTool for BadToolImpl {
         assert!(
             !output.status.success(),
             "a stdin/stdout stream is projected only from its type and any `#[arg]` field would be silently dropped, so it must be rejected, but cargo check succeeded\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_auto_injected_principal_rejects_arg_attributes_that_would_be_ignored() {
+        let output = cargo_check_tool_crate(
+            "principal-arg-attr",
+            r#"
+use golem_rust::{tool_definition, tool_implementation};
+
+#[tool_definition]
+trait BadTool {
+    #[arg(principal = "option")]
+    fn run(&self, principal: golem_rust::agentic::Principal, name: String) -> String;
+}
+
+struct BadToolImpl;
+
+#[tool_implementation]
+impl BadTool for BadToolImpl {
+    fn run(&self, _principal: golem_rust::agentic::Principal, name: String) -> String {
+        name
+    }
+}
+"#,
+        );
+
+        assert!(
+            !output.status.success(),
+            "an auto-injected Principal is projected only from its exact SDK/WIT type and any `#[arg]` field would be silently dropped, so it must be rejected, but cargo check succeeded\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn tool_client_accepts_native_stdin_stream() {
+        let output = cargo_check_tool_crate(
+            "tool-client-native-stdin",
+            r#"
+use golem_rust::agentic::{InputStream, invoke_and_await_infallible};
+use golem_rust::bindings::golem::tool::host::ToolRpc;
+
+fn forward_stdin(rpc: &ToolRpc, input: &golem_rust::TypedSchemaValue, stdin: InputStream) {
+    let _ = invoke_and_await_infallible(rpc, &[], input, Some(stdin));
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "tool client helpers must accept the same native stream type that tool definitions use, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn tool_client_allows_command_named_new() {
+        let output = cargo_check_tool_crate(
+            "tool-client-command-named-new",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Project {
+    fn new(&self, name: String) -> String;
+}
+
+fn build_client() {
+    let client = ProjectClient::default();
+    let _future = client.new("demo".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "a valid tool command named `new` must not collide with the generated client constructor, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_command_named_new_does_not_reserve_fallback_constructor_name() {
+        let output = cargo_check_tool_crate(
+            "tool-client-new-fallback-name-collision",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Project {
+    fn new(&self, name: String) -> String;
+    fn __golem_tool_client_new(&self, name: String) -> String;
+}
+
+fn build_client() {
+    let client = ProjectClient::default();
+    let _first = client.new("demo".to_string());
+    let _second = client.__golem_tool_client_new("demo".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "renaming the generated constructor away from `new` must not reserve a valid command method name; cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_command_named_with_parts_does_not_collide_with_hidden_client_helper() {
+        let output = cargo_check_tool_crate(
+            "tool-client-with-parts-name-collision",
+            r#"
+use golem_rust::tool_definition;
+
+#[tool_definition]
+trait Project {
+    fn __golem_tool_client_with_parts(&self, name: String) -> String;
+}
+
+fn build_client() {
+    let client = ProjectClient::default();
+    let _future = client.__golem_tool_client_with_parts("demo".to_string());
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "valid command names must not collide with generated client helpers, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn subtree_placeholder_return_type_does_not_need_magic_suffix() {
+        let output = cargo_check_tool_crate(
+            "subtree-placeholder-return-type",
+            r#"
+use golem_rust::{tool_definition, tool_implementation};
+
+#[tool_definition]
+trait ChildTool {
+    fn leaf(&self) -> String;
+}
+
+struct ChildHandle;
+
+#[tool_definition]
+trait ParentTool {
+    #[command(subtree = ChildTool)]
+    fn child_tool(&self) -> ChildHandle;
+}
+
+struct ParentToolImpl;
+
+#[tool_implementation]
+impl ParentTool for ParentToolImpl {
+    fn child_tool(&self) -> ChildHandle {
+        ChildHandle
+    }
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "the #[command(subtree = ...)] attribute, not a return-type suffix, marks a subtree dispatcher placeholder, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn tool_implementation_on_named_field_struct_still_compiles() {
+        let output = cargo_check_tool_crate(
+            "stateful-tool-implementation",
+            r#"
+use golem_rust::{tool_definition, tool_implementation, ToolError};
+
+#[derive(ToolError)]
+enum E {
+    #[tool_error(kind = "usage-error", exit_code = 2)]
+    Bad(String),
+}
+
+#[tool_definition]
+trait StatefulTool {
+    fn run(&self, input: String) -> Result<String, E>;
+}
+
+struct StatefulToolImpl {
+    prefix: String,
+}
+
+#[tool_implementation]
+impl StatefulTool for StatefulToolImpl {
+    fn run(&self, input: String) -> Result<String, E> {
+        Ok(format!("{}{}", self.prefix, input))
+    }
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "#[tool_implementation] is applied to trait impls and should not impose an undocumented unit-struct-only restriction, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn tool_implementation_allows_wildcard_impl_parameter_names() {
+        let output = cargo_check_tool_crate(
+            "wildcard-impl-parameter",
+            r#"
+use golem_rust::{tool_definition, tool_implementation, ToolError};
+
+#[derive(ToolError)]
+enum E {
+    #[tool_error(kind = "usage-error", exit_code = 2)]
+    Bad(String),
+}
+
+#[tool_definition]
+trait UnusedParamTool {
+    fn run(&self, input: String) -> Result<String, E>;
+}
+
+struct UnusedParamToolImpl;
+
+#[tool_implementation]
+impl UnusedParamTool for UnusedParamToolImpl {
+    fn run(&self, _: String) -> Result<String, E> {
+        Ok("ok".to_string())
+    }
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "#[tool_implementation] should accept ordinary Rust impl parameter patterns such as `_`, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn user_value_type_named_principal_is_not_auto_injected() {
+        let output = cargo_check_tool_crate(
+            "user-principal-value-type",
+            r#"
+use golem_rust::{tool_definition, tool_implementation, FromSchema, IntoSchema};
+
+mod domain {
+    use super::*;
+
+    #[derive(IntoSchema, FromSchema)]
+    pub struct Principal {
+        pub id: String,
+    }
+}
+
+#[tool_definition]
+trait DomainTool {
+    fn run(&self, principal: domain::Principal) -> String;
+}
+
+struct DomainToolImpl;
+
+#[tool_implementation]
+impl DomainTool for DomainToolImpl {
+    fn run(&self, principal: domain::Principal) -> String {
+        principal.id
+    }
+}
+
+fn build_client() {
+    let client = DomainToolClient::default();
+    let _future = client.run(domain::Principal { id: "u".to_string() });
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "a user-defined value type named `Principal` should be treated by path as a normal schema value, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_domain_principal_parameter_is_schema_input() {
+        let output = cargo_check_tool_crate(
+            "bug-finder-domain-principal-input",
+            r#"
+use golem_rust::{tool_definition, tool_implementation, FromSchema, IntoSchema};
+
+mod domain {
+    use super::*;
+
+    #[derive(IntoSchema, FromSchema)]
+    pub struct Principal {
+        pub id: String,
+    }
+}
+
+#[tool_definition]
+trait DomainPrincipalTool {
+    fn lookup(&self, principal: domain::Principal) -> String;
+}
+
+struct DomainPrincipalToolImpl;
+
+#[tool_implementation]
+impl DomainPrincipalTool for DomainPrincipalToolImpl {
+    fn lookup(&self, principal: domain::Principal) -> String {
+        principal.id
+    }
+}
+
+fn compile_client_and_impl() {
+    let client = DomainPrincipalToolClient::default();
+    let _future = client.lookup(domain::Principal { id: "user-1".to_string() });
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "a user-defined schema type whose last path segment is `Principal` must not be treated as the host principal; cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn bug_finder_local_principal_type_is_schema_input() {
+        let output = cargo_check_tool_crate(
+            "bug-finder-local-principal-input",
+            r#"
+use golem_rust::{tool_definition, tool_implementation, FromSchema, IntoSchema};
+
+#[derive(IntoSchema, FromSchema)]
+pub struct Principal {
+    pub id: String,
+}
+
+#[tool_definition]
+trait LocalPrincipalTool {
+    fn lookup(&self, principal: Principal) -> String;
+}
+
+struct LocalPrincipalToolImpl;
+
+#[tool_implementation]
+impl LocalPrincipalTool for LocalPrincipalToolImpl {
+    fn lookup(&self, principal: Principal) -> String {
+        principal.id
+    }
+}
+
+fn compile_client_and_impl() {
+    let client = LocalPrincipalToolClient::default();
+    let _future = client.lookup(Principal { id: "user-1".to_string() });
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "a local user-defined schema type named `Principal` should be treated as a normal schema value, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn agentic_world_tool_rpc_is_accepted_by_tool_client_helpers() {
+        let output = cargo_check_tool_crate(
+            "agentic-world-tool-rpc-client-helper",
+            r#"
+use golem_rust::agentic::invoke_and_await_infallible;
+use golem_rust::golem_agentic::golem::tool::host::ToolRpc;
+
+fn call_tool(rpc: &ToolRpc, input: &golem_rust::TypedSchemaValue) {
+    let _ = invoke_and_await_infallible(rpc, &[], input, None);
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "tool client helpers must accept the ToolRpc type exposed by the exported agentic world, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn exported_agentic_world_uses_native_streams() {
+        let output = cargo_check_tool_crate(
+            "agentic-world-native-streams",
+            r#"
+use golem_rust::agentic::InputStream;
+use golem_rust::golem_agentic::exports::golem::tool::guest::{Guest, InvocationResult, Tool, ToolError, TypedSchemaValue};
+use golem_rust::golem_agentic::golem::agent::common::Principal;
+
+struct Component;
+
+impl Guest for Component {
+    fn discover_tools() -> Result<Vec<Tool>, ToolError> {
+        unimplemented!()
+    }
+
+    fn get_tool(_name: String) -> Result<Tool, ToolError> {
+        unimplemented!()
+    }
+
+    async fn invoke(
+        _tool_name: String,
+        _command_path: Vec<String>,
+        _input: TypedSchemaValue,
+        _stdin: Option<InputStream>,
+        _principal: Principal,
+    ) -> Result<InvocationResult, ToolError> {
+        unimplemented!()
+    }
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "the exported agentic world should expose the same native stream types as tool definitions and tool clients, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
@@ -4132,7 +7066,30 @@ impl BadTool for BadToolImpl {
         cargo_tool_crate(name, source, "test")
     }
 
+    fn cargo_test_tool_crate_with_renamed_sdk(name: &str, source: &str) -> std::process::Output {
+        cargo_tool_crate_with_dependency(
+            name,
+            source,
+            "test",
+            "golem-rust-actual = { package = \"golem-rust\", path = PATH, features = [\"export_golem_agentic\"] }",
+        )
+    }
+
     fn cargo_tool_crate(name: &str, source: &str, command: &str) -> std::process::Output {
+        cargo_tool_crate_with_dependency(
+            name,
+            source,
+            command,
+            "golem-rust = { path = PATH, features = [\"export_golem_agentic\"] }",
+        )
+    }
+
+    fn cargo_tool_crate_with_dependency(
+        name: &str,
+        source: &str,
+        command: &str,
+        dependency_template: &str,
+    ) -> std::process::Output {
         let root = std::env::temp_dir().join(format!(
             "golem-rust-tool-{name}-{}-{}",
             std::process::id(),
@@ -4144,6 +7101,7 @@ impl BadTool for BadToolImpl {
         fs::create_dir_all(root.join("src")).unwrap();
 
         let golem_rust_path = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let dependency = dependency_template.replace("PATH", &toml_string(golem_rust_path));
         fs::write(
             root.join("Cargo.toml"),
             format!(
@@ -4154,9 +7112,8 @@ version = "0.0.0"
 edition = "2024"
 
 [dependencies]
-golem-rust = {{ path = {}, features = ["export_golem_agentic"] }}
+{dependency}
 "#,
-                toml_string(golem_rust_path)
             ),
         )
         .unwrap();

@@ -193,45 +193,49 @@ try {
 ## Complete Example in an Agent
 
 ```typescript
-import { BaseAgent, agent, atomically, endpoint } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import { defineAgent, method, http, atomically } from '@golemcloud/golem-ts-sdk';
 
-type WeatherReport = { temperature: number; description: string };
+const WeatherReport = z.object({ temperature: z.number(), description: z.string() });
 
-@agent({ mount: '/weather/{city}' })
-class WeatherAgent extends BaseAgent {
-  constructor(readonly city: string) {
-    super();
-  }
+export const WeatherAgent = defineAgent({
+  name: 'WeatherAgent',
+  id: { city: z.string() },
+  http: http.mount('/weather/{city}'),
+  methods: {
+    getCurrent: method({ input: {}, returns: WeatherReport, http: http.get('/current') }),
+  },
+});
 
-  @endpoint({ get: '/current' })
-  async getCurrent(): Promise<WeatherReport> {
-    return atomically(async () => {
-      const response = await fetch(
-        `https://api.weather.example.com/current?city=${encodeURIComponent(this.city)}`,
-        {
-          headers: { 'Accept': 'application/json' },
+export const WeatherAgentImpl = WeatherAgent.implement({
+  init: ({ id }) => ({ city: id.city }),
+  methods: {
+    async getCurrent() {
+      return atomically(async () => {
+        const response = await fetch(
+          `https://api.weather.example.com/current?city=${encodeURIComponent(this.city)}`,
+          { headers: { 'Accept': 'application/json' } },
+        );
+
+        if (!response.ok) {
+          throw new Error(`Weather API error: ${response.status}`);
         }
-      );
 
-      if (!response.ok) {
-        throw new Error(`Weather API error: ${response.status}`);
-      }
-
-      return await response.json();
-    });
-  }
-}
+        return await response.json();
+      });
+    },
+  },
+});
 ```
 
 ## Calling Golem Agent HTTP Endpoints
 
-When making HTTP requests to other Golem agent endpoints (or your own), the request body must match the **Golem HTTP body mapping convention**: non-binary body parameters are always deserialized from a **JSON object** where each top-level field corresponds to a method parameter name. This is true even when the endpoint has a single body parameter.
+When making HTTP requests to other Golem agent endpoints (or your own), the request body must match the **Golem HTTP body mapping convention**: non-binary body parameters are always deserialized from a **JSON object** where each top-level field corresponds to a method input key. This is true even when the endpoint has a single body parameter.
 
 For example, given this endpoint definition:
 
 ```typescript
-@endpoint({ post: '/record' })
-async record(body: string): Promise<void> { ... }
+record: method({ input: { body: z.string() }, returns: z.void(), http: http.post('/record') }),
 ```
 
 The correct HTTP request must send a JSON object with a `body` field — **not** a raw text string:

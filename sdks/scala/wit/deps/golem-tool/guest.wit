@@ -12,7 +12,6 @@ interface guest {
   use common.{tool, tool-error, invocation-result};
   use golem:core/types@2.0.0.{typed-schema-value};
   use golem:agent/common@2.0.0.{principal};
-  use wasi:io/streams@0.2.3.{input-stream};
 
   /// Enumerate the tools this component exposes. The returned metadata
   /// is complete (full command tree and schema graph).
@@ -35,17 +34,17 @@ interface guest {
   /// the body's schema.
   ///
   /// `stdin` is supplied when the selected body declared a stdin
-  /// `stream-spec`. Stream ownership: the `stdin` resource handle is moved
-  /// into the callee for the duration of the call.
+  /// `stream-spec`. The callee consumes the stream for the duration of the
+  /// call; dropping its reader closes further consumption.
   ///
   /// `principal` carries the caller's authenticated identity for
   /// authorization and audit, identical in semantics to the parameter
   /// of the same name in `golem:agent/guest.invoke`.
-  invoke: func(
+  invoke: async func(
     tool-name:    string,
     command-path: list<string>,
     input:        typed-schema-value,
-    stdin:        option<input-stream>,
+    stdin:        option<stream<u8>>,
     principal:    principal,
   ) -> result<invocation-result, tool-error>;
 }

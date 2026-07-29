@@ -32,15 +32,19 @@ harness = false
 name = "schema_reexport"
 harness = false
 
-[[test]]
+[[bench]]
 name = "agent_registry_bench"
-path = "benches/agent_registry_bench.rs"
+harness = false
+required-features = ["export_golem_agentic"]
+
+[[bench]]
+name = "eager_vs_lazy_format_bench"
 harness = false
 
-[[test]]
-name = "eager_vs_lazy_format_bench"
-path = "benches/eager_vs_lazy_format_bench.rs"
+[[bench]]
+name = "tool_client_bench"
 harness = false
+required-features = ["export_golem_agentic"]
 
 [dependencies]
 golem-schema = { path = "../../../golem-schema", version = "0.0.0", default-features = false, features = ["guest"] }
@@ -63,10 +67,9 @@ serde_json = { version = "1.0.145", optional = true }
 url = { version = "2.5.7", optional = true }
 unicode-segmentation = ">=1.0, <1.13"
 uuid = { version = "1.19.0", features = ["v4"] }
-wasip2 = { version = "1.0.2" }
-wstd = { version = "=0.6.5" }
+wasip3 = { version = "0.7.0" }
 wasi-logger = { version = "0.1.2", features = ["kv"] }
-wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.58.0" }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.59.0", features = ["async", "async-spawn"] }
 
 [features]
 default = ["durability", "json", "macro"]
@@ -92,3 +95,4 @@ url = ["dep:url", "golem-schema/url"]
 test-r = "3.0.9"
 proptest = "1.4.0"
 trybuild = "1.0.116"
+criterion = "0.5"

@@ -1,4 +1,4 @@
 {
   "type": "agent",
-  "description": "A simple agent demonstrating JSON API support"
+  "description": "A task manager agent with JSON object I/O and HTTP endpoints"
 }

@@ -1,9 +1,9 @@
+warnings = "-44"
+
 import {
   "golemcloud/golem_sdk/interface/golem/api/context",
   "golemcloud/golem_sdk/interface/golem/api/host",
   "golemcloud/golem_sdk/interface/golem/api/retry",
   "golemcloud/golem_sdk/interface/golem/core/types",
-  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
+  "golemcloud/golem_sdk/interface/wasi/clocks/system-clock",
 }
-
-warnings = "-44"

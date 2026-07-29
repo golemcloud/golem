@@ -5,12 +5,11 @@ import {
   "golemcloud/golem_sdk/interface/golem/api/host",
   "golemcloud/golem_sdk/interface/golem/api/retry",
   "golemcloud/golem_sdk/interface/golem/core/types",
-  "golemcloud/golem_sdk/interface/wasi/io/poll",
   "moonbitlang/core/debug",
 }
 
 // Values
-pub fn await_promise(@types.PromiseId) -> Bytes
+pub async fn await_promise(@types.PromiseId) -> Bytes
 
 pub fn complete_promise(@types.PromiseId, Bytes) -> Bool
 
@@ -173,8 +172,7 @@ pub(all) struct PromiseResult {
   // private fields
 }
 pub fn PromiseResult::drop(Self) -> Unit
-pub fn PromiseResult::get(Self) -> Bytes?
-pub fn PromiseResult::subscribe(Self) -> @poll.Pollable
+pub async fn PromiseResult::get(Self) -> Bytes
 
 pub struct Props {
   key : String
@@ -248,8 +246,6 @@ pub using @host {type ForkResult}
 pub using @retry {type NamedRetryPolicy}
 
 pub using @host {type PersistenceLevel}
-
-pub using @poll {type Pollable}
 
 pub using @retry {type PredicateValue}
 

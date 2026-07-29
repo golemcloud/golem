@@ -7,25 +7,52 @@ Golem 1.5 introduces a dedicated WebSocket client API (`golem:websocket@1.5.0`) 
 
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
 <Tabs.Tab>
-    The TypeScript SDK exposes the standard browser `WebSocket` and `WebSocketStream` APIs,
-    so existing code and patterns work out of the box.
+    The Golem TypeScript SDK provides a fluent WebSocket client API. `connectWebsocket` opens a
+    connection and returns a `WebSocketHandle` with `send`, `receive`, `receiveWithTimeout`, and
+    `close` methods. Received messages are `{ tag: "text", val }` / `{ tag: "binary", val }`, and
+    a graceful close surfaces as a `WebsocketError` with `tag === "closed"` and a `closeInfo`.
 
     ```typescript
-    @agent()
-    class ExampleAgent extends BaseAgent {
-      async run(): Promise<void> {
-        return new Promise((resolve, reject) => {
-          const ws = new WebSocket("wss://example.com/chat");
-          ws.onopen = () => { console.log("Connected"); ws.send("Hello, server!"); };
-          ws.onmessage = (event: MessageEvent) => {
-            if (typeof event.data === "string") { console.log("Text:", event.data); }
-            else { console.log("Binary:", new Uint8Array(event.data)); }
-          };
-          ws.onerror = () => reject(new Error("WebSocket error"));
-          ws.onclose = (event: CloseEvent) => { console.log(`Closed [${event.code}] "${event.reason}"`); resolve(); };
-        });
-      }
-    }
+    import { z } from "zod";
+    import { defineAgent, method, connectWebsocket, WebsocketError } from "@golemcloud/golem-ts-sdk";
+
+    export const ExampleAgent = defineAgent({
+      name: "ExampleAgent",
+      id: { name: z.string() },
+      methods: {
+        run: method({ input: {}, returns: z.void() }),
+      },
+    });
+
+    export const ExampleAgentImpl = ExampleAgent.implement({
+      init: () => ({}),
+      methods: {
+        async run() {
+          const ws = await connectWebsocket("wss://example.com/chat");
+          console.log("Connected");
+          ws.send("Hello, server!");
+          try {
+            for (;;) {
+              const message = ws.receive();
+              if (message.tag === "text") {
+                console.log("Text:", message.val);
+              } else {
+                console.log("Binary:", message.val);
+              }
+            }
+          } catch (err) {
+            if (err instanceof WebsocketError && err.tag === "closed") {
+              const info = err.closeInfo;
+              if (info) {
+                console.log(`Closed [${info.code}] "${info.reason}"`);
+              }
+            } else {
+              throw err;
+            }
+          }
+        },
+      },
+    });
     ```
 </Tabs.Tab>
 

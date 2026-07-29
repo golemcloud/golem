@@ -1,10 +1,10 @@
 use golem_rust::bindings::golem::api::context::AttributeValue;
 use golem_rust::bindings::golem::api::oplog::{Timestamp, WorkerError, WrappedFunctionType};
 use golem_rust::schema::wit::wire::{AgentId, ComponentId};
-use golem_rust::wasip2::clocks::wall_clock::Datetime;
+use golem_rust::wasip3::clocks::system_clock::Instant;
 use std::collections::HashMap;
 
-pub(crate) fn datetime_to_nanos(dt: &Datetime) -> u128 {
+pub(crate) fn datetime_to_nanos(dt: &Instant) -> u128 {
     (dt.seconds as u128) * 1_000_000_000 + (dt.nanoseconds as u128)
 }
 

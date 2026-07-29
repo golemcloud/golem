@@ -358,9 +358,9 @@ fn resolve_ref_chain<'a>(
                     return None;
                 }
                 visited.push(id.clone());
-                match graph.lookup(id) {
-                    Some(def) => current = &def.body,
-                    None => return None,
+                {
+                    let def = graph.lookup(id)?;
+                    current = &def.body
                 }
             }
             other => return Some(other),
