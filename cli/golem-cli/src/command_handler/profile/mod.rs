@@ -150,7 +150,7 @@ impl ProfileCommandHandler {
         static_token: Option<String>,
     ) -> anyhow::Result<AuthenticationConfig> {
         match (mode, static_token) {
-            (Some(ProfileAuthMode::Oauth2), Some(_)) => {
+            (Some(ProfileAuthMode::OAuth2), Some(_)) => {
                 log_error(
                     "--static-token cannot be combined with --auth oauth2. A static token implies --auth static.",
                 );
@@ -163,7 +163,7 @@ impl ProfileCommandHandler {
                 let token = self.ctx.interactive_handler().prompt_static_token()?;
                 Ok(AuthenticationConfig::static_token(token))
             }
-            (Some(ProfileAuthMode::Oauth2), None) | (None, None) => {
+            (Some(ProfileAuthMode::OAuth2), None) | (None, None) => {
                 Ok(AuthenticationConfig::empty_oauth2())
             }
         }

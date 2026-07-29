@@ -2100,7 +2100,8 @@ pub mod profile {
     #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
     #[clap(rename_all = "kebab-case")]
     pub enum ProfileAuthMode {
-        Oauth2,
+        #[value(name = "oauth2")]
+        OAuth2,
         Static,
     }
 
