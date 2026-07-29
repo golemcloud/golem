@@ -14,15 +14,15 @@
 
 use crate::agent_id_display::SourceLanguage;
 use crate::log::{LogColorize, logln};
+use crate::model::agent_instance::{
+    AgentIdMatch, AgentMetadataView, AgentsMetadataResponseView, RawAgentId,
+};
 use crate::model::cli_output::StructuredOutput;
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::environment::EnvironmentReference;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::masking::{Masked, MaskingConfig};
 use crate::model::text::fmt::*;
-use crate::model::worker::{
-    AgentIdMatch, AgentMetadataView, AgentsMetadataResponseView, RawAgentId,
-};
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use chrono::DateTime;

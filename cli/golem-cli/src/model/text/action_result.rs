@@ -22,9 +22,9 @@
 //! to stderr (see `Context::new`) and these structured payloads are
 //! emitted on stdout so that automation can rely on a stable schema.
 
+use crate::model::agent_instance::RawAgentId;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::text::fmt::{NoTextOutput, TextOutput};
-use crate::model::worker::RawAgentId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

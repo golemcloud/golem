@@ -25,6 +25,7 @@ use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
 use crate::log::{LogColorize, LogIndent, log_action, log_error, log_warn_action, logln};
 use crate::model::GuestLanguage;
+use crate::model::agent_instance::AgentUpdateMode;
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::app_raw;
@@ -50,7 +51,6 @@ use crate::model::text::component::{
 use crate::model::text::fmt::log_text_view;
 use crate::model::text::help::ComponentNameHelp;
 use crate::model::text::plugin::PluginNameAndVersion;
-use crate::model::worker::AgentUpdateMode;
 use crate::validation::ValidationBuilder;
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use futures_util::future::OptionFuture;

@@ -14,12 +14,12 @@
 
 use crate::agent_id_display::SourceLanguage;
 use crate::agent_id_display::render_type_for_language;
+use crate::model::agent_instance::RawAgentId;
 use crate::model::app_raw;
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::masking::{
     Masked, MaskingConfig, mask_sensitive_map, mask_typed_agent_config_entries,
 };
-use crate::model::worker::RawAgentId;
 use chrono::{DateTime, Utc};
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::agent::{AgentConfigSource, AgentTypeName};

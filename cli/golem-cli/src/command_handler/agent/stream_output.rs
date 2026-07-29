@@ -15,8 +15,8 @@
 use crate::command_handler::log::print_command_output_document;
 use crate::log::log_error;
 use crate::model::agent::stream::AgentStreamEvent;
+use crate::model::agent_instance::AgentLogStreamOptions;
 use crate::model::format::Format;
-use crate::model::worker::AgentLogStreamOptions;
 use colored::Colorize;
 use golem_common::model::{IdempotencyKey, LogLevel, Timestamp};
 use std::cmp::Ordering;

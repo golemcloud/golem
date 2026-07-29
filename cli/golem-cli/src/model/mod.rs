@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod agent;
+pub mod agent_instance;
 pub mod app;
 pub mod app_raw;
 pub mod cascade;
@@ -31,7 +32,6 @@ pub mod plugin_manifest;
 pub mod repl;
 pub mod template;
 pub mod text;
-pub mod worker;
 
 use crate::app::template::AppTemplate;
 use crate::config::AuthenticationConfig;

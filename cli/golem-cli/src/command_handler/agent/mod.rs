@@ -36,26 +36,26 @@ use crate::model::text::action_result::{
     AgentCancelInvocationResult, AgentDeleteResult, AgentFileContentsResult, AgentInterruptResult,
     AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
 };
+use crate::model::text::agent_instance::{
+    AgentCreateView, AgentFilesView, AgentGetView, AgentOplogEntryView, FileNodeView,
+    format_agent_id_match, format_timestamp,
+};
 use crate::model::text::fmt::{log_fuzzy_match, log_text_view};
 use crate::model::text::help::{
     AgentNameHelp, ArgumentError, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp,
     ParameterErrorTableView,
-};
-use crate::model::text::worker::{
-    AgentCreateView, AgentFilesView, AgentGetView, AgentOplogEntryView, FileNodeView,
-    format_agent_id_match, format_timestamp,
 };
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 
 use crate::agent_id_display::SourceLanguage;
-use crate::model::environment::{
-    EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
-};
-use crate::model::worker::{
+use crate::model::agent_instance::{
     AgentIdMatch, AgentListMode, AgentMetadata, AgentMetadataView, AgentUpdateMode,
     AgentsMetadataResponseView, RawAgentId,
+};
+use crate::model::environment::{
+    EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
 use golem_client::api::{AgentClient, ComponentClient, WorkerClient};
 use golem_client::model::ScanCursor;

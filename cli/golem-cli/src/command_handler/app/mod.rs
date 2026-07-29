@@ -41,6 +41,7 @@ use crate::log::{
     log_warn_action, logged_failed_to, logged_finished_or_failed_to, logln,
 };
 use crate::model::agent::view::AgentTypeView;
+use crate::model::agent_instance::AgentUpdateMode;
 use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
     WithSource,
@@ -59,7 +60,6 @@ use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::model::text::template::TemplateListView;
-use crate::model::worker::AgentUpdateMode;
 use crate::model::{GuestLanguage, TemplateDescription};
 use anyhow::{anyhow, bail};
 use colored::Colorize;
@@ -2677,7 +2677,10 @@ impl AppCommandHandler {
                             format!(
                                 "  - {} matched by {}",
                                 option.bold(),
-                                patterns.iter().map(|p| p.as_str().bold().to_string()).join(", ")
+                                patterns
+                                    .iter()
+                                    .map(|p| p.as_str().bold().to_string())
+                                    .join(", ")
                             )
                         })
                         .join("\n")

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::agent_instance::AgentLogStreamOptions;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::text::fmt::format_stderr;
-use crate::model::worker::AgentLogStreamOptions;
 use golem_common::model::{IdempotencyKey, LogLevel, Timestamp};
 use serde::{Deserialize, Serialize};
 
@@ -259,7 +259,7 @@ impl AgentStreamEvent {
 #[cfg(test)]
 mod tests {
     use super::{AgentStreamEvent, AgentStreamEventKind};
-    use crate::model::worker::AgentLogStreamOptions;
+    use crate::model::agent_instance::AgentLogStreamOptions;
     use golem_common::model::{IdempotencyKey, Timestamp};
     use std::str::FromStr;
     use test_r::test;

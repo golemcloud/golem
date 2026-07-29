@@ -35,12 +35,12 @@ use crate::command::worker::AgentSubcommand;
 use crate::config::ProfileName;
 use crate::error::ShowClapHelpTarget;
 use crate::model::GuestLanguage;
+use crate::model::agent_instance::{AgentUpdateMode, RawAgentId};
 use crate::model::app::ComponentPresetName;
 use crate::model::cli_command_metadata::{CliCommandMetadata, CliMetadataFilter};
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
-use crate::model::worker::{AgentUpdateMode, RawAgentId};
 use crate::{command_name, version};
 use anyhow::{Context as AnyhowContext, anyhow};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
@@ -941,8 +941,8 @@ pub enum GolemCliSubcommand {
 
 pub mod shared_args {
     use crate::model::GuestLanguage;
+    use crate::model::agent_instance::{AgentUpdateMode, RawAgentId};
     use crate::model::app::AppBuildStep;
-    use crate::model::worker::{AgentUpdateMode, RawAgentId};
     use clap::Args;
     use golem_common::model::account::AccountId;
     use golem_common::model::component::ComponentName;
@@ -1169,7 +1169,7 @@ pub mod environment {
 
 pub mod component {
     use crate::command::shared_args::{OptionalComponentName, OptionalComponentNames};
-    use crate::model::worker::AgentUpdateMode;
+    use crate::model::agent_instance::AgentUpdateMode;
     use clap::Subcommand;
     use golem_common::model::component::ComponentRevision;
 
@@ -1281,7 +1281,7 @@ pub mod worker {
     use crate::command::shared_args::{
         AgentFunctionArgument, AgentFunctionName, AgentIdArgs, PostDeployArgs, StreamArgs,
     };
-    use crate::model::worker::{AgentListMode, AgentUpdateMode};
+    use crate::model::agent_instance::{AgentListMode, AgentUpdateMode};
     use chrono::{DateTime, Utc};
     use clap::Subcommand;
     use golem_client::model::ScanCursor;
@@ -2341,7 +2341,7 @@ pub mod account {
 
 pub mod card {
     use crate::command::shared_args::AccountIdOptionalArg;
-    use crate::model::worker::RawAgentId;
+    use crate::model::agent_instance::RawAgentId;
     use clap::Subcommand;
     use golem_common::model::card::CardId;
 
@@ -2510,7 +2510,7 @@ mod test {
         help_target_to_subcommand_names,
     };
     use crate::error::ShowClapHelpTarget;
-    use crate::model::worker::AgentUpdateMode;
+    use crate::model::agent_instance::AgentUpdateMode;
     use clap::builder::StyledStr;
     use clap::{Command, CommandFactory};
     use itertools::Itertools;
@@ -2734,7 +2734,7 @@ mod test {
 
     #[test]
     fn update_agents_accepts_auto_as_update_mode_alias() {
-        use crate::model::worker::AgentUpdateMode;
+        use crate::model::agent_instance::AgentUpdateMode;
         use clap::Parser;
 
         let result =
@@ -2755,7 +2755,7 @@ mod test {
 
     #[test]
     fn update_agents_accepts_automatic_as_update_mode() {
-        use crate::model::worker::AgentUpdateMode;
+        use crate::model::agent_instance::AgentUpdateMode;
         use clap::Parser;
 
         let result = GolemCliCommand::try_parse_from([
