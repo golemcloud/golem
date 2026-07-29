@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod instance;
+
+pub use instance::*;
+
 use crate::model::agent::view::AgentTypeView;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;

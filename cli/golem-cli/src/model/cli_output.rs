@@ -920,7 +920,7 @@ mod tests {
 
     #[test]
     fn agent_get_structured_output_masks_secret_config_paths() {
-        let value = hidden_structured_output(crate::model::text::agent_instance::AgentGetView {
+        let value = hidden_structured_output(crate::model::text::agent::AgentGetView {
             metadata: sample_agent_metadata_view(),
             precise: true,
         });
@@ -1373,7 +1373,7 @@ mod tests {
                 agent_types: vec![agent_type],
             })
             .expect("agent-type.list should serialize"),
-            to_structured_output_value(crate::model::text::agent_instance::AgentOplogEntryView {
+            to_structured_output_value(crate::model::text::agent::AgentOplogEntryView {
                 index: 0,
                 entry: sample_public_oplog_entries()
                     .into_iter()
@@ -2851,11 +2851,11 @@ mod tests {
     fn arb_agent_files_result() -> OutputDocumentStrategy {
         serialized_output(
             proptest::collection::vec(arb_file_node(), 0..6)
-                .prop_map(|nodes| crate::model::text::agent_instance::AgentFilesView { nodes }),
+                .prop_map(|nodes| crate::model::text::agent::AgentFilesView { nodes }),
         )
     }
 
-    fn arb_file_node() -> BoxedStrategy<crate::model::text::agent_instance::FileNodeView> {
+    fn arb_file_node() -> BoxedStrategy<crate::model::text::agent::FileNodeView> {
         (
             arb_small_string(),
             arb_small_string(),
@@ -2864,7 +2864,7 @@ mod tests {
             arb_small_u64(),
         )
             .prop_map(|(name, last_modified, kind, permissions, size)| {
-                crate::model::text::agent_instance::FileNodeView {
+                crate::model::text::agent::FileNodeView {
                     name,
                     last_modified,
                     kind,
@@ -2877,10 +2877,7 @@ mod tests {
 
     fn arb_agent_get_result() -> OutputDocumentStrategy {
         serialized_output((arb_agent_metadata_view(), any::<bool>()).prop_map(
-            |(metadata, precise)| crate::model::text::agent_instance::AgentGetView {
-                metadata,
-                precise,
-            },
+            |(metadata, precise)| crate::model::text::agent::AgentGetView { metadata, precise },
         ))
     }
 
@@ -2931,7 +2928,7 @@ mod tests {
 
     fn arb_agent_new_result() -> OutputDocumentStrategy {
         serialized_output((arb_small_string(), arb_small_string()).prop_map(
-            |(component_name, agent_id)| crate::model::text::agent_instance::AgentCreateView {
+            |(component_name, agent_id)| crate::model::text::agent::AgentCreateView {
                 component_name: golem_common::model::component::ComponentName(component_name),
                 agent_id: crate::model::agent::RawAgentId(agent_id),
             },
@@ -2948,7 +2945,7 @@ mod tests {
                 ],
             )
                 .prop_map(|(index, entry)| {
-                    crate::model::text::agent_instance::AgentOplogEntryView { index, entry }
+                    crate::model::text::agent::AgentOplogEntryView { index, entry }
                 }),
         )
     }

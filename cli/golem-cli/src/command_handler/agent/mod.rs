@@ -36,7 +36,7 @@ use crate::model::text::action_result::{
     AgentCancelInvocationResult, AgentDeleteResult, AgentFileContentsResult, AgentInterruptResult,
     AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
 };
-use crate::model::text::agent_instance::{
+use crate::model::text::agent::{
     AgentCreateView, AgentFilesView, AgentGetView, AgentOplogEntryView, FileNodeView,
     format_agent_id_match, format_timestamp,
 };

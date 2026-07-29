@@ -15,7 +15,6 @@
 pub mod account;
 pub mod action_result;
 pub mod agent;
-pub mod agent_instance;
 pub mod card;
 pub mod component;
 pub mod deployment;
