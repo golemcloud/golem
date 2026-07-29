@@ -65,7 +65,7 @@ cargo clippy
 
 ### Packages
 
-Build order matters: `golem-ts-types-core` → `golem-ts-typegen` → `golem-ts-sdk`
+Build order matters: `golem-ts-sdk` → `golem-ts-bridge` → `golem-ts-repl`.
 
 ### Building
 
@@ -88,7 +88,7 @@ The agent template WASM embeds the SDK runtime. You **must** rebuild it when:
 
 - `wasm-rquickjs-cli` is updated
 - WIT dependencies change
-- SDK runtime code changes (`baseAgent.ts`, `index.ts`, `resolvedAgent.ts`)
+- SDK runtime code changes (`defineAgent.ts`, `runtime.ts`, `index.ts`, `resolvedAgent.ts`)
 
 ```shell
 cargo install cargo-component --version 0.21.1

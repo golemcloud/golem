@@ -4,7 +4,7 @@
 
 A Golem agent can act as its own scheduler by scheduling one of its own methods to run again at the end of each invocation. This creates a durable, crash-resilient recurring task — if the agent restarts, the scheduled invocation is still pending and will fire at the designated time.
 
-Because a fluent handler's `this` is bound to the agent's **state** (not to its other methods), factor the self-scheduling logic into a small module-level helper that builds an RPC client for the agent itself with `clientFor` and calls `.schedule()`.
+Because a method handler's `this` is bound to the agent's **state** (not to its other methods), factor the self-scheduling logic into a small module-level helper that builds an RPC client for the agent itself with `clientFor` and calls `.schedule()`.
 
 ## Basic Pattern
 

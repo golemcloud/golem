@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// NOTE (fluent port): the fluent `s.quotaToken()` marker encodes/decodes the RAW
+// The `s.quotaToken()` marker encodes and decodes the raw
 // `golem:core/types` quota-token resource handle, and the SDK `QuotaToken`
 // wrapper class (`acquireQuotaToken` / `token.reserve()`) does NOT interoperate
 // with that marker through the public API. So this file uses the raw

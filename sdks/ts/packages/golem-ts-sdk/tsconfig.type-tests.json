@@ -4,5 +4,5 @@
     "declaration": false,
     "noEmit": true
   },
-  "include": ["tests/fluent-tool.test-d.ts", "types/**/*.d.ts"]
+  "include": ["tests/tool.test-d.ts", "types/**/*.d.ts"]
 }

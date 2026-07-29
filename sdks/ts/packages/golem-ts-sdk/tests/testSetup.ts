@@ -110,6 +110,6 @@ vi.mock('wasi:cli/environment@0.3.0', () => ({
 }));
 
 // Load the package barrel so its side-effecting imports register the schema
-// walkers (zod / valibot / arktype / effect) for tests that import fluent
+// walkers (zod / valibot / arktype / effect) for tests that import the SDK entry point
 // submodules directly rather than the top-level entry.
 await import('../src');

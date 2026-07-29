@@ -101,8 +101,6 @@ runs:
           sdks/ts/packages/golem-ts-sdk/dist
           sdks/ts/packages/golem-ts-sdk/types
           sdks/ts/packages/golem-ts-sdk/wasm
-          sdks/ts/packages/golem-ts-typegen/dist
-          sdks/ts/packages/golem-ts-types-core/dist
           sdks/ts/packages/golem-ts-bridge/dist
           sdks/ts/packages/golem-ts-repl/dist
         key: golem-ts-sdk-skill-harness-${{ github.run_id }}
