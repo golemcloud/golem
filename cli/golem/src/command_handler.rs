@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::{anyhow, bail};
+use anyhow::{Context as _, anyhow, bail};
 use clap_verbosity_flag::Verbosity;
 use golem_cli::command::server::{RunArgs, ServerSubcommand};
 use golem_cli::command_handler::{CommandHandlerHooks, Handlers};
@@ -168,13 +168,23 @@ fn launch_args_from_run_args_and_local_server(
 
 fn resolve_clean_data_dir(data_dir: &Path) -> anyhow::Result<PathBuf> {
     let data_dir = fs::absolute_lexical_path(data_dir)?;
-    if data_dir.parent().is_none() {
+    let Some(parent) = data_dir.parent() else {
         bail!(
             "Refusing to clean filesystem root {}",
             data_dir.display().to_string().log_color_highlight()
         );
-    }
-    Ok(data_dir)
+    };
+    let file_name = data_dir
+        .file_name()
+        .ok_or_else(|| anyhow!("Data directory {} has no name", data_dir.display()))?;
+    let resolved_parent = std::fs::canonicalize(parent).with_context(|| {
+        format!(
+            "Failed to resolve parent of local server data directory {}",
+            data_dir.display()
+        )
+    })?;
+
+    Ok(resolved_parent.join(file_name))
 }
 
 async fn clean_data_dir(ctx: &Arc<Context>, data_dir: &Path) -> anyhow::Result<()> {
@@ -290,15 +300,40 @@ mod tests {
 
     #[test]
     fn clean_resolves_relative_data_dir() {
-        let data_dir = resolve_clean_data_dir(Path::new(".golem/data")).unwrap();
+        let data_dir = resolve_clean_data_dir(Path::new("local-server-data")).unwrap();
 
         assert!(data_dir.is_absolute());
-        assert!(data_dir.ends_with(Path::new(".golem/data")));
+        assert!(data_dir.ends_with(Path::new("local-server-data")));
 
         let absolute_data_dir = std::env::current_dir().unwrap().join("local-server-data");
         assert_eq!(
             resolve_clean_data_dir(&absolute_data_dir).unwrap(),
             absolute_data_dir
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clean_resolves_intermediate_symlink_without_following_final_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let test_root =
+            std::env::temp_dir().join(format!("golem-clean-symlink-test-{}", std::process::id()));
+        let actual_parent = test_root.join("actual");
+        let intermediate_link = test_root.join("intermediate-link");
+        let final_link = actual_parent.join("final-link");
+        std::fs::create_dir_all(&actual_parent).unwrap();
+        symlink(&actual_parent, &intermediate_link).unwrap();
+        symlink(actual_parent.join("final-target"), &final_link).unwrap();
+
+        let resolved_intermediate =
+            resolve_clean_data_dir(&intermediate_link.join("data")).unwrap();
+        let resolved_final = resolve_clean_data_dir(&final_link).unwrap();
+        let canonical_parent = std::fs::canonicalize(&actual_parent).unwrap();
+
+        assert_eq!(resolved_intermediate, canonical_parent.join("data"));
+        assert_eq!(resolved_final, canonical_parent.join("final-link"));
+
+        std::fs::remove_dir_all(&test_root).unwrap();
     }
 }
