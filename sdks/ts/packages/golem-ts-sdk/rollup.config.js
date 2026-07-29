@@ -37,11 +37,6 @@ export default defineConfig([
       typescript({
         tsconfig: './tsconfig.json',
         include: ['src/**/*', 'types'],
-        // Transpile-only: the decorator-era files (agentConfig/mapping/typegen) have
-        // pre-existing type errors from the new schema-model that block the build;
-        // they are erased at runtime and unused by agents. Type-checking is
-        // done separately via `tsc --noEmit`.
-        check: false,
         tsconfigOverride: {
           compilerOptions: { declaration: false },
         },
