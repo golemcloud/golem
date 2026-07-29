@@ -155,7 +155,7 @@ Available naming related string transforming functions:
   <Field meta={{
     path: "localServer.dataDir",
   }}>
-    ***Optional directory*** used by `golem server run` and removed by `golem server clean`. Defaults to `$XDG_STATE_HOME/golem`. Pass `-X` to `server clean` to ignore the manifest and clean the platform default.
+    ***Optional directory*** used by `golem server run` and removed by `golem server clean` or `golem server run --clean`. Before deleting it, the CLI displays the resolved absolute path and asks for confirmation; pass `-Y` or `--yes` only after verifying the target. Filesystem roots are always rejected. Defaults to `$XDG_STATE_HOME/golem`. Pass `-X` to `server clean` to ignore the manifest and clean the platform default.
   </Field>
 
   <Field meta={{

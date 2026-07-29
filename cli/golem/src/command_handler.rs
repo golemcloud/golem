@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use clap_verbosity_flag::Verbosity;
 use golem_cli::command::server::{RunArgs, ServerSubcommand};
-use golem_cli::command_handler::CommandHandlerHooks;
+use golem_cli::command_handler::{CommandHandlerHooks, Handlers};
 use golem_cli::context::Context;
+use golem_cli::error::NonSuccessfulExit;
+use golem_cli::fs;
 use golem_cli::log::{LogColorize, log_warn_action};
 use golem_cli::model::app::ResolvedLocalServer;
 use std::path::{Path, PathBuf};
@@ -47,7 +49,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
                 let launch_args = launch_args_from_run_args_and_manifest(&args, &ctx)?;
                 let data_dir = launch_args.data_dir.clone();
                 if args.clean && tokio::fs::metadata(&data_dir).await.is_ok() {
-                    clean_data_dir(&data_dir).await?;
+                    clean_data_dir(&ctx, &data_dir).await?;
                 };
 
                 let mut join_set = launch_golem_services(&launch_args)
@@ -62,7 +64,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
             }
             ServerSubcommand::Clean => {
                 let data_dir = data_dir_from_local_server(ctx.manifest_local_server())?;
-                clean_data_dir(&data_dir).await
+                clean_data_dir(&ctx, &data_dir).await
             }
         }
     }
@@ -164,7 +166,26 @@ fn launch_args_from_run_args_and_local_server(
     })
 }
 
-async fn clean_data_dir(data_dir: &Path) -> anyhow::Result<()> {
+fn resolve_clean_data_dir(data_dir: &Path) -> anyhow::Result<PathBuf> {
+    let data_dir = fs::absolute_lexical_path(data_dir)?;
+    if data_dir.parent().is_none() {
+        bail!(
+            "Refusing to clean filesystem root {}",
+            data_dir.display().to_string().log_color_highlight()
+        );
+    }
+    Ok(data_dir)
+}
+
+async fn clean_data_dir(ctx: &Arc<Context>, data_dir: &Path) -> anyhow::Result<()> {
+    let data_dir = resolve_clean_data_dir(data_dir)?;
+    if !ctx
+        .interactive_handler()
+        .confirm_clean_local_server_data_dir(&data_dir)?
+    {
+        bail!(NonSuccessfulExit);
+    }
+
     log_warn_action(
         "Cleaning",
         format!(
@@ -250,6 +271,34 @@ mod tests {
         assert_eq!(
             args.agent_filesystem_root,
             Some(PathBuf::from("cli-agents"))
+        );
+    }
+
+    #[test]
+    fn clean_rejects_filesystem_root() {
+        let current_dir = std::env::current_dir().unwrap();
+        let root = current_dir.ancestors().last().unwrap();
+
+        let error = resolve_clean_data_dir(root).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Refusing to clean filesystem root")
+        );
+    }
+
+    #[test]
+    fn clean_resolves_relative_data_dir() {
+        let data_dir = resolve_clean_data_dir(Path::new(".golem/data")).unwrap();
+
+        assert!(data_dir.is_absolute());
+        assert!(data_dir.ends_with(Path::new(".golem/data")));
+
+        let absolute_data_dir = std::env::current_dir().unwrap().join("local-server-data");
+        assert_eq!(
+            resolve_clean_data_dir(&absolute_data_dir).unwrap(),
+            absolute_data_dir
         );
     }
 }

@@ -128,11 +128,11 @@ golem server clean
 
 This removes all stored state including deployed components, agent data, and operation logs.
 
-When a manifest is discovered, this removes `localServer.dataDir`. Without a manifest it removes the platform default data directory. Pass `-X` to ignore a discovered manifest and clean the platform default.
+When a manifest is discovered, this removes `localServer.dataDir`. Without a manifest it removes the platform default data directory. Pass `-X` to ignore a discovered manifest and clean the platform default. The CLI displays the resolved absolute path and asks for confirmation before deleting it; filesystem roots are always rejected.
 
 ## Important Notes
 
-- **`--clean` deletes all state**: Running `golem server run --clean` deletes all existing agents, deployed components, and data. Never run it without explicitly asking the user for confirmation first.
+- **Cleanup deletes all state**: Both `golem server clean` and `golem server run --clean` delete all existing agents, deployed components, and data from the resolved directory. Never run either command without explicitly asking the user for confirmation first. In a non-interactive workflow, pass `--yes` only after the user approves the exact target path.
 - **The server runs in the foreground**: It blocks the terminal. Run it in a separate terminal or background process before deploying or invoking agents.
 - **Deploy after starting**: Components must be deployed with `golem deploy` after the server is running before agents can be invoked.
 - **File limits**: On startup the server automatically attempts to increase the OS file descriptor limit to 1,000,000 for better performance.

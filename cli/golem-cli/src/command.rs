@@ -2399,7 +2399,9 @@ pub mod server {
         /// then start it. This is equivalent to running `golem-cli server clean`
         /// followed by `golem-cli server run`, but in a single step. Unlike
         /// `server clean`, this does not exit afterwards; the server keeps
-        /// running with a fresh data directory.
+        /// running with a fresh data directory. The resolved data directory is
+        /// shown for confirmation before deletion. Use `-Y/--yes` to skip the
+        /// interactive confirmation.
         #[clap(long)]
         pub clean: bool,
 
@@ -2436,7 +2438,7 @@ pub mod server {
             #[clap(flatten)]
             args: RunArgs,
         },
-        /// DESTRUCTIVE: Permanently deletes the local server data directory, including all components, agents and oplogs created via the local server. Uses localServer.dataDir from the discovered manifest, or the platform default when no manifest is loaded. Pass -X to ignore manifest configuration. This action is irreversible.
+        /// DESTRUCTIVE: Permanently deletes the local server data directory, including all components, agents and oplogs created via the local server. Uses localServer.dataDir from the discovered manifest, or the platform default when no manifest is loaded. The resolved directory is shown for confirmation; use -Y/--yes to skip the prompt. Pass -X to ignore manifest configuration. Filesystem roots are always rejected. This action is irreversible.
         #[command(after_help = crate::command_examples::SERVER_CLEAN)]
         Clean,
     }
