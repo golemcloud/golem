@@ -198,11 +198,11 @@ impl CursorTx<'_> {
                 .collect();
 
             // Snapshot/cache churn can make a cross-layer batch start after the requested index.
-            if !self
+            if self
                 .st
                 .replay_buffer
                 .front()
-                .is_some_and(|(idx, _)| *idx == read_idx)
+                .is_none_or(|(idx, _)| *idx != read_idx)
             {
                 self.st.replay_buffer = self
                     .cursor

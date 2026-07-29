@@ -1124,8 +1124,7 @@ impl BridgeSdks {
             GuestLanguage::TypeScript => self.ts.as_ref(),
             GuestLanguage::Scala => self.scala.as_ref(),
             GuestLanguage::MoonBit => self.moonbit.as_ref(),
-            // No bridge SDK targets for Go; see
-            // GuestLanguage::supports_bridge_generation.
+            // No bridge SDK targets for Go; see BridgeSdkTargetKind::supports.
             GuestLanguage::Go => None,
         }
     }

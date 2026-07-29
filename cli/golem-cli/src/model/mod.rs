@@ -116,18 +116,6 @@ impl GuestLanguage {
         }
     }
 
-    pub fn supports_bridge_generation(&self) -> bool {
-        match self {
-            GuestLanguage::Rust
-            | GuestLanguage::TypeScript
-            | GuestLanguage::Scala
-            | GuestLanguage::MoonBit => true,
-            // No `src/bridge_gen/go` yet; cross-component clients for Go are
-            // written by hand against the SDK until it lands.
-            GuestLanguage::Go => false,
-        }
-    }
-
     pub fn name(&self) -> &'static str {
         match self {
             GuestLanguage::Rust => "Rust",

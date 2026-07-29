@@ -647,6 +647,8 @@ export type UnstructuredText<LC extends LanguageCode[] = []> =
       languageCode?: LC[number];
     };
 
+export type UnstructuredTextType<LC extends LanguageCode[] = []> = UnstructuredText<LC>;
+
 // Variant case indices of the canonical role-marked unstructured wrapper:
 // `variant { inline: text/binary, url: url }`.
 const UNSTRUCTURED_INLINE_CASE = 0;
@@ -832,6 +834,9 @@ export type UnstructuredBinary<MT extends MimeType[] | MimeType = MimeType> =
       val: Uint8Array;
       mimeType: MT extends MimeType[] ? MT[number] : MimeType;
     };
+
+export type UnstructuredBinaryType<MT extends MimeType[] | MimeType = MimeType> =
+  UnstructuredBinary<MT>;
 
 export const UnstructuredBinary = {
   /**
