@@ -29,7 +29,7 @@ use std::time::Duration;
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
-use tracing::{Instrument, Level, error, span};
+use tracing::{Instrument, debug_span, error};
 
 #[derive(Debug)]
 pub struct AtomicResourceEntry {
@@ -401,31 +401,28 @@ impl ResourceLimitsGrpc {
         let svc_weak = Arc::downgrade(&svc);
 
         // Background task for batch updates
-        tokio::spawn(
-            async move {
-                let mut tick = tokio::time::interval(batch_update_interval);
-                let refresh_threshold_secs = limit_refresh_interval.as_secs() as i64;
-                loop {
-                    tokio::select! {
-                        _ = shutdown_token.cancelled() => {
-                            break;
-                        }
-                        _ = tick.tick() => {}
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(batch_update_interval);
+            let refresh_threshold_secs = limit_refresh_interval.as_secs() as i64;
+            loop {
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => {
+                        break;
                     }
-
-                    let svc_arc = match svc_weak.upgrade() {
-                        Some(s) => s,
-                        None => {
-                            // service itself was dropped, we can exit
-                            break;
-                        }
-                    };
-
-                    svc_arc.send_batch(refresh_threshold_secs).await;
+                    _ = tick.tick() => {}
                 }
+
+                let svc_arc = match svc_weak.upgrade() {
+                    Some(s) => s,
+                    None => {
+                        // service itself was dropped, we can exit
+                        break;
+                    }
+                };
+
+                svc_arc.send_batch(refresh_threshold_secs).await;
             }
-            .instrument(span!(parent: None, Level::INFO, "Resource limits batch updates")),
-        );
+        });
 
         svc
     }
@@ -458,6 +455,12 @@ impl ResourceLimitsGrpc {
     /// failure, resets in-flight deltas for active accounts so they are not
     /// double-counted next cycle; stale idle accounts are retried next tick.
     async fn send_batch(&self, refresh_threshold_secs: i64) {
+        self.send_batch_inner(refresh_threshold_secs)
+            .instrument(debug_span!("resource_limits_batch_update"))
+            .await
+    }
+
+    async fn send_batch_inner(&self, refresh_threshold_secs: i64) {
         // Collect active updates (non-zero delta) and move delta → in_flight.
         // An account is included if it has any non-zero delta OR has gone stale.
         let mut updates: HashMap<AccountId, ResourceUsageUpdate> = HashMap::new();
@@ -1638,6 +1641,37 @@ mod tests {
 
         let result = svc.initialize_account(account_id()).await;
         assert!(result.is_err());
+    }
+
+    /// One span per tick, not one for the lifetime of the batch loop.
+    #[test]
+    async fn send_batch_records_one_closed_span_when_it_sends_a_batch() {
+        let mock = Arc::new(MockRegistryService::new(1000, 512));
+        let svc = make_grpc(mock);
+        let entry = svc.initialize_account(account_id()).await.unwrap();
+        entry.borrow_fuel(300);
+
+        let recorder = crate::span_test_support::record_spans();
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
+
+        recorder.assert_closed_span("resource_limits_batch_update");
+        recorder.assert_all_closed();
+    }
+
+    /// An idle tick is still spanned: discovering that there is nothing to send is
+    /// itself work that can fail, and events recorded outside a span never reach
+    /// the trace. Volume is controlled by the span's debug level, not by omitting
+    /// it.
+    #[test]
+    async fn send_batch_records_one_closed_span_when_there_is_nothing_to_send() {
+        let mock = Arc::new(MockRegistryService::new(1000, 512));
+        let svc = make_grpc(mock);
+        let _ = svc.initialize_account(account_id()).await.unwrap();
+
+        let recorder = crate::span_test_support::record_spans();
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
+
+        recorder.assert_closed_span("resource_limits_batch_update");
     }
 
     #[test]

@@ -29,7 +29,7 @@ use std::time::Duration;
 use tokio::sync::{Mutex, RwLock, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
-use tracing::{Instrument, info, info_span};
+use tracing::{Instrument, debug_span, info};
 
 type ResourceKey = (EnvironmentId, ResourceName);
 
@@ -471,26 +471,22 @@ impl GrpcQuotaService {
         renewal_interval: Duration,
     ) {
         let svc_weak = Arc::downgrade(self);
-        tokio::spawn(
-            async move {
-                loop {
-                    tokio::select! {
-                        _ = shutdown_token.cancelled() => break,
-                        _ = tokio::time::sleep(renewal_interval) => {}
-                    }
-                    let svc = match svc_weak.upgrade() {
-                        Some(s) => s,
-                        None => {
-                            info!("QuotaService was dropped, stopping renewal loop");
-                            break;
-                        }
-                    };
-                    svc.renew_all().await;
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => break,
+                    _ = tokio::time::sleep(renewal_interval) => {}
                 }
+                let svc = match svc_weak.upgrade() {
+                    Some(s) => s,
+                    None => {
+                        info!("QuotaService was dropped, stopping renewal loop");
+                        break;
+                    }
+                };
+                svc.renew_all().await;
             }
-            .instrument(info_span!("Quota renewal loop"))
-            .instrument(tracing::Span::current()),
-        );
+        });
     }
 
     async fn get_slot(&self, key: &ResourceKey) -> Option<Arc<LeaseEntry>> {
@@ -741,7 +737,15 @@ impl GrpcQuotaService {
         }
     }
 
+    /// Performs one renewal pass, spanned per pass rather than per loop: a span
+    /// wrapping the loop would never close, so it would never be exported.
     async fn renew_all(&self) {
+        self.renew_all_inner()
+            .instrument(debug_span!("quota_renewal"))
+            .await
+    }
+
+    async fn renew_all_inner(&self) {
         // phase 1: collect live and dead slots
         let mut entries_to_renew: Vec<(ResourceKey, Arc<LeaseEntry>)> = Vec::new();
         let mut leases_to_release: Vec<TrackedLease> = Vec::new();
@@ -1407,6 +1411,18 @@ mod tests {
             Duration::from_millis(200),
             Duration::from_secs(60),
         )
+    }
+
+    /// One span per renewal pass, not one for the lifetime of the renewal loop.
+    #[test]
+    async fn renew_all_records_one_closed_span_per_pass() {
+        let svc = make_service(MockShardManager::new());
+
+        let recorder = crate::span_test_support::record_spans();
+        svc.renew_all().await;
+
+        recorder.assert_closed_span("quota_renewal");
+        recorder.assert_all_closed();
     }
 
     #[test]

@@ -57,6 +57,10 @@ pub struct EnvBasedTestDependenciesConfig {
     pub redis_key_prefix: String,
     pub golem_repo_root: PathBuf,
     pub unique_network_id: String,
+    /// Whether spawned services export their own spans over OTLP. Off by default;
+    /// tests that assert on exported spans turn it on and point it at a collector
+    /// with [`OtlpEndpoint::set_for_spawned_services`].
+    pub otlp: bool,
 }
 
 impl EnvBasedTestDependenciesConfig {
@@ -144,6 +148,7 @@ impl Default for EnvBasedTestDependenciesConfig {
             redis_key_prefix: "".to_string(),
             golem_repo_root: PathBuf::from(".."),
             unique_network_id: Uuid::new_v4().to_string(),
+            otlp: false,
         }
     }
 }
@@ -227,7 +232,7 @@ impl EnvBasedTestDependencies {
                 config.default_verbosity(),
                 config.default_stdout_level(),
                 config.default_stderr_level(),
-                false,
+                config.otlp,
             )
             .await,
         )
@@ -250,7 +255,7 @@ impl EnvBasedTestDependencies {
                 config.default_verbosity(),
                 config.default_stdout_level(),
                 config.default_stderr_level(),
-                false,
+                config.otlp,
             )
             .await,
         )
@@ -273,7 +278,7 @@ impl EnvBasedTestDependencies {
                 config.default_stdout_level(),
                 config.default_stderr_level(),
                 true,
-                false,
+                config.otlp,
             )
             .await,
         )
@@ -302,7 +307,7 @@ impl EnvBasedTestDependencies {
                 config.default_stderr_level(),
                 registry_service,
                 true,
-                false,
+                config.otlp,
             )
             .await,
         )
@@ -331,7 +336,7 @@ impl EnvBasedTestDependencies {
                 registry_service,
                 config.environment_state_cache_capacity,
                 config.oplog_archive_interval,
-                false,
+                config.otlp,
             )
             .await,
         )

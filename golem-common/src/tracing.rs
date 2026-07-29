@@ -47,6 +47,176 @@ pub enum Output {
     Otlp,
 }
 
+/// How work that was handed off to be run elsewhere should be related back to
+/// whatever handed it off.
+///
+/// The choice is not a matter of taste: it follows from whether the originator is
+/// still running when the work runs.
+#[derive(Clone, Debug)]
+pub enum TraceOrigin {
+    /// The originator waits for the work to finish, so its span encloses the work
+    /// and the work belongs in the originator's trace as a child.
+    ///
+    /// This is the OpenTelemetry messaging conventions' single-message exception to
+    /// their links-by-default rule.
+    AwaitedBy(TraceParent),
+    /// The originator returns before the work runs, so the work gets its own trace
+    /// with a link back. Making it a child would report a span longer than its
+    /// parent, and often one that started after its parent finished.
+    TriggeredBy(TraceParent),
+}
+
+impl TraceOrigin {
+    /// Captures the current span as an originator that will wait for the work.
+    ///
+    /// Call this where the waiting span is current: the span that stays open for
+    /// the whole time the work runs, not an inner short-lived one. The captured
+    /// span becomes the work's parent, so it has to enclose the work in time.
+    pub fn awaited() -> Self {
+        Self::AwaitedBy(TraceParent::capture_current())
+    }
+
+    /// Captures the current span as an originator that will not wait for the work.
+    pub fn triggered() -> Self {
+        Self::TriggeredBy(TraceParent::capture_current())
+    }
+
+    /// An origin with nothing to relate to, for work with no in-process
+    /// originator - recovered from durable storage after a restart, for example.
+    pub fn none() -> Self {
+        Self::TriggeredBy(TraceParent::default())
+    }
+
+    /// Relates `span` to this origin. `span` must have been created with
+    /// `parent: None`.
+    pub fn relate(&self, span: &tracing::Span) {
+        match self {
+            Self::AwaitedBy(parent) => parent.set_as_parent_of(span),
+            Self::TriggeredBy(parent) => parent.add_as_link_to(span),
+        }
+    }
+}
+
+/// Creates a parentless span and relates it to a [`TraceOrigin`], yielding the
+/// span.
+///
+/// The span starts with no parent so that `relate` is free to either give it the
+/// originator as parent or leave it a linked root.
+#[macro_export]
+macro_rules! related_span {
+    ($origin:expr, $level:expr, $name:expr) => {{
+        let span = ::tracing::span!(parent: None, $level, $name);
+        $origin.relate(&span);
+        span
+    }};
+    ($origin:expr, $level:expr, $name:expr, $($fields:tt)*) => {{
+        let span = ::tracing::span!(parent: None, $level, $name, $($fields)*);
+        $origin.relate(&span);
+        span
+    }};
+}
+
+/// A trace parent captured from a [`tracing::Span`], holding only that span's
+/// OpenTelemetry [`SpanContext`](opentelemetry::trace::SpanContext) rather than
+/// the span itself.
+///
+/// Use this whenever the origin of an operation has to be remembered across an
+/// asynchronous boundary - an invocation enqueued by one request and executed
+/// after that request returned, for example.
+///
+/// A `tracing::Span` is unsuitable for that: it stays open until every clone of
+/// it is dropped, and while it is open `tracing-opentelemetry` appends an
+/// OpenTelemetry event to it for every `tracing` event recorded inside it,
+/// without any bound. A captured `SpanContext` is a small fixed-size value that
+/// holds nothing open.
+///
+/// Which of the two relationships to apply depends on whether the origin encloses
+/// the work in time:
+///
+/// - [`set_as_parent_of`](Self::set_as_parent_of) when the origin waits for the
+///   work, so the two belong in one trace and the parent really does contain the
+///   child.
+/// - [`add_as_link_to`](Self::add_as_link_to) when the origin has already
+///   returned, so the work belongs in its own trace with a link back. The
+///   OpenTelemetry specification is explicit that a parent is the wrong
+///   relationship when it does not enclose the child, and names a "long running
+///   asynchronous data processing operation that was initiated by one of many
+///   fast incoming requests" as a case for a new linked trace.
+///
+/// That split follows the OpenTelemetry specification: links are the messaging
+/// conventions' default for correlating a producer with a consumer, and
+/// parent-child is permitted only for single-message scenarios.
+#[derive(Clone, Debug, Default)]
+pub struct TraceParent(Option<opentelemetry::trace::SpanContext>);
+
+impl TraceParent {
+    /// Captures the currently active span as a trace parent. Yields an empty
+    /// parent when there is no active span, or when no OTLP layer is installed.
+    pub fn capture_current() -> Self {
+        Self::of(&tracing::Span::current())
+    }
+
+    /// Captures `span` as a trace parent. Yields an empty parent if `span` is
+    /// disabled, or if no OTLP layer is installed.
+    ///
+    /// Note that this forces `span`'s sampling decision, since its span id has to
+    /// be known to be recorded as a parent or link.
+    fn of(span: &tracing::Span) -> Self {
+        use opentelemetry::trace::TraceContextExt;
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+        let span_context = span.context().span().span_context().clone();
+        if span_context.is_valid() {
+            Self(Some(span_context))
+        } else {
+            Self(None)
+        }
+    }
+
+    /// Only the tests need to distinguish an empty parent; production code goes
+    /// through [`TraceOrigin::relate`], which no-ops on one.
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_none()
+    }
+
+    /// Makes `span` a child of the captured parent, joining the parent's trace.
+    ///
+    /// `span` must have been created with `parent: None`; a span that already has
+    /// a contextual or explicit parent keeps it. Does nothing for an empty
+    /// parent, leaving `span` a trace root.
+    ///
+    /// Only correct when the captured parent outlives `span` - otherwise the
+    /// exported trace contains a child longer than its parent, which breaks
+    /// critical-path analysis. Use [`add_as_link_to`](Self::add_as_link_to)
+    /// instead when that is not guaranteed.
+    pub(crate) fn set_as_parent_of(&self, span: &tracing::Span) {
+        use opentelemetry::trace::TraceContextExt;
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+        if let Some(span_context) = &self.0 {
+            span.set_parent(
+                opentelemetry::Context::new().with_remote_span_context(span_context.clone()),
+            );
+        }
+    }
+
+    /// Records the captured parent as a link on `span`, for work that the parent
+    /// caused but does not contain. `span` stays the root of its own trace. Does
+    /// nothing for an empty parent.
+    ///
+    /// The link is recorded on the consuming span and points back at the
+    /// originating one, which is the direction the OpenTelemetry messaging
+    /// conventions prescribe.
+    pub(crate) fn add_as_link_to(&self, span: &tracing::Span) {
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+        if let Some(span_context) = &self.0 {
+            span.add_link(span_context.clone());
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct OutputConfig {
     pub enabled: bool,
@@ -420,9 +590,24 @@ pub mod directive {
     /// enables trace-level for `otel::tracing` target so that spans
     /// created by `tonic-tracing-opentelemetry` (which uses TRACE level)
     /// are exported and can propagate trace context across services.
+    ///
+    /// It additionally drops debug-level events from the WASM host-call
+    /// implementations, which are the highest-volume events in the executor - one
+    /// or more per host call, all recorded onto the enclosing invocation span.
+    ///
+    /// Dropping them loses nothing that could ever have been exported:
+    /// `tracing-opentelemetry` accumulates events on an open span without bound,
+    /// and the SDK truncates to the *first* `max_events_per_span` (128 by default)
+    /// only at span close - so for a long invocation every host-call event past
+    /// the 128th is held for the whole invocation and then discarded. This is also
+    /// why `OTEL_SPAN_EVENT_COUNT_LIMIT` cannot bound that memory.
+    ///
+    /// Console and file layers are unaffected and still log these events.
     pub fn otlp_deps() -> Vec<Directive> {
         let mut deps = default_deps();
         deps.push("otel::tracing=trace".parse().unwrap());
+        deps.push(info("golem_worker_executor::durable_host"));
+        deps.push(info("golem_worker_executor::services::rdbms"));
         deps
     }
 }
@@ -829,7 +1014,7 @@ pub(crate) mod format {
 }
 
 #[cfg(test)]
-mod test {
+pub(crate) mod test {
     pub fn make_mock_writer<'a>() -> tracing_test::internal::MockWriter<'a> {
         tracing_test::internal::MockWriter::new(tracing_test::internal::global_buf())
     }
@@ -842,6 +1027,248 @@ mod test {
                 .to_vec(),
         )
         .unwrap()
+    }
+
+    /// Support for asserting on what the OTLP path actually exports.
+    ///
+    /// Tests here run against a real `tracing-opentelemetry` layer and a real
+    /// `SdkTracerProvider`, because what is being verified is precisely how that
+    /// stack treats parents, links, span kind and span lifetime - a hand-written
+    /// fake would verify nothing.
+    pub(crate) mod otel {
+        use std::sync::{Arc, Mutex};
+
+        use opentelemetry::trace::TracerProvider;
+        use opentelemetry_sdk::error::OTelSdkResult;
+        use opentelemetry_sdk::trace::{
+            SdkTracerProvider, SimpleSpanProcessor, SpanData, SpanExporter,
+        };
+        use tracing_subscriber::layer::SubscriberExt;
+
+        #[derive(Debug, Clone, Default)]
+        struct CollectingExporter {
+            spans: Arc<Mutex<Vec<SpanData>>>,
+        }
+
+        impl SpanExporter for CollectingExporter {
+            fn export(
+                &self,
+                batch: Vec<SpanData>,
+            ) -> impl std::future::Future<Output = OTelSdkResult> + Send {
+                self.spans.lock().unwrap().extend(batch);
+                std::future::ready(Ok(()))
+            }
+        }
+
+        /// Runs `f` under a subscriber whose only layer is a `tracing-opentelemetry`
+        /// layer, and returns the exported spans.
+        ///
+        /// `SimpleSpanProcessor` exports synchronously when a span closes, so every
+        /// span closed inside `f` is collected by the time this returns. A span
+        /// still open at the end of `f` is absent, which is what makes this usable
+        /// for asserting on span lifetime.
+        pub(crate) fn exported_spans(f: impl FnOnce()) -> Vec<SpanData> {
+            let collected: Arc<Mutex<Vec<SpanData>>> = Arc::new(Mutex::new(Vec::new()));
+            let provider = SdkTracerProvider::builder()
+                .with_span_processor(SimpleSpanProcessor::new(CollectingExporter {
+                    spans: collected.clone(),
+                }))
+                .build();
+            let subscriber = tracing_subscriber::registry()
+                .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
+
+            tracing::subscriber::with_default(subscriber, f);
+
+            collected.lock().unwrap().clone()
+        }
+
+        pub(crate) fn named<'a>(spans: &'a [SpanData], name: &str) -> &'a SpanData {
+            spans.iter().find(|s| s.name == name).unwrap_or_else(|| {
+                let found: Vec<&str> = spans.iter().map(|s| &*s.name).collect();
+                panic!("no exported span named {name:?}; exported: {found:?}")
+            })
+        }
+    }
+
+    /// Tests for [`crate::tracing::TraceParent`].
+    mod trace_parent {
+        use opentelemetry::trace::SpanId;
+        use test_r::test;
+
+        use crate::tracing::TraceParent;
+        use crate::tracing::test::otel::{exported_spans, named};
+
+        /// The synchronous invoke-and-await shape: the caller's span encloses the
+        /// execution, so the picked-up work is a child in the caller's trace.
+        #[test]
+        fn set_as_parent_of_adopts_the_captured_trace_and_parent() {
+            let spans = exported_spans(|| {
+                let caller = tracing::info_span!("caller");
+                let captured = caller.in_scope(TraceParent::capture_current);
+
+                let picked_up = tracing::info_span!(parent: None, "picked_up");
+                captured.set_as_parent_of(&picked_up);
+                drop(picked_up);
+                drop(caller);
+            });
+
+            let caller = named(&spans, "caller");
+            let picked_up = named(&spans, "picked_up");
+
+            assert_eq!(
+                picked_up.span_context.trace_id(),
+                caller.span_context.trace_id(),
+                "child should join the captured parent's trace"
+            );
+            assert_eq!(
+                picked_up.parent_span_id,
+                caller.span_context.span_id(),
+                "child's parent should be the captured span"
+            );
+        }
+
+        /// The asynchronous enqueue shape: the enqueuing request has already
+        /// returned, so execution is a new trace linked back to it. Per the
+        /// OpenTelemetry messaging conventions the link lives on the consumer span.
+        #[test]
+        fn add_as_link_to_starts_a_new_trace_linked_to_the_captured_span() {
+            let spans = exported_spans(|| {
+                let enqueue = tracing::info_span!("enqueue");
+                let captured = enqueue.in_scope(TraceParent::capture_current);
+                // The enqueuing request returns before the work is picked up.
+                drop(enqueue);
+
+                let picked_up = tracing::info_span!(parent: None, "picked_up");
+                captured.add_as_link_to(&picked_up);
+                drop(picked_up);
+            });
+
+            let enqueue = named(&spans, "enqueue");
+            let picked_up = named(&spans, "picked_up");
+
+            assert_ne!(
+                picked_up.span_context.trace_id(),
+                enqueue.span_context.trace_id(),
+                "linked work should be a separate trace"
+            );
+            assert_eq!(
+                picked_up.parent_span_id,
+                SpanId::INVALID,
+                "linked work should be a trace root, not a child"
+            );
+
+            let link_targets: Vec<(_, _)> = picked_up
+                .links
+                .iter()
+                .map(|l| (l.span_context.trace_id(), l.span_context.span_id()))
+                .collect();
+            assert!(
+                link_targets.contains(&(
+                    enqueue.span_context.trace_id(),
+                    enqueue.span_context.span_id()
+                )),
+                "consumer span should link to the enqueuing span; links were {link_targets:?}"
+            );
+        }
+
+        /// Capturing a parent must not keep the captured span open, so that a span
+        /// remembered for later use still closes and exports on its own schedule.
+        #[test]
+        fn capturing_a_parent_does_not_keep_the_captured_span_open() {
+            let mut held: Option<TraceParent> = None;
+
+            let spans = exported_spans(|| {
+                let request = tracing::info_span!("request");
+                held = Some(request.in_scope(TraceParent::capture_current));
+                drop(request);
+                // `held` is still alive here, as the pending-invocation map holds it
+                // while the invocation waits to be picked up.
+            });
+
+            assert!(held.is_some_and(|parent| !parent.is_empty()));
+            assert_eq!(
+                spans.len(),
+                1,
+                "the captured span must still close and export while its TraceParent is held"
+            );
+            assert_eq!(spans[0].name, "request");
+        }
+
+        /// With no active span, or with no OpenTelemetry layer installed, a captured
+        /// parent is empty and applying it changes nothing.
+        #[test]
+        fn an_empty_parent_leaves_the_span_as_a_root() {
+            let empty = TraceParent::default();
+            assert!(empty.is_empty());
+
+            let spans = exported_spans(|| {
+                let root = tracing::info_span!(parent: None, "root");
+                empty.set_as_parent_of(&root);
+                empty.add_as_link_to(&root);
+                drop(root);
+            });
+
+            let root = named(&spans, "root");
+            assert_eq!(root.parent_span_id, SpanId::INVALID);
+            assert!(root.links.is_empty());
+        }
+
+        /// `TraceOrigin` picks the relationship for us, so a call site only has to
+        /// say whether the caller waits.
+        #[test]
+        fn an_awaited_origin_makes_the_work_a_child_in_the_callers_trace() {
+            use crate::tracing::TraceOrigin;
+
+            let spans = exported_spans(|| {
+                let caller = tracing::info_span!("caller");
+                let origin = caller.in_scope(TraceOrigin::awaited);
+
+                let work = tracing::info_span!(parent: None, "work");
+                origin.relate(&work);
+                drop(work);
+                drop(caller);
+            });
+
+            let caller = named(&spans, "caller");
+            let work = named(&spans, "work");
+            assert_eq!(work.span_context.trace_id(), caller.span_context.trace_id());
+            assert_eq!(work.parent_span_id, caller.span_context.span_id());
+            assert!(work.links.is_empty(), "an awaited origin uses a parent");
+        }
+
+        #[test]
+        fn a_triggered_origin_makes_the_work_a_linked_root() {
+            use crate::tracing::TraceOrigin;
+
+            let spans = exported_spans(|| {
+                let caller = tracing::info_span!("caller");
+                let origin = caller.in_scope(TraceOrigin::triggered);
+                drop(caller);
+
+                let work = tracing::info_span!(parent: None, "work");
+                origin.relate(&work);
+                drop(work);
+            });
+
+            let caller = named(&spans, "caller");
+            let work = named(&spans, "work");
+            assert_ne!(work.span_context.trace_id(), caller.span_context.trace_id());
+            assert_eq!(work.parent_span_id, SpanId::INVALID);
+            assert_eq!(
+                work.links.iter().count(),
+                1,
+                "a triggered origin uses a link"
+            );
+        }
+
+        #[test]
+        fn capture_current_outside_any_span_is_empty() {
+            let mut captured = None;
+            exported_spans(|| {
+                captured = Some(TraceParent::capture_current());
+            });
+            assert!(captured.is_some_and(|parent| parent.is_empty()));
+        }
     }
 
     mod json_flatten_span_formatter {

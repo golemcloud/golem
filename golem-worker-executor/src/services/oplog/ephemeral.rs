@@ -33,7 +33,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
-use tracing::{Instrument, Level, Span, debug, info, span, warn};
+use golem_common::related_span;
+use golem_common::tracing::TraceOrigin;
+use tracing::{Instrument, Level, debug, info, warn};
 
 pub struct EphemeralOplog {
     owned_agent_id: OwnedAgentId,
@@ -173,7 +175,7 @@ impl EphemeralOplog {
                     keep_alive: Some(keep_alive),
                     done: done_tx,
                     drain,
-                    transfer_span: Span::current(),
+                    transfer_origin: TraceOrigin::triggered(),
                 })
                 .expect("Failed to enqueue transfer of ephemeral oplog entries");
             // Return true if there are more movable layers that could still hold data
@@ -220,7 +222,7 @@ impl EphemeralOplog {
                     mut keep_alive,
                     done,
                     drain,
-                    transfer_span,
+                    transfer_origin,
                 } => {
                     async {
                         if source + 1 >= lower.len().get() {
@@ -268,17 +270,13 @@ impl EphemeralOplog {
                             let _ = done.send(());
                         }
                     }
-                    .instrument(
-                        span!(parent: None, Level::INFO, "Ephemeral oplog background transfer")
-                            .follows_from(transfer_span)
-                            .clone(),
-                    )
+                    .instrument(related_span!(transfer_origin, Level::INFO, "ephemeral_oplog_background_transfer"))
                     .await;
                 }
                 BackgroundTransferMessage::TransferFromPrimary {
                     mut keep_alive,
                     done,
-                    transfer_span,
+                    transfer_origin,
                     ..
                 } => {
                     async {
@@ -292,11 +290,11 @@ impl EphemeralOplog {
                             let _ = done.send(());
                         }
                     }
-                    .instrument(
-                        span!(parent: None, Level::INFO, "Ephemeral oplog background transfer")
-                            .follows_from(transfer_span)
-                            .clone(),
-                    )
+                    .instrument(related_span!(
+                        transfer_origin,
+                        Level::INFO,
+                        "ephemeral_oplog_background_transfer"
+                    ))
                     .await;
                 }
             }

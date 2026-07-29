@@ -14,7 +14,7 @@
 
 use async_trait::async_trait;
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -25,6 +25,10 @@ mod docker;
 #[async_trait]
 pub trait Jaeger: Send + Sync {
     fn otlp_http_endpoint(&self) -> String;
+    /// Host port the OTLP/HTTP receiver is published on. Chosen at container start,
+    /// so callers that need to configure an exporter must read it rather than
+    /// assume the default.
+    fn otlp_http_port(&self) -> u16;
     fn query_url(&self) -> String;
     async fn kill(&self);
 }
@@ -38,7 +42,17 @@ pub struct JaegerQueryClient {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct JaegerQueryResponse {
+    /// Jaeger sends `null` rather than `[]` when no trace matched.
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub data: Vec<JaegerTrace>,
+}
+
+fn null_as_empty<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -46,6 +60,16 @@ pub struct JaegerTrace {
     #[serde(rename = "traceID")]
     pub trace_id: String,
     pub spans: Vec<JaegerSpan>,
+    /// Emitting process per `JaegerSpan::process_id`. This is where the service
+    /// name lives; spans themselves do not carry it.
+    #[serde(default)]
+    pub processes: HashMap<String, JaegerProcess>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct JaegerProcess {
+    #[serde(rename = "serviceName")]
+    pub service_name: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -56,6 +80,13 @@ pub struct JaegerSpan {
     pub span_id: String,
     #[serde(rename = "operationName")]
     pub operation_name: String,
+    #[serde(rename = "processID", default)]
+    pub process_id: String,
+    /// Span start, in microseconds since the Unix epoch.
+    #[serde(rename = "startTime")]
+    pub start_time: u64,
+    /// Span duration in microseconds.
+    pub duration: u64,
     pub references: Vec<JaegerReference>,
     pub tags: Vec<JaegerTag>,
 }
@@ -124,6 +155,29 @@ impl JaegerTrace {
         }
     }
 
+    /// Service that emitted `span`, if the trace declared its process.
+    pub fn service_of(&self, span: &JaegerSpan) -> Option<&str> {
+        self.processes
+            .get(&span.process_id)
+            .map(|p| p.service_name.as_str())
+    }
+
+    /// Distinct service names that contributed spans to this trace.
+    pub fn service_names(&self) -> HashSet<&str> {
+        self.processes
+            .values()
+            .map(|p| p.service_name.as_str())
+            .collect()
+    }
+
+    /// Operation names of every span in the trace.
+    pub fn operation_names(&self) -> HashSet<&str> {
+        self.spans
+            .iter()
+            .map(|s| s.operation_name.as_str())
+            .collect()
+    }
+
     /// Returns span IDs whose parent references a span not present in this
     /// trace and not listed in `known_external_parent_ids`.
     pub fn disconnected_spans(
@@ -158,6 +212,30 @@ impl JaegerTrace {
             .collect()
     }
 
+    /// Returns `(operation_name, parent_operation_name)` for every span that
+    /// escapes its parent's time window - it either started before its parent or
+    /// ended after it.
+    ///
+    /// A span is supposed to represent one operation, and a parent is supposed to
+    /// contain the operations of its children; a child that outlives its parent
+    /// makes critical-path analysis meaningless. Spans whose parent was not
+    /// exported into this trace are skipped, since there is nothing to compare
+    /// against, and linked roots (FOLLOWS_FROM only) are not children at all so
+    /// they are exempt by construction.
+    pub fn spans_outliving_parent(&self) -> Vec<(&str, &str)> {
+        let by_id: HashMap<&str, &JaegerSpan> =
+            self.spans.iter().map(|s| (s.span_id.as_str(), s)).collect();
+
+        self.spans
+            .iter()
+            .filter_map(|span| {
+                let parent = by_id.get(span.parent_span_id()?)?;
+                (span.start_time < parent.start_time || span.end_time() > parent.end_time())
+                    .then_some((span.operation_name.as_str(), parent.operation_name.as_str()))
+            })
+            .collect()
+    }
+
     /// Returns span IDs of spans whose operation name is `"unknown"`.
     pub fn unknown_name_spans(&self) -> Vec<&str> {
         self.spans
@@ -169,9 +247,22 @@ impl JaegerTrace {
 }
 
 impl JaegerSpan {
-    /// Returns the parent span ID from the first CHILD_OF reference, if any.
+    /// Returns the parent span ID from the CHILD_OF reference, if any.
+    ///
+    /// Only CHILD_OF establishes parentage. A span may also carry FOLLOWS_FROM
+    /// references, which is how OpenTelemetry span links are surfaced, and those
+    /// must not be mistaken for a parent - a span whose only reference is
+    /// FOLLOWS_FROM is the root of its own trace.
     pub fn parent_span_id(&self) -> Option<&str> {
-        self.references.first().map(|r| r.span_id.as_str())
+        self.references
+            .iter()
+            .find(|r| r.ref_type == "CHILD_OF")
+            .map(|r| r.span_id.as_str())
+    }
+
+    /// Span end, in microseconds since the Unix epoch.
+    pub fn end_time(&self) -> u64 {
+        self.start_time + self.duration
     }
 
     /// Returns the value of a tag by key, if present.
@@ -182,6 +273,8 @@ impl JaegerSpan {
 
 #[derive(Debug, Clone, Deserialize)]
 struct JaegerServicesResponse {
+    /// Jaeger sends `null` rather than `[]` when it knows of no services yet.
+    #[serde(default, deserialize_with = "null_as_empty")]
     data: Vec<String>,
 }
 
@@ -298,5 +391,140 @@ async fn wait_for_startup(query_url: &str, timeout: Duration) {
             panic!("Failed to verify that Jaeger is running at {query_url}");
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+
+    use super::{HashMap, JaegerReference, JaegerSpan, JaegerTrace};
+
+    fn span(
+        span_id: &str,
+        name: &str,
+        start_time: u64,
+        duration: u64,
+        references: Vec<JaegerReference>,
+    ) -> JaegerSpan {
+        JaegerSpan {
+            trace_id: "trace".to_string(),
+            span_id: span_id.to_string(),
+            operation_name: name.to_string(),
+            process_id: "p1".to_string(),
+            start_time,
+            duration,
+            references,
+            tags: vec![],
+        }
+    }
+
+    fn reference(ref_type: &str, span_id: &str) -> JaegerReference {
+        JaegerReference {
+            ref_type: ref_type.to_string(),
+            trace_id: "trace".to_string(),
+            span_id: span_id.to_string(),
+        }
+    }
+
+    /// A span may carry both a CHILD_OF parent and FOLLOWS_FROM links, and Jaeger
+    /// does not guarantee the order. Only the CHILD_OF reference is the parent.
+    #[test]
+    fn parent_span_id_ignores_non_child_of_references() {
+        let with_link_first = span(
+            "b",
+            "child",
+            0,
+            1,
+            vec![
+                reference("FOLLOWS_FROM", "link"),
+                reference("CHILD_OF", "a"),
+            ],
+        );
+        assert_eq!(with_link_first.parent_span_id(), Some("a"));
+
+        let only_link = span("b", "root", 0, 1, vec![reference("FOLLOWS_FROM", "link")]);
+        assert_eq!(
+            only_link.parent_span_id(),
+            None,
+            "a linked root has no parent"
+        );
+    }
+
+    /// Acceptance criterion: no span may escape its parent's window. A child that
+    /// starts before or ends after its parent means the parent does not actually
+    /// contain the operation it appears to contain.
+    #[test]
+    fn spans_outliving_parent_flags_children_that_escape_their_parent() {
+        let trace = JaegerTrace {
+            trace_id: "trace".to_string(),
+            processes: HashMap::new(),
+            spans: vec![
+                span("a", "parent", 1_000, 1_000, vec![]),
+                span(
+                    "b",
+                    "contained",
+                    1_100,
+                    500,
+                    vec![reference("CHILD_OF", "a")],
+                ),
+                span(
+                    "c",
+                    "ends_late",
+                    1_500,
+                    2_000,
+                    vec![reference("CHILD_OF", "a")],
+                ),
+                span(
+                    "d",
+                    "starts_early",
+                    500,
+                    200,
+                    vec![reference("CHILD_OF", "a")],
+                ),
+                // A linked root is not a child, so it is exempt.
+                span(
+                    "e",
+                    "linked",
+                    9_000,
+                    9_000,
+                    vec![reference("FOLLOWS_FROM", "a")],
+                ),
+            ],
+        };
+
+        let offenders: Vec<&str> = trace
+            .spans_outliving_parent()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+
+        assert!(offenders.contains(&"ends_late"), "got {offenders:?}");
+        assert!(offenders.contains(&"starts_early"), "got {offenders:?}");
+        assert!(!offenders.contains(&"contained"), "got {offenders:?}");
+        assert!(
+            !offenders.contains(&"linked"),
+            "a linked root is not a child and must not be flagged; got {offenders:?}"
+        );
+    }
+
+    #[test]
+    fn spans_outliving_parent_ignores_parents_outside_the_trace() {
+        let trace = JaegerTrace {
+            trace_id: "trace".to_string(),
+            processes: HashMap::new(),
+            spans: vec![span(
+                "b",
+                "remote_child",
+                1_000,
+                10_000,
+                vec![reference("CHILD_OF", "not-in-this-trace")],
+            )],
+        };
+
+        assert!(
+            trace.spans_outliving_parent().is_empty(),
+            "cannot compare against a parent that was not exported here"
+        );
     }
 }

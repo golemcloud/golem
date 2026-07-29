@@ -52,7 +52,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
-use tracing::Instrument;
 use uuid::{Uuid, uuid};
 
 /// Per-plugin live state tracked by `ForwardingOplogState` for exactly-once delivery.
@@ -834,7 +833,8 @@ impl ForwardingOplog {
                     state.try_flush().await;
                 }
             }
-            .in_current_span()
+            // No span: this timer runs for the worker's whole life, and a span held
+            // that long neither closes nor stops accumulating events.
         });
         Self {
             inner,
@@ -1327,8 +1327,8 @@ impl ForwardingOplogState {
                                 }
                             }
                         }
-                    }
-                    .in_current_span(),
+                    },
+                    // No span: this monitor outlives the call that spawns it.
                 );
                 self.monitor_tasks.push(monitor);
             }

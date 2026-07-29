@@ -46,12 +46,14 @@ use golem_common::model::oplog::{
     PersistenceLevel,
 };
 use golem_common::model::{NamedRetryPolicy, PredicateValue, RetryContext, RetryProperties};
+use golem_common::related_span;
+use golem_common::tracing::TraceOrigin;
 use http::{HeaderName, HeaderValue};
 use http_body_util::BodyExt;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::Instrument;
+use tracing::{Instrument, Level};
 use wasmtime_wasi::OutputStream;
 use wasmtime_wasi_http::HttpConnectionPool;
 use wasmtime_wasi_http::p2::bindings::http::types as wasi_http_types;
@@ -672,6 +674,12 @@ pub(crate) fn spawn_http_status_retry_after_body_finish<Ctx: crate::workerctx::W
     max_delay: Duration,
     begin_index: OplogIndex,
 ) -> FutureIncomingResponseHandle {
+    // The handle this returns is owned by a guest resource, so the task can outlive
+    // the invocation that started it. It therefore links back to the invocation
+    // rather than running inside its span, which would hold that span open - and
+    // unexported - for as long as the guest keeps the resource alive.
+    let origin = TraceOrigin::triggered();
+    let agent_id = worker.agent_id();
     wasmtime_wasi::runtime::spawn(
         async move {
             let result = original_handle.await;
@@ -774,7 +782,12 @@ pub(crate) fn spawn_http_status_retry_after_body_finish<Ctx: crate::workerctx::W
 
             Ok(Ok(response))
         }
-        .in_current_span(),
+        .instrument(related_span!(
+            origin,
+            Level::INFO,
+            "http_status_retry_after_body_finish",
+            %agent_id
+        )),
     )
 }
 
@@ -917,6 +930,12 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
     let connect_timeout = config.connect_timeout;
     let first_byte_timeout = config.first_byte_timeout;
     let between_bytes_timeout = config.between_bytes_timeout;
+
+    // See `spawn_http_status_retry_after_body_finish`: the returned handle is owned
+    // by a guest resource, so this links back to the invocation instead of holding
+    // its span open.
+    let origin = TraceOrigin::triggered();
+    let agent_id = worker.agent_id();
 
     wasmtime_wasi::runtime::spawn(
         async move {
@@ -1111,7 +1130,12 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                 }
             }
         }
-        .in_current_span(),
+        .instrument(related_span!(
+            origin,
+            Level::INFO,
+            "http_request_retry",
+            %agent_id
+        )),
     )
 }
 

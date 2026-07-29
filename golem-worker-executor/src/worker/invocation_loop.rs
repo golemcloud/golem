@@ -46,6 +46,8 @@ use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorEr
 use golem_service_base::model::GetFileSystemNodeResult;
 
 use golem_common::model::agent::structural_format::format_structural;
+use golem_common::related_span;
+use golem_common::tracing::TraceOrigin;
 use std::collections::VecDeque;
 use std::ops::DerefMut;
 use std::sync::Arc;
@@ -54,9 +56,40 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
-use tracing::{Instrument, Level, Span, debug, span, warn};
+use tracing::{Instrument, Level, debug, span, warn};
 use wasmtime::Store;
 use wasmtime::component::Instance;
+
+/// Span for one bounded phase of a worker's lifecycle.
+///
+/// The invocation loop has no span of its own, because it lives as long as the
+/// worker is resident and a span that stays open that long is never exported and
+/// retains every event recorded inside it (see `RunningWorker::new`). Each phase
+/// span therefore carries the `agent_id` / `agent_type` fields itself, and roots
+/// its own trace with a link back to the worker's startup so the phases of one
+/// worker remain navigable from each other.
+///
+/// `$this` must have `owned_agent_id` and `startup_origin` fields and an
+/// `agent_type_label` method, which both `InvocationLoop` and
+/// `InnerInvocationLoop` do.
+macro_rules! agent_phase_span {
+    ($this:expr, $name:expr) => {
+        related_span!(
+            $this.startup_origin,
+            Level::INFO,
+            $name,
+            agent_id = %$this.owned_agent_id.agent_id,
+            agent_type = $this.agent_type_label(),
+        )
+    };
+}
+
+fn agent_type_label(parsed_agent_id: &Option<ParsedAgentId>) -> String {
+    parsed_agent_id
+        .as_ref()
+        .map(|id| id.agent_type.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
 
 /// Context of a running worker's invocation loop
 pub struct InvocationLoop<Ctx: WorkerCtx> {
@@ -75,9 +108,16 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     /// `ResumeReplay` is not represented in the internal queue, so we track it
     /// explicitly to avoid evicting a worker that is blocked waking up for it.
     pub resume_replay_pending: Arc<AtomicBool>,
+    /// The worker's startup, captured so each phase span can link back to it.
+    pub startup_origin: TraceOrigin,
 }
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
+    /// Agent type for span fields, or `-` when the agent id could not be parsed.
+    fn agent_type_label(&self) -> String {
+        agent_type_label(&self.parent.parsed_agent_id)
+    }
+
     fn interrupt_decision(kind: InterruptKind) -> RetryDecision {
         match kind {
             InterruptKind::Restart | InterruptKind::Jump => RetryDecision::Immediate,
@@ -104,9 +144,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// - Suspending the worker
     /// - Process the retry decision
     pub async fn run(&mut self) {
-        loop {
-            debug!("Invocation queue loop creating the instance");
+        let agent_id = self.owned_agent_id.agent_id.clone();
 
+        loop {
             let (instance, store) = if let Some((instance, store)) = self.create_instance().await {
                 (instance, store)
             } else {
@@ -114,14 +154,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 break;
             };
 
-            debug!("Invocation queue loop preparing the instance");
-
             let mut final_decision = self.recover_instance_state(&instance, &store).await;
             let mut final_interrupt = None;
             let mut cleanup_ephemeral_worker = false;
 
             if let Some((kind, decision)) = self.pending_interrupt().await {
                 debug!(
+                    %agent_id,
                     ?decision,
                     "Invocation queue loop interrupted after recovery"
                 );
@@ -145,6 +184,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     idle_snapshot_task: None,
                     concurrent_agent_permit: &mut self.concurrent_agent_permit,
                     resume_replay_pending: self.resume_replay_pending.clone(),
+                    startup_origin: self.startup_origin.clone(),
                 };
 
                 let result = inner_loop.run().await;
@@ -165,7 +205,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
             match final_decision {
                 None | Some(RetryDecision::None) => {
-                    debug!("Invocation queue loop notifying parent about being stopped");
+                    debug!(
+                        %agent_id,
+                        "Invocation queue loop notifying parent about being stopped"
+                    );
                     self.parent
                         .stop_internal(
                             true,
@@ -184,11 +227,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 Some(RetryDecision::TryStop(ts)) => {
                     if ts < *self.parent.last_resume_request.lock().await {
                         debug!(
+                            %agent_id,
                             "Suspend request ignored because there was a resume request since it"
                         );
                         continue;
                     } else {
-                        debug!("Invocation queue loop notifying parent about being stopped");
+                        debug!(
+                            %agent_id,
+                            "Invocation queue loop notifying parent about being stopped"
+                        );
                         self.parent
                             .stop_internal(
                                 true,
@@ -202,19 +249,22 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     }
                 }
                 Some(RetryDecision::Immediate) => {
-                    debug!("Invocation queue loop triggering restart immediately");
+                    debug!(%agent_id, "Invocation queue loop triggering restart immediately");
                     continue;
                 }
                 Some(RetryDecision::Delayed(delay)) => {
-                    debug!("Invocation queue loop sleeping for {delay:?} for delayed restart");
+                    debug!(
+                        %agent_id,
+                        "Invocation queue loop sleeping for {delay:?} for delayed restart"
+                    );
                     tokio::select! {
                         _ = tokio::time::sleep(delay) => {
-                            debug!("Invocation queue loop restarting after delay");
+                            debug!(%agent_id, "Invocation queue loop restarting after delay");
                             continue;
                         }
                         command = self.receiver.recv() => {
                             if let Some((kind, decision)) = self.pending_interrupt().await {
-                                debug!(?decision, "Invocation queue loop interrupted during delayed retry");
+                                debug!(%agent_id, ?decision, "Invocation queue loop interrupted during delayed retry");
                                 if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
                                     store
                                         .lock()
@@ -245,16 +295,16 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
                             match command {
                                 Some(WorkerCommand::Unblock) => {
-                                    debug!("Invocation queue loop woke up during delayed retry");
+                                    debug!(%agent_id, "Invocation queue loop woke up during delayed retry");
                                     continue;
                                 }
                                 Some(WorkerCommand::ResumeReplay) => {
                                     self.resume_replay_pending.store(false, Ordering::Release);
-                                    debug!("Invocation queue loop woke up for resume replay during delayed retry");
+                                    debug!(%agent_id, "Invocation queue loop woke up for resume replay during delayed retry");
                                     continue;
                                 }
                                 None => {
-                                    debug!("Invocation queue loop command channel closed during delayed retry");
+                                    debug!(%agent_id, "Invocation queue loop command channel closed during delayed retry");
                                     self.parent
                                         .stop_internal(
                                             true,
@@ -273,6 +323,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 Some(RetryDecision::ReacquirePermits) => {
                     let delay = get_delay(self.parent.oom_retry_config(), self.oom_retry_count);
                     debug!(
+                        %agent_id,
                         "Invocation queue loop dropping memory permits and triggering restart with a delay of {delay:?}"
                     );
                     let _ = Worker::restart_on_oom(
@@ -290,6 +341,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
     /// Create the worker instance and publish an event about it
     async fn create_instance(&self) -> Option<(Instance, Mutex<Store<Ctx>>)> {
+        self.create_instance_inner()
+            .instrument(agent_phase_span!(self, "create_instance"))
+            .await
+    }
+
+    async fn create_instance_inner(&self) -> Option<(Instance, Mutex<Store<Ctx>>)> {
+        debug!("Creating the worker instance");
         match RunningWorker::create_instance(self.parent.clone()).await {
             Ok((instance, store)) => {
                 self.parent.events().publish(Event::WorkerLoaded {
@@ -333,6 +391,17 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         instance: &Instance,
         store: &Mutex<Store<Ctx>>,
     ) -> Option<RetryDecision> {
+        self.recover_instance_state_inner(instance, store)
+            .instrument(agent_phase_span!(self, "recover_instance_state"))
+            .await
+    }
+
+    async fn recover_instance_state_inner(
+        &self,
+        instance: &Instance,
+        store: &Mutex<Store<Ctx>>,
+    ) -> Option<RetryDecision> {
+        debug!("Preparing the worker instance");
         let mut store = store.lock().await;
 
         store.data().set_suspended();
@@ -377,6 +446,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
     /// Suspends the worker after the invocation loop exited
     async fn suspend_worker(&self, store: &Mutex<Store<Ctx>>) {
+        self.suspend_worker_inner(store)
+            .instrument(agent_phase_span!(self, "suspend_worker"))
+            .await
+    }
+
+    async fn suspend_worker_inner(&self, store: &Mutex<Store<Ctx>>) {
         // Marking the worker as suspended
         store.lock().await.data().set_suspended();
 
@@ -416,9 +491,16 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     /// permit back to the semaphore pool) and re-acquired on wake.
     concurrent_agent_permit: &'a mut Option<crate::services::active_workers::ConcurrentAgentPermit>,
     resume_replay_pending: Arc<AtomicBool>,
+    /// The worker's startup, captured so each phase span can link back to it.
+    startup_origin: TraceOrigin,
 }
 
 impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
+    /// Agent type for span fields, or `-` when the agent id could not be parsed.
+    fn agent_type_label(&self) -> String {
+        agent_type_label(&self.parent.parsed_agent_id)
+    }
+
     /// The inner invocation loop started when the worker instance state is fully restored
     /// and the worker is ready to take invocations.
     ///
@@ -434,7 +516,8 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     ///
     /// The outer loop should either break or use the returned retry decision after the inner loop quits.
     pub async fn run(&mut self) -> InnerInvocationLoopResult {
-        debug!("Invocation queue loop started");
+        let agent_id = self.owned_agent_id.agent_id.clone();
+        debug!(%agent_id, "Invocation queue loop started");
 
         let mut final_decision = None;
         let mut cleanup_ephemeral_worker = false;
@@ -522,7 +605,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// Called when the agent enters idle state. No-op if already released.
     fn release_concurrent_agent_permit(&mut self) {
         if let Some(permit) = self.concurrent_agent_permit.take() {
-            debug!("Releasing concurrent-agent permit (entering idle)");
+            debug!(agent_id = %self.owned_agent_id.agent_id, "Releasing concurrent-agent permit (entering idle)");
             drop(permit);
         }
     }
@@ -533,10 +616,15 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// that just finished goes to the back of the queue.
     async fn acquire_concurrent_agent_permit(&mut self) {
         if self.concurrent_agent_permit.is_none() {
+            let span = agent_phase_span!(self, "acquire_concurrent_agent_permit");
             let agent_id = self.owned_agent_id.agent_id();
             let registered_concurrent_account = self.parent.registered_concurrent_account.clone();
-            debug!("Re-acquiring concurrent-agent permit (waking from idle)");
-            let permit = registered_concurrent_account.acquire(agent_id).await;
+            let permit = async {
+                debug!("Re-acquiring concurrent-agent permit (waking from idle)");
+                registered_concurrent_account.acquire(agent_id).await
+            }
+            .instrument(span)
+            .await;
             *self.concurrent_agent_permit = Some(permit);
         }
     }
@@ -553,7 +641,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 result = &mut *task => {
                     if let Err(err) = result {
                         if !err.is_cancelled() {
-                            warn!("Idle snapshot timer failed: {err}");
+                            warn!(agent_id = %self.owned_agent_id.agent_id, "Idle snapshot timer failed: {err}");
                         }
                         return self.receiver.recv().await;
                     }
@@ -595,14 +683,16 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             // Then, try to process a pending invocation
             if let Some(pending_invocation) = status.pending_invocations.first() {
                 let idempotency_key = pending_invocation.idempotency_key();
-                let invocation_span = if let Some(idempotency_key) = idempotency_key {
-                    let spans = self.parent.external_invocation_spans.read().await;
-                    spans.get(idempotency_key).cloned()
+                let origin = if let Some(idempotency_key) = idempotency_key {
+                    let origins = self.parent.external_invocation_origins.read().await;
+                    origins.get(idempotency_key).cloned()
                 } else {
                     None
                 };
 
-                let invocation_span = invocation_span.unwrap_or(Span::current());
+                // An invocation with no recorded origin was enqueued in an earlier
+                // process, so there is nothing in-process to relate it to.
+                let origin = origin.unwrap_or_else(TraceOrigin::none);
 
                 // The status record only stores a lightweight reference to the pending invocation;
                 // hydrate the full invocation (including its payload) from the oplog before running.
@@ -613,10 +703,29 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 {
                     Ok(invocation) => invocation,
                     Err(error) => {
-                        warn!("Failed to hydrate pending invocation from oplog: {error}");
+                        warn!(
+                            agent_id = %self.owned_agent_id.agent_id,
+                            "Failed to hydrate pending invocation from oplog: {error}"
+                        );
                         break CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
                     }
                 };
+
+                // The span for picking work off the queue and running it. It is
+                // created parentless and then related to whatever enqueued the
+                // work: a child of the enqueuing request when that request is
+                // waiting for the result, or the root of its own linked trace when
+                // the request has already returned. `otel.kind = consumer` is what
+                // the OpenTelemetry messaging conventions prescribe for processing
+                // work a producer handed off.
+                let pickup_span = related_span!(
+                    origin,
+                    Level::INFO,
+                    "invocation_queue_pickup",
+                    agent_id = %self.owned_agent_id.agent_id,
+                    agent_type = self.agent_type_label(),
+                    otel.kind = "consumer",
+                );
 
                 let outcome = async {
                     let mut store = self.store.lock().await;
@@ -626,11 +735,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                         instance: self.instance,
                         store: store.deref_mut(),
                     };
-                    invocation
-                        .external_invocation(timestamped_invocation, &invocation_span)
-                        .await
+                    invocation.external_invocation(timestamped_invocation).await
                 }
-                .instrument(span!(parent: &invocation_span, Level::INFO, "invocation_queue_pickup"))
+                .instrument(pickup_span)
                 .await;
 
                 match outcome {
@@ -731,6 +838,12 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// Returns `CommandOutcome` if this fails and the invocation loop should be stopped.
     /// Otherwise, it returns the new retry decision to be used by the outer invocation loop.
     async fn resume_replay(&self) -> CommandOutcome {
+        self.resume_replay_inner()
+            .instrument(agent_phase_span!(self, "resume_replay"))
+            .await
+    }
+
+    async fn resume_replay_inner(&self) -> CommandOutcome {
         let mut store = self.store.lock().await;
 
         let resume_replay_result = Ctx::resume_replay(&mut *store, self.instance, true).await;
@@ -819,11 +932,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// Process an external queued worker invocation - this is either an exported function invocation
     /// or a manual update request (which involves invoking the exported save-snapshot functions, so
     /// it is a special case of the exported function invocation).
-    async fn external_invocation(
-        &mut self,
-        inner: TimestampedAgentInvocation,
-        invocation_span: &Span,
-    ) -> CommandOutcome {
+    async fn external_invocation(&mut self, inner: TimestampedAgentInvocation) -> CommandOutcome {
         match inner.invocation {
             AgentInvocation::ManualUpdate { target_revision } => {
                 self.manual_update(target_revision).await
@@ -835,7 +944,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         invocation_results.contains_key(idempotency_key)
                     };
                     if !has_result {
-                        self.invoke_agent(invocation, invocation_span).await
+                        self.invoke_agent(invocation).await
                     } else {
                         debug!(
                             "Skipping enqueued invocation with idempotency key {idempotency_key} as it already has a result"
@@ -843,18 +952,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         CommandOutcome::Continue
                     }
                 } else {
-                    self.invoke_agent(invocation, invocation_span).await
+                    self.invoke_agent(invocation).await
                 }
             }
         }
     }
 
     /// Invokes an agent function on the worker
-    async fn invoke_agent(
-        &mut self,
-        invocation: AgentInvocation,
-        invocation_span: &Span,
-    ) -> CommandOutcome {
+    async fn invoke_agent(&mut self, invocation: AgentInvocation) -> CommandOutcome {
         let display_name = invocation.display_name();
         let invocation_context = invocation.invocation_context();
         let idempotency_key = invocation
@@ -863,7 +968,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .unwrap_or_else(IdempotencyKey::fresh);
 
         let span = span!(
-            parent: invocation_span,
             Level::INFO,
             "invocation",
             agent_id = %self.owned_agent_id.agent_id,

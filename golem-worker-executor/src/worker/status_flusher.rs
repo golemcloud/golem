@@ -45,7 +45,7 @@ use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Level, debug, error, span};
+use tracing::{Instrument, debug, debug_span, error};
 
 use golem_common::model::{AgentStatusRecord, OwnedAgentId};
 
@@ -343,8 +343,9 @@ impl AgentStatusFlushQueue {
                         None => break,
                     }
                 }
-            }
-            .instrument(span!(parent: None, Level::INFO, "Agent status flush sweeper")),
+            },
+            // No span around the loop: it runs for the process lifetime. Sweeps
+            // that have work span themselves - see `sweep`.
         );
         *queue.background_handle.lock().unwrap() = Some(handle);
         queue
@@ -359,6 +360,12 @@ impl AgentStatusFlushQueue {
     /// Drains all currently-dirty flushers and flushes them with bounded concurrency. Entries
     /// enqueued while a sweep is running are picked up by the next tick.
     async fn sweep(&self) {
+        self.sweep_inner()
+            .instrument(debug_span!("agent_status_flush_sweep"))
+            .await
+    }
+
+    async fn sweep_inner(&self) {
         let entries: Vec<Weak<AgentStatusFlusher>> = {
             let mut dirty = self.dirty.lock().unwrap();
             dirty.drain().map(|(_, weak)| weak).collect()
@@ -550,6 +557,37 @@ mod tests {
     fn test_queue() -> Arc<AgentStatusFlushQueue> {
         // Long interval so the background sweeper never fires; tests drive `sweep` manually.
         AgentStatusFlushQueue::new(Duration::from_secs(3600), 16, CancellationToken::new())
+    }
+
+    /// One span per sweep, not one for the lifetime of the sweeper.
+    #[test]
+    async fn sweep_records_one_closed_span_when_it_has_work() {
+        let ws = MockWorkerService::arc();
+        let queue = test_queue();
+        let (flusher, current, _) = make_flusher(false, true, ws.clone(), queue.clone());
+
+        *current.write().await = status(AgentStatus::Running, 1);
+        flusher.mark_dirty();
+
+        let recorder = crate::span_test_support::record_spans();
+        queue.sweep().await;
+
+        recorder.assert_closed_span("agent_status_flush_sweep");
+        recorder.assert_all_closed();
+    }
+
+    /// An idle sweep is still spanned, so that every tick of the sweeper is
+    /// represented the same way. Volume is controlled by the span's debug level.
+    #[test]
+    async fn sweep_records_one_closed_span_when_nothing_is_dirty() {
+        let ws = MockWorkerService::arc();
+        let queue = test_queue();
+        let (_flusher, _current, _) = make_flusher(false, true, ws.clone(), queue.clone());
+
+        let recorder = crate::span_test_support::record_spans();
+        queue.sweep().await;
+
+        recorder.assert_closed_span("agent_status_flush_sweep");
     }
 
     #[test]

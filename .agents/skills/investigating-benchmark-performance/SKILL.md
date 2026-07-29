@@ -280,7 +280,7 @@ Long-lived spans from background loops can dominate the trace data. Filter them 
 python3 -c "
 import json
 data = json.load(open('tmp/traces.json'))
-NOISE = {'Oplog background transfer', 'Scheduler loop', 'broadcast loop'}
+NOISE = {'oplog_background_transfer', 'scheduler_tick', 'quota_renewal', 'broadcast loop'}
 clean = [t for t in data['data']
          if not any(s['operationName'] in NOISE for s in t['spans'])]
 print(f'Total: {len(data[\"data\"])}, After filtering noise: {len(clean)}')
