@@ -17,6 +17,7 @@ use clap_verbosity_flag::Verbosity;
 use golem_cli::command::server::{RunArgs, ServerSubcommand};
 use golem_cli::command_handler::CommandHandlerHooks;
 use golem_cli::context::Context;
+use golem_cli::log::{LogColorize, log_warn_action};
 use golem_cli::model::app::ResolvedLocalServer;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -164,6 +165,13 @@ fn launch_args_from_run_args_and_local_server(
 }
 
 async fn clean_data_dir(data_dir: &Path) -> anyhow::Result<()> {
+    log_warn_action(
+        "Cleaning",
+        format!(
+            "local server data directory {}",
+            data_dir.display().to_string().log_color_highlight()
+        ),
+    );
     tokio::fs::remove_dir_all(&data_dir)
         .await
         .map_err(|err| anyhow!("Failed cleaning data dir ({}): {}", data_dir.display(), err))
