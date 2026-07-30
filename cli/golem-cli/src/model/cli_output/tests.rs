@@ -2817,11 +2817,11 @@ fn arb_agent_update_meta() -> BoxedStrategy<crate::model::deploy::AgentUpdateMet
 }
 
 fn arb_agent_redeployment_meta()
--> BoxedStrategy<crate::model::text::action_result::AgentRedeploymentMeta> {
+-> BoxedStrategy<crate::model::text::agent::action_result::AgentRedeploymentMeta> {
     arb_agent_transition_fields()
         .prop_map(
             |(component_name, agent_id, from_revision, revision, from_version, version)| {
-                crate::model::text::action_result::AgentRedeploymentMeta {
+                crate::model::text::agent::action_result::AgentRedeploymentMeta {
                     component_name,
                     agent_id,
                     from_revision,
@@ -2834,11 +2834,11 @@ fn arb_agent_redeployment_meta()
         .boxed()
 }
 
-fn arb_agent_deletion_meta() -> BoxedStrategy<crate::model::text::action_result::AgentDeletionMeta>
-{
+fn arb_agent_deletion_meta()
+-> BoxedStrategy<crate::model::text::agent::action_result::AgentDeletionMeta> {
     (arb_small_string(), arb_small_string())
         .prop_map(|(component_name, agent_id)| {
-            crate::model::text::action_result::AgentDeletionMeta {
+            crate::model::text::agent::action_result::AgentDeletionMeta {
                 component_name: golem_common::model::component::ComponentName(component_name),
                 agent_id: crate::model::agent::RawAgentId(agent_id),
             }
@@ -3009,7 +3009,7 @@ fn arb_agent_resource_description() -> BoxedStrategy<golem_common::model::AgentR
 fn arb_agent_delete_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string()).prop_map(|(deleted, agent)| {
-            crate::model::text::action_result::AgentDeleteResult {
+            crate::model::text::agent::action_result::AgentDeleteResult {
                 deleted,
                 agent_id: agent,
             }
@@ -3027,7 +3027,7 @@ fn arb_agent_file_contents_result() -> OutputDocumentStrategy {
             arb_small_u64(),
         )
             .prop_map(|(saved, agent, path, output_path, bytes)| {
-                crate::model::text::action_result::AgentFileContentsResult {
+                crate::model::text::agent::action_result::AgentFileContentsResult {
                     saved,
                     agent_id: agent,
                     path,
@@ -3041,7 +3041,7 @@ fn arb_agent_file_contents_result() -> OutputDocumentStrategy {
 fn arb_agent_interrupt_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string()).prop_map(|(interrupted, agent)| {
-            crate::model::text::action_result::AgentInterruptResult {
+            crate::model::text::agent::action_result::AgentInterruptResult {
                 interrupted,
                 agent_id: agent,
             }
@@ -3052,7 +3052,7 @@ fn arb_agent_interrupt_result() -> OutputDocumentStrategy {
 fn arb_agent_resume_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string()).prop_map(|(resumed, agent)| {
-            crate::model::text::action_result::AgentResumeResult {
+            crate::model::text::agent::action_result::AgentResumeResult {
                 resumed,
                 agent_id: agent,
             }
@@ -3063,7 +3063,7 @@ fn arb_agent_resume_result() -> OutputDocumentStrategy {
 fn arb_agent_simulate_crash_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string()).prop_map(|(simulated, agent)| {
-            crate::model::text::action_result::AgentSimulateCrashResult {
+            crate::model::text::agent::action_result::AgentSimulateCrashResult {
                 simulated,
                 agent_id: agent,
             }
@@ -3363,7 +3363,7 @@ fn arb_agent_cancel_invocation_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string(), arb_small_string()).prop_map(
             |(canceled, agent, idempotency_key)| {
-                crate::model::text::action_result::AgentCancelInvocationResult {
+                crate::model::text::agent::action_result::AgentCancelInvocationResult {
                     canceled,
                     agent_id: agent,
                     idempotency_key,
@@ -3380,7 +3380,7 @@ fn arb_agent_delete_all_result() -> OutputDocumentStrategy {
             proptest::collection::vec(arb_agent_deletion_meta(), 0..5),
         )
             .prop_map(|(deleted, agents)| {
-                crate::model::text::action_result::AgentDeleteAllResult { deleted, agents }
+                crate::model::text::agent::action_result::AgentDeleteAllResult { deleted, agents }
             }),
     )
 }
@@ -3392,7 +3392,7 @@ fn arb_agent_redeploy_result() -> OutputDocumentStrategy {
             proptest::collection::vec(arb_agent_redeployment_meta(), 0..5),
         )
             .prop_map(|(redeployed, agents)| {
-                crate::model::text::action_result::AgentRedeployResult { redeployed, agents }
+                crate::model::text::agent::action_result::AgentRedeployResult { redeployed, agents }
             }),
     )
 }
@@ -3407,7 +3407,7 @@ fn arb_agent_revert_result() -> OutputDocumentStrategy {
         )
             .prop_map(
                 |(reverted, agent, last_oplog_index, number_of_invocations)| {
-                    crate::model::text::action_result::AgentRevertResult {
+                    crate::model::text::agent::action_result::AgentRevertResult {
                         reverted,
                         agent_id: agent,
                         last_oplog_index,
@@ -3427,7 +3427,7 @@ fn arb_agent_plugin_toggle_result() -> OutputDocumentStrategy {
             0i32..1000,
         )
             .prop_map(|(activated, agent, plugin, priority)| {
-                crate::model::text::action_result::AgentPluginToggleResult {
+                crate::model::text::agent::action_result::AgentPluginToggleResult {
                     activated,
                     agent_id: agent,
                     plugin,

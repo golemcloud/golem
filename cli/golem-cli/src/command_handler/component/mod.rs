@@ -42,7 +42,7 @@ use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
 use crate::model::language::GuestLanguage;
-use crate::model::text::action_result::{
+use crate::model::text::agent::action_result::{
     AgentDeleteAllResult, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
 };
 use crate::model::text::component::{

@@ -32,7 +32,7 @@ use crate::log::{
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{AgentUpdateMeta, TryUpdateAllWorkersResult};
 use crate::model::invoke_result_view::InvokeResultView;
-use crate::model::text::action_result::{
+use crate::model::text::agent::action_result::{
     AgentCancelInvocationResult, AgentDeleteResult, AgentFileContentsResult, AgentInterruptResult,
     AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
 };
