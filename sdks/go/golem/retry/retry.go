@@ -53,14 +53,14 @@
 //
 // # Concurrency
 //
-// [Set], [Remove] and [With] mutate worker-global host state (as in every Golem
-// SDK — the runtime has no per-task retry scope). Golem runs an agent
-// single-threaded with cooperative task-switching only at await points (RPC,
-// promise, sleep). [With] is therefore safe when its scope does not await while
-// other goroutines run concurrently; nesting on a single logical flow is fine.
-// Do not hold a scoped policy open across a concurrent await (e.g. a CallAsync
-// fan-out) — for concurrency, distribute work across agent instances. Per-
-// goroutine isolation is not achievable because the host state is global.
+// [Set], [Remove] and [With] apply at the worker level — the retry scope is
+// currently per worker rather than per goroutine (the same model as the other
+// Golem SDKs). Golem runs an agent single-threaded with cooperative
+// task-switching only at await points (RPC, promise, sleep), so [With] is safe
+// when its scope does not await while other goroutines run concurrently; nesting
+// on a single logical flow is fine. To keep an override from affecting concurrent
+// work, don't hold a scope open across a concurrent await (e.g. a CallAsync
+// fan-out); for concurrency, distribute work across agent instances.
 package retry
 
 import (
