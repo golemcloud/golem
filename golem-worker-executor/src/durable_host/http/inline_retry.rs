@@ -674,120 +674,107 @@ pub(crate) fn spawn_http_status_retry_after_body_finish<Ctx: crate::workerctx::W
     max_delay: Duration,
     begin_index: OplogIndex,
 ) -> FutureIncomingResponseHandle {
-    // The returned handle is owned by a guest resource, so this task can outlive
-    // the invocation. It links back rather than running inside its span. See
-    // `TraceOrigin`.
-    let origin = TraceOrigin::triggered();
-    let agent_id = worker.agent_id();
-    wasmtime_wasi::runtime::spawn(
-        async move {
-            let result = original_handle.await;
-            let Ok(Ok(response)) = result else {
-                // No response to evaluate against — publish a definitive non-match
-                // so any consumer waiting on the decision wakes up immediately
-                // (rather than waiting on the sender drop).
-                let _ = pending_status_retry_decision.send(PendingStatusRetryDecision::NotMatched);
-                return result;
-            };
+    // No span: this task waits for the guest to finish its outgoing body, so its
+    // duration is decided by guest code rather than by an operation the executor
+    // performs, and it has no bound. See `TraceOrigin`.
+    wasmtime_wasi::runtime::spawn(async move {
+        let result = original_handle.await;
+        let Ok(Ok(response)) = result else {
+            // No response to evaluate against — publish a definitive non-match
+            // so any consumer waiting on the decision wakes up immediately
+            // (rather than waiting on the sender drop).
+            let _ = pending_status_retry_decision.send(PendingStatusRetryDecision::NotMatched);
+            return result;
+        };
 
-            if *body_state.borrow() != HttpOutgoingBodyState::Open {
-                let _ = pending_status_retry_decision.send(PendingStatusRetryDecision::NotMatched);
-                return Ok(Ok(response));
-            }
+        if *body_state.borrow() != HttpOutgoingBodyState::Open {
+            let _ = pending_status_retry_decision.send(PendingStatusRetryDecision::NotMatched);
+            return Ok(Ok(response));
+        }
 
-            let status = response.resp.status().as_u16();
-            let mut properties = RetryContext::http_with_response(
-                &request.method.to_string(),
-                &request.uri,
-                Some(status),
-                "http-status",
-            );
-            if let Some(agent_type) = agent_type {
-                properties.set("agent-type", PredicateValue::Text(agent_type));
-            }
-            properties.set(
-                "is-idempotent",
-                PredicateValue::Boolean(is_http_request_idempotent(
-                    assume_idempotence,
-                    &request.method,
-                )),
-            );
+        let status = response.resp.status().as_u16();
+        let mut properties = RetryContext::http_with_response(
+            &request.method.to_string(),
+            &request.uri,
+            Some(status),
+            "http-status",
+        );
+        if let Some(agent_type) = agent_type {
+            properties.set("agent-type", PredicateValue::Text(agent_type));
+        }
+        properties.set(
+            "is-idempotent",
+            PredicateValue::Boolean(is_http_request_idempotent(
+                assume_idempotence,
+                &request.method,
+            )),
+        );
 
-            let current_retry_policy_state = worker
-                .get_non_detached_last_known_status()
-                .await
-                .current_retry_state
-                .get(&begin_index)
-                .cloned();
-            let mut task_ctx = crate::durable_host::durability::TaskRetryContext {
-                retry_point: begin_index,
-                environment_state_service,
-                environment_id,
-                default_retry_policy,
-                agent_config_retry_policies,
-                runtime_retry_policy_mutations,
-                max_in_function_retry_delay: max_delay,
-                current_retry_policy_state,
-                retry_properties: properties.clone(),
-                worker,
-            };
+        let current_retry_policy_state = worker
+            .get_non_detached_last_known_status()
+            .await
+            .current_retry_state
+            .get(&begin_index)
+            .cloned();
+        let mut task_ctx = crate::durable_host::durability::TaskRetryContext {
+            retry_point: begin_index,
+            environment_state_service,
+            environment_id,
+            default_retry_policy,
+            agent_config_retry_policies,
+            runtime_retry_policy_mutations,
+            max_in_function_retry_delay: max_delay,
+            current_retry_policy_state,
+            retry_properties: properties.clone(),
+            worker,
+        };
 
-            let policies = task_ctx.named_retry_policies().await;
-            match resolve_matching_status_retry_policy(policies, &properties) {
-                Ok(Some(matched)) => {
-                    // Publish the decision *before* waiting for the body to finish.
-                    // Stream write paths can now deterministically observe `Matched`
-                    // via `watch::Receiver::wait_for(...)` instead of polling and
-                    // hoping a single `yield_now()` is enough.
-                    let _ = pending_status_retry_decision
-                        .send(PendingStatusRetryDecision::Matched);
+        let policies = task_ctx.named_retry_policies().await;
+        match resolve_matching_status_retry_policy(policies, &properties) {
+            Ok(Some(matched)) => {
+                // Publish the decision *before* waiting for the body to finish.
+                // Stream write paths can now deterministically observe `Matched`
+                // via `watch::Receiver::wait_for(...)` instead of polling and
+                // hoping a single `yield_now()` is enough.
+                let _ = pending_status_retry_decision.send(PendingStatusRetryDecision::Matched);
+                tracing::debug!(
+                    policy = %matched.name,
+                    status,
+                    uri = %request.uri,
+                    "HTTP status retry matched before request body finished; delaying response readiness"
+                );
+                if wait_for_outgoing_body_finish(&mut body_state).await {
                     tracing::debug!(
                         policy = %matched.name,
                         status,
                         uri = %request.uri,
-                        "HTTP status retry matched before request body finished; delaying response readiness"
+                        "HTTP request body finished after pending status retry match; exposing response to retry path"
                     );
-                    if wait_for_outgoing_body_finish(&mut body_state).await {
-                        tracing::debug!(
-                            policy = %matched.name,
-                            status,
-                            uri = %request.uri,
-                            "HTTP request body finished after pending status retry match; exposing response to retry path"
-                        );
-                    } else {
-                        tracing::debug!(
-                            policy = %matched.name,
-                            status,
-                            uri = %request.uri,
-                            "HTTP request body closed before pending status retry could become replayable"
-                        );
-                    }
-                }
-                Ok(None) => {
-                    let _ = pending_status_retry_decision
-                        .send(PendingStatusRetryDecision::NotMatched);
-                }
-                Err(err) => {
-                    let _ = pending_status_retry_decision
-                        .send(PendingStatusRetryDecision::NotMatched);
-                    tracing::warn!(
-                        ?err,
+                } else {
+                    tracing::debug!(
+                        policy = %matched.name,
                         status,
                         uri = %request.uri,
-                        "Failed evaluating status-code retry policies for pending HTTP status retry"
+                        "HTTP request body closed before pending status retry could become replayable"
                     );
                 }
             }
-
-            Ok(Ok(response))
+            Ok(None) => {
+                let _ = pending_status_retry_decision.send(PendingStatusRetryDecision::NotMatched);
+            }
+            Err(err) => {
+                let _ = pending_status_retry_decision.send(PendingStatusRetryDecision::NotMatched);
+                tracing::warn!(
+                    ?err,
+                    status,
+                    uri = %request.uri,
+                    "Failed evaluating status-code retry policies for pending HTTP status retry"
+                );
+            }
         }
-        .instrument(related_span!(
-            origin,
-            Level::INFO,
-            "http_status_retry_after_body_finish",
-            %agent_id
-        )),
-    )
+
+        Ok(Ok(response))
+    })
 }
 
 /// Writes a sequence of `BodyChunk`s into an `OutputStream`, respecting
@@ -1129,7 +1116,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
         }
         .instrument(related_span!(
             origin,
-            Level::INFO,
+            Level::DEBUG,
             "http_request_retry",
             %agent_id
         )),

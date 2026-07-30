@@ -127,6 +127,8 @@ without_time = false
 
 [tracing.otlp]
 enabled = false
+high_volume_event_level = "off"
+high_volume_event_targets = ["golem_worker_executor::durable_host", "golem_worker_executor::services::rdbms"]
 host = "localhost"
 port = 4318
 service_name = "golem"

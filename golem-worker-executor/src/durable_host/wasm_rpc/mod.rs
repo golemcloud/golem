@@ -1287,7 +1287,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         }
         .instrument(related_span!(
             origin,
-            Level::INFO,
+            Level::DEBUG,
             "rpc_invoke_retry",
             agent_id = %caller_agent_id
         )),
