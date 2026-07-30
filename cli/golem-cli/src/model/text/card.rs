@@ -15,6 +15,7 @@
 use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
+use crate::model::text::grant::format_grants;
 use golem_client::model::{CardManagedBy, StoredCard};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -234,13 +235,5 @@ fn format_ids(ids: &[Uuid]) -> String {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("\n")
-    }
-}
-
-fn format_grants(grants: &[String]) -> String {
-    if grants.is_empty() {
-        "(none)".to_string()
-    } else {
-        grants.join("\n")
     }
 }

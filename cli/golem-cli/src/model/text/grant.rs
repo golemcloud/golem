@@ -12,25 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod account;
-pub mod action_result;
-pub mod agent;
-pub mod card;
-pub mod component;
-pub mod deployment;
-pub mod diff;
-pub mod environment;
-pub mod fmt;
-pub mod grant;
-pub mod help;
-pub mod http_api_deployment;
-pub mod http_api_domain;
-pub mod http_api_security;
-pub mod plugin;
-pub mod profile;
-pub mod resource_definition;
-pub mod retry_policy;
-pub mod secret;
-pub mod server;
-pub mod template;
-pub mod token;
+//! Text rendering helpers for permission grants, shared by the permission-share
+//! and card views.
+
+use golem_common::model::permission_share::PermissionShareData;
+
+pub(crate) fn format_grants(grants: &[String]) -> String {
+    if grants.is_empty() {
+        "(none)".to_string()
+    } else {
+        grants.join("\n")
+    }
+}
+
+pub(crate) fn grant_count(data: &PermissionShareData) -> usize {
+    data.lower_positive.len() + data.lower_negative.len()
+}
