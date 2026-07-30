@@ -578,8 +578,11 @@ pub const SERVER_RUN: &str = "Examples:
   # Bind the main API to a different port
   golem-cli server run --router-port 8080
 
-  # Start from a clean data directory
+  # Start from a clean data directory after confirming the resolved path
   golem-cli server run --clean
+
+  # Start clean in an approved non-interactive workflow
+  golem-cli server run --clean --yes
 
   # Persist data and agent filesystems in a chosen location
   golem-cli server run --data-dir ./my-data --agent-filesystem-root ./agent-fs
@@ -588,8 +591,15 @@ pub const SERVER_RUN: &str = "Examples:
   golem-cli server run --ports-file ./ports.json";
 
 pub const SERVER_CLEAN: &str = "Examples:
-  # Wipe the local server's persistent data directory
-  golem-cli server clean";
+  # Wipe the data directory of the discovered application manifest
+  # (localServer.dataDir), or the platform default if no manifest is found
+  golem-cli server clean
+
+  # Skip the prompt after independently verifying the resolved data directory
+  golem-cli server clean --yes
+
+  # Ignore any discovered manifest and wipe the platform default data directory
+  golem-cli server clean -X";
 
 // Account commands ---------------------------------------------------------------------------------
 

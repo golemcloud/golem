@@ -1038,6 +1038,288 @@ async fn test_rust_agent_guest_bridge_e2e() {
     );
 }
 
+fn add_ts_guest_bridge_source(ctx: &TestContext, package_name: &str, generated_source_name: &str) {
+    let tsconfig_path = ctx.cwd_path_join("consumer/tsconfig.json");
+    let mut tsconfig: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&tsconfig_path).unwrap()).unwrap();
+    let generated_source =
+        format!("../golem-temp/bridge-sdk/ts/internal/{package_name}/{generated_source_name}");
+    tsconfig["compilerOptions"]["paths"][package_name] = serde_json::json!([generated_source]);
+    let include = tsconfig["include"]
+        .as_array_mut()
+        .expect("TypeScript template tsconfig include must be an array");
+    if !include.iter().any(|entry| entry == "src/**/*.ts") {
+        include.push(serde_json::json!("src/**/*.ts"));
+    }
+    include.push(serde_json::json!(format!(
+        "../golem-temp/bridge-sdk/ts/internal/{package_name}/*.ts"
+    )));
+    fs::write_str(
+        tsconfig_path,
+        serde_json::to_string_pretty(&tsconfig).unwrap() + "\n",
+    )
+    .unwrap();
+}
+
+#[test]
+#[timeout("15 minutes")]
+async fn test_ts_agent_guest_bridge_e2e() {
+    let mut ctx = TestContext::new();
+    let app_name = "ts-agent-bridge";
+
+    ctx.start_server().await;
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    for (template, component_name) in [
+        ("rust", "ts-agent-bridge:provider"),
+        ("ts", "ts-agent-bridge:consumer"),
+    ] {
+        let outputs = ctx
+            .cli([
+                flag::YES,
+                cmd::NEW,
+                ".",
+                flag::TEMPLATE,
+                template,
+                flag::COMPONENT_NAME,
+                component_name,
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: ts-agent-bridge
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              ts-agent-bridge:provider:
+                dir: provider
+                templates: rust
+              ts-agent-bridge:consumer:
+                dir: consumer
+                templates: ts
+                dependencies:
+                  agents:
+                    - ts-agent-bridge:provider/CounterAgent
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+    add_ts_guest_bridge_source(
+        &ctx,
+        "counter-agent-guest-client",
+        "counter-agent-guest-client.ts",
+    );
+    fs::write_str(
+        ctx.cwd_path_join("consumer/src/counter-agent.ts"),
+        indoc! {r#"
+            import { z } from 'zod';
+            import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
+            import { CounterAgent } from 'counter-agent-guest-client';
+
+            export const CounterConsumerAgent = defineAgent({
+              name: 'CounterConsumerAgent',
+              id: { name: z.string() },
+              methods: {
+                incrementProvider: method({
+                  input: { providerName: z.string() },
+                  returns: z.string(),
+                }),
+              },
+            });
+
+            export const CounterConsumerAgentImpl = CounterConsumerAgent.implement({
+              init: () => ({}),
+              methods: {
+                async incrementProvider({ providerName }) {
+                  const value = await CounterAgent.get(providerName).increment();
+                  return `ok:${value}`;
+                },
+              },
+            });
+        "#},
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+    assert!(
+        ctx.cwd_path_join("golem-temp/bridge-sdk/ts/internal/counter-agent-guest-client/counter-agent-guest-client.ts")
+            .exists()
+    );
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+    let consumer_name = Uuid::new_v4().to_string();
+    let provider_name = Uuid::new_v4().to_string();
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("CounterConsumerAgent(\"{consumer_name}\")"),
+            "incrementProvider",
+            &format!("\"{provider_name}\""),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(
+        outputs.stdout_contains("ok:1"),
+        "expected the TypeScript consumer to return ok:1 through the generated guest client"
+    );
+}
+
+#[test]
+#[timeout("15 minutes")]
+async fn test_ts_tool_guest_bridge_e2e() {
+    let mut ctx = TestContext::new();
+    let app_name = "ts-tool-bridge";
+
+    ctx.start_server().await;
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    for (template, component_name) in [
+        ("rust", "ts-tool-bridge:provider"),
+        ("ts", "ts-tool-bridge:consumer"),
+    ] {
+        let outputs = ctx
+            .cli([
+                flag::YES,
+                cmd::NEW,
+                ".",
+                flag::TEMPLATE,
+                template,
+                flag::COMPONENT_NAME,
+                component_name,
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+
+    fs::write_str(
+        ctx.cwd_path_join("provider/src/counter_agent.rs"),
+        indoc! {r#"
+            use golem_rust::{tool_definition, tool_implementation};
+
+            #[tool_definition(version = "1.0.0")]
+            pub trait Echo {
+                fn echo(&self, message: String) -> String;
+            }
+
+            struct EchoImpl;
+
+            #[tool_implementation]
+            impl Echo for EchoImpl {
+                fn echo(&self, message: String) -> String {
+                    format!("echo:{message}")
+                }
+            }
+        "#},
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: ts-tool-bridge
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              ts-tool-bridge:provider:
+                dir: provider
+                templates: rust
+              ts-tool-bridge:consumer:
+                dir: consumer
+                templates: ts
+                dependencies:
+                  tools:
+                    - ts-tool-bridge:provider/echo
+
+            bridge:
+              ts:
+                internal:
+                  tools:
+                    - echo
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+    add_ts_guest_bridge_source(&ctx, "echo-tool-guest-client", "echo-tool-guest-client.ts");
+    fs::write_str(
+        ctx.cwd_path_join("consumer/src/counter-agent.ts"),
+        indoc! {r#"
+            import { z } from 'zod';
+            import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
+            import { EchoClient } from 'echo-tool-guest-client';
+
+            export const EchoConsumerAgent = defineAgent({
+              name: 'EchoConsumerAgent',
+              id: { name: z.string() },
+              methods: {
+                callEcho: method({ input: { message: z.string() }, returns: z.string() }),
+              },
+            });
+
+            export const EchoConsumerAgentImpl = EchoConsumerAgent.implement({
+              init: () => ({}),
+              methods: {
+                async callEcho({ message }) {
+                  const value = await EchoClient.newClient().echo(message);
+                  return `ok:${value}`;
+                },
+              },
+            });
+        "#},
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+    assert!(
+        ctx.cwd_path_join(
+            "golem-temp/bridge-sdk/ts/internal/echo-tool-guest-client/echo-tool-guest-client.ts"
+        )
+        .exists()
+    );
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+    let consumer_name = Uuid::new_v4().to_string();
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("EchoConsumerAgent(\"{consumer_name}\")"),
+            "callEcho",
+            "\"hello\"",
+        ])
+        .await;
+    let reached_tool_host_stub =
+        !outputs.success() && outputs.stderr_contains("golem:tool/host is not yet implemented");
+    if !reached_tool_host_stub {
+        outputs.dump();
+    }
+    assert!(
+        reached_tool_host_stub,
+        "expected the TypeScript tool client to reach the executor's golem:tool/host stub"
+    );
+}
+
 #[test]
 #[timeout("15 minutes")]
 async fn test_moonbit_agent_guest_bridge_e2e() {

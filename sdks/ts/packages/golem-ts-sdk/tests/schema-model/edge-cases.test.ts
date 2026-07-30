@@ -24,6 +24,7 @@ import {
   GuestSecretHandle,
   GuestQuotaTokenHandle,
   SchemaBuilder,
+  SchemaEncodeError,
   type SchemaGraph,
   type SchemaValue,
   emptyMetadata,
@@ -333,6 +334,16 @@ describe('rich semantic and capability values', () => {
       ],
     };
     expect(() => schemaValueToWit(tree)).toThrow(/datetime/);
+    expect(handle.isPresent()).toBe(true);
+  });
+
+  it('rejects a sparse model list before transferring a quota-token sibling', () => {
+    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, {} as never);
+    const fields = new Array<SchemaValue>(2);
+    fields[1] = v.quotaToken(handle);
+    const tree: SchemaValue = { tag: 'record', fields };
+
+    expect(() => schemaValueToWit(tree)).toThrow(SchemaEncodeError);
     expect(handle.isPresent()).toBe(true);
   });
 

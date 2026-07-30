@@ -15,15 +15,15 @@
 import { type FlagSpec } from 'golem:tool/common@0.1.0';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod/v4';
-import { compileSchema } from '../src/fluent/schema/adapter';
-import type { FluentCodec } from '../src/fluent/schema/codec';
-import { Bytes, KeyValue, Quantity, s } from '../src/fluent/schema/markers';
+import { compileSchema } from '../src/schema/adapter';
+import type { SchemaCodec } from '../src/schema/codec';
+import { Bytes, KeyValue, Quantity, s } from '../src/schema/markers';
 import {
   getExtendedToolDefinition,
   renderArgumentHelp,
   renderHelp,
   toolDefinition,
-} from '../src/fluent/tool';
+} from '../src/tool';
 import {
   field,
   schemaShapesMatch,
@@ -51,7 +51,7 @@ import {
 
 const stringCodec = compileSchema(z.string());
 
-function option(long: string, codec: FluentCodec = stringCodec): ExtendedOptionSpec {
+function option(long: string, codec: SchemaCodec = stringCodec): ExtendedOptionSpec {
   return {
     long,
     aliases: [],
@@ -1106,14 +1106,14 @@ describe('internal extended tool model', () => {
         ]),
     ).toThrowError(expect.objectContaining({ code: 'ill-formed-schema' }));
 
-    const stringRef: FluentCodec = {
+    const stringRef: SchemaCodec = {
       ...stringCodec,
       graph: {
         defs: new Map([['shared', { body: t.string() }]]),
         root: t.ref('shared'),
       },
     };
-    const boolRef: FluentCodec = {
+    const boolRef: SchemaCodec = {
       ...compileSchema(z.boolean()),
       graph: {
         defs: new Map([['shared', { body: t.bool() }]]),
@@ -1177,7 +1177,7 @@ describe('internal extended tool model', () => {
   });
 
   it('treats a secret as opaque when checking for variants in input position', () => {
-    const codec: FluentCodec = {
+    const codec: SchemaCodec = {
       graph: {
         defs: new Map(),
         root: t.secret(
@@ -1312,7 +1312,7 @@ describe('internal extended tool model', () => {
     (stage) => {
       const failure = new Error(`${stage} failed unexpectedly`);
       const base = compileSchema(z.string());
-      const codec: FluentCodec =
+      const codec: SchemaCodec =
         stage === 'source validation'
           ? {
               ...base,
@@ -1830,7 +1830,7 @@ describe('internal extended tool model', () => {
   });
 
   it('rejects a zero-length fixed-list schema', () => {
-    const codec: FluentCodec = {
+    const codec: SchemaCodec = {
       graph: { defs: new Map(), root: t.fixedList(t.string(), 0) },
       toValue: () => v.fixedList([]),
       fromValue: () => [],
@@ -1860,7 +1860,7 @@ describe('internal extended tool model', () => {
   });
 
   it('uses ECMAScript syntax when validating text regexes', () => {
-    const codec: FluentCodec = {
+    const codec: SchemaCodec = {
       graph: {
         defs: new Map(),
         root: schemaType({ tag: 'text', restrictions: { regex: '(?=a)' } }),
@@ -1891,7 +1891,7 @@ describe('internal extended tool model', () => {
   });
 
   it('rejects a default whose enum case index is not representable as u32', () => {
-    const codec: FluentCodec = {
+    const codec: SchemaCodec = {
       graph: { defs: new Map(), root: t.enum(['only']) },
       toValue: () => ({ tag: 'enum', caseIndex: 0.5 }),
       fromValue: () => 'only',
@@ -1922,7 +1922,7 @@ describe('internal extended tool model', () => {
   });
 
   it('rejects a default whose u64 codec emits a number instead of a bigint', () => {
-    const codec: FluentCodec = {
+    const codec: SchemaCodec = {
       graph: { defs: new Map(), root: t.u64() },
       toValue: () => ({ tag: 'u64', value: 1 as unknown as bigint }),
       fromValue: () => 1n,
@@ -1960,9 +1960,9 @@ describe('internal extended tool model', () => {
   ] as const)(
     'rejects a default whose %s codec emits the wrong runtime type',
     (_name, root, emitted) => {
-      const codec: FluentCodec = {
+      const codec: SchemaCodec = {
         graph: { defs: new Map(), root },
-        toValue: () => emitted as unknown as ReturnType<FluentCodec['toValue']>,
+        toValue: () => emitted as unknown as ReturnType<SchemaCodec['toValue']>,
         fromValue: () => undefined,
       };
       const tool = new ExtendedToolType(
@@ -2122,7 +2122,7 @@ describe('internal extended tool model', () => {
   });
 
   it('accepts a union input when none of its branches reaches a variant', () => {
-    const codec: FluentCodec = {
+    const codec: SchemaCodec = {
       graph: {
         defs: new Map(),
         root: {
@@ -2212,7 +2212,7 @@ describe('internal extended tool model', () => {
       },
     ],
   ])('rejects an ill-formed result schema with %s', (_description, root) => {
-    const codec: FluentCodec = {
+    const codec: SchemaCodec = {
       graph: { defs: new Map(), root },
       toValue: () => {
         throw new Error('not needed by this validation test');

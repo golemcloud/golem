@@ -22,8 +22,8 @@ import {
   ok,
   toolDefinition,
   type ToolImplementation,
-} from '../src/fluent';
-import { compileSchema } from '../src/fluent/schema/adapter';
+} from '../src/index';
+import { compileSchema } from '../src/schema/adapter';
 import { ToolRegistry } from '../src/internal/registry/toolRegistry';
 import { CanonicalInputModel } from '../src/internal/tool';
 import { t, typedSchemaValueFromWit, typedSchemaValueToWit, v } from '../src/internal/schema-model';
@@ -33,7 +33,7 @@ beforeEach(() => {
   ToolRegistry.clearForTests();
 });
 
-describe('fluent tool registration', () => {
+describe('tool registration', () => {
   it('keeps definitions inert until implement is called', () => {
     toolDefinition('inert').body((body) => body.returns(z.void()));
 

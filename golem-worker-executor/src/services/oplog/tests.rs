@@ -15,11 +15,15 @@
 use super::*;
 use crate::services::oplog::compressed::CompressedOplogArchiveService;
 use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveService};
-use crate::storage::indexed::IndexedStorage;
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
+use crate::storage::indexed::{
+    IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+};
 use assert2::check;
+use bytes::Bytes;
+use futures::stream::BoxStream;
 use golem_common::config::RedisConfig;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, Principal};
@@ -35,10 +39,15 @@ use golem_common::redis::RedisPool;
 use golem_common::schema::{BinaryValuePayload, FromSchema, IntoTypedSchemaValue, SchemaValue};
 use golem_common::tracing::{TracingConfig, init_tracing};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+use golem_service_base::storage::blob::{
+    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult,
+};
 use nonempty_collections::nev;
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
+use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -344,6 +353,361 @@ impl OplogArchive for BlockingArchive {
     }
 }
 
+/// `IndexedStorage` decorator counting read-type operations, used to prove at
+/// the storage level that fresh oplog construction performs no reads before
+/// its first append.
+#[derive(Debug)]
+struct ReadCountingIndexedStorage {
+    inner: InMemoryIndexedStorage,
+    reads: AtomicUsize,
+}
+
+impl ReadCountingIndexedStorage {
+    fn new() -> Self {
+        Self {
+            inner: InMemoryIndexedStorage::new(),
+            reads: AtomicUsize::new(0),
+        }
+    }
+
+    fn reads(&self) -> usize {
+        self.reads.load(Ordering::Relaxed)
+    }
+
+    fn reset(&self) {
+        self.reads.store(0, Ordering::Relaxed)
+    }
+
+    fn count_read(&self) {
+        self.reads.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[async_trait]
+impl IndexedStorage for ReadCountingIndexedStorage {
+    async fn number_of_replicas(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+    ) -> Result<u8, IndexedStorageError> {
+        self.inner.number_of_replicas(svc_name, api_name).await
+    }
+
+    async fn wait_for_replicas(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        replicas: u8,
+        timeout: Duration,
+    ) -> Result<u8, IndexedStorageError> {
+        self.inner
+            .wait_for_replicas(svc_name, api_name, replicas, timeout)
+            .await
+    }
+
+    async fn exists(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<bool, IndexedStorageError> {
+        self.count_read();
+        self.inner.exists(svc_name, api_name, namespace, key).await
+    }
+
+    async fn scan(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageMetaNamespace,
+        prefix: Option<&str>,
+        cursor: crate::storage::indexed::ScanCursor,
+        count: u64,
+    ) -> Result<(crate::storage::indexed::ScanCursor, Vec<String>), IndexedStorageError> {
+        self.count_read();
+        self.inner
+            .scan(svc_name, api_name, namespace, prefix, cursor, count)
+            .await
+    }
+
+    async fn append(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        id: u64,
+        value: Vec<u8>,
+    ) -> Result<(), IndexedStorageError> {
+        self.inner
+            .append(svc_name, api_name, entity_name, namespace, key, id, value)
+            .await
+    }
+
+    async fn length(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<u64, IndexedStorageError> {
+        self.count_read();
+        self.inner.length(svc_name, api_name, namespace, key).await
+    }
+
+    async fn delete(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<(), IndexedStorageError> {
+        self.inner.delete(svc_name, api_name, namespace, key).await
+    }
+
+    async fn read(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        start_id: u64,
+        end_id: u64,
+    ) -> Result<Vec<(u64, Vec<u8>)>, IndexedStorageError> {
+        self.count_read();
+        self.inner
+            .read(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                start_id,
+                end_id,
+            )
+            .await
+    }
+
+    async fn first(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
+        self.count_read();
+        self.inner
+            .first(svc_name, api_name, entity_name, namespace, key)
+            .await
+    }
+
+    async fn last(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
+        self.count_read();
+        self.inner
+            .last(svc_name, api_name, entity_name, namespace, key)
+            .await
+    }
+
+    async fn closest(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        id: u64,
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
+        self.count_read();
+        self.inner
+            .closest(svc_name, api_name, entity_name, namespace, key, id)
+            .await
+    }
+
+    async fn drop_prefix(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        last_dropped_id: u64,
+    ) -> Result<(), IndexedStorageError> {
+        self.inner
+            .drop_prefix(svc_name, api_name, namespace, key, last_dropped_id)
+            .await
+    }
+}
+
+/// `BlobStorage` decorator counting read-type operations, used to prove at the
+/// storage level that fresh oplog construction performs no reads before its
+/// first append.
+#[derive(Debug)]
+struct ReadCountingBlobStorage {
+    inner: InMemoryBlobStorage,
+    reads: AtomicUsize,
+}
+
+impl ReadCountingBlobStorage {
+    fn new() -> Self {
+        Self {
+            inner: InMemoryBlobStorage::new(),
+            reads: AtomicUsize::new(0),
+        }
+    }
+
+    fn reads(&self) -> usize {
+        self.reads.load(Ordering::Relaxed)
+    }
+
+    fn reset(&self) {
+        self.reads.store(0, Ordering::Relaxed)
+    }
+
+    fn count_read(&self) {
+        self.reads.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[async_trait]
+impl BlobStorage for ReadCountingBlobStorage {
+    async fn get_raw(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<Vec<u8>>, anyhow::Error> {
+        self.count_read();
+        self.inner
+            .get_raw(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn get_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, anyhow::Error>>>, anyhow::Error> {
+        self.count_read();
+        self.inner
+            .get_stream(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn get_metadata(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<BlobMetadata>, anyhow::Error> {
+        self.count_read();
+        self.inner
+            .get_metadata(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn put_raw(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        data: &[u8],
+    ) -> Result<(), anyhow::Error> {
+        self.inner
+            .put_raw(target_label, op_label, namespace, path, data)
+            .await
+    }
+
+    async fn put_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, anyhow::Error>, Error = anyhow::Error>,
+    ) -> Result<(), anyhow::Error> {
+        self.inner
+            .put_stream(target_label, op_label, namespace, path, stream)
+            .await
+    }
+
+    async fn delete(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<(), anyhow::Error> {
+        self.inner
+            .delete(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn create_dir(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<(), anyhow::Error> {
+        self.inner
+            .create_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn list_dir(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Vec<PathBuf>, anyhow::Error> {
+        self.count_read();
+        self.inner
+            .list_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn delete_dir(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<bool, anyhow::Error> {
+        self.inner
+            .delete_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn exists(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<ExistsResult, anyhow::Error> {
+        self.count_read();
+        self.inner
+            .exists(target_label, op_label, namespace, path)
+            .await
+    }
+}
+
 #[test]
 async fn ephemeral_create_baseline_uses_lower_storage_and_checked_reads_find_it(
     _tracing: &Tracing,
@@ -532,6 +896,234 @@ async fn fresh_ephemeral_create_does_not_probe_lower_storage(_tracing: &Tracing)
         )
         .await;
     assert_eq!(entries.get(&OplogIndex::INITIAL), Some(&create_entry));
+
+    drop(oplog);
+}
+
+/// Storage-level regression guard for `CompressedOplogArchive::open_fresh`:
+/// even if the archive-service wrapper reports no reads, a future change that
+/// adds an eager read to the fresh constructor must fail this test.
+#[test]
+async fn fresh_ephemeral_create_with_compressed_layers_does_not_read_storage(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(ReadCountingIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage,
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let lower1: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        indexed_storage.clone(),
+        1,
+        RetryConfig::default(),
+    ));
+    let lower2: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        indexed_storage.clone(),
+        2,
+        RetryConfig::default(),
+    ));
+    let service = MultiLayerOplogService::new(primary.clone(), nev![lower1, lower2], 10, 10);
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "fresh-ephemeral-compressed-storage".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let create_entry = OplogEntry::create(
+        agent_id.clone(),
+        AgentMode::Ephemeral,
+        ComponentRevision::new(1).unwrap(),
+        Vec::new(),
+        environment_id,
+        account_id,
+        None,
+        100,
+        100,
+        HashSet::new(),
+        Vec::new(),
+        None,
+        Uuid::new_v4(),
+    )
+    .rounded();
+
+    let mut metadata = make_agent_metadata(agent_id, account_id, environment_id);
+    metadata.agent_mode = AgentMode::Ephemeral;
+    indexed_storage.reset();
+    let oplog = service
+        .create_fresh(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            create_entry.clone(),
+            metadata,
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+
+    assert_eq!(indexed_storage.reads(), 0);
+
+    let entries = service
+        .read(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            OplogIndex::INITIAL,
+            1,
+        )
+        .await;
+    assert_eq!(entries.get(&OplogIndex::INITIAL), Some(&create_entry));
+    assert!(indexed_storage.reads() > 0);
+
+    drop(oplog);
+}
+
+#[test]
+async fn primary_fresh_ephemeral_create_does_not_read_storage(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(ReadCountingIndexedStorage::new());
+    let service = PrimaryOplogService::new(
+        indexed_storage.clone(),
+        Arc::new(InMemoryBlobStorage::new()),
+        1,
+        1,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "fresh-ephemeral-primary-storage".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let create_entry = OplogEntry::create(
+        agent_id.clone(),
+        AgentMode::Ephemeral,
+        ComponentRevision::new(1).unwrap(),
+        Vec::new(),
+        environment_id,
+        account_id,
+        None,
+        100,
+        100,
+        HashSet::new(),
+        Vec::new(),
+        None,
+        Uuid::new_v4(),
+    )
+    .rounded();
+    let mut metadata = make_agent_metadata(agent_id, account_id, environment_id);
+    metadata.agent_mode = AgentMode::Ephemeral;
+
+    indexed_storage.reset();
+    let oplog = service
+        .create_fresh(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            create_entry.clone(),
+            metadata,
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+
+    assert_eq!(indexed_storage.reads(), 0);
+
+    let entries = service
+        .read(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            OplogIndex::INITIAL,
+            1,
+        )
+        .await;
+    assert_eq!(entries.get(&OplogIndex::INITIAL), Some(&create_entry));
+    assert!(indexed_storage.reads() > 0);
+
+    drop(oplog);
+}
+
+/// Storage-level zero-read contract for the blob archive backend, whose fresh
+/// construction diverges most from the checked path (a real `exists`/`list_dir`
+/// call is bypassed).
+#[test]
+async fn fresh_ephemeral_create_with_blob_layers_does_not_read_storage(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(ReadCountingIndexedStorage::new());
+    let blob_storage = Arc::new(ReadCountingBlobStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let lower1: Arc<dyn OplogArchiveService> =
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 1));
+    let lower2: Arc<dyn OplogArchiveService> =
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
+    let service = MultiLayerOplogService::new(primary.clone(), nev![lower1, lower2], 10, 10);
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "fresh-ephemeral-blob-storage".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let create_entry = OplogEntry::create(
+        agent_id.clone(),
+        AgentMode::Ephemeral,
+        ComponentRevision::new(1).unwrap(),
+        Vec::new(),
+        environment_id,
+        account_id,
+        None,
+        100,
+        100,
+        HashSet::new(),
+        Vec::new(),
+        None,
+        Uuid::new_v4(),
+    )
+    .rounded();
+
+    let mut metadata = make_agent_metadata(agent_id, account_id, environment_id);
+    metadata.agent_mode = AgentMode::Ephemeral;
+    indexed_storage.reset();
+    blob_storage.reset();
+    let oplog = service
+        .create_fresh(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            create_entry.clone(),
+            metadata,
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+
+    assert_eq!(indexed_storage.reads(), 0);
+    assert_eq!(blob_storage.reads(), 0);
+
+    let entries = service
+        .read(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            OplogIndex::INITIAL,
+            1,
+        )
+        .await;
+    assert_eq!(entries.get(&OplogIndex::INITIAL), Some(&create_entry));
+    assert!(blob_storage.reads() > 0);
 
     drop(oplog);
 }

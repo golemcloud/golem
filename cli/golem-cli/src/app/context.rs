@@ -164,6 +164,7 @@ pub struct ApplicationContext {
     component_metadata: crate::app::component_metadata::ComponentMetadataRegistry,
     calling_working_dir: PathBuf,
     selected_component_names: BTreeSet<ComponentName>,
+    builtin_local_url: url::Url,
     tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps,
 }
 
@@ -280,6 +281,7 @@ impl ApplicationContext {
         environments: BTreeMap<EnvironmentName, app_raw::Environment>,
         local_server: Option<WithSource<app_raw::LocalServer>>,
         component_presets: ComponentPresetSelector,
+        builtin_local_url: url::Url,
         file_download_client: reqwest::Client,
     ) -> anyhow::Result<Option<ApplicationContext>> {
         let Some(app_and_calling_working_dir) = load_app(
@@ -294,7 +296,13 @@ impl ApplicationContext {
 
         let ctx = validated_to_anyhow(
             "Failed to load application manifest, see problems above",
-            Self::create_context(app_and_calling_working_dir, config, file_download_client).await,
+            Self::create_context(
+                app_and_calling_working_dir,
+                config,
+                builtin_local_url,
+                file_download_client,
+            )
+            .await,
             Some(|mut app_ctx| {
                 app_ctx.loaded_with_warnings = true;
                 app_ctx
@@ -332,6 +340,7 @@ impl ApplicationContext {
     async fn create_context(
         app_and_calling_working_dir: ValidatedResult<(Application, PathBuf)>,
         config: ApplicationConfig,
+        builtin_local_url: url::Url,
         _file_download_client: reqwest::Client,
     ) -> ValidatedResult<ApplicationContext> {
         let tools_with_ensured_common_deps = ToolsWithEnsuredCommonDeps::new();
@@ -346,6 +355,7 @@ impl ApplicationContext {
                 component_metadata,
                 calling_working_dir,
                 selected_component_names: BTreeSet::new(),
+                builtin_local_url,
                 tools_with_ensured_common_deps,
             }
         })
@@ -539,7 +549,10 @@ impl ApplicationContext {
                 print_field(
                     label_padding,
                     LABEL_SERVER,
-                    environment.to_formatted_server_context().bold().to_string(),
+                    environment
+                        .to_formatted_server_context(&self.builtin_local_url)
+                        .bold()
+                        .to_string(),
                 );
                 print_field(
                     label_padding,

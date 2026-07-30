@@ -16,7 +16,7 @@ use crate::app::context::ApplicationContext;
 use crate::command::shared_args::PostDeployArgs;
 use crate::command_handler::Handlers;
 use crate::command_handler::repl::typescript::TypeScriptRepl;
-use crate::config::{builtin_local_url, uses_default_builtin_local_url};
+use crate::config::is_standard_builtin_local_url;
 use crate::context::Context;
 use crate::fs;
 use crate::model::GuestLanguage;
@@ -250,17 +250,14 @@ impl ReplHandler {
 
         match environment.environment.server.as_ref() {
             Some(Server::Builtin(BuiltinServer::Local)) | None => {
-                if uses_default_builtin_local_url() {
+                let local_url = self.ctx.worker_service_url();
+                if is_standard_builtin_local_url(local_url) {
                     env_vars.insert("GOLEM_REPL_SERVER_KIND".to_string(), "local".to_string());
                 } else {
-                    let local_url_override = builtin_local_url();
                     env_vars.insert("GOLEM_REPL_SERVER_KIND".to_string(), "custom".to_string());
                     env_vars.insert(
                         "GOLEM_REPL_SERVER_CUSTOM_URL".to_string(),
-                        local_url_override
-                            .as_str()
-                            .trim_end_matches('/')
-                            .to_string(),
+                        local_url.as_str().trim_end_matches('/').to_string(),
                     );
                     env_vars.insert(
                         "GOLEM_REPL_SERVER_TOKEN".to_string(),
