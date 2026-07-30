@@ -853,22 +853,19 @@ impl MultiLayerOplog {
             &result.transfer_fiber,
         );
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
-        let transfer_fiber = tokio::spawn(
-            async move {
-                if start_rx.await.is_ok() {
-                    Self::background_transfer(
-                        owned_agent_id,
-                        agent_mode,
-                        Arc::downgrade(&result_oplog),
-                        lower,
-                        multi_layer_oplog_service.clone(),
-                        rx,
-                    )
-                    .await;
-                }
-            },
-            // No span: fiber lives as long as the oplog. See `TraceOrigin`.
-        );
+        let transfer_fiber = tokio::spawn(async move {
+            if start_rx.await.is_ok() {
+                Self::background_transfer(
+                    owned_agent_id,
+                    agent_mode,
+                    Arc::downgrade(&result_oplog),
+                    lower,
+                    multi_layer_oplog_service.clone(),
+                    rx,
+                )
+                .await;
+            }
+        });
         result
             .set_background_transfer(start_tx, transfer_fiber)
             .await;

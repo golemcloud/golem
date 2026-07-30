@@ -2571,7 +2571,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
         start_attempt: Uuid,
-        startup_origin: TraceOrigin,
+        worker_trace: WorkerTrace,
     ) {
         let mut instance_guard = this.instance.lock().await;
         match &*instance_guard {
@@ -2586,7 +2586,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     component_charge,
                     concurrent_agent_permit,
                     oom_retry_count,
-                    startup_origin,
+                    worker_trace,
                 )
                 .await;
                 if let Some(sp) = filesystem_storage_permit {
@@ -2785,6 +2785,31 @@ enum EnqueueCaller {
     Returns,
 }
 
+/// What a resident worker's phase spans need in order to be traceable: the startup
+/// they link back to, and the agent fields they carry.
+///
+/// Built while the worker is admitted and passed to the loop rather than captured
+/// there, because the loop task has no ambient span by design.
+#[derive(Debug, Clone)]
+pub struct WorkerTrace {
+    pub startup_origin: TraceOrigin,
+    pub agent_type: String,
+}
+
+impl WorkerTrace {
+    fn of<Ctx: WorkerCtx>(worker: &Worker<Ctx>, startup_origin: TraceOrigin) -> Self {
+        Self {
+            startup_origin,
+            // `-` stands in for an agent id that could not be parsed into a type.
+            agent_type: worker
+                .parsed_agent_id
+                .as_ref()
+                .map(|id| id.agent_type.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct WaitingWorker {
     handle: Option<JoinHandle<()>>,
@@ -2798,17 +2823,9 @@ impl WaitingWorker {
         filesystem_storage_requirement: u64,
         oom_retry_count: u32,
     ) -> Self {
-        // Admission is a sequence of independent waits, each of which can block for
-        // an unbounded time under pressure. They are spanned one by one rather than
-        // under a single `waiting-for-permits` span, so that a worker stuck waiting
-        // for memory does not hold one span open - and unexported - accumulating
-        // every event emitted while it waits. See `TraceOrigin`.
-        let origin = TraceOrigin::triggered();
-        let agent_type = parent
-            .parsed_agent_id
-            .as_ref()
-            .map(|id| id.agent_type.to_string())
-            .unwrap_or_else(|| "-".to_string());
+        // Each admission wait can block for an unbounded time under pressure, so
+        // each one spans itself rather than sharing a span covering all of them.
+        let worker_trace = WorkerTrace::of(&parent, TraceOrigin::triggered());
 
         let start_attempt = Uuid::new_v4();
 
@@ -2852,11 +2869,11 @@ impl WaitingWorker {
             let concurrent_agent_permit = registered_concurrent_account
                 .acquire(agent_id.clone())
                 .instrument(related_span!(
-                    origin,
+                    worker_trace.startup_origin,
                     Level::INFO,
                     "acquire_concurrent_agent_slot",
                     %agent_id,
-                    %agent_type
+                    agent_type = %worker_trace.agent_type
                 ))
                 .await;
             crate::metrics::workers::record_worker_admission_wait(
@@ -2923,11 +2940,11 @@ impl WaitingWorker {
                     .active_workers()
                     .acquire_filesystem_storage(acquire_bytes)
                     .instrument(related_span!(
-                        origin,
+                        worker_trace.startup_origin,
                         Level::INFO,
                         "acquire_filesystem_storage",
                         %agent_id,
-                        %agent_type
+                        agent_type = %worker_trace.agent_type
                     ))
                     .await;
                 crate::metrics::workers::record_worker_admission_wait(
@@ -2961,7 +2978,7 @@ impl WaitingWorker {
                 concurrent_agent_permit,
                 oom_retry_count,
                 start_attempt,
-                origin,
+                worker_trace,
             )
             .await;
             // If we do not start the worker here we will drop the permits here, which will release them to the host.
@@ -3033,10 +3050,7 @@ impl RunningWorker {
         component_charge: WorkerComponentCharge,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
-        // Origin of the worker's startup, so each phase of the loop can link back to
-        // the admission that began it. Passed in rather than captured: this runs
-        // inside the `WaitingWorker` task, which has no ambient span by design.
-        startup_origin: TraceOrigin,
+        worker_trace: WorkerTrace,
     ) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         sender.send(WorkerCommand::Unblock).unwrap();
@@ -3050,14 +3064,8 @@ impl RunningWorker {
         let resume_replay_pending = Arc::new(AtomicBool::new(false));
         let resume_replay_pending_clone = resume_replay_pending.clone();
 
-        let agent_type = parent
-            .parsed_agent_id
-            .as_ref()
-            .map(|id| id.agent_type.to_string())
-            .unwrap_or_else(|| "-".to_string());
-
-        // No span on the loop or the task: both live as long as the worker is
-        // resident. Each bounded phase spans itself. See `TraceOrigin`.
+        // The loop and its task live as long as the worker is resident; each
+        // bounded phase inside spans itself.
         let handle = tokio::task::spawn(async move {
             RunningWorker::invocation_loop(
                 receiver,
@@ -3069,8 +3077,7 @@ impl RunningWorker {
                 oom_retry_count,
                 concurrent_agent_permit,
                 resume_replay_pending_clone,
-                startup_origin,
-                agent_type,
+                worker_trace,
             )
             .await;
         });
@@ -3352,8 +3359,7 @@ impl RunningWorker {
         oom_retry_count: u32,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         resume_replay_pending: Arc<AtomicBool>,
-        startup_origin: TraceOrigin,
-        agent_type: String,
+        worker_trace: WorkerTrace,
     ) {
         let mut invocation_loop = InvocationLoop {
             receiver,
@@ -3365,8 +3371,7 @@ impl RunningWorker {
             oom_retry_count,
             concurrent_agent_permit: Some(concurrent_agent_permit),
             resume_replay_pending,
-            startup_origin,
-            agent_type,
+            worker_trace,
         };
         invocation_loop.run().await;
     }

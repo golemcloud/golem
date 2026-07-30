@@ -321,31 +321,28 @@ impl AgentStatusFlushQueue {
         });
 
         let weak = Arc::downgrade(&queue);
-        let handle = tokio::spawn(
-            async move {
-                loop {
-                    tokio::select! {
-                        _ = shutdown_token.cancelled() => {
-                            debug!("Shutdown requested, draining agent status flush queue once before stopping");
-                            // Best-effort final drain so a graceful shutdown leaves the cache as
-                            // fresh as possible. Not required for correctness (the oplog is the
-                            // source of truth and a cold load re-folds), but avoids an avoidable
-                            // re-fold on next load of every dirty worker.
-                            if let Some(queue) = weak.upgrade() {
-                                queue.sweep().await;
-                            }
-                            break;
+        let handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => {
+                        debug!("Shutdown requested, draining agent status flush queue once before stopping");
+                        // Best-effort final drain so a graceful shutdown leaves the cache as
+                        // fresh as possible. Not required for correctness (the oplog is the
+                        // source of truth and a cold load re-folds), but avoids an avoidable
+                        // re-fold on next load of every dirty worker.
+                        if let Some(queue) = weak.upgrade() {
+                            queue.sweep().await;
                         }
-                        _ = tokio::time::sleep(interval) => {}
+                        break;
                     }
-                    match weak.upgrade() {
-                        Some(queue) => queue.sweep().await,
-                        None => break,
-                    }
+                    _ = tokio::time::sleep(interval) => {}
                 }
-            },
-            // No span: loop runs for the process lifetime. See `TraceOrigin`.
-        );
+                match weak.upgrade() {
+                    Some(queue) => queue.sweep().await,
+                    None => break,
+                }
+            }
+        });
         *queue.background_handle.lock().unwrap() = Some(handle);
         queue
     }

@@ -23,6 +23,7 @@ use crate::worker::invocation::{
 use crate::worker::status_checkpointer;
 use crate::worker::{
     FinalWorkerState, QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand,
+    WorkerTrace,
 };
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
@@ -66,15 +67,15 @@ use wasmtime::component::Instance;
 /// agent fields itself and links back to the worker's startup, keeping one worker's
 /// phases navigable from each other.
 ///
-/// Requires `owned_agent_id`, `startup_origin` and `agent_type` fields on `$this`.
+/// Requires `owned_agent_id` and `worker_trace` fields on `$this`.
 macro_rules! agent_phase_span {
     ($this:expr, $name:expr) => {
         related_span!(
-            $this.startup_origin,
+            $this.worker_trace.startup_origin,
             Level::INFO,
             $name,
             agent_id = %$this.owned_agent_id.agent_id,
-            agent_type = %$this.agent_type,
+            agent_type = %$this.worker_trace.agent_type,
         )
     };
 }
@@ -96,10 +97,8 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     /// `ResumeReplay` is not represented in the internal queue, so we track it
     /// explicitly to avoid evicting a worker that is blocked waking up for it.
     pub resume_replay_pending: Arc<AtomicBool>,
-    /// The worker's startup, captured so each phase span can link back to it.
-    pub startup_origin: TraceOrigin,
-    /// Agent type label for span fields, derived once.
-    pub agent_type: String,
+    /// What this worker's phase spans link back to, and the fields they carry.
+    pub worker_trace: WorkerTrace,
 }
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
@@ -169,8 +168,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     idle_snapshot_task: None,
                     concurrent_agent_permit: &mut self.concurrent_agent_permit,
                     resume_replay_pending: self.resume_replay_pending.clone(),
-                    startup_origin: self.startup_origin.clone(),
-                    agent_type: self.agent_type.clone(),
+                    worker_trace: self.worker_trace.clone(),
                 };
 
                 let result = inner_loop.run().await;
@@ -385,7 +383,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 Level::INFO,
                 "invocation",
                 agent_id = %self.owned_agent_id.agent_id,
-                agent_type = %self.agent_type,
+                agent_type = %self.worker_trace.agent_type,
             );
             let prepare_result =
                 Ctx::prepare_instance(&self.owned_agent_id.agent_id, instance, &mut *store)
@@ -463,10 +461,8 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     /// permit back to the semaphore pool) and re-acquired on wake.
     concurrent_agent_permit: &'a mut Option<crate::services::active_workers::ConcurrentAgentPermit>,
     resume_replay_pending: Arc<AtomicBool>,
-    /// The worker's startup, captured so each phase span can link back to it.
-    startup_origin: TraceOrigin,
-    /// Agent type label for span fields, derived once.
-    agent_type: String,
+    /// What this worker's phase spans link back to, and the fields they carry.
+    worker_trace: WorkerTrace,
 }
 
 impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
@@ -703,7 +699,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     Level::INFO,
                     "invocation_queue_pickup",
                     agent_id = %self.owned_agent_id.agent_id,
-                    agent_type = %self.agent_type,
+                    agent_type = %self.worker_trace.agent_type,
                     otel.kind = "consumer",
                 );
 

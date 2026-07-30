@@ -155,14 +155,6 @@ impl JaegerTrace {
         }
     }
 
-    /// Distinct service names that contributed spans to this trace.
-    pub fn service_names(&self) -> HashSet<&str> {
-        self.processes
-            .values()
-            .map(|p| p.service_name.as_str())
-            .collect()
-    }
-
     /// Returns span IDs whose parent references a span not present in this
     /// trace and not listed in `known_external_parent_ids`.
     pub fn disconnected_spans(

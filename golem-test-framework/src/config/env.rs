@@ -58,8 +58,8 @@ pub struct EnvBasedTestDependenciesConfig {
     pub golem_repo_root: PathBuf,
     pub unique_network_id: String,
     /// Whether spawned services export their own spans over OTLP. Off by default;
-    /// tests that assert on exported spans turn it on and point it at a collector
-    /// with [`OtlpEndpoint::set_for_spawned_services`].
+    /// tests that assert on exported spans turn it on and name the collector
+    /// through the environment variables read by `OtlpEndpoint::from_env`.
     pub otlp: bool,
 }
 
