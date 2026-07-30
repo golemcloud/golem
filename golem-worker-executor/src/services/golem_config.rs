@@ -59,11 +59,6 @@ pub struct GolemConfig {
     #[serde(default)]
     pub agent_status_checkpoint: AgentStatusCheckpointConfig,
     pub scheduler: SchedulerConfig,
-    /// Retry policy applied to SQL-backed scheduler storage operations when the connection pool
-    /// is briefly exhausted (a pool acquisition timeout). The scheduler background loop panics
-    /// on exhaustion because its `schedule`/`cancel` entry points cannot propagate errors.
-    #[serde(default = "default_scheduler_storage_retry")]
-    pub scheduler_storage_retry: RetryConfig,
     pub public_worker_api: WorkerServiceGrpcConfig,
     pub memory: MemoryConfig,
     pub filesystem_storage: FilesystemStorageConfig,
@@ -282,7 +277,6 @@ impl Default for GolemConfig {
             oplog: OplogConfig::default(),
             suspend: SuspendConfig::default(),
             scheduler: SchedulerConfig::default(),
-            scheduler_storage_retry: default_scheduler_storage_retry(),
             active_workers: ActiveWorkersConfig::default(),
             agent_status_flush: AgentStatusFlushConfig::default(),
             agent_status_checkpoint: AgentStatusCheckpointConfig::default(),
@@ -615,6 +609,11 @@ pub struct SchedulerConfig {
     pub lease_ttl: Duration,
     pub max_batches_per_tick: u32,
     pub max_concurrent_action_processing: u32,
+    /// Retry policy applied to SQL-backed scheduler storage operations when the connection pool
+    /// is briefly exhausted (a pool acquisition timeout). The scheduler background loop panics
+    /// on exhaustion because its `schedule`/`cancel` entry points cannot propagate errors.
+    #[serde(default = "default_scheduler_storage_retry")]
+    pub storage_retry: RetryConfig,
 }
 
 impl SafeDisplay for SchedulerConfig {
@@ -633,6 +632,7 @@ impl SafeDisplay for SchedulerConfig {
             "max concurrent action processing: {}",
             self.max_concurrent_action_processing
         );
+        let _ = writeln!(&mut result, "storage retry: {:?}", self.storage_retry);
         result
     }
 }
@@ -1629,6 +1629,7 @@ impl Default for SchedulerConfig {
             lease_ttl: Duration::from_secs(30),
             max_batches_per_tick: 10,
             max_concurrent_action_processing: 64,
+            storage_retry: default_scheduler_storage_retry(),
         }
     }
 }
