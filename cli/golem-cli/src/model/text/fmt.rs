@@ -19,7 +19,6 @@ pub use crate::log::terminal_width;
 use crate::log::{
     INDENT, LogColorize, LogIndent, WRAP_PADDING, current_indent_width, log_warn_action,
 };
-use crate::model::app::ComponentLayerId;
 use crate::model::format::Format;
 use crate::model::masking::{Masked, MaskingConfig};
 use anyhow::anyhow;
@@ -29,9 +28,6 @@ pub use comfy_table::Table as ComfyTable;
 use comfy_table::{
     Cell, CellAlignment, Color as ComfyColor, ColumnConstraint, ContentArrangement, Width,
 };
-use golem_common::model::AgentStatus;
-use golem_common::model::component::{InitialAgentFile, InstalledPlugin};
-use golem_common::model::worker::TypedAgentConfigEntry;
 use itertools::Itertools;
 use regex::Regex;
 use serde::Serialize;
@@ -297,28 +293,6 @@ pub fn format_binary_size(size: &u64) -> String {
     humansize::format_size(*size, humansize::BINARY)
 }
 
-pub fn format_status(status: &AgentStatus) -> String {
-    let status_name = status.to_string();
-    match status {
-        AgentStatus::Running => status_name.green(),
-        AgentStatus::Idle => status_name.cyan(),
-        AgentStatus::Suspended => status_name.yellow(),
-        AgentStatus::Interrupted => status_name.red(),
-        AgentStatus::Retrying => status_name.yellow(),
-        AgentStatus::Failed => status_name.bright_red(),
-        AgentStatus::Exited => status_name.white(),
-    }
-    .to_string()
-}
-
-pub fn format_retry_count(retry_count: &u32) -> String {
-    if *retry_count == 0 {
-        retry_count.to_string()
-    } else {
-        format_warn(&retry_count.to_string())
-    }
-}
-
 static BUILTIN_TYPES: phf::Set<&'static str> = phf::phf_set! {
     // WIT primitives
     "bool",
@@ -399,68 +373,9 @@ pub fn format_exports(exports: &[String]) -> String {
     exports.iter().map(|e| format_export(e.as_str())).join("\n")
 }
 
-pub fn format_files(files: &[InitialAgentFile]) -> String {
-    files
-        .iter()
-        .map(|file| {
-            format!(
-                "{} {} {}",
-                file.permissions.as_compact_str(),
-                file.path.as_path().as_str().log_color_highlight(),
-                file.content_hash.0.to_string().black()
-            )
-        })
-        .join("\n")
-}
-
-pub fn format_plugins(plugins: &[InstalledPlugin]) -> String {
-    plugins
-        .iter()
-        .map(|plugin| {
-            let plugin_id = format!(
-                "{}: {}/{}",
-                plugin.priority,
-                plugin.plugin_name.log_color_highlight(),
-                plugin.plugin_version.log_color_highlight(),
-            );
-
-            if plugin.parameters.is_empty() {
-                plugin_id
-            } else {
-                format!(
-                    "{}:\n{}",
-                    plugin_id,
-                    plugin
-                        .parameters
-                        .iter()
-                        .map(|(k, v)| format!("  {}={}", k, v))
-                        .join("\n")
-                )
-            }
-        })
-        .join("\n")
-}
-
 pub fn format_env(env: &BTreeMap<String, String>) -> String {
     env.iter()
         .map(|(k, v)| format!("{}={}", k, v.log_color_highlight()))
-        .join("\n")
-}
-
-pub fn format_typed_config(config: &[TypedAgentConfigEntry]) -> String {
-    config
-        .iter()
-        .map(|entry| {
-            let key = entry.path.join(".");
-            let value = golem_common::schema::render::to_json_value(
-                entry.value.graph(),
-                entry.value.root_type(),
-                entry.value.value(),
-            )
-            .map(|v| v.to_string())
-            .unwrap_or_else(|_| "<invalid>".to_string());
-            format!("{}={}", key.log_color_highlight(), value)
-        })
         .join("\n")
 }
 
@@ -1001,20 +916,6 @@ pub fn to_colored_yaml<T: Serialize>(value: &T) -> anyhow::Result<String> {
     }
 
     Ok(output)
-}
-
-pub fn format_component_applied_layers(
-    applied_layers: &[(ComponentLayerId, Option<String>)],
-) -> String {
-    applied_layers
-        .iter()
-        .map(|(id, selection)| match selection {
-            Some(selection) => {
-                format!("{}[{}]", id.name(), selection.as_str())
-            }
-            None => id.name().to_string(),
-        })
-        .join(", ")
 }
 
 #[cfg(test)]

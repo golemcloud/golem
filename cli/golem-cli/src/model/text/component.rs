@@ -12,14 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::app::ComponentLayerProperties;
+use crate::log::LogColorize;
+use crate::model::app::{ComponentLayerId, ComponentLayerProperties};
 use crate::model::cli_output::StructuredOutput;
 use crate::model::component::ComponentView;
 use crate::model::masking::{Masked, MaskingConfig, is_sensitive_key, mask_secret};
 use crate::model::text::fmt::*;
+use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
 use golem_common::model::card::PolymorphicCard;
-use golem_common::model::component::ComponentName;
+use golem_common::model::component::{ComponentName, InitialAgentFile, InstalledPlugin};
+use golem_common::model::worker::TypedAgentConfigEntry;
+use itertools::Itertools;
 use serde::Serializer;
 use serde::ser::Error;
 use serde::{Deserialize, Serialize};
@@ -412,4 +416,77 @@ fn mask_sensitive_keyed_values(value: &mut Value) {
         }
         _ => {}
     }
+}
+
+fn format_files(files: &[InitialAgentFile]) -> String {
+    files
+        .iter()
+        .map(|file| {
+            format!(
+                "{} {} {}",
+                file.permissions.as_compact_str(),
+                file.path.as_path().as_str().log_color_highlight(),
+                file.content_hash.0.to_string().black()
+            )
+        })
+        .join("\n")
+}
+
+fn format_plugins(plugins: &[InstalledPlugin]) -> String {
+    plugins
+        .iter()
+        .map(|plugin| {
+            let plugin_id = format!(
+                "{}: {}/{}",
+                plugin.priority,
+                plugin.plugin_name.log_color_highlight(),
+                plugin.plugin_version.log_color_highlight(),
+            );
+
+            if plugin.parameters.is_empty() {
+                plugin_id
+            } else {
+                format!(
+                    "{}:\n{}",
+                    plugin_id,
+                    plugin
+                        .parameters
+                        .iter()
+                        .map(|(k, v)| format!("  {}={}", k, v))
+                        .join("\n")
+                )
+            }
+        })
+        .join("\n")
+}
+
+fn format_typed_config(config: &[TypedAgentConfigEntry]) -> String {
+    config
+        .iter()
+        .map(|entry| {
+            let key = entry.path.join(".");
+            let value = golem_common::schema::render::to_json_value(
+                entry.value.graph(),
+                entry.value.root_type(),
+                entry.value.value(),
+            )
+            .map(|v| v.to_string())
+            .unwrap_or_else(|_| "<invalid>".to_string());
+            format!("{}={}", key.log_color_highlight(), value)
+        })
+        .join("\n")
+}
+
+pub fn format_component_applied_layers(
+    applied_layers: &[(ComponentLayerId, Option<String>)],
+) -> String {
+    applied_layers
+        .iter()
+        .map(|(id, selection)| match selection {
+            Some(selection) => {
+                format!("{}[{}]", id.name(), selection.as_str())
+            }
+            None => id.name().to_string(),
+        })
+        .join(", ")
 }

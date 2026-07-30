@@ -596,3 +596,25 @@ pub fn format_agent_id_match(agent_id_match: &AgentIdMatch) -> String {
         rendered_agent_id.green().bold(),
     )
 }
+
+fn format_status(status: &AgentStatus) -> String {
+    let status_name = status.to_string();
+    match status {
+        AgentStatus::Running => status_name.green(),
+        AgentStatus::Idle => status_name.cyan(),
+        AgentStatus::Suspended => status_name.yellow(),
+        AgentStatus::Interrupted => status_name.red(),
+        AgentStatus::Retrying => status_name.yellow(),
+        AgentStatus::Failed => status_name.bright_red(),
+        AgentStatus::Exited => status_name.white(),
+    }
+    .to_string()
+}
+
+fn format_retry_count(retry_count: &u32) -> String {
+    if *retry_count == 0 {
+        retry_count.to_string()
+    } else {
+        format_warn(&retry_count.to_string())
+    }
+}
