@@ -2228,6 +2228,7 @@ pub mod account {
             #[command(flatten)]
             account_id: AccountIdOptionalArg,
 
+            /// Maximum storage per agent in bytes. Cannot exceed the plan ceiling.
             #[arg(value_name = "BYTES")]
             max_storage_per_agent: u64,
         },
