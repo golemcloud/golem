@@ -25,10 +25,6 @@ mod docker;
 #[async_trait]
 pub trait Jaeger: Send + Sync {
     fn otlp_http_endpoint(&self) -> String;
-    /// Host port the OTLP/HTTP receiver is published on. Chosen at container start,
-    /// so callers that need to configure an exporter must read it rather than
-    /// assume the default.
-    fn otlp_http_port(&self) -> u16;
     fn query_url(&self) -> String;
     async fn kill(&self);
 }
@@ -60,16 +56,6 @@ pub struct JaegerTrace {
     #[serde(rename = "traceID")]
     pub trace_id: String,
     pub spans: Vec<JaegerSpan>,
-    /// Emitting process per `JaegerSpan::process_id`. This is where the service
-    /// name lives; spans themselves do not carry it.
-    #[serde(default)]
-    pub processes: HashMap<String, JaegerProcess>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct JaegerProcess {
-    #[serde(rename = "serviceName")]
-    pub service_name: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -80,8 +66,6 @@ pub struct JaegerSpan {
     pub span_id: String,
     #[serde(rename = "operationName")]
     pub operation_name: String,
-    #[serde(rename = "processID", default)]
-    pub process_id: String,
     /// Span start, in microseconds since the Unix epoch.
     #[serde(rename = "startTime")]
     pub start_time: u64,
@@ -375,7 +359,7 @@ async fn wait_for_startup(query_url: &str, timeout: Duration) {
 mod tests {
     use test_r::test;
 
-    use super::{HashMap, JaegerReference, JaegerSpan, JaegerTrace};
+    use super::{JaegerReference, JaegerSpan, JaegerTrace};
 
     fn span(
         span_id: &str,
@@ -388,7 +372,6 @@ mod tests {
             trace_id: "trace".to_string(),
             span_id: span_id.to_string(),
             operation_name: name.to_string(),
-            process_id: "p1".to_string(),
             start_time,
             duration,
             references,
@@ -435,7 +418,6 @@ mod tests {
     fn spans_outliving_parent_flags_children_that_escape_their_parent() {
         let trace = JaegerTrace {
             trace_id: "trace".to_string(),
-            processes: HashMap::new(),
             spans: vec![
                 span("a", "parent", 1_000, 1_000, vec![]),
                 span(
@@ -489,7 +471,6 @@ mod tests {
     fn spans_outliving_parent_ignores_parents_outside_the_trace() {
         let trace = JaegerTrace {
             trace_id: "trace".to_string(),
-            processes: HashMap::new(),
             spans: vec![span(
                 "b",
                 "remote_child",

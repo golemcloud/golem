@@ -76,10 +76,6 @@ impl Jaeger for DockerJaeger {
         format!("http://localhost:{}", self.otlp_http_port)
     }
 
-    fn otlp_http_port(&self) -> u16 {
-        self.otlp_http_port
-    }
-
     fn query_url(&self) -> String {
         format!("http://localhost:{}", self.query_port)
     }
