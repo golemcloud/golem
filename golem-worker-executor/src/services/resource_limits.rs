@@ -290,7 +290,7 @@ impl AtomicResourceEntry {
         meter: &AgentStorageMeter,
     ) {
         self.storage_meters
-            .remove_if_sync(owned_agent_id, |registered| registered == meter);
+            .remove_if_sync(owned_agent_id, |registered| registered.is_same_meter(meter));
     }
 
     pub fn flush_storage_meters(&self, now: Instant) {
@@ -601,26 +601,18 @@ impl ResourceLimitsGrpc {
         {
             Ok(updated_limits) => {
                 for (account_id, update) in &updates {
-                    match (
-                        update.durable_storage_byte_seconds_delta > 0,
-                        update.ephemeral_storage_byte_seconds_delta > 0,
-                    ) {
-                        (false, false) => {}
-                        (record_durable, record_ephemeral) => {
-                            let account_id = account_id.to_string();
-                            if record_durable {
-                                record_durable_storage_byte_seconds(
-                                    &account_id,
-                                    update.durable_storage_byte_seconds_delta,
-                                );
-                            }
-                            if record_ephemeral {
-                                record_ephemeral_storage_byte_seconds(
-                                    &account_id,
-                                    update.ephemeral_storage_byte_seconds_delta,
-                                );
-                            }
-                        }
+                    let durable = update.durable_storage_byte_seconds_delta;
+                    let ephemeral = update.ephemeral_storage_byte_seconds_delta;
+                    if durable == 0 && ephemeral == 0 {
+                        continue;
+                    }
+
+                    let account_id = account_id.to_string();
+                    if durable > 0 {
+                        record_durable_storage_byte_seconds(&account_id, durable);
+                    }
+                    if ephemeral > 0 {
+                        record_ephemeral_storage_byte_seconds(&account_id, ephemeral);
                     }
                 }
                 for (account_id, resource_limits) in updated_limits.0 {
@@ -816,7 +808,7 @@ mod tests {
         entry.unregister_storage_meter(&owned_agent_id, &old);
 
         let registered = entry.storage_meters.get_sync(&owned_agent_id).unwrap();
-        assert_eq!(registered.get(), &reloaded);
+        assert!(registered.get().is_same_meter(&reloaded));
     }
 
     #[test]

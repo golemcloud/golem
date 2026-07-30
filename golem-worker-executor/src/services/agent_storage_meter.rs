@@ -25,13 +25,16 @@ pub struct AgentStorageMeter {
     inner: Arc<Inner>,
 }
 
-impl PartialEq for AgentStorageMeter {
-    fn eq(&self, other: &Self) -> bool {
+impl AgentStorageMeter {
+    /// Whether both handles refer to the same underlying meter.
+    ///
+    /// Deliberately not `PartialEq`: this is identity, not value equality — two meters
+    /// holding identical byte counts are still different meters, and unregistration must
+    /// only remove the exact handle it was given.
+    pub fn is_same_meter(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 }
-
-impl Eq for AgentStorageMeter {}
 
 #[derive(Debug)]
 struct Inner {

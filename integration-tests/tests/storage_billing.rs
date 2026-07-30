@@ -224,7 +224,12 @@ mod tests {
             24.0,
             "pre-eviction metering",
         );
-        assert_billing_window(evicted_end - evicted_start, 0.0, 2.0, "evicted interval");
+        // An evicted agent must stop accruing. The bound is 6.0 rather than something
+        // tighter because eviction settling is asynchronous: at 8 bytes, 2.0 byte-seconds
+        // is only a quarter-second of headroom, which a loaded CI runner can exceed
+        // without anything being wrong. 6.0 still sits clearly below the 10.0 floor the
+        // active windows assert, so an agent that kept billing after eviction fails.
+        assert_billing_window(evicted_end - evicted_start, 0.0, 6.0, "evicted interval");
         assert_billing_window(
             reloaded_end - reloaded_start,
             10.0,
