@@ -74,7 +74,8 @@ use golem_common::model::{
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
-use golem_common::tracing::TraceOrigin;
+use golem_common::related_span;
+use golem_common::tracing::{TraceOrigin, TraceParent};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
@@ -88,7 +89,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Mutex, MutexGuard, RwLock};
 use tokio::task::JoinHandle;
-use tracing::{Instrument, Level, Span, debug, info, span, warn};
+use tracing::{Instrument, Level, debug, info, span, warn};
 use uuid::Uuid;
 use wasmtime::component::Instance;
 use wasmtime::{Store, UpdateDeadline};
@@ -161,9 +162,9 @@ pub struct Worker<Ctx: WorkerCtx> {
     /// trace of whatever enqueued it, so the invocation loop can attach the
     /// invocation's spans correctly when it picks the work up.
     ///
-    /// Holds captured origins rather than `tracing::Span`s: a durable invocation
-    /// can be picked up long after the request that enqueued it returned, and a
-    /// span held that long neither closes nor stops accumulating events.
+    /// Holds captured origins rather than `tracing::Span`s: a durable invocation can
+    /// be picked up long after the request that enqueued it returned. See
+    /// [`TraceOrigin`].
     external_invocation_origins: Arc<RwLock<HashMap<IdempotencyKey, TraceOrigin>>>,
 
     invocation_results: Arc<RwLock<HashMap<IdempotencyKey, InvocationResult>>>,
@@ -455,7 +456,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         invocation_context: invocation_context_stack.clone(),
                         principal,
                     },
-                    TraceOrigin::triggered(),
+                    EnqueueCaller::Returns,
                 )
                 .await
                 .expect("Failed enqueuing initial agent invocations to worker");
@@ -729,9 +730,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<ResultOrSubscription, WorkerExecutorError> {
         let idempotency_key = Self::require_idempotency_key(&invocation)?;
 
-        // The caller does not wait for the invocation, so its execution belongs in
-        // a trace of its own, linked back to whatever enqueued it.
-        self.invoke_internal(&idempotency_key, invocation, TraceOrigin::triggered())
+        self.invoke_internal(&idempotency_key, invocation, EnqueueCaller::Returns)
             .await
     }
 
@@ -742,10 +741,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         let idempotency_key = Self::require_idempotency_key(&invocation)?;
 
-        // This call encloses the invocation, so the execution belongs in the
-        // caller's trace as a child of the caller's span.
+        // This call stays open until the invocation completes, so its span encloses
+        // the execution and can be its parent.
         let outcome = self
-            .invoke_internal(&idempotency_key, invocation, TraceOrigin::awaited())
+            .invoke_internal(
+                &idempotency_key,
+                invocation,
+                EnqueueCaller::Awaits(TraceParent::capture_current()),
+            )
             .await?;
 
         match outcome {
@@ -789,7 +792,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         idempotency_key: &IdempotencyKey,
         invocation: AgentInvocation,
-        origin: TraceOrigin,
+        caller: EnqueueCaller,
     ) -> Result<ResultOrSubscription, WorkerExecutorError> {
         // We need to create the subscription before checking whether the result is still pending, otherwise there is a race.
         let subscription = self.events().subscribe();
@@ -802,7 +805,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             LookupResult::Interrupted => Err(InterruptKind::Interrupt(Timestamp::now_utc()).into()),
             LookupResult::Pending => Ok(ResultOrSubscription::Pending(subscription)),
             LookupResult::New => {
-                self.enqueue_worker_invocation(invocation, origin).await?;
+                self.enqueue_worker_invocation(invocation, caller).await?;
                 Ok(ResultOrSubscription::Pending(subscription))
             }
         }
@@ -827,7 +830,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<(), WorkerExecutorError> {
         self.enqueue_worker_invocation(
             AgentInvocation::ManualUpdate { target_revision },
-            TraceOrigin::triggered(),
+            EnqueueCaller::Returns,
         )
         .await
     }
@@ -1409,7 +1412,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn enqueue_worker_invocation(
         &self,
         invocation: AgentInvocation,
-        origin: TraceOrigin,
+        caller: EnqueueCaller,
     ) -> Result<(), WorkerExecutorError> {
         async {
             let instance_guard = self.lock_non_stopping_worker().await;
@@ -1457,14 +1460,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
 
             if let Some(idempotency_key) = timestamped_invocation.invocation.idempotency_key() {
-                // A consumer links back to the *creation context* of the work, which
-                // is this producer span - not whatever was current before it opened.
-                // An awaited origin is exempt: it has to keep the caller's span,
-                // because that is the span which encloses the execution.
-                let origin = if origin.is_awaited() {
-                    origin
-                } else {
-                    TraceOrigin::triggered()
+                // A consumer links back to the *creation context* of the work, so a
+                // returning caller is captured here, inside the producer span,
+                // rather than wherever it happened to call from. A waiting caller
+                // keeps its own span instead: that is the one enclosing the
+                // execution.
+                let origin = match caller {
+                    EnqueueCaller::Awaits(parent) => TraceOrigin::AwaitedBy(parent),
+                    EnqueueCaller::Returns => TraceOrigin::triggered(),
                 };
                 self.external_invocation_origins
                     .write()
@@ -2567,6 +2570,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
         start_attempt: Uuid,
+        startup_origin: TraceOrigin,
     ) {
         let mut instance_guard = this.instance.lock().await;
         match &*instance_guard {
@@ -2581,6 +2585,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     component_charge,
                     concurrent_agent_permit,
                     oom_retry_count,
+                    startup_origin,
                 )
                 .await;
                 if let Some(sp) = filesystem_storage_permit {
@@ -2768,6 +2773,17 @@ impl WorkerInstance {
     }
 }
 
+/// What the caller of [`Worker::enqueue_worker_invocation`] intends to do next,
+/// which is what decides how the execution relates to its trace.
+enum EnqueueCaller {
+    /// The caller waits for the result, so its span encloses the execution and
+    /// becomes the parent of the pickup span.
+    Awaits(TraceParent),
+    /// The caller returns before the work runs, so the execution becomes a new trace
+    /// linked back to the producer span.
+    Returns,
+}
+
 #[derive(Debug)]
 struct WaitingWorker {
     handle: Option<JoinHandle<()>>,
@@ -2781,133 +2797,154 @@ impl WaitingWorker {
         filesystem_storage_requirement: u64,
         oom_retry_count: u32,
     ) -> Self {
-        let span = span!(
-            parent: None,
-            Level::INFO,
-            "waiting-for-permits",
-            agent_id = parent.owned_agent_id.agent_id.to_string(),
-            agent_type = parent
-                .parsed_agent_id
-                .as_ref()
-                .map(|id| id.agent_type.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-        );
-        span.follows_from(Span::current());
+        // Admission is a sequence of independent waits, each of which can block for
+        // an unbounded time under pressure. They are spanned one by one rather than
+        // under a single `waiting-for-permits` span, so that a worker stuck waiting
+        // for memory does not hold one span open - and unexported - accumulating
+        // every event emitted while it waits. See `TraceOrigin`.
+        let origin = TraceOrigin::triggered();
+        let agent_type = parent
+            .parsed_agent_id
+            .as_ref()
+            .map(|id| id.agent_type.to_string())
+            .unwrap_or_else(|| "-".to_string());
 
         let start_attempt = Uuid::new_v4();
 
-        let handle = tokio::task::spawn(
-            async move {
-                let agent_id = parent.owned_agent_id.agent_id();
-                let registered_concurrent_account = parent.registered_concurrent_account.clone();
+        let handle = tokio::task::spawn(async move {
+            let agent_id = parent.owned_agent_id.agent_id();
+            let registered_concurrent_account = parent.registered_concurrent_account.clone();
 
-                // Determine the component's compiled-module size before acquiring
-                // the per-account concurrency slot (and before reserving memory),
-                // so the worker's memory and its module are admitted together (the
-                // module is reserved first, then the memory admission accounts for
-                // it). The module is charged once per resident component and shared
-                // by all its workers.
-                //
-                // Charges the pending-update target revision when one is queued
-                // (matching what create_instance loads); only a non-existent
-                // target falls back to the current revision, and transient
-                // resolution failures are retried rather than wedging the worker
-                // in WaitingForPermit or under-reserving against the old revision.
-                //
-                // This resolution is read-only and holds no permits, so it is done
-                // before acquiring the concurrent-agent permit: its retry loop must
-                // not hold one of the account's active-agent slots while the worker
-                // is not yet running, otherwise a single worker whose target
-                // metadata is transiently unavailable could block unrelated workers
-                // of the same account from starting.
-                let (component_id, component_revision, component_module_bytes) =
-                    parent.startup_component_charge_requirement().await;
+            // Determine the component's compiled-module size before acquiring
+            // the per-account concurrency slot (and before reserving memory),
+            // so the worker's memory and its module are admitted together (the
+            // module is reserved first, then the memory admission accounts for
+            // it). The module is charged once per resident component and shared
+            // by all its workers.
+            //
+            // Charges the pending-update target revision when one is queued
+            // (matching what create_instance loads); only a non-existent
+            // target falls back to the current revision, and transient
+            // resolution failures are retried rather than wedging the worker
+            // in WaitingForPermit or under-reserving against the old revision.
+            //
+            // This resolution is read-only and holds no permits, so it is done
+            // before acquiring the concurrent-agent permit: its retry loop must
+            // not hold one of the account's active-agent slots while the worker
+            // is not yet running, otherwise a single worker whose target
+            // metadata is transiently unavailable could block unrelated workers
+            // of the same account from starting.
+            // Not spanned: this retries on a 500ms delay and logs once per attempt,
+            // so a span covering the whole call would accumulate two events a second
+            // for as long as resolution keeps failing - the pathology this change
+            // exists to remove. The retry events stay in the logs; how long
+            // admission took is a metrics question.
+            let (component_id, component_revision, component_module_bytes) =
+                parent.startup_component_charge_requirement().await;
 
-                let concurrent_agent_permit = registered_concurrent_account.acquire(agent_id).await;
+            let concurrent_agent_permit = registered_concurrent_account
+                .acquire(agent_id.clone())
+                .instrument(related_span!(
+                    origin,
+                    Level::INFO,
+                    "acquire_concurrent_agent_slot",
+                    %agent_id,
+                    %agent_type
+                ))
+                .await;
 
-                // `memory_grant` and `component_charge` own their reservations
-                // from here on: held as locals until the worker becomes resident
-                // (when they move into the RunningWorker) or this task ends/aborts
-                // (when dropping them returns the reservations to the gate). This
-                // is what makes a start cancelled mid-flight — e.g. the worker
-                // being deleted while still waiting for its remaining permits —
-                // release rather than leak its grant and module charge.
-                //
-                // Admission is not gated while waiting for a per-account
-                // concurrency slot above; otherwise one account could exhaust the
-                // memory headroom with workers that are not allowed to run yet.
-                let (memory_grant, component_charge) = parent
+            // `memory_grant` and `component_charge` own their reservations
+            // from here on: held as locals until the worker becomes resident
+            // (when they move into the RunningWorker) or this task ends/aborts
+            // (when dropping them returns the reservations to the gate). This
+            // is what makes a start cancelled mid-flight — e.g. the worker
+            // being deleted while still waiting for its remaining permits —
+            // release rather than leak its grant and module charge.
+            //
+            // Admission is not gated while waiting for a per-account
+            // concurrency slot above; otherwise one account could exhaust the
+            // memory headroom with workers that are not allowed to run yet.
+            let (memory_grant, component_charge) = parent
+                .active_workers()
+                .acquire_with_component_charge(
+                    memory_requirement,
+                    component_id,
+                    component_revision,
+                    component_module_bytes,
+                )
+                // Not spanned, for the same reason as the charge resolution above:
+                // `acquire_memory` retries on the same 500ms delay and logs once per
+                // attempt.
+                .await;
+
+            // Pre-acquire storage permits for this restart.
+            //
+            // We need to acquire `filesystem_storage_requirement + desired_extra` total:
+            // - `filesystem_storage_requirement`: bytes to hold as the pre-acquired permit
+            //   for replay (mirrors what the worker held before being evicted).
+            //   The old RunningWorker already returned these bytes to the pool
+            //   when it dropped, so the pool likely already has them — the
+            //   blocking acquire will find them without needing to evict anyone.
+            // - `desired_extra`: bytes for the write that triggered NodeOutOfFilesystemStorage.
+            //   The pool may not have these yet, so the blocking acquire will
+            //   evict idle workers only for the missing portion.
+            //
+            // After acquiring, we release `desired_extra` back to the pool so
+            // it is available for the pending write to re-acquire at runtime.
+            //
+            // Example: prior writes = 3 KB, failing write needs 1 KB extra.
+            //   Old RunningWorker drops → 3 KB returned to pool.
+            //   acquire_bytes = 4 KB. Pool has 3 KB → 1 KB gap → evict 1 KB.
+            //   Hold 3 KB as filesystem_storage_permit, release 1 KB → pool has 1 KB free.
+            //   Pending write re-acquires 1 KB → succeeds.
+            let desired_extra = parent
+                .desired_extra_filesystem_storage
+                .load(Ordering::Relaxed);
+            let acquire_bytes = filesystem_storage_requirement + desired_extra;
+            let filesystem_storage_permit = if acquire_bytes > 0 {
+                let mut permit = parent
                     .active_workers()
-                    .acquire_with_component_charge(
-                        memory_requirement,
-                        component_id,
-                        component_revision,
-                        component_module_bytes,
-                    )
+                    .acquire_filesystem_storage(acquire_bytes)
+                    .instrument(related_span!(
+                        origin,
+                        Level::INFO,
+                        "acquire_filesystem_storage",
+                        %agent_id,
+                        %agent_type
+                    ))
                     .await;
-
-                // Pre-acquire storage permits for this restart.
-                //
-                // We need to acquire `filesystem_storage_requirement + desired_extra` total:
-                // - `filesystem_storage_requirement`: bytes to hold as the pre-acquired permit
-                //   for replay (mirrors what the worker held before being evicted).
-                //   The old RunningWorker already returned these bytes to the pool
-                //   when it dropped, so the pool likely already has them — the
-                //   blocking acquire will find them without needing to evict anyone.
-                // - `desired_extra`: bytes for the write that triggered NodeOutOfFilesystemStorage.
-                //   The pool may not have these yet, so the blocking acquire will
-                //   evict idle workers only for the missing portion.
-                //
-                // After acquiring, we release `desired_extra` back to the pool so
-                // it is available for the pending write to re-acquire at runtime.
-                //
-                // Example: prior writes = 3 KB, failing write needs 1 KB extra.
-                //   Old RunningWorker drops → 3 KB returned to pool.
-                //   acquire_bytes = 4 KB. Pool has 3 KB → 1 KB gap → evict 1 KB.
-                //   Hold 3 KB as filesystem_storage_permit, release 1 KB → pool has 1 KB free.
-                //   Pending write re-acquires 1 KB → succeeds.
-                let desired_extra = parent
-                    .desired_extra_filesystem_storage
-                    .load(Ordering::Relaxed);
-                let acquire_bytes = filesystem_storage_requirement + desired_extra;
-                let filesystem_storage_permit = if acquire_bytes > 0 {
-                    let mut permit = parent
-                        .active_workers()
-                        .acquire_filesystem_storage(acquire_bytes)
-                        .await;
-                    // Release the `desired_extra` portion back to the pool.
-                    if desired_extra > 0 {
-                        let extra_permits =
-                            crate::services::active_workers::bytes_to_filesystem_storage_permits(
-                                desired_extra,
-                            ) as usize;
-                        if let Some(extra) = permit.split(extra_permits) {
-                            drop(extra); // returns to semaphore
-                        }
+                // Release the `desired_extra` portion back to the pool.
+                if desired_extra > 0 {
+                    let extra_permits =
+                        crate::services::active_workers::bytes_to_filesystem_storage_permits(
+                            desired_extra,
+                        ) as usize;
+                    if let Some(extra) = permit.split(extra_permits) {
+                        drop(extra); // returns to semaphore
                     }
-                    if permit.num_permits() > 0 {
-                        Some(permit)
-                    } else {
-                        None
-                    }
+                }
+                if permit.num_permits() > 0 {
+                    Some(permit)
                 } else {
                     None
-                };
-                debug!("Attempting to start worker after acquiring enough permits");
-                Worker::start_waiting_worker(
-                    parent,
-                    memory_grant,
-                    component_charge,
-                    filesystem_storage_permit,
-                    concurrent_agent_permit,
-                    oom_retry_count,
-                    start_attempt,
-                )
-                .await;
-                // If we do not start the worker here we will drop the permits here, which will release them to the host.
-            }
-            .instrument(span),
-        );
+                }
+            } else {
+                None
+            };
+            debug!("Attempting to start worker after acquiring enough permits");
+            Worker::start_waiting_worker(
+                parent,
+                memory_grant,
+                component_charge,
+                filesystem_storage_permit,
+                concurrent_agent_permit,
+                oom_retry_count,
+                start_attempt,
+                origin,
+            )
+            .await;
+            // If we do not start the worker here we will drop the permits here, which will release them to the host.
+        });
 
         WaitingWorker {
             handle: Some(handle),
@@ -2975,6 +3012,10 @@ impl RunningWorker {
         component_charge: WorkerComponentCharge,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
+        // Origin of the worker's startup, so each phase of the loop can link back to
+        // the admission that began it. Passed in rather than captured: this runs
+        // inside the `WaitingWorker` task, which has no ambient span by design.
+        startup_origin: TraceOrigin,
     ) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         sender.send(WorkerCommand::Unblock).unwrap();
@@ -2988,10 +3029,6 @@ impl RunningWorker {
         let resume_replay_pending = Arc::new(AtomicBool::new(false));
         let resume_replay_pending_clone = resume_replay_pending.clone();
 
-        // Captured here, where the worker's `waiting-for-permits` span is current,
-        // so each phase of the loop can be linked back to the startup that began
-        // it. A link rather than a parent: the phases outlive that span.
-        let startup_origin = TraceOrigin::triggered();
         let agent_type = parent
             .parsed_agent_id
             .as_ref()

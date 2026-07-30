@@ -221,12 +221,7 @@ impl SchedulerServiceDefault {
     /// Runs a scheduler storage operation, retrying transient errors (such as
     /// connection pool exhaustion) according to `storage_retry`. Panics on a
     /// non-transient error, or after the configured retries are exhausted.
-    async fn retry_storage_op<T, F, Fut>(
-        &self,
-        op_name: &str,
-        target: &(dyn std::fmt::Display + Sync),
-        mut op: F,
-    ) -> T
+    async fn retry_storage_op<T, F, Fut>(&self, op_name: &str, target: &str, mut op: F) -> T
     where
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<T, SchedulerStorageError>>,
@@ -653,7 +648,7 @@ impl SchedulerService for SchedulerServiceDefault {
             );
         }
 
-        self.retry_storage_op("insert", &action, || {
+        self.retry_storage_op("insert", &format!("action {action}"), || {
             self.scheduler_storage
                 .insert(schedule_id, time, shard_id, &action)
         })
@@ -662,8 +657,10 @@ impl SchedulerService for SchedulerServiceDefault {
     }
 
     async fn cancel(&self, id: ScheduleId) {
-        self.retry_storage_op("cancel", &id, || self.scheduler_storage.cancel(&id))
-            .await;
+        self.retry_storage_op("cancel", &format!("schedule {id}"), || {
+            self.scheduler_storage.cancel(&id)
+        })
+        .await;
     }
 }
 
@@ -696,9 +693,13 @@ mod tests {
     };
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-    use std::collections::HashSet;
+    use pretty_assertions::assert_eq;
+    use proptest::prelude::*;
+    use std::collections::{HashMap, HashSet};
+    use std::fmt::Debug;
     use std::str::FromStr;
     use std::sync::Arc;
+    use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
     use std::time::Duration;
     use test_r::test;
@@ -1004,6 +1005,147 @@ mod tests {
             account_id: AccountId::new(),
             environment_id: EnvironmentId::new(),
             promise_id,
+        }
+    }
+
+    fn agent_method_invocation_with_idempotency_key(idempotency_key: String) -> AgentInvocation {
+        AgentInvocation::AgentMethod {
+            idempotency_key: IdempotencyKey::new(idempotency_key),
+            method_name: "run".to_string(),
+            input: UntypedDataValue::Tuple(vec![]),
+            invocation_context: InvocationContextStack::fresh(),
+            principal: Principal::anonymous(),
+        }
+    }
+
+    /// Storage that fails `ack` for a chosen set of schedule ids, and records what
+    /// was claimed so a test can check ordering and whether the tick kept claiming
+    /// after a failure.
+    struct RecordingSchedulerStorage {
+        inner: Arc<InMemorySchedulerStorage>,
+        failed_ack_ids: Arc<StdMutex<HashSet<Uuid>>>,
+        failed_acknowledgements: Arc<StdMutex<HashSet<Uuid>>>,
+        claimed_batches: Arc<StdMutex<Vec<Vec<ClaimedScheduledAction>>>>,
+        ack_failures: AtomicUsize,
+        claims_after_ack_failure: AtomicUsize,
+    }
+
+    impl Debug for RecordingSchedulerStorage {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("RecordingSchedulerStorage")
+        }
+    }
+
+    #[async_trait]
+    impl SchedulerStorage for RecordingSchedulerStorage {
+        async fn insert(
+            &self,
+            schedule_id: ScheduleId,
+            due_at: DateTime<Utc>,
+            shard_id: ShardId,
+            action: &ScheduledAction,
+        ) -> Result<(), SchedulerStorageError> {
+            self.inner
+                .insert(schedule_id, due_at, shard_id, action)
+                .await
+        }
+
+        async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), SchedulerStorageError> {
+            self.inner.cancel(schedule_id).await
+        }
+
+        async fn claim_due(
+            &self,
+            now: DateTime<Utc>,
+            assignment: &ShardAssignment,
+            limit: u32,
+            lease_ttl: Duration,
+        ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError> {
+            if self.ack_failures.load(Ordering::SeqCst) > 0 {
+                self.claims_after_ack_failure.fetch_add(1, Ordering::SeqCst);
+            }
+            let claimed = self
+                .inner
+                .claim_due(now, assignment, limit, lease_ttl)
+                .await?;
+            self.claimed_batches.lock().unwrap().push(claimed.clone());
+            Ok(claimed)
+        }
+
+        async fn count_due(
+            &self,
+            now: DateTime<Utc>,
+            assignment: &ShardAssignment,
+        ) -> Result<u64, String> {
+            self.inner.count_due(now, assignment).await
+        }
+
+        async fn extend_lease(
+            &self,
+            schedule_id: &ScheduleId,
+            lease_owner: Uuid,
+            lease_until: DateTime<Utc>,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner
+                .extend_lease(schedule_id, lease_owner, lease_until)
+                .await
+        }
+
+        async fn ack(
+            &self,
+            schedule_id: &ScheduleId,
+            lease_owner: Uuid,
+        ) -> Result<bool, SchedulerStorageError> {
+            if self.failed_ack_ids.lock().unwrap().remove(&schedule_id.id) {
+                self.ack_failures.fetch_add(1, Ordering::SeqCst);
+                self.failed_acknowledgements
+                    .lock()
+                    .unwrap()
+                    .insert(schedule_id.id);
+                return Err(SchedulerStorageError::Transient(
+                    "simulated transient acknowledgement failure".to_string(),
+                ));
+            }
+            self.inner.ack(schedule_id, lease_owner).await
+        }
+    }
+
+    struct RecordingActiveWorkerAccess {
+        fingerprint: AgentFingerprint,
+        executions: Arc<StdMutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl SchedulerWorkerAccess for RecordingActiveWorkerAccess {
+        async fn active_worker_fingerprint(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Option<AgentFingerprint> {
+            Some(self.fingerprint)
+        }
+
+        async fn activate_worker(&self, _owned_agent_id: &OwnedAgentId) {}
+
+        async fn open_oplog(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+            unimplemented!()
+        }
+
+        async fn enqueue_invocation(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            invocation: AgentInvocation,
+        ) -> Result<(), WorkerExecutorError> {
+            let AgentInvocation::AgentMethod {
+                idempotency_key, ..
+            } = invocation
+            else {
+                unreachable!()
+            };
+            self.executions.lock().unwrap().push(idempotency_key.value);
+            Ok(())
         }
     }
 
@@ -1564,5 +1706,189 @@ mod tests {
     #[test]
     fn shard_id_from_routing_hash_handles_negative_hashes() {
         assert_eq!(ShardId::from_routing_hash(-i64::MAX, 10), ShardId::new(7));
+    }
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn scheduler_preserves_claim_order_and_aborts_after_ack_failures(
+            actions_per_agent in prop::collection::vec(1usize..5, 1..5),
+            claim_batch_size in 1u32..8,
+            max_batches_per_tick in 1u32..5,
+            max_concurrent_action_processing in 1u32..8,
+            ack_failure_choices in prop::collection::vec(any::<bool>(), 0..20),
+        ) {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                let failed_ack_ids = Arc::new(StdMutex::new(HashSet::new()));
+                let failed_acknowledgements = Arc::new(StdMutex::new(HashSet::new()));
+                let claimed_batches = Arc::new(StdMutex::new(Vec::new()));
+                let storage = Arc::new(RecordingSchedulerStorage {
+                    inner: Arc::new(InMemorySchedulerStorage::new()),
+                    failed_ack_ids: failed_ack_ids.clone(),
+                    failed_acknowledgements: failed_acknowledgements.clone(),
+                    claimed_batches: claimed_batches.clone(),
+                    ack_failures: AtomicUsize::new(0),
+                    claims_after_ack_failure: AtomicUsize::new(0),
+                });
+                let executions = Arc::new(StdMutex::new(Vec::new()));
+                let fingerprint = AgentFingerprint::new();
+                let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+                    Arc::new(RecordingActiveWorkerAccess {
+                        fingerprint,
+                        executions: executions.clone(),
+                    });
+                let svc = SchedulerServiceDefault::new(
+                    storage.clone(),
+                    create_shard_service_mock(),
+                    create_promise_service_mock(),
+                    worker_access,
+                    create_oplog_service_mock().await,
+                    create_worker_service_mock(),
+                    Duration::from_secs(1000),
+                    claim_batch_size,
+                    Duration::from_secs(30),
+                    max_batches_per_tick,
+                    RetryConfig::max_attempts_3(),
+                    max_concurrent_action_processing,
+                    CancellationToken::new(),
+                );
+
+                let due_at = DateTime::from_str("2023-07-17T07:05:00Z").unwrap();
+                let mut scheduled = HashMap::new();
+                let mut schedule_ids = Vec::new();
+                for (agent_index, action_count) in actions_per_agent.iter().enumerate() {
+                    let owned_agent_id = OwnedAgentId::new(
+                        EnvironmentId::new(),
+                        &agent(&format!("agent-{agent_index}")),
+                    );
+                    for action_index in 0..*action_count {
+                        let execution_id = format!("{agent_index}-{action_index}");
+                        let schedule_id = svc
+                            .schedule(
+                                due_at,
+                                ScheduledAction::Invoke {
+                                    account_id: AccountId::new(),
+                                    owned_agent_id: owned_agent_id.clone(),
+                                    invocation: Box::new(
+                                        agent_method_invocation_with_idempotency_key(
+                                            execution_id.clone(),
+                                        ),
+                                    ),
+                                    target_worker_fingerprint: fingerprint,
+                                },
+                            )
+                            .await;
+                        scheduled.insert(schedule_id.id, (owned_agent_id.clone(), execution_id));
+                        schedule_ids.push(schedule_id.id);
+                    }
+                }
+
+                for (index, schedule_id) in schedule_ids.iter().enumerate() {
+                    if ack_failure_choices
+                        .get(index % ack_failure_choices.len().max(1))
+                        .copied()
+                        .unwrap_or(false)
+                    {
+                        failed_ack_ids.lock().unwrap().insert(*schedule_id);
+                    }
+                }
+
+                let result = svc
+                    .process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+                    .await;
+                let ack_failures = storage.ack_failures.load(Ordering::SeqCst);
+                prop_assert_eq!(result.is_err(), ack_failures > 0);
+                prop_assert_eq!(
+                    storage.claims_after_ack_failure.load(Ordering::SeqCst),
+                    0,
+                    "scheduler claimed another batch after an acknowledgement failure"
+                );
+
+                let claimed_batches = claimed_batches.lock().unwrap().clone();
+                let failed_acknowledgements = failed_acknowledgements.lock().unwrap().clone();
+                let executions = executions.lock().unwrap().clone();
+                let execution_set: HashSet<_> = executions.iter().cloned().collect();
+                prop_assert_eq!(
+                    execution_set.len(),
+                    executions.len(),
+                    "an action executed twice before its lease expired"
+                );
+
+                let mut claimed_by_agent: HashMap<OwnedAgentId, Vec<String>> = HashMap::new();
+                let mut executed_by_agent: HashMap<OwnedAgentId, Vec<String>> = HashMap::new();
+                let failed_execution_ids: HashSet<_> = failed_acknowledgements
+                    .iter()
+                    .map(|schedule_id| scheduled[schedule_id].1.clone())
+                    .collect();
+                for batch in &claimed_batches {
+                    for claimed in batch {
+                        let (owned_agent_id, execution_id) = &scheduled[&claimed.schedule_id.id];
+                        claimed_by_agent
+                            .entry(owned_agent_id.clone())
+                            .or_default()
+                            .push(execution_id.clone());
+                    }
+                }
+                for execution_id in executions {
+                    let (owned_agent_id, _) = scheduled
+                        .values()
+                        .find(|(_, id)| id == &execution_id)
+                        .unwrap();
+                    executed_by_agent
+                        .entry(owned_agent_id.clone())
+                        .or_default()
+                        .push(execution_id);
+                }
+                for (owned_agent_id, claimed) in &claimed_by_agent {
+                    let expected_len = claimed
+                        .iter()
+                        .position(|execution_id| failed_execution_ids.contains(execution_id))
+                        .map(|index| index + 1)
+                        .unwrap_or(claimed.len());
+                    let executions = executed_by_agent
+                        .get(owned_agent_id)
+                        .cloned()
+                        .unwrap_or_default();
+                    prop_assert_eq!(
+                        executions,
+                        &claimed[..expected_len],
+                        "agent {} actions executed out of claim order",
+                        owned_agent_id
+                    );
+                }
+
+                for batch in claimed_batches {
+                    for failed in batch.iter().filter(|action| {
+                        failed_acknowledgements.contains(&action.schedule_id.id)
+                    }) {
+                        let (failed_agent_id, _) = &scheduled[&failed.schedule_id.id];
+                        let sibling_agents: HashSet<_> = batch
+                            .iter()
+                            .map(|action| scheduled[&action.schedule_id.id].0.clone())
+                            .filter(|agent_id| agent_id != failed_agent_id)
+                            .collect();
+                        for sibling_agent_id in sibling_agents {
+                            let sibling = batch
+                                .iter()
+                                .find(|action| {
+                                    scheduled[&action.schedule_id.id].0 == sibling_agent_id
+                                })
+                                .unwrap();
+                            let (_, execution_id) = &scheduled[&sibling.schedule_id.id];
+                            prop_assert!(
+                                execution_set.contains(execution_id),
+                                "acknowledgement failure cancelled sibling agent lane"
+                            );
+                        }
+                    }
+                }
+
+                Ok(())
+            }).unwrap();
+        }
     }
 }

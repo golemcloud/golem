@@ -630,7 +630,6 @@ mod tests {
         );
     }
 
-    /// A request that completed is not marked cancelled.
     #[test]
     fn a_completed_request_is_not_marked_cancelled() {
         let spans = exported_spans(|| {

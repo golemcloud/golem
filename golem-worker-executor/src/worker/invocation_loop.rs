@@ -385,11 +385,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 Level::INFO,
                 "invocation",
                 agent_id = %self.owned_agent_id.agent_id,
-                agent_type = self.parent
-                    .parsed_agent_id
-                    .as_ref()
-                    .map(|id| id.agent_type.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
+                agent_type = %self.agent_type,
             );
             let prepare_result =
                 Ctx::prepare_instance(&self.owned_agent_id.agent_id, instance, &mut *store)

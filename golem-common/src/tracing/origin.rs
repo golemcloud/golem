@@ -125,11 +125,9 @@ macro_rules! related_span {
 /// asynchronous boundary - an invocation enqueued by one request and executed
 /// after that request returned, for example.
 ///
-/// A `tracing::Span` is unsuitable for that: it stays open until every clone of
-/// it is dropped, and while it is open `tracing-opentelemetry` appends an
-/// OpenTelemetry event to it for every `tracing` event recorded inside it,
-/// without any bound. A captured `SpanContext` is a small fixed-size value that
-/// holds nothing open.
+/// A `tracing::Span` is unsuitable for that: it stays open until every clone of it
+/// is dropped, with the consequences described on [`TraceOrigin`]. A captured
+/// `SpanContext` is a small fixed-size value that holds nothing open.
 ///
 /// Which of the two relationships to apply depends on whether the origin encloses
 /// the work in time:

@@ -122,16 +122,6 @@ impl SpanRecorder {
         );
     }
 
-    /// Asserts that no span named `name` was created.
-    pub fn assert_no_span(&self, name: &str) {
-        let spans = self.spans();
-        let recorded: Vec<&str> = spans.iter().map(|s| s.name).collect();
-        assert!(
-            !spans.iter().any(|s| s.name == name),
-            "span {name:?} should not exist any more; recorded: {recorded:?}"
-        );
-    }
-
     /// Asserts every recorded span has closed.
     pub fn assert_all_closed(&self) {
         let spans = self.spans();
