@@ -15,8 +15,8 @@
 use crate::config::ProfileConfig;
 use crate::config::ProfileName;
 use crate::log::{LogColorize, logln};
-use crate::model::ProfileView;
 use crate::model::cli_output::StructuredOutput;
+use crate::model::config::ProfileView;
 use crate::model::format::Format;
 use crate::model::masking::Masked;
 use crate::model::text::fmt::*;

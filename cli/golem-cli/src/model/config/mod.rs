@@ -12,6 +12,47 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::config::{AuthenticationConfig, NamedProfile, ProfileConfig, ProfileName};
+use serde::{Deserialize, Serialize};
+use url::Url;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileView {
+    pub is_active: bool,
+    pub name: ProfileName,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub url: Option<Url>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub worker_url: Option<Url>,
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    pub allow_insecure: bool,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub authenticated: Option<bool>,
+    pub config: ProfileConfig,
+}
+
+impl ProfileView {
+    pub fn from_profile(active: &ProfileName, profile: NamedProfile) -> Self {
+        let NamedProfile { name, profile } = profile;
+
+        let authenticated = match &profile.auth {
+            AuthenticationConfig::OAuth2(inner) => Some(inner.data.is_some()),
+            AuthenticationConfig::Static(_) => None,
+        };
+
+        ProfileView {
+            is_active: &name == active,
+            name,
+            url: profile.custom_url,
+            worker_url: profile.custom_worker_url,
+            allow_insecure: profile.allow_insecure,
+            authenticated,
+            config: profile.config,
+        }
+    }
+}
+
 pub fn value_at_path<'a>(
     root: &'a serde_json::Value,
     path: &[String],

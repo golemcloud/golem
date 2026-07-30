@@ -24,6 +24,7 @@ pub mod deploy;
 pub mod environment;
 pub mod format;
 pub mod http_api;
+pub mod input;
 pub mod invoke_result_view;
 pub mod masking;
 pub mod plugin;
@@ -32,29 +33,12 @@ pub mod repl;
 pub mod template;
 pub mod text;
 
-use crate::app::template::AppTemplate;
-use crate::config::AuthenticationConfig;
-use crate::config::{NamedProfile, ProfileConfig, ProfileName};
-use anyhow::{Context, anyhow};
 use clap::ValueEnum;
-use clap::builder::{StringValueParser, TypedValueParser};
-use clap::error::{ContextKind, ContextValue, ErrorKind};
-use clap::{Arg, Error};
-use golem_common::model::account::AccountId;
-use golem_common::model::quota::EnforcementAction;
-use golem_common::model::security_scheme::ProviderKind;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::ffi::OsStr;
-use std::fmt;
-use std::fmt::Display;
-use std::fmt::{Debug, Formatter};
-use std::io::Read;
-use std::path::PathBuf;
+use std::fmt::{self, Formatter};
 use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
-use url::Url;
 
 // NOTE: the order of languages (currently) is NOT alphabetical, rather based on recommendation
 #[derive(
@@ -137,216 +121,5 @@ impl FromStr for GuestLanguage {
                 .join(", ");
             format!("Unknown guest language: {s}. Expected one of {all}")
         })
-    }
-}
-
-#[derive(Clone)]
-pub struct JsonValueParser;
-
-impl TypedValueParser for JsonValueParser {
-    type Value = Value;
-
-    fn parse_ref(
-        &self,
-        cmd: &clap::Command,
-        arg: Option<&Arg>,
-        value: &OsStr,
-    ) -> Result<Self::Value, Error> {
-        let inner = StringValueParser::new();
-        let val = inner.parse_ref(cmd, arg, value)?;
-        let parsed = <Value as FromStr>::from_str(&val);
-
-        match parsed {
-            Ok(value) => Ok(value),
-            Err(serde_err) => {
-                let mut err = clap::Error::new(ErrorKind::ValueValidation);
-                if let Some(arg) = arg {
-                    err.insert(
-                        ContextKind::InvalidArg,
-                        ContextValue::String(arg.to_string()),
-                    );
-                }
-                err.insert(
-                    ContextKind::InvalidValue,
-                    ContextValue::String(format!("Invalid JSON value: {serde_err}")),
-                );
-                Err(err)
-            }
-        }
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub struct TemplateDescription {
-    pub name: String,
-    pub language: GuestLanguage,
-    pub description: String,
-}
-
-impl TemplateDescription {
-    pub fn from_template(template: &AppTemplate) -> Self {
-        Self {
-            name: template.name.as_str().to_string(),
-            language: template.language,
-            description: template.description().to_string(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum PathBufOrStdin {
-    Path(PathBuf),
-    Stdin,
-}
-
-impl PathBufOrStdin {
-    pub fn read_to_string(&self) -> anyhow::Result<String> {
-        match self {
-            PathBufOrStdin::Path(path) => std::fs::read_to_string(path)
-                .with_context(|| anyhow!("Failed to read file: {}", path.display())),
-            PathBufOrStdin::Stdin => {
-                let mut content = String::new();
-                let _ = std::io::stdin()
-                    .read_to_string(&mut content)
-                    .with_context(|| anyhow!("Failed to read from STDIN"))?;
-                Ok(content)
-            }
-        }
-    }
-
-    pub fn is_stdin(&self) -> bool {
-        match self {
-            PathBufOrStdin::Path(_) => false,
-            PathBufOrStdin::Stdin => true,
-        }
-    }
-}
-
-impl FromStr for PathBufOrStdin {
-    type Err = core::convert::Infallible;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s == "-" {
-            Ok(PathBufOrStdin::Stdin)
-        } else {
-            Ok(PathBufOrStdin::Path(PathBuf::from_str(s)?))
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ProfileView {
-    pub is_active: bool,
-    pub name: ProfileName,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub url: Option<Url>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub worker_url: Option<Url>,
-    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
-    pub allow_insecure: bool,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub authenticated: Option<bool>,
-    pub config: ProfileConfig,
-}
-
-impl ProfileView {
-    pub fn from_profile(active: &ProfileName, profile: NamedProfile) -> Self {
-        let NamedProfile { name, profile } = profile;
-
-        let authenticated = match &profile.auth {
-            AuthenticationConfig::OAuth2(inner) => Some(inner.data.is_some()),
-            AuthenticationConfig::Static(_) => None,
-        };
-
-        ProfileView {
-            is_active: &name == active,
-            name,
-            url: profile.custom_url,
-            worker_url: profile.custom_worker_url,
-            allow_insecure: profile.allow_insecure,
-            authenticated,
-            config: profile.config,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct AccountDetails {
-    pub account_id: AccountId,
-    pub email: String,
-}
-
-impl From<golem_client::model::Account> for AccountDetails {
-    fn from(value: golem_client::model::Account) -> Self {
-        Self {
-            account_id: value.id,
-            email: value.email.into_inner(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
-#[clap(rename_all = "kebab-case")]
-pub enum EnforcementActionArg {
-    Throttle,
-    Reject,
-    Terminate,
-}
-
-impl Display for EnforcementActionArg {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EnforcementActionArg::Throttle => write!(f, "throttle"),
-            EnforcementActionArg::Reject => write!(f, "reject"),
-            EnforcementActionArg::Terminate => write!(f, "terminate"),
-        }
-    }
-}
-
-impl FromStr for EnforcementActionArg {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "throttle" => Ok(Self::Throttle),
-            "reject" => Ok(Self::Reject),
-            "terminate" => Ok(Self::Terminate),
-            _ => Err(format!(
-                "Unknown enforcement actions: {s}. Expected one of \"throttle\", \"reject\", \"terminate\""
-            )),
-        }
-    }
-}
-
-impl From<EnforcementActionArg> for EnforcementAction {
-    fn from(value: EnforcementActionArg) -> Self {
-        match value {
-            EnforcementActionArg::Throttle => Self::Throttle,
-            EnforcementActionArg::Terminate => Self::Terminate,
-            EnforcementActionArg::Reject => Self::Reject,
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
-#[clap(rename_all = "lower")]
-pub enum ProviderKindArg {
-    Google,
-    Facebook,
-    Microsoft,
-    Gitlab,
-    Custom,
-}
-
-impl From<ProviderKindArg> for ProviderKind {
-    fn from(value: ProviderKindArg) -> Self {
-        match value {
-            ProviderKindArg::Google => ProviderKind::Google,
-            ProviderKindArg::Facebook => ProviderKind::Facebook,
-            ProviderKindArg::Microsoft => ProviderKind::Microsoft,
-            ProviderKindArg::Gitlab => ProviderKind::Gitlab,
-            ProviderKindArg::Custom => ProviderKind::Custom,
-        }
     }
 }

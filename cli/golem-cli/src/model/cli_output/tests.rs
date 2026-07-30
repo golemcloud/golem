@@ -3749,10 +3749,10 @@ fn arb_template_list_result() -> OutputDocumentStrategy {
     )
 }
 
-fn arb_template_description() -> BoxedStrategy<crate::model::TemplateDescription> {
+fn arb_template_description() -> BoxedStrategy<crate::app::template::TemplateDescription> {
     (arb_small_string(), arb_guest_language(), arb_small_string())
         .prop_map(
-            |(name, language, description)| crate::model::TemplateDescription {
+            |(name, language, description)| crate::app::template::TemplateDescription {
                 name,
                 language,
                 description,
@@ -4911,7 +4911,7 @@ fn arb_profile_list_result() -> OutputDocumentStrategy {
     )
 }
 
-fn arb_profile_view() -> BoxedStrategy<crate::model::ProfileView> {
+fn arb_profile_view() -> BoxedStrategy<crate::model::config::ProfileView> {
     (
         any::<bool>(),
         arb_small_string(),
@@ -4923,7 +4923,7 @@ fn arb_profile_view() -> BoxedStrategy<crate::model::ProfileView> {
     )
         .prop_map(
             |(is_active, name, url, worker_url, allow_insecure, authenticated, default_format)| {
-                crate::model::ProfileView {
+                crate::model::config::ProfileView {
                     is_active,
                     name: crate::config::ProfileName(name),
                     url: url.map(|url| url.parse().expect("generated URL should parse")),

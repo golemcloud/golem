@@ -1748,9 +1748,30 @@ pub mod api {
     }
 
     pub mod security_scheme {
-        use crate::model::ProviderKindArg;
-        use clap::Subcommand;
-        use golem_common::model::security_scheme::SecuritySchemeName;
+        use clap::{Subcommand, ValueEnum};
+        use golem_common::model::security_scheme::{ProviderKind, SecuritySchemeName};
+
+        #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+        #[clap(rename_all = "lower")]
+        pub enum ProviderKindArg {
+            Google,
+            Facebook,
+            Microsoft,
+            Gitlab,
+            Custom,
+        }
+
+        impl From<ProviderKindArg> for ProviderKind {
+            fn from(value: ProviderKindArg) -> Self {
+                match value {
+                    ProviderKindArg::Google => ProviderKind::Google,
+                    ProviderKindArg::Facebook => ProviderKind::Facebook,
+                    ProviderKindArg::Microsoft => ProviderKind::Microsoft,
+                    ProviderKindArg::Gitlab => ProviderKind::Gitlab,
+                    ProviderKindArg::Custom => ProviderKind::Custom,
+                }
+            }
+        }
 
         #[derive(Debug, Subcommand)]
         pub enum ApiSecuritySchemeSubcommand {
@@ -1878,9 +1899,53 @@ pub mod api {
 }
 
 pub mod resource_definition {
-    use crate::model::EnforcementActionArg;
-    use clap::Subcommand;
-    use golem_common::model::quota::ResourceDefinitionId;
+    use clap::{Subcommand, ValueEnum};
+    use golem_common::model::quota::{EnforcementAction, ResourceDefinitionId};
+    use std::fmt::{Display, Formatter};
+    use std::str::FromStr;
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+    #[clap(rename_all = "kebab-case")]
+    pub enum EnforcementActionArg {
+        Throttle,
+        Reject,
+        Terminate,
+    }
+
+    impl Display for EnforcementActionArg {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            match self {
+                EnforcementActionArg::Throttle => write!(f, "throttle"),
+                EnforcementActionArg::Reject => write!(f, "reject"),
+                EnforcementActionArg::Terminate => write!(f, "terminate"),
+            }
+        }
+    }
+
+    impl FromStr for EnforcementActionArg {
+        type Err = String;
+
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            match s {
+                "throttle" => Ok(Self::Throttle),
+                "reject" => Ok(Self::Reject),
+                "terminate" => Ok(Self::Terminate),
+                _ => Err(format!(
+                    "Unknown enforcement actions: {s}. Expected one of \"throttle\", \"reject\", \"terminate\""
+                )),
+            }
+        }
+    }
+
+    impl From<EnforcementActionArg> for EnforcementAction {
+        fn from(value: EnforcementActionArg) -> Self {
+            match value {
+                EnforcementActionArg::Throttle => Self::Throttle,
+                EnforcementActionArg::Terminate => Self::Terminate,
+                EnforcementActionArg::Reject => Self::Reject,
+            }
+        }
+    }
 
     #[derive(Debug, Subcommand)]
     pub enum ResourceDefinitionSubcommand {
@@ -2056,7 +2121,7 @@ pub mod retry_policy {
 }
 
 pub mod plugin {
-    use crate::model::PathBufOrStdin;
+    use crate::model::input::PathBufOrStdin;
     use clap::Subcommand;
     use uuid::Uuid;
 

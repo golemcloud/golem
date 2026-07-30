@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::template::TemplateDescription;
 use crate::log::current_indent_width;
-use crate::model::TemplateDescription;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::text::fmt::*;
 use itertools::Itertools;

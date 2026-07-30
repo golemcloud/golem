@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod description;
 mod generator;
 mod metadata;
 mod plan;
@@ -20,6 +21,7 @@ mod snippet;
 #[allow(clippy::module_inception)]
 mod template;
 
+pub use description::TemplateDescription;
 pub use generator::InMemoryFs;
 pub use metadata::AppTemplateMetadata;
 pub use plan::{

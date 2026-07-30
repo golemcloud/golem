@@ -18,6 +18,7 @@ use crate::app::build::check::{
 use crate::app::context::BuildContext;
 use crate::app::error::CustomCommandError;
 use crate::app::template::AppTemplateName;
+use crate::app::template::TemplateDescription;
 use crate::command::builtin_exec_subcommands;
 use crate::command::exec::ExecSubcommand;
 use crate::command::shared_args::{
@@ -40,6 +41,7 @@ use crate::log::{
     log_finished_ok, log_finished_up_to_date, log_preformatted, log_skipping_up_to_date, log_warn,
     log_warn_action, logged_failed_to, logged_finished_or_failed_to, logln,
 };
+use crate::model::GuestLanguage;
 use crate::model::agent::AgentUpdateMode;
 use crate::model::agent::view::AgentTypeView;
 use crate::model::app::{
@@ -60,7 +62,6 @@ use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::model::text::template::TemplateListView;
-use crate::model::{GuestLanguage, TemplateDescription};
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use futures_util::{StreamExt, TryStreamExt, stream};
@@ -479,7 +480,7 @@ impl AppCommandHandler {
         let templates: Vec<TemplateDescription> = templates
             .into_values()
             .flat_map(|templates| templates.into_values())
-            .map(|template| TemplateDescription::from_template(&template.0))
+            .map(|template| template.0.to_description())
             .collect();
 
         self.ctx

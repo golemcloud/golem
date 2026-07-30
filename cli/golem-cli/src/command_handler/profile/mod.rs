@@ -23,7 +23,7 @@ use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::log_error;
 use crate::log::{LogColorize, log_action, log_warn_action};
-use crate::model::ProfileView;
+use crate::model::config::ProfileView;
 use crate::model::format::Format;
 use crate::model::text::profile::{
     ProfileCreateResult, ProfileDeleteResult, ProfileListView, ProfileSwitchResult,

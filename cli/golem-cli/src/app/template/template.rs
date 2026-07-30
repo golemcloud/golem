@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::template::description::TemplateDescription;
 use crate::app::template::generator::{
     InMemoryFs, StdFs, generate_agent_by_template, generate_commons_by_template,
     generate_component_by_template, generate_on_demand_commons_by_template,
@@ -133,6 +134,10 @@ impl AppTemplate {
             AppTemplateMetadata::Component { description, .. } => description.as_str(),
             AppTemplateMetadata::Agent { description, .. } => description.as_str(),
         }
+    }
+
+    pub fn to_description(&self) -> TemplateDescription {
+        TemplateDescription::from_template(self)
     }
 
     fn generate_commons(
