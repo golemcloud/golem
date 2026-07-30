@@ -19,8 +19,8 @@ use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
 use crate::log::log_error;
-use crate::model::GuestLanguage;
 use crate::model::environment::EnvironmentResolveMode;
+use crate::model::language::GuestLanguage;
 use crate::model::text::secret::{
     SecretCreateView, SecretDeleteView, SecretGetView, SecretListView, SecretUpdateView,
 };

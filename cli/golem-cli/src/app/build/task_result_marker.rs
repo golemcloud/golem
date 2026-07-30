@@ -16,10 +16,11 @@ use crate::app::build::task_result_marker::TaskResultMarkerHashSourceKind::{Hash
 use crate::bridge_gen::BridgeMode;
 use crate::fs;
 use crate::log::log_warn_action;
+use crate::model::app_raw;
 use crate::model::app_raw::{
     GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs, PreinitializeJs,
 };
-use crate::model::{GuestLanguage, app_raw};
+use crate::model::language::GuestLanguage;
 use anyhow::{Context, anyhow, bail};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentName, ComponentRevision};

@@ -3761,12 +3761,12 @@ fn arb_template_description() -> BoxedStrategy<crate::app::template::TemplateDes
         .boxed()
 }
 
-fn arb_guest_language() -> BoxedStrategy<crate::model::GuestLanguage> {
+fn arb_guest_language() -> BoxedStrategy<crate::model::language::GuestLanguage> {
     prop_oneof![
-        Just(crate::model::GuestLanguage::TypeScript),
-        Just(crate::model::GuestLanguage::Rust),
-        Just(crate::model::GuestLanguage::Scala),
-        Just(crate::model::GuestLanguage::MoonBit)
+        Just(crate::model::language::GuestLanguage::TypeScript),
+        Just(crate::model::language::GuestLanguage::Rust),
+        Just(crate::model::language::GuestLanguage::Scala),
+        Just(crate::model::language::GuestLanguage::MoonBit)
     ]
     .boxed()
 }

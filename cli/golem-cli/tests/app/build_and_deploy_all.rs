@@ -3,8 +3,8 @@ use crate::app::{TestContext, cmd, flag};
 
 use golem_cli::bridge_gen::BridgeMode;
 use golem_cli::fs;
-use golem_cli::model::GuestLanguage;
 use golem_cli::model::app::BridgeSdkTargetKind;
+use golem_cli::model::language::GuestLanguage;
 use golem_cli::model::text::agent::AgentTypeListView;
 use golem_cli::model::text::template::TemplateListView;
 use strum::IntoEnumIterator;

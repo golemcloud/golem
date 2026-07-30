@@ -24,7 +24,6 @@ use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
 use crate::log::{LogColorize, LogIndent, log_action, log_error, log_warn_action, logln};
-use crate::model::GuestLanguage;
 use crate::model::agent::AgentUpdateMode;
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
@@ -42,6 +41,7 @@ use crate::model::deploy::{
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
+use crate::model::language::GuestLanguage;
 use crate::model::text::action_result::{
     AgentDeleteAllResult, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
 };

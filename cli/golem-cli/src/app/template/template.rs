@@ -19,7 +19,7 @@ use crate::app::template::generator::{
 };
 use crate::app::template::metadata::AppTemplateMetadata;
 use crate::fs;
-use crate::model::GuestLanguage;
+use crate::model::language::GuestLanguage;
 use golem_common::base_model::application::ApplicationName;
 use golem_common::base_model::component::ComponentName;
 use serde_derive::{Deserialize, Serialize};

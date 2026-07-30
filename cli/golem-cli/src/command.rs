@@ -34,12 +34,12 @@ use crate::command::shared_args::{
 use crate::command::worker::AgentSubcommand;
 use crate::config::ProfileName;
 use crate::error::ShowClapHelpTarget;
-use crate::model::GuestLanguage;
 use crate::model::agent::{AgentUpdateMode, RawAgentId};
 use crate::model::app::ComponentPresetName;
 use crate::model::cli_command_metadata::{CliCommandMetadata, CliMetadataFilter};
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
+use crate::model::language::GuestLanguage;
 use crate::model::repl::ReplLanguage;
 use crate::{command_name, version};
 use anyhow::{Context as AnyhowContext, anyhow};
@@ -940,9 +940,9 @@ pub enum GolemCliSubcommand {
 }
 
 pub mod shared_args {
-    use crate::model::GuestLanguage;
     use crate::model::agent::{AgentUpdateMode, RawAgentId};
     use crate::model::app::AppBuildStep;
+    use crate::model::language::GuestLanguage;
     use clap::Args;
     use golem_common::model::account::AccountId;
     use golem_common::model::component::ComponentName;

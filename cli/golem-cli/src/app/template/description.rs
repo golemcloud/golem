@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::app::template::AppTemplate;
-use crate::model::GuestLanguage;
+use crate::model::language::GuestLanguage;
 use serde::{Deserialize, Serialize};
 
 /// A summary view of an [`AppTemplate`] for CLI output (the `app templates` listing).

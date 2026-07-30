@@ -15,11 +15,11 @@
 use crate::agent_id_display::{SourceLanguage, render_type_for_language};
 use crate::command::shared_args::{ForceBuildArg, PostDeployArgs};
 use crate::error::service::ServiceError;
-use crate::model::GuestLanguage;
 use crate::model::agent::RawAgentId;
 use crate::model::component::{
     render_agent_constructor, render_input_schema, render_output_schema,
 };
+use crate::model::language::GuestLanguage;
 use crate::model::masking::{
     MaskingConfig, is_sensitive_key, mask_json_secret_for_deploy_diff, mask_secret_with_fingerprint,
 };

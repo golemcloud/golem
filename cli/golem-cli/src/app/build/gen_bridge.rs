@@ -16,11 +16,11 @@ use crate::error::NonSuccessfulExit;
 use crate::fs;
 use crate::log::log_error;
 use crate::log::{LogColorize, LogIndent, log_action, log_skipping_up_to_date, logln};
-use crate::model::GuestLanguage;
 use crate::model::app::{
     BridgeSdkTarget, BridgeSdkTargetKind, BridgeSdkTargetSubject, ComponentDependency,
     CustomBridgeSdkTarget,
 };
+use crate::model::language::GuestLanguage;
 use crate::model::repl::{ReplAgentMetadata, ReplMetadata};
 use anyhow::bail;
 use camino::Utf8PathBuf;

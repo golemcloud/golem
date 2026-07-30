@@ -338,7 +338,7 @@ mod test {
     #[test]
     fn ts_tsconfig_requires_bundler_resolution_without_decorators() {
         use crate::app::build::check::requirements::typescript_tsconfig_requirements;
-        use crate::model::GuestLanguage;
+        use crate::model::language::GuestLanguage;
 
         let setting_keys = |language| -> Vec<&'static str> {
             typescript_tsconfig_requirements(language)

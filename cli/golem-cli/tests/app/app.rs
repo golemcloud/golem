@@ -6,7 +6,7 @@ use crate::app::{
 };
 
 use golem_cli::fs;
-use golem_cli::model::GuestLanguage;
+use golem_cli::model::language::GuestLanguage;
 use golem_cli::versions;
 use golem_common::schema::SchemaType;
 use golem_common::schema::graph::SchemaGraph;

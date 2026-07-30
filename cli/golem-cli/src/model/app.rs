@@ -19,6 +19,7 @@ use crate::bridge_gen::{
 use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_application_preload};
+use crate::model::app_raw;
 use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::Property;
 use crate::model::cascade::property::json::JsonProperty;
@@ -26,9 +27,9 @@ use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
 use crate::model::cascade::property::optional::OptionalProperty;
 use crate::model::cascade::property::vec::{VecMergeMode, VecProperty};
 use crate::model::cascade::store::Store;
+use crate::model::language::GuestLanguage;
 use crate::model::repl::ReplLanguage;
 use crate::model::template::Template;
-use crate::model::{GuestLanguage, app_raw};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::{Context, anyhow};
 use golem_common::model::agent::AgentTypeName;
@@ -4491,7 +4492,7 @@ mod test {
         assert_eq!(
             app.bridge_sdk_dir(
                 &alpha_agent,
-                crate::model::GuestLanguage::Rust,
+                crate::model::language::GuestLanguage::Rust,
                 BridgeMode::External
             ),
             app_tmp_dir
@@ -4505,7 +4506,7 @@ mod test {
         assert_eq!(
             app.bridge_sdk_dir(
                 &beta_agent,
-                crate::model::GuestLanguage::Rust,
+                crate::model::language::GuestLanguage::Rust,
                 BridgeMode::External
             ),
             app_tmp_dir
@@ -4547,7 +4548,7 @@ mod test {
         assert_eq!(
             app.bridge_sdk_dir(
                 &alpha_agent,
-                crate::model::GuestLanguage::Rust,
+                crate::model::language::GuestLanguage::Rust,
                 BridgeMode::External
             ),
             app.temp_dir()
@@ -4561,7 +4562,7 @@ mod test {
         assert_eq!(
             app.bridge_sdk_dir(
                 &alpha_agent,
-                crate::model::GuestLanguage::Rust,
+                crate::model::language::GuestLanguage::Rust,
                 BridgeMode::Guest
             ),
             app.temp_dir()
@@ -4602,7 +4603,7 @@ mod test {
         assert_eq!(
             app.bridge_sdk_dir(
                 &alpha_agent,
-                crate::model::GuestLanguage::Rust,
+                crate::model::language::GuestLanguage::Rust,
                 BridgeMode::Guest
             ),
             app_tmp_dir
@@ -4639,7 +4640,7 @@ mod test {
         let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
 
         assert_eq!(
-            app.tool_bridge_sdk_dir("MyTool", crate::model::GuestLanguage::Rust),
+            app.tool_bridge_sdk_dir("MyTool", crate::model::language::GuestLanguage::Rust),
             app_tmp_dir.path().join("bridge-sdk/rust-guest").join(
                 crate::bridge_gen::tool_bridge_client_directory_name("MyTool")
             )
@@ -4647,7 +4648,7 @@ mod test {
 
         let used_modes = app.bridge_sdks().for_all_used_modes();
         assert_eq!(used_modes.len(), 1);
-        assert_eq!(used_modes[0].0, crate::model::GuestLanguage::Rust);
+        assert_eq!(used_modes[0].0, crate::model::language::GuestLanguage::Rust);
         assert_eq!(used_modes[0].1, BridgeMode::Guest);
     }
 
@@ -4675,7 +4676,7 @@ mod test {
         let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
 
         assert_eq!(
-            app.tool_bridge_sdk_dir("MyTool", crate::model::GuestLanguage::MoonBit),
+            app.tool_bridge_sdk_dir("MyTool", crate::model::language::GuestLanguage::MoonBit),
             app_tmp_dir.path().join("bridge-sdk/moonbit-guest").join(
                 crate::bridge_gen::tool_bridge_client_directory_name("MyTool")
             )
@@ -4683,7 +4684,10 @@ mod test {
 
         let used_modes = app.bridge_sdks().for_all_used_modes();
         assert_eq!(used_modes.len(), 1);
-        assert_eq!(used_modes[0].0, crate::model::GuestLanguage::MoonBit);
+        assert_eq!(
+            used_modes[0].0,
+            crate::model::language::GuestLanguage::MoonBit
+        );
         assert_eq!(used_modes[0].1, BridgeMode::Guest);
     }
 
@@ -4999,7 +5003,7 @@ mod test {
         assert_eq!(
             app.bridge_sdk_dir(
                 &agent_type_name,
-                crate::model::GuestLanguage::Scala,
+                crate::model::language::GuestLanguage::Scala,
                 BridgeMode::Guest
             ),
             app_tmp_dir

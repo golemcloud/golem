@@ -27,7 +27,7 @@ use golem_cli::bridge_gen::moonbit::{
     MoonBitBridgeGenerator, MoonBitBridgeMode, MoonBitTypeName, emit_schema_graph_literal,
 };
 use golem_cli::bridge_gen::type_naming::TypeName;
-use golem_cli::model::GuestLanguage;
+use golem_cli::model::language::GuestLanguage;
 use golem_cli::sdk_overrides::workspace_root;
 use golem_common::model::agent::{AgentConfigSource, AgentMode};
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
