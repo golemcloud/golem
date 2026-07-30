@@ -259,6 +259,13 @@ database = "../data/worker-executor-scheduler-storage.db"
 foreign_keys = false
 max_connections = 10
 
+[scheduler_storage_retry]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
+
 [shard_manager]
 connect_timeout = "10s"
 host = "localhost"
@@ -604,6 +611,13 @@ without_time = false
 # foreign_keys = false
 # max_connections = 10
 # 
+# [scheduler_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+# 
 # [shard_manager]
 # connect_timeout = "10s"
 # host = "localhost"
@@ -918,6 +932,13 @@ without_time = false
 # database = "../data/worker-executor-scheduler-storage.db"
 # foreign_keys = false
 # max_connections = 10
+# 
+# [scheduler_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
 # 
 # [shard_manager]
 # connect_timeout = "10s"

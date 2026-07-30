@@ -59,6 +59,11 @@ pub struct GolemConfig {
     #[serde(default)]
     pub agent_status_checkpoint: AgentStatusCheckpointConfig,
     pub scheduler: SchedulerConfig,
+    /// Retry policy applied to SQL-backed scheduler storage operations when the connection pool
+    /// is briefly exhausted (a pool acquisition timeout). The scheduler background loop panics
+    /// on exhaustion because its `schedule`/`cancel` entry points cannot propagate errors.
+    #[serde(default = "default_scheduler_storage_retry")]
+    pub scheduler_storage_retry: RetryConfig,
     pub public_worker_api: WorkerServiceGrpcConfig,
     pub memory: MemoryConfig,
     pub filesystem_storage: FilesystemStorageConfig,
@@ -277,6 +282,7 @@ impl Default for GolemConfig {
             oplog: OplogConfig::default(),
             suspend: SuspendConfig::default(),
             scheduler: SchedulerConfig::default(),
+            scheduler_storage_retry: default_scheduler_storage_retry(),
             active_workers: ActiveWorkersConfig::default(),
             agent_status_flush: AgentStatusFlushConfig::default(),
             agent_status_checkpoint: AgentStatusCheckpointConfig::default(),
@@ -721,6 +727,10 @@ impl SafeDisplay for OplogConfig {
         );
         result
     }
+}
+
+fn default_scheduler_storage_retry() -> RetryConfig {
+    RetryConfig::max_attempts_3()
 }
 
 fn default_oplog_indexed_storage_retry() -> RetryConfig {

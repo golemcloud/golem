@@ -20,17 +20,19 @@ use crate::services::promise::PromiseService;
 use crate::services::shard::ShardService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_activator::WorkerActivator;
-use crate::storage::scheduler::{ClaimedScheduledAction, SchedulerStorage};
+use crate::storage::scheduler::{ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::stream::StreamExt;
+use golem_common::model::RetryConfig;
 use golem_common::model::agent::Principal;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{
     AgentFingerprint, AgentInvocation, OwnedAgentId, ScheduleId, ScheduledAction, ShardId,
 };
+use golem_common::retries::get_delay;
 use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::HashMap;
@@ -148,6 +150,7 @@ pub struct SchedulerServiceDefault {
     claim_batch_size: u32,
     lease_ttl: Duration,
     max_batches_per_tick: u32,
+    storage_retry: RetryConfig,
     max_concurrent_action_processing: usize,
 }
 
@@ -163,6 +166,7 @@ impl SchedulerServiceDefault {
         claim_batch_size: u32,
         lease_ttl: Duration,
         max_batches_per_tick: u32,
+        storage_retry: RetryConfig,
         max_concurrent_action_processing: u32,
         shutdown_token: CancellationToken,
     ) -> Arc<Self> {
@@ -177,6 +181,7 @@ impl SchedulerServiceDefault {
             claim_batch_size,
             lease_ttl,
             max_batches_per_tick,
+            storage_retry,
             max_concurrent_action_processing: max_concurrent_action_processing.max(1) as usize,
         };
         let svc = Arc::new(svc);
@@ -213,6 +218,41 @@ impl SchedulerServiceDefault {
         svc
     }
 
+    /// Runs a scheduler storage operation, retrying transient errors (such as
+    /// connection pool exhaustion) according to `storage_retry`. Panics on a
+    /// non-transient error, or after the configured retries are exhausted.
+    async fn retry_storage_op<T, F, Fut>(&self, op_name: &str, target: &str, mut op: F) -> T
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T, SchedulerStorageError>>,
+    {
+        let mut attempts = 0u32;
+        loop {
+            attempts += 1;
+            match op().await {
+                Ok(val) => return val,
+                Err(SchedulerStorageError::Transient(msg)) => {
+                    if let Some(delay) = get_delay(&self.storage_retry, attempts) {
+                        warn!(
+                            op = op_name,
+                            attempt = attempts,
+                            delay_ms = delay.as_millis() as u64,
+                            "Transient scheduler storage error for {target}, retrying: {msg}"
+                        );
+                        tokio::time::sleep(delay).await;
+                    } else {
+                        panic!(
+                            "scheduler storage operation '{op_name}' failed for {target} after {attempts} attempts: Transient storage error: {msg}"
+                        );
+                    }
+                }
+                Err(SchedulerStorageError::Other(msg)) => {
+                    panic!("scheduler storage operation '{op_name}' failed for {target}: {msg}");
+                }
+            }
+        }
+    }
+
     /// Performs one scheduler tick, spanned per tick rather than per loop: a span
     /// wrapping the loop would never close, so it would never be exported.
     async fn process(&self, now: DateTime<Utc>) -> Result<(), String> {
@@ -236,16 +276,6 @@ impl SchedulerServiceDefault {
             .current_assignment()
             .map_err(|err| err.to_string())?;
 
-        match self
-            .scheduler_storage
-            .count_due(now, &assignment)
-            .instrument(debug_span!("scheduler_storage_count_due"))
-            .await
-        {
-            Ok(backlog) => crate::metrics::scheduler::set_scheduler_due_action_backlog(backlog),
-            Err(error) => warn!(error, "Failed to count due scheduled actions"),
-        }
-
         for _ in 0..self.max_batches_per_tick {
             let claimed = self
                 .scheduler_storage
@@ -259,7 +289,7 @@ impl SchedulerServiceDefault {
                 break;
             }
 
-            self.process_claimed_actions(claimed, now).await;
+            self.process_claimed_actions(claimed, now).await?;
 
             if claimed_count < self.claim_batch_size as usize {
                 break;
@@ -286,7 +316,7 @@ impl SchedulerServiceDefault {
         &self,
         claimed: Vec<ClaimedScheduledAction>,
         now: DateTime<Utc>,
-    ) {
+    ) -> Result<(), SchedulerStorageError> {
         let mut actions_by_agent: HashMap<OwnedAgentId, Vec<ClaimedScheduledAction>> =
             HashMap::new();
         for action in claimed {
@@ -296,25 +326,30 @@ impl SchedulerServiceDefault {
                 .push(action);
         }
 
-        futures::stream::iter(actions_by_agent.into_values())
+        let results = futures::stream::iter(actions_by_agent.into_values())
             .map(|actions| async move {
                 // A durable agent's scheduled actions must retain claim order.
                 for action in actions {
-                    if !self.process_and_ack_claimed_action(action, now).await {
-                        break;
-                    }
+                    self.process_and_ack_claimed_action(action, now).await?;
                 }
+                Ok::<(), SchedulerStorageError>(())
             })
             .buffer_unordered(self.max_concurrent_action_processing)
             .collect::<Vec<_>>()
             .await;
+
+        for result in results {
+            result?;
+        }
+
+        Ok(())
     }
 
     async fn process_and_ack_claimed_action(
         &self,
         claimed_action: ClaimedScheduledAction,
         now: DateTime<Utc>,
-    ) -> bool {
+    ) -> Result<(), SchedulerStorageError> {
         let action_kind = crate::metrics::scheduler::action_kind_label(&claimed_action.action);
         let action_start_time = Utc::now();
         let lag = action_start_time.signed_duration_since(claimed_action.due_at);
@@ -330,34 +365,30 @@ impl SchedulerServiceDefault {
             action_start.elapsed(),
         );
         if !processed {
-            return true;
+            return Ok(());
         }
 
-        match self
+        let acked = self
             .scheduler_storage
             .ack(&claimed_action.schedule_id, claimed_action.lease_owner)
             .await
-        {
-            Ok(acked) => {
-                if !acked {
-                    warn!(
-                        schedule_id = %claimed_action.schedule_id,
-                        lease_owner = %claimed_action.lease_owner,
-                        "Failed to acknowledge scheduled action because the lease was lost"
-                    );
-                }
-                true
-            }
-            Err(error) => {
+            .map_err(|error| {
                 warn!(
                     schedule_id = %claimed_action.schedule_id,
                     lease_owner = %claimed_action.lease_owner,
                     error = %error,
-                    "Failed to acknowledge scheduled action; stopping its agent lane"
+                    "Failed to acknowledge scheduled action; aborting scheduler tick"
                 );
-                false
-            }
+                error
+            })?;
+        if !acked {
+            warn!(
+                schedule_id = %claimed_action.schedule_id,
+                lease_owner = %claimed_action.lease_owner,
+                "Failed to acknowledge scheduled action because the lease was lost"
+            );
         }
+        Ok(())
     }
 
     async fn with_lease_renewal<T, F>(
@@ -616,22 +647,19 @@ impl SchedulerService for SchedulerServiceDefault {
             );
         }
 
-        self.scheduler_storage
-            .insert(schedule_id, time, shard_id, &action)
-            .await
-            .unwrap_or_else(|err| {
-                panic!("failed to add schedule for action {action} in scheduler storage: {err}")
-            });
+        self.retry_storage_op("insert", &format!("action {action}"), || {
+            self.scheduler_storage
+                .insert(schedule_id, time, shard_id, &action)
+        })
+        .await;
         schedule_id
     }
 
     async fn cancel(&self, id: ScheduleId) {
-        self.scheduler_storage
-            .cancel(&id)
-            .await
-            .unwrap_or_else(|err| {
-                panic!("failed to remove schedule {id} from scheduler storage: {err}")
-            });
+        self.retry_storage_op("cancel", &format!("schedule {id}"), || {
+            self.scheduler_storage.cancel(&id)
+        })
+        .await;
     }
 }
 
@@ -646,7 +674,9 @@ mod tests {
     use crate::services::worker::{GetWorkerMetadataResult, WorkerService};
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use crate::storage::scheduler::memory::InMemorySchedulerStorage;
-    use crate::storage::scheduler::{ClaimedScheduledAction, SchedulerStorage};
+    use crate::storage::scheduler::{
+        ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError,
+    };
     use async_trait::async_trait;
     use chrono::{DateTime, Utc};
     use golem_common::model::AgentStatusRecord;
@@ -658,14 +688,14 @@ mod tests {
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
         AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, OwnedAgentId, PromiseId,
-        ScheduleId, ScheduledAction, ShardAssignment, ShardId,
+        RetryConfig, ScheduleId, ScheduledAction, ShardAssignment, ShardId,
     };
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use std::collections::HashSet;
     use std::str::FromStr;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
     use std::time::Duration;
     use test_r::test;
     use tokio_util::sync::CancellationToken;
@@ -771,26 +801,36 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct FailFirstAckSchedulerStorage {
+    struct FlakyInsertSchedulerStorage {
         inner: Arc<InMemorySchedulerStorage>,
-        failures_remaining: AtomicUsize,
+        transient_failures: AtomicU32,
+        insert_attempts: Arc<AtomicUsize>,
     }
 
     #[async_trait]
-    impl SchedulerStorage for FailFirstAckSchedulerStorage {
+    impl SchedulerStorage for FlakyInsertSchedulerStorage {
         async fn insert(
             &self,
             schedule_id: ScheduleId,
             due_at: DateTime<Utc>,
             shard_id: ShardId,
             action: &ScheduledAction,
-        ) -> Result<(), String> {
+        ) -> Result<(), SchedulerStorageError> {
+            self.insert_attempts.fetch_add(1, Ordering::SeqCst);
+            let remaining =
+                self.transient_failures
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
+            if remaining.is_ok() {
+                return Err(SchedulerStorageError::Transient(
+                    "simulated pool timeout".to_string(),
+                ));
+            }
             self.inner
                 .insert(schedule_id, due_at, shard_id, action)
                 .await
         }
 
-        async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), String> {
+        async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), SchedulerStorageError> {
             self.inner.cancel(schedule_id).await
         }
 
@@ -800,7 +840,7 @@ mod tests {
             assignment: &ShardAssignment,
             limit: u32,
             lease_ttl: Duration,
-        ) -> Result<Vec<ClaimedScheduledAction>, String> {
+        ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError> {
             self.inner
                 .claim_due(now, assignment, limit, lease_ttl)
                 .await
@@ -819,16 +859,17 @@ mod tests {
             schedule_id: &ScheduleId,
             lease_owner: Uuid,
             lease_until: DateTime<Utc>,
-        ) -> Result<bool, String> {
+        ) -> Result<bool, SchedulerStorageError> {
             self.inner
                 .extend_lease(schedule_id, lease_owner, lease_until)
                 .await
         }
 
-        async fn ack(&self, schedule_id: &ScheduleId, lease_owner: Uuid) -> Result<bool, String> {
-            if self.failures_remaining.swap(0, Ordering::SeqCst) > 0 {
-                return Err("simulated transient acknowledgement failure".to_string());
-            }
+        async fn ack(
+            &self,
+            schedule_id: &ScheduleId,
+            lease_owner: Uuid,
+        ) -> Result<bool, SchedulerStorageError> {
             self.inner.ack(schedule_id, lease_owner).await
         }
     }
@@ -934,6 +975,7 @@ mod tests {
             100,
             Duration::from_secs(30),
             10,
+            RetryConfig::max_attempts_3(),
             64,
             CancellationToken::new(),
         )
@@ -1121,6 +1163,7 @@ mod tests {
             100,
             Duration::from_secs(30),
             10,
+            RetryConfig::max_attempts_3(),
             64,
             CancellationToken::new(),
         );
@@ -1167,6 +1210,7 @@ mod tests {
             100,
             Duration::from_secs(30),
             10,
+            RetryConfig::max_attempts_3(),
             2,
             CancellationToken::new(),
         );
@@ -1215,6 +1259,7 @@ mod tests {
             100,
             Duration::from_secs(30),
             10,
+            RetryConfig::max_attempts_3(),
             2,
             CancellationToken::new(),
         );
@@ -1241,63 +1286,46 @@ mod tests {
         assert_eq!(max_in_flight.load(Ordering::SeqCst), 1);
     }
 
+    /// Transient storage failures are retried rather than aborting the operation.
+    /// A non-transient error, or exhausting the retries, panics instead - the
+    /// `schedule`/`cancel` entry points cannot propagate an error to their caller.
     #[test]
-    async fn acknowledgement_failure_does_not_cancel_sibling_agent_lanes() {
-        let inner = Arc::new(InMemorySchedulerStorage::new());
-        let storage: Arc<dyn SchedulerStorage + Send + Sync> =
-            Arc::new(FailFirstAckSchedulerStorage {
-                inner: inner.clone(),
-                failures_remaining: AtomicUsize::new(1),
-            });
+    async fn schedule_retries_transient_storage_errors() {
+        let insert_attempts = Arc::new(AtomicUsize::new(0));
+        let storage = Arc::new(FlakyInsertSchedulerStorage {
+            inner: Arc::new(InMemorySchedulerStorage::new()),
+            transient_failures: AtomicU32::new(2),
+            insert_attempts: insert_attempts.clone(),
+        });
         let promise_service = create_promise_service_mock();
-        let fingerprint = AgentFingerprint::new();
-        let in_flight = Arc::new(AtomicUsize::new(0));
-        let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
-            Arc::new(DelayedActiveWorkerAccessMock {
-                fingerprint,
-                in_flight: in_flight.clone(),
-                max_in_flight: Arc::new(AtomicUsize::new(0)),
-            });
-        let svc = SchedulerServiceDefault::new(
-            storage,
-            create_shard_service_mock(),
-            promise_service.clone(),
-            worker_access,
-            create_oplog_service_mock().await,
-            create_worker_service_mock(),
-            Duration::from_secs(1000),
-            100,
-            Duration::from_secs(30),
-            10,
-            2,
-            CancellationToken::new(),
+        let svc = create_scheduler(storage.clone(), promise_service).await;
+
+        let action = complete_promise_action(promise(agent("inst1"), 101));
+        let schedule_id = ScheduleId::fresh();
+        let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+
+        // Two transient failures are retried; the third attempt succeeds without panicking.
+        assert_eq!(
+            svc.schedule_with_id(schedule_id, due_at, action).await,
+            schedule_id
         );
-
-        let due_at = DateTime::from_str("2023-07-17T07:05:00Z").unwrap();
-        let promise_id = promise(agent("fast"), 1);
-        svc.schedule(due_at, complete_promise_action(promise_id.clone()))
-            .await;
-        svc.schedule(
-            due_at,
-            ScheduledAction::Invoke {
-                account_id: AccountId::new(),
-                owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("slow")),
-                invocation: Box::new(agent_method_invocation()),
-                target_worker_fingerprint: fingerprint,
-            },
-        )
-        .await;
-
-        let now = DateTime::from_str("2023-07-17T10:15:00Z").unwrap();
-        svc.process(now).await.unwrap();
+        assert_eq!(insert_attempts.load(Ordering::SeqCst), 3);
 
         let assignment = ShardAssignment {
             number_of_shards: 1,
             shard_ids: HashSet::from_iter([ShardId::new(0)]),
         };
-        assert!(promise_service.all_completed().await.contains(&promise_id));
-        assert_eq!(in_flight.load(Ordering::SeqCst), 0);
-        assert_eq!(inner.count_due(now, &assignment).await.unwrap(), 1);
+        let claimed = storage
+            .claim_due(
+                DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
+                &assignment,
+                10,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].schedule_id, schedule_id);
     }
 
     #[test]
