@@ -14,11 +14,10 @@
 
 pub mod extraction;
 pub mod stream;
-pub mod view;
 
 use crate::agent_id_display::SourceLanguage;
 use crate::command::shared_args::StreamArgs;
-use crate::model::component::ComponentNameMatchKind;
+use crate::model::component::{ComponentNameMatchKind, render_agent_constructor};
 use crate::model::environment::{
     EnvironmentReference, ResolvedEnvironmentIdentity, ResolvedEnvironmentIdentitySource,
 };
@@ -27,7 +26,7 @@ use clap::ValueEnum;
 use colored::control::SHOULD_COLORIZE;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
+use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, ParsedAgentId};
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::worker::{AgentConfigEntryDto, UpdateRecord};
@@ -321,5 +320,23 @@ impl AgentIdMatch {
         self.agent_id = agent_id;
         self.parsed_agent_id = parsed_agent_id;
         self
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTypeView {
+    pub agent_type: String,
+    pub constructor: String,
+    pub description: String,
+}
+
+impl AgentTypeView {
+    pub fn new(value: &DeployedRegisteredAgentType, wrapper_naming: bool) -> Self {
+        Self {
+            agent_type: value.agent_type.type_name.to_string(),
+            constructor: render_agent_constructor(&value.agent_type, wrapper_naming, false),
+            description: value.agent_type.description.clone(),
+        }
     }
 }

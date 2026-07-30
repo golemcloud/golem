@@ -16,7 +16,7 @@ pub mod instance;
 
 pub use instance::*;
 
-use crate::model::agent::view::AgentTypeView;
+use crate::model::agent::AgentTypeView;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
 use crate::model::text::fmt::{

@@ -2090,7 +2090,7 @@ fn arb_generate_bridge_result() -> OutputDocumentStrategy {
 fn arb_agent_type_get_result() -> OutputDocumentStrategy {
     serialized_output(
         (arb_small_string(), arb_small_string(), arb_small_string()).prop_map(
-            |(agent_type, constructor, description)| crate::model::agent::view::AgentTypeView {
+            |(agent_type, constructor, description)| crate::model::agent::AgentTypeView {
                 agent_type,
                 constructor,
                 description,
