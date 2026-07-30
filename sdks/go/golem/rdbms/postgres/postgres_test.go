@@ -193,6 +193,26 @@ func TestDecodeValue(t *testing.T) {
 	}
 }
 
+// TestTagName — display names key on the generated constants, with a diagnosable
+// fallback for an unrecognized (e.g. newly appended) tag.
+func TestTagName(t *testing.T) {
+	cases := []struct {
+		tag  uint8
+		want string
+	}{
+		{pg.DbValueCharacter, "character"},
+		{pg.DbValueNumeric, "numeric"},
+		{pg.DbValueUuid, "uuid"},
+		{pg.DbValueSparsevec, "sparsevec"},
+		{200, "unknown(200)"},
+	}
+	for _, c := range cases {
+		if got := tagName(c.tag); got != c.want {
+			t.Fatalf("tagName(%d) = %q, want %q", c.tag, got, c.want)
+		}
+	}
+}
+
 // TestTimeRoundTrip — time.Time survives the timestamptz encode/decode.
 func TestTimeRoundTrip(t *testing.T) {
 	orig := time.Date(2026, 7, 30, 12, 34, 56, 123456000, time.FixedZone("", 2*3600))

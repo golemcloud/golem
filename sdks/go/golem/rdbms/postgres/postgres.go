@@ -107,20 +107,107 @@ func pgError(e pg.Error) error {
 // its family with [DbValue.Kind].
 type DbValue struct{ raw pg.DbValue }
 
-var dbValueTagNames = [...]string{
-	"character", "int2", "int4", "int8", "float4", "float8", "numeric", "boolean",
-	"text", "varchar", "bpchar", "timestamp", "timestamptz", "date", "time", "timetz",
-	"interval", "bytea", "json", "jsonb", "jsonpath", "xml", "uuid", "inet", "cidr",
-	"macaddr", "bit", "varbit", "int4range", "int8range", "numrange", "tsrange",
-	"tstzrange", "daterange", "money", "oid", "enumeration", "composite", "domain",
-	"array", "range", "null", "vector", "halfvec", "sparsevec",
-}
-
+// tagName gives a db-value family its display name (used by [DbValue.Kind] and
+// error text — never by encode/decode). It switches on the generated constants,
+// not on the raw tag position, so a reordered or inserted WIT case still names
+// correctly and a renamed or removed one fails to compile here. A newly appended
+// WIT case shows as "unknown(N)" and is handled as an opaque [DbValue] (see the
+// default in decodeValue) until a case and name are added below.
 func tagName(tag uint8) string {
-	if int(tag) < len(dbValueTagNames) {
-		return dbValueTagNames[tag]
+	switch tag {
+	case pg.DbValueCharacter:
+		return "character"
+	case pg.DbValueInt2:
+		return "int2"
+	case pg.DbValueInt4:
+		return "int4"
+	case pg.DbValueInt8:
+		return "int8"
+	case pg.DbValueFloat4:
+		return "float4"
+	case pg.DbValueFloat8:
+		return "float8"
+	case pg.DbValueNumeric:
+		return "numeric"
+	case pg.DbValueBoolean:
+		return "boolean"
+	case pg.DbValueText:
+		return "text"
+	case pg.DbValueVarchar:
+		return "varchar"
+	case pg.DbValueBpchar:
+		return "bpchar"
+	case pg.DbValueTimestamp:
+		return "timestamp"
+	case pg.DbValueTimestamptz:
+		return "timestamptz"
+	case pg.DbValueDate:
+		return "date"
+	case pg.DbValueTime:
+		return "time"
+	case pg.DbValueTimetz:
+		return "timetz"
+	case pg.DbValueInterval:
+		return "interval"
+	case pg.DbValueBytea:
+		return "bytea"
+	case pg.DbValueJson:
+		return "json"
+	case pg.DbValueJsonb:
+		return "jsonb"
+	case pg.DbValueJsonpath:
+		return "jsonpath"
+	case pg.DbValueXml:
+		return "xml"
+	case pg.DbValueUuid:
+		return "uuid"
+	case pg.DbValueInet:
+		return "inet"
+	case pg.DbValueCidr:
+		return "cidr"
+	case pg.DbValueMacaddr:
+		return "macaddr"
+	case pg.DbValueBit:
+		return "bit"
+	case pg.DbValueVarbit:
+		return "varbit"
+	case pg.DbValueInt4range:
+		return "int4range"
+	case pg.DbValueInt8range:
+		return "int8range"
+	case pg.DbValueNumrange:
+		return "numrange"
+	case pg.DbValueTsrange:
+		return "tsrange"
+	case pg.DbValueTstzrange:
+		return "tstzrange"
+	case pg.DbValueDaterange:
+		return "daterange"
+	case pg.DbValueMoney:
+		return "money"
+	case pg.DbValueOid:
+		return "oid"
+	case pg.DbValueEnumeration:
+		return "enumeration"
+	case pg.DbValueComposite:
+		return "composite"
+	case pg.DbValueDomain:
+		return "domain"
+	case pg.DbValueArray:
+		return "array"
+	case pg.DbValueRange:
+		return "range"
+	case pg.DbValueNull:
+		return "null"
+	case pg.DbValueVector:
+		return "vector"
+	case pg.DbValueHalfvec:
+		return "halfvec"
+	case pg.DbValueSparsevec:
+		return "sparsevec"
+	default:
+		return fmt.Sprintf("unknown(%d)", tag)
 	}
-	return "unknown"
 }
 
 // Kind returns the name of the value's Postgres type family (for example "array"
