@@ -104,4 +104,7 @@ func TestBridges(t *testing.T) {
 		t.Fatalf("Must2 = %q,%d", a, b)
 	}
 	mustPanic(t, "bad", func() { Must2("", 0, errors.New("bad")) })
+
+	Must0(nil) // no panic on success
+	mustPanic(t, "boom0", func() { Must0(errors.New("boom0")) })
 }

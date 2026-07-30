@@ -344,3 +344,14 @@ func Must2[A any, B any](a A, b B, err error) (A, B) {
 	}
 	return a, b
 }
+
+// Must0 is Must for a call that returns only an error: it panics if err is
+// non-nil and otherwise does nothing. Use it to abort the invocation on a
+// fallible, side-effecting call that yields no value:
+//
+//	golem.Must0(bucket.Set(key, value))
+func Must0(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
