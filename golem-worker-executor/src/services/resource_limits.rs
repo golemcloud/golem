@@ -498,7 +498,6 @@ impl ResourceLimitsGrpc {
         self.entries
             .iter_async(|k, cell| {
                 if let Some(entry) = cell.get() {
-                    entry.flush_storage_meters(Instant::now());
                     let fuel_delta = entry.delta.swap(0, Ordering::AcqRel);
                     // Move unsynced call counts into the syncing bucket for this batch.
                     let http_count = entry.unsynced_http_calls.swap(0, Ordering::AcqRel);
@@ -507,6 +506,13 @@ impl ResourceLimitsGrpc {
                     let stale = entry.secs_since_last_refresh() >= refresh_threshold_secs;
 
                     if active || stale {
+                        // Integrate the meters only when this batch will actually ship an
+                        // update. Neither `active` nor `stale` depends on storage, and
+                        // un-integrated byte-nanoseconds stay in the meter's own state until
+                        // the next flush or its `Drop`, so nothing is lost by deferring —
+                        // storage-only accounts simply settle on the limit refresh interval
+                        // instead of every batch tick.
+                        entry.flush_storage_meters(Instant::now());
                         let durable_storage_byte_seconds_delta =
                             entry.durable_byte_seconds_delta.swap(0, Ordering::AcqRel);
                         let ephemeral_storage_byte_seconds_delta =
@@ -829,6 +835,34 @@ mod tests {
 
         entry.flush_storage_meters(now + Duration::from_secs(3));
 
+        assert_eq!(entry.durable_byte_seconds_delta(), 30);
+    }
+
+    /// `send_batch` only integrates the meters on ticks that actually ship an update,
+    /// so a meter routinely goes several ticks without being flushed. Time spanned by
+    /// those skipped ticks must still be billed, exactly once.
+    #[test]
+    fn skipped_flushes_are_billed_once_when_the_next_flush_happens() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let owned_agent_id = OwnedAgentId::new(
+            EnvironmentId(Uuid::new_v4()),
+            &AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "deferred-storage-meter-flush".to_string(),
+            },
+        );
+        let now = Instant::now();
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
+        entry.register_storage_meter(owned_agent_id, meter);
+
+        // A tick that ships integrates the first second.
+        entry.flush_storage_meters(now + Duration::from_secs(1));
+        assert_eq!(entry.durable_byte_seconds_delta(), 10);
+
+        // The next two ticks are skipped because the account is idle and its limits are
+        // still fresh. The following flush must bill both of those seconds, and neither
+        // re-bill the first nor drop anything.
+        entry.flush_storage_meters(now + Duration::from_secs(3));
         assert_eq!(entry.durable_byte_seconds_delta(), 30);
     }
 
