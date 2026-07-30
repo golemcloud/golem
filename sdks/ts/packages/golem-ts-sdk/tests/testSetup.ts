@@ -15,10 +15,9 @@
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentClassName } from '../src/agentClassName';
 
-// The production runtime boundary now targets `golem:agent/host@2.0.0`. Mock it
-// with a schema-native, JSON-round-trippable `make-agent-id` / `parse-agent-id`
-// pair (the constructor params crossing the boundary are `schema-value-tree`s)
-// plus the registry and RPC stubs the SDK touches.
+// The production runtime boundary now targets `golem:agent/host@2.0.0`. Mock its
+// registry and RPC surfaces; tests that inspect an agent ID configure the exact
+// canonical host result they expect.
 vi.mock('golem:agent/host@2.0.0', () => ({
   getAllAgentTypes: () => [],
   getAgentType: (agentTypeName: string) => {
@@ -34,14 +33,7 @@ vi.mock('golem:agent/host@2.0.0', () => ({
     }
     return undefined;
   },
-  makeAgentId: (
-    agentTypeName: string,
-    input: unknown,
-    phantomId: { highBits: bigint; lowBits: bigint } | undefined,
-  ): string => {
-    const phantomPostfix = phantomId ? `[${phantomId.highBits}-${phantomId.lowBits}]` : '';
-    return `${agentTypeName}(${JSON.stringify(input)})${phantomPostfix}`;
-  },
+  makeAgentId: vi.fn(() => 'MockAgent()'),
   parseAgentId: (agentId: string) => {
     const match = agentId.match(/^(.*)\((.*)\)(\[(\d+)-(\d+)])?$/);
     if (!match) {
@@ -70,6 +62,14 @@ vi.mock('golem:agent/host@2.0.0', () => ({
     asyncInvokeAndAwait: vi.fn(),
     scheduleInvocation: vi.fn(),
     scheduleCancelableInvocation: vi.fn(),
+  })),
+}));
+
+vi.mock('golem:tool/host@0.1.0', () => ({
+  ToolRpc: vi.fn().mockImplementation(() => ({
+    invokeAndAwait: vi.fn(),
+    invoke: vi.fn(),
+    asyncInvokeAndAwait: vi.fn(),
   })),
 }));
 
@@ -105,11 +105,11 @@ vi.mock('golem:secrets/reveal@0.1.0', () => ({
 
 (globalThis as any).currentAgentId = 'foo-agent(123)';
 
-vi.mock('wasi:cli/environment@0.2.3', () => ({
+vi.mock('wasi:cli/environment@0.3.0', () => ({
   getEnvironment: () => [['GOLEM_AGENT_ID', (globalThis as any).currentAgentId]],
 }));
 
 // Load the package barrel so its side-effecting imports register the schema
-// walkers (zod / valibot / arktype / effect) for tests that import fluent
+// walkers (zod / valibot / arktype / effect) for tests that import the SDK entry point
 // submodules directly rather than the top-level entry.
 await import('../src');

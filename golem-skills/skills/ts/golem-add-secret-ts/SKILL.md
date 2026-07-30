@@ -7,7 +7,7 @@ description: "Adding secrets to TypeScript Golem agents. Use when the user asks 
 
 ## Overview
 
-Secrets are sensitive configuration values (API keys, passwords, tokens) stored per-environment. In the fluent SDK a secret is just a config field marked with the `s.secret(...)` schema marker. The config value carries an opaque, log-safe `Secret<T>` handle; the plaintext is revealed only when agent code calls `.get()`.
+Secrets are sensitive configuration values (API keys, passwords, tokens) stored per-environment. In the TypeScript SDK a secret is just a config field marked with the `s.secret(...)` schema marker. The config value carries an opaque, log-safe `Secret<T>` handle; the plaintext is revealed only when agent code calls `.get()`.
 
 ## Declaring Secrets in the Config Record
 

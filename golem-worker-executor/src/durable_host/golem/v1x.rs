@@ -12,8 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::concurrent::{
+    CallHandle, CallReplayOutcome, Cancellable, NotCancellable, drain_dropped_call_events_access,
+    drain_queued_dropped_call_events,
+};
 use crate::durable_host::durability::HostFailureKind;
+use crate::durable_host::suspendable_wait::{
+    ParkOutcome, SuspendableWaitContext, ephemeral_sleep_too_long_error, park_suspendable_wait,
+};
 use crate::durable_host::{
     ActiveAtomicRegion, DurabilityHost, DurableWorkerCtx, InternalRetryResult,
 };
@@ -21,13 +27,14 @@ use crate::get_oplog_entry;
 use crate::model::public_oplog::{
     PublicOplogEntryOps, find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
+use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::host::{
     AgentAnyFilter, ForkDetails, ForkResult, GetAgents, Host, HostGetAgents, HostGetPromiseResult,
+    HostGetPromiseResultWithStore,
 };
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
 };
-use crate::preview2::{Pollable, golem_api_1_x};
 use crate::services::oplog::CommitLevel;
 use crate::services::promise::{PromiseHandle, PromiseService};
 use crate::services::worker_proxy::WorkerProxyError;
@@ -53,10 +60,10 @@ use golem_common::model::oplog::{
     HostResponseGolemApiComponentId, HostResponseGolemApiFork, HostResponseGolemApiIdempotencyKey,
     HostResponseGolemApiPromiseCompletion, HostResponseGolemApiPromiseId,
     HostResponseGolemApiPromiseResult, HostResponseGolemApiSelfAgentMetadata,
-    HostResponseGolemApiUnit, OplogEntry, PublicOplogEntry,
+    HostResponseGolemApiUnit, OplogEntry, PersistenceLevel, PublicOplogEntry,
 };
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
+use golem_common::model::{AgentId, OwnedAgentId, ScanCursor, Timestamp};
 use golem_common::model::{OplogIndex, PromiseId, RetryContext};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::sync::Arc;
@@ -64,8 +71,8 @@ use std::time::Duration;
 use tokio::sync::OnceCell;
 use tracing::debug;
 use uuid::Uuid;
-use wasmtime::component::Resource;
-use wasmtime_wasi::{IoView, subscribe};
+use wasmtime::component::{Accessor, HasSelf, Resource};
+use wasmtime_wasi::IoView;
 
 fn classify_worker_proxy_error(err: &WorkerProxyError) -> HostFailureKind {
     match err {
@@ -243,8 +250,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 Ok(()) => true,
                 Err(WorkerExecutorError::InvalidShardId { .. }) => false,
                 Err(other) => {
-                    handle.abandon_for_trap();
-                    return Err(other.into());
+                    return Err(handle.trap(other));
                 }
             };
 
@@ -257,8 +263,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 {
                     Ok(completed) => completed,
                     Err(err) => {
-                        handle.abandon_for_trap();
-                        return Err(err.into());
+                        return Err(handle.trap(err));
                     }
                 }
             } else {
@@ -271,8 +276,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 {
                     Ok(completed) => completed,
                     Err(err) => {
-                        handle.abandon_for_trap();
-                        return Err(err.into());
+                        return Err(handle.trap(err));
                     }
                 }
             };
@@ -295,8 +299,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         if self.state.snapshotting_mode.is_some() {
             Ok(self.state.current_oplog_index().await.into())
         } else if self.state.is_live() {
-            self.state.oplog.add(OplogEntry::no_op()).await;
-            let marker = self.state.current_oplog_index().await;
+            // Use the index returned by `add` — a concurrently running host task (a durable
+            // call's terminal write, a drop-event `Cancelled`, a log hint entry) may append
+            // between this `add` and a subsequent `current_oplog_index` read, so re-reading the
+            // tip would nondeterministically point past the `NoOp` entry. Debugging sessions
+            // discard writes and return `NONE` from `add`; fall back to the session's replay
+            // target there so the guest never observes an invalid index.
+            let marker = match self.state.oplog.add(OplogEntry::no_op()).await {
+                OplogIndex::NONE => self.state.current_oplog_index().await,
+                index => index,
+            };
             // This `NoOp` index is the realistic `set_oplog_index` target; pin the mid-invocation
             // checkpoint watermark to the earliest one so a checkpoint at `<= marker` survives a
             // later jump back to it. (No checkpoint is taken here — there is no commit at this
@@ -324,12 +336,29 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         oplog_idx: golem_api_1_x::oplog::OplogIndex,
     ) -> anyhow::Result<()> {
         self.observe_function_call("golem::api", "set_oplog_index");
+        if self.state.snapshotting_mode.is_some() {
+            return Ok(());
+        }
+        if self.state.is_live() {
+            // A jump deletes the oplog region between the target and the Jump entry; no durable
+            // call may span that boundary. First drain already-dropped cancellable calls so their
+            // `Cancelled` terminal is recorded before the Jump (inside the deleted region), then
+            // refuse to jump while any live durable call is still in flight — its `End`/
+            // `Cancelled` would be recorded after the Jump and reference a `Start` inside the
+            // deleted region (mirrors the `mark_end_operation` and persistence-level guards).
+            drain_queued_dropped_call_events(self)
+                .await
+                .map_err(anyhow::Error::from)?;
+            if self.state.has_in_flight_live_host_calls() {
+                return Err(anyhow!(
+                    "Cannot jump to oplog index {oplog_idx}: durable host calls are still in flight"
+                ));
+            }
+        }
         let jump_source = self.state.current_oplog_index().await.next(); // index of the Jump instruction that we will add
         let jump_target = OplogIndex::from_u64(oplog_idx).next(); // we want to jump _after_ reaching the target index
         let original_target = OplogIndex::from_u64(oplog_idx); // the actual oplog entry the user wants to jump to
-        if self.state.snapshotting_mode.is_some() {
-            Ok(())
-        } else if jump_target > jump_source {
+        if jump_target > jump_source {
             Err(anyhow!(
                 "Attempted to jump forward in oplog to index {jump_target} from {jump_source}"
             ))
@@ -338,6 +367,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .replay_state
             .is_in_skipped_region(original_target)
             .await
+            .map_err(anyhow::Error::from)?
         {
             Err(anyhow!(
                 "Attempted to jump to a deleted region in oplog to index {original_target} from {jump_source}"
@@ -395,18 +425,31 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let next_idempotency_key_oplog_index = self
                 .state
                 .current_atomic_region_idempotency_key_oplog_index();
-            self.state
+            // Use the index returned by `add` — a concurrently running host task (a durable
+            // call's terminal write, a drop-event `Cancelled`, a log hint entry) may append
+            // between this `add` and a subsequent `current_oplog_index` read. Reading the tip
+            // afterwards would record a begin index past the `BeginAtomicRegion` entry, making
+            // `Error.retry_from` diverge from the persisted region marker and breaking the
+            // retry-budget grouping keyed on it. Debugging sessions discard writes and return
+            // `NONE` from `add`; fall back to the session's replay target there, matching the
+            // index the guest observed before.
+            let begin_index = match self
+                .state
                 .oplog
                 .add(OplogEntry::begin_atomic_region())
-                .await;
-            let begin_index = self.state.current_oplog_index().await;
+                .await
+            {
+                OplogIndex::NONE => self.state.current_oplog_index().await,
+                index => index,
+            };
             let next_idempotency_key_oplog_index =
                 next_idempotency_key_oplog_index.unwrap_or_else(|| begin_index.next());
-            self.state.active_atomic_regions.push(ActiveAtomicRegion {
-                begin_index,
-                next_idempotency_key_oplog_index,
-                has_side_effects: false,
-            });
+            self.state
+                .active_atomic_regions
+                .push(ActiveAtomicRegion::new(
+                    begin_index,
+                    next_idempotency_key_oplog_index,
+                ));
             Ok(begin_index.into())
         } else {
             let (begin_index, _) =
@@ -451,11 +494,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             }
 
-            self.state.active_atomic_regions.push(ActiveAtomicRegion {
-                begin_index,
-                next_idempotency_key_oplog_index: begin_index.next(),
-                has_side_effects: false,
-            });
+            self.state
+                .active_atomic_regions
+                .push(ActiveAtomicRegion::new(begin_index, begin_index.next()));
             Ok(begin_index.into())
         }
     }
@@ -467,18 +508,55 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::api", "mark_end_operation");
         if self.state.snapshotting_mode.is_some() {
             return Ok(());
-        } else if self.state.is_live() {
+        }
+        let begin_index = OplogIndex::from_u64(begin);
+        if self.state.is_live() {
+            // Atomic-region legality under overlap: closing a region does not require all member
+            // calls to have completed. Each member call holds a transferable ownership lease
+            // (`AtomicRegionLease`); on close, surviving members transfer to the enclosing open
+            // atomic region if one exists, and at the outermost close they detach — allowed only
+            // for calls that replay can safely re-execute from an incomplete `Start` (reads,
+            // local writes, idempotent remote writes). A pending non-repairable write (a
+            // non-idempotent / batched / transactional remote write) still blocks the outermost
+            // close: its terminal must be able to record against the region that made it
+            // retry-relevant, and replay cannot repair it if it never lands.
+            //
+            // A member call the guest already awaited may still hold its lease here: its cleanup
+            // (terminal join, scope close, lease release) is queued as a dropped-call event and
+            // drained at the next safe worker-access window. Ending the region is such a window,
+            // so drain first — otherwise a fully completed call would spuriously count as a
+            // surviving member (mirrors the jump and persistence-level guards).
+            drain_queued_dropped_call_events(self)
+                .await
+                .map_err(anyhow::Error::from)?;
+            if !self.state.atomic_region_has_parent(begin_index)
+                && self
+                    .state
+                    .atomic_region_surviving_members(begin_index)
+                    .iter()
+                    .any(|lease| !lease.repairable_when_incomplete())
+            {
+                return Err(anyhow!(
+                    "Cannot end atomic region {begin_index}: non-re-executable durable calls initiated in it are still in flight"
+                ));
+            }
+            // The `EndAtomicRegion` entry is the durable linearization point of the transfer /
+            // detach decision: append it first, then transition the leases, so a crash before the
+            // append leaves the region uncommitted and replay retries it as a whole.
             self.state
                 .oplog
-                .add(OplogEntry::end_atomic_region(OplogIndex::from_u64(begin)))
+                .add(OplogEntry::end_atomic_region(begin_index))
                 .await;
         } else {
             let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::EndAtomicRegion)?;
         }
 
-        self.state
-            .active_atomic_regions
-            .retain(|region| region.begin_index != OplogIndex::from_u64(begin));
+        // Same transition on live and replay: transfer surviving members to the parent region (or
+        // detach them at the outermost close) and remove the region, so replayed calls observe the
+        // same ownership changes as live ones did. The replay path deliberately skips the
+        // non-repairable validation above — a committed `EndAtomicRegion` is a fact of the oplog
+        // and must replay even for layouts a newer live executor would reject.
+        self.state.close_atomic_region(begin_index);
 
         Ok(())
     }
@@ -509,6 +587,43 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         if self.state.persistence_level != new_persistence_level {
             // commit all pending entries and change persistence level
             if self.state.is_live() {
+                // A persistence-level transition is a positional replay boundary: replay skips
+                // whole persist-nothing zones, so a concurrent durable call's `Start`/`End` pair
+                // must never straddle the `ChangePersistenceLevel` entry — replay would claim one
+                // half and skip the other. First drain already-dropped cancellable calls so their
+                // `Cancelled` is recorded on this side of the boundary, then refuse to switch
+                // while any live durable call is still in flight.
+                //
+                // Open *durable scopes* (batched remote writes such as an unconsumed HTTP
+                // response, remote transactions) are deliberately allowed to stay open across the
+                // boundary: their `End` is resolved by identity through the concurrent replay
+                // resolver, not positionally, so a scope whose `Start` and `End` both lie outside
+                // the zone replays correctly even with the zone skipped in between.
+                //
+                // The exception is leaving a `PersistNothing` zone while a scope *opened inside
+                // the zone* is still open: its `Start` lies in the region replay skips, so its
+                // eventual `End` outside the zone would reference a `Start` replay never sees.
+                // Such a scope must be closed before the zone is.
+                //
+                // During snapshotting no oplog entries are written, so no boundary is created and
+                // the guard is skipped.
+                if self.state.snapshotting_mode.is_none() {
+                    drain_queued_dropped_call_events(self)
+                        .await
+                        .map_err(anyhow::Error::from)?;
+                    if self.state.has_in_flight_live_host_calls() {
+                        return Err(anyhow!(
+                            "Cannot change oplog persistence level: durable host calls are still in flight"
+                        ));
+                    }
+                    if self.state.persistence_level == PersistenceLevel::PersistNothing
+                        && self.state.has_open_scope_in_persist_nothing_zone()
+                    {
+                        return Err(anyhow!(
+                            "Cannot change oplog persistence level: a durable scope (batched remote write or transaction) opened inside the PersistNothing zone is still open"
+                        ));
+                    }
+                }
                 self.public_state
                     .worker()
                     .add_and_commit_oplog(OplogEntry::change_persistence_level(
@@ -1010,8 +1125,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 ) {
                     Ok(parsed) => parsed.to_string(),
                     Err(err) => {
-                        handle.abandon_for_trap();
-                        return Err(anyhow!(err));
+                        return Err(handle.trap(anyhow!(err)));
                     }
                 }
             } else {
@@ -1186,69 +1300,6 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
-    async fn subscribe(
-        &mut self,
-        resource: Resource<GetPromiseResultEntry>,
-    ) -> anyhow::Result<Resource<Pollable>> {
-        self.observe_function_call("golem::api::promise-result", "subscribe");
-        let handle = self.table().get(&resource)?.clone();
-
-        let resource_rep = resource.rep();
-        let dyn_pollable = subscribe(self.table(), resource, None)?;
-        self.state
-            .promise_backed_pollables
-            .write()
-            .await
-            .insert(dyn_pollable.rep(), handle);
-        self.state
-            .promise_dyn_pollables
-            .write()
-            .await
-            .entry(resource_rep)
-            .or_default()
-            .insert(dyn_pollable.rep());
-
-        Ok(dyn_pollable)
-    }
-
-    async fn get(
-        &mut self,
-        resource: Resource<GetPromiseResultEntry>,
-    ) -> anyhow::Result<Option<Vec<u8>>> {
-        let handle = CallHandle::<GolemApiGetPromiseResult, NotCancellable>::start(
-            self,
-            HostRequestNoInput {},
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
-
-        let result = handle
-            .run(self, async |ctx| {
-                let self_agent_id = ctx.agent_id().clone();
-                let entry = ctx.table().get(&resource)?;
-
-                // only the agent that originally created the promise is woken up when it is completed.
-                if entry.promise_id.agent_id != self_agent_id {
-                    return Err(anyhow!(
-                        "Tried awaiting a promise not created by the current agent"
-                    ));
-                }
-
-                let result = match entry.get_handle().await {
-                    Ok(handle) => handle.get().await,
-                    Err(err) => {
-                        return Err(anyhow::Error::from(WorkerExecutorError::runtime(
-                            err.clone(),
-                        )));
-                    }
-                };
-                Ok::<_, anyhow::Error>(HostResponseGolemApiPromiseResult { result })
-            })
-            .await?;
-
-        Ok(result.result)
-    }
-
     async fn drop(&mut self, resource: Resource<GetPromiseResultEntry>) -> anyhow::Result<()> {
         self.observe_function_call("golem::api::promise-result", "drop");
         let resource_rep = resource.rep();
@@ -1276,6 +1327,148 @@ impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
         self.state.promise_service.cleanup().await;
 
         Ok(())
+    }
+}
+
+impl<U: Send + 'static, Ctx: WorkerCtx> HostGetPromiseResultWithStore<U>
+    for HasSelf<DurableWorkerCtx<Ctx>>
+{
+    async fn get(
+        accessor: &Accessor<U, Self>,
+        resource: Resource<GetPromiseResultEntry>,
+    ) -> anyhow::Result<Vec<u8>> {
+        let resource_rep = resource.rep();
+        let (entry, self_agent_id) = accessor.with(|mut access| {
+            let ctx = access.get();
+            let entry = ctx
+                .table()
+                .get(&Resource::<GetPromiseResultEntry>::new_borrow(resource_rep))?
+                .clone();
+            Ok::<_, anyhow::Error>((entry, ctx.agent_id().clone()))
+        })?;
+
+        drain_dropped_call_events_access(accessor, accessor.getter())
+            .await
+            .map_err(anyhow::Error::from)?;
+
+        let mut handle = CallHandle::<GolemApiGetPromiseResult, Cancellable>::start_access(
+            accessor,
+            accessor.getter(),
+            HostRequestNoInput {},
+            DurableFunctionType::ReadRemote,
+        )
+        .await
+        .map_err(anyhow::Error::from)?;
+
+        if !handle.is_live() {
+            match handle
+                .replay_access(accessor, accessor.getter())
+                .await
+                .map_err(anyhow::Error::from)?
+            {
+                CallReplayOutcome::Replayed(response) => {
+                    return response.result.ok_or_else(|| {
+                        anyhow::anyhow!("Promise result was not completed in the oplog")
+                    });
+                }
+                CallReplayOutcome::Incomplete(live) => handle = live,
+            }
+        }
+
+        // Only the agent that originally created the promise is woken up when it is completed.
+        if entry.promise_id.agent_id != self_agent_id {
+            return Err(handle.trap(anyhow!(
+                "Tried awaiting a promise not created by the current agent"
+            )));
+        }
+
+        let promise_handle = match entry.get_handle().await {
+            Ok(handle) => handle,
+            Err(err) => {
+                return Err(handle.trap(WorkerExecutorError::runtime(err.clone())));
+            }
+        };
+        let (wait_context, interrupt) = accessor.with(|mut access| {
+            let ctx = access.get();
+            let interrupt = ctx.create_interrupt_signal();
+            (
+                SuspendableWaitContext {
+                    wait_id: ctx.state.next_suspendable_wait_id(),
+                    agent_mode: ctx.agent_mode(),
+                    suspend: ctx.state.config.suspend.clone(),
+                    wait_deadline: None,
+                    suspendable_waits: ctx.state.suspendable_waits(),
+                    wakeup_scheduler: ctx.state.wakeup_scheduler(),
+                },
+                interrupt,
+            )
+        });
+        let outcome = park_suspendable_wait(
+            wait_context,
+            interrupt,
+            || {
+                let promise_handle = promise_handle.clone();
+                async move {
+                    promise_handle.await_ready().await;
+                }
+            },
+            || promise_handle.is_ready_now(),
+            || {
+                accessor.with(|mut access| {
+                    let ctx = access.get();
+                    ctx.state.safe_to_suspend()
+                })
+            },
+            || None,
+        )
+        .await
+        .map_err(|err| handle.trap(err))?;
+
+        match outcome {
+            ParkOutcome::Ready => {}
+            ParkOutcome::SuspendWorker => {
+                return Err(handle.trap(InterruptKind::Suspend(Timestamp::now_utc())));
+            }
+            ParkOutcome::Interrupted(kind) => {
+                // An interrupt is non-error control flow: abandon the durable call without a
+                // trap context so the error classifies as `TrapType::Interrupt`.
+                handle.abandon_for_trap();
+                return Err(anyhow::Error::from(kind));
+            }
+            ParkOutcome::EphemeralTooLong {
+                requested_nanos,
+                max_nanos,
+            } => {
+                return Err(handle.trap(ephemeral_sleep_too_long_error(requested_nanos, max_nanos)));
+            }
+        }
+
+        let result = match promise_handle.get().await {
+            Some(result) => result,
+            None => {
+                return Err(handle.trap(WorkerExecutorError::runtime(format!(
+                    "Promise {} was ready without a completion payload",
+                    entry.promise_id
+                ))));
+            }
+        };
+
+        let response = handle
+            .complete_access(
+                accessor,
+                accessor.getter(),
+                HostResponseGolemApiPromiseResult {
+                    result: Some(result),
+                },
+            )
+            .await
+            .map_err(anyhow::Error::from)?;
+
+        response.result.ok_or_else(|| {
+            anyhow::Error::from(WorkerExecutorError::runtime(
+                "Promise result was not completed after durable persistence",
+            ))
+        })
     }
 }
 

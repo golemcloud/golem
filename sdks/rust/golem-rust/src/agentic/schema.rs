@@ -36,6 +36,7 @@ pub trait Schema {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum StructuredSchema {
     AutoInject(AutoInjectedParamType),

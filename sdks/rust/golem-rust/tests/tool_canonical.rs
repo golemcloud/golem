@@ -49,16 +49,21 @@ test_r::enable!();
 #[cfg(feature = "export_golem_agentic")]
 #[test_r::sequential]
 mod canonical {
-    #[allow(clippy::disallowed_names, dead_code)]
+    #[allow(
+        clippy::disallowed_names,
+        dead_code,
+        private_interfaces,
+        unused_imports
+    )]
     mod grep_canonical {
         use golem_rust::agentic::{
             EffectiveCommandField, ExtendedOptionShape, ExtendedToolType,
             encode_schema_value_default, get_all_tools, get_extended_tool_by_name,
             get_tool_by_name, option_collected_graph, render_argument_help, render_help,
         };
+        use golem_rust::agentic::{InputStream, OutputStream};
         use golem_rust::schema::schema_type::NumericBound;
         use golem_rust::schema::{SchemaType, SchemaValue};
-        use golem_rust::wasip2::io::streams::{InputStream, OutputStream};
         use golem_rust::{FromSchema, IntoSchema, tool_definition, tool_implementation};
         use golem_rust_macro::ToolError;
         use std::path::PathBuf;
@@ -452,7 +457,12 @@ mod canonical {
     // schema features for the `Url` / `DateTime<Utc>` nodes, so it is compiled only
     // when those features are enabled (in addition to `export_golem_agentic`).
     #[cfg(all(feature = "url", feature = "chrono"))]
-    #[allow(clippy::disallowed_names, dead_code)]
+    #[allow(
+        clippy::disallowed_names,
+        dead_code,
+        private_interfaces,
+        unused_imports
+    )]
     mod git_canonical {
         use chrono::{DateTime, Utc};
         use golem_rust::agentic::{

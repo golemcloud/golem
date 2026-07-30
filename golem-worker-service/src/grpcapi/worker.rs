@@ -43,23 +43,27 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
 
-fn decode_invocation_freshness_disposition(value: i32) -> InvocationFreshnessDisposition {
-    if value
+/// The only way to turn a wire-level freshness disposition into the internal
+/// [`InvocationFreshnessDisposition`]. Decoding and trust-sanitization are
+/// deliberately fused into a single function so that no gRPC entry point can
+/// accept a `KnownFresh` claim from the wire without going through the
+/// trusted-caller check: `KnownFresh` allows the executor to skip the
+/// ephemeral existence check, so it must never be honored for external
+/// callers.
+fn sanitize_invocation_freshness_disposition(
+    wire_value: i32,
+    trusted_internal_caller: bool,
+) -> InvocationFreshnessDisposition {
+    let decoded = if wire_value
         == golem_api_grpc::proto::golem::worker::v1::InvocationFreshnessDisposition::KnownFresh
             as i32
     {
         InvocationFreshnessDisposition::KnownFresh
     } else {
         InvocationFreshnessDisposition::MayExist
-    }
-}
-
-fn sanitize_invocation_freshness_disposition(
-    value: InvocationFreshnessDisposition,
-    trusted_internal_caller: bool,
-) -> InvocationFreshnessDisposition {
+    };
     if trusted_internal_caller {
-        value
+        decoded
     } else {
         InvocationFreshnessDisposition::MayExist
     }
@@ -507,8 +511,6 @@ impl WorkerGrpcApi {
         &self,
         request: InvokeAgentRequest,
     ) -> Result<InvokeAgentSuccess, GrpcAgentError> {
-        let requested_freshness_disposition =
-            decode_invocation_freshness_disposition(request.freshness_disposition);
         let config = request
             .config
             .iter()
@@ -538,7 +540,7 @@ impl WorkerGrpcApi {
             ));
         }
         let freshness_disposition = sanitize_invocation_freshness_disposition(
-            requested_freshness_disposition,
+            request.freshness_disposition,
             trusted_internal_caller,
         );
 
@@ -577,7 +579,7 @@ impl WorkerGrpcApi {
                 request.schedule_at,
                 request.idempotency_key.map(|k| k.into()),
                 request.context,
-                trusted_internal_caller && !is_lookup,
+                trusted_internal_caller,
                 freshness_disposition,
                 config,
                 auth,
@@ -736,31 +738,29 @@ impl WorkerGrpcApi {
 
 #[cfg(test)]
 mod freshness_tests {
-    use super::{
-        decode_invocation_freshness_disposition, sanitize_invocation_freshness_disposition,
-    };
+    use super::sanitize_invocation_freshness_disposition;
     use golem_common::model::agent::InvocationFreshnessDisposition;
     use test_r::test;
+
+    const KNOWN_FRESH_WIRE: i32 =
+        golem_api_grpc::proto::golem::worker::v1::InvocationFreshnessDisposition::KnownFresh as i32;
 
     #[test]
     fn invocation_freshness_defaults_unknown_values_to_may_exist() {
         assert_eq!(
-            decode_invocation_freshness_disposition(0),
+            sanitize_invocation_freshness_disposition(0, true),
             InvocationFreshnessDisposition::MayExist
         );
         assert_eq!(
-            decode_invocation_freshness_disposition(i32::MAX),
+            sanitize_invocation_freshness_disposition(i32::MAX, true),
             InvocationFreshnessDisposition::MayExist
         );
     }
 
     #[test]
-    fn invocation_freshness_decodes_known_fresh_explicitly() {
+    fn invocation_freshness_preserves_known_fresh_for_trusted_callers() {
         assert_eq!(
-            decode_invocation_freshness_disposition(
-                golem_api_grpc::proto::golem::worker::v1::InvocationFreshnessDisposition::KnownFresh
-                    as i32
-            ),
+            sanitize_invocation_freshness_disposition(KNOWN_FRESH_WIRE, true),
             InvocationFreshnessDisposition::KnownFresh
         );
     }
@@ -768,18 +768,8 @@ mod freshness_tests {
     #[test]
     fn invocation_freshness_is_downgraded_for_untrusted_callers() {
         assert_eq!(
-            sanitize_invocation_freshness_disposition(
-                InvocationFreshnessDisposition::KnownFresh,
-                false,
-            ),
+            sanitize_invocation_freshness_disposition(KNOWN_FRESH_WIRE, false),
             InvocationFreshnessDisposition::MayExist
-        );
-        assert_eq!(
-            sanitize_invocation_freshness_disposition(
-                InvocationFreshnessDisposition::KnownFresh,
-                true,
-            ),
-            InvocationFreshnessDisposition::KnownFresh
         );
     }
 }

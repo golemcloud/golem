@@ -238,6 +238,17 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_clean_local_server_data_dir(&self, data_dir: &Path) -> anyhow::Result<bool> {
+        self.confirm(
+            false,
+            format!(
+                "Permanently delete the local server data directory {} and all of its contents?",
+                data_dir.display().to_string().log_color_highlight()
+            ),
+            None,
+        )
+    }
+
     pub fn confirm_interrupt_ephemeral_agent(&self) -> anyhow::Result<bool> {
         self.confirm(
             false,

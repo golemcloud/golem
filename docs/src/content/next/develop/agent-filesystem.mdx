@@ -79,36 +79,48 @@ For example, we can define an agent with a `download` endpoint that serves files
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-MoonBit|Rust|TypeScript">
     <Tabs.Tab>
     ```typescript
+    import { z } from 'zod';
+    import { defineAgent, method, http, s } from '@golemcloud/golem-ts-sdk';
     import * as fs from 'node:fs';
-    import { BaseAgent, agent, endpoint, UnstructuredBinary } from '@golemcloud/golem-ts-sdk';
 
-    @agent({ mount: "/files/{name}" })
-    class FileServerAgent extends BaseAgent {
-      constructor(readonly name: string) {
-        super();
-      }
+    export const FileServerAgent = defineAgent({
+      name: 'FileServerAgent',
+      id: { name: z.string() },
+      http: http.mount('/files/{name}'),
+      methods: {
+        downloadFile: method({
+          input: { path: z.string() },
+          returns: s.unstructuredBinary(),
+          http: http.get('/download/{path}'),
+        }),
+      },
+    });
 
-      @endpoint({ get: "/download/{path}" })
-      downloadFile(path: string): UnstructuredBinary {
-        try {
-          const buffer = fs.readFileSync(`/web/${path}`);
+    export const FileServerAgentImpl = FileServerAgent.implement({
+      init: () => ({}),
+      methods: {
+        downloadFile({ path }) {
+          try {
+            const buffer = fs.readFileSync(`/web/${path}`);
 
-          let contentType = 'application/octet-stream';
-          if (path.endsWith('.html')) {
-            contentType = 'text/html';
-          } else if (path.endsWith('.js')) {
-            contentType = 'application/javascript';
+            let contentType = 'application/octet-stream';
+            if (path.endsWith('.html')) {
+              contentType = 'text/html';
+            } else if (path.endsWith('.js')) {
+              contentType = 'application/javascript';
+            }
+
+            return { tag: 'inline', val: buffer, mimeType: contentType };
+          } catch (err) {
+            return {
+              tag: 'inline',
+              val: new TextEncoder().encode(`Not found! (${err})`),
+              mimeType: 'text/plain',
+            };
           }
-
-          return UnstructuredBinary.fromInline(buffer, contentType);
-        } catch (err) {
-          return UnstructuredBinary.fromInline(
-            new TextEncoder().encode(`Not found! (${err})`),
-            'text/plain',
-          );
-        }
-      }
-    }
+        },
+      },
+    });
     ```
     </Tabs.Tab>
 

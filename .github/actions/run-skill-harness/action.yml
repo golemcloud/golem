@@ -101,8 +101,6 @@ runs:
           sdks/ts/packages/golem-ts-sdk/dist
           sdks/ts/packages/golem-ts-sdk/types
           sdks/ts/packages/golem-ts-sdk/wasm
-          sdks/ts/packages/golem-ts-typegen/dist
-          sdks/ts/packages/golem-ts-types-core/dist
           sdks/ts/packages/golem-ts-bridge/dist
           sdks/ts/packages/golem-ts-repl/dist
         key: golem-ts-sdk-skill-harness-${{ github.run_id }}
@@ -154,7 +152,7 @@ runs:
     - name: Install wasm-tools
       if: inputs.language == 'moonbit'
       shell: bash
-      run: cargo binstall --force --locked wasm-tools@1.227.1
+      run: cargo binstall --force --locked wasm-tools@1.248.0
 
     - name: Install Harness Dependencies
       shell: bash

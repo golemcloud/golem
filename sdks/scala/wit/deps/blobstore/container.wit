@@ -2,11 +2,6 @@ package wasi:blobstore;
 
 // a Container is a collection of objects
 interface container {
-  use wasi:io/streams@0.2.3.{
-    input-stream,
-    output-stream,
-  };
-
   use types.{
     container-metadata,
     error,
@@ -34,7 +29,7 @@ interface container {
     write-data: func(name: object-name, data: borrow<outgoing-value>) -> result<_, error>;
 
     // returns list of objects in the container. Order is undefined.
-    list-objects: func() -> result<stream-object-names, error>;
+    list-objects: func() -> result<stream<object-name>, error>;
 
     // deletes object.
     // does not return error if object did not exist.
@@ -53,16 +48,4 @@ interface container {
     clear: func() -> result<_, error>;
   }
 
-  // this defines the `stream-object-names` resource which is a representation of stream<object-name>
-  resource stream-object-names {
-    // reads the next number of objects from the stream
-    //
-    // This function returns the list of objects read, and a boolean indicating if the end of the stream was reached.
-    read-stream-object-names: func(len: u64) -> result<tuple<list<object-name>, bool>, error>;
-
-    // skip the next number of objects in the stream
-    //
-    // This function returns the number of objects skipped, and a boolean indicating if the end of the stream was reached.
-    skip-stream-object-names: func(num: u64) -> result<tuple<u64, bool>, error>;
-  }
 }

@@ -12,12 +12,13 @@ pub fn get_tool(name : String) -> Result[@common.Tool, @common.ToolError] {
 
 ///|
 /// Invoke a command of a tool.
-pub fn invoke(
+pub async fn invoke(
   tool_name : String,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
-  stdin : @streams.InputStream?,
+  stdin : @async-core.Stream[Byte]?,
   principal : @common0.Principal,
+  _background_group : @async-core.TaskGroup[Unit],
 ) -> Result[@common.InvocationResult, @common.ToolError] {
   @tool.invoke_registered_tool(tool_name, command_path, input, stdin, principal)
 }

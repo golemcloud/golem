@@ -1,9 +1,8 @@
 // Durable functions — wrap a non-deterministic side effect so its typed result
 // is persisted to the oplog on the live run and replayed (without re-running the
 // body) on recovery. Mirrors effect-golem's `Durability.wrap`/`wrapInfallible`
-// over the same `golem:durability@1.5.0` host interface; the base decorator SDK
-// has no equivalent. Lives in the shared `host/` layer, so both the fluent and
-// decorator surfaces get it (re-exported from the package root).
+// over the same `golem:durability@1.5.0` host interface. It is re-exported from
+// the package root.
 
 import {
   beginDurableFunction,
@@ -17,9 +16,10 @@ import {
 
 import type { OplogIndex } from 'golem:api/oplog@1.5.0';
 
-import { compileSchema, type FluentCodec } from '../fluent/schema/adapter';
-import { buildResultCodec } from '../fluent/schema/result';
-import { StandardSchemaV1 } from '../fluent/schema/standardSchema';
+import { compileSchema } from '../schema/adapter';
+import type { SchemaCodec } from '../schema/codec';
+import { buildResultCodec } from '../schema/result';
+import { StandardSchemaV1 } from '../schema/standardSchema';
 import { typedSchemaValueFromWit, typedSchemaValueToWit } from '../internal/schema-model';
 import { withPersistenceLevel } from './guard';
 import { Result } from './result';
@@ -101,7 +101,7 @@ export function durable(
   const okCodec = compileSchema(spec.success);
   // With an `error` schema the response is a `result<ok, err>` value (reuses the
   // Item-3 result codec); otherwise it's the bare success value.
-  const responseCodec: FluentCodec = spec.error
+  const responseCodec: SchemaCodec = spec.error
     ? buildResultCodec(okCodec, compileSchema(spec.error))
     : okCodec;
 

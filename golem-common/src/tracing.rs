@@ -408,7 +408,6 @@ pub mod directive {
             warn("hyper"),
             warn("tower"),
             error("fred"),
-            warn("wac_graph"),
             warn("wasmtime_environ"),
             warn("wit_parser"),
             warn("golem_client"),

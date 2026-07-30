@@ -55,6 +55,7 @@ use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use strum::IntoEnumIterator;
 use url::Url;
 
 const TEMP_DIR: &str = "golem-temp";
@@ -326,7 +327,7 @@ impl ComponentDependency {
 #[derive(Debug, Clone)]
 pub struct BridgeSdkTarget {
     pub component_name: ComponentName,
-    pub kind: BridgeSdkTargetKind,
+    pub subject: BridgeSdkTargetSubject,
     pub target_language: GuestLanguage,
     pub bridge_mode: BridgeMode,
     pub output_dir: PathBuf,
@@ -334,24 +335,119 @@ pub struct BridgeSdkTarget {
 
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
-pub enum BridgeSdkTargetKind {
+pub enum BridgeSdkTargetSubject {
     Agent(AgentTypeSchema),
     Tool(Tool),
 }
 
-impl BridgeSdkTargetKind {
+impl BridgeSdkTargetSubject {
+    pub fn kind(&self) -> BridgeSdkTargetKind {
+        match self {
+            BridgeSdkTargetSubject::Agent(_) => BridgeSdkTargetKind::Agent,
+            BridgeSdkTargetSubject::Tool(_) => BridgeSdkTargetKind::Tool,
+        }
+    }
+
     pub fn display_name(&self) -> &str {
         match self {
-            BridgeSdkTargetKind::Agent(agent_type) => agent_type.type_name.as_str(),
-            BridgeSdkTargetKind::Tool(tool) => tool.name().unwrap_or_default(),
+            BridgeSdkTargetSubject::Agent(agent_type) => agent_type.type_name.as_str(),
+            BridgeSdkTargetSubject::Tool(tool) => tool.name().unwrap_or_default(),
         }
     }
 
     pub fn as_agent(&self) -> Option<&AgentTypeSchema> {
         match self {
-            BridgeSdkTargetKind::Agent(agent_type) => Some(agent_type),
-            BridgeSdkTargetKind::Tool(_) => None,
+            BridgeSdkTargetSubject::Agent(agent_type) => Some(agent_type),
+            BridgeSdkTargetSubject::Tool(_) => None,
         }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum BridgeSdkTargetKind {
+    Agent,
+    Tool,
+}
+
+impl BridgeSdkTargetKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Agent => "agent",
+            Self::Tool => "tool",
+        }
+    }
+
+    pub fn supports(self, bridge_mode: BridgeMode, language: GuestLanguage) -> bool {
+        match (self, bridge_mode, language) {
+            (
+                Self::Agent,
+                BridgeMode::External,
+                GuestLanguage::TypeScript
+                | GuestLanguage::Rust
+                | GuestLanguage::Scala
+                | GuestLanguage::MoonBit,
+            )
+            | (
+                Self::Agent,
+                BridgeMode::Guest,
+                GuestLanguage::TypeScript
+                | GuestLanguage::Rust
+                | GuestLanguage::Scala
+                | GuestLanguage::MoonBit,
+            )
+            | (
+                Self::Tool,
+                BridgeMode::Guest,
+                GuestLanguage::TypeScript
+                | GuestLanguage::Rust
+                | GuestLanguage::Scala
+                | GuestLanguage::MoonBit,
+            ) => true,
+            (
+                Self::Tool,
+                BridgeMode::External,
+                GuestLanguage::TypeScript
+                | GuestLanguage::Rust
+                | GuestLanguage::Scala
+                | GuestLanguage::MoonBit,
+            ) => false,
+        }
+    }
+
+    pub fn supported_languages(
+        self,
+        bridge_mode: BridgeMode,
+    ) -> impl Iterator<Item = GuestLanguage> {
+        GuestLanguage::iter().filter(move |language| self.supports(bridge_mode, *language))
+    }
+
+    pub fn supported_language_names(self, bridge_mode: BridgeMode) -> String {
+        self.supported_languages(bridge_mode)
+            .map(|language| language.to_string())
+            .join(", ")
+    }
+
+    pub fn support_error(self, bridge_mode: BridgeMode, language: GuestLanguage) -> Option<String> {
+        if self.supports(bridge_mode, language) {
+            return None;
+        }
+
+        let supported_language_names = self.supported_language_names(bridge_mode);
+        if supported_language_names.is_empty() {
+            Some(format!(
+                "{bridge_mode} {self} bridge SDKs are not supported yet"
+            ))
+        } else {
+            Some(format!(
+                "{bridge_mode} {self} bridge SDKs are only supported for {supported_language_names} yet; {language} is not supported"
+            ))
+        }
+    }
+}
+
+impl Display for BridgeSdkTargetKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -2551,7 +2647,7 @@ mod app_builder {
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
-        Application, ApplicationPreload, ComponentDependency, ComponentLayer,
+        Application, ApplicationPreload, BridgeSdkTargetKind, ComponentDependency, ComponentLayer,
         ComponentLayerApplyContext, ComponentLayerId, ComponentLayerProperties,
         ComponentLayerPropertiesKind, ComponentPresetName, ComponentPresetSelector,
         ComponentProperties, PartitionedComponentPresets, TEMP_DIR, WithSource,
@@ -3284,8 +3380,8 @@ mod app_builder {
                             for (target_language, bridge_mode, sdk_targets) in
                                 self.bridge_sdks.value.for_all_used_modes()
                             {
-                                let sdk_targets = sdk_targets.agents.clone().into_vec();
-                                let non_unique_targets = sdk_targets.iter()
+                                let agent_targets = sdk_targets.agents.clone().into_vec();
+                                let non_unique_targets = agent_targets.iter()
                                     .counts()
                                     .into_iter()
                                     .filter(|(_, count)| *count > 1)
@@ -3308,40 +3404,33 @@ mod app_builder {
                                             ));
                                         }
 
-                                        if sdk_targets.len() > 1 && sdk_targets.iter().any(|t| t == "*") {
+                                        if agent_targets.len() > 1 && agent_targets.iter().any(|t| t == "*") {
                                             validation.add_warn(format!(
                                                 "Including \"*\" as language target will match all agents, no need for adding other targets: {}",
-                                                sdk_targets
+                                                agent_targets
                                                     .iter()
                                                     .map(|target| target.log_color_highlight())
                                                     .join(", ")
                                             ));
                                         }
+
+                                        if !agent_targets.is_empty()
+                                            && let Some(error) = BridgeSdkTargetKind::Agent
+                                                .support_error(bridge_mode, target_language)
+                                        {
+                                            validation.add_error(error);
+                                        }
+
+                                        if sdk_targets
+                                            .tools
+                                            .is_some_and(|tools| !tools.is_empty())
+                                            && let Some(error) = BridgeSdkTargetKind::Tool
+                                                .support_error(bridge_mode, target_language)
+                                        {
+                                            validation.add_error(error);
+                                        }
                                     },
                                 );
-                            }
-
-                            for (target_language, sdk_targets) in
-                                self.bridge_sdks.value.for_all_languages()
-                            {
-                                if !matches!(
-                                    target_language,
-                                    crate::model::GuestLanguage::Rust
-                                        | crate::model::GuestLanguage::Scala
-                                        | crate::model::GuestLanguage::MoonBit
-                                )
-                                    && sdk_targets.is_some_and(|targets| targets.internal.is_some())
-                                {
-                                    validation.with_context(
-                                        vec![("bridge SDK language", target_language.to_string())],
-                                        |validation| {
-                                            validation.add_error(format!(
-                                                "internal bridge mode is not supported for {} yet",
-                                                target_language.to_string().log_color_error_highlight()
-                                            ));
-                                        },
-                                    );
-                                }
                             }
                         }
                 });
@@ -3416,11 +3505,7 @@ mod app_builder {
                                 app.source.log_color_highlight()
                             )),
                             None => {
-                                Self::validate_local_server_ports(
-                                    validation,
-                                    local_server,
-                                    &app.source,
-                                );
+                                Self::validate_local_server(validation, local_server, &app.source);
                                 self.local_server =
                                     Some(WithSource::new(app.source.clone(), local_server.clone()));
                             }
@@ -3446,7 +3531,7 @@ mod app_builder {
             );
         }
 
-        fn validate_local_server_ports(
+        fn validate_local_server(
             validation: &mut ValidationBuilder,
             local_server: &app_raw::LocalServer,
             source: &Path,
@@ -3467,6 +3552,19 @@ mod app_builder {
                         "golem server run".log_color_highlight(),
                     ));
                 }
+            }
+
+            if let Some(router_addr) = local_server.router_addr.as_ref()
+                && router_addr.parse::<std::net::Ipv4Addr>().is_err()
+            {
+                validation.add_error(format!(
+                    "{} in {} must be an IPv4 address (e.g. {} or {}), but was {}.",
+                    "localServer.routerAddr".log_color_highlight(),
+                    source.display().to_string().log_color_highlight(),
+                    "0.0.0.0".log_color_highlight(),
+                    "127.0.0.1".log_color_highlight(),
+                    router_addr.log_color_highlight(),
+                ));
             }
 
             validate_port(
@@ -4622,7 +4720,7 @@ mod test {
     }
 
     #[test]
-    fn non_rust_guest_bridge_mode_is_rejected() {
+    fn typescript_guest_bridge_mode_is_accepted() {
         let source = indoc! { r#"
             app: hello-app
 
@@ -4658,7 +4756,7 @@ mod test {
             panic!("expected Some(ApplicationPreload)")
         };
 
-        let (_app, _warns, errors) = Application::from_raw_apps(
+        let (_app, warns, errors) = Application::from_raw_apps(
             std::env::current_dir().unwrap(),
             application_name,
             environments,
@@ -4668,12 +4766,8 @@ mod test {
         )
         .into_product();
 
-        assert_eq!(errors.len(), 1);
-        assert!(
-            errors[0].contains("internal bridge mode is not supported for TypeScript yet"),
-            "unexpected error: {}",
-            errors[0]
-        );
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
     }
 
     #[test]
@@ -4716,7 +4810,7 @@ mod test {
     }
 
     #[test]
-    fn non_rust_guest_bridge_config_without_agents_is_rejected() {
+    fn typescript_guest_bridge_config_without_agents_is_accepted() {
         let source = indoc! { r#"
             app: hello-app
 
@@ -4766,12 +4860,7 @@ mod test {
         .into_product();
 
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
-        assert_eq!(errors.len(), 1);
-        assert!(
-            errors[0].contains("internal bridge mode is not supported for TypeScript yet"),
-            "unexpected error: {}",
-            errors[0]
-        );
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
     }
 
     #[test]
@@ -5428,6 +5517,69 @@ mod test {
             "\n{}",
             errors.join("\n\n")
         );
+    }
+
+    #[test]
+    fn local_server_rejects_non_ipv4_router_addr() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            localServer:
+              routerAddr: localhost
+
+            environments:
+              local:
+                server: local
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path)
+                .expect("raw manifest should parse"),
+        ];
+
+        let (app_name_and_envs, warns, errors) =
+            Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(app_name_and_envs.is_none());
+        assert_eq!(errors.len(), 1, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors[0].contains("localServer.routerAddr") && errors[0].contains("localhost"),
+            "\n{}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn local_server_accepts_ipv4_router_addr() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            localServer:
+              routerAddr: 0.0.0.0
+              routerPort: 9881
+
+            environments:
+              local:
+                server: local
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path)
+                .expect("raw manifest should parse"),
+        ];
+
+        let (preload, warns, errors) = Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        let preload = preload.expect("manifest should preload");
+        let local_server = preload.local_server.expect("localServer should be present");
+        assert_eq!(local_server.value.router_addr.as_deref(), Some("0.0.0.0"));
     }
 
     #[test]

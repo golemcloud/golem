@@ -119,50 +119,61 @@ regular (non-read-only) method instead.
 
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
     <Tabs.Tab>
-        Use the `@readonly()` decorator on the method:
+        Mark a method read-only by setting `readOnly: true` on its `method(...)` spec:
 
         ```typescript
-        import { BaseAgent, agent, readonly } from "@golemcloud/golem-ts-sdk"
+        import { z } from "zod"
+        import { defineAgent, method } from "@golemcloud/golem-ts-sdk"
 
-        @agent()
-        class CounterAgent extends BaseAgent {
-          private count: number = 0
+        export const CounterAgent = defineAgent({
+          name: "CounterAgent",
+          id: { name: z.string() },
+          methods: {
+            // Non-read-only: writes shared state
+            increment: method({ input: {}, returns: z.number() }),
+            // Read-only: pure read over already-loaded state
+            getCount: method({ input: {}, returns: z.number(), readOnly: true }),
+          },
+        })
 
-          constructor(private name: string) {
-            super()
-          }
-
-          // Non-read-only: writes shared state
-          async increment(): Promise<number> {
-            this.count += 1
-            return this.count
-          }
-
-          // Read-only: pure read over already-loaded state
-          @readonly()
-          async getCount(): Promise<number> {
-            return this.count
-          }
-        }
+        export const CounterAgentImpl = CounterAgent.implement({
+          init: () => ({ count: 0 }),
+          methods: {
+            increment() {
+              this.count += 1
+              return this.count
+            },
+            getCount() {
+              return this.count
+            },
+          },
+        })
         ```
 
-        Choose a cache policy via the decorator options; per-principal caching is automatic when a parameter has
-        type `Principal`:
+        `readOnly: true` uses the default `until-write` cache policy. For finer control, pass an object instead of
+        the boolean; per-principal caching is enabled with `usesPrincipal: true`:
 
         ```typescript
-        import { Principal } from "@golemcloud/golem-ts-sdk"
-
-        @readonly({ cache: { ttl: "30s" } })
-        async recentSummary(): Promise<Summary> { /* ... */ }
-
-        @readonly({ cache: "no-cache" })
-        async pureCompute(x: number, y: number): Promise<number> {
-          return x + y
+        methods: {
+          // TTL cache: the result expires 30s after it is computed
+          recentSummary: method({
+            input: {},
+            returns: Summary,
+            readOnly: { cache: { ttlNanos: 30_000_000_000n } },
+          }),
+          // Never cached, but still side-effect-free
+          pureCompute: method({
+            input: { x: z.number(), y: z.number() },
+            returns: z.number(),
+            readOnly: { cache: "no-cache" },
+          }),
+          // Principal-aware: cached per caller principal
+          myVisibleItems: method({
+            input: {},
+            returns: z.array(Item),
+            readOnly: { usesPrincipal: true },
+          }),
         }
-
-        // Principal-aware: cached per principal (usesPrincipal auto-derived)
-        @readonly()
-        async myVisibleItems(principal: Principal): Promise<Item[]> { /* ... */ }
         ```
     </Tabs.Tab>
     <Tabs.Tab>

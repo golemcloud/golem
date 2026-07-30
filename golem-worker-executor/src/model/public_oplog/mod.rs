@@ -14,6 +14,9 @@
 
 pub mod wit;
 
+#[cfg(test)]
+mod tests;
+
 use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
@@ -28,15 +31,15 @@ use golem_common::model::oplog::public_oplog_entry::{
     CancelledParams, CardDerivedParams, CardEventQueuedParams, CardExpiredParams,
     CardInstallFailedParams, CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams,
     CardTransferConfirmedParams, CardTransferStartedParams, CardTransferredParams,
-    ChangePersistenceLevelParams, CommittedRemoteTransactionParams, CreateParams,
-    CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams,
-    EndParams, ErrorParams, ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams,
-    FinishSpanParams, GrowMemoryParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
-    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams,
-    SuspendParams,
+    ChangePersistenceLevelParams, CommittedRemoteTransactionParams, CompletionDiscardedParams,
+    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
+    EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
+    FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams, HostStreamFrameParams,
+    InterruptedParams, JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
+    SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
@@ -403,6 +406,15 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     partial: partial_value,
                 }))
             }
+            OplogEntry::CompletionDiscarded {
+                timestamp,
+                start_index,
+            } => Ok(PublicOplogEntry::CompletionDiscarded(
+                CompletionDiscardedParams {
+                    timestamp,
+                    start_index,
+                },
+            )),
             OplogEntry::AgentInvocationStarted {
                 timestamp,
                 idempotency_key,
@@ -912,6 +924,25 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 card_id,
                 wallet_generation,
             })),
+            OplogEntry::HostStreamFrame {
+                timestamp,
+                parent_start_index,
+                kind,
+                payload,
+            } => {
+                let host_request: HostRequest = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, payload)
+                    .await?;
+
+                Ok(PublicOplogEntry::HostStreamFrame(HostStreamFrameParams {
+                    timestamp,
+                    parent_start_index,
+                    kind,
+                    payload: host_request
+                        .into_typed_schema_value()
+                        .map_err(|e| e.to_string())?,
+                }))
+            }
             OplogEntry::CardEventQueued { timestamp, event } => {
                 Ok(PublicOplogEntry::CardEventQueued(CardEventQueuedParams {
                     timestamp,
@@ -1367,7 +1398,7 @@ fn make_plugin_installation_description(
 }
 
 #[cfg(test)]
-mod tests {
+mod conversion_tests {
     use super::*;
     use golem_common::schema::agent::{AutoInjectedKind, NamedField};
     use test_r::test;

@@ -105,12 +105,32 @@ impl TestHttpServer {
                     )
                     .route(
                         "/side-effect",
-                        post(move |body: Bytes| async move {
-                            let body = String::from_utf8(body.to_vec()).unwrap();
-                            debug!("received POST message: {body}");
-                            events_clone3.lock().unwrap().push(body.clone());
-                            "OK"
-                        }),
+                        post(
+                            move |headers: axum::http::HeaderMap, body: Bytes| async move {
+                                let body = String::from_utf8(body.to_vec()).unwrap();
+                                debug!("received POST message: {body}");
+                                let is_first = {
+                                    let mut events = events_clone3.lock().unwrap();
+                                    events.push(body.clone());
+                                    events.len() == 1
+                                };
+                                // A request carrying `x-test-first-response-delay-ms` gets
+                                // its response delayed by that many milliseconds if it is the
+                                // first recorded side effect; the event is recorded on arrival
+                                // either way. This lets a guest keep a durable HTTP send in
+                                // flight (dispatched but not completed) while it crashes,
+                                // while a repeated send on retry gets an immediate response.
+                                if is_first
+                                    && let Some(delay_ms) = headers
+                                        .get("x-test-first-response-delay-ms")
+                                        .and_then(|value| value.to_str().ok())
+                                        .and_then(|value| value.parse::<u64>().ok())
+                                {
+                                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                                }
+                                "OK"
+                            },
+                        ),
                     );
 
                 axum::serve(listener, route).await.unwrap();

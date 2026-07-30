@@ -21,19 +21,23 @@ use crate::model::agent::AgentTypeName;
 use crate::model::card::ScopeCard;
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
-use crate::model::oplog::PayloadId;
 use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, PermissionCardRevokeError, SecretRevealAudit,
-    SecretRevealError, SerializableDateTime, SerializableFileTimes, SerializableSocketError,
-    SerializableWebsocketError, SerializableWebsocketMessage,
+    SecretRevealError, SerializableDateTime, SerializableFileTimes, SerializableP3FileSystemError,
+    SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3UdpDatagram,
+    SerializableSocketError, SerializableWebsocketError, SerializableWebsocketMessage,
 };
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
     SerializableHttpErrorCode, SerializableHttpMethod, SerializableHttpResponse,
-    SerializableInvokeResult, SerializableIpAddresses, SerializableRdbmsError,
+    SerializableInvokeResult, SerializableIpAddresses, SerializableP3HttpBodyChunk,
+    SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
+    SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestBodyFrame,
+    SerializableP3IpNameLookupError, SerializableP3TcpChunk, SerializableRdbmsError,
     SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleId,
     SerializableStreamError,
 };
+use crate::model::oplog::{CardInstallFailure, PayloadId};
 use crate::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryPolicy};
 use crate::model::worker::RevertWorkerTarget;
 use crate::model::{
@@ -125,10 +129,6 @@ oplog_payload! {
             path: Vec<String>,
             expected_type: SchemaGraph
         },
-        SecretReveal {
-            secret_id: Uuid,
-            expected_type: SchemaGraph
-        },
         GolemAgentGetAgentType {
             agent_type_name: AgentTypeName
         },
@@ -199,6 +199,9 @@ oplog_payload! {
         SocketsResolveName {
             name: String
         },
+        P3SocketsResolveName {
+            name: String
+        },
         WebsocketConnect {
             url: String,
             headers: Option<Vec<(String, String)>>,
@@ -249,6 +252,42 @@ oplog_payload! {
         GolemRpcCreate {
             remote_agent_id: AgentId
         },
+        KVCacheKey {
+            key: String
+        },
+        KVCacheKeyValueAndTtl {
+            key: String,
+            length: usize,
+            ttl_ms: Option<u32>
+        },
+        KVCacheKeyAndTtl {
+            key: String,
+            ttl_ms: Option<u32>
+        },
+        MonotonicClockTimestamp {
+            nanos: u64
+        },
+        P3SocketsUdpSend {
+            data: Vec<u8>,
+            remote_address: Option<SerializableP3IpSocketAddress>
+        },
+        P3HttpClientSend {
+            request: SerializableP3HttpClientSend
+        },
+        /// Payload of a `HostStreamFrame` hint oplog entry recording one frame of a
+        /// P3 HTTP outgoing request body. Not a host-call request: these frames are
+        /// persisted as standalone hint entries under the send's `Start`, never as a
+        /// `Start`/`End` payload pair.
+        P3HttpClientRequestBodyFrame {
+            frame: SerializableP3HttpRequestBodyFrame
+        },
+        GolemApiCard {
+            card_id: Uuid
+        },
+        SecretReveal {
+            secret_id: Uuid,
+            expected_type: SchemaGraph
+        },
     }
 }
 
@@ -286,13 +325,6 @@ oplog_payload! {
         },
         GolemAgentGetConfigValue {
             result: SchemaValue,
-        },
-        SecretRevealed {
-            secret_id: Uuid,
-            pinned_revision: u64,
-            resolved_at: SerializableDateTime,
-            result: Result<(), SecretRevealError>,
-            audit: SecretRevealAudit,
         },
         GolemAgentWebhookUrl {
             result: Result<String, String>
@@ -397,8 +429,12 @@ oplog_payload! {
             lo: u64,
             hi: u64
         },
+        P3MonotonicClockUnit {},
         SocketsResolveName {
             result: Result<SerializableIpAddresses, SerializableSocketError>
+        },
+        P3SocketsResolveName {
+            result: Result<SerializableIpAddresses, SerializableP3IpNameLookupError>
         },
         WebsocketConnectResponse {
             result: Result<(), SerializableWebsocketError>,
@@ -475,6 +511,58 @@ oplog_payload! {
         GolemRpcCreate {
             target_fingerprint: AgentFingerprint,
             target_environment_id: EnvironmentId
+        },
+        P3KeyvalueIncomingValueStream {
+            contents: Vec<u8>
+        },
+        P3BlobstoreIncomingValueStream {
+            contents: Vec<u8>
+        },
+        P3SocketsUdpSend {
+            result: Result<(), SerializableP3SocketErrorCode>
+        },
+        P3SocketsUdpReceive {
+            result: Result<SerializableP3UdpDatagram, SerializableP3SocketErrorCode>
+        },
+        P3FileSystemStat {
+            result: Result<SerializableFileTimes, SerializableP3FileSystemError>,
+        },
+        P3HttpClientSendResult {
+            result: SerializableP3HttpClientSendResult
+        },
+        P3HttpClientConsumeBodyResult {
+            result: SerializableP3HttpConsumeBodyResult
+        },
+        P3HttpClientConsumeBodyChunk {
+            chunk: SerializableP3HttpBodyChunk
+        },
+        P3SocketsTcpSend {
+            result: Result<(), SerializableP3SocketErrorCode>
+        },
+        P3SocketsTcpReceive {
+            result: Result<(), SerializableP3SocketErrorCode>
+        },
+        P3SocketsTcpReceiveChunk {
+            chunk: SerializableP3TcpChunk
+        },
+        P3SocketsTcpAcquire {
+            result: Result<(), SerializableP3SocketErrorCode>
+        },
+        P3HttpClientRequestBodyTransmission {
+            result: Result<(), SerializableHttpErrorCode>
+        },
+        SecretRevealed {
+            secret_id: Uuid,
+            pinned_revision: u64,
+            resolved_at: SerializableDateTime,
+            result: Result<(), SecretRevealError>,
+            audit: SecretRevealAudit,
+        },
+        GolemApiCard {
+            result: Result<Uuid, String>
+        },
+        GolemApiInstallCard {
+            result: Result<(), CardInstallFailure>,
         }
     }
 }
@@ -557,6 +645,7 @@ pub mod host_functions {
         (MonotonicClockNow => "monotonic_clock", "now", NoInput, MonotonicClockTimestamp),
         (MonotonicClockResolution => "monotonic_clock", "resolution", NoInput, MonotonicClockTimestamp),
         (MonotonicClockSubscribeDuration => "monotonic_clock", "subscribe_duration", MonotonicClockDuration, MonotonicClockTimestamp),
+        (P3MonotonicClockWaitFor => "clocks::monotonic-clock", "wait-for", MonotonicClockDuration, P3MonotonicClockUnit),
         (BlobstoreBlobstoreCreateContainer => "blobstore::blobstore", "create_container", BlobStoreContainer, BlobStoreTimestamp),
         (BlobstoreBlobstoreGetContainer => "blobstore::blobstore", "get_container", BlobStoreContainer, BlobStoreOptionalTimestamp),
         (BlobstoreBlobstoreDeleteContainer => "blobstore::blobstore", "delete_container", BlobStoreContainer, BlobStoreUnit),
@@ -574,11 +663,11 @@ pub mod host_functions {
         (FilesystemTypesDescriptorStat => "filesystem::types::descriptor", "stat", FileSystemPath, FileSystemStat),
         (FilesystemTypesDescriptorStatAt => "filesystem::types::descriptor", "stat_at", FileSystemPath, FileSystemStat),
         (SocketsIpNameLookupResolveAddresses => "sockets::ip_name_lookup", "resolve_addresses", SocketsResolveName, SocketsResolveName),
+        (P3SocketsIpNameLookupResolveAddresses => "sockets::ip-name-lookup", "resolve-addresses", P3SocketsResolveName, P3SocketsResolveName),
         (GolemAgentGetAllAgentTypes => "golem::agent", "get_all_agent_types", NoInput, GolemAgentAgentTypes),
         (GolemAgentGetAgentType => "golem::agent", "get_agent_type", GolemAgentGetAgentType, GolemAgentAgentType),
         (GolemAgentCreateWebhook => "golem::agent", "create_webhook", GolemApiPromiseId, GolemAgentWebhookUrl),
         (GolemAgentGetConfigValue => "golem::agent", "get_config_value", GolemAgentGetConfigValue, GolemAgentGetConfigValue),
-        (GolemSecretsReveal => "golem::secrets::reveal", "reveal", SecretReveal, SecretRevealed),
         (GolemApiCreatePromise => "golem::api", "create_promise", NoInput, GolemApiPromiseId),
         (GolemApiCompletePromise => "golem::api", "complete_promise", GolemApiPromiseId, GolemApiPromiseCompletion),
         (GolemApiGenerateIdempotencyKey => "golem::api", "generate_idempotency-key", NoInput, GolemApiIdempotencyKey),
@@ -607,6 +696,41 @@ pub mod host_functions {
         (GolemRpcWasmRpcNew => "golem::rpc::wasm-rpc", "new", GolemRpcCreate, GolemRpcCreate),
         (GolemPermissionsInstallChildPersist => "golem::permissions::wallet", "persist-installed-child-card", PermissionCardDerive, PermissionCardDerived),
         (GolemPermissionsInstallTransfer => "golem::permissions::wallet", "install-card-transfer", PermissionCardTransfer, PermissionCardTransferComplete),
+        (P3KeyvalueCacheGet => "keyvalue::cache", "get", KVCacheKey, KVGet),
+        (P3KeyvalueCacheExists => "keyvalue::cache", "exists", KVCacheKey, KVDelete),
+        (P3KeyvalueCacheSet => "keyvalue::cache", "set", KVCacheKeyValueAndTtl, KVUnit),
+        (P3KeyvalueCacheGetOrSet => "keyvalue::cache", "get-or-set", KVCacheKey, KVGet),
+        (P3KeyvalueCacheDelete => "keyvalue::cache", "delete", KVCacheKey, KVUnit),
+        (P3KeyvalueCacheVacancyFill => "keyvalue::cache::vacancy", "vacancy-fill", KVCacheKeyAndTtl, KVUnit),
+        (P3KeyvalueCacheVacancyDrop => "keyvalue::cache::vacancy", "drop", KVCacheKey, KVUnit),
+        (P3KeyvalueTypesIncomingValueConsumeAsync => "keyvalue::types::incoming_value", "incoming_value_consume_async", NoInput, P3KeyvalueIncomingValueStream),
+        (P3BlobstoreTypesIncomingValueConsumeAsync => "blobstore::types::incoming_value", "incoming_value_consume_async", NoInput, P3BlobstoreIncomingValueStream),
+        (P3SystemClockNow => "clocks::system-clock", "now", NoInput, WallClock),
+        (P3SystemClockGetResolution => "clocks::system-clock", "get-resolution", NoInput, MonotonicClockTimestamp),
+        (P3MonotonicClockNow => "clocks::monotonic-clock", "now", NoInput, MonotonicClockTimestamp),
+        (P3MonotonicClockGetResolution => "clocks::monotonic-clock", "get-resolution", NoInput, MonotonicClockTimestamp),
+        (P3MonotonicClockWaitUntil => "clocks::monotonic-clock", "wait-until", MonotonicClockTimestamp, P3MonotonicClockUnit),
+        (P3RandomRandomGetRandomBytes => "random::random", "get-random-bytes", RandomBytes, RandomBytes),
+        (P3RandomRandomGetRandomU64 => "random::random", "get-random-u64", NoInput, RandomU64),
+        (P3RandomInsecureGetInsecureRandomBytes => "random::insecure", "get-insecure-random-bytes", RandomBytes, RandomBytes),
+        (P3RandomInsecureGetInsecureRandomU64 => "random::insecure", "get-insecure-random-u64", NoInput, RandomU64),
+        (P3RandomInsecureSeedGetInsecureSeed => "random::insecure-seed", "get-insecure-seed", NoInput, RandomSeed),
+        (P3FilesystemTypesDescriptorStat => "filesystem::types::descriptor", "stat-async", FileSystemPath, P3FileSystemStat),
+        (P3FilesystemTypesDescriptorStatAt => "filesystem::types::descriptor", "stat-at", FileSystemPath, P3FileSystemStat),
+        (P3SocketsTypesTcpSocketSend => "sockets::types::tcp-socket", "send", NoInput, P3SocketsTcpSend),
+        (P3SocketsTypesTcpSocketReceive => "sockets::types::tcp-socket", "receive", NoInput, P3SocketsTcpReceive),
+        (P3SocketsTypesTcpSocketReceiveChunk => "sockets::types::tcp-socket", "receive-chunk", NoInput, P3SocketsTcpReceiveChunk),
+        (P3SocketsTypesTcpSocketSendAcquire => "sockets::types::tcp-socket", "send-acquire", NoInput, P3SocketsTcpAcquire),
+        (P3SocketsTypesTcpSocketReceiveAcquire => "sockets::types::tcp-socket", "receive-acquire", NoInput, P3SocketsTcpAcquire),
+        (P3SocketsTypesUdpSocketSend => "sockets::types::udp-socket", "send", P3SocketsUdpSend, P3SocketsUdpSend),
+        (P3SocketsTypesUdpSocketReceive => "sockets::types::udp-socket", "receive", NoInput, P3SocketsUdpReceive),
+        (P3HttpClientSend => "http::client", "send", P3HttpClientSend, P3HttpClientSendResult),
+        (P3HttpClientConsumeBody => "http::types::response", "consume-body", NoInput, P3HttpClientConsumeBodyResult),
+        (P3HttpClientConsumeBodyChunk => "http::types::response", "consume-body-chunk", NoInput, P3HttpClientConsumeBodyChunk),
+        (P3HttpClientRequestBodyTransmission => "http::types::request", "body-transmission", NoInput, P3HttpClientRequestBodyTransmission),
+        (GolemSecretsReveal => "golem::secrets::reveal", "reveal", SecretReveal, SecretRevealed),
+        (GolemApiDeriveCard => "golem::api", "derive-card", GolemApiCard, GolemApiCard),
+        (GolemApiInstallCard => "golem::api", "install-card", GolemApiCard, GolemApiInstallCard),
         (FilesystemInputStreamRead => "filesystem::input_stream", "read", NoInput, StreamSkip),
         (FilesystemInputStreamSkip => "filesystem::input_stream", "skip", NoInput, StreamSkip),
         (FilesystemOutputStreamCheckWrite => "filesystem::output_stream", "check_write", NoInput, StreamCheckWrite)

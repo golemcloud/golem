@@ -12065,6 +12065,13 @@ components:
       - entries
       - firstIndexInChunk
       - lastIndex
+    HostStreamKind:
+      description: |-
+        Identifies which host-owned stream a `HostStreamFrame` oplog entry belongs
+        to. The kind determines how the entry's payload is interpreted.
+      type: string
+      enum:
+      - P3HttpRequestBody
     InterruptResponse:
       title: InterruptResponse
       type: object
@@ -12825,6 +12832,8 @@ components:
           CardTransferred: '#/components/schemas/PublicOplogEntry_r#CardTransferredParams'
           CardRevokedCascade: '#/components/schemas/PublicOplogEntry_r#CardRevokedCascadeParams'
           CardTransferConfirmed: '#/components/schemas/PublicOplogEntry_r#CardTransferConfirmedParams'
+          HostStreamFrame: '#/components/schemas/PublicOplogEntry_r#HostStreamFrameParams'
+          CompletionDiscarded: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
@@ -12878,6 +12887,8 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardTransferredParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardRevokedCascadeParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardTransferConfirmedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#HostStreamFrameParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
     PublicOplogEntryWithIndex:
       title: PublicOplogEntryWithIndex
       type: object
@@ -13118,6 +13129,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#CommittedRemoteTransactionParams'
+    PublicOplogEntry_r#CompletionDiscardedParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CompletionDiscarded
+            type: string
+            enum:
+            - CompletionDiscarded
+        required:
+        - type
+      - $ref: '#/components/schemas/r#CompletionDiscardedParams'
     PublicOplogEntry_r#CreateParams:
       allOf:
       - type: object
@@ -13262,6 +13285,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#GrowMemoryParams'
+    PublicOplogEntry_r#HostStreamFrameParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: HostStreamFrame
+            type: string
+            enum:
+            - HostStreamFrame
+        required:
+        - type
+      - $ref: '#/components/schemas/r#HostStreamFrameParams'
     PublicOplogEntry_r#InterruptedParams:
       allOf:
       - type: object
@@ -16033,6 +16068,19 @@ components:
       required:
       - timestamp
       - beginIndex
+    r#CompletionDiscardedParams:
+      title: r#CompletionDiscardedParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        startIndex:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - startIndex
     r#CreateParams:
       title: r#CreateParams
       type: object
@@ -16256,6 +16304,25 @@ components:
       required:
       - timestamp
       - delta
+    r#HostStreamFrameParams:
+      title: r#HostStreamFrameParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        parentStartIndex:
+          type: integer
+          format: uint64
+        kind:
+          $ref: '#/components/schemas/HostStreamKind'
+        payload:
+          $ref: '#/components/schemas/TypedSchemaValue'
+      required:
+      - timestamp
+      - parentStartIndex
+      - kind
+      - payload
     r#InterruptedParams:
       title: r#InterruptedParams
       type: object

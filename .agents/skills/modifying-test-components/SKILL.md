@@ -38,11 +38,15 @@ If no `AGENTS.md` exists, **stop** — you cannot rebuild this component.
 
 Each component's `AGENTS.md` contains specific build instructions. Follow them exactly.
 
-**Important:** When running `golem build` (or `../../target/debug/golem build`) for test components, always pass `--yes` to automatically confirm dependency/configuration updates without interactive prompts. For example:
+**Important:** When running `golem build` (or `../../target/debug/golem build`) for test components, always pass `--yes` to automatically confirm dependency/configuration updates without interactive prompts.
+
+For Rust Golem application test components, rebuild with the **release profile** so the `golem-temp/agents/*_release.wasm` artifact used by tests is regenerated. Use `-P release` and force the build if you need to refresh an existing artifact:
 
 ```shell
-../../target/debug/golem build --yes
+../../target/debug/golem build -P release --force-build --yes
 ```
+
+If a component's `AGENTS.md` gives a different component-specific command, follow it, but make sure Rust test-component rebuilds produce the release artifact unless the task explicitly asks for a debug build.
 
 ## TS SDK Change Rebuild Chain
 
@@ -84,7 +88,7 @@ cargo build -p golem-rust-macro
 
 ### 2. Rebuild affected Rust test components
 
-Follow each component's `AGENTS.md` for specific instructions. Rust test components typically use `cargo component build` with a local path dependency on `golem-rust`.
+Follow each component's `AGENTS.md` for specific instructions. Rust Golem application test components should be rebuilt with `golem build -P release --force-build --yes`; Rust test components that are not Golem applications may use `cargo component build` or another component-specific command with a local path dependency on `golem-rust`.
 
 ## Finding Test Components
 
@@ -102,5 +106,5 @@ To find which test components depend on a specific SDK, check their `Cargo.toml`
 2. If SDK was changed: rebuilt SDK first
 3. If TS SDK was changed: rebuilt agent template WASM before components
 4. Followed the component's specific `AGENTS.md` build instructions
-5. Confirmed the expected `.wasm` artifact now exists under `test-components/`
+5. Confirmed the expected `.wasm` artifact now exists under `test-components/`; for Rust Golem application components, confirm the `golem-temp/agents/*_release.wasm` artifact was updated
 6. Ran the relevant tests after the rebuild (`cargo make worker-executor-tests`, `cargo make integration-tests`, or `cargo make cli-integration-tests`)

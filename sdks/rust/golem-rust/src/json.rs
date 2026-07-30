@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::await_promise;
-use crate::{PromiseId, complete_promise, get_promise};
+use crate::{PromiseId, complete_promise};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -27,9 +27,7 @@ use serde::de::DeserializeOwned;
 pub fn blocking_await_promise_json<T: DeserializeOwned>(
     promise_id: &PromiseId,
 ) -> Result<T, serde_json::Error> {
-    let promise = get_promise(promise_id);
-    promise.subscribe().block();
-    let bytes = promise.get().unwrap();
+    let bytes = crate::blocking_await_promise(promise_id);
     serde_json::from_slice(&bytes)
 }
 

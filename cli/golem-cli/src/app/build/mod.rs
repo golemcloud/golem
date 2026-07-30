@@ -435,11 +435,8 @@ impl BridgeSdkTargetKey {
     fn from_bridge_target(ctx: &BuildContext<'_>, target: &BridgeSdkTarget) -> Self {
         Self {
             component_name: target.component_name.clone(),
-            target_name: target.kind.display_name().to_string(),
-            kind: match &target.kind {
-                crate::model::app::BridgeSdkTargetKind::Agent(_) => "agent",
-                crate::model::app::BridgeSdkTargetKind::Tool(_) => "tool",
-            },
+            target_name: target.subject.display_name().to_string(),
+            kind: target.subject.kind().as_str(),
             target_language: target.target_language,
             bridge_mode: target.bridge_mode,
             output_dir: crate::fs::absolute_lexical_path(&target.output_dir).unwrap_or_else(|_| {
@@ -1004,7 +1001,7 @@ fn validate_exact_targets_against_claims(
                 log_error(format!(
                     "Bridge SDK target output directory {} for {} may overlap unresolved {} at {}",
                     target_output_dir.log_color_highlight(),
-                    target.kind.display_name(),
+                    target.subject.display_name(),
                     claim.description,
                     claim_base_dir.log_color_highlight(),
                 ));
@@ -1077,7 +1074,7 @@ fn validate_manifest_matchers_resolved(
             for target in exact_targets {
                 if target.target_language == target_language
                     && target.bridge_mode == bridge_mode
-                    && let Some(agent_type) = target.kind.as_agent()
+                    && let Some(agent_type) = target.subject.as_agent()
                 {
                     agent_matchers.remove(agent_type.type_name.as_str());
                 }
@@ -1122,9 +1119,12 @@ fn validate_manifest_matchers_resolved(
             for target in exact_targets {
                 if target.target_language == target_language
                     && target.bridge_mode == bridge_mode
-                    && matches!(target.kind, crate::model::app::BridgeSdkTargetKind::Tool(_))
+                    && matches!(
+                        target.subject,
+                        crate::model::app::BridgeSdkTargetSubject::Tool(_)
+                    )
                 {
-                    tool_matchers.remove(target.kind.display_name());
+                    tool_matchers.remove(target.subject.display_name());
                 }
             }
 
@@ -1273,7 +1273,7 @@ fn has_explicit_manifest_guest_bridge_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::app::BridgeSdkTargetKind;
+    use crate::model::app::BridgeSdkTargetSubject;
     use test_r::test;
 
     #[test]
@@ -1282,7 +1282,7 @@ mod tests {
             std::env::temp_dir().join(format!("golem-cli-build-plan-{}", std::process::id()));
         let dependency_guest_target = BridgeSdkTarget {
             component_name: ComponentName::try_from("app:producer").unwrap(),
-            kind: BridgeSdkTargetKind::Agent(bar_agent_type()),
+            subject: BridgeSdkTargetSubject::Agent(bar_agent_type()),
             target_language: GuestLanguage::Rust,
             bridge_mode: BridgeMode::Guest,
             output_dir: base_dir.join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client"),

@@ -51,6 +51,10 @@ impl TsWriter {
             .map_err(|e| anyhow!("Failed to write TypeScript file: {e}"))
     }
 
+    pub(crate) fn finish_string(self) -> String {
+        self.content
+    }
+
     pub fn write_doc(&mut self, doc: &str) {
         let doc = doc.trim_end();
         if doc.is_empty() {

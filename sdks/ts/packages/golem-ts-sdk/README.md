@@ -1,23 +1,31 @@
 # Golem TypeScript SDK
 
 ```ts
-import { BaseAgent, agent, prompt, description } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
 
-@agent()
-class CounterAgent extends BaseAgent {
-  private readonly name: string;
-  private value: number = 0;
+const counter = defineAgent({
+  name: 'Counter',
+  id: { name: z.string() },
+  methods: {
+    increment: method({ input: {}, returns: z.number() }),
+  },
+});
 
-  constructor(name: string) {
-    super();
-    this.name = name;
-  }
-
-  @prompt('Increase the count by one')
-  @description('Increases the count by one and returns the new value')
-  async increment(): Promise<number> {
-    this.value += 1;
-    return this.value;
-  }
-}
+export const Counter = counter.implement({
+  init() {
+    return { value: 0 };
+  },
+  methods: {
+    async increment() {
+      return ++this.value;
+    },
+  },
+});
 ```
+
+The SDK uses Standard Schema-compatible schemas to define agent identities,
+method inputs, and method results.
+
+From `sdks/ts`, run `pnpm build` to build all TypeScript packages and
+`pnpm test` to run their tests.

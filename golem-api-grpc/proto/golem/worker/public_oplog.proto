@@ -72,12 +72,20 @@ message OplogEntry {
     CardInstalledParameters CardInstalled = 49;
     CardInstallFailedParameters CardInstallFailed = 50;
     CardExpiredParameters CardExpired = 51;
-    CardDerivedParameters CardDerived = 52;
-    CardTransferStartedParameters CardTransferStarted = 53;
-    CardTransferredParameters CardTransferred = 54;
-    CardRevokedCascadeParameters CardRevokedCascade = 55;
-    CardTransferConfirmedParameters CardTransferConfirmed = 56;
+    HostStreamFrameParameters HostStreamFrame = 52;
+    CompletionDiscardedParameters CompletionDiscarded = 53;
+    CardDerivedParameters CardDerived = 54;
+    CardTransferStartedParameters CardTransferStarted = 55;
+    CardTransferredParameters CardTransferred = 56;
+    CardRevokedCascadeParameters CardRevokedCascade = 57;
+    CardTransferConfirmedParameters CardTransferConfirmed = 58;
   }
+}
+
+// Identifies which host-owned stream a HostStreamFrame oplog entry belongs to.
+enum HostStreamKind {
+  // A frame of the outgoing request body of a P3 HTTP client send.
+  HOST_STREAM_KIND_P3_HTTP_REQUEST_BODY = 0;
 }
 
 message WrappedFunctionType {
@@ -143,6 +151,11 @@ message CancelledParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 start_index = 2;
   optional golem.schema.TypedSchemaValue partial = 3;
+}
+
+message CompletionDiscardedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 start_index = 2;
 }
 
 message AgentInvocationStartedParameters {
@@ -411,6 +424,15 @@ message CardTransferConfirmedParameters {
   golem.common.UUID source_card_id = 3;
   golem.common.UUID installed_card_id = 4;
   CardHolder target_holder = 5;
+}
+
+// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
+// attached to the durable host call identified by its Start entry's index.
+message HostStreamFrameParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 parent_start_index = 2;
+  HostStreamKind kind = 3;
+  golem.schema.TypedSchemaValue payload = 4;
 }
 
 message EndAtomicRegionParameters {
