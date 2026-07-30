@@ -268,7 +268,6 @@ impl TracingConfig {
             host: host.to_string(),
             port,
             service_name: service_name.to_string(),
-            ..OtlpConfig::default()
         };
         self
     }
@@ -337,46 +336,6 @@ pub struct OtlpConfig {
     pub host: String,
     pub port: u16,
     pub service_name: String,
-    /// Targets that emit events far more often than once per operation - the WASM
-    /// host-call implementations (one or more events per host call, including
-    /// guest-controlled log output) and the RDBMS layer (per query and per row as
-    /// the guest pulls results). Every event they emit records onto the enclosing
-    /// invocation span, which stays open for as long as the invocation runs.
-    ///
-    /// Matched as target prefixes.
-    #[serde(default = "default_high_volume_event_targets")]
-    pub high_volume_event_targets: Vec<String>,
-    /// Level at or above which events from `high_volume_event_targets` are exported
-    /// over OTLP. `"off"` by default, so those targets contribute spans but no
-    /// events and an open span cannot accumulate them without bound.
-    ///
-    /// Raise it (`"info"`, `"debug"`, `"trace"`) to trace a specific bottleneck such
-    /// as a slow query, accepting that a long-running invocation then holds every
-    /// event its span collects. Unparseable values fall back to `"off"`. Console and
-    /// file output is unaffected either way.
-    #[serde(default = "default_high_volume_event_level")]
-    pub high_volume_event_level: String,
-}
-
-fn default_high_volume_event_targets() -> Vec<String> {
-    vec![
-        "golem_worker_executor::durable_host".to_string(),
-        "golem_worker_executor::services::rdbms".to_string(),
-    ]
-}
-
-fn default_high_volume_event_level() -> String {
-    "off".to_string()
-}
-
-impl OtlpConfig {
-    /// Parsed [`Self::high_volume_event_level`], falling back to `OFF` so a typo
-    /// cannot silently remove the bound on span event accumulation.
-    pub fn parsed_high_volume_event_level(&self) -> tracing_subscriber::filter::LevelFilter {
-        self.high_volume_event_level
-            .parse()
-            .unwrap_or(tracing_subscriber::filter::LevelFilter::OFF)
-    }
 }
 
 impl SafeDisplay for OtlpConfig {
@@ -388,16 +347,6 @@ impl SafeDisplay for OtlpConfig {
         let _ = writeln!(&mut result, "host: {}", self.host);
         let _ = writeln!(&mut result, "port: {}", self.port);
         let _ = writeln!(&mut result, "service_name: {}", self.service_name);
-        let _ = writeln!(
-            &mut result,
-            "high volume event targets: {}",
-            self.high_volume_event_targets.join(", ")
-        );
-        let _ = writeln!(
-            &mut result,
-            "high volume event level: {}",
-            self.high_volume_event_level
-        );
 
         result
     }
@@ -410,8 +359,6 @@ impl Default for OtlpConfig {
             host: "localhost".to_string(),
             port: 4318,
             service_name: "golem".to_string(),
-            high_volume_event_targets: default_high_volume_event_targets(),
-            high_volume_event_level: default_high_volume_event_level(),
         }
     }
 }
@@ -455,6 +402,10 @@ pub mod directive {
         format!("{target}=error").parse().unwrap()
     }
 
+    pub fn off(target: &str) -> Directive {
+        format!("{target}=off").parse().unwrap()
+    }
+
     pub fn default_deps() -> Vec<Directive> {
         vec![
             warn("cranelift_codegen"),
@@ -478,121 +429,59 @@ pub mod directive {
     /// created by `tonic-tracing-opentelemetry` (which uses TRACE level)
     /// are exported and can propagate trace context across services.
     ///
+    /// These targets emit events far more often than once per operation - the WASM
+    /// host-call implementations (one or more per host call, including
+    /// guest-controlled log output) and the RDBMS layer (per query and per row as
+    /// the guest pulls results) - and every one of them records onto the enclosing
+    /// invocation span, which stays open for as long as the invocation runs.
+    ///
+    /// `tracing-opentelemetry` holds an event for as long as its span is open, and
+    /// the SDK applies `max_events_per_span` only at span close, keeping the *first*
+    /// N. So a long invocation accumulates every event it emits and exports almost
+    /// none of them. Silencing these targets for the OTLP layer is what keeps that
+    /// bounded; console and file output still log them.
+    ///
+    /// This is a default, not a rule: a `GOLEM_OTLP_LOG` directive naming one of
+    /// these targets wins over it, which is how you get RDBMS or host-call detail
+    /// into a trace when chasing a specific bottleneck.
+    fn otlp_silenced_targets() -> Vec<Directive> {
+        vec![
+            off("golem_worker_executor::durable_host"),
+            off("golem_worker_executor::services::rdbms"),
+        ]
+    }
+
     pub fn otlp_deps() -> Vec<Directive> {
         let mut deps = default_deps();
         deps.push("otel::tracing=trace".parse().unwrap());
+        deps.extend(otlp_silenced_targets());
         deps
+    }
+
+    /// The full directive list for the OTLP layer, as an `EnvFilter` spec.
+    ///
+    /// `user` is the raw `GOLEM_OTLP_LOG` value. It is appended last because
+    /// `EnvFilter` lets a later directive replace an earlier one for the same
+    /// target, so every default here stays overridable per target.
+    pub fn otlp_spec(user: Option<&str>) -> String {
+        let mut spec = default::info().to_string();
+        for directive in otlp_deps() {
+            spec.push(',');
+            spec.push_str(&directive.to_string());
+        }
+        if let Some(user) = user.map(str::trim).filter(|user| !user.is_empty()) {
+            spec.push(',');
+            spec.push_str(user);
+        }
+        spec
     }
 }
 
 pub mod filter {
-    use tracing::{Event, Metadata, span, subscriber::Interest};
     use tracing_subscriber::Registry;
-    use tracing_subscriber::filter::LevelFilter;
-    use tracing_subscriber::layer::{Context, Filter};
+    use tracing_subscriber::layer::Filter;
 
     pub type Boxed = Box<dyn Filter<Registry> + 'static + Send + Sync>;
-
-    /// Wraps a filter so that events from `targets` are only exported when they are
-    /// at or above `level`, independently of what the inner filter allows.
-    ///
-    /// This exists because an event recorded on a span is held by
-    /// `tracing-opentelemetry` for as long as that span stays open, and the SDK
-    /// applies `max_events_per_span` only at span close - keeping the *first* N and
-    /// discarding the rest. A span that is short-lived by design can still be open
-    /// for a long time (an invocation of an agent that runs for hours), so a
-    /// high-frequency event source attached to it grows without bound and nothing
-    /// past the first N is ever exported anyway. The volume is driven by how much
-    /// work the guest does rather than by how severe each event is, which is why
-    /// these targets need a threshold of their own instead of inheriting the
-    /// layer's.
-    ///
-    /// With `level` at `OFF` - the default - such targets contribute spans but no
-    /// events. Raising it trades the bound for detail, which is worth it when
-    /// tracing a specific bottleneck. Only the OTLP layer is affected; console and
-    /// file layers keep logging these events at whatever level their own filters
-    /// allow.
-    pub struct HighVolumeEvents {
-        inner: Boxed,
-        targets: Vec<String>,
-        level: LevelFilter,
-    }
-
-    impl HighVolumeEvents {
-        /// Returns `inner` unchanged when the wrapper could not reject anything, so
-        /// the common fully-permissive configuration costs nothing.
-        pub fn wrap(inner: Boxed, targets: Vec<String>, level: LevelFilter) -> Boxed {
-            if targets.is_empty() || level == LevelFilter::TRACE {
-                inner
-            } else {
-                Box::new(Self {
-                    inner,
-                    targets,
-                    level,
-                })
-            }
-        }
-
-        fn is_suppressed(&self, meta: &Metadata<'_>) -> bool {
-            meta.is_event()
-                && LevelFilter::from_level(*meta.level()) > self.level
-                && self
-                    .targets
-                    .iter()
-                    .any(|target| meta.target().starts_with(target.as_str()))
-        }
-    }
-
-    impl Filter<Registry> for HighVolumeEvents {
-        fn enabled(&self, meta: &Metadata<'_>, cx: &Context<'_, Registry>) -> bool {
-            !self.is_suppressed(meta) && self.inner.enabled(meta, cx)
-        }
-
-        fn callsite_enabled(&self, meta: &'static Metadata<'static>) -> Interest {
-            if self.is_suppressed(meta) {
-                // Target and level are both fixed per callsite, so this decision
-                // never has to be re-evaluated.
-                Interest::never()
-            } else {
-                self.inner.callsite_enabled(meta)
-            }
-        }
-
-        fn event_enabled(&self, event: &Event<'_>, cx: &Context<'_, Registry>) -> bool {
-            !self.is_suppressed(event.metadata()) && self.inner.event_enabled(event, cx)
-        }
-
-        fn max_level_hint(&self) -> Option<LevelFilter> {
-            self.inner.max_level_hint()
-        }
-
-        // The inner filter may track per-span state (`EnvFilter` does, for
-        // field-based directives), so every lifecycle callback has to reach it.
-        fn on_new_span(
-            &self,
-            attrs: &span::Attributes<'_>,
-            id: &span::Id,
-            cx: Context<'_, Registry>,
-        ) {
-            self.inner.on_new_span(attrs, id, cx)
-        }
-
-        fn on_record(&self, id: &span::Id, values: &span::Record<'_>, cx: Context<'_, Registry>) {
-            self.inner.on_record(id, values, cx)
-        }
-
-        fn on_enter(&self, id: &span::Id, cx: Context<'_, Registry>) {
-            self.inner.on_enter(id, cx)
-        }
-
-        fn on_exit(&self, id: &span::Id, cx: Context<'_, Registry>) {
-            self.inner.on_exit(id, cx)
-        }
-
-        fn on_close(&self, id: span::Id, cx: Context<'_, Registry>) {
-            self.inner.on_close(id, cx)
-        }
-    }
 
     pub mod boxed {
         use tracing_subscriber::EnvFilter;
@@ -645,22 +534,14 @@ pub mod filter {
         /// debug, so raising the level deepens a trace rather than changing what it
         /// is about.
         ///
-        /// Unlike the other filters this does **not** read `RUST_LOG`.
-        /// `RUST_LOG` controls console verbosity and is often set to `warn`
-        /// in benchmark/CI runs, which would silently suppress all
-        /// INFO spans from OTLP export. Instead the OTLP layer has its own
-        /// default and is overridden via `GOLEM_OTLP_LOG`.
+        /// Unlike the other filters this reads `GOLEM_OTLP_LOG` rather than
+        /// `RUST_LOG`, because `RUST_LOG` controls console verbosity and is often set
+        /// to `warn` in benchmark and CI runs, which would silently suppress every
+        /// exported span. Its value is applied on top of the defaults in
+        /// [`directive::otlp_spec`], so it can raise or lower any individual target.
         pub fn default_otlp_env() -> Boxed {
-            let mut builder = EnvFilter::builder()
-                .with_default_directive(directive::default::info())
-                .with_env_var("GOLEM_OTLP_LOG")
-                .from_env_lossy();
-
-            for directive in directive::otlp_deps() {
-                builder = builder.add_directive(directive);
-            }
-
-            Box::new(builder)
+            let user = std::env::var("GOLEM_OTLP_LOG").ok();
+            Box::new(EnvFilter::builder().parse_lossy(directive::otlp_spec(user.as_deref())))
         }
     }
 
@@ -744,14 +625,7 @@ where
         let telemetry = tracing_opentelemetry::layer().with_tracer(tracer.clone());
         result = Some((tracer, tracer_provider));
 
-        // Applied here rather than inside the filter each service supplies, so the
-        // bound holds whichever filter that is.
-        let otlp_filter = filter::HighVolumeEvents::wrap(
-            make_filter(Output::Otlp),
-            config.otlp.high_volume_event_targets.clone(),
-            config.otlp.parsed_high_volume_event_level(),
-        );
-        layers.push(telemetry.with_filter(otlp_filter).boxed());
+        layers.push(telemetry.with_filter(make_filter(Output::Otlp)).boxed());
     }
 
     if config.stdout.enabled {
@@ -1103,98 +977,88 @@ pub(crate) mod test {
         }
     }
 
-    /// Tests for [`crate::tracing::filter::HighVolumeEvents`].
-    mod high_volume_events {
+    /// Tests for the OTLP layer's directive set.
+    mod otlp_spec {
         use test_r::test;
         use tracing_subscriber::EnvFilter;
-        use tracing_subscriber::filter::LevelFilter;
 
-        use crate::tracing::OtlpConfig;
-        use crate::tracing::filter::{Boxed, HighVolumeEvents};
+        use crate::tracing::directive::otlp_spec;
         use crate::tracing::test::otel::{exported_spans_filtered, named};
 
-        const HIGH_VOLUME: &str = "golem_worker_executor::durable_host::http";
-        const OTHER: &str = "golem_worker_executor::services::worker";
+        const HOST_CALL: &str = "golem_worker_executor::durable_host::http";
+        const RDBMS: &str = "golem_worker_executor::services::rdbms::postgres";
 
-        fn filter(level: LevelFilter) -> Boxed {
-            HighVolumeEvents::wrap(
-                Box::new(EnvFilter::new("trace")),
-                OtlpConfig::default().high_volume_event_targets,
-                level,
-            )
-        }
-
-        /// The span holding the events is deliberately still open while they are
-        /// emitted, since that is the state in which they accumulate.
-        fn event_count_on_span(level: LevelFilter) -> usize {
-            let spans = exported_spans_filtered(filter(level), || {
+        /// The span is deliberately still open while the events are emitted, since
+        /// that is the state in which they accumulate.
+        fn events_on_span(user: Option<&str>) -> usize {
+            let filter = EnvFilter::builder().parse_lossy(otlp_spec(user));
+            let spans = exported_spans_filtered(Box::new(filter), || {
                 let span = tracing::info_span!("invocation");
                 let _guard = span.enter();
-                tracing::error!(target: HIGH_VOLUME, "host call failed");
-                tracing::info!(target: HIGH_VOLUME, "host call");
-                tracing::debug!(target: HIGH_VOLUME, "host call detail");
+                tracing::error!(target: HOST_CALL, "host call failed");
+                tracing::info!(target: HOST_CALL, "host call");
+                tracing::info!(target: RDBMS, "query");
             });
             named(&spans, "invocation").events.len()
         }
 
         #[test]
-        fn off_by_default_drops_high_volume_events_at_every_level() {
-            assert_eq!(
-                OtlpConfig::default().parsed_high_volume_event_level(),
-                LevelFilter::OFF
-            );
-            assert_eq!(event_count_on_span(LevelFilter::OFF), 0);
+        fn high_volume_targets_contribute_no_events_by_default() {
+            assert_eq!(events_on_span(None), 0);
+        }
+
+        /// The deployed setting, which must not weaken the default.
+        #[test]
+        fn a_bare_level_does_not_re_enable_them() {
+            assert_eq!(events_on_span(Some("info")), 0);
+            assert_eq!(events_on_span(Some("debug")), 0);
         }
 
         #[test]
-        fn raising_the_level_exports_high_volume_events_at_or_above_it() {
-            assert_eq!(event_count_on_span(LevelFilter::ERROR), 1);
-            assert_eq!(event_count_on_span(LevelFilter::INFO), 2);
-            assert_eq!(event_count_on_span(LevelFilter::DEBUG), 3);
+        fn naming_a_target_explicitly_re_enables_it() {
+            assert_eq!(
+                events_on_span(Some("golem_worker_executor::services::rdbms=info")),
+                1
+            );
+            assert_eq!(
+                events_on_span(Some(
+                    "golem_worker_executor::durable_host=info,golem_worker_executor::services::rdbms=info"
+                )),
+                3
+            );
         }
 
         #[test]
         fn events_from_other_targets_are_untouched() {
-            let spans = exported_spans_filtered(filter(LevelFilter::OFF), || {
+            let filter = EnvFilter::builder().parse_lossy(otlp_spec(None));
+            let spans = exported_spans_filtered(Box::new(filter), || {
                 let span = tracing::info_span!("invocation");
                 let _guard = span.enter();
-                tracing::debug!(target: OTHER, "unrelated");
+                tracing::info!(target: "golem_worker_executor::services::worker", "unrelated");
             });
             assert_eq!(named(&spans, "invocation").events.len(), 1);
         }
 
-        /// Suppressing events must not suppress the spans those same modules open,
-        /// which are what the invocation path is traced by.
         #[test]
-        fn spans_from_high_volume_targets_are_still_exported() {
-            let spans = exported_spans_filtered(filter(LevelFilter::OFF), || {
-                let span = tracing::info_span!(target: HIGH_VOLUME, "http_request_retry");
-                let _guard = span.enter();
+        fn the_default_level_is_info() {
+            let filter = EnvFilter::builder().parse_lossy(otlp_spec(None));
+            let spans = exported_spans_filtered(Box::new(filter), || {
+                tracing::info_span!("kept").in_scope(|| {});
+                tracing::debug_span!("dropped").in_scope(|| {});
             });
-            named(&spans, "http_request_retry");
+            named(&spans, "kept");
+            assert!(spans.iter().all(|s| s.name != "dropped"));
         }
 
         #[test]
-        fn an_unparseable_level_falls_back_to_off() {
-            let config = OtlpConfig {
-                high_volume_event_level: "verbose".to_string(),
-                ..OtlpConfig::default()
-            };
-            assert_eq!(config.parsed_high_volume_event_level(), LevelFilter::OFF);
-        }
-
-        #[test]
-        fn wrapping_is_skipped_when_it_could_not_reject_anything() {
-            let inner: Boxed = Box::new(EnvFilter::new("trace"));
-            let wrapped = HighVolumeEvents::wrap(inner, vec![], LevelFilter::OFF);
-            // An empty target list leaves the inner filter in place, so an event on
-            // what would have been a high-volume target still records.
-            let spans = exported_spans_filtered(wrapped, || {
+        fn an_unparseable_user_directive_does_not_discard_the_defaults() {
+            let filter = EnvFilter::builder().parse_lossy(otlp_spec(Some("not a level")));
+            let spans = exported_spans_filtered(Box::new(filter), || {
                 let span = tracing::info_span!("invocation");
                 let _guard = span.enter();
-                tracing::info!(target: HIGH_VOLUME, "host call");
+                tracing::info!(target: HOST_CALL, "host call");
             });
-            assert_eq!(named(&spans, "invocation").events.len(), 1);
+            assert_eq!(named(&spans, "invocation").events.len(), 0);
         }
     }
 
