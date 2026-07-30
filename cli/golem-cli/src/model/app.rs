@@ -3509,11 +3509,7 @@ mod app_builder {
                                 app.source.log_color_highlight()
                             )),
                             None => {
-                                Self::validate_local_server_ports(
-                                    validation,
-                                    local_server,
-                                    &app.source,
-                                );
+                                Self::validate_local_server(validation, local_server, &app.source);
                                 self.local_server =
                                     Some(WithSource::new(app.source.clone(), local_server.clone()));
                             }
@@ -3539,7 +3535,7 @@ mod app_builder {
             );
         }
 
-        fn validate_local_server_ports(
+        fn validate_local_server(
             validation: &mut ValidationBuilder,
             local_server: &app_raw::LocalServer,
             source: &Path,
@@ -3560,6 +3556,19 @@ mod app_builder {
                         "golem server run".log_color_highlight(),
                     ));
                 }
+            }
+
+            if let Some(router_addr) = local_server.router_addr.as_ref()
+                && router_addr.parse::<std::net::Ipv4Addr>().is_err()
+            {
+                validation.add_error(format!(
+                    "{} in {} must be an IPv4 address (e.g. {} or {}), but was {}.",
+                    "localServer.routerAddr".log_color_highlight(),
+                    source.display().to_string().log_color_highlight(),
+                    "0.0.0.0".log_color_highlight(),
+                    "127.0.0.1".log_color_highlight(),
+                    router_addr.log_color_highlight(),
+                ));
             }
 
             validate_port(
@@ -5512,6 +5521,69 @@ mod test {
             "\n{}",
             errors.join("\n\n")
         );
+    }
+
+    #[test]
+    fn local_server_rejects_non_ipv4_router_addr() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            localServer:
+              routerAddr: localhost
+
+            environments:
+              local:
+                server: local
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path)
+                .expect("raw manifest should parse"),
+        ];
+
+        let (app_name_and_envs, warns, errors) =
+            Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(app_name_and_envs.is_none());
+        assert_eq!(errors.len(), 1, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors[0].contains("localServer.routerAddr") && errors[0].contains("localhost"),
+            "\n{}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn local_server_accepts_ipv4_router_addr() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            localServer:
+              routerAddr: 0.0.0.0
+              routerPort: 9881
+
+            environments:
+              local:
+                server: local
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path)
+                .expect("raw manifest should parse"),
+        ];
+
+        let (preload, warns, errors) = Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        let preload = preload.expect("manifest should preload");
+        let local_server = preload.local_server.expect("localServer should be present");
+        assert_eq!(local_server.value.router_addr.as_deref(), Some("0.0.0.0"));
     }
 
     #[test]

@@ -87,7 +87,7 @@ Key concepts:
 - **Agent type**: Declared with `defineAgent({ ... })` and given behaviour with `.implement({ ... })` from `@golemcloud/golem-ts-sdk`
 - **Agent (worker)**: A running instance of an agent type, identified by its `id` record values, with persistent state
 
-The SDK is the **fluent (Standard Schema)** API: method inputs and return values are described with [Standard Schema](https://standardschema.dev/) values. **Zod** is used throughout these examples; **Valibot** and **ArkType** also work (any Standard Schema vendor). There are no classes and no decorators.
+The SDK is schema-driven: method inputs and return values are described with [Standard Schema](https://standardschema.dev/) values. **Zod** is used throughout these examples; **Valibot** and **ArkType** also work (any Standard Schema vendor). There are no classes and no decorators.
 
 ## Agent Fundamentals
 
@@ -111,7 +111,7 @@ Only customize when the *strategy* needs to change — see `golem-retry-policies
 ```
 golem.yaml                     # Golem Application Manifest
 package.json                   # npm dependencies (zod, etc.)
-tsconfig.json                  # moduleResolution: "bundler"; NO experimentalDecorators
+tsconfig.json                  # moduleResolution: "bundler"
 src/
   main.ts                      # Entrypoint: imports each agent module for its side effects
   <agent-name>.ts              # Agent definition (defineAgent) + implementation (.implement)
@@ -294,7 +294,7 @@ Host helpers, importable from `@golemcloud/golem-ts-sdk`:
 
 ## Key Constraints
 
-- The fluent SDK has **no classes and no decorators**. `tsconfig.json` uses `"moduleResolution": "bundler"` and must NOT set `experimentalDecorators` / `emitDecoratorMetadata`.
+- The TypeScript SDK has **no classes and no decorators**. `tsconfig.json` uses `"moduleResolution": "bundler"`.
 - `z.number()` maps to WIT `f64`; use the `s.*` integer markers for sized ints, and `bigint` for 64-bit values.
 - TypeScript enums are unsupported — use `z.enum([...])`.
 - Every agent module must be imported from `src/main.ts`.

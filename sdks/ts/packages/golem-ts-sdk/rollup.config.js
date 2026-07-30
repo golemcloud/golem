@@ -10,7 +10,7 @@ import path from 'path';
 
 // All `golem:*` and `wasi:*` specifiers are host-provided WIT imports (resolved by
 // the wasm runtime), plus `agent-guest`/`node:sqlite`. Externalize them all so the
-// fluent host surfaces (keyvalue/blobstore/websocket/rdbms) aren't bundled.
+// SDK host surfaces (keyvalue/blobstore/websocket/rdbms) aren't bundled.
 const external = (id) =>
   id === 'agent-guest' || id === 'node:sqlite' || id.startsWith('golem:') || id.startsWith('wasi:');
 
@@ -37,11 +37,6 @@ export default defineConfig([
       typescript({
         tsconfig: './tsconfig.json',
         include: ['src/**/*', 'types'],
-        // Transpile-only: the decorator-era files (agentConfig/mapping/typegen) have
-        // pre-existing type errors from the new schema-model that block the build;
-        // they are erased at runtime and unused by fluent agents. Type-checking is
-        // done separately via `tsc --noEmit`.
-        check: false,
         tsconfigOverride: {
           compilerOptions: { declaration: false },
         },
