@@ -62,16 +62,11 @@ use wasmtime::component::Instance;
 
 /// Span for one bounded phase of a worker's lifecycle.
 ///
-/// The invocation loop has no span of its own, because it lives as long as the
-/// worker is resident and a span that stays open that long is never exported and
-/// retains every event recorded inside it (see `RunningWorker::new`). Each phase
-/// span therefore carries the `agent_id` / `agent_type` fields itself, and roots
-/// its own trace with a link back to the worker's startup so the phases of one
-/// worker remain navigable from each other.
+/// The loop itself has no span (see `TraceOrigin`), so each phase span carries the
+/// agent fields itself and links back to the worker's startup, keeping one worker's
+/// phases navigable from each other.
 ///
-/// `$this` must have `owned_agent_id` and `startup_origin` fields and an
-/// `agent_type_label` method, which both `InvocationLoop` and
-/// `InnerInvocationLoop` do.
+/// Requires `owned_agent_id`, `startup_origin` and `agent_type` fields on `$this`.
 macro_rules! agent_phase_span {
     ($this:expr, $name:expr) => {
         related_span!(
@@ -79,16 +74,9 @@ macro_rules! agent_phase_span {
             Level::INFO,
             $name,
             agent_id = %$this.owned_agent_id.agent_id,
-            agent_type = $this.agent_type_label(),
+            agent_type = %$this.agent_type,
         )
     };
-}
-
-fn agent_type_label(parsed_agent_id: &Option<ParsedAgentId>) -> String {
-    parsed_agent_id
-        .as_ref()
-        .map(|id| id.agent_type.to_string())
-        .unwrap_or_else(|| "-".to_string())
 }
 
 /// Context of a running worker's invocation loop
@@ -110,14 +98,11 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub resume_replay_pending: Arc<AtomicBool>,
     /// The worker's startup, captured so each phase span can link back to it.
     pub startup_origin: TraceOrigin,
+    /// Agent type label for span fields, derived once.
+    pub agent_type: String,
 }
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
-    /// Agent type for span fields, or `-` when the agent id could not be parsed.
-    fn agent_type_label(&self) -> String {
-        agent_type_label(&self.parent.parsed_agent_id)
-    }
-
     fn interrupt_decision(kind: InterruptKind) -> RetryDecision {
         match kind {
             InterruptKind::Restart | InterruptKind::Jump => RetryDecision::Immediate,
@@ -185,6 +170,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     concurrent_agent_permit: &mut self.concurrent_agent_permit,
                     resume_replay_pending: self.resume_replay_pending.clone(),
                     startup_origin: self.startup_origin.clone(),
+                    agent_type: self.agent_type.clone(),
                 };
 
                 let result = inner_loop.run().await;
@@ -341,39 +327,37 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
     /// Create the worker instance and publish an event about it
     async fn create_instance(&self) -> Option<(Instance, Mutex<Store<Ctx>>)> {
-        self.create_instance_inner()
-            .instrument(agent_phase_span!(self, "create_instance"))
-            .await
-    }
-
-    async fn create_instance_inner(&self) -> Option<(Instance, Mutex<Store<Ctx>>)> {
-        debug!("Creating the worker instance");
-        match RunningWorker::create_instance(self.parent.clone()).await {
-            Ok((instance, store)) => {
-                self.parent.events().publish(Event::WorkerLoaded {
-                    agent_id: self.owned_agent_id.agent_id(),
-                    result: Ok(()),
-                });
-                Some((instance, store))
-            }
-            Err(err) => {
-                warn!("Failed to start the worker: {err}");
-                self.parent.events().publish(Event::WorkerLoaded {
-                    agent_id: self.owned_agent_id.agent_id(),
-                    result: Err(err.clone()),
-                });
-                self.parent
-                    .stop_internal(
-                        true,
-                        Some(err.clone()),
-                        FinalWorkerState::Unloaded {
-                            startup_failure: Some(err),
-                        },
-                    )
-                    .await;
-                None
+        async {
+            debug!("Creating the worker instance");
+            match RunningWorker::create_instance(self.parent.clone()).await {
+                Ok((instance, store)) => {
+                    self.parent.events().publish(Event::WorkerLoaded {
+                        agent_id: self.owned_agent_id.agent_id(),
+                        result: Ok(()),
+                    });
+                    Some((instance, store))
+                }
+                Err(err) => {
+                    warn!("Failed to start the worker: {err}");
+                    self.parent.events().publish(Event::WorkerLoaded {
+                        agent_id: self.owned_agent_id.agent_id(),
+                        result: Err(err.clone()),
+                    });
+                    self.parent
+                        .stop_internal(
+                            true,
+                            Some(err.clone()),
+                            FinalWorkerState::Unloaded {
+                                startup_failure: Some(err),
+                            },
+                        )
+                        .await;
+                    None
+                }
             }
         }
+        .instrument(agent_phase_span!(self, "create_instance"))
+        .await
     }
 
     fn archive_ephemeral_oplog(&self) {
@@ -391,87 +375,79 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         instance: &Instance,
         store: &Mutex<Store<Ctx>>,
     ) -> Option<RetryDecision> {
-        self.recover_instance_state_inner(instance, store)
-            .instrument(agent_phase_span!(self, "recover_instance_state"))
-            .await
-    }
+        async {
+            debug!("Preparing the worker instance");
+            let mut store = store.lock().await;
 
-    async fn recover_instance_state_inner(
-        &self,
-        instance: &Instance,
-        store: &Mutex<Store<Ctx>>,
-    ) -> Option<RetryDecision> {
-        debug!("Preparing the worker instance");
-        let mut store = store.lock().await;
+            store.data().set_suspended();
 
-        store.data().set_suspended();
-
-        let span = span!(
-            Level::INFO,
-            "invocation",
-            agent_id = %self.owned_agent_id.agent_id,
-            agent_type = self.parent
-                .parsed_agent_id
-                .as_ref()
-                .map(|id| id.agent_type.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-        );
-        let prepare_result =
-            Ctx::prepare_instance(&self.owned_agent_id.agent_id, instance, &mut *store)
-                .instrument(span)
-                .await;
-
-        match prepare_result {
-            Ok(decision) => {
-                debug!("Recovery decision from prepare_instance: {decision:?}");
-                decision
-            }
-            Err(err) => {
-                warn!("Failed to start the worker: {err}");
-                store.data().set_suspended();
-
-                self.parent
-                    .stop_internal(
-                        true,
-                        Some(err.clone()),
-                        FinalWorkerState::Unloaded {
-                            startup_failure: Some(err),
-                        },
-                    )
+            let span = span!(
+                Level::INFO,
+                "invocation",
+                agent_id = %self.owned_agent_id.agent_id,
+                agent_type = self.parent
+                    .parsed_agent_id
+                    .as_ref()
+                    .map(|id| id.agent_type.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+            );
+            let prepare_result =
+                Ctx::prepare_instance(&self.owned_agent_id.agent_id, instance, &mut *store)
+                    .instrument(span)
                     .await;
-                Some(RetryDecision::None) // early return, we can't retry this
+
+            match prepare_result {
+                Ok(decision) => {
+                    debug!("Recovery decision from prepare_instance: {decision:?}");
+                    decision
+                }
+                Err(err) => {
+                    warn!("Failed to start the worker: {err}");
+                    store.data().set_suspended();
+
+                    self.parent
+                        .stop_internal(
+                            true,
+                            Some(err.clone()),
+                            FinalWorkerState::Unloaded {
+                                startup_failure: Some(err),
+                            },
+                        )
+                        .await;
+                    Some(RetryDecision::None) // early return, we can't retry this
+                }
             }
         }
+        .instrument(agent_phase_span!(self, "recover_instance_state"))
+        .await
     }
 
     /// Suspends the worker after the invocation loop exited
     async fn suspend_worker(&self, store: &Mutex<Store<Ctx>>) {
-        self.suspend_worker_inner(store)
-            .instrument(agent_phase_span!(self, "suspend_worker"))
-            .await
-    }
+        async {
+            // Marking the worker as suspended
+            store.lock().await.data().set_suspended();
 
-    async fn suspend_worker_inner(&self, store: &Mutex<Store<Ctx>>) {
-        // Marking the worker as suspended
-        store.lock().await.data().set_suspended();
+            // Making sure all pending commits are flushed
+            // Make sure all pending commits are done
+            let worker = store.lock().await.data().get_public_state().worker();
+            worker
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await;
 
-        // Making sure all pending commits are flushed
-        // Make sure all pending commits are done
-        let worker = store.lock().await.data().get_public_state().worker();
-        worker
-            .commit_oplog_and_update_state(CommitLevel::Always)
-            .await;
+            // The worker is going idle; persist its cached status synchronously now instead of leaving
+            // it for the next background sweep, so reads of an idle worker see an up-to-date blob.
+            worker.force_flush_status().await;
 
-        // The worker is going idle; persist its cached status synchronously now instead of leaving
-        // it for the next background sweep, so reads of an idle worker see an up-to-date blob.
-        worker.force_flush_status().await;
-
-        // Idle is a structurally clean boundary (the invocation loop has exited and committed, so
-        // no jumpable region is open): write a throttled clean status checkpoint so a later
-        // jump-induced recompute can fold forward from here.
-        worker
-            .checkpoint_status(status_checkpointer::CheckpointReason::Idle)
-            .await;
+            // Idle is a structurally clean boundary (the invocation loop has exited and committed, so
+            // no jumpable region is open): write a throttled clean status checkpoint so a later
+            // jump-induced recompute can fold forward from here.
+            worker
+                .checkpoint_status(status_checkpointer::CheckpointReason::Idle)
+                .await;
+        }
+        .instrument(agent_phase_span!(self, "suspend_worker"))
+        .await
     }
 }
 
@@ -493,14 +469,11 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     resume_replay_pending: Arc<AtomicBool>,
     /// The worker's startup, captured so each phase span can link back to it.
     startup_origin: TraceOrigin,
+    /// Agent type label for span fields, derived once.
+    agent_type: String,
 }
 
 impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
-    /// Agent type for span fields, or `-` when the agent id could not be parsed.
-    fn agent_type_label(&self) -> String {
-        agent_type_label(&self.parent.parsed_agent_id)
-    }
-
     /// The inner invocation loop started when the worker instance state is fully restored
     /// and the worker is ready to take invocations.
     ///
@@ -684,8 +657,19 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             if let Some(pending_invocation) = status.pending_invocations.first() {
                 let idempotency_key = pending_invocation.idempotency_key();
                 let origin = if let Some(idempotency_key) = idempotency_key {
-                    let origins = self.parent.external_invocation_origins.read().await;
-                    origins.get(idempotency_key).cloned()
+                    let mut origins = self.parent.external_invocation_origins.write().await;
+                    let origin = origins.get(idempotency_key).cloned();
+                    // Only the first pickup can claim the awaited caller as its
+                    // parent. A retry runs after that caller may already have given
+                    // up and closed its span, so downgrade the record to a link now;
+                    // a later attempt then relates truthfully instead of claiming a
+                    // parent that has ended.
+                    if let Some(recorded) = origins.get_mut(idempotency_key)
+                        && recorded.is_awaited()
+                    {
+                        *recorded = recorded.as_link();
+                    }
+                    origin
                 } else {
                     None
                 };
@@ -723,7 +707,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     Level::INFO,
                     "invocation_queue_pickup",
                     agent_id = %self.owned_agent_id.agent_id,
-                    agent_type = self.agent_type_label(),
+                    agent_type = %self.agent_type,
                     otel.kind = "consumer",
                 );
 
@@ -838,35 +822,33 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// Returns `CommandOutcome` if this fails and the invocation loop should be stopped.
     /// Otherwise, it returns the new retry decision to be used by the outer invocation loop.
     async fn resume_replay(&self) -> CommandOutcome {
-        self.resume_replay_inner()
-            .instrument(agent_phase_span!(self, "resume_replay"))
-            .await
-    }
+        async {
+            let mut store = self.store.lock().await;
 
-    async fn resume_replay_inner(&self) -> CommandOutcome {
-        let mut store = self.store.lock().await;
+            let resume_replay_result = Ctx::resume_replay(&mut *store, self.instance, true).await;
 
-        let resume_replay_result = Ctx::resume_replay(&mut *store, self.instance, true).await;
+            match resume_replay_result {
+                Ok(None) => CommandOutcome::Continue,
+                Ok(Some(decision)) => CommandOutcome::BreakInnerLoop(decision),
+                Err(err) => {
+                    warn!("Failed to resume replay: {err}");
+                    store.data().set_suspended();
 
-        match resume_replay_result {
-            Ok(None) => CommandOutcome::Continue,
-            Ok(Some(decision)) => CommandOutcome::BreakInnerLoop(decision),
-            Err(err) => {
-                warn!("Failed to resume replay: {err}");
-                store.data().set_suspended();
-
-                self.parent
-                    .stop_internal(
-                        true,
-                        Some(err.clone()),
-                        FinalWorkerState::Unloaded {
-                            startup_failure: Some(err),
-                        },
-                    )
-                    .await;
-                CommandOutcome::BreakOuterLoop
+                    self.parent
+                        .stop_internal(
+                            true,
+                            Some(err.clone()),
+                            FinalWorkerState::Unloaded {
+                                startup_failure: Some(err),
+                            },
+                        )
+                        .await;
+                    CommandOutcome::BreakOuterLoop
+                }
             }
         }
+        .instrument(agent_phase_span!(self, "resume_replay"))
+        .await
     }
 
     /// Performs a queued invocation on the worker

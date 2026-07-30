@@ -1457,6 +1457,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
 
             if let Some(idempotency_key) = timestamped_invocation.invocation.idempotency_key() {
+                // A consumer links back to the *creation context* of the work, which
+                // is this producer span - not whatever was current before it opened.
+                // An awaited origin is exempt: it has to keep the caller's span,
+                // because that is the span which encloses the execution.
+                let origin = if origin.is_awaited() {
+                    origin
+                } else {
+                    TraceOrigin::triggered()
+                };
                 self.external_invocation_origins
                     .write()
                     .await
@@ -2983,10 +2992,14 @@ impl RunningWorker {
         // so each phase of the loop can be linked back to the startup that began
         // it. A link rather than a parent: the phases outlive that span.
         let startup_origin = TraceOrigin::triggered();
+        let agent_type = parent
+            .parsed_agent_id
+            .as_ref()
+            .map(|id| id.agent_type.to_string())
+            .unwrap_or_else(|| "-".to_string());
 
-        // Neither the loop nor the task carries a span: both live as long as the
-        // worker is resident, and a span held that long neither closes nor stops
-        // accumulating events. Each bounded phase of the loop spans itself.
+        // No span on the loop or the task: both live as long as the worker is
+        // resident. Each bounded phase spans itself. See `TraceOrigin`.
         let handle = tokio::task::spawn(async move {
             RunningWorker::invocation_loop(
                 receiver,
@@ -2999,6 +3012,7 @@ impl RunningWorker {
                 concurrent_agent_permit,
                 resume_replay_pending_clone,
                 startup_origin,
+                agent_type,
             )
             .await;
         });
@@ -3281,6 +3295,7 @@ impl RunningWorker {
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         resume_replay_pending: Arc<AtomicBool>,
         startup_origin: TraceOrigin,
+        agent_type: String,
     ) {
         let mut invocation_loop = InvocationLoop {
             receiver,
@@ -3293,6 +3308,7 @@ impl RunningWorker {
             concurrent_agent_permit: Some(concurrent_agent_permit),
             resume_replay_pending,
             startup_origin,
+            agent_type,
         };
         invocation_loop.run().await;
     }

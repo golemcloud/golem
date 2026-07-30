@@ -455,128 +455,126 @@ impl ResourceLimitsGrpc {
     /// failure, resets in-flight deltas for active accounts so they are not
     /// double-counted next cycle; stale idle accounts are retried next tick.
     async fn send_batch(&self, refresh_threshold_secs: i64) {
-        self.send_batch_inner(refresh_threshold_secs)
-            .instrument(debug_span!("resource_limits_batch_update"))
-            .await
-    }
+        async {
+            // Collect active updates (non-zero delta) and move delta → in_flight.
+            // An account is included if it has any non-zero delta OR has gone stale.
+            let mut updates: HashMap<AccountId, ResourceUsageUpdate> = HashMap::new();
 
-    async fn send_batch_inner(&self, refresh_threshold_secs: i64) {
-        // Collect active updates (non-zero delta) and move delta → in_flight.
-        // An account is included if it has any non-zero delta OR has gone stale.
-        let mut updates: HashMap<AccountId, ResourceUsageUpdate> = HashMap::new();
+            self.entries
+                .iter_async(|k, cell| {
+                    if let Some(entry) = cell.get() {
+                        let fuel_delta = entry.delta.swap(0, Ordering::AcqRel);
+                        // Move unsynced call counts into the syncing bucket for this batch.
+                        let http_count = entry.unsynced_http_calls.swap(0, Ordering::AcqRel);
+                        let rpc_count = entry.unsynced_rpc_calls.swap(0, Ordering::AcqRel);
 
-        self.entries
-            .iter_async(|k, cell| {
-                if let Some(entry) = cell.get() {
-                    let fuel_delta = entry.delta.swap(0, Ordering::AcqRel);
-                    // Move unsynced call counts into the syncing bucket for this batch.
-                    let http_count = entry.unsynced_http_calls.swap(0, Ordering::AcqRel);
-                    let rpc_count = entry.unsynced_rpc_calls.swap(0, Ordering::AcqRel);
+                        if fuel_delta != 0 || http_count > 0 || rpc_count > 0 {
+                            if http_count > 0 {
+                                entry
+                                    .syncing_http_calls
+                                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
+                                        Some(c.saturating_add(http_count))
+                                    })
+                                    .ok();
+                            }
+                            if rpc_count > 0 {
+                                entry
+                                    .syncing_rpc_calls
+                                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
+                                        Some(c.saturating_add(rpc_count))
+                                    })
+                                    .ok();
+                            }
 
-                    if fuel_delta != 0 || http_count > 0 || rpc_count > 0 {
-                        if http_count > 0 {
                             entry
-                                .syncing_http_calls
-                                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
-                                    Some(c.saturating_add(http_count))
+                                .in_flight_delta
+                                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |d| {
+                                    Some(d.saturating_add(fuel_delta))
                                 })
                                 .ok();
+                            updates.insert(
+                                *k,
+                                ResourceUsageUpdate {
+                                    fuel_delta,
+                                    http_call_count_delta: http_count,
+                                    rpc_call_count_delta: rpc_count,
+                                },
+                            );
+                        } else if entry.secs_since_last_refresh() >= refresh_threshold_secs {
+                            // Stale idle account: include with zero delta to fetch
+                            // updated limits without reporting any consumption.
+                            updates.insert(
+                                *k,
+                                ResourceUsageUpdate {
+                                    fuel_delta: 0,
+                                    http_call_count_delta: 0,
+                                    rpc_call_count_delta: 0,
+                                },
+                            );
                         }
-                        if rpc_count > 0 {
-                            entry
-                                .syncing_rpc_calls
-                                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
-                                    Some(c.saturating_add(rpc_count))
-                                })
-                                .ok();
-                        }
-
-                        entry
-                            .in_flight_delta
-                            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |d| {
-                                Some(d.saturating_add(fuel_delta))
-                            })
-                            .ok();
-                        updates.insert(
-                            *k,
-                            ResourceUsageUpdate {
-                                fuel_delta,
-                                http_call_count_delta: http_count,
-                                rpc_call_count_delta: rpc_count,
-                            },
-                        );
-                    } else if entry.secs_since_last_refresh() >= refresh_threshold_secs {
-                        // Stale idle account: include with zero delta to fetch
-                        // updated limits without reporting any consumption.
-                        updates.insert(
-                            *k,
-                            ResourceUsageUpdate {
-                                fuel_delta: 0,
-                                http_call_count_delta: 0,
-                                rpc_call_count_delta: 0,
-                            },
-                        );
                     }
-                }
-                true
-            })
-            .await;
-
-        if updates.is_empty() {
-            return;
-        }
-
-        tracing::debug!(
-            "Sending batch: {} fuel, {} http, {} rpc, {} stale idle account(s)",
-            updates.values().filter(|u| u.fuel_delta != 0).count(),
-            updates
-                .values()
-                .filter(|u| u.http_call_count_delta > 0)
-                .count(),
-            updates
-                .values()
-                .filter(|u| u.rpc_call_count_delta > 0)
-                .count(),
-            updates
-                .values()
-                .filter(|u| {
-                    u.fuel_delta == 0 && u.http_call_count_delta == 0 && u.rpc_call_count_delta == 0
+                    true
                 })
-                .count(),
-        );
+                .await;
 
-        // Send resource usage batch. The response refreshes all account limits
-        // (fuel, memory, disk, per-invocation caps, and monthly call budgets)
-        // for every account in `updates`.
-        match self
-            .client
-            .batch_update_resource_usage(updates.clone())
-            .await
-        {
-            Ok(updated_limits) => {
-                for (account_id, resource_limits) in updated_limits.0 {
-                    self.update_last_known_limits(account_id, resource_limits)
-                        .await;
-                }
+            if updates.is_empty() {
+                return;
             }
-            Err(err) => {
-                error!("Failed to send batched resource usage updates: {}", err);
-                for (account_id, update) in &updates {
-                    if update.fuel_delta != 0
-                        || update.http_call_count_delta > 0
-                        || update.rpc_call_count_delta > 0
-                    {
-                        error!(
-                            "Lost resource usage updates for account {account_id}: fuel_delta={}, http_call_count_delta={}, rpc_call_count_delta={}",
-                            update.fuel_delta,
-                            update.http_call_count_delta,
-                            update.rpc_call_count_delta,
-                        );
-                        self.reset_in_flight_delta(*account_id).await;
+
+            tracing::debug!(
+                "Sending batch: {} fuel, {} http, {} rpc, {} stale idle account(s)",
+                updates.values().filter(|u| u.fuel_delta != 0).count(),
+                updates
+                    .values()
+                    .filter(|u| u.http_call_count_delta > 0)
+                    .count(),
+                updates
+                    .values()
+                    .filter(|u| u.rpc_call_count_delta > 0)
+                    .count(),
+                updates
+                    .values()
+                    .filter(|u| {
+                        u.fuel_delta == 0 && u.http_call_count_delta == 0 && u.rpc_call_count_delta == 0
+                    })
+                    .count(),
+            );
+
+            // Send resource usage batch. The response refreshes all account limits
+            // (fuel, memory, disk, per-invocation caps, and monthly call budgets)
+            // for every account in `updates`.
+            match self
+                .client
+                .batch_update_resource_usage(updates.clone())
+                .await
+            {
+                Ok(updated_limits) => {
+                    for (account_id, resource_limits) in updated_limits.0 {
+                        self.update_last_known_limits(account_id, resource_limits)
+                            .await;
+                    }
+                }
+                Err(err) => {
+                    error!("Failed to send batched resource usage updates: {}", err);
+                    for (account_id, update) in &updates {
+                        if update.fuel_delta != 0
+                            || update.http_call_count_delta > 0
+                            || update.rpc_call_count_delta > 0
+                        {
+                            error!(
+                                "Lost resource usage updates for account {account_id}: fuel_delta={}, http_call_count_delta={}, rpc_call_count_delta={}",
+                                update.fuel_delta,
+                                update.http_call_count_delta,
+                                update.rpc_call_count_delta,
+                            );
+                            self.reset_in_flight_delta(*account_id).await;
+                        }
                     }
                 }
             }
         }
+        .instrument(debug_span!("resource_limits_batch_update"))
+        .await
     }
 
     async fn update_last_known_limits(

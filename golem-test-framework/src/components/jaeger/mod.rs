@@ -155,26 +155,11 @@ impl JaegerTrace {
         }
     }
 
-    /// Service that emitted `span`, if the trace declared its process.
-    pub fn service_of(&self, span: &JaegerSpan) -> Option<&str> {
-        self.processes
-            .get(&span.process_id)
-            .map(|p| p.service_name.as_str())
-    }
-
     /// Distinct service names that contributed spans to this trace.
     pub fn service_names(&self) -> HashSet<&str> {
         self.processes
             .values()
             .map(|p| p.service_name.as_str())
-            .collect()
-    }
-
-    /// Operation names of every span in the trace.
-    pub fn operation_names(&self) -> HashSet<&str> {
-        self.spans
-            .iter()
-            .map(|s| s.operation_name.as_str())
             .collect()
     }
 

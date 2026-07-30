@@ -867,8 +867,7 @@ impl MultiLayerOplog {
                     .await;
                 }
             },
-            // No span around the fiber: it lives as long as the oplog. Each
-            // transfer message spans itself, linked to whatever triggered it.
+            // No span: fiber lives as long as the oplog. See `TraceOrigin`.
         );
         result
             .set_background_transfer(start_tx, transfer_fiber)

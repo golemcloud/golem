@@ -833,8 +833,7 @@ impl ForwardingOplog {
                     state.try_flush().await;
                 }
             }
-            // No span: this timer runs for the worker's whole life, and a span held
-            // that long neither closes nor stops accumulating events.
+            // No span: runs for the worker's whole life. See `TraceOrigin`.
         });
         Self {
             inner,
@@ -1328,7 +1327,7 @@ impl ForwardingOplogState {
                             }
                         }
                     },
-                    // No span: this monitor outlives the call that spawns it.
+                    // No span: outlives the call. See `TraceOrigin`.
                 );
                 self.monitor_tasks.push(monitor);
             }

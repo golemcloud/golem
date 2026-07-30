@@ -235,7 +235,6 @@ pub mod caching {
 
 pub mod api {
     use lazy_static::lazy_static;
-    use opentelemetry::trace::Status;
     use prometheus::{Gauge, HistogramVec, register_gauge, register_histogram_vec};
     use std::fmt::Debug;
     use tracing::{Span, debug, error};
@@ -398,15 +397,11 @@ pub mod api {
     impl Drop for RecordedApiRequest {
         fn drop(&mut self) {
             if let Some(start) = self.start_time.take() {
-                // Neither `succeed` nor `fail` ran, so the request was abandoned
-                // before it produced a result - typically the client disconnected or
-                // hit its deadline. Marking the span says so, which matters because
-                // work the request started (a durable invocation, say) can outlive
-                // it and would otherwise look like a child span that inexplicably
-                // ran past its parent.
+                // Neither `succeed` nor `fail` ran: the caller went away before the
+                // request produced a result. Not an error status - the server did not
+                // fail - but recorded, because work this request started can outlive
+                // it.
                 self.span.set_attribute("cancelled", true);
-                self.span
-                    .set_status(Status::error("API request abandoned before completion"));
                 record_api_failure(self.api_name, self.api_type, "Drop", start.elapsed());
             }
         }
@@ -623,16 +618,15 @@ mod tests {
 
         let span = named(&spans, "gRPC test_api");
         assert!(
-            matches!(span.status, Status::Error { .. }),
-            "expected Error status, got {:?}",
-            span.status
-        );
-        assert!(
             span.attributes
                 .iter()
                 .any(|kv| kv.key.as_str() == "cancelled" && kv.value.as_str() == "true"),
             "expected a cancelled attribute, got {:?}",
             span.attributes
+        );
+        assert!(
+            !matches!(span.status, Status::Error { .. }),
+            "an abandoned request is not a server error"
         );
     }
 
@@ -645,7 +639,6 @@ mod tests {
         });
 
         let span = named(&spans, "gRPC test_api");
-        assert!(!matches!(span.status, Status::Error { .. }));
         assert!(
             !span
                 .attributes

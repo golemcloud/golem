@@ -1215,10 +1215,9 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     stack: InvocationContextStack,
     retry_params: Option<TaskRetryParams<Ctx>>,
 ) -> AbortOnDropJoinHandle<Result<Result<UntypedDataValue, InternalRpcError>, Error>> {
-    // The returned handle is owned by a guest resource, so this task can outlive the
-    // invocation that started it. It links back to the invocation rather than
-    // running inside its span, which would hold that span open - and unexported -
-    // for as long as the guest keeps the resource alive.
+    // The returned handle is owned by a guest resource, so this task can outlive
+    // the invocation. It links back rather than running inside its span. See
+    // `TraceOrigin`.
     let origin = TraceOrigin::triggered();
     let caller_agent_id = agent_id.clone();
     let invoke = move || {

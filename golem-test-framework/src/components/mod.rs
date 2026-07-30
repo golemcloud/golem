@@ -488,10 +488,10 @@ impl EnvVarBuilder {
 
 /// Where a spawned service should send its OTLP spans.
 ///
-/// A container-backed collector publishes on a port chosen at runtime, so tests
-/// that assert on exported spans need to override the default. Set
-/// `GOLEM_TEST_OTLP_HOST` / `GOLEM_TEST_OTLP_PORT` before the test dependencies
-/// are constructed - they are read when each service's environment is built.
+/// A container-backed collector publishes on a port chosen at runtime, so a test
+/// that asserts on exported spans overrides the default by setting
+/// `GOLEM_TEST_OTLP_HOST` / `GOLEM_TEST_OTLP_PORT` before the test dependencies are
+/// constructed - they are read as each service's environment is built.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OtlpEndpoint {
     pub host: String,
@@ -512,16 +512,6 @@ impl OtlpEndpoint {
                 .ok()
                 .and_then(|port| port.parse().ok())
                 .unwrap_or(Self::DEFAULT_PORT),
-        }
-    }
-
-    /// Points subsequently-created services at this endpoint. Must be called
-    /// before the test dependencies are constructed.
-    pub fn set_for_spawned_services(&self) {
-        // SAFETY: called from test setup before any service environment is built.
-        unsafe {
-            std::env::set_var("GOLEM_TEST_OTLP_HOST", &self.host);
-            std::env::set_var("GOLEM_TEST_OTLP_PORT", self.port.to_string());
         }
     }
 }

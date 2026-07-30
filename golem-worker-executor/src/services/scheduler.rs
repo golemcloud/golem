@@ -221,7 +221,12 @@ impl SchedulerServiceDefault {
     /// Runs a scheduler storage operation, retrying transient errors (such as
     /// connection pool exhaustion) according to `storage_retry`. Panics on a
     /// non-transient error, or after the configured retries are exhausted.
-    async fn retry_storage_op<T, F, Fut>(&self, op_name: &str, target: &str, mut op: F) -> T
+    async fn retry_storage_op<T, F, Fut>(
+        &self,
+        op_name: &str,
+        target: &(dyn std::fmt::Display + Sync),
+        mut op: F,
+    ) -> T
     where
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<T, SchedulerStorageError>>,
@@ -257,7 +262,51 @@ impl SchedulerServiceDefault {
     /// wrapping the loop would never close, so it would never be exported.
     async fn process(&self, now: DateTime<Utc>) -> Result<(), String> {
         async {
-            let result = self.process_inner(now).await;
+            let result = async {
+                let tick_start = std::time::Instant::now();
+                let assignment = self
+                    .shard_service
+                    .current_assignment()
+                    .map_err(|err| err.to_string())?;
+
+                for _ in 0..self.max_batches_per_tick {
+                    let claimed = self
+                        .scheduler_storage
+                        .claim_due(now, &assignment, self.claim_batch_size, self.lease_ttl)
+                        .instrument(debug_span!("scheduler_storage_claim_due"))
+                        .await?;
+
+                    let claimed_count = claimed.len();
+                    crate::metrics::scheduler::set_scheduler_queue_depth(claimed_count);
+                    if claimed.is_empty() {
+                        break;
+                    }
+
+                    self.process_claimed_actions(claimed, now).await?;
+
+                    if claimed_count < self.claim_batch_size as usize {
+                        break;
+                    }
+                }
+
+                match self
+                    .scheduler_storage
+                    .count_due(Utc::now(), &assignment)
+                    .instrument(debug_span!("scheduler_storage_count_due"))
+                    .await
+                {
+                    Ok(backlog) => {
+                        crate::metrics::scheduler::set_scheduler_due_action_backlog_after_tick(
+                            backlog,
+                        )
+                    }
+                    Err(error) => warn!(error, "Failed to count due scheduled actions after tick"),
+                }
+
+                crate::metrics::scheduler::record_scheduler_tick_duration(tick_start.elapsed());
+                Ok(())
+            }
+            .await;
             // Logged inside the span, so a failed tick is visible in the trace and
             // not only in the logs.
             if let Err(error) = &result {
@@ -267,49 +316,6 @@ impl SchedulerServiceDefault {
         }
         .instrument(debug_span!("scheduler_tick"))
         .await
-    }
-
-    async fn process_inner(&self, now: DateTime<Utc>) -> Result<(), String> {
-        let tick_start = std::time::Instant::now();
-        let assignment = self
-            .shard_service
-            .current_assignment()
-            .map_err(|err| err.to_string())?;
-
-        for _ in 0..self.max_batches_per_tick {
-            let claimed = self
-                .scheduler_storage
-                .claim_due(now, &assignment, self.claim_batch_size, self.lease_ttl)
-                .instrument(debug_span!("scheduler_storage_claim_due"))
-                .await?;
-
-            let claimed_count = claimed.len();
-            crate::metrics::scheduler::set_scheduler_queue_depth(claimed_count);
-            if claimed.is_empty() {
-                break;
-            }
-
-            self.process_claimed_actions(claimed, now).await?;
-
-            if claimed_count < self.claim_batch_size as usize {
-                break;
-            }
-        }
-
-        match self
-            .scheduler_storage
-            .count_due(Utc::now(), &assignment)
-            .instrument(debug_span!("scheduler_storage_count_due"))
-            .await
-        {
-            Ok(backlog) => {
-                crate::metrics::scheduler::set_scheduler_due_action_backlog_after_tick(backlog)
-            }
-            Err(error) => warn!(error, "Failed to count due scheduled actions after tick"),
-        }
-
-        crate::metrics::scheduler::record_scheduler_tick_duration(tick_start.elapsed());
-        Ok(())
     }
 
     async fn process_claimed_actions(
@@ -647,7 +653,7 @@ impl SchedulerService for SchedulerServiceDefault {
             );
         }
 
-        self.retry_storage_op("insert", &format!("action {action}"), || {
+        self.retry_storage_op("insert", &action, || {
             self.scheduler_storage
                 .insert(schedule_id, time, shard_id, &action)
         })
@@ -656,10 +662,8 @@ impl SchedulerService for SchedulerServiceDefault {
     }
 
     async fn cancel(&self, id: ScheduleId) {
-        self.retry_storage_op("cancel", &format!("schedule {id}"), || {
-            self.scheduler_storage.cancel(&id)
-        })
-        .await;
+        self.retry_storage_op("cancel", &id, || self.scheduler_storage.cancel(&id))
+            .await;
     }
 }
 

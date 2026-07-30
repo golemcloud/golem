@@ -674,10 +674,9 @@ pub(crate) fn spawn_http_status_retry_after_body_finish<Ctx: crate::workerctx::W
     max_delay: Duration,
     begin_index: OplogIndex,
 ) -> FutureIncomingResponseHandle {
-    // The handle this returns is owned by a guest resource, so the task can outlive
-    // the invocation that started it. It therefore links back to the invocation
-    // rather than running inside its span, which would hold that span open - and
-    // unexported - for as long as the guest keeps the resource alive.
+    // The returned handle is owned by a guest resource, so this task can outlive
+    // the invocation. It links back rather than running inside its span. See
+    // `TraceOrigin`.
     let origin = TraceOrigin::triggered();
     let agent_id = worker.agent_id();
     wasmtime_wasi::runtime::spawn(
@@ -931,9 +930,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
     let first_byte_timeout = config.first_byte_timeout;
     let between_bytes_timeout = config.between_bytes_timeout;
 
-    // See `spawn_http_status_retry_after_body_finish`: the returned handle is owned
-    // by a guest resource, so this links back to the invocation instead of holding
-    // its span open.
+    // Links back rather than running inside the invocation's span, as above.
     let origin = TraceOrigin::triggered();
     let agent_id = worker.agent_id();
 

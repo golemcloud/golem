@@ -344,8 +344,7 @@ impl AgentStatusFlushQueue {
                     }
                 }
             },
-            // No span around the loop: it runs for the process lifetime. Sweeps
-            // that have work span themselves - see `sweep`.
+            // No span: loop runs for the process lifetime. See `TraceOrigin`.
         );
         *queue.background_handle.lock().unwrap() = Some(handle);
         queue
@@ -360,29 +359,27 @@ impl AgentStatusFlushQueue {
     /// Drains all currently-dirty flushers and flushes them with bounded concurrency. Entries
     /// enqueued while a sweep is running are picked up by the next tick.
     async fn sweep(&self) {
-        self.sweep_inner()
-            .instrument(debug_span!("agent_status_flush_sweep"))
-            .await
-    }
+        async {
+            let entries: Vec<Weak<AgentStatusFlusher>> = {
+                let mut dirty = self.dirty.lock().unwrap();
+                dirty.drain().map(|(_, weak)| weak).collect()
+            };
+            if entries.is_empty() {
+                return;
+            }
 
-    async fn sweep_inner(&self) {
-        let entries: Vec<Weak<AgentStatusFlusher>> = {
-            let mut dirty = self.dirty.lock().unwrap();
-            dirty.drain().map(|(_, weak)| weak).collect()
-        };
-        if entries.is_empty() {
-            return;
+            futures::stream::iter(entries)
+                .for_each_concurrent(self.max_concurrency, |weak| async move {
+                    if let Some(flusher) = weak.upgrade() {
+                        // Failures are logged, metered and re-queued inside `flush`; nothing more to do
+                        // here (the next sweep will retry).
+                        let _ = flusher.flush(FlushReason::Background).await;
+                    }
+                })
+                .await;
         }
-
-        futures::stream::iter(entries)
-            .for_each_concurrent(self.max_concurrency, |weak| async move {
-                if let Some(flusher) = weak.upgrade() {
-                    // Failures are logged, metered and re-queued inside `flush`; nothing more to do
-                    // here (the next sweep will retry).
-                    let _ = flusher.flush(FlushReason::Background).await;
-                }
-            })
-            .await;
+        .instrument(debug_span!("agent_status_flush_sweep"))
+        .await
     }
 
     #[cfg(test)]
