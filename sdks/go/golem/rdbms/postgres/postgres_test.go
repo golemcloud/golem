@@ -129,67 +129,73 @@ func TestInt64Widths(t *testing.T) {
 	}
 }
 
-// TestScan — Scan fills typed destinations positionally, including *any.
-func TestScan(t *testing.T) {
-	u := golem.UUID{0: 0xab, 15: 0x01}
-	r := Row{values: []pg.DbValue{
-		pg.MakeDbValueInt8(7),
-		pg.MakeDbValueText("name"),
-		pg.MakeDbValueBoolean(false),
-		pg.MakeDbValueUuid(uuidToWit(u)),
-	}}
-	var id int64
-	var name string
-	var ok bool
-	var got golem.UUID
-	if err := r.Scan(&id, &name, &ok, &got); err != nil {
-		t.Fatalf("Scan error: %v", err)
-	}
-	if id != 7 || name != "name" || ok || got != u {
-		t.Fatalf("Scan = %d %q %v %v", id, name, ok, got)
-	}
+// Row.Scan and Row.Get route through the recursive decoder (host-backed), so they
+// are exercised end-to-end in the playground demo rather than here; the typed
+// getters they dispatch to are covered directly above.
 
-	// *any receives the decoded value.
-	var anyVal any
-	if err := r.Scan(&anyVal, new(string), new(bool), new(golem.UUID)); err != nil {
-		t.Fatalf("Scan into *any error: %v", err)
+// mustFlat decodes a flat value, failing if it is not a flat family.
+func mustFlat(t *testing.T, v pg.DbValue) any {
+	t.Helper()
+	x, ok := decodeFlat(v)
+	if !ok {
+		t.Fatalf("%s should be a flat family", tagName(v.Tag()))
 	}
-	if anyVal.(int64) != 7 {
-		t.Fatalf("*any = %v", anyVal)
-	}
-
-	// Wrong destination count.
-	if err := r.Scan(&id); err == nil {
-		t.Fatal("Scan with wrong count should error")
-	}
+	return x
 }
 
-// TestDecodeValue — decode maps each family to the expected Go type.
-func TestDecodeValue(t *testing.T) {
-	if v := decodeValue(pg.MakeDbValueNull()); v != nil {
+// TestDecodeFlat — the pure decoder maps each flat family to the expected Go type.
+func TestDecodeFlat(t *testing.T) {
+	if v := mustFlat(t, pg.MakeDbValueNull()); v != nil {
 		t.Fatalf("null = %v", v)
 	}
-	if v := decodeValue(pg.MakeDbValueInt4(5)); v.(int32) != 5 {
+	if v := mustFlat(t, pg.MakeDbValueInt4(5)); v.(int32) != 5 {
 		t.Fatalf("int4 = %v", v)
 	}
-	if v := decodeValue(pg.MakeDbValueNumeric("1.25")); v.(string) != "1.25" {
+	if v := mustFlat(t, pg.MakeDbValueNumeric("1.25")); v.(string) != "1.25" {
 		t.Fatalf("numeric = %v", v)
 	}
-	if v := decodeValue(pg.MakeDbValueJsonb(`{"a":1}`)); v.(string) != `{"a":1}` {
+	if v := mustFlat(t, pg.MakeDbValueJsonb(`{"a":1}`)); v.(string) != `{"a":1}` {
 		t.Fatalf("jsonb = %v", v)
 	}
-	if v := decodeValue(pg.MakeDbValueVector([]float32{1, 2})); len(v.([]float32)) != 2 {
+	if v := mustFlat(t, pg.MakeDbValueVector([]float32{1, 2})); len(v.([]float32)) != 2 {
 		t.Fatalf("vector = %v", v)
 	}
 
-	// A family we do not decode yet comes back as an opaque DbValue.
-	esc := decodeValue(pg.MakeDbValueEnumeration(pg.Enumeration{Name: "color", Value: "red"}))
-	dv, ok := esc.(DbValue)
-	if !ok {
-		t.Fatalf("enumeration should decode to DbValue, got %T", esc)
+	// Enumeration and sparsevec decode to their typed structs.
+	e := mustFlat(t, pg.MakeDbValueEnumeration(pg.Enumeration{Name: "color", Value: "red"})).(Enum)
+	if e.Name != "color" || e.Value != "red" {
+		t.Fatalf("enum = %+v", e)
 	}
-	if dv.Kind() != "enumeration" {
-		t.Fatalf("Kind = %q", dv.Kind())
+	sv := mustFlat(t, pg.MakeDbValueSparsevec(pg.SparseVec{Dim: 5, Indices: []int32{1, 3}, Values: []float32{9, 8}})).(SparseVec)
+	if sv.Dim != 5 || len(sv.Indices) != 2 || sv.Values[1] != 8 {
+		t.Fatalf("sparsevec = %+v", sv)
+	}
+
+	// The recursive families are NOT flat.
+	if _, ok := decodeFlat(pg.MakeDbValueArray(nil)); ok {
+		t.Fatal("array should not be a flat family")
+	}
+}
+
+// TestFlatRanges — the built-in ranges round-trip through their constructors and
+// the pure decoder, exercising the generic Bound/Range helpers.
+func TestFlatRanges(t *testing.T) {
+	i4 := Int4Range(Range[int32]{Start: Included(int32(1)), End: Excluded(int32(10))})
+	if got := mustFlat(t, i4.raw).(Range[int32]); got.Start != Included(int32(1)) || got.End != Excluded(int32(10)) {
+		t.Fatalf("int4range = %+v", got)
+	}
+
+	num := NumRange(Range[string]{Start: Included("1.5"), End: Unbounded[string]()})
+	got := mustFlat(t, num.raw).(Range[string])
+	if got.Start != Included("1.5") || got.End.Kind != BoundUnbounded {
+		t.Fatalf("numrange = %+v", got)
+	}
+
+	day := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
+	dr := DateRange(Range[time.Time]{Start: Included(day), End: Excluded(day.AddDate(0, 0, 7))})
+	drGot := mustFlat(t, dr.raw).(Range[time.Time])
+	if !drGot.Start.Value.Equal(day) || drGot.End.Kind != BoundExcluded {
+		t.Fatalf("daterange = %+v", drGot)
 	}
 }
 
@@ -233,11 +239,11 @@ func TestTimeRoundTrip(t *testing.T) {
 
 // TestTemporalTypes — time/timetz/interval decode into the types structs.
 func TestTemporalTypes(t *testing.T) {
-	tm := decodeValue(pg.MakeDbValueTime(pg.Time{Hour: 1, Minute: 2, Second: 3, Nanosecond: 4})).(types.Time)
+	tm := mustFlat(t, pg.MakeDbValueTime(pg.Time{Hour: 1, Minute: 2, Second: 3, Nanosecond: 4})).(types.Time)
 	if tm.Hour != 1 || tm.Minute != 2 || tm.Second != 3 || tm.Nanosecond != 4 {
 		t.Fatalf("time = %+v", tm)
 	}
-	iv := decodeValue(pg.MakeDbValueInterval(pg.Interval{Months: 1, Days: 2, Microseconds: 3})).(types.Interval)
+	iv := mustFlat(t, pg.MakeDbValueInterval(pg.Interval{Months: 1, Days: 2, Microseconds: 3})).(types.Interval)
 	if iv.Months != 1 || iv.Days != 2 || iv.Microseconds != 3 {
 		t.Fatalf("interval = %+v", iv)
 	}

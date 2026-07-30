@@ -97,22 +97,29 @@ func pgError(e pg.Error) error {
 	}
 }
 
-// ── DbValue (typed parameters + opaque escape hatch) ─────────────────────────
+// ── DbValue (typed parameters) ───────────────────────────────────────────────
 
 // DbValue is a Postgres value whose exact column type is chosen explicitly,
 // rather than inferred from a Go value. Build one with a constructor in this
-// package ([Numeric], [JSONB], [Int4], …) and pass it as a query argument. A
-// value read back from a column whose family this wrapper does not yet decode
-// (an array, composite, domain or range) is also returned as a DbValue; inspect
-// its family with [DbValue.Kind].
-type DbValue struct{ raw pg.DbValue }
+// package ([Numeric], [JSONB], [Int4], [Array], [Composite], …) and pass it as a
+// query argument.
+//
+// A DbValue holds either a ready value (the flat constructors) or a deferred
+// encoder (the recursive [Array]/[Composite]/[Domain]/[CustomRange], whose host
+// resources are built only when the parameter is actually sent — so construction
+// stays side-effect free and a bad element surfaces as a normal parameter error).
+type DbValue struct {
+	raw    pg.DbValue
+	encode func() (pg.DbValue, error)
+}
 
-// tagName gives a db-value family its display name (used by [DbValue.Kind] and
-// error text — never by encode/decode). It switches on the generated constants,
-// not on the raw tag position, so a reordered or inserted WIT case still names
-// correctly and a renamed or removed one fails to compile here. A newly appended
-// WIT case shows as "unknown(N)" and is handled as an opaque [DbValue] (see the
-// default in decodeValue) until a case and name are added below.
+func flat(v pg.DbValue) DbValue { return DbValue{raw: v} }
+
+// tagName gives a db-value family its display name (used in error text — never by
+// encode/decode). It switches on the generated constants, not on the raw tag
+// position, so a reordered or inserted WIT case still names correctly and a
+// renamed or removed one fails to compile here. A newly appended WIT case shows
+// as "unknown(N)" until a case and name are added below.
 func tagName(tag uint8) string {
 	switch tag {
 	case pg.DbValueCharacter:
@@ -210,116 +217,280 @@ func tagName(tag uint8) string {
 	}
 }
 
-// Kind returns the name of the value's Postgres type family (for example "array"
-// or "numeric").
-func (v DbValue) Kind() string { return tagName(v.raw.Tag()) }
-
-// IsNull reports whether the value is SQL NULL.
-func (v DbValue) IsNull() bool { return v.raw.Tag() == pg.DbValueNull }
-
-func (v DbValue) String() string { return "postgres:" + v.Kind() }
-
 // Null builds a SQL NULL parameter.
-func Null() DbValue { return DbValue{pg.MakeDbValueNull()} }
+func Null() DbValue { return flat(pg.MakeDbValueNull()) }
 
 // Char builds a Postgres "char" (single-byte integer) parameter.
-func Char(v int8) DbValue { return DbValue{pg.MakeDbValueCharacter(v)} }
+func Char(v int8) DbValue { return flat(pg.MakeDbValueCharacter(v)) }
 
 // Int2 builds a smallint parameter.
-func Int2(v int16) DbValue { return DbValue{pg.MakeDbValueInt2(v)} }
+func Int2(v int16) DbValue { return flat(pg.MakeDbValueInt2(v)) }
 
 // Int4 builds an integer parameter.
-func Int4(v int32) DbValue { return DbValue{pg.MakeDbValueInt4(v)} }
+func Int4(v int32) DbValue { return flat(pg.MakeDbValueInt4(v)) }
 
 // Int8 builds a bigint parameter.
-func Int8(v int64) DbValue { return DbValue{pg.MakeDbValueInt8(v)} }
+func Int8(v int64) DbValue { return flat(pg.MakeDbValueInt8(v)) }
 
 // Float4 builds a real parameter.
-func Float4(v float32) DbValue { return DbValue{pg.MakeDbValueFloat4(v)} }
+func Float4(v float32) DbValue { return flat(pg.MakeDbValueFloat4(v)) }
 
 // Float8 builds a double precision parameter.
-func Float8(v float64) DbValue { return DbValue{pg.MakeDbValueFloat8(v)} }
+func Float8(v float64) DbValue { return flat(pg.MakeDbValueFloat8(v)) }
 
 // Numeric builds an exact numeric/decimal parameter from its string form (so no
 // precision is lost).
-func Numeric(v string) DbValue { return DbValue{pg.MakeDbValueNumeric(v)} }
+func Numeric(v string) DbValue { return flat(pg.MakeDbValueNumeric(v)) }
 
 // Money builds a money parameter (value in the smallest currency unit).
-func Money(v int64) DbValue { return DbValue{pg.MakeDbValueMoney(v)} }
+func Money(v int64) DbValue { return flat(pg.MakeDbValueMoney(v)) }
 
 // Oid builds an object identifier parameter.
-func Oid(v uint32) DbValue { return DbValue{pg.MakeDbValueOid(v)} }
+func Oid(v uint32) DbValue { return flat(pg.MakeDbValueOid(v)) }
 
 // Varchar builds a varchar parameter.
-func Varchar(v string) DbValue { return DbValue{pg.MakeDbValueVarchar(v)} }
+func Varchar(v string) DbValue { return flat(pg.MakeDbValueVarchar(v)) }
 
 // Bpchar builds a blank-padded char parameter.
-func Bpchar(v string) DbValue { return DbValue{pg.MakeDbValueBpchar(v)} }
+func Bpchar(v string) DbValue { return flat(pg.MakeDbValueBpchar(v)) }
 
 // JSON builds a json parameter from its serialized text.
-func JSON(v string) DbValue { return DbValue{pg.MakeDbValueJson(v)} }
+func JSON(v string) DbValue { return flat(pg.MakeDbValueJson(v)) }
 
 // JSONB builds a jsonb parameter from its serialized text.
-func JSONB(v string) DbValue { return DbValue{pg.MakeDbValueJsonb(v)} }
+func JSONB(v string) DbValue { return flat(pg.MakeDbValueJsonb(v)) }
 
 // JSONPath builds a jsonpath parameter.
-func JSONPath(v string) DbValue { return DbValue{pg.MakeDbValueJsonpath(v)} }
+func JSONPath(v string) DbValue { return flat(pg.MakeDbValueJsonpath(v)) }
 
 // XML builds an xml parameter.
-func XML(v string) DbValue { return DbValue{pg.MakeDbValueXml(v)} }
+func XML(v string) DbValue { return flat(pg.MakeDbValueXml(v)) }
 
 // Bit builds a fixed-length bit-string parameter.
-func Bit(v []bool) DbValue { return DbValue{pg.MakeDbValueBit(v)} }
+func Bit(v []bool) DbValue { return flat(pg.MakeDbValueBit(v)) }
 
 // Varbit builds a varying bit-string parameter.
-func Varbit(v []bool) DbValue { return DbValue{pg.MakeDbValueVarbit(v)} }
+func Varbit(v []bool) DbValue { return flat(pg.MakeDbValueVarbit(v)) }
 
 // Inet builds an inet (host address) parameter.
-func Inet(a netip.Addr) DbValue { return DbValue{pg.MakeDbValueInet(ipToWit(a))} }
+func Inet(a netip.Addr) DbValue { return flat(pg.MakeDbValueInet(ipToWit(a))) }
 
 // Cidr builds a cidr (network address) parameter.
-func Cidr(a netip.Addr) DbValue { return DbValue{pg.MakeDbValueCidr(ipToWit(a))} }
+func Cidr(a netip.Addr) DbValue { return flat(pg.MakeDbValueCidr(ipToWit(a))) }
 
 // Macaddr builds a macaddr parameter.
-func Macaddr(m types.MacAddr) DbValue { return DbValue{pg.MakeDbValueMacaddr(macToWit(m))} }
+func Macaddr(m types.MacAddr) DbValue { return flat(pg.MakeDbValueMacaddr(macToWit(m))) }
 
 // Interval builds an interval parameter.
 func Interval(iv types.Interval) DbValue {
-	return DbValue{pg.MakeDbValueInterval(pg.Interval{
+	return flat(pg.MakeDbValueInterval(pg.Interval{
 		Months: int32(iv.Months), Days: int32(iv.Days), Microseconds: iv.Microseconds,
-	})}
+	}))
 }
 
 // Date builds a date parameter.
 func Date(d types.Date) DbValue {
-	return DbValue{pg.MakeDbValueDate(pg.Date{Year: int32(d.Year), Month: uint8(d.Month), Day: uint8(d.Day)})}
+	return flat(pg.MakeDbValueDate(pg.Date{Year: int32(d.Year), Month: uint8(d.Month), Day: uint8(d.Day)}))
 }
 
 // Time builds a time-of-day parameter.
-func Time(t types.Time) DbValue { return DbValue{pg.MakeDbValueTime(typesTimeToWit(t))} }
+func Time(t types.Time) DbValue { return flat(pg.MakeDbValueTime(typesTimeToWit(t))) }
 
 // Timetz builds a time-of-day-with-offset parameter.
 func Timetz(t types.Timetz) DbValue {
-	return DbValue{pg.MakeDbValueTimetz(pg.Timetz{Time: typesTimeToWit(t.Time), Offset: int32(t.OffsetSeconds)})}
+	return flat(pg.MakeDbValueTimetz(pg.Timetz{Time: typesTimeToWit(t.Time), Offset: int32(t.OffsetSeconds)}))
 }
 
 // Timestamp builds a timestamp (no time zone) parameter.
 func Timestamp(ts types.Timestamp) DbValue {
-	return DbValue{pg.MakeDbValueTimestamp(typesTimestampToWit(ts))}
+	return flat(pg.MakeDbValueTimestamp(typesTimestampToWit(ts)))
 }
 
 // Timestamptz builds a timestamp-with-time-zone parameter.
 func Timestamptz(ts types.Timestamptz) DbValue {
-	return DbValue{pg.MakeDbValueTimestamptz(pg.Timestamptz{
+	return flat(pg.MakeDbValueTimestamptz(pg.Timestamptz{
 		Timestamp: typesTimestampToWit(ts.Timestamp), Offset: int32(ts.OffsetSeconds),
-	})}
+	}))
 }
 
 // Vector builds a pgvector vector parameter.
-func Vector(v []float32) DbValue { return DbValue{pg.MakeDbValueVector(v)} }
+func Vector(v []float32) DbValue { return flat(pg.MakeDbValueVector(v)) }
 
 // Halfvec builds a pgvector halfvec parameter.
-func Halfvec(v []float32) DbValue { return DbValue{pg.MakeDbValueHalfvec(v)} }
+func Halfvec(v []float32) DbValue { return flat(pg.MakeDbValueHalfvec(v)) }
+
+// Enumeration builds an enum parameter carrying the enum type name and the
+// selected label.
+func Enumeration(name, value string) DbValue {
+	return flat(pg.MakeDbValueEnumeration(pg.Enumeration{Name: name, Value: value}))
+}
+
+// SparseVector builds a pgvector sparse-vector parameter.
+func SparseVector(v SparseVec) DbValue {
+	return flat(pg.MakeDbValueSparsevec(pg.SparseVec{Dim: int32(v.Dim), Indices: v.Indices, Values: v.Values}))
+}
+
+// ── Ranges ────────────────────────────────────────────────────────────────────
+
+// BoundKind is the kind of a range [Bound].
+type BoundKind uint8
+
+const (
+	// BoundUnbounded is an open end (-infinity / +infinity).
+	BoundUnbounded BoundKind = iota
+	// BoundIncluded is a closed end (the value is part of the range).
+	BoundIncluded
+	// BoundExcluded is an open end (the value is not part of the range).
+	BoundExcluded
+)
+
+// Bound is one end of a [Range].
+type Bound[T any] struct {
+	Kind  BoundKind
+	Value T // ignored when Kind is BoundUnbounded
+}
+
+// Included builds a closed bound.
+func Included[T any](v T) Bound[T] { return Bound[T]{Kind: BoundIncluded, Value: v} }
+
+// Excluded builds an open bound.
+func Excluded[T any](v T) Bound[T] { return Bound[T]{Kind: BoundExcluded, Value: v} }
+
+// Unbounded builds an infinite bound.
+func Unbounded[T any]() Bound[T] { return Bound[T]{Kind: BoundUnbounded} }
+
+// Range is a range value with a typed start and end.
+type Range[T any] struct {
+	Start Bound[T]
+	End   Bound[T]
+}
+
+// Int4Range builds an int4range parameter. Reads back as Range[int32].
+func Int4Range(r Range[int32]) DbValue {
+	return flat(pg.MakeDbValueInt4range(pg.Int4range{Start: int4BoundToWit(r.Start), End: int4BoundToWit(r.End)}))
+}
+
+// Int8Range builds an int8range parameter. Reads back as Range[int64].
+func Int8Range(r Range[int64]) DbValue {
+	return flat(pg.MakeDbValueInt8range(pg.Int8range{Start: int8BoundToWit(r.Start), End: int8BoundToWit(r.End)}))
+}
+
+// NumRange builds a numrange parameter (bounds as numeric strings). Reads back as Range[string].
+func NumRange(r Range[string]) DbValue {
+	return flat(pg.MakeDbValueNumrange(pg.Numrange{Start: numBoundToWit(r.Start), End: numBoundToWit(r.End)}))
+}
+
+// TsRange builds a tsrange parameter. Reads back as Range[time.Time] (UTC).
+func TsRange(r Range[time.Time]) DbValue {
+	return flat(pg.MakeDbValueTsrange(pg.Tsrange{Start: tsBoundToWit(r.Start), End: tsBoundToWit(r.End)}))
+}
+
+// TstzRange builds a tstzrange parameter. Reads back as Range[time.Time] (offset preserved).
+func TstzRange(r Range[time.Time]) DbValue {
+	return flat(pg.MakeDbValueTstzrange(pg.Tstzrange{Start: tstzBoundToWit(r.Start), End: tstzBoundToWit(r.End)}))
+}
+
+// DateRange builds a daterange parameter. Reads back as Range[time.Time] (UTC, date only).
+func DateRange(r Range[time.Time]) DbValue {
+	return flat(pg.MakeDbValueDaterange(pg.Daterange{Start: dateBoundToWit(r.Start), End: dateBoundToWit(r.End)}))
+}
+
+// ── Recursive families (arrays, composites, domains, custom ranges) ──────────
+//
+// These are backed by host lazy-value resources built when the parameter is sent,
+// so their constructors defer the work into DbValue.encode.
+
+// Array builds an array parameter from elements, each an ordinary Go value or a
+// nested [DbValue]. Reads back as []any.
+func Array(elems ...any) DbValue {
+	return DbValue{encode: func() (pg.DbValue, error) {
+		lazies := make([]*pg.LazyDbValue, len(elems))
+		for i, e := range elems {
+			ev, err := encodeParam(e)
+			if err != nil {
+				return pg.DbValue{}, fmt.Errorf("array element %d: %w", i+1, err)
+			}
+			lazies[i] = pg.MakeLazyDbValue(ev)
+		}
+		return pg.MakeDbValueArray(lazies), nil
+	}}
+}
+
+// Composite builds a composite (row) parameter of the named type with the given
+// ordered field values. Reads back as [CompositeValue].
+func Composite(name string, fields ...any) DbValue {
+	return DbValue{encode: func() (pg.DbValue, error) {
+		vals := make([]*pg.LazyDbValue, len(fields))
+		for i, f := range fields {
+			fv, err := encodeParam(f)
+			if err != nil {
+				return pg.DbValue{}, fmt.Errorf("composite field %d: %w", i+1, err)
+			}
+			vals[i] = pg.MakeLazyDbValue(fv)
+		}
+		return pg.MakeDbValueComposite(pg.Composite{Name: name, Values: vals}), nil
+	}}
+}
+
+// Domain builds a domain parameter of the named type wrapping value. Reads back
+// as [DomainValue].
+func Domain(name string, value any) DbValue {
+	return DbValue{encode: func() (pg.DbValue, error) {
+		v, err := encodeParam(value)
+		if err != nil {
+			return pg.DbValue{}, fmt.Errorf("domain value: %w", err)
+		}
+		return pg.MakeDbValueDomain(pg.Domain{Name: name, Value: pg.MakeLazyDbValue(v)}), nil
+	}}
+}
+
+// CustomRange builds a value of a user-defined range type (name) with arbitrary
+// element bounds. Reads back as [RangeValue]. Use the typed [Int4Range] etc. for
+// the built-in range types.
+func CustomRange(name string, start, end Bound[any]) DbValue {
+	return DbValue{encode: func() (pg.DbValue, error) {
+		s, err := valueBoundToWit(start)
+		if err != nil {
+			return pg.DbValue{}, fmt.Errorf("range start: %w", err)
+		}
+		e, err := valueBoundToWit(end)
+		if err != nil {
+			return pg.DbValue{}, fmt.Errorf("range end: %w", err)
+		}
+		return pg.MakeDbValueRange(pg.Range{Name: name, Value: pg.ValuesRange{Start: s, End: e}}), nil
+	}}
+}
+
+// Decoded shapes for the recursive families.
+
+// Enum is the decoded form of an enumeration value.
+type Enum struct{ Name, Value string }
+
+// SparseVec is the decoded form of a sparse vector (and the input to [SparseVector]).
+type SparseVec struct {
+	Dim     int
+	Indices []int32
+	Values  []float32
+}
+
+// CompositeValue is the decoded form of a composite value.
+type CompositeValue struct {
+	Name   string
+	Fields []any
+}
+
+// DomainValue is the decoded form of a domain value.
+type DomainValue struct {
+	Name  string
+	Value any
+}
+
+// RangeValue is the decoded form of a user-defined range value.
+type RangeValue struct {
+	Name  string
+	Start Bound[any]
+	End   Bound[any]
+}
 
 // ── Parameter encoding ───────────────────────────────────────────────────────
 
@@ -328,6 +499,9 @@ func encodeParam(v any) (pg.DbValue, error) {
 	case nil:
 		return pg.MakeDbValueNull(), nil
 	case DbValue:
+		if x.encode != nil {
+			return x.encode()
+		}
 		return x.raw, nil
 	case bool:
 		return pg.MakeDbValueBoolean(x), nil
@@ -374,79 +548,161 @@ func encodeParams(args []any) ([]pg.DbValue, error) {
 }
 
 // ── Value decoding ────────────────────────────────────────────────────────────
+//
+// decode is split so the pure part (decodeFlat, every non-recursive family) is
+// natively testable, while the host-backed recursive part (decodeLazy, which
+// calls LazyDbValue.Get/Drop) stays reachable only from the query paths.
 
-func decodeValue(v pg.DbValue) any {
+func decode(v pg.DbValue) any {
+	if x, ok := decodeFlat(v); ok {
+		return x
+	}
+	return decodeLazy(v)
+}
+
+// decodeLazy handles the recursive families (array, composite, domain, custom
+// range). It calls the host to read each lazy child and drops it afterwards.
+func decodeLazy(v pg.DbValue) any {
+	switch v.Tag() {
+	case pg.DbValueArray:
+		lazies := v.Array()
+		out := make([]any, len(lazies))
+		for i, l := range lazies {
+			out[i] = decode(l.Get())
+			l.Drop()
+		}
+		return out
+	case pg.DbValueComposite:
+		c := v.Composite()
+		fields := make([]any, len(c.Values))
+		for i, l := range c.Values {
+			fields[i] = decode(l.Get())
+			l.Drop()
+		}
+		return CompositeValue{Name: c.Name, Fields: fields}
+	case pg.DbValueDomain:
+		d := v.Domain()
+		val := decode(d.Value.Get())
+		d.Value.Drop()
+		return DomainValue{Name: d.Name, Value: val}
+	case pg.DbValueRange:
+		rg := v.Range()
+		return RangeValue{Name: rg.Name, Start: valueBoundFromWit(rg.Value.Start), End: valueBoundFromWit(rg.Value.End)}
+	default:
+		// A newly appended WIT family we do not decode yet.
+		return fmt.Sprintf("unsupported(%s)", tagName(v.Tag()))
+	}
+}
+
+func valueBoundFromWit(b pg.ValueBound) Bound[any] {
+	switch b.Tag() {
+	case pg.ValueBoundIncluded:
+		l := b.Included()
+		val := decode(l.Get())
+		l.Drop()
+		return Included[any](val)
+	case pg.ValueBoundExcluded:
+		l := b.Excluded()
+		val := decode(l.Get())
+		l.Drop()
+		return Excluded[any](val)
+	default:
+		return Unbounded[any]()
+	}
+}
+
+// decodeFlat handles every non-recursive family; ok is false for the recursive
+// ones (array/composite/domain/range), which decodeLazy takes.
+func decodeFlat(v pg.DbValue) (any, bool) {
 	switch v.Tag() {
 	case pg.DbValueNull:
-		return nil
+		return nil, true
 	case pg.DbValueCharacter:
-		return v.Character()
+		return v.Character(), true
 	case pg.DbValueInt2:
-		return v.Int2()
+		return v.Int2(), true
 	case pg.DbValueInt4:
-		return v.Int4()
+		return v.Int4(), true
 	case pg.DbValueInt8:
-		return v.Int8()
+		return v.Int8(), true
 	case pg.DbValueFloat4:
-		return v.Float4()
+		return v.Float4(), true
 	case pg.DbValueFloat8:
-		return v.Float8()
+		return v.Float8(), true
 	case pg.DbValueNumeric:
-		return v.Numeric()
+		return v.Numeric(), true
 	case pg.DbValueBoolean:
-		return v.Boolean()
+		return v.Boolean(), true
 	case pg.DbValueText:
-		return v.Text()
+		return v.Text(), true
 	case pg.DbValueVarchar:
-		return v.Varchar()
+		return v.Varchar(), true
 	case pg.DbValueBpchar:
-		return v.Bpchar()
+		return v.Bpchar(), true
 	case pg.DbValueTimestamp:
-		return timestampToGoTime(v.Timestamp(), time.UTC)
+		return timestampToGoTime(v.Timestamp(), time.UTC), true
 	case pg.DbValueTimestamptz:
-		return timestamptzToGoTime(v.Timestamptz())
+		return timestamptzToGoTime(v.Timestamptz()), true
 	case pg.DbValueDate:
-		return dateToGoTime(v.Date())
+		return dateToGoTime(v.Date()), true
 	case pg.DbValueTime:
-		return witTimeToTypes(v.Time())
+		return witTimeToTypes(v.Time()), true
 	case pg.DbValueTimetz:
-		return types.Timetz{Time: witTimeToTypes(v.Timetz().Time), OffsetSeconds: int(v.Timetz().Offset)}
+		return types.Timetz{Time: witTimeToTypes(v.Timetz().Time), OffsetSeconds: int(v.Timetz().Offset)}, true
 	case pg.DbValueInterval:
 		iv := v.Interval()
-		return types.Interval{Months: int(iv.Months), Days: int(iv.Days), Microseconds: iv.Microseconds}
+		return types.Interval{Months: int(iv.Months), Days: int(iv.Days), Microseconds: iv.Microseconds}, true
 	case pg.DbValueBytea:
-		return v.Bytea()
+		return v.Bytea(), true
 	case pg.DbValueJson:
-		return v.Json()
+		return v.Json(), true
 	case pg.DbValueJsonb:
-		return v.Jsonb()
+		return v.Jsonb(), true
 	case pg.DbValueJsonpath:
-		return v.Jsonpath()
+		return v.Jsonpath(), true
 	case pg.DbValueXml:
-		return v.Xml()
+		return v.Xml(), true
 	case pg.DbValueUuid:
-		return uuidFromWit(v.Uuid())
+		return uuidFromWit(v.Uuid()), true
 	case pg.DbValueInet:
-		return ipFromWit(v.Inet())
+		return ipFromWit(v.Inet()), true
 	case pg.DbValueCidr:
-		return ipFromWit(v.Cidr())
+		return ipFromWit(v.Cidr()), true
 	case pg.DbValueMacaddr:
-		return macFromWit(v.Macaddr())
+		return macFromWit(v.Macaddr()), true
 	case pg.DbValueBit:
-		return v.Bit()
+		return v.Bit(), true
 	case pg.DbValueVarbit:
-		return v.Varbit()
+		return v.Varbit(), true
 	case pg.DbValueMoney:
-		return v.Money()
+		return v.Money(), true
 	case pg.DbValueOid:
-		return v.Oid()
+		return v.Oid(), true
 	case pg.DbValueVector:
-		return v.Vector()
+		return v.Vector(), true
 	case pg.DbValueHalfvec:
-		return v.Halfvec()
+		return v.Halfvec(), true
+	case pg.DbValueInt4range:
+		return int4RangeFromWit(v.Int4range()), true
+	case pg.DbValueInt8range:
+		return int8RangeFromWit(v.Int8range()), true
+	case pg.DbValueNumrange:
+		return numRangeFromWit(v.Numrange()), true
+	case pg.DbValueTsrange:
+		return tsRangeFromWit(v.Tsrange()), true
+	case pg.DbValueTstzrange:
+		return tstzRangeFromWit(v.Tstzrange()), true
+	case pg.DbValueDaterange:
+		return dateRangeFromWit(v.Daterange()), true
+	case pg.DbValueEnumeration:
+		e := v.Enumeration()
+		return Enum{Name: e.Name, Value: e.Value}, true
+	case pg.DbValueSparsevec:
+		s := v.Sparsevec()
+		return SparseVec{Dim: int(s.Dim), Indices: s.Indices, Values: s.Values}, true
 	default:
-		// enumeration, composite, domain, array, range, sparsevec — opaque for now.
-		return DbValue{raw: v}
+		// array, composite, domain, range — recursive, handled by decodeLazy.
+		return nil, false
 	}
 }
 
@@ -548,6 +804,189 @@ func macFromWit(m rtypes.MacAddress) types.MacAddr {
 	return types.MacAddr{o.F0, o.F1, o.F2, o.F3, o.F4, o.F5}
 }
 
+func goTimeToDate(t time.Time) pg.Date {
+	return pg.Date{Year: int32(t.Year()), Month: uint8(t.Month()), Day: uint8(t.Day())}
+}
+
+// ── Range bound conversions ───────────────────────────────────────────────────
+
+func int4BoundToWit(b Bound[int32]) pg.Int4bound {
+	switch b.Kind {
+	case BoundIncluded:
+		return pg.MakeInt4boundIncluded(b.Value)
+	case BoundExcluded:
+		return pg.MakeInt4boundExcluded(b.Value)
+	default:
+		return pg.MakeInt4boundUnbounded()
+	}
+}
+
+func int4BoundFromWit(b pg.Int4bound) Bound[int32] {
+	switch b.Tag() {
+	case pg.Int4boundIncluded:
+		return Included(b.Included())
+	case pg.Int4boundExcluded:
+		return Excluded(b.Excluded())
+	default:
+		return Unbounded[int32]()
+	}
+}
+
+func int4RangeFromWit(r pg.Int4range) Range[int32] {
+	return Range[int32]{Start: int4BoundFromWit(r.Start), End: int4BoundFromWit(r.End)}
+}
+
+func int8BoundToWit(b Bound[int64]) pg.Int8bound {
+	switch b.Kind {
+	case BoundIncluded:
+		return pg.MakeInt8boundIncluded(b.Value)
+	case BoundExcluded:
+		return pg.MakeInt8boundExcluded(b.Value)
+	default:
+		return pg.MakeInt8boundUnbounded()
+	}
+}
+
+func int8BoundFromWit(b pg.Int8bound) Bound[int64] {
+	switch b.Tag() {
+	case pg.Int8boundIncluded:
+		return Included(b.Included())
+	case pg.Int8boundExcluded:
+		return Excluded(b.Excluded())
+	default:
+		return Unbounded[int64]()
+	}
+}
+
+func int8RangeFromWit(r pg.Int8range) Range[int64] {
+	return Range[int64]{Start: int8BoundFromWit(r.Start), End: int8BoundFromWit(r.End)}
+}
+
+func numBoundToWit(b Bound[string]) pg.Numbound {
+	switch b.Kind {
+	case BoundIncluded:
+		return pg.MakeNumboundIncluded(b.Value)
+	case BoundExcluded:
+		return pg.MakeNumboundExcluded(b.Value)
+	default:
+		return pg.MakeNumboundUnbounded()
+	}
+}
+
+func numBoundFromWit(b pg.Numbound) Bound[string] {
+	switch b.Tag() {
+	case pg.NumboundIncluded:
+		return Included(b.Included())
+	case pg.NumboundExcluded:
+		return Excluded(b.Excluded())
+	default:
+		return Unbounded[string]()
+	}
+}
+
+func numRangeFromWit(r pg.Numrange) Range[string] {
+	return Range[string]{Start: numBoundFromWit(r.Start), End: numBoundFromWit(r.End)}
+}
+
+func tsBoundToWit(b Bound[time.Time]) pg.Tsbound {
+	switch b.Kind {
+	case BoundIncluded:
+		return pg.MakeTsboundIncluded(goTimeToTimestamp(b.Value))
+	case BoundExcluded:
+		return pg.MakeTsboundExcluded(goTimeToTimestamp(b.Value))
+	default:
+		return pg.MakeTsboundUnbounded()
+	}
+}
+
+func tsBoundFromWit(b pg.Tsbound) Bound[time.Time] {
+	switch b.Tag() {
+	case pg.TsboundIncluded:
+		return Included(timestampToGoTime(b.Included(), time.UTC))
+	case pg.TsboundExcluded:
+		return Excluded(timestampToGoTime(b.Excluded(), time.UTC))
+	default:
+		return Unbounded[time.Time]()
+	}
+}
+
+func tsRangeFromWit(r pg.Tsrange) Range[time.Time] {
+	return Range[time.Time]{Start: tsBoundFromWit(r.Start), End: tsBoundFromWit(r.End)}
+}
+
+func tstzBoundToWit(b Bound[time.Time]) pg.Tstzbound {
+	switch b.Kind {
+	case BoundIncluded:
+		return pg.MakeTstzboundIncluded(goTimeToTimestamptz(b.Value))
+	case BoundExcluded:
+		return pg.MakeTstzboundExcluded(goTimeToTimestamptz(b.Value))
+	default:
+		return pg.MakeTstzboundUnbounded()
+	}
+}
+
+func tstzBoundFromWit(b pg.Tstzbound) Bound[time.Time] {
+	switch b.Tag() {
+	case pg.TstzboundIncluded:
+		return Included(timestamptzToGoTime(b.Included()))
+	case pg.TstzboundExcluded:
+		return Excluded(timestamptzToGoTime(b.Excluded()))
+	default:
+		return Unbounded[time.Time]()
+	}
+}
+
+func tstzRangeFromWit(r pg.Tstzrange) Range[time.Time] {
+	return Range[time.Time]{Start: tstzBoundFromWit(r.Start), End: tstzBoundFromWit(r.End)}
+}
+
+func dateBoundToWit(b Bound[time.Time]) pg.Datebound {
+	switch b.Kind {
+	case BoundIncluded:
+		return pg.MakeDateboundIncluded(goTimeToDate(b.Value))
+	case BoundExcluded:
+		return pg.MakeDateboundExcluded(goTimeToDate(b.Value))
+	default:
+		return pg.MakeDateboundUnbounded()
+	}
+}
+
+func dateBoundFromWit(b pg.Datebound) Bound[time.Time] {
+	switch b.Tag() {
+	case pg.DateboundIncluded:
+		return Included(dateToGoTime(b.Included()))
+	case pg.DateboundExcluded:
+		return Excluded(dateToGoTime(b.Excluded()))
+	default:
+		return Unbounded[time.Time]()
+	}
+}
+
+func dateRangeFromWit(r pg.Daterange) Range[time.Time] {
+	return Range[time.Time]{Start: dateBoundFromWit(r.Start), End: dateBoundFromWit(r.End)}
+}
+
+// valueBoundToWit builds a host value-bound for a custom range, wrapping the
+// bound value in a lazy resource (a host call).
+func valueBoundToWit(b Bound[any]) (pg.ValueBound, error) {
+	switch b.Kind {
+	case BoundIncluded:
+		v, err := encodeParam(b.Value)
+		if err != nil {
+			return pg.ValueBound{}, err
+		}
+		return pg.MakeValueBoundIncluded(pg.MakeLazyDbValue(v)), nil
+	case BoundExcluded:
+		v, err := encodeParam(b.Value)
+		if err != nil {
+			return pg.ValueBound{}, err
+		}
+		return pg.MakeValueBoundExcluded(pg.MakeLazyDbValue(v)), nil
+	default:
+		return pg.MakeValueBoundUnbounded(), nil
+	}
+}
+
 // ── Rows / columns / result sets ─────────────────────────────────────────────
 
 // Column describes a result column.
@@ -597,7 +1036,7 @@ func (r Row) Get(i int) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return decodeValue(v), nil
+	return decode(v), nil
 }
 
 // Int64 reads an integer column (any integer width, money or oid) as int64.
