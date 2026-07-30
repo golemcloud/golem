@@ -1117,7 +1117,7 @@ fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
             agent_types: vec![agent_type],
         })
         .expect("agent-type.list should serialize"),
-        to_structured_output_value(crate::model::text::agent::AgentOplogEntryView {
+        to_structured_output_value(crate::model::text::agent::oplog::AgentOplogEntryView {
             index: 0,
             entry: sample_public_oplog_entries()
                 .into_iter()
@@ -2578,11 +2578,11 @@ fn arb_path_segment() -> BoxedStrategy<golem_common::model::agent::PathSegment> 
 fn arb_agent_files_result() -> OutputDocumentStrategy {
     serialized_output(
         proptest::collection::vec(arb_file_node(), 0..6)
-            .prop_map(|nodes| crate::model::text::agent::AgentFilesView { nodes }),
+            .prop_map(|nodes| crate::model::text::agent::files::AgentFilesView { nodes }),
     )
 }
 
-fn arb_file_node() -> BoxedStrategy<crate::model::text::agent::FileNodeView> {
+fn arb_file_node() -> BoxedStrategy<crate::model::text::agent::files::FileNodeView> {
     (
         arb_small_string(),
         arb_small_string(),
@@ -2591,7 +2591,7 @@ fn arb_file_node() -> BoxedStrategy<crate::model::text::agent::FileNodeView> {
         arb_small_u64(),
     )
         .prop_map(|(name, last_modified, kind, permissions, size)| {
-            crate::model::text::agent::FileNodeView {
+            crate::model::text::agent::files::FileNodeView {
                 name,
                 last_modified,
                 kind,
@@ -2670,9 +2670,9 @@ fn arb_agent_oplog_result() -> OutputDocumentStrategy {
                 arb_typed_value_oplog_entry(),
             ],
         )
-            .prop_map(
-                |(index, entry)| crate::model::text::agent::AgentOplogEntryView { index, entry },
-            ),
+            .prop_map(|(index, entry)| {
+                crate::model::text::agent::oplog::AgentOplogEntryView { index, entry }
+            }),
     )
 }
 
