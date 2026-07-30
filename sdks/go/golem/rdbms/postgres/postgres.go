@@ -1163,6 +1163,158 @@ func (r Row) Time(i int) (time.Time, error) {
 	}
 }
 
+// Typed getters for the exotic families. The flat ones (ranges, enum, sparse
+// vector) read directly; the recursive ones (array, composite, domain, custom
+// range) go through the host lazy resources, so — like [Row.Get] — they only run
+// inside a query, not native tests.
+
+// Int4Range reads an int4range column.
+func (r Row) Int4Range(i int) (Range[int32], error) {
+	v, err := r.at(i)
+	if err != nil {
+		return Range[int32]{}, err
+	}
+	if v.Tag() != pg.DbValueInt4range {
+		return Range[int32]{}, typeErr(i, v, "int4range")
+	}
+	return int4RangeFromWit(v.Int4range()), nil
+}
+
+// Int8Range reads an int8range column.
+func (r Row) Int8Range(i int) (Range[int64], error) {
+	v, err := r.at(i)
+	if err != nil {
+		return Range[int64]{}, err
+	}
+	if v.Tag() != pg.DbValueInt8range {
+		return Range[int64]{}, typeErr(i, v, "int8range")
+	}
+	return int8RangeFromWit(v.Int8range()), nil
+}
+
+// NumRange reads a numrange column (bounds as numeric strings).
+func (r Row) NumRange(i int) (Range[string], error) {
+	v, err := r.at(i)
+	if err != nil {
+		return Range[string]{}, err
+	}
+	if v.Tag() != pg.DbValueNumrange {
+		return Range[string]{}, typeErr(i, v, "numrange")
+	}
+	return numRangeFromWit(v.Numrange()), nil
+}
+
+// TsRange reads a tsrange column (bounds in UTC).
+func (r Row) TsRange(i int) (Range[time.Time], error) {
+	v, err := r.at(i)
+	if err != nil {
+		return Range[time.Time]{}, err
+	}
+	if v.Tag() != pg.DbValueTsrange {
+		return Range[time.Time]{}, typeErr(i, v, "tsrange")
+	}
+	return tsRangeFromWit(v.Tsrange()), nil
+}
+
+// TstzRange reads a tstzrange column (bound offsets preserved).
+func (r Row) TstzRange(i int) (Range[time.Time], error) {
+	v, err := r.at(i)
+	if err != nil {
+		return Range[time.Time]{}, err
+	}
+	if v.Tag() != pg.DbValueTstzrange {
+		return Range[time.Time]{}, typeErr(i, v, "tstzrange")
+	}
+	return tstzRangeFromWit(v.Tstzrange()), nil
+}
+
+// DateRange reads a daterange column (bounds in UTC, date only).
+func (r Row) DateRange(i int) (Range[time.Time], error) {
+	v, err := r.at(i)
+	if err != nil {
+		return Range[time.Time]{}, err
+	}
+	if v.Tag() != pg.DbValueDaterange {
+		return Range[time.Time]{}, typeErr(i, v, "daterange")
+	}
+	return dateRangeFromWit(v.Daterange()), nil
+}
+
+// Enum reads an enumeration column.
+func (r Row) Enum(i int) (Enum, error) {
+	v, err := r.at(i)
+	if err != nil {
+		return Enum{}, err
+	}
+	if v.Tag() != pg.DbValueEnumeration {
+		return Enum{}, typeErr(i, v, "enumeration")
+	}
+	e := v.Enumeration()
+	return Enum{Name: e.Name, Value: e.Value}, nil
+}
+
+// SparseVec reads a sparsevec column.
+func (r Row) SparseVec(i int) (SparseVec, error) {
+	v, err := r.at(i)
+	if err != nil {
+		return SparseVec{}, err
+	}
+	if v.Tag() != pg.DbValueSparsevec {
+		return SparseVec{}, typeErr(i, v, "sparsevec")
+	}
+	s := v.Sparsevec()
+	return SparseVec{Dim: int(s.Dim), Indices: s.Indices, Values: s.Values}, nil
+}
+
+// Array reads an array column into a slice, each element decoded like [Row.Get].
+func (r Row) Array(i int) ([]any, error) {
+	v, err := r.at(i)
+	if err != nil {
+		return nil, err
+	}
+	if v.Tag() != pg.DbValueArray {
+		return nil, typeErr(i, v, "array")
+	}
+	return decodeLazy(v).([]any), nil
+}
+
+// Composite reads a composite column.
+func (r Row) Composite(i int) (CompositeValue, error) {
+	v, err := r.at(i)
+	if err != nil {
+		return CompositeValue{}, err
+	}
+	if v.Tag() != pg.DbValueComposite {
+		return CompositeValue{}, typeErr(i, v, "composite")
+	}
+	return decodeLazy(v).(CompositeValue), nil
+}
+
+// Domain reads a domain column.
+func (r Row) Domain(i int) (DomainValue, error) {
+	v, err := r.at(i)
+	if err != nil {
+		return DomainValue{}, err
+	}
+	if v.Tag() != pg.DbValueDomain {
+		return DomainValue{}, typeErr(i, v, "domain")
+	}
+	return decodeLazy(v).(DomainValue), nil
+}
+
+// Range reads a user-defined range column (use the typed range getters for the
+// built-in range types).
+func (r Row) Range(i int) (RangeValue, error) {
+	v, err := r.at(i)
+	if err != nil {
+		return RangeValue{}, err
+	}
+	if v.Tag() != pg.DbValueRange {
+		return RangeValue{}, typeErr(i, v, "range")
+	}
+	return decodeLazy(v).(RangeValue), nil
+}
+
 // Scan decodes the row into the given pointers, one per column. Supported
 // destinations are *int64, *int, *float64, *string, *bool, *[]byte,
 // *golem.UUID, *time.Time and *any (which receives whatever [Row.Get] returns).

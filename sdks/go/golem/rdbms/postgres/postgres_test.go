@@ -237,6 +237,39 @@ func TestTimeRoundTrip(t *testing.T) {
 	}
 }
 
+// TestExoticGetters — the typed getters for the flat exotic families read the
+// matching column and reject others. (The recursive getters — Array/Composite/
+// Domain/Range — are host-backed and exercised in the playground demo.)
+func TestExoticGetters(t *testing.T) {
+	r := Row{values: []pg.DbValue{
+		Int4Range(Range[int32]{Start: Included(int32(1)), End: Excluded(int32(10))}).raw,
+		Enumeration("mood", "happy").raw,
+		pg.MakeDbValueSparsevec(pg.SparseVec{Dim: 3, Indices: []int32{0, 2}, Values: []float32{1, 2}}),
+		pg.MakeDbValueText("nope"),
+	}}
+
+	if got, err := r.Int4Range(0); err != nil || got.Start != Included(int32(1)) || got.End != Excluded(int32(10)) {
+		t.Fatalf("Int4Range = %+v, %v", got, err)
+	}
+	if got, err := r.Enum(1); err != nil || got.Name != "mood" || got.Value != "happy" {
+		t.Fatalf("Enum = %+v, %v", got, err)
+	}
+	if got, err := r.SparseVec(2); err != nil || got.Dim != 3 || len(got.Indices) != 2 || got.Values[1] != 2 {
+		t.Fatalf("SparseVec = %+v, %v", got, err)
+	}
+
+	// Type mismatches are errors, not panics.
+	if _, err := r.Int4Range(3); err == nil {
+		t.Fatal("Int4Range on text should error")
+	}
+	if _, err := r.Enum(0); err == nil {
+		t.Fatal("Enum on int4range should error")
+	}
+	if _, err := r.SparseVec(3); err == nil {
+		t.Fatal("SparseVec on text should error")
+	}
+}
+
 // TestTemporalTypes — time/timetz/interval decode into the types structs.
 func TestTemporalTypes(t *testing.T) {
 	tm := mustFlat(t, pg.MakeDbValueTime(pg.Time{Hour: 1, Minute: 2, Second: 3, Nanosecond: 4})).(types.Time)
