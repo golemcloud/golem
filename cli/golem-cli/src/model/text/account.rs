@@ -145,21 +145,29 @@ impl From<StorageUsageMetrics> for AccountUsageView {
     }
 }
 
-/// Labels for the usage values, shared by `account usage show` and `account usage
-/// history` so the two commands cannot disagree on naming.
+/// Column headings for the history table, which needs them even when there are no rows
+/// to take them from. Kept in step with [`AccountUsageView::rendered_fields`] by
+/// `account_usage_always_renders_the_same_labels_in_order`.
 const ACCOUNT_USAGE_LABELS: [&str; 4] =
     ["Period", "Compute", "Durable storage", "Ephemeral storage"];
 
 impl AccountUsageView {
-    /// The single place usage values are turned into customer-visible strings. Both
-    /// the detail view and the history table render through this, so the same usage
-    /// can never be reported two different ways.
-    fn rendered_values(&self) -> [String; 4] {
+    /// The single place usage values are turned into customer-visible strings. Both the
+    /// detail view and the history table render through this, so the same usage can never
+    /// be reported two different ways. Each label sits next to the value it names, so a
+    /// figure cannot end up under the wrong heading.
+    fn rendered_fields(&self) -> [(&'static str, String); 4] {
         [
-            self.period.to_string(),
-            format!("{} GCU", self.compute_gcu),
-            format!("{} GB-month", self.durable_storage_gb_month),
-            format!("{} GB-month", self.ephemeral_storage_gb_month),
+            ("Period", self.period.to_string()),
+            ("Compute", format!("{} GCU", self.compute_gcu)),
+            (
+                "Durable storage",
+                format!("{} GB-month", self.durable_storage_gb_month),
+            ),
+            (
+                "Ephemeral storage",
+                format!("{} GB-month", self.ephemeral_storage_gb_month),
+            ),
         ]
     }
 }
@@ -171,7 +179,7 @@ impl MessageWithFields for AccountUsageView {
 
     fn fields(&self) -> Vec<(String, String)> {
         let mut fields = FieldsBuilder::new();
-        for (label, value) in ACCOUNT_USAGE_LABELS.iter().zip(self.rendered_values()) {
+        for (label, value) in self.rendered_fields() {
             fields.field(label, &value);
         }
         fields.build()
@@ -198,7 +206,7 @@ impl TextOutput for AccountUsageListView {
         );
 
         for usage in &self.usage {
-            table.add_row(usage.rendered_values());
+            table.add_row(usage.rendered_fields().map(|(_, value)| value));
         }
 
         log_table(table);
@@ -498,7 +506,10 @@ mod tests {
         #[test]
         fn account_usage_detail_and_history_render_identically(usage in arb_usage()) {
             let detail = usage.fields().into_iter().map(|(_, value)| value).collect::<Vec<_>>();
-            let history_row = usage.rendered_values().to_vec();
+            let history_row = usage
+                .rendered_fields()
+                .map(|(_, value)| value)
+                .to_vec();
 
             prop_assert_eq!(detail, history_row);
         }

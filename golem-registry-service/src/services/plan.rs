@@ -91,9 +91,9 @@ impl PlanService {
 
             let needs_update = match self.get(&plan.plan_id, &AuthCtx::System).await {
                 Ok(existing_plan) => {
-                    // Compare the whole record rather than a hand-maintained field list:
-                    // a list silently stops reconciling any limit someone forgets to add
-                    // to it, and drifts from the record actually written below.
+                    // Comparing the whole record keeps reconciliation exhaustive: every
+                    // field written below is also a field that can trigger an update, so
+                    // a newly added plan limit is covered without touching this line.
                     let needs_update = existing_plan != desired_plan;
 
                     if needs_update {
