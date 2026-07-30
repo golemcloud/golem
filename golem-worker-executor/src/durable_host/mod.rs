@@ -50,6 +50,7 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::{
     AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
 };
+use crate::services::agent_storage_meter::AgentStorageMeter;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -137,7 +138,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
 use std::vec;
@@ -219,7 +220,7 @@ impl WasiHttpHooks for DurableHttpHooks {
         body_completion: Option<BodyCompletionReceiver>,
     ) -> HttpResult<HostFutureIncomingResponse> {
         let connection_pool = self.connection_pool.clone();
-        if self.is_replay.load(std::sync::atomic::Ordering::Acquire) {
+        if self.is_replay.load(Ordering::Acquire) {
             // If this is a replay, we must not actually send the request, but we have to store it in the
             // FutureIncomingResponse because it is possible that there wasn't any response recorded in the oplog.
             // If that is the case, the request has to be sent as soon as we get into live mode and trying to await
@@ -326,10 +327,19 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     execution_status: Arc<RwLock<ExecutionStatus>>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
+    storage_meter: AgentStorageMeter,
     /// Per-instance cache of resolved typed guest export handles, populated
     /// lazily on first use during invocation dispatch.
     agent_export_funcs: AgentExportFuncs,
     _store_alive_guard: StoreAliveGuard,
+}
+
+impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
+    fn drop(&mut self) {
+        self.storage_meter.flush(Instant::now());
+        self.resource_limits
+            .unregister_storage_meter(&self.owned_agent_id, &self.storage_meter);
+    }
 }
 
 /// Increments the live-`Store` gauge on construction and decrements it on drop.
@@ -397,7 +407,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         component_service: Arc<dyn ComponentService>,
         resource_limits: Arc<AtomicResourceEntry>,
         config: Arc<GolemConfig>,
-        worker_config: AgentConfig,
+        mut worker_config: AgentConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         worker_fork: Arc<dyn WorkerForkService>,
@@ -460,6 +470,27 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .get(&agent_id.agent_type)
                 .cloned()
         });
+        let initial_read_write_file_bytes: u64 = agent_type_provision_configs
+            .as_ref()
+            .map(|c| c.files.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .filter(|f| f.permissions == AgentFilePermissions::ReadWrite)
+            .map(|f| f.size)
+            .fold(0u64, u64::saturating_add);
+        let initial_filesystem_storage_usage = worker_config
+            .current_filesystem_storage_usage
+            .saturating_add(initial_read_write_file_bytes);
+        if initial_filesystem_storage_usage > resource_limits.max_disk_space_limit() {
+            return Err(WorkerExecutorError::worker_creation_failed(
+                owned_agent_id.agent_id.clone(),
+                format!(
+                    "Provisioned read-write files require {initial_filesystem_storage_usage} bytes, exceeding the per-agent disk limit of {} bytes",
+                    resource_limits.max_disk_space_limit()
+                ),
+            ));
+        }
+
         let files = prepare_filesystem(
             &file_loader,
             owned_agent_id.environment_id,
@@ -481,22 +512,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         //
         // Read-write files are copied per-worker (each worker gets its own
         // private inode and data blocks), so they must be charged individually.
-        if let Some(worker) = invocation_queue.upgrade() {
-            let rw_bytes: u64 = agent_type_provision_configs
-                .as_ref()
-                .map(|c| c.files.as_slice())
-                .unwrap_or_default()
-                .iter()
-                .filter(|f| f.permissions == AgentFilePermissions::ReadWrite)
-                .map(|f| f.size)
-                .sum();
-            if rw_bytes > 0 {
-                worker
-                    .acquire_initial_filesystem_storage(rw_bytes)
-                    .await
-                    .map_err(|trap| WorkerExecutorError::runtime(trap.to_string()))?;
-            }
+        if let Some(worker) = invocation_queue.upgrade()
+            && initial_read_write_file_bytes > 0
+        {
+            worker
+                .acquire_initial_filesystem_storage(initial_read_write_file_bytes)
+                .await
+                .map_err(|trap| WorkerExecutorError::runtime(trap.to_string()))?;
         }
+        worker_config.current_filesystem_storage_usage = initial_filesystem_storage_usage;
 
         let agent_config = if agent_id.is_some() {
             effective_agent_config(
@@ -533,6 +557,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             connection_pool: http_connection_pool,
             is_replay: Arc::new(AtomicBool::new(false)),
         };
+        let storage_meter = AgentStorageMeter::new(
+            execution_status.read().unwrap().agent_mode(),
+            worker_config.current_filesystem_storage_usage,
+            resource_limits.clone(),
+            Instant::now(),
+        );
+        resource_limits.register_storage_meter(owned_agent_id.clone(), storage_meter.clone());
+
         Ok(DurableWorkerCtx {
             table: Arc::new(Mutex::new(table)),
             wasi: Arc::new(Mutex::new(wasi)),
@@ -594,6 +626,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             worker_dir,
             execution_status,
             resource_limits,
+            storage_meter,
             agent_export_funcs: AgentExportFuncs::default(),
             _store_alive_guard: StoreAliveGuard::new(),
         })
@@ -1028,7 +1061,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let is_replay = self.state.is_replay();
         self.http_hooks
             .is_replay
-            .store(is_replay, std::sync::atomic::Ordering::Release);
+            .store(is_replay, Ordering::Release);
         let inner = &mut *self;
         let table = Arc::get_mut(&mut inner.table)
             .expect("ResourceTable is shared and cannot be borrowed mutably")
@@ -1132,6 +1165,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 new_bytes as i64,
             ))
             .await;
+        self.storage_meter.on_acquire(new_bytes, Instant::now());
         self.state.current_filesystem_storage_usage += new_bytes;
         let account_id = self.created_by().to_string();
         let environment_id = self.state.owned_agent_id.environment_id().to_string();
@@ -1165,6 +1199,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .worker()
             .release_filesystem_storage_space(freed_bytes)
             .await;
+        self.storage_meter.on_release(freed_bytes, Instant::now());
         self.state.current_filesystem_storage_usage -= freed_bytes;
         let account_id = self.created_by().to_string();
         let environment_id = self.state.owned_agent_id.environment_id().to_string();
@@ -4109,7 +4144,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             .get_public_state()
                             .worker()
                             .snapshot_recovery_disabled
-                            .store(true, std::sync::atomic::Ordering::Release);
+                            .store(true, Ordering::Release);
                         Ok(Some(RetryDecision::Immediate))
                     }
                 },
@@ -4881,9 +4916,9 @@ pub(crate) struct HttpRequestState {
     /// creates the stream from the outgoing body.
     pub output_stream_rep: Option<u32>,
     pub use_tls: bool,
-    pub connect_timeout: std::time::Duration,
-    pub first_byte_timeout: std::time::Duration,
-    pub between_bytes_timeout: std::time::Duration,
+    pub connect_timeout: Duration,
+    pub first_byte_timeout: Duration,
+    pub between_bytes_timeout: Duration,
     /// Notifies a wrapped response future when the outgoing body becomes fully
     /// replayable, or when it is closed before finish and therefore cannot be
     /// held back for status-code retry anymore.
@@ -5126,7 +5161,7 @@ struct PrivateDurableWorkerState {
     /// Runtime overlay of named retry policy mutations applied via oplog entries.
     /// `Some(policy)` = set/overwrite, `None` = tombstone (removed).
     /// Applied on top of base policies from agent_config during `named_retry_policies()`.
-    runtime_retry_policy_mutations: std::collections::BTreeMap<String, Option<NamedRetryPolicy>>,
+    runtime_retry_policy_mutations: BTreeMap<String, Option<NamedRetryPolicy>>,
 
     /// Maps child pollable rep → parent FutureInvokeResult rep.
     /// Used to finalize deferred parent deletion when a child pollable is dropped.
@@ -5363,7 +5398,7 @@ impl PrivateDurableWorkerState {
             initial_agent_config,
             config,
             cached_agent_config_retry_policies: None,
-            runtime_retry_policy_mutations: std::collections::BTreeMap::new(),
+            runtime_retry_policy_mutations: BTreeMap::new(),
             rpc_pollable_to_parent: HashMap::new(),
             shard_service,
             promise_backed_pollables: TRwLock::new(HashMap::new()),
@@ -5418,7 +5453,7 @@ impl PrivateDurableWorkerState {
             });
 
         // Tier 3: runtime overlay (highest precedence)
-        let mut deduped = std::collections::BTreeMap::new();
+        let mut deduped = BTreeMap::new();
         deduped.insert(default_policy.name.clone(), default_policy);
         for policy in agent_config_policies {
             deduped.insert(policy.name.clone(), policy);

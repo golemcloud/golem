@@ -9,4 +9,6 @@ message ResourceUsageUpdate {
   int64 fuel_delta = 2;
   uint64 http_call_count_delta = 3;
   uint64 rpc_call_count_delta = 4;
+  int64 durable_storage_byte_seconds_delta = 5;
+  int64 ephemeral_storage_byte_seconds_delta = 6;
 }

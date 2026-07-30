@@ -79,6 +79,10 @@ impl PlanService {
                             != plan.max_table_elements_per_worker
                         || existing_plan.max_disk_space_per_worker
                             != plan.max_disk_space_per_worker
+                        || existing_plan.max_disk_space_per_worker_ceiling
+                            != plan.max_disk_space_per_worker_ceiling
+                        || existing_plan.max_disk_space_per_worker_user_configurable
+                            != plan.max_disk_space_per_worker_user_configurable
                         || existing_plan.max_concurrent_agents_per_executor
                             != plan.max_concurrent_agents_per_executor
                         || existing_plan.oplog_writes_per_second != plan.oplog_writes_per_second;
@@ -111,6 +115,9 @@ impl PlanService {
                         max_memory_per_worker: plan.max_memory_per_worker,
                         max_table_elements_per_worker: plan.max_table_elements_per_worker,
                         max_disk_space_per_worker: plan.max_disk_space_per_worker,
+                        max_disk_space_per_worker_ceiling: plan.max_disk_space_per_worker_ceiling,
+                        max_disk_space_per_worker_user_configurable: plan
+                            .max_disk_space_per_worker_user_configurable,
                         per_invocation_http_call_limit: plan.per_invocation_http_call_limit,
                         per_invocation_rpc_call_limit: plan.per_invocation_rpc_call_limit,
                         monthly_http_call_limit: plan.monthly_http_call_limit,
@@ -151,6 +158,9 @@ impl PlanService {
             max_memory_per_worker: plan.max_memory_per_worker.into(),
             max_table_elements_per_worker: plan.max_table_elements_per_worker.into(),
             max_disk_space_per_worker: plan.max_disk_space_per_worker.into(),
+            max_disk_space_per_worker_ceiling: plan.max_disk_space_per_worker_ceiling.into(),
+            max_disk_space_per_worker_user_configurable: plan
+                .max_disk_space_per_worker_user_configurable,
             max_concurrent_agents_per_executor: plan.max_concurrent_agents_per_executor.into(),
             total_app_count: plan.app_limit.into(),
             total_env_count: plan.env_limit.into(),

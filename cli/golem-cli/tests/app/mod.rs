@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod account;
 mod agents;
 
 #[allow(clippy::module_inception)]
@@ -63,6 +64,7 @@ const GOLEM_CLI_TEST_BIN_PROFILE_ENV_VAR: &str = "GOLEM_CLI_TEST_BIN_PROFILE";
 mod cmd {
     pub static NO_ARGS: &[&str] = &[];
 
+    pub static ACCOUNT: &str = "account";
     pub static AGENT: &str = "agent";
     pub static AGENT_TYPE: &str = "agent-type";
     pub static BUILD: &str = "build";

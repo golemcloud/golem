@@ -298,6 +298,14 @@ async fn env_vars(
             "5".to_string(), // 5 bytes — "hello world" (11 bytes) exceeds this
         )
         .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_DISK_SPACE_PER_WORKER_CEILING",
+            "20".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_DISK_SPACE_PER_WORKER_USER_CONFIGURABLE",
+            "true".to_string(),
+        )
+        .with(
             "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_GAS_LIMIT",
             "1000000000000000000".to_string(),
         )

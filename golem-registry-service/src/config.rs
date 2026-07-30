@@ -180,6 +180,8 @@ impl Default for RegistryServiceConfig {
                 max_memory_per_worker: 1024 * 1024 * 1024, // 1 GB
                 max_table_elements_per_worker: 16_384,
                 max_disk_space_per_worker: 1024 * 1024 * 1024, // 1 GB
+                max_disk_space_per_worker_ceiling: 1024 * 1024 * 1024, // 1 GB
+                max_disk_space_per_worker_user_configurable: false,
                 per_invocation_http_call_limit: 1_000_000_000_000_000_000,
                 per_invocation_rpc_call_limit: 1_000_000_000_000_000_000,
                 monthly_http_call_limit: 1_000_000_000_000_000_000,
@@ -491,6 +493,10 @@ pub struct PrecreatedPlan {
     pub max_table_elements_per_worker: u64,
     #[serde(default = "default_max_disk_space_per_worker")]
     pub max_disk_space_per_worker: u64,
+    #[serde(default = "default_max_disk_space_per_worker")]
+    pub max_disk_space_per_worker_ceiling: u64,
+    #[serde(default)]
+    pub max_disk_space_per_worker_user_configurable: bool,
     #[serde(default = "default_unlimited")]
     pub per_invocation_http_call_limit: u64,
     #[serde(default = "default_unlimited")]

@@ -2189,7 +2189,54 @@ pub mod api_token {
 pub mod account {
     use crate::command::shared_args::AccountIdOptionalArg;
     use clap::{Args, Subcommand};
+    use golem_common::model::account_usage::{
+        DEFAULT_STORAGE_USAGE_HISTORY_PERIODS, StorageUsagePeriod,
+    };
     use golem_common::model::permission_share::PermissionShareId;
+
+    #[derive(Debug, Subcommand)]
+    pub enum AccountUsageSubcommand {
+        /// Show storage usage for current or selected billing period.
+        Show {
+            #[command(flatten)]
+            account_id: AccountIdOptionalArg,
+
+            /// Billing period in YYYY-MM format.
+            #[arg(long)]
+            period: Option<StorageUsagePeriod>,
+        },
+        /// Show storage usage for closed billing periods.
+        History {
+            #[command(flatten)]
+            account_id: AccountIdOptionalArg,
+
+            /// Number of closed periods to show.
+            #[arg(long, default_value_t = DEFAULT_STORAGE_USAGE_HISTORY_PERIODS)]
+            last: usize,
+        },
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum AccountLimitsSubcommand {
+        /// Show the effective maximum storage per agent.
+        Show {
+            #[command(flatten)]
+            account_id: AccountIdOptionalArg,
+        },
+        /// Set the maximum storage per agent in bytes.
+        Set {
+            #[command(flatten)]
+            account_id: AccountIdOptionalArg,
+
+            #[arg(value_name = "BYTES")]
+            max_storage_per_agent: u64,
+        },
+        /// Clear the account storage override and use the plan default.
+        Unset {
+            #[command(flatten)]
+            account_id: AccountIdOptionalArg,
+        },
+    }
 
     #[derive(Debug, Args)]
     pub struct PermissionShareGrantArgs {
@@ -2296,6 +2343,16 @@ pub mod account {
         Delete {
             #[command(flatten)]
             account_id: AccountIdOptionalArg,
+        },
+        /// Show current or historical account storage usage.
+        Usage {
+            #[command(subcommand)]
+            subcommand: AccountUsageSubcommand,
+        },
+        /// Show or change account storage limits.
+        Limits {
+            #[command(subcommand)]
+            subcommand: AccountLimitsSubcommand,
         },
         /// Manage permission shares owned by an account.
         PermissionShare {
@@ -2470,6 +2527,9 @@ pub fn help_target_to_command(target: ShowClapHelpTarget) -> Command {
 
 #[cfg(test)]
 mod test {
+    use crate::command::account::{
+        AccountLimitsSubcommand, AccountSubcommand, AccountUsageSubcommand,
+    };
     use crate::command::shared_args::PostDeployArgs;
     use crate::command::{
         GolemCliCommand, GolemCliSubcommand, builtin_exec_subcommands,
@@ -2478,7 +2538,7 @@ mod test {
     use crate::error::ShowClapHelpTarget;
     use crate::model::worker::AgentUpdateMode;
     use clap::builder::StyledStr;
-    use clap::{Command, CommandFactory};
+    use clap::{Command, CommandFactory, Parser};
     use itertools::Itertools;
     use std::collections::{BTreeMap, BTreeSet};
     use strum::IntoEnumIterator;
@@ -2722,7 +2782,6 @@ mod test {
     #[test]
     fn update_agents_accepts_automatic_as_update_mode() {
         use crate::model::worker::AgentUpdateMode;
-        use clap::Parser;
 
         let result = GolemCliCommand::try_parse_from([
             "golem",
@@ -2742,6 +2801,129 @@ mod test {
             }
             _ => panic!("Expected UpdateAgents subcommand"),
         }
+    }
+
+    #[test]
+    fn account_usage_show_parses_period_and_account_id() {
+        let account_id = "00000000-0000-0000-0000-000000000001";
+        let command = GolemCliCommand::try_parse_from([
+            "golem",
+            "account",
+            "usage",
+            "show",
+            "--period",
+            "2026-07",
+            "--account-id",
+            account_id,
+        ])
+        .unwrap();
+
+        match command.subcommand {
+            GolemCliSubcommand::Account {
+                subcommand:
+                    AccountSubcommand::Usage {
+                        subcommand:
+                            AccountUsageSubcommand::Show {
+                                account_id: selected_account_id,
+                                period,
+                            },
+                    },
+            } => {
+                assert_eq!(
+                    selected_account_id.account_id.unwrap().to_string(),
+                    account_id
+                );
+                assert_eq!(period.unwrap().to_string(), "2026-07");
+            }
+            _ => panic!("Expected account usage show command"),
+        }
+    }
+
+    #[test]
+    fn account_usage_history_parses_default_and_last() {
+        let default_command =
+            GolemCliCommand::try_parse_from(["golem", "account", "usage", "history"]).unwrap();
+        let last_command = GolemCliCommand::try_parse_from([
+            "golem", "account", "usage", "history", "--last", "3",
+        ])
+        .unwrap();
+
+        match default_command.subcommand {
+            GolemCliSubcommand::Account {
+                subcommand:
+                    AccountSubcommand::Usage {
+                        subcommand: AccountUsageSubcommand::History { last, .. },
+                    },
+            } => assert_eq!(last, 6),
+            _ => panic!("Expected account usage history command"),
+        }
+
+        match last_command.subcommand {
+            GolemCliSubcommand::Account {
+                subcommand:
+                    AccountSubcommand::Usage {
+                        subcommand: AccountUsageSubcommand::History { last, .. },
+                    },
+            } => assert_eq!(last, 3),
+            _ => panic!("Expected account usage history command"),
+        }
+    }
+
+    #[test]
+    fn account_limits_show_set_and_unset_parse() {
+        let show_command =
+            GolemCliCommand::try_parse_from(["golem", "account", "limits", "show"]).unwrap();
+        let set_command =
+            GolemCliCommand::try_parse_from(["golem", "account", "limits", "set", "1048576"])
+                .unwrap();
+        let unset_command =
+            GolemCliCommand::try_parse_from(["golem", "account", "limits", "unset"]).unwrap();
+
+        assert!(matches!(
+            show_command.subcommand,
+            GolemCliSubcommand::Account {
+                subcommand: AccountSubcommand::Limits {
+                    subcommand: AccountLimitsSubcommand::Show { .. },
+                },
+            }
+        ));
+        assert!(matches!(
+            set_command.subcommand,
+            GolemCliSubcommand::Account {
+                subcommand: AccountSubcommand::Limits {
+                    subcommand: AccountLimitsSubcommand::Set {
+                        max_storage_per_agent: 1_048_576,
+                        ..
+                    },
+                },
+            }
+        ));
+        assert!(matches!(
+            unset_command.subcommand,
+            GolemCliSubcommand::Account {
+                subcommand: AccountSubcommand::Limits {
+                    subcommand: AccountLimitsSubcommand::Unset { .. },
+                },
+            }
+        ));
+    }
+
+    #[test]
+    fn account_usage_show_rejects_invalid_period() {
+        assert!(
+            GolemCliCommand::try_parse_from([
+                "golem", "account", "usage", "show", "--period", "2026-13",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn account_limits_set_rejects_invalid_storage_size() {
+        assert!(
+            GolemCliCommand::try_parse_from(["golem", "account", "limits", "set", "not-a-size",])
+                .is_err()
+        );
     }
 
     #[test]

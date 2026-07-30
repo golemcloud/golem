@@ -17,8 +17,10 @@ mod card;
 use self::card::account_root_card_record;
 use super::plan::{PlanError, PlanService};
 use crate::config::PrecreatedAccount;
-use crate::repo::account::AccountRepo;
-use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord};
+use crate::repo::account::{AccountRepo, DiskOverridePolicy};
+use crate::repo::model::account::{
+    AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
+};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
@@ -36,6 +38,7 @@ use golem_common::model::card::{
 use golem_common::model::plan::{Plan, PlanId};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
+use golem_service_base::repo::RepoError;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -73,7 +76,7 @@ impl SafeDisplay for AccountError {
     }
 }
 
-error_forwarding!(AccountError, PlanError, AccountRepoError);
+error_forwarding!(AccountError, PlanError, AccountRepoError, RepoError);
 
 pub struct AccountService {
     account_repo: Arc<dyn AccountRepo>,
@@ -177,7 +180,8 @@ impl AccountService {
         info!("Updating account: {}", account_id);
 
         // check that plan exists
-        self.plan_service
+        let destination_plan = self
+            .plan_service
             .get(&update.plan, &AuthCtx::System)
             .await
             .map_err(|e| match e {
@@ -186,8 +190,18 @@ impl AccountService {
             })?;
 
         account.plan_id = update.plan;
-
-        self.update_internal(account, auth).await
+        let record = Self::next_revision_record(account, auth)?;
+        let result = self
+            .account_repo
+            .update_plan_and_reconcile_overrides(
+                record,
+                DiskOverridePolicy {
+                    ceiling: destination_plan.max_disk_space_per_worker_ceiling,
+                    user_configurable: destination_plan.max_disk_space_per_worker_user_configurable,
+                },
+            )
+            .await;
+        Self::map_update_result(result)
     }
 
     pub async fn delete(
@@ -317,18 +331,30 @@ impl AccountService {
 
     async fn update_internal(
         &self,
-        mut account: Account,
+        account: Account,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        account.revision = account.revision.next()?;
-
-        let record = AccountRevisionRecord::from_model(
-            account,
-            DeletableRevisionAuditFields::new(auth.actor_account_id().0),
-        );
+        let record = Self::next_revision_record(account, auth)?;
 
         let result = self.account_repo.update(record).await;
 
+        Self::map_update_result(result)
+    }
+
+    fn next_revision_record(
+        mut account: Account,
+        auth: &AuthCtx,
+    ) -> Result<AccountRevisionRecord, AccountError> {
+        account.revision = account.revision.next()?;
+        Ok(AccountRevisionRecord::from_model(
+            account,
+            DeletableRevisionAuditFields::new(auth.actor_account_id().0),
+        ))
+    }
+
+    fn map_update_result(
+        result: Result<AccountExtRevisionRecord, AccountRepoError>,
+    ) -> Result<Account, AccountError> {
         match result {
             Ok(record) => Ok(record.try_into()?),
             Err(AccountRepoError::AccountViolatesUniqueness) => {

@@ -23,6 +23,7 @@ use futures_concurrency::future::Join;
 use golem_api_grpc::proto::golem::worker::{LogEvent, log_event};
 use golem_client::api::RegistryServiceClient;
 use golem_common::model::account::{AccountRevision, AccountSetPlan};
+use golem_common::model::account_usage::SetStorageLimit;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentId};
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
 use golem_common::model::oplog::{
@@ -2414,6 +2415,84 @@ async fn agent_exceeds_per_plan_disk_space_quota(
     assert!(
         err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
         "expected WorkerAgentExceededFilesystemStorageLimit from plan quota enforcement, got: {err_str}"
+    );
+
+    Ok(())
+}
+
+/// Verifies that an account storage override set through the registry HTTP API
+/// becomes the executor's effective per-agent disk quota.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn agent_uses_account_storage_override_for_disk_space_quota(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let admin = deps.admin().await;
+    let admin_client = admin.registry_service_client().await;
+    let user = deps.user().await?;
+
+    admin_client
+        .set_account_plan(
+            &user.account_id.0,
+            &AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: deps.registry_service().low_disk_space_plan(),
+            },
+        )
+        .await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
+        .store()
+        .await?;
+    let agent_id = agent_id!("FileSystem", "disk-quota-override-1");
+    user.start_agent(&component.id, agent_id.clone()).await?;
+
+    user.invoke_and_await_agent(
+        &component,
+        &agent_id,
+        "write_file",
+        data_value!("/initial.txt", "x"),
+    )
+    .await?;
+
+    deps.registry_service()
+        .client(&user.token)
+        .await
+        .set_account_storage_override(
+            &user.account_id.0,
+            &SetStorageLimit {
+                value: 12,
+                expires_at: None,
+            },
+        )
+        .await?;
+
+    // Invocation fuel activity includes this account in the next one-minute usage batch, whose
+    // response refreshes the executor's cached limits.
+    user.invoke_and_await_agent(
+        &component,
+        &agent_id,
+        "write_file",
+        data_value!("/initial.txt", "x"),
+    )
+    .await?;
+    sleep(Duration::from_secs(65)).await;
+
+    let result = user
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_file",
+            data_value!("/testfile.txt", "hello world"),
+        )
+        .await;
+    assert!(
+        result.is_ok(),
+        "expected 11-byte write to fit after raising disk quota to 12 bytes, got: {result:?}"
     );
 
     Ok(())

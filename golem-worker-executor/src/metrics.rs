@@ -937,6 +937,23 @@ pub mod resources {
             "Total amount of ephemeral overdraft fuel consumed"
         )
         .unwrap();
+        static ref DURABLE_STORAGE_BYTE_SECONDS_TOTAL: CounterVec = register_counter_vec!(
+            "durable_storage_byte_seconds_total",
+            "Durable filesystem storage byte-seconds billed by account",
+            &["account_id"]
+        )
+        .unwrap();
+        static ref EPHEMERAL_STORAGE_BYTE_SECONDS_TOTAL: CounterVec = register_counter_vec!(
+            "ephemeral_storage_byte_seconds_total",
+            "Ephemeral filesystem storage byte-seconds billed by account",
+            &["account_id"]
+        )
+        .unwrap();
+        static ref RESOURCE_USAGE_BATCH_UPDATE_FAILURE_TOTAL: Counter = register_counter!(
+            "resource_usage_batch_update_failure_total",
+            "Number of resource usage batches dropped after registry update failures"
+        )
+        .unwrap();
     }
 
     pub fn record_fuel_borrow(amount: u64) {
@@ -949,6 +966,22 @@ pub mod resources {
 
     pub fn record_ephemeral_overdraft_fuel(amount: u64) {
         EPHEMERAL_OVERDRAFT_FUEL_TOTAL.inc_by(amount as f64);
+    }
+
+    pub fn record_durable_storage_byte_seconds(account_id: &str, amount: i64) {
+        DURABLE_STORAGE_BYTE_SECONDS_TOTAL
+            .with_label_values(&[account_id])
+            .inc_by(amount as f64);
+    }
+
+    pub fn record_ephemeral_storage_byte_seconds(account_id: &str, amount: i64) {
+        EPHEMERAL_STORAGE_BYTE_SECONDS_TOTAL
+            .with_label_values(&[account_id])
+            .inc_by(amount as f64);
+    }
+
+    pub fn record_resource_usage_batch_update_failure() {
+        RESOURCE_USAGE_BATCH_UPDATE_FAILURE_TOTAL.inc();
     }
 }
 

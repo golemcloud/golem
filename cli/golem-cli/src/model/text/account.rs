@@ -17,6 +17,9 @@ use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
 use golem_client::model::{Account, PermissionShare};
 use golem_common::model::account::AccountId;
+use golem_common::model::account_usage::{
+    StorageLimit, StorageUsage, StorageUsageHistory, StorageUsageMetrics, StorageUsagePeriod,
+};
 use golem_common::model::permission_share::{PermissionShareData, PermissionShareId};
 use serde::{Deserialize, Serialize};
 
@@ -106,6 +109,141 @@ impl TextOutput for AccountDeleteResult {}
 
 impl StructuredOutput for AccountDeleteResult {
     const KIND: &'static str = "account.delete";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUsageView {
+    pub compute_gcu: f64,
+    pub durable_storage_gb_month: f64,
+    pub ephemeral_storage_gb_month: f64,
+    pub period: StorageUsagePeriod,
+}
+
+impl Masked for AccountUsageView {}
+
+impl From<StorageUsage> for AccountUsageView {
+    fn from(usage: StorageUsage) -> Self {
+        usage.usage.into()
+    }
+}
+
+impl From<StorageUsageHistory> for AccountUsageView {
+    fn from(usage: StorageUsageHistory) -> Self {
+        usage.usage.into()
+    }
+}
+
+impl From<StorageUsageMetrics> for AccountUsageView {
+    fn from(usage: StorageUsageMetrics) -> Self {
+        Self {
+            period: usage.period,
+            compute_gcu: usage.compute_gcu,
+            durable_storage_gb_month: usage.durable_storage_gb_month,
+            ephemeral_storage_gb_month: usage.ephemeral_storage_gb_month,
+        }
+    }
+}
+
+impl MessageWithFields for AccountUsageView {
+    fn message(&self) -> String {
+        format!("Storage usage for {}", self.period)
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        let mut fields = FieldsBuilder::new();
+        let period = self.period.to_string();
+        fields
+            .field("Period", &period)
+            .field("Compute", &format!("{} GCU", self.compute_gcu))
+            .field(
+                "Durable storage",
+                &format!("{} GB-month", self.durable_storage_gb_month),
+            )
+            .field(
+                "Ephemeral storage",
+                &format!("{} GB-month", self.ephemeral_storage_gb_month),
+            );
+        fields.build()
+    }
+}
+
+impl StructuredOutput for AccountUsageView {
+    const KIND: &'static str = "account.usage.show";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUsageListView {
+    pub usage: Vec<AccountUsageView>,
+}
+
+impl TextOutput for AccountUsageListView {
+    fn log(&self) {
+        let mut table = new_table_full_condensed(vec![
+            Column::new("Period"),
+            Column::new("Compute"),
+            Column::new("Durable storage"),
+            Column::new("Ephemeral storage"),
+        ]);
+
+        for usage in &self.usage {
+            table.add_row(vec![
+                usage.period.to_string(),
+                format!("{} GCU", usage.compute_gcu),
+                format!("{} GB-month", usage.durable_storage_gb_month),
+                format!("{} GB-month", usage.ephemeral_storage_gb_month),
+            ]);
+        }
+
+        log_table(table);
+    }
+}
+
+impl StructuredOutput for AccountUsageListView {
+    const KIND: &'static str = "account.usage.history";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountLimitsView(pub StorageLimit);
+
+impl Masked for AccountLimitsView {}
+
+impl From<StorageLimit> for AccountLimitsView {
+    fn from(limit: StorageLimit) -> Self {
+        Self(limit)
+    }
+}
+
+impl MessageWithFields for AccountLimitsView {
+    fn message(&self) -> String {
+        "Account storage limits".to_string()
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        let limit = &self.0;
+        let mut fields = FieldsBuilder::new();
+        fields
+            .field(
+                "Max storage per agent",
+                &format!("{} bytes", limit.effective_value),
+            )
+            .field("Plan default", &format!("{} bytes", limit.plan_default))
+            .field(
+                "Override",
+                &limit
+                    .override_value
+                    .map(|value| format!("{value} bytes"))
+                    .unwrap_or_else(|| "(none)".to_string()),
+            )
+            .field("Ceiling", &format!("{} bytes", limit.ceiling))
+            .field("User configurable", &limit.user_configurable);
+        fields.build()
+    }
+}
+
+impl StructuredOutput for AccountLimitsView {
+    const KIND: &'static str = "account.limits.show";
 }
 
 fn permission_share_fields(share: &PermissionShare) -> Vec<(String, String)> {
