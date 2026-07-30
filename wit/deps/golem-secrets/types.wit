@@ -5,7 +5,7 @@ package golem:secrets@0.1.0;
 /// secrets — most tools, audit middleware, MCP-import bridges —
 /// import only this interface.
 interface types {
-  use wasi:clocks/wall-clock@0.2.3.{datetime};
+  use wasi:clocks/system-clock@0.3.0.{instant as datetime};
   use golem:core/types@2.0.0.{secret};
 
   /// The opaque handle to a sensitive value is defined in

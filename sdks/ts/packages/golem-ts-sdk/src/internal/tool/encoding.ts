@@ -414,12 +414,11 @@ function encodeFlag(flag: FlagSpec): FlagSpec {
     ...flag,
     aliases: [...flag.aliases],
     doc: cloneDoc(flag.doc),
-    shape: { ...flag.shape, val: cloneFlagShapeValue(flag) },
+    shape:
+      flag.shape.tag === 'bool-flag'
+        ? { tag: 'bool-flag', val: { ...flag.shape.val } }
+        : { tag: 'count-flag', val: flag.shape.val },
   };
-}
-
-function cloneFlagShapeValue(flag: FlagSpec) {
-  return flag.shape.tag === 'bool-flag' ? { ...flag.shape.val } : flag.shape.val;
 }
 
 function cloneDoc(doc: Doc): Doc {

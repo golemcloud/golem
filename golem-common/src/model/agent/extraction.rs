@@ -31,12 +31,14 @@ use std::sync::{Arc, Mutex};
 use tracing::{debug, error, trace};
 use wasmtime::component::types::{ComponentInstance, ComponentItem};
 use wasmtime::component::{
-    Component, Func, Instance, Linker, LinkerInstance, ResourceTable, ResourceType, Type,
+    Component, Func, Instance, Linker, LinkerInstance, ResourceTable, ResourceType,
 };
 use wasmtime::{AsContextMut, Engine, Store};
 use wasmtime_wasi::cli::StdoutStream;
 use wasmtime_wasi::p2::pipe;
 use wasmtime_wasi::{IoCtx, IoData, IoView, WasiCtx, WasiCtxView, WasiView};
+use wasmtime_wasi_http::WasiHttpCtx;
+use wasmtime_wasi_http::p2::{WasiHttpCtxView, WasiHttpView, default_hooks};
 
 const AGENT_INTERFACE_NAME: &str = "golem:agent/guest@2.0.0";
 const AGENT_FUNCTION_NAME: &str = "discover-agent-types";
@@ -134,6 +136,11 @@ async fn extract_component_metadata_impl(
     let mut config = wasmtime::Config::default();
     config.wasm_multi_value(true);
     config.wasm_component_model(true);
+    // Required for WASI p3: enables the async ABI (stream<T>, future<T>,
+    // async lift/lower, error-context). Without this, components that use
+    // any p3 async builtins fail to parse via `Component::from_file`.
+    config.wasm_component_model_async(true);
+    config.wasm_component_model_error_context(true);
     config.epoch_interruption(true);
     config.consume_fuel(true);
     config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Enable);
@@ -152,6 +159,20 @@ async fn extract_component_metadata_impl(
         &mut linker,
         &wasmtime_wasi::p2::bindings::LinkOptions::default(),
     )?;
+    // WASI P3 interfaces are imported by components built against the newer
+    // WASI snapshots (e.g. `wasi:cli/environment@0.3.0-rc-...`). The p2 linker
+    // above only satisfies p2 imports; this adds the p3 ones so mixed
+    // p2/p3 components instantiate cleanly.
+    wasmtime_wasi::p3::add_to_linker(&mut linker)?;
+    // `wasi:http` is not covered by either `wasmtime_wasi::p2::add_to_linker_*`
+    // or `wasmtime_wasi::p3::add_to_linker`; the p2 http interfaces are added
+    // explicitly here. P3 `wasi:http` — like every other import outside the
+    // allowlist in `dynamic_import` — is satisfied by the mock instances
+    // registered below, which fail loudly if actually invoked: agent
+    // discovery must never perform real HTTP calls. Because shadowing is
+    // allowed and `dynamic_import` runs after these static registrations,
+    // the mocks take precedence for the interfaces they cover.
+    wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
 
     let mut builder = WasiCtx::builder();
 
@@ -173,6 +194,7 @@ async fn extract_component_metadata_impl(
         table: Arc::new(Mutex::new(ResourceTable::new())),
         wasi: Arc::new(Mutex::new(wasi)),
         io: Arc::new(Mutex::new(io)),
+        wasi_http: WasiHttpCtx::new(),
     };
 
     let component = Component::from_file(&engine, wasm_path)?;
@@ -184,7 +206,7 @@ async fn extract_component_metadata_impl(
     let component_type = component.component_type();
     for (name, item) in component_type.imports(&engine) {
         let name = name.to_string();
-        match item {
+        match item.ty {
             ComponentItem::ComponentFunc(_) => {}
             ComponentItem::CoreFunc(_) => {}
             ComponentItem::Module(_) => {}
@@ -390,6 +412,7 @@ struct Host {
     pub table: Arc<Mutex<ResourceTable>>,
     pub wasi: Arc<Mutex<WasiCtx>>,
     pub io: Arc<Mutex<IoCtx>>,
+    pub wasi_http: WasiHttpCtx,
 }
 
 impl IoView for Host {
@@ -436,6 +459,19 @@ impl WasiView for Host {
                 .expect("IoCtx is shared and cannot be borrowed mutably")
                 .get_mut()
                 .expect("IoCtx mutex must never fail"),
+        }
+    }
+}
+
+impl WasiHttpView for Host {
+    fn http(&mut self) -> WasiHttpCtxView<'_> {
+        WasiHttpCtxView {
+            ctx: &mut self.wasi_http,
+            table: Arc::get_mut(&mut self.table)
+                .expect("ResourceTable is shared and cannot be borrowed mutably")
+                .get_mut()
+                .expect("ResourceTable mutex must never fail"),
+            hooks: default_hooks(),
         }
     }
 }
@@ -497,27 +533,25 @@ fn dynamic_import(
         Ok(())
     } else {
         let mut instance = root.instance(name)?;
-        let mut functions = Vec::new();
+        // (function_name, is_async) pairs to be mocked. Sync-ABI functions
+        // are registered via `func_new_async`; async-ABI functions (declared
+        // with `async` in WIT, lowered with `[async-lower]`) require
+        // `func_new_concurrent` because the wasmtime typecheck verifies that
+        // the host function's asyncness matches the component's.
+        let mut functions: Vec<(ParsedFunctionName, bool)> = Vec::new();
 
         for (inner_name, inner_item) in inst.exports(engine) {
             let name = name.to_owned();
             let inner_name = inner_name.to_owned();
 
-            match inner_item {
+            match inner_item.ty {
                 ComponentItem::ComponentFunc(fun) => {
-                    let param_types: Vec<Type> = fun.params().map(|(_, t)| t).collect();
-                    let result_types: Vec<Type> = fun.results().collect();
-
                     let function_name = ParsedFunctionName::parse(format!(
                         "{name}.{{{inner_name}}}"
                     ))
-                        .map_err(|err| anyhow!(format!("Unexpected linking error: {name}.{{{inner_name}}} is not a valid function name: {err}")))?;
+                    .map_err(|err| anyhow!(format!("Unexpected linking error: {name}.{{{inner_name}}} is not a valid function name: {err}")))?;
 
-                    functions.push(FunctionInfo {
-                        name: function_name,
-                        params: param_types,
-                        results: result_types,
-                    });
+                    functions.push((function_name, fun.async_()));
                 }
                 ComponentItem::CoreFunc(_) => {}
                 ComponentItem::Module(_) => {}
@@ -566,21 +600,40 @@ fn dynamic_import(
             }
         }
 
-        for function in functions {
-            instance.func_new_async(
-                &function.name.function.function_name(),
-                move |_store, _func_type, _params, _results| {
-                    let function_name = function.name.clone();
-                    Box::new(async move {
-                        error!(
-                            "External function called during component metadata discovery: {function_name}",
-                        );
-                        Err(wasmtime::Error::msg(format!(
-                            "External function called during component metadata discovery: {function_name}"
-                        )))
-                    })
-                },
-            )?;
+        for (function_name, is_async) in functions {
+            let function_name_for_closure = function_name.clone();
+            let function_name_str = function_name.function.function_name();
+            if is_async {
+                instance.func_new_concurrent(
+                    &function_name_str,
+                    move |_accessor, _func_type, _params, _results| {
+                        let function_name = function_name_for_closure.clone();
+                        Box::pin(async move {
+                            error!(
+                                "External function called during component metadata discovery: {function_name}",
+                            );
+                            Err(wasmtime::Error::msg(format!(
+                                "External function called during component metadata discovery: {function_name}"
+                            )))
+                        })
+                    },
+                )?;
+            } else {
+                instance.func_new_async(
+                    &function_name_str,
+                    move |_store, _func_type, _params, _results| {
+                        let function_name = function_name_for_closure.clone();
+                        Box::new(async move {
+                            error!(
+                                "External function called during component metadata discovery: {function_name}",
+                            );
+                            Err(wasmtime::Error::msg(format!(
+                                "External function called during component metadata discovery: {function_name}"
+                            )))
+                        })
+                    },
+                )?;
+            }
         }
 
         Ok(())
@@ -588,19 +641,6 @@ fn dynamic_import(
 }
 
 #[allow(unused)]
-struct MethodInfo {
-    method_name: String,
-    params: Vec<Type>,
-    results: Vec<Type>,
-}
-
-#[allow(unused)]
-struct FunctionInfo {
-    name: ParsedFunctionName,
-    params: Vec<Type>,
-    results: Vec<Type>,
-}
-
 struct ResourceEntry;
 
 #[cfg(test)]

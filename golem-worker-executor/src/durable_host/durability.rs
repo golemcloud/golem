@@ -15,16 +15,11 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::Resolution;
 use crate::metrics::wasm::{record_host_function_call, record_in_function_retry};
-// `TrapType` was used for the legacy retry-config fallback; no longer needed
-// here after the refactor that funnels every host-trap retry decision through
-// named-policy resolution.
-// use crate::model::TrapType;
+use crate::model::ExecutionStatus;
 use crate::preview2::golem::durability::durability;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasOplog, HasWorker};
-// `RetryDecision` was used by the legacy retry-config fallback removed from
-// `try_trigger_retry`.
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use async_trait::async_trait;
@@ -47,8 +42,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, warn};
-use wasmtime::component::Resource;
-use wasmtime_wasi::{DynPollable, DynamicPollable, Pollable, dynamic_subscribe};
 
 /// Classification of host function failures for semantic retry decisions
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +100,10 @@ pub enum SemanticTrapRetryVerdict {
 /// path consumes it once via `TrapType::semantic_trap_retry_override`.
 #[derive(Debug, Clone)]
 pub struct SemanticTrapRetryOverride {
+    /// Retry point owned by the host call/scope that produced this trap. The
+    /// outer invocation wrapper can use this instead of consulting the ambient
+    /// worker fallback state.
+    pub retry_from: OplogIndex,
     /// Name of the named retry policy that produced this decision.
     pub policy_name: String,
     /// Retry verdict computed from the policy.
@@ -173,6 +170,181 @@ pub fn find_semantic_trap_retry_override(
         .map(|m| m.payload.clone())
 }
 
+/// Call-owned trap classification carried with a hard (non-semantic) host-call trap.
+///
+/// When a durable call abandons for a trap, the call's own retry point and atomic-region membership
+/// are attached to the escaping error (via the `DurableCallTrapContextMarker` wrapper). The
+/// post-trap recovery path then groups the failure against the *call's* scope rather than the
+/// ambient/global worker state, which an overlapping sibling call can clobber once concurrent
+/// durable calls truly overlap.
+///
+/// Both fields are a *pure* function of the call's execution scope captured at initiation (no
+/// ambient/`ctx` read), so the context can be built at the trap egress point with no early snapshot
+/// and is immune to sibling activity. The only load-bearing field is `retry_from`; `in_atomic_region`
+/// is carried for completeness/future use (see its doc). The persisted
+/// `OplogEntry::Error.inside_atomic_region` side-effect flag is deliberately *not* part of this
+/// context: it only modulates `AgentError::DeterministicTrap` retriability, and a host-call trap (the
+/// only thing carrying this marker) is never a deterministic wasm trap, so it is sourced from ambient
+/// state in `TrapType::from_error`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DurableCallTrapContext {
+    /// The retry point owned by the trapping call: its enclosing atomic region begin index if any,
+    /// otherwise its enclosing durable scope `Start` or its own `Start` (i.e.
+    /// `execution_scope.atomic_region.unwrap_or(retry_from)`).
+    pub retry_from: OplogIndex,
+    /// Whether the trapping call was initiated inside an atomic region (membership). Pure function of
+    /// the call's execution scope, so it needs no early snapshot and cannot be made stale by a
+    /// sibling. Currently inert for any marked error: it only feeds `TrapType::Error.in_atomic_region`,
+    /// which `fixed_decision_for_trap_type` consults solely for `AgentError::DeterministicTrap`, and a
+    /// host-call trap is never a deterministic wasm trap. Kept so atomic-region legality checks
+    /// under overlap have the call's own membership available.
+    pub in_atomic_region: bool,
+}
+
+/// Marker error wrapping a [`DurableCallTrapContext`] together with the original failure. Mirrors
+/// [`SemanticTrapRetryOverrideMarker`]: it is the *head* of the resulting `anyhow::Error` chain and
+/// exposes the original failure through `source()`, so `TrapType::from_error` (and any nested
+/// semantic-override / classification lookups) still walk past it via `.chain()`.
+#[derive(Debug)]
+pub struct DurableCallTrapContextMarker {
+    pub payload: DurableCallTrapContext,
+    pub inner: anyhow::Error,
+}
+
+impl std::fmt::Display for DurableCallTrapContextMarker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "durable-call-trap-context(retry_from={}, in_atomic_region={})",
+            self.payload.retry_from, self.payload.in_atomic_region
+        )
+    }
+}
+
+impl std::error::Error for DurableCallTrapContextMarker {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(AsRef::<dyn std::error::Error + Send + Sync + 'static>::as_ref(&self.inner))
+    }
+}
+
+/// Wraps `inner` with a [`DurableCallTrapContextMarker`] carrying `payload`, returning the new head
+/// of the error chain. Idempotent in spirit: re-wrapping is harmless because
+/// [`find_durable_call_trap_context`] returns the *outermost* (most specific) marker it encounters.
+pub fn mark_durable_call_trap_context(
+    inner: anyhow::Error,
+    payload: DurableCallTrapContext,
+) -> anyhow::Error {
+    anyhow::Error::new(DurableCallTrapContextMarker { payload, inner })
+}
+
+/// Searches an `anyhow::Error` for a `DurableCallTrapContextMarker` and returns a copy of its
+/// payload.
+pub fn find_durable_call_trap_context(error: &anyhow::Error) -> Option<DurableCallTrapContext> {
+    error
+        .chain()
+        .find_map(|e| e.downcast_ref::<DurableCallTrapContextMarker>())
+        .map(|m| m.payload)
+}
+
+/// An error type that can carry a [`DurableCallTrapContextMarker`] in its chain, used as the error
+/// bound of the Shape-A `CallHandle::run` combinator.
+///
+/// Implemented only for `anyhow::Error` / `wasmtime::Error` (which preserve the marker chain). It is
+/// deliberately **not** implemented for typed errors such as `WorkerExecutorError`: converting a
+/// marked `anyhow::Error` into a typed error would silently drop the marker and reintroduce the
+/// ambient-fallback misclassification under overlap. So a `run` call site that wants a typed error
+/// must instead return `wasmtime::Result`/`anyhow::Result` and map the error at the boundary.
+pub trait DurableCallTrapError: From<WorkerExecutorError> + Into<anyhow::Error> {
+    /// Re-wraps a marked `anyhow::Error` (produced by [`CallHandle::trap`]) back into this error
+    /// type, preserving the marker chain.
+    fn from_durable_call_trap(error: anyhow::Error) -> Self;
+}
+
+impl DurableCallTrapError for anyhow::Error {
+    fn from_durable_call_trap(error: anyhow::Error) -> Self {
+        error
+    }
+}
+
+impl DurableCallTrapError for wasmtime::Error {
+    fn from_durable_call_trap(error: anyhow::Error) -> Self {
+        wasmtime::Error::from_anyhow(error)
+    }
+}
+
+/// A failure escaping a live *terminal* durable-call step — `CallHandle::complete` /
+/// `complete_access` / `cancel` / `cancel_access` and the dropped-call cancellation drain — paired
+/// with that call's own [`DurableCallTrapContext`].
+///
+/// It is a *conversion carrier*, deliberately **not** a `std::error::Error`: converting it into a
+/// marker-preserving error type (`anyhow::Error` / `wasmtime::Error` /
+/// `wasmtime_wasi::p2::StreamError`) attaches the call-owned trap marker via
+/// [`mark_durable_call_trap_context`], so post-trap retry grouping stays owned by the failing call
+/// rather than falling back to ambient worker state an overlapping sibling could have clobbered. If
+/// it implemented `std::error::Error`, the upstream blanket `From<E: Error>` conversions for
+/// `anyhow::Error` / `wasmtime::Error` would collide with (or silently bypass) the marker-adding
+/// `From` impls below.
+#[derive(Debug)]
+pub struct TerminalCallError {
+    pub source: WorkerExecutorError,
+    pub context: DurableCallTrapContext,
+}
+
+impl TerminalCallError {
+    pub fn new(source: WorkerExecutorError, context: DurableCallTrapContext) -> Self {
+        Self { source, context }
+    }
+
+    /// Converts into an `anyhow::Error` carrying this call's trap marker, keeping the original
+    /// `WorkerExecutorError` reachable as the root cause so `TrapType::from_error` can still
+    /// downcast it (e.g. for `ReadOnlyViolation` / unexpected-oplog-entry classification).
+    pub fn into_marked_anyhow(self) -> anyhow::Error {
+        let inner = anyhow::Error::new(self.source);
+        debug_assert!(
+            inner
+                .root_cause()
+                .downcast_ref::<wasmtime::Trap>()
+                .is_none(),
+            "TerminalCallError must not wrap a deterministic wasm trap"
+        );
+        mark_durable_call_trap_context(inner, self.context)
+    }
+}
+
+impl std::fmt::Display for TerminalCallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.source, f)
+    }
+}
+
+impl From<TerminalCallError> for anyhow::Error {
+    fn from(error: TerminalCallError) -> Self {
+        error.into_marked_anyhow()
+    }
+}
+
+impl From<TerminalCallError> for wasmtime::Error {
+    fn from(error: TerminalCallError) -> Self {
+        wasmtime::Error::from_anyhow(error.into_marked_anyhow())
+    }
+}
+
+impl From<TerminalCallError> for wasmtime_wasi::p2::StreamError {
+    fn from(error: TerminalCallError) -> Self {
+        wasmtime_wasi::p2::StreamError::Trap(wasmtime::Error::from_anyhow(
+            error.into_marked_anyhow(),
+        ))
+    }
+}
+
+impl From<TerminalCallError> for wasmtime_wasi::p2::SocketError {
+    fn from(error: TerminalCallError) -> Self {
+        // `TrappableError::trap` takes `impl Into<wasmtime::Error>`, so the marker is attached via the
+        // `From<TerminalCallError> for wasmtime::Error` impl above.
+        wasmtime_wasi::p2::SocketError::trap(error)
+    }
+}
+
 /// Result of `try_trigger_retry_or_loop`: tells the host function caller what to do next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InternalRetryResult {
@@ -213,7 +385,13 @@ pub struct DurableExecutionState {
 #[async_trait]
 pub trait InFunctionRetryHost {
     /// Returns true if the worker is currently inside a user-defined atomic region.
-    fn in_atomic_region(&self) -> bool;
+    ///
+    /// Defaults to `false`, the correct answer for retry hosts detached from any worker atomic
+    /// region (spawned background tasks). Region-aware hosts (`DurableWorkerCtx`,
+    /// `ScopedRetryHost`) must override it.
+    fn in_atomic_region(&self) -> bool {
+        false
+    }
 
     /// Returns the oplog index that `OplogEntry::Error` entries should reference as `retry_from`.
     fn current_retry_point(&self) -> OplogIndex;
@@ -227,10 +405,30 @@ pub trait InFunctionRetryHost {
     /// Returns the current durable execution state.
     fn durable_execution_state(&self) -> DurableExecutionState;
 
+    /// Whether the atomic region identified by `begin_index` has recorded side effects. Lets a
+    /// scoped retry host classify against the *call's* own region rather than the ambient state.
+    ///
+    /// Defaults to `false` for retry hosts detached from any worker atomic region; region-aware
+    /// hosts must override it.
+    fn atomic_region_has_side_effects_for(&self, _begin_index: OplogIndex) -> bool {
+        false
+    }
+
+    /// The `inside_atomic_region` flag to persist with an in-function retry `Error` entry: whether
+    /// the retry's owning atomic region had side effects. For a scoped call this is the call's own
+    /// region; for an unscoped/legacy caller it falls back to the ambient outermost-region state.
+    ///
+    /// Defaults to `false` for retry hosts detached from any worker atomic region; region-aware
+    /// hosts must override it.
+    fn retry_context_atomic_region_had_side_effects(&self) -> bool {
+        false
+    }
+
     /// Writes an `OplogEntry::Error` entry for an in-function retry attempt, and commits.
     async fn append_retry_error_entry(
         &mut self,
         retry_from: OplogIndex,
+        inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
     );
 }
@@ -254,6 +452,45 @@ pub(crate) fn collect_named_retry_policies(
         }
     }
 
+    policies
+}
+
+/// Merges the named-retry-policy tiers into the effective policy list, shared by the direct
+/// worker context and the spawned-task retry context: the config-based default catch-all
+/// (tier 0), agent-config policies (tier 1), and environment-level policies (tier 2) override
+/// each other by name in that order, then the runtime overlay (tier 3, highest precedence) is
+/// applied — a `Some` mutation inserts/replaces the policy, a `None` mutation removes it. The
+/// result is sorted by descending priority, then by name.
+pub(crate) fn merge_named_retry_policy_tiers(
+    default_policy: NamedRetryPolicy,
+    agent_config_policies: impl IntoIterator<Item = NamedRetryPolicy>,
+    environment_policies: impl IntoIterator<Item = NamedRetryPolicy>,
+    runtime_retry_policy_mutations: &BTreeMap<String, Option<NamedRetryPolicy>>,
+) -> Vec<NamedRetryPolicy> {
+    let mut deduped = BTreeMap::new();
+    deduped.insert(default_policy.name.clone(), default_policy);
+    for policy in agent_config_policies {
+        deduped.insert(policy.name.clone(), policy);
+    }
+    for policy in environment_policies {
+        deduped.insert(policy.name.clone(), policy);
+    }
+    for (name, mutation) in runtime_retry_policy_mutations {
+        match mutation {
+            Some(policy) => {
+                deduped.insert(name.clone(), policy.clone());
+            }
+            None => {
+                deduped.remove(name);
+            }
+        }
+    }
+    let mut policies: Vec<NamedRetryPolicy> = deduped.into_values().collect();
+    policies.sort_by(|a, b| {
+        b.priority
+            .cmp(&a.priority)
+            .then_with(|| a.name.cmp(&b.name))
+    });
     policies
 }
 
@@ -474,7 +711,8 @@ impl InFunctionRetryState {
             return AsyncRetryDecision::FallBackToTrap;
         }
 
-        ctx.append_retry_error_entry(retry_point, retry_policy_state)
+        let inside_atomic_region = ctx.retry_context_atomic_region_had_side_effects();
+        ctx.append_retry_error_entry(retry_point, inside_atomic_region, retry_policy_state)
             .await;
         self.retry_count += 1;
 
@@ -552,16 +790,15 @@ pub trait DurabilityHost: InFunctionRetryHost {
         &mut self,
     ) -> Result<PersistedDurableFunctionInvocation, WorkerExecutorError>;
 
-    /// Checks if the current retry policy allows more retries, and if yes, then returns
-    /// with `Err(failure)`. This error should be directly returned from host function
-    /// implementations, triggering a retry.
+    /// Classifies a failed host operation and delegates transient failures to the worker's retry
+    /// policy. If that policy permits another attempt, the returned error should be propagated by
+    /// the host function to trigger the retry.
     ///
     /// If retrying is not possible, the function returns Ok(()) and the host function
     /// can continue persisting the failed result permanently.
     ///
-    /// The `properties` bag is used for semantic policy resolution when named retry
-    /// policies are available. When empty or when no semantic policy matches, the
-    /// legacy `RetryConfig` fallback is used.
+    /// The `properties` bag is used for semantic policy resolution. The available named policies
+    /// include a synthesized default policy that matches any property set.
     async fn try_trigger_retry(
         &mut self,
         failure: Error,
@@ -581,6 +818,108 @@ pub trait DurabilityHost: InFunctionRetryHost {
     /// `Write*` durable function type so that any host call carrying a side effect is rejected
     /// before any oplog entry is written.
     fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap>;
+}
+
+pub(crate) async fn try_trigger_host_trap_retry(
+    ctx: &mut (impl InFunctionRetryHost + Sync),
+    failure: Error,
+    properties: RetryProperties,
+) -> anyhow::Result<()> {
+    let current_retry_point = ctx.current_retry_point();
+
+    // Resolve the matching named retry policy. The synthesized
+    // default-from-config policy (with `Predicate::True`) is always
+    // present in `named_retry_policies()`, so resolution finds at least
+    // one match for every property set; there is no legacy `RetryConfig`
+    // path any more.
+    let policies = ctx.named_retry_policies().await;
+    let named_policy =
+        match NamedRetryPolicy::resolve_applicable_treating_missing_properties_as_no_match(
+            &policies,
+            &properties,
+        ) {
+            Ok(Some(named_policy)) => named_policy,
+            Ok(None) => {
+                warn!(
+                    retry_path = "host-trap",
+                    "No named retry policy matched (including the synthesized default); giving up"
+                );
+                return Ok(());
+            }
+            Err(error) => {
+                warn!(
+                    ?error,
+                    retry_path = "host-trap",
+                    "Failed resolving semantic host-trap retry policy; giving up"
+                );
+                return Ok(());
+            }
+        };
+
+    let current_state = ctx.current_retry_state_for(current_retry_point).await;
+    let total_attempts = current_state.as_ref().map(|s| s.retry_count()).unwrap_or(0);
+
+    match evaluate_named_policy_step_resetting_on_invalid_state(
+        named_policy,
+        &properties,
+        current_state.as_ref(),
+    ) {
+        Ok((new_state, RetryVerdict::Retry(delay))) => {
+            debug!(
+                retry_policy = %named_policy.name,
+                retry_path = "host-trap",
+                retry_policy_source = "worker-local",
+                retry_decision = "retry",
+                attempt = total_attempts + 1,
+                delay_ms = delay.as_millis() as u64,
+                "Semantic host-trap retry: triggering retry"
+            );
+            // Attach the resolved verdict to the failure so the post-trap recovery path can honour
+            // it directly without re-resolving from an impoverished trap context (e.g. missing HTTP
+            // `status-code`).
+            let payload = SemanticTrapRetryOverride {
+                retry_from: current_retry_point,
+                policy_name: named_policy.name.clone(),
+                verdict: SemanticTrapRetryVerdict::Retry(delay),
+                retry_policy_state: new_state,
+            };
+            Err(anyhow::Error::new(SemanticTrapRetryOverrideMarker {
+                payload,
+                inner: failure,
+            }))
+        }
+        Ok((_new_state, RetryVerdict::GiveUp)) => {
+            debug!(
+                retry_policy = %named_policy.name,
+                retry_path = "host-trap",
+                retry_policy_source = "worker-local",
+                retry_decision = "give-up",
+                attempt = total_attempts + 1,
+                "Semantic host-trap retry: exhausted"
+            );
+            Ok(())
+        }
+        Ok((_new_state, RetryVerdict::Error(error))) => {
+            warn!(
+                retry_policy = %named_policy.name,
+                ?error,
+                retry_path = "host-trap",
+                fallback_reason = "eval-error",
+                "Semantic host-trap retry evaluation returned an error verdict; giving up"
+            );
+            Ok(())
+        }
+        Err(error) => {
+            warn!(
+                retry_policy = %named_policy.name,
+                ?error,
+                retry_path = "host-trap",
+                fallback_reason = "eval-error",
+                "Failed evaluating semantic host-trap retry policy; giving up"
+            );
+            Ok(())
+        }
+    }
 }
 
 /// Returns `true` when the given durable function type represents a write side-effect of any
@@ -662,53 +1001,6 @@ impl TryFrom<PersistedDurableFunctionInvocation>
             function_type: value.function_type.into(),
             entry_version: value.oplog_entry_version.into(),
         })
-    }
-}
-
-impl<Ctx: WorkerCtx> durability::HostLazyInitializedPollable for DurableWorkerCtx<Ctx> {
-    async fn new(&mut self) -> anyhow::Result<Resource<LazyInitializedPollableEntry>> {
-        DurabilityHost::observe_function_call(self, "durability::lazy_initialized_pollable", "new");
-        let lazy_pollable = self.table().push(LazyInitializedPollableEntry::Empty)?;
-        Ok(lazy_pollable)
-    }
-
-    async fn set(
-        &mut self,
-        self_: Resource<LazyInitializedPollableEntry>,
-        pollable: Resource<DynPollable>,
-    ) -> anyhow::Result<()> {
-        DurabilityHost::observe_function_call(self, "durability::lazy_initialized_pollable", "set");
-        let entry = self.table().get_mut(&self_)?;
-        *entry = LazyInitializedPollableEntry::Subscribed { pollable };
-        Ok(())
-    }
-
-    async fn subscribe(
-        &mut self,
-        self_: Resource<LazyInitializedPollableEntry>,
-    ) -> anyhow::Result<Resource<DynPollable>> {
-        DurabilityHost::observe_function_call(
-            self,
-            "durability::lazy_initialized_pollable",
-            "subscribe",
-        );
-
-        Ok(dynamic_subscribe(self.table(), self_, None)?)
-    }
-
-    async fn drop(&mut self, rep: Resource<LazyInitializedPollableEntry>) -> anyhow::Result<()> {
-        DurabilityHost::observe_function_call(
-            self,
-            "durability::lazy_initialized_pollable",
-            "drop",
-        );
-
-        let entry = self.table().delete(rep)?;
-        if let LazyInitializedPollableEntry::Subscribed { pollable } = entry {
-            let _ = self.table().delete(pollable)?;
-        }
-
-        Ok(())
     }
 }
 
@@ -843,9 +1135,20 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         }
     }
 
+    fn atomic_region_has_side_effects_for(&self, begin_index: OplogIndex) -> bool {
+        self.state.atomic_region_has_side_effects_for(begin_index)
+    }
+
+    fn retry_context_atomic_region_had_side_effects(&self) -> bool {
+        // Unscoped/legacy retry path: fall back to the ambient outermost active region. A scoped
+        // call uses `ScopedRetryHost`, which classifies against its own initiating region instead.
+        self.state.outermost_atomic_region_has_side_effects()
+    }
+
     async fn append_retry_error_entry(
         &mut self,
         retry_from: OplogIndex,
+        inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
     ) {
         if self.state.snapshotting_mode.is_some() {
@@ -853,7 +1156,6 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         }
 
         use golem_common::model::oplog::AgentError;
-        let inside_atomic_region = self.state.outermost_atomic_region_has_side_effects();
         let entry = OplogEntry::error(
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
@@ -1020,6 +1322,22 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                         format!("Cancelled at {cancelled_idx}"),
                     ))
                 }
+                Resolution::CompletedButDiscarded {
+                    end_idx,
+                    marker_idx,
+                    ..
+                } => {
+                    // Discarded completions are recorded only on the accessor completion path;
+                    // durable invocations are always persisted as a delivered `Start` + `End`
+                    // pair, so a marker resolving here means the oplog does not match this code
+                    // path.
+                    Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "End delivered to the guest",
+                        format!(
+                            "End at {end_idx} marked CompletionDiscarded at {marker_idx} for a non-accessor durable call"
+                        ),
+                    ))
+                }
             }
         }
     }
@@ -1029,109 +1347,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         failure: Error,
         properties: RetryProperties,
     ) -> anyhow::Result<()> {
-        let latest_status = self
-            .public_state
-            .worker()
-            .get_non_detached_last_known_status()
-            .await;
-        let current_retry_point = self.state.effective_retry_point();
-
-        // Resolve the matching named retry policy. The synthesized
-        // default-from-config policy (with `Predicate::True`) is always
-        // present in `named_retry_policies()`, so resolution finds at least
-        // one match for every property set; there is no legacy `RetryConfig`
-        // path any more.
-        let policies = self.state.named_retry_policies().await;
-        let named_policy =
-            match NamedRetryPolicy::resolve_applicable_treating_missing_properties_as_no_match(
-                &policies,
-                &properties,
-            ) {
-                Ok(Some(named_policy)) => named_policy,
-                Ok(None) => {
-                    warn!(
-                        retry_path = "host-trap",
-                        "No named retry policy matched (including the synthesized default); giving up"
-                    );
-                    return Ok(());
-                }
-                Err(error) => {
-                    warn!(
-                        ?error,
-                        retry_path = "host-trap",
-                        "Failed resolving semantic host-trap retry policy; giving up"
-                    );
-                    return Ok(());
-                }
-            };
-
-        let current_state = latest_status
-            .current_retry_state
-            .get(&current_retry_point)
-            .cloned();
-        let total_attempts = current_state.as_ref().map(|s| s.retry_count()).unwrap_or(0);
-
-        match evaluate_named_policy_step_resetting_on_invalid_state(
-            named_policy,
-            &properties,
-            current_state.as_ref(),
-        ) {
-            Ok((new_state, RetryVerdict::Retry(delay))) => {
-                debug!(
-                    retry_policy = %named_policy.name,
-                    retry_path = "host-trap",
-                    retry_policy_source = "worker-local",
-                    retry_decision = "retry",
-                    attempt = total_attempts + 1,
-                    delay_ms = delay.as_millis() as u64,
-                    "Semantic host-trap retry: triggering retry"
-                );
-                // Attach the resolved verdict to the failure so the
-                // post-trap recovery path can honour it directly without
-                // re-resolving from an impoverished trap context (e.g.
-                // missing HTTP `status-code`).
-                let payload = SemanticTrapRetryOverride {
-                    policy_name: named_policy.name.clone(),
-                    verdict: SemanticTrapRetryVerdict::Retry(delay),
-                    retry_policy_state: new_state,
-                };
-                Err(anyhow::Error::new(SemanticTrapRetryOverrideMarker {
-                    payload,
-                    inner: failure,
-                }))
-            }
-            Ok((_new_state, RetryVerdict::GiveUp)) => {
-                debug!(
-                    retry_policy = %named_policy.name,
-                    retry_path = "host-trap",
-                    retry_policy_source = "worker-local",
-                    retry_decision = "give-up",
-                    attempt = total_attempts + 1,
-                    "Semantic host-trap retry: exhausted"
-                );
-                Ok(())
-            }
-            Ok((_new_state, RetryVerdict::Error(error))) => {
-                warn!(
-                    retry_policy = %named_policy.name,
-                    ?error,
-                    retry_path = "host-trap",
-                    fallback_reason = "eval-error",
-                    "Semantic host-trap retry evaluation returned an error verdict; giving up"
-                );
-                Ok(())
-            }
-            Err(error) => {
-                warn!(
-                    retry_policy = %named_policy.name,
-                    ?error,
-                    retry_path = "host-trap",
-                    fallback_reason = "eval-error",
-                    "Failed evaluating semantic host-trap retry policy; giving up"
-                );
-                Ok(())
-            }
-        }
+        try_trigger_host_trap_retry(self, failure, properties).await
     }
 
     fn mark_atomic_region_side_effect(&mut self) {
@@ -1139,10 +1355,32 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
     }
 
     fn create_interrupt_signal(&self) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
-        self.execution_status
-            .read()
-            .unwrap()
-            .create_await_interrupt_signal()
+        // Synthetic deadline broadcasts only reach subscribers that already exist, so a signal
+        // is created before checking the latches. That closes the check-before-subscribe race: a
+        // deadline either sets its latch first or broadcasts to this subscription. A real external
+        // interrupt keeps precedence over either synthetic deadline.
+        let interrupt_signal = {
+            let status = self.execution_status.read().unwrap();
+            status.create_await_interrupt_signal()
+        };
+        if self
+            .state
+            .invocation_deadline_exceeded
+            .load(std::sync::atomic::Ordering::Acquire)
+            || self
+                .state
+                .tail_work_deadline_exceeded
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
+            let status = self.execution_status.read().unwrap();
+            if matches!(&*status, ExecutionStatus::Interrupting { .. }) {
+                return status.create_await_interrupt_signal();
+            }
+            return Box::pin(std::future::ready(InterruptKind::Interrupt(
+                Timestamp::now_utc(),
+            )));
+        }
+        interrupt_signal
     }
 
     fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap> {
@@ -1157,7 +1395,7 @@ pub enum OplogEntryVersion {
 }
 
 /// Holds the in-function retry decision logic for a single durable host call, decoupled from how
-/// the call's request/response is persisted or replayed. Both the legacy [`Durability`] and the
+/// the call's request/response is persisted or replayed. Both the sequential [`Durability`] and the
 /// concurrent [`crate::durable_host::concurrent::CallHandle`] own one and route their
 /// `try_trigger_retry*` methods through it, so the retry logic has a single home.
 ///
@@ -1204,12 +1442,10 @@ impl InFunctionRetryController {
     /// If retrying is not possible, the function returns Ok(()) and the host function
     /// can continue persisting the failed result permanently.
     ///
-    /// The `classify` closure inspects the error and returns a `HostFailureKind` which determines
-    /// whether the error is wrapped as `AgentError::TransientError` or `AgentError::PermanentError`.
-    ///
-    /// When `Permanent`, the method returns `Ok(())` immediately (no retry, persist the failure).
-    /// When `Transient`, the inner `try_trigger_retry` is called, and if it triggers a retry,
-    /// the error is wrapped in a `ClassifiedHostError` so `TrapType::from_error` can detect it.
+    /// The `classify` closure determines whether the failure is transient or permanent. Permanent
+    /// failures return `Ok(())` immediately so the caller can persist them. Transient failures are
+    /// wrapped in [`ClassifiedHostError`] before retry-policy evaluation so trap classification
+    /// preserves the failure kind.
     pub async fn try_trigger_retry<Ok, Err: Display>(
         &self,
         ctx: &mut impl DurabilityHost,
@@ -1414,10 +1650,9 @@ pub struct TaskRetryContext<Ctx: WorkerCtx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
-    fn in_atomic_region(&self) -> bool {
-        // Spawned tasks are never inside atomic regions
-        false
-    }
+    // Spawned tasks are never inside atomic regions, so the trait's inert defaults for
+    // `in_atomic_region`, `atomic_region_has_side_effects_for` and
+    // `retry_context_atomic_region_had_side_effects` apply.
 
     fn current_retry_point(&self) -> OplogIndex {
         self.retry_point
@@ -1434,34 +1669,12 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
                 vec![]
             });
 
-        let mut deduped = BTreeMap::new();
-        deduped.insert(
-            self.default_retry_policy.name.clone(),
+        merge_named_retry_policy_tiers(
             self.default_retry_policy.clone(),
-        );
-        for policy in &self.agent_config_retry_policies {
-            deduped.insert(policy.name.clone(), policy.clone());
-        }
-        for policy in environment_policies {
-            deduped.insert(policy.name.clone(), policy);
-        }
-        for (name, mutation) in &self.runtime_retry_policy_mutations {
-            match mutation {
-                Some(policy) => {
-                    deduped.insert(name.clone(), policy.clone());
-                }
-                None => {
-                    deduped.remove(name);
-                }
-            }
-        }
-        let mut policies: Vec<NamedRetryPolicy> = deduped.into_values().collect();
-        policies.sort_by(|a, b| {
-            b.priority
-                .cmp(&a.priority)
-                .then_with(|| a.name.cmp(&b.name))
-        });
-        policies
+            self.agent_config_retry_policies.iter().cloned(),
+            environment_policies,
+            &self.runtime_retry_policy_mutations,
+        )
     }
 
     async fn current_retry_state_for(&self, _retry_from: OplogIndex) -> Option<RetryPolicyState> {
@@ -1481,13 +1694,14 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
     async fn append_retry_error_entry(
         &mut self,
         retry_from: OplogIndex,
+        inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
     ) {
         use golem_common::model::oplog::AgentError;
         let entry = OplogEntry::error(
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
-            false, // spawned tasks are never inside atomic regions
+            inside_atomic_region,
             retry_policy_state.clone(),
         );
         self.worker.add_and_commit_oplog(entry).await;
@@ -1565,34 +1779,6 @@ where
                     }
                 }
             }
-        }
-    }
-}
-
-pub enum LazyInitializedPollableEntry {
-    Empty,
-    Subscribed { pollable: Resource<DynPollable> },
-}
-
-#[async_trait]
-impl Pollable for LazyInitializedPollableEntry {
-    async fn ready(&mut self) {
-        match self {
-            LazyInitializedPollableEntry::Empty => {
-                // Empty pollable is always ready
-            }
-            LazyInitializedPollableEntry::Subscribed { .. } => {
-                unreachable!("The dynamic pollable override should prevent this from being called")
-            }
-        }
-    }
-}
-
-impl DynamicPollable for LazyInitializedPollableEntry {
-    fn override_index(&self) -> Option<u32> {
-        match self {
-            LazyInitializedPollableEntry::Empty => None,
-            LazyInitializedPollableEntry::Subscribed { pollable } => Some(pollable.rep()),
         }
     }
 }
@@ -1694,9 +1880,18 @@ mod tests {
             MockDurabilityHost::durable_execution_state(self)
         }
 
+        fn atomic_region_has_side_effects_for(&self, _begin_index: OplogIndex) -> bool {
+            self.in_atomic_region
+        }
+
+        fn retry_context_atomic_region_had_side_effects(&self) -> bool {
+            self.in_atomic_region
+        }
+
         async fn append_retry_error_entry(
             &mut self,
             _retry_from: OplogIndex,
+            _inside_atomic_region: bool,
             retry_policy_state: Option<RetryPolicyState>,
         ) {
             self.retry_entries_appended += 1;
@@ -2643,6 +2838,7 @@ mod tests {
         // (which would clobber jitter) easy to spot.
         let jittered_delay = Duration::from_millis(1873);
         let payload = SemanticTrapRetryOverride {
+            retry_from: OplogIndex::from_u64(17),
             policy_name: "manifest-5xx-retry".to_string(),
             verdict: SemanticTrapRetryVerdict::Retry(jittered_delay),
             retry_policy_state: RetryPolicyState::CountBox {
@@ -2664,6 +2860,7 @@ mod tests {
         // (1) Marker is found verbatim.
         let extracted = find_semantic_trap_retry_override(&with_marker)
             .expect("override marker must round-trip through anyhow chain");
+        assert_eq!(extracted.retry_from, payload.retry_from);
         assert_eq!(extracted.policy_name, payload.policy_name);
         assert_eq!(extracted.verdict, payload.verdict);
         assert_eq!(
@@ -2695,6 +2892,7 @@ mod tests {
     #[test]
     fn semantic_trap_retry_override_survives_anyhow_context_wrapper() {
         let payload = SemanticTrapRetryOverride {
+            retry_from: OplogIndex::from_u64(23),
             policy_name: "manifest-5xx-retry".to_string(),
             verdict: SemanticTrapRetryVerdict::Retry(Duration::from_secs(2)),
             retry_policy_state: RetryPolicyState::CountBox {
@@ -2718,6 +2916,7 @@ mod tests {
 
         let extracted = find_semantic_trap_retry_override(&wrapped)
             .expect("override marker must survive an outer context wrapper");
+        assert_eq!(extracted.retry_from, payload.retry_from);
         assert_eq!(extracted.policy_name, payload.policy_name);
         assert_eq!(extracted.verdict, payload.verdict);
     }
@@ -2736,6 +2935,90 @@ mod tests {
 
         let with_context = bare.context("escalated to trap");
         assert!(find_semantic_trap_retry_override(&with_context).is_none());
+    }
+
+    /// Every terminal-step conversion (`complete` / `complete_access` / `cancel` / the dropped-call
+    /// drain) funnels through [`TerminalCallError::into_marked_anyhow`]. That single funnel must
+    /// preserve *both* halves of the carrier: the call-owned [`DurableCallTrapContext`] (so
+    /// `TrapType::from_error` groups the failure against the call's own scope) *and* the original
+    /// `WorkerExecutorError` as the reachable root cause (so the same path can still downcast it to
+    /// classify e.g. `ReadOnlyViolation` / unexpected-oplog-entry failures).
+    #[test]
+    fn terminal_call_error_preserves_marker_and_inner_worker_executor_error() {
+        let context = DurableCallTrapContext {
+            retry_from: OplogIndex::from_u64(17),
+            in_atomic_region: true,
+        };
+        let terminal = TerminalCallError::new(
+            WorkerExecutorError::ReadOnlyViolation {
+                method: "agent::read-only-method".to_string(),
+                host_function: "test:host-function".to_string(),
+            },
+            context,
+        );
+
+        let error = terminal.into_marked_anyhow();
+
+        // (1) The call-owned marker is recoverable verbatim.
+        let marker = find_durable_call_trap_context(&error)
+            .expect("terminal failure must carry its call-owned trap context");
+        assert_eq!(marker, context);
+
+        // (2) The original WorkerExecutorError is still the root cause and downcastable from the
+        //     chain, so classification on the trap path keeps working.
+        let inner = error
+            .root_cause()
+            .downcast_ref::<WorkerExecutorError>()
+            .expect("inner WorkerExecutorError must remain reachable as the root cause");
+        match inner {
+            WorkerExecutorError::ReadOnlyViolation {
+                method,
+                host_function,
+            } => {
+                assert_eq!(method, "agent::read-only-method");
+                assert_eq!(host_function, "test:host-function");
+            }
+            other => panic!("expected ReadOnlyViolation root cause, got {other:?}"),
+        }
+    }
+
+    /// Terminal-step failures don't always reach the invocation loop as an `anyhow::Error` directly:
+    /// the stream paths in `io/streams.rs` carry them as `wasmtime_wasi::p2::StreamError::Trap`, and
+    /// other host paths as `wasmtime::Error`, before the loop converts back to `anyhow::Error` for
+    /// `TrapType::from_error`. Those explicit `From<TerminalCallError>` funnels must preserve the
+    /// call-owned marker across the round trip, otherwise the marker would silently vanish on exactly
+    /// those surfaces and the classifier would fall back to ambient state.
+    #[test]
+    fn terminal_call_error_marker_survives_wasmtime_and_stream_conversions() {
+        let context = DurableCallTrapContext {
+            retry_from: OplogIndex::from_u64(23),
+            in_atomic_region: false,
+        };
+
+        // wasmtime::Error funnel -> back to anyhow (as the invocation loop does).
+        let via_wasmtime: wasmtime::Error =
+            TerminalCallError::new(WorkerExecutorError::runtime("boom"), context).into();
+        let back: anyhow::Error = via_wasmtime.into();
+        assert_eq!(
+            find_durable_call_trap_context(&back),
+            Some(context),
+            "marker must survive the wasmtime::Error round trip"
+        );
+
+        // StreamError::Trap funnel -> unwrap the trap -> back to anyhow.
+        let via_stream: wasmtime_wasi::p2::StreamError =
+            TerminalCallError::new(WorkerExecutorError::runtime("boom"), context).into();
+        match via_stream {
+            wasmtime_wasi::p2::StreamError::Trap(trap) => {
+                let back: anyhow::Error = trap.into();
+                assert_eq!(
+                    find_durable_call_trap_context(&back),
+                    Some(context),
+                    "marker must survive the StreamError::Trap round trip"
+                );
+            }
+            other => panic!("expected StreamError::Trap, got {other:?}"),
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -2826,5 +3109,72 @@ mod tests {
                 ),
             }
         }
+    }
+
+    fn named_policy(name: &str, priority: u32, policy: RetryPolicy) -> NamedRetryPolicy {
+        NamedRetryPolicy {
+            name: name.to_string(),
+            priority,
+            predicate: Predicate::True,
+            policy,
+        }
+    }
+
+    /// `merge_named_retry_policy_tiers` must apply name-based overrides in tier order
+    /// (default < agent-config < environment < runtime mutations), honor runtime removals,
+    /// and sort the result by descending priority then by name.
+    #[test]
+    async fn merge_named_retry_policy_tiers_precedence_removal_and_sorting() {
+        let default_policy = named_policy("default", 0, RetryPolicy::Never);
+
+        let agent_config_policies = vec![
+            // Overridden by the environment tier below.
+            named_policy("shared", 10, RetryPolicy::Never),
+            named_policy("agent-only", 5, RetryPolicy::Immediate),
+            // Removed by a runtime mutation below.
+            named_policy("removed", 99, RetryPolicy::Immediate),
+        ];
+
+        let environment_policies = vec![
+            named_policy("shared", 20, RetryPolicy::Immediate),
+            // Same priority as "agent-only" to exercise the name tie-break.
+            named_policy("env-only", 5, RetryPolicy::Immediate),
+        ];
+
+        let mut mutations: BTreeMap<String, Option<NamedRetryPolicy>> = BTreeMap::new();
+        mutations.insert(
+            "runtime-added".to_string(),
+            Some(named_policy("runtime-added", 30, RetryPolicy::Immediate)),
+        );
+        mutations.insert(
+            "shared".to_string(),
+            Some(named_policy("shared", 1, RetryPolicy::Never)),
+        );
+        mutations.insert("removed".to_string(), None);
+
+        let merged = merge_named_retry_policy_tiers(
+            default_policy,
+            agent_config_policies,
+            environment_policies,
+            &mutations,
+        );
+
+        let names_and_priorities: Vec<(&str, u32)> = merged
+            .iter()
+            .map(|p| (p.name.as_str(), p.priority))
+            .collect();
+        assert_eq!(
+            names_and_priorities,
+            vec![
+                ("runtime-added", 30),
+                ("agent-only", 5),
+                ("env-only", 5),
+                ("shared", 1),
+                ("default", 0),
+            ]
+        );
+        // The runtime mutation (highest tier) determines the surviving "shared" policy.
+        let shared = merged.iter().find(|p| p.name == "shared").unwrap();
+        assert_eq!(shared.policy, RetryPolicy::Never);
     }
 }

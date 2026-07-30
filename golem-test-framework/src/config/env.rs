@@ -203,12 +203,17 @@ fn resolve_cargo_target_dir_uncached(repo_root: &Path) -> PathBuf {
     if !manifest_path.exists() {
         return fallback();
     }
+    // `repo_root` is usually a relative path (e.g. `..`). Cargo resolves a
+    // relative `--manifest-path` against the child process's working
+    // directory, so a relative path combined with `current_dir(repo_root)`
+    // would be applied twice and point outside the repo. Absolutize it
+    // against our own working directory instead.
+    let manifest_path = manifest_path.canonicalize().unwrap_or(manifest_path);
 
     let output = std::process::Command::new("cargo")
         .args(["metadata", "--no-deps", "--format-version", "1"])
         .arg("--manifest-path")
         .arg(&manifest_path)
-        .current_dir(repo_root)
         .output();
 
     match output {
@@ -836,8 +841,8 @@ pub trait RedisControl {
     /// Async because test-r's `#[hosted_rpc]` macro requires the trait
     /// to be all-async or all-sync, and other methods in this trait
     /// (notably `flush_redis_db`) sit on top of blocking I/O that we
-    /// keep sync at the body level but expose via an async signature so
-    /// the parent IPC dispatcher can drive them without `block_in_place`.
+    /// keep sync at the body level but expose via an async signature for
+    /// the parent IPC dispatcher.
     async fn is_redis_healthy(&self) -> bool;
 
     /// Flushes the given logical Redis database on the parent-owned

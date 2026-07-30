@@ -649,9 +649,11 @@ describe('internal extended tool model', () => {
     const normalized = normalizeExtendedTool(composed);
     const remote = normalized.commandByPath(['remote']);
     expect(remote?.globals.options).toEqual([]);
-    expect(normalized.effectiveGlobals(remote!).map((entry) => entry.option?.long)).toEqual([
-      'profile',
-    ]);
+    expect(
+      normalized
+        .effectiveGlobals(remote!)
+        .map((entry) => (entry.tag === 'option' ? entry.option.long : undefined)),
+    ).toEqual(['profile']);
     expect(normalized.canonicalInputFields(remote!).map((field) => field.name)).toEqual([
       'profile',
     ]);

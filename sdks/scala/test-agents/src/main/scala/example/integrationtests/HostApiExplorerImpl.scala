@@ -21,6 +21,7 @@ import golem.wasi
 
 import scala.annotation.unused
 import scala.concurrent.Future
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
 @agentImplementation()
 final class HostApiExplorerImpl(@unused private val name: String) extends HostApiExplorer {
@@ -30,24 +31,26 @@ final class HostApiExplorerImpl(@unused private val name: String) extends HostAp
   override def exploreContext(): Future[String]    = Future.successful(exploreContextSync())
   override def exploreOplog(): Future[String]      = Future.successful(exploreOplogSync())
   override def exploreKeyValue(): Future[String]   = Future.successful(exploreKeyValueSync())
-  override def exploreBlobstore(): Future[String]  = Future.successful(exploreBlobstoreSync())
+  override def exploreBlobstore(): Future[String]  = exploreBlobstoreAsync()
   override def exploreRdbms(): Future[String]      = Future.successful(exploreRdbmsSync())
 
   override def exploreAll(): Future[String] = {
-    val sb                                        = new StringBuilder
-    def run(label: String, body: => String): Unit =
-      try sb.append(s"=== $label ===\n$body\n")
-      catch { case t: Throwable => sb.append(s"=== $label === ERROR: ${t.getMessage}\n") }
+    def run(label: String, body: => Future[String]): Future[String] =
+      try
+        body
+          .map(result => s"=== $label ===\n$result\n")
+          .recover { case t: Throwable => s"=== $label === ERROR: ${t.getMessage}\n" }
+      catch { case t: Throwable => Future.successful(s"=== $label === ERROR: ${t.getMessage}\n") }
 
-    run("CONFIG", exploreConfigSync())
-    run("DURABILITY", exploreDurabilitySync())
-    run("CONTEXT", exploreContextSync())
-    run("OPLOG", exploreOplogSync())
-    run("KEYVALUE", exploreKeyValueSync())
-    run("BLOBSTORE", exploreBlobstoreSync())
-    run("RDBMS", exploreRdbmsSync())
-
-    Future.successful(sb.toString())
+    for {
+      config     <- run("CONFIG", Future.successful(exploreConfigSync()))
+      durability <- run("DURABILITY", Future.successful(exploreDurabilitySync()))
+      context    <- run("CONTEXT", Future.successful(exploreContextSync()))
+      oplog      <- run("OPLOG", Future.successful(exploreOplogSync()))
+      keyValue   <- run("KEYVALUE", Future.successful(exploreKeyValueSync()))
+      blobstore  <- run("BLOBSTORE", exploreBlobstoreAsync())
+      rdbms      <- run("RDBMS", Future.successful(exploreRdbmsSync()))
+    } yield config + durability + context + oplog + keyValue + blobstore + rdbms
   }
 
   private def exploreConfigSync(): String = {
@@ -129,7 +132,7 @@ final class HostApiExplorerImpl(@unused private val name: String) extends HostAp
     sb.toString()
   }
 
-  private def exploreBlobstoreSync(): String = {
+  private def exploreBlobstoreAsync(): Future[String] = {
     val sb = new StringBuilder
 
     val exists1 = wasi.Blobstore.containerExists("test-blob-container")
@@ -144,13 +147,14 @@ final class HostApiExplorerImpl(@unused private val name: String) extends HostAp
     val hasObj1 = container.hasObject("greeting")
     sb.append(s"hasObject('greeting') = $hasObj1\n")
 
-    val objects = container.listObjects()
-    sb.append(s"listObjects() = $objects\n")
+    container.listObjects().map { objects =>
+      sb.append(s"listObjects() = $objects\n")
 
-    wasi.Blobstore.deleteContainer("test-blob-container")
-    sb.append(s"deleteContainer('test-blob-container') OK\n")
+      wasi.Blobstore.deleteContainer("test-blob-container")
+      sb.append(s"deleteContainer('test-blob-container') OK\n")
 
-    sb.toString()
+      sb.toString()
+    }
   }
 
   private def exploreRdbmsSync(): String = {

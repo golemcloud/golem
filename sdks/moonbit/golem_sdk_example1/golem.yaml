@@ -8,6 +8,7 @@ httpApi:
       - domain: localhost:9006
         agents:
           WeatherAgent: {}
+          WebhookAgent: {}
 
 environments:
   local:
@@ -18,7 +19,7 @@ environments:
     componentPresets: release
 
 componentTemplates:
-  moonbit:
+  moonbit-local:
     presets:
       debug:
         default: true
@@ -45,5 +46,5 @@ componentTemplates:
 
 components:
   golem:moonbit-examples:
-    templates: moonbit
+    templates: moonbit-local
     dir: ""

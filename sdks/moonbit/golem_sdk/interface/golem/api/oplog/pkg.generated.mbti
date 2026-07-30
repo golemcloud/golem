@@ -6,7 +6,7 @@ import {
   "golemcloud/golem_sdk/interface/golem/api/host",
   "golemcloud/golem_sdk/interface/golem/api/retry",
   "golemcloud/golem_sdk/interface/golem/core/types",
-  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
+  "golemcloud/golem_sdk/interface/wasi/clocks/system-clock",
 }
 
 // Values
@@ -37,7 +37,7 @@ pub(all) suberror WorkerError {
 
 // Types and methods
 pub(all) struct ActivatePluginParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   plugin : PluginInstallationDescription
 } derive(Eq, Show)
 
@@ -59,7 +59,7 @@ pub(all) enum AgentInvocation {
 } derive(Eq, Show)
 
 pub(all) struct AgentInvocationFinishedParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   result : AgentInvocationResult
   method_name : String?
   consumed_fuel : Int64
@@ -80,7 +80,7 @@ pub(all) enum AgentInvocationResult {
 } derive(Eq, Show)
 
 pub(all) struct AgentInvocationStartedParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   invocation : AgentInvocation
 } derive(Eq, Show)
 
@@ -112,33 +112,33 @@ pub(all) struct AndThenState {
 } derive(Eq, Show)
 
 pub(all) struct BeginRemoteTransactionParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   transaction_id : String
 } derive(Eq, Show)
 
 pub(all) struct CancelPendingInvocationParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   idempotency_key : String
 } derive(Eq, Show)
 
 pub(all) struct CancelledParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   start_index : UInt64
   partial : @types.TypedSchemaValue?
 } derive(Eq, Show)
 
 pub(all) struct CardEventQueuedParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   event : QueuedCardEvent
 } derive(Eq, Show)
 
 pub(all) struct CardExpiredParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   card_id : @types.CardId
 } derive(Eq, Show)
 
 pub(all) struct CardInstallFailedParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   queued_event_index : UInt64
   card_id : @types.CardId
   reason : CardInstallFailure
@@ -154,20 +154,25 @@ pub fn CardInstallFailure::from(Int) -> Self
 pub fn CardInstallFailure::ordinal(Self) -> Int
 
 pub(all) struct CardInstalledParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   queued_event_index : UInt64?
   card_id : @types.CardId
 } derive(Eq, Show)
 
 pub(all) struct CardRevokedParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   queued_event_index : UInt64
   card_id : @types.CardId
 } derive(Eq, Show)
 
 pub(all) struct ChangePersistenceLevelParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   persistence_level : @host.PersistenceLevel
+} derive(Eq, Show)
+
+pub(all) struct CompletionDiscardedParameters {
+  timestamp : @system-clock.Instant
+  start_index : UInt64
 } derive(Eq, Show)
 
 pub(all) struct CountBoxState {
@@ -176,7 +181,7 @@ pub(all) struct CountBoxState {
 } derive(Eq, Show)
 
 pub(all) struct CreateParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   agent_id : @types.AgentId
   agent_mode : AgentMode
   component_revision : UInt64
@@ -193,31 +198,31 @@ pub(all) struct CreateParameters {
 } derive(Eq, Show)
 
 pub(all) struct CreateResourceParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   id : UInt64
   name : String
   owner : String
 } derive(Eq, Show)
 
 pub(all) struct DeactivatePluginParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   plugin : PluginInstallationDescription
 } derive(Eq, Show)
 
 pub(all) struct DropResourceParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   id : UInt64
   name : String
   owner : String
 } derive(Eq, Show)
 
 pub(all) struct EndAtomicRegionParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   begin_index : UInt64
 } derive(Eq, Show)
 
 pub(all) struct EndParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   start_index : UInt64
   response : @types.TypedSchemaValue?
   forced_commit : Bool
@@ -241,7 +246,7 @@ pub(all) struct EphemeralSleepTooLong {
 } derive(Eq, Show)
 
 pub(all) struct ErrorParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   error : String
   retry_from : UInt64
   inside_atomic_region : Bool
@@ -253,7 +258,7 @@ pub(all) struct ExternalSpanData {
 } derive(Eq, Show)
 
 pub(all) struct FailedUpdateParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   target_revision : UInt64
   details : String?
 } derive(Eq, Show)
@@ -263,12 +268,12 @@ pub(all) struct FallibleResultParameters {
 } derive(Eq, Show)
 
 pub(all) struct FilesystemStorageUsageUpdateParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   delta : Int64
 } derive(Eq, Show)
 
 pub(all) struct FinishSpanParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   span_id : String
 } derive(Eq, Show)
 
@@ -278,12 +283,25 @@ pub fn GetOplog::get_next(Self) -> Array[PublicOplogEntry]?
 pub fn GetOplog::get_oplog(@types.AgentId, UInt64) -> Self
 
 pub(all) struct GrowMemoryParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   delta : UInt64
 } derive(Eq, Show)
 
+pub(all) struct HostStreamFrameParameters {
+  timestamp : @system-clock.Instant
+  parent_start_index : UInt64
+  kind : HostStreamKind
+  payload : @types.TypedSchemaValue
+} derive(Eq, Show)
+
+pub(all) enum HostStreamKind {
+  P3_HTTP_REQUEST_BODY
+} derive(Eq, Show)
+pub fn HostStreamKind::from(Int) -> Self
+pub fn HostStreamKind::ordinal(Self) -> Int
+
 pub(all) struct JumpParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   jump : OplogRegion
 } derive(Eq, Show)
 
@@ -298,7 +316,7 @@ pub(all) struct LocalAgentConfigEntry {
 
 pub(all) struct LocalSpanData {
   span_id : String
-  start : @wallClock.Datetime
+  start : @system-clock.Instant
   parent : String?
   linked_context : UInt64?
   attributes : Array[@context.Attribute]
@@ -319,7 +337,7 @@ pub fn LogLevel::from(Int) -> Self
 pub fn LogLevel::ordinal(Self) -> Int
 
 pub(all) struct LogParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   level : LogLevel
   context : String
   message : String
@@ -376,6 +394,8 @@ pub(all) enum OplogEntry {
   CardInstallFailed(CardInstallFailedParameters)
   CardRevoked(CardRevokedParameters)
   CardExpired(CardExpiredParameters)
+  HostStreamFrame(RawHostStreamFrameParameters)
+  CompletionDiscarded(RawCompletionDiscardedParameters)
 } derive(Eq, Show)
 
 pub(all) struct OplogExternalPayload {
@@ -389,7 +409,7 @@ pub(all) enum OplogPayload {
 } derive(Eq, Show)
 
 pub(all) struct OplogProcessorCheckpointParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   plugin : PluginInstallationDescription
   target_agent_id : @types.AgentId
   confirmed_up_to : UInt64
@@ -408,12 +428,12 @@ pub(all) struct PairState {
 } derive(Eq, Show)
 
 pub(all) struct PendingAgentInvocationParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   invocation : AgentInvocation
 } derive(Eq, Show)
 
 pub(all) struct PendingUpdateParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   target_revision : UInt64
   description : UpdateDescription
 } derive(Eq, Show)
@@ -477,6 +497,8 @@ pub(all) enum PublicOplogEntry {
   CardInstallFailed(CardInstallFailedParameters)
   CardRevoked(CardRevokedParameters)
   CardExpired(CardExpiredParameters)
+  HostStreamFrame(HostStreamFrameParameters)
+  CompletionDiscarded(CompletionDiscardedParameters)
 } derive(Eq, Show)
 
 pub(all) enum QueuedCardEvent {
@@ -493,12 +515,12 @@ pub(all) struct QueuedCardEventRevoke {
 } derive(Eq, Show)
 
 pub(all) struct RawActivatePluginParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   plugin_grant_id : EnvironmentPluginGrantId
 } derive(Eq, Show)
 
 pub(all) struct RawAgentInvocationFinishedParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   result : OplogPayload
   method_name : String?
   consumed_fuel : Int64
@@ -506,7 +528,7 @@ pub(all) struct RawAgentInvocationFinishedParameters {
 } derive(Eq, Show)
 
 pub(all) struct RawAgentInvocationStartedParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   idempotency_key : String
   payload : OplogPayload
   trace_id : String
@@ -515,25 +537,30 @@ pub(all) struct RawAgentInvocationStartedParameters {
 } derive(Eq, Show)
 
 pub(all) struct RawBeginRemoteTransactionParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   transaction_id : String
   original_begin_index : UInt64?
 } derive(Eq, Show)
 
 pub(all) struct RawCancelledParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   start_index : UInt64
   partial : OplogPayload?
 } derive(Eq, Show)
 
 pub(all) struct RawCardInstalledParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   queued_event_index : UInt64?
   card : FixedArray[Byte]
 } derive(Eq, Show)
 
+pub(all) struct RawCompletionDiscardedParameters {
+  timestamp : @system-clock.Instant
+  start_index : UInt64
+} derive(Eq, Show)
+
 pub(all) struct RawCreateParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   agent_id : @types.AgentId
   agent_mode : AgentMode
   component_revision : UInt64
@@ -550,35 +577,42 @@ pub(all) struct RawCreateParameters {
 } derive(Eq, Show)
 
 pub(all) struct RawCreateResourceParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   id : UInt64
   resource_type_id : ResourceTypeId
 } derive(Eq, Show)
 
 pub(all) struct RawDeactivatePluginParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   plugin_grant_id : EnvironmentPluginGrantId
 } derive(Eq, Show)
 
 pub(all) struct RawDropResourceParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   id : UInt64
   resource_type_id : ResourceTypeId
 } derive(Eq, Show)
 
 pub(all) struct RawEndParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   start_index : UInt64
   response : OplogPayload?
   forced_commit : Bool
 } derive(Eq, Show)
 
 pub(all) struct RawErrorParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   error : WorkerError
   retry_from : UInt64
   inside_atomic_region : Bool
   retry_policy_state : RetryPolicyState?
+} derive(Eq, Show)
+
+pub(all) struct RawHostStreamFrameParameters {
+  timestamp : @system-clock.Instant
+  parent_start_index : UInt64
+  kind : HostStreamKind
+  payload : OplogPayload
 } derive(Eq, Show)
 
 pub(all) struct RawLocalAgentConfigEntry {
@@ -587,7 +621,7 @@ pub(all) struct RawLocalAgentConfigEntry {
 } derive(Eq, Show)
 
 pub(all) struct RawOplogProcessorCheckpointParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   plugin_grant_id : EnvironmentPluginGrantId
   target_agent_id : @types.AgentId
   confirmed_up_to : UInt64
@@ -596,7 +630,7 @@ pub(all) struct RawOplogProcessorCheckpointParameters {
 } derive(Eq, Show)
 
 pub(all) struct RawPendingAgentInvocationParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   idempotency_key : String
   payload : OplogPayload
   trace_id : String
@@ -605,7 +639,7 @@ pub(all) struct RawPendingAgentInvocationParameters {
 } derive(Eq, Show)
 
 pub(all) struct RawPendingUpdateParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   description : RawUpdateDescription
 } derive(Eq, Show)
 
@@ -616,13 +650,13 @@ pub(all) struct RawSnapshotBasedUpdate {
 } derive(Eq, Show)
 
 pub(all) struct RawSnapshotParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   data : OplogPayload
   mime_type : String
 } derive(Eq, Show)
 
 pub(all) struct RawStartParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   parent_start_index : UInt64?
   function_name : String
   request : OplogPayload?
@@ -630,7 +664,7 @@ pub(all) struct RawStartParameters {
 } derive(Eq, Show)
 
 pub(all) struct RawSuccessfulUpdateParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   target_revision : UInt64
   new_component_size : UInt64
   new_active_plugins : Array[EnvironmentPluginGrantId]
@@ -647,12 +681,12 @@ pub(all) struct ReadOnlyViolation {
 } derive(Eq, Show)
 
 pub(all) struct RemoteTransactionParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   begin_index : UInt64
 } derive(Eq, Show)
 
 pub(all) struct RemoveRetryPolicyParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   name : String
 } derive(Eq, Show)
 
@@ -666,7 +700,7 @@ pub(all) struct RetryPolicyState {
 } derive(Eq, Show)
 
 pub(all) struct RevertParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   dropped_region : OplogRegion
 } derive(Eq, Show)
 
@@ -680,12 +714,12 @@ pub fn SearchOplog::get_next(Self) -> Array[(UInt64, PublicOplogEntry)]?
 pub fn SearchOplog::search_oplog(@types.AgentId, String) -> Self
 
 pub(all) struct SetRetryPolicyParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   policy : @retry.NamedRetryPolicy
 } derive(Eq, Show)
 
 pub(all) struct SetSpanAttributeParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   span_id : String
   key : String
   value : @context.AttributeValue
@@ -697,7 +731,7 @@ pub(all) struct SnapshotData {
 } derive(Eq, Show)
 
 pub(all) struct SnapshotParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   data : SnapshotData
 } derive(Eq, Show)
 
@@ -707,7 +741,7 @@ pub(all) enum SpanData {
 } derive(Eq, Show)
 
 pub(all) struct StartParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   parent_start_index : UInt64?
   function_name : String
   request : @types.TypedSchemaValue?
@@ -715,7 +749,7 @@ pub(all) struct StartParameters {
 } derive(Eq, Show)
 
 pub(all) struct StartSpanParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   span_id : String
   parent : String?
   linked_context_id : String?
@@ -732,14 +766,14 @@ pub(all) enum StateNode {
 } derive(Eq, Show)
 
 pub(all) struct SuccessfulUpdateParameters {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
   target_revision : UInt64
   new_component_size : UInt64
   new_active_plugins : Array[PluginInstallationDescription]
 } derive(Eq, Show)
 
 pub(all) struct Timestamp {
-  timestamp : @wallClock.Datetime
+  timestamp : @system-clock.Instant
 } derive(Eq, Show)
 
 pub(all) enum UpdateDescription {

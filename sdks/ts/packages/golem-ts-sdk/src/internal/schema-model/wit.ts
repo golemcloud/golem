@@ -513,14 +513,18 @@ export function assertSchemaValueRepresentable(value: SchemaValue): void {
         }
         return;
       case 'bool':
-        if (typeof v.value !== 'boolean') {
-          throw new SchemaEncodeError(`bool value must be a boolean: ${String(v.value)}`);
+        if (typeof (v as { value: unknown }).value !== 'boolean') {
+          throw new SchemaEncodeError(
+            `bool value must be a boolean: ${String((v as { value: unknown }).value)}`,
+          );
         }
         return;
       case 'f32':
       case 'f64':
-        if (typeof v.value !== 'number') {
-          throw new SchemaEncodeError(`${v.tag} value must be a number: ${String(v.value)}`);
+        if (typeof (v as { value: unknown }).value !== 'number') {
+          throw new SchemaEncodeError(
+            `${v.tag} value must be a number: ${String((v as { value: unknown }).value)}`,
+          );
         }
         return;
       case 'char': {
@@ -536,8 +540,10 @@ export function assertSchemaValueRepresentable(value: SchemaValue): void {
       case 'string':
       case 'path':
       case 'url':
-        if (typeof v.value !== 'string') {
-          throw new SchemaEncodeError(`${v.tag} value must be a string: ${String(v.value)}`);
+        if (typeof (v as { value: unknown }).value !== 'string') {
+          throw new SchemaEncodeError(
+            `${v.tag} value must be a string: ${String((v as { value: unknown }).value)}`,
+          );
         }
         return;
       case 'datetime': {

@@ -514,13 +514,13 @@ describe.skip('websocket', () => {
     fake.inbox.push({ tag: 'text', val: 'pong' });
     fake.inbox.push({ tag: 'binary', val: new Uint8Array([9]) });
 
-    const m1 = handle.receive();
+    const m1 = await handle.receive();
     expect(m1).toEqual({ tag: 'text', val: 'pong' });
-    const m2 = handle.receive();
+    const m2 = await handle.receive();
     expect(m2.tag).toBe('binary');
     expect(m2.tag === 'binary' && Array.from(m2.val)).toEqual([9]);
 
-    expect(handle.receiveWithTimeout(5)).toBeUndefined();
+    expect(await handle.receiveWithTimeout(5)).toBeUndefined();
   });
 
   it('wraps host connection failures as WebsocketError with the tag', async () => {

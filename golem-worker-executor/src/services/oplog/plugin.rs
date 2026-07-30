@@ -15,7 +15,9 @@
 use crate::model::ExecutionStatus;
 use crate::model::event::InternalWorkerEvent;
 use crate::services::component::ComponentService;
-use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
+use crate::services::oplog::{
+    CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService, OrderedOplogStart,
+};
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
 use crate::services::worker_event::WorkerEventService;
@@ -25,7 +27,6 @@ use crate::services::{
 };
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-use async_lock::Mutex;
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
@@ -507,7 +508,7 @@ struct CreateOplogConstructor {
     oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     components: Arc<dyn ComponentService>,
     initial_worker_metadata: AgentMetadata,
-    last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+    last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
     execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     plugin_max_commit_count: usize,
     plugin_max_elapsed_time: Duration,
@@ -525,7 +526,7 @@ impl CreateOplogConstructor {
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService>,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         plugin_max_commit_count: usize,
         plugin_max_elapsed_time: Duration,
@@ -656,7 +657,7 @@ impl OplogService for ForwardingOplogService {
         agent_mode: AgentMode,
         initial_entry: OplogEntry,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
@@ -687,7 +688,7 @@ impl OplogService for ForwardingOplogService {
         agent_mode: AgentMode,
         initial_entry: OplogEntry,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
@@ -718,7 +719,7 @@ impl OplogService for ForwardingOplogService {
         agent_mode: AgentMode,
         last_oplog_index: Option<OplogIndex>,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
@@ -807,12 +808,54 @@ impl OplogService for ForwardingOplogService {
 }
 
 /// A wrapper for `Oplog` that periodically sends buffered oplog entries to oplog processor plugins
+///
+/// Structured as an actor for the same reason as `PrimaryOplog` (see its doc comment): this
+/// wrapper is called both from futures polled by wasmtime's store event loop and from host code
+/// running on store-keeping wasm fibers, and while such a fiber is suspended the event loop
+/// cannot poll store-polled futures (wasmtime#11869/#11870). A shared async mutex held across the
+/// inner-oplog delegation — or even fairly handed to a queued store-polled future — deadlocks the
+/// store, so instead the state is exclusively owned by an independent actor task and callers only
+/// await oneshot replies.
+///
+/// ORDERING: `add`, `add_pair` and `add_start_with_reserved_raw_payload` rely on the mirrored
+/// `buffer`/`last_oplog_idx` staying in lockstep with the order the inner (leaf) oplog assigns
+/// indices. The single-consumer job channel processes jobs in enqueue order, which is the same
+/// FIFO guarantee the previous FIFO-fair mutex provided via `lock()` acquisition order.
 pub struct ForwardingOplog {
     inner: Arc<dyn Oplog>,
-    state: Arc<Mutex<ForwardingOplogState>>,
-    max_commit_count: usize,
+    jobs: tokio::sync::mpsc::UnboundedSender<ForwardingJob>,
+    actor: JoinHandle<()>,
     timer: Option<JoinHandle<()>>,
     close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
+}
+
+/// A request processed by the [`ForwardingOplog`] actor task, which exclusively owns the
+/// [`ForwardingOplogState`].
+enum ForwardingJob {
+    Add {
+        entry: OplogEntry,
+        done: tokio::sync::oneshot::Sender<OplogIndex>,
+    },
+    AddPair {
+        start: OplogEntry,
+        make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+        done: tokio::sync::oneshot::Sender<(OplogIndex, OplogIndex)>,
+    },
+    AddStart {
+        serialized_request: Vec<u8>,
+        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        done: tokio::sync::oneshot::Sender<Result<OrderedOplogStart, String>>,
+    },
+    Commit {
+        level: CommitLevel,
+        done: tokio::sync::oneshot::Sender<BTreeMap<OplogIndex, OplogEntry>>,
+    },
+    SetWorkerEventService {
+        service: Arc<dyn WorkerEventService>,
+        done: tokio::sync::oneshot::Sender<()>,
+    },
+    /// Periodic tick from the timer task: runs locality recovery and a time-based flush.
+    Tick,
 }
 
 impl ForwardingOplog {
@@ -821,7 +864,7 @@ impl ForwardingOplog {
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService>,
         initial_worker_metadata: AgentMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         last_oplog_idx: OplogIndex,
         close_fn: Box<dyn FnOnce() + Send + Sync>,
         max_commit_count: usize,
@@ -830,7 +873,7 @@ impl ForwardingOplog {
         // Seed per-plugin live state from the current status snapshot (not the
         // potentially stale initial_worker_metadata.last_known_status)
         let plugin_state = {
-            let seed_status = last_known_status.read().await;
+            let seed_status = last_known_status.get();
             let mut state = HashMap::new();
             for (grant_id, cp) in &seed_status.oplog_processor_checkpoints {
                 state.insert(
@@ -857,7 +900,7 @@ impl ForwardingOplog {
             state
         };
 
-        let state = Arc::new(Mutex::new(ForwardingOplogState {
+        let mut state = ForwardingOplogState {
             buffer: VecDeque::new(),
             buffer_start_idx: last_oplog_idx.next(),
             commit_count: 0,
@@ -873,24 +916,105 @@ impl ForwardingOplog {
             pending_direct_commits: BTreeMap::new(),
             worker_event_service: None,
             monitor_tasks: Vec::new(),
-        }));
+        };
+
+        let (jobs, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<ForwardingJob>();
+        let actor = tokio::spawn(
+            async move {
+                while let Some(job) = job_rx.recv().await {
+                    match job {
+                        ForwardingJob::Add { entry, done } => {
+                            state.buffer.push_back(entry.clone());
+                            state.last_oplog_idx = state.last_oplog_idx.next();
+                            let idx = state.inner.add(entry).await;
+                            let _ = done.send(idx);
+                        }
+                        ForwardingJob::AddPair {
+                            start,
+                            make_second,
+                            done,
+                        } => {
+                            // The `Start` will be appended at the next index; this wrapper tracks
+                            // `last_oplog_idx` in lockstep with the inner oplog, so the predicted
+                            // index matches the one the inner oplog assigns.
+                            let first_idx = state.last_oplog_idx.next();
+                            let second = make_second(first_idx);
+                            state.buffer.push_back(start.clone());
+                            state.last_oplog_idx = state.last_oplog_idx.next();
+                            state.buffer.push_back(second.clone());
+                            state.last_oplog_idx = state.last_oplog_idx.next();
+                            let result =
+                                state.inner.add_pair(start, Box::new(move |_| second)).await;
+                            let _ = done.send(result);
+                        }
+                        ForwardingJob::AddStart {
+                            serialized_request,
+                            build_start,
+                            done,
+                        } => {
+                            // The `Start` entry is built deep in the leaf from the reserved payload
+                            // reference, so — unlike `Add`/`AddPair` — it is mirrored into the
+                            // buffer only after the delegation returns it.
+                            let result = state
+                                .inner
+                                .add_start_with_reserved_raw_payload(
+                                    serialized_request,
+                                    build_start,
+                                )
+                                .await;
+                            if let Ok(ordered) = &result {
+                                state.buffer.push_back(ordered.entry.clone());
+                                state.last_oplog_idx = state.last_oplog_idx.next();
+                            }
+                            let _ = done.send(result);
+                        }
+                        ForwardingJob::Commit { level, done } => {
+                            let mut result = state.inner.commit(level).await;
+                            // Update last_committed_idx from committed entries
+                            if let Some(max_idx) = result.keys().max()
+                                && *max_idx > state.last_committed_idx
+                            {
+                                state.last_committed_idx = *max_idx;
+                            }
+                            state.commit_count += 1;
+                            if state.commit_count >= max_commit_count {
+                                state.try_flush().await;
+                            }
+                            // Merge entries committed directly to inner during flush
+                            // so the Worker folds them into AgentStatusRecord
+                            result.append(&mut state.pending_direct_commits);
+                            let _ = done.send(result);
+                        }
+                        ForwardingJob::SetWorkerEventService { service, done } => {
+                            state.worker_event_service = Some(service);
+                            let _ = done.send(());
+                        }
+                        ForwardingJob::Tick => {
+                            state.try_locality_recovery().await;
+                            state.try_flush().await;
+                        }
+                    }
+                }
+            }
+            .in_current_span(),
+        );
 
         let timer = tokio::spawn({
-            let state = state.clone();
+            let jobs = jobs.clone();
             async move {
                 loop {
                     tokio::time::sleep(max_elapsed_time).await;
-                    let mut state = state.lock().await;
-                    state.try_locality_recovery().await;
-                    state.try_flush().await;
+                    if jobs.send(ForwardingJob::Tick).is_err() {
+                        break;
+                    }
                 }
             }
             .in_current_span()
         });
         Self {
             inner,
-            state,
-            max_commit_count,
+            jobs,
+            actor,
             timer: Some(timer),
             close_fn: Some(close_fn),
         }
@@ -900,8 +1024,30 @@ impl ForwardingOplog {
         &self,
         worker_event_service: Arc<dyn WorkerEventService>,
     ) {
-        let mut state = self.state.lock().await;
-        state.worker_event_service = Some(worker_event_service);
+        self.run_job(|done| ForwardingJob::SetWorkerEventService {
+            service: worker_event_service,
+            done,
+        })
+        .await
+    }
+
+    /// Enqueues a job for the actor task and awaits its reply.
+    ///
+    /// Panics if the actor task is gone: the actor is only aborted from `Drop` (when no caller
+    /// can be in flight anymore), so a missing reply means the actor itself panicked and the
+    /// oplog's state is no longer trustworthy.
+    async fn run_job<R>(
+        &self,
+        make_job: impl FnOnce(tokio::sync::oneshot::Sender<R>) -> ForwardingJob,
+    ) -> R {
+        let (done, done_rx) = tokio::sync::oneshot::channel();
+        if self.jobs.send(make_job(done)).is_err() {
+            panic!("Forwarding oplog actor terminated unexpectedly");
+        }
+        match done_rx.await {
+            Ok(result) => result,
+            Err(_) => panic!("Forwarding oplog actor dropped a request without replying"),
+        }
     }
 }
 
@@ -919,23 +1065,20 @@ impl Drop for ForwardingOplog {
         if let Some(timer) = self.timer.take() {
             timer.abort();
         }
-        // Abort all background monitor tasks to prevent them from
-        // outliving this oplog and causing resource contention.
-        if let Some(mut state) = self.state.try_lock() {
-            for task in state.monitor_tasks.drain(..) {
-                task.abort();
-            }
-        }
+        // In-flight `Oplog` calls borrow `self`, so at this point no caller can be awaiting a
+        // job reply anymore and aborting the actor cannot lose an observed operation. Dropping
+        // the actor's state aborts all background monitor tasks (they are
+        // `AbortOnDropJoinHandle`s), preventing them from outliving this oplog and causing
+        // resource contention.
+        self.actor.abort();
     }
 }
 
 #[async_trait]
 impl Oplog for ForwardingOplog {
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
-        let mut state = self.state.lock().await;
-        state.buffer.push_back(entry.clone());
-        state.last_oplog_idx = state.last_oplog_idx.next();
-        self.inner.add(entry).await
+        self.run_job(|done| ForwardingJob::Add { entry, done })
+            .await
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
@@ -943,22 +1086,8 @@ impl Oplog for ForwardingOplog {
     }
 
     async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
-        let mut state = self.state.lock().await;
-        let mut result = self.inner.commit(level).await;
-        // Update last_committed_idx from committed entries
-        if let Some(max_idx) = result.keys().max()
-            && *max_idx > state.last_committed_idx
-        {
-            state.last_committed_idx = *max_idx;
-        }
-        state.commit_count += 1;
-        if state.commit_count >= self.max_commit_count {
-            state.try_flush().await;
-        }
-        // Merge entries committed directly to inner during flush
-        // so the Worker folds them into AgentStatusRecord
-        result.append(&mut state.pending_direct_commits);
-        result
+        self.run_job(|done| ForwardingJob::Commit { level, done })
+            .await
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
@@ -1006,17 +1135,25 @@ impl Oplog for ForwardingOplog {
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
     ) -> (OplogIndex, OplogIndex) {
-        let mut state = self.state.lock().await;
-        // The `Start` will be appended at the next index; this wrapper tracks
-        // `last_oplog_idx` in lockstep with the inner oplog, so the predicted
-        // index matches the one the inner oplog assigns.
-        let first_idx = state.last_oplog_idx.next();
-        let second = make_second(first_idx);
-        state.buffer.push_back(start.clone());
-        state.last_oplog_idx = state.last_oplog_idx.next();
-        state.buffer.push_back(second.clone());
-        state.last_oplog_idx = state.last_oplog_idx.next();
-        self.inner.add_pair(start, Box::new(move |_| second)).await
+        self.run_job(|done| ForwardingJob::AddPair {
+            start,
+            make_second,
+            done,
+        })
+        .await
+    }
+
+    async fn add_start_with_reserved_raw_payload(
+        &self,
+        serialized_request: Vec<u8>,
+        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+    ) -> Result<OrderedOplogStart, String> {
+        self.run_job(|done| ForwardingJob::AddStart {
+            serialized_request,
+            build_start,
+            done,
+        })
+        .await
     }
 
     fn inner(&self) -> Option<Arc<dyn Oplog>> {
@@ -1032,7 +1169,7 @@ struct ForwardingOplogState {
     last_send: Instant,
     oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     initial_worker_metadata: AgentMetadata,
-    last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+    last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
     last_oplog_idx: OplogIndex,
     last_committed_idx: OplogIndex,
     components: Arc<dyn ComponentService>,
@@ -1043,7 +1180,9 @@ struct ForwardingOplogState {
     /// so the Worker folds them into `AgentStatusRecord`.
     pending_direct_commits: BTreeMap<OplogIndex, OplogEntry>,
     worker_event_service: Option<Arc<dyn WorkerEventService>>,
-    monitor_tasks: Vec<JoinHandle<()>>,
+    /// Abort-on-drop so that dropping this state (when the owning actor task is aborted) also
+    /// stops all in-flight send-monitor tasks.
+    monitor_tasks: Vec<wasmtime_wasi::runtime::AbortOnDropJoinHandle<()>>,
 }
 
 impl ForwardingOplogState {
@@ -1054,7 +1193,7 @@ impl ForwardingOplogState {
     /// Entries are always read from the persisted oplog (canonical source) to avoid
     /// buffer/index drift caused by checkpoint entries injected during flush.
     pub async fn try_flush(&mut self) {
-        let status = self.last_known_status.read().await.clone();
+        let status = self.last_known_status.get().as_ref().clone();
         let flush_set = self.reconcile_plugin_state(&status);
 
         if flush_set.is_empty() {
@@ -1397,7 +1536,7 @@ impl ForwardingOplogState {
                     }
                     .in_current_span(),
                 );
-                self.monitor_tasks.push(monitor);
+                self.monitor_tasks.push(monitor.into());
             }
             Err(err) => {
                 tracing::error!("Failed to enqueue oplog entries to plugin {grant_id}: {err}");
@@ -1535,7 +1674,7 @@ impl ForwardingOplogState {
     /// delivery always goes to the recorded `target_agent_id` with deterministic
     /// idempotency keys.
     async fn try_locality_recovery(&mut self) {
-        let status = self.last_known_status.read().await.clone();
+        let status = self.last_known_status.get().as_ref().clone();
         // Ensure plugin_state is reconciled with current status
         self.reconcile_plugin_state(&status);
         let environment_id = self.initial_worker_metadata.environment_id;
@@ -1861,6 +2000,7 @@ mod tests {
     struct RecordedSend {
         initial_oplog_index: OplogIndex,
         entry_count: usize,
+        entries: Vec<OplogEntry>,
     }
 
     #[derive(Debug, Clone)]
@@ -1913,6 +2053,7 @@ mod tests {
             self.sends.lock().await.push(RecordedSend {
                 initial_oplog_index,
                 entry_count: entries.len(),
+                entries,
             });
             Ok(())
         }
@@ -2069,11 +2210,17 @@ mod tests {
         async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
     }
 
-    /// A minimal in-memory oplog for testing ForwardingOplog behavior
+    /// A minimal in-memory oplog for testing ForwardingOplog behavior.
+    ///
+    /// Entry `i` (1-based [`OplogIndex`]) is stored at `entries[i - 1]`, so the indices returned
+    /// by `add`/`add_pair` agree with `read`/`read_many` — the forwarding wrapper's mirrored
+    /// buffer relies on this. `commit` returns the newly committed suffix, like the production
+    /// leaf oplogs, so the forwarding actor's `last_committed_idx` tracking is exercised.
     #[allow(dead_code)]
     struct InMemoryOplog {
         entries: async_lock::Mutex<Vec<OplogEntry>>,
         current_idx: async_lock::Mutex<OplogIndex>,
+        committed_idx: async_lock::Mutex<OplogIndex>,
     }
 
     #[allow(dead_code)]
@@ -2081,7 +2228,8 @@ mod tests {
         fn new() -> Self {
             Self {
                 entries: async_lock::Mutex::new(Vec::new()),
-                current_idx: async_lock::Mutex::new(OplogIndex::INITIAL),
+                current_idx: async_lock::Mutex::new(OplogIndex::NONE),
+                committed_idx: async_lock::Mutex::new(OplogIndex::NONE),
             }
         }
     }
@@ -2102,12 +2250,52 @@ mod tests {
             *idx
         }
 
+        async fn add_pair(
+            &self,
+            start: OplogEntry,
+            make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+        ) -> (OplogIndex, OplogIndex) {
+            let mut entries = self.entries.lock().await;
+            let mut idx = self.current_idx.lock().await;
+            *idx = idx.next();
+            let first_idx = *idx;
+            entries.push(start);
+            *idx = idx.next();
+            let second_idx = *idx;
+            entries.push(make_second(first_idx));
+            (first_idx, second_idx)
+        }
+
+        async fn add_start_with_reserved_raw_payload(
+            &self,
+            serialized_request: Vec<u8>,
+            build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        ) -> Result<OrderedOplogStart, String> {
+            let entry = build_start(RawOplogPayload::SerializedInline(serialized_request))?;
+            let index = self.add(entry.clone()).await;
+            Ok(OrderedOplogStart {
+                index,
+                entry,
+                pending_upload: crate::services::oplog::PendingUpload::already_durable(),
+            })
+        }
+
         async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
             0
         }
 
         async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
-            BTreeMap::new()
+            let entries = self.entries.lock().await;
+            let current = *self.current_idx.lock().await;
+            let mut committed = self.committed_idx.lock().await;
+            let mut result = BTreeMap::new();
+            let mut idx = *committed;
+            while idx < current {
+                idx = idx.next();
+                result.insert(idx, entries[(idx.as_u64() - 1) as usize].clone());
+            }
+            *committed = current;
+            result
         }
 
         async fn current_oplog_index(&self) -> OplogIndex {
@@ -2167,7 +2355,7 @@ mod tests {
         active_plugins: HashSet<EnvironmentPluginGrantId>,
     ) -> (
         AgentMetadata,
-        read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+        read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
     ) {
         let agent_id = AgentId {
             component_id: ComponentId::new(),
@@ -2195,8 +2383,9 @@ mod tests {
             agent_mode: AgentMode::Durable,
         };
 
-        let status_lock =
-            read_only_lock::tokio::ReadOnlyLock::new(Arc::new(tokio::sync::RwLock::new(status)));
+        let status_lock = read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(
+            arc_swap::ArcSwap::from_pointee(status),
+        ));
 
         (metadata, status_lock)
     }
@@ -2407,5 +2596,96 @@ mod tests {
         let lookups = recording_plugin.lookups().await;
         assert_eq!(lookups.len(), 1, "Expected exactly one status lookup");
         assert_eq!(lookups[0].caller_account_id, worker_owner);
+    }
+
+    // --------------------------------------------------------------------------
+    // Reserved-start through the forwarding actor
+    // --------------------------------------------------------------------------
+
+    /// Reserved starts pass through the forwarding actor in initiation order: the indices the
+    /// wrapper returns are the ones the inner (leaf) oplog assigned, the mirrored buffer stays in
+    /// lockstep, and a flush forwards the `Start` entries to the plugin as regular oplog entries.
+    /// The contract verified here is structural (entry kind, order, batch range); the payload
+    /// representation is owned by the leaf oplog and is not part of the forwarding contract.
+    #[test]
+    async fn reserved_start_forwarded_in_initiation_order_and_reaches_plugin() {
+        use crate::services::oplog::OplogOps;
+        use golem_common::model::oplog::host_functions::HostFunctionName;
+        use golem_common::model::oplog::{DurableFunctionType, HostRequest};
+        use golem_common::schema::IntoTypedSchemaValue;
+
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (metadata, status_lock) = test_worker_metadata(HashSet::from([grant_id]));
+        let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
+        let components: Arc<dyn ComponentService> = Arc::new(
+            FakeComponentService::with_one_oplog_processor_plugin(grant_id),
+        );
+        let inner: Arc<dyn Oplog> = Arc::new(InMemoryOplog::new());
+
+        let oplog = ForwardingOplog::new(
+            inner.clone(),
+            recording_plugin.clone(),
+            components,
+            metadata,
+            status_lock,
+            OplogIndex::NONE,
+            Box::new(|| {}),
+            1,                         // flush on every commit
+            Duration::from_secs(3600), // keep the periodic tick out of this test
+        )
+        .await;
+
+        let build_start = |function_name: HostFunctionName| {
+            move |request_payload| OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: None,
+                function_name,
+                request: Some(request_payload),
+                durable_function_type: DurableFunctionType::ReadRemote,
+            }
+        };
+
+        let (first_idx, first_pending) = oplog
+            .add_start_with_reserved_payload(
+                HostRequest::Custom("first".into_typed_schema_value().unwrap()),
+                build_start(HostFunctionName::Custom("first".to_string())),
+            )
+            .await
+            .unwrap();
+        let (second_idx, second_pending) = oplog
+            .add_start_with_reserved_payload(
+                HostRequest::Custom("second".into_typed_schema_value().unwrap()),
+                build_start(HostFunctionName::Custom("second".to_string())),
+            )
+            .await
+            .unwrap();
+
+        // The wrapper returns the leaf-assigned indices, in initiation order.
+        assert_eq!(first_idx, OplogIndex::INITIAL);
+        assert_eq!(second_idx, first_idx.next());
+        first_pending.wait().await.unwrap();
+        second_pending.wait().await.unwrap();
+
+        // With max_commit_count = 1 the first commit triggers a flush to the plugin.
+        oplog.commit(CommitLevel::Always).await;
+
+        let sends = recording_plugin.sends().await;
+        assert_eq!(sends.len(), 1, "Expected exactly one batch");
+        assert_eq!(sends[0].initial_oplog_index, first_idx);
+        let function_names: Vec<_> = sends[0]
+            .entries
+            .iter()
+            .map(|entry| match entry {
+                OplogEntry::Start {
+                    function_name: HostFunctionName::Custom(name),
+                    ..
+                } => name.clone(),
+                other => panic!("unexpected forwarded entry: {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            function_names,
+            vec!["first".to_string(), "second".to_string()]
+        );
     }
 }

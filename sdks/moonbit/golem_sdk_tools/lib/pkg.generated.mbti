@@ -276,6 +276,7 @@ pub(all) struct ToolArgInfo {
 pub(all) struct ToolCommandInfo {
   source_name : String
   name : String
+  explicit_name : Bool
   aliases : Array[String]
   subtree : String?
   read_only : Bool?

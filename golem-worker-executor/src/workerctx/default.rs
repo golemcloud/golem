@@ -14,7 +14,9 @@
 
 use super::LogEventEmitBehaviour;
 use crate::durable_host::websocket::WebSocketConnectionPool;
-use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
+use crate::durable_host::{
+    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState, SnapshotBoundaryBlocker,
+};
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
 use crate::preview2::golem::agent::host::{
@@ -277,6 +279,18 @@ impl DurableWorkerCtxView<Context> for Context {
     }
 }
 
+impl wasmtime_wasi::WasiView for Context {
+    fn ctx(&mut self) -> wasmtime_wasi::WasiCtxView<'_> {
+        self.durable_ctx.ctx()
+    }
+}
+
+impl wasmtime_wasi_http::p3::WasiHttpView for Context {
+    fn http(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
+        self.durable_ctx.as_wasi_http_view_p3()
+    }
+}
+
 #[async_trait]
 impl FuelManagement for Context {
     fn ensure_fuel(&mut self, current_level: u64) -> Result<(), AgentError> {
@@ -431,6 +445,14 @@ impl InvocationHooks for Context {
         self.durable_ctx.get_current_retry_point().await
     }
 
+    fn current_in_atomic_region(&self) -> bool {
+        self.durable_ctx.current_in_atomic_region()
+    }
+
+    fn current_atomic_region_had_side_effects(&self) -> bool {
+        self.durable_ctx.current_atomic_region_had_side_effects()
+    }
+
     fn enter_read_only_mode(&mut self, method_name: String) {
         self.durable_ctx.enter_read_only_mode(method_name)
     }
@@ -462,10 +484,10 @@ impl ResourceLimiterAsync for Context {
         let delta = (desired as u64).saturating_sub(current_known);
 
         if delta > 0 {
-            // Get more permits from the host. If this is not allowed the worker will fail immediately and will retry with more permits.
+            // Request more permits from the host on a detached task; if that fails
+            // the worker gets restarted and reacquires memory on startup.
             self.durable_ctx
                 .increase_memory(delta)
-                .await
                 .map_err(wasmtime::Error::from_anyhow)?;
             record_allocated_memory(desired);
         }
@@ -554,6 +576,10 @@ impl ResourceStore for Context {
 
 #[async_trait]
 impl UpdateManagement for Context {
+    fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker> {
+        self.durable_ctx.snapshot_boundary_blocker()
+    }
+
     fn begin_call_snapshotting_function(&mut self) {
         self.durable_ctx.begin_call_snapshotting_function()
     }
@@ -650,7 +676,7 @@ impl HostWasmRpc for Context {
     async fn schedule_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+        scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
     ) -> anyhow::Result<ScheduledInvocationReceipt> {
@@ -662,7 +688,7 @@ impl HostWasmRpc for Context {
     async fn schedule_cancelable_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+        scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
     ) -> anyhow::Result<CancelableScheduledInvocationReceipt> {
@@ -677,28 +703,8 @@ impl HostWasmRpc for Context {
 }
 
 impl HostFutureInvokeResult for Context {
-    async fn subscribe(
-        &mut self,
-        self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Resource<wasmtime_wasi::p2::DynPollable>> {
-        HostFutureInvokeResult::subscribe(&mut self.durable_ctx, self_).await
-    }
-
-    async fn get(
-        &mut self,
-        self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<
-        Option<Result<Option<golem_schema::schema::wit::wire::SchemaValueTree>, RpcError>>,
-    > {
-        HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
-    }
-
     async fn cancel(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         HostFutureInvokeResult::cancel(&mut self.durable_ctx, this).await
-    }
-
-    async fn drop(&mut self, rep: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
-        HostFutureInvokeResult::drop(&mut self.durable_ctx, rep).await
     }
 }
 

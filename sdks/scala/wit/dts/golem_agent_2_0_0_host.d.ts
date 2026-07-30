@@ -1,8 +1,7 @@
 declare module 'golem:agent/host@2.0.0' {
   import * as golemAgent200Common from 'golem:agent/common@2.0.0';
   import * as golemCore200Types from 'golem:core/types@2.0.0';
-  import * as wasiClocks023WallClock from 'wasi:clocks/wall-clock@0.2.3';
-  import * as wasiIo023Poll from 'wasi:io/poll@0.2.3';
+  import * as wasiClocks030SystemClock from 'wasi:clocks/system-clock@0.3.0';
   /**
    * Gets all the registered agent types
    */
@@ -88,13 +87,10 @@ declare module 'golem:agent/host@2.0.0' {
   }
   export class FutureInvokeResult {
     /**
-     * Subscribes to the result of the invocation
+     * Awaits the result of the invocation.
+     * @throws RpcError
      */
-    subscribe(): Pollable;
-    /**
-     * Poll for the invocation. If the invocation has not completed yet, returns `none`.
-     */
-    get(): Result<SchemaValueTree | undefined, RpcError> | undefined;
+    get(): Promise<SchemaValueTree | undefined>;
     /**
      * Best-effort attempt to cancel the remote invocation by idempotency key.
      * If the invocation has already started or completed, this is a no-op.
@@ -113,8 +109,7 @@ declare module 'golem:agent/host@2.0.0' {
   export type SchemaGraph = golemCore200Types.SchemaGraph;
   export type SchemaValueTree = golemCore200Types.SchemaValueTree;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
-  export type Datetime = wasiClocks023WallClock.Datetime;
-  export type Pollable = wasiIo023Poll.Pollable;
+  export type Datetime = wasiClocks030SystemClock.Instant;
   export type AgentError = golemAgent200Common.AgentError;
   export type AgentType = golemAgent200Common.AgentType;
   export type RegisteredAgentType = golemAgent200Common.RegisteredAgentType;
@@ -122,7 +117,7 @@ declare module 'golem:agent/host@2.0.0' {
   /**
    * Possible failures of an RPC call
    */
-  export type RpcError = 
+  export type RpcError =
   /** Protocol level error */
   {
     tag: 'protocol-error'

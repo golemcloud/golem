@@ -1,5 +1,4 @@
 declare module 'golem:websocket/client@1.5.0' {
-  import * as wasiIo023Poll from 'wasi:io/poll@0.2.3';
   export class WebsocketConnection {
     /**
      * Connect to a WebSocket server at the given URL (ws:// or wss://)
@@ -16,29 +15,24 @@ declare module 'golem:websocket/client@1.5.0' {
      * Receive the next message (blocks until available)
      * @throws Error
      */
-    receive(): Message;
+    receive(): Promise<Message>;
     /**
      * Receive the next message with a timeout in milliseconds.
      * Returns none if the timeout expires before a message arrives.
      * @throws Error
      */
-    receiveWithTimeout(timeoutMs: bigint): Message | undefined;
+    receiveWithTimeout(timeoutMs: bigint): Promise<Message | undefined>;
     /**
      * Send a close frame with optional code and reason
      * @throws Error
      */
     close(code: number | undefined, reason: string | undefined): void;
-    /**
-     * Returns a pollable that resolves when a message is available to read
-     */
-    subscribe(): Pollable;
   }
-  export type Pollable = wasiIo023Poll.Pollable;
   export type CloseInfo = {
     code: number;
     reason: string;
   };
-  export type Error = 
+  export type Error =
   {
     tag: 'connection-failure'
     val: string
@@ -66,7 +60,7 @@ declare module 'golem:websocket/client@1.5.0' {
   /**
    * A WebSocket message — text or binary
    */
-  export type Message = 
+  export type Message =
   {
     tag: 'text'
     val: string

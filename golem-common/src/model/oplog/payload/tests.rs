@@ -18,8 +18,30 @@ use crate::model::Timestamp;
 use crate::model::invocation_context::{AttributeValue, SpanId};
 use crate::model::oplog::raw_types::SpanData;
 use crate::model::oplog::types::{
-    SerializableDateTime, SerializableHttpErrorCode, SerializableHttpVersion,
-    SerializableIpAddress, SerializableIpAddresses, SerializableStreamError,
+    SerializableDateTime, SerializableFileTimes, SerializableHttpErrorCode, SerializableHttpMethod,
+    SerializableHttpVersion, SerializableIpAddress, SerializableIpAddresses,
+    SerializableP3FileSystemError, SerializableP3FsErrorCode, SerializableP3HttpBodyChunk,
+    SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
+    SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestBodyFrame,
+    SerializableP3HttpRequestOptions, SerializableP3HttpScheme, SerializableP3IpSocketAddress,
+    SerializableP3SocketErrorCode, SerializableP3TcpChunk, SerializableP3UdpDatagram,
+    SerializableResponseHeaders, SerializableStreamError,
+};
+use crate::model::oplog::{
+    HostPayloadPair, HostRequest, HostRequestFileSystemPath, HostRequestKVCacheKey,
+    HostRequestKVCacheKeyAndTtl, HostRequestKVCacheKeyValueAndTtl,
+    HostRequestMonotonicClockDuration, HostRequestMonotonicClockTimestamp, HostRequestNoInput,
+    HostRequestP3HttpClientRequestBodyFrame, HostRequestP3HttpClientSend,
+    HostRequestP3SocketsUdpSend, HostRequestRandomBytes, HostResponse, HostResponseKVDelete,
+    HostResponseKVGet, HostResponseKVUnit, HostResponseMonotonicClockTimestamp,
+    HostResponseP3BlobstoreIncomingValueStream, HostResponseP3FileSystemStat,
+    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
+    HostResponseP3HttpClientRequestBodyTransmission, HostResponseP3HttpClientSendResult,
+    HostResponseP3KeyvalueIncomingValueStream, HostResponseP3MonotonicClockUnit,
+    HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
+    HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
+    HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseRandomBytes,
+    HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock, host_functions,
 };
 use http::Version;
 use iso8601_timestamp as iso_ts;
@@ -27,6 +49,7 @@ use proptest::collection::vec;
 use proptest::option::of;
 use proptest::prelude::*;
 use proptest::strategy::LazyJust;
+use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::ops::Add;
 use std::time::{Duration, SystemTime};
@@ -38,7 +61,7 @@ use wasmtime_wasi_http::p2::bindings::http::types::{
 
 fn datetime_strat()
 -> impl Strategy<Value = wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> {
-    (0..(u64::MAX / 1_000_000_000), 0..999_999_999u32).prop_map(|(seconds, nanoseconds)| {
+    (0..(u64::MAX / 1_000_000_000), 0..1_000_000_000u32).prop_map(|(seconds, nanoseconds)| {
         wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime {
             seconds,
             nanoseconds,
@@ -47,9 +70,20 @@ fn datetime_strat()
 }
 
 fn systemtime_strat() -> impl Strategy<Value = SystemTime> {
-    (0..(u64::MAX / 1_000_000_000), 0..999_999_999u32).prop_map(|(seconds, nanoseconds)| {
-        SystemTime::UNIX_EPOCH.add(Duration::new(seconds, nanoseconds))
-    })
+    // Covers pre-epoch instants too: `seconds` is the floored second offset from
+    // the epoch, `nanoseconds` the non-negative offset within that second.
+    (
+        -(i64::MAX / 1_000_000_000)..(i64::MAX / 1_000_000_000),
+        0..1_000_000_000u32,
+    )
+        .prop_map(|(seconds, nanoseconds)| {
+            if seconds >= 0 {
+                SystemTime::UNIX_EPOCH.add(Duration::new(seconds as u64, nanoseconds))
+            } else {
+                SystemTime::UNIX_EPOCH - Duration::new(seconds.unsigned_abs(), 0)
+                    + Duration::new(0, nanoseconds)
+            }
+        })
 }
 
 fn ipaddress_strat() -> impl Strategy<Value = IpAddress> {
@@ -137,6 +171,725 @@ proptest! {
             }
         }
     }
+}
+
+#[test]
+fn pre_epoch_systemtime_to_serializable_datetime() {
+    // 2.75 seconds before the epoch: floored seconds is -3 with 250ms on top
+    let value = SystemTime::UNIX_EPOCH - Duration::new(2, 750_000_000);
+    let serialized: SerializableDateTime = value.into();
+    assert_eq!(serialized.seconds, -3);
+    assert_eq!(serialized.nanoseconds, 250_000_000);
+
+    let result: SystemTime = serialized.into();
+    assert_eq!(value, result);
+}
+
+#[test]
+fn pre_epoch_whole_second_systemtime_to_serializable_datetime() {
+    let value = SystemTime::UNIX_EPOCH - Duration::new(5, 0);
+    let serialized: SerializableDateTime = value.into();
+    assert_eq!(serialized.seconds, -5);
+    assert_eq!(serialized.nanoseconds, 0);
+
+    let result: SystemTime = serialized.into();
+    assert_eq!(value, result);
+}
+
+#[test]
+fn one_nanosecond_before_epoch_roundtrips() {
+    let value = SystemTime::UNIX_EPOCH - Duration::new(0, 1);
+    let serialized: SerializableDateTime = value.into();
+    assert_eq!(serialized.seconds, -1);
+    assert_eq!(serialized.nanoseconds, 999_999_999);
+
+    let result: SystemTime = serialized.into();
+    assert_eq!(value, result);
+}
+
+#[test]
+fn one_second_before_epoch_roundtrips() {
+    let value = SystemTime::UNIX_EPOCH - Duration::new(1, 0);
+    let serialized: SerializableDateTime = value.into();
+    assert_eq!(serialized.seconds, -1);
+    assert_eq!(serialized.nanoseconds, 0);
+
+    let result: SystemTime = serialized.into();
+    assert_eq!(value, result);
+}
+
+#[test]
+fn earliest_i64_second_systemtime_roundtrips_if_representable() {
+    // epoch - 2^63 seconds is exactly SerializableDateTime { i64::MIN, 0 }
+    if let Some(value) = SystemTime::UNIX_EPOCH.checked_sub(Duration::from_secs(1u64 << 63)) {
+        let serialized: SerializableDateTime = value.into();
+        assert_eq!(serialized.seconds, i64::MIN);
+        assert_eq!(serialized.nanoseconds, 0);
+
+        let result: SystemTime = serialized.into();
+        assert_eq!(value, result);
+    }
+}
+
+#[test]
+fn fractional_instant_with_floored_i64_min_seconds_roundtrips_if_representable() {
+    // epoch - (2^63 - 0.25) seconds: floored seconds is i64::MIN with 250ms on top
+    if let Some(value) =
+        SystemTime::UNIX_EPOCH.checked_sub(Duration::new((1u64 << 63) - 1, 750_000_000))
+    {
+        let serialized: SerializableDateTime = value.into();
+        assert_eq!(serialized.seconds, i64::MIN);
+        assert_eq!(serialized.nanoseconds, 250_000_000);
+
+        let result: SystemTime = serialized.into();
+        assert_eq!(value, result);
+    }
+}
+
+#[test]
+fn pre_epoch_systemtime_beyond_i64_seconds_saturates_if_representable() {
+    // epoch - (2^63 seconds + 1ns) is below SerializableDateTime's range
+    if let Some(value) = SystemTime::UNIX_EPOCH.checked_sub(Duration::new(1u64 << 63, 1)) {
+        let serialized: SerializableDateTime = value.into();
+        assert_eq!(serialized.seconds, i64::MIN);
+        assert_eq!(serialized.nanoseconds, 0);
+    }
+}
+
+#[test]
+fn post_epoch_systemtime_beyond_i64_seconds_saturates_if_representable() {
+    if let Some(value) =
+        SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(i64::MAX as u64 + 1))
+    {
+        let serialized: SerializableDateTime = value.into();
+        assert_eq!(serialized.seconds, i64::MAX);
+        assert_eq!(serialized.nanoseconds, 999_999_999);
+    }
+}
+
+#[test]
+fn extreme_serializable_datetime_to_datetime_utc_clamps_to_chrono_bounds() {
+    let min = SerializableDateTime {
+        seconds: i64::MIN,
+        nanoseconds: 0,
+    };
+    let result: chrono::DateTime<chrono::Utc> = min.into();
+    assert_eq!(result, chrono::DateTime::<chrono::Utc>::MIN_UTC);
+
+    let max = SerializableDateTime {
+        seconds: i64::MAX,
+        nanoseconds: 999_999_999,
+    };
+    let result: chrono::DateTime<chrono::Utc> = max.into();
+    assert_eq!(result, chrono::DateTime::<chrono::Utc>::MAX_UTC);
+}
+
+#[test]
+fn pre_epoch_serializable_datetime_to_p2_datetime_clamps_to_epoch() {
+    let value = SerializableDateTime {
+        seconds: -3,
+        nanoseconds: 250_000_000,
+    };
+    let result: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime = value.into();
+    assert_eq!(result.seconds, 0);
+    assert_eq!(result.nanoseconds, 0);
+}
+
+#[test]
+fn pre_epoch_serializable_datetime_to_p3_instant_is_lossless() {
+    let value = SerializableDateTime {
+        seconds: -3,
+        nanoseconds: 250_000_000,
+    };
+    let instant: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant = value.clone().into();
+    assert_eq!(instant.seconds, -3);
+    assert_eq!(instant.nanoseconds, 250_000_000);
+
+    let result: SerializableDateTime = instant.into();
+    assert_eq!(result, value);
+}
+
+#[test]
+fn pre_epoch_serializable_datetime_to_datetime_utc_roundtrip() {
+    let value = SerializableDateTime {
+        seconds: -3,
+        nanoseconds: 250_000_000,
+    };
+    let datetime: chrono::DateTime<chrono::Utc> = value.clone().into();
+    assert_eq!(datetime.to_rfc3339(), "1969-12-31T23:59:57.250+00:00");
+
+    let result: SerializableDateTime = datetime.into();
+    assert_eq!(result, value);
+}
+
+#[test]
+fn p3_clock_host_payload_pairs_roundtrip() {
+    assert_host_payload_pair_roundtrip::<host_functions::P3SystemClockNow>(
+        HostRequestNoInput {},
+        HostResponseWallClock {
+            time: SerializableDateTime {
+                seconds: 123,
+                nanoseconds: 456,
+            },
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3SystemClockGetResolution>(
+        HostRequestNoInput {},
+        HostResponseMonotonicClockTimestamp { nanos: 1 },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3MonotonicClockNow>(
+        HostRequestNoInput {},
+        HostResponseMonotonicClockTimestamp { nanos: 2 },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3MonotonicClockGetResolution>(
+        HostRequestNoInput {},
+        HostResponseMonotonicClockTimestamp { nanos: 3 },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3MonotonicClockWaitUntil>(
+        HostRequestMonotonicClockTimestamp { nanos: 4 },
+        HostResponseP3MonotonicClockUnit {},
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3MonotonicClockWaitFor>(
+        HostRequestMonotonicClockDuration {
+            duration_in_nanos: 5,
+        },
+        HostResponseP3MonotonicClockUnit {},
+    );
+}
+
+#[test]
+fn p3_random_host_payload_pairs_roundtrip() {
+    assert_host_payload_pair_roundtrip::<host_functions::P3RandomRandomGetRandomBytes>(
+        HostRequestRandomBytes { length: 4 },
+        HostResponseRandomBytes {
+            bytes: vec![1, 2, 3, 4],
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3RandomRandomGetRandomU64>(
+        HostRequestNoInput {},
+        HostResponseRandomU64 { value: 42 },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3RandomInsecureGetInsecureRandomBytes>(
+        HostRequestRandomBytes { length: 3 },
+        HostResponseRandomBytes {
+            bytes: vec![5, 6, 7],
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3RandomInsecureGetInsecureRandomU64>(
+        HostRequestNoInput {},
+        HostResponseRandomU64 { value: 43 },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3RandomInsecureSeedGetInsecureSeed>(
+        HostRequestNoInput {},
+        HostResponseRandomSeed { lo: 44, hi: 45 },
+    );
+}
+
+#[test]
+fn p3_tcp_socket_host_payload_pairs_roundtrip() {
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketSend>(
+        HostRequestNoInput {},
+        HostResponseP3SocketsTcpSend { result: Ok(()) },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketReceive>(
+        HostRequestNoInput {},
+        HostResponseP3SocketsTcpReceive {
+            result: Err(SerializableP3SocketErrorCode::ConnectionReset),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketReceiveChunk>(
+        HostRequestNoInput {},
+        HostResponseP3SocketsTcpReceiveChunk {
+            chunk: SerializableP3TcpChunk::Data(b"incoming tcp bytes".to_vec()),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketReceiveChunk>(
+        HostRequestNoInput {},
+        HostResponseP3SocketsTcpReceiveChunk {
+            chunk: SerializableP3TcpChunk::End,
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketSendAcquire>(
+        HostRequestNoInput {},
+        HostResponseP3SocketsTcpAcquire { result: Ok(()) },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketReceiveAcquire>(
+        HostRequestNoInput {},
+        HostResponseP3SocketsTcpAcquire {
+            result: Err(SerializableP3SocketErrorCode::InvalidState),
+        },
+    );
+}
+
+#[test]
+fn p3_udp_socket_host_payload_pairs_roundtrip() {
+    let remote_address = SerializableP3IpSocketAddress {
+        address: SerializableIpAddress::IPv4 {
+            address: [127, 0, 0, 1],
+        },
+        port: 1234,
+        flow_info: None,
+        scope_id: None,
+    };
+
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesUdpSocketSend>(
+        HostRequestP3SocketsUdpSend {
+            data: b"outgoing udp bytes".to_vec(),
+            remote_address: Some(remote_address.clone()),
+        },
+        HostResponseP3SocketsUdpSend { result: Ok(()) },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesUdpSocketReceive>(
+        HostRequestNoInput {},
+        HostResponseP3SocketsUdpReceive {
+            result: Ok(SerializableP3UdpDatagram {
+                data: b"incoming udp bytes".to_vec(),
+                remote_address,
+            }),
+        },
+    );
+}
+
+#[test]
+fn p3_http_client_send_host_payload_pairs_roundtrip() {
+    let request = SerializableP3HttpClientSend {
+        method: SerializableHttpMethod::Post,
+        scheme: Some(SerializableP3HttpScheme::Https),
+        authority: Some("example.com".to_string()),
+        path_with_query: Some("/path?query=1".to_string()),
+        headers: HashMap::from([(
+            "x-custom".to_string(),
+            vec![b"value".to_vec(), b"other".to_vec()],
+        )]),
+        options: Some(SerializableP3HttpRequestOptions {
+            connect_timeout_nanos: Some(5_000_000_000),
+            first_byte_timeout_nanos: Some(10_000_000_000),
+            between_bytes_timeout_nanos: None,
+        }),
+    };
+
+    // Success result: response head and request-body recording state round-trip.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientSend>(
+        HostRequestP3HttpClientSend {
+            request: request.clone(),
+        },
+        HostResponseP3HttpClientSendResult {
+            result: SerializableP3HttpClientSendResult::SuccessWithRecordedRequestBody {
+                headers: SerializableResponseHeaders {
+                    status: 200,
+                    headers: HashMap::from([(
+                        "content-type".to_string(),
+                        vec![b"application/json".to_vec()],
+                    )]),
+                },
+                recording_complete_at_end: true,
+            },
+        },
+    );
+
+    // Error result (blocker #2): a replayed transport/protocol ErrorCode
+    // round-trips back to the guest instead of being flattened to a generic
+    // failure.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientSend>(
+        HostRequestP3HttpClientSend {
+            request: request.clone(),
+        },
+        HostResponseP3HttpClientSendResult {
+            result: SerializableP3HttpClientSendResult::HttpError(
+                SerializableHttpErrorCode::ConnectionRefused,
+            ),
+        },
+    );
+
+    // Empty/None edge cases on the request head and an error-code variant
+    // carrying a payload, to exercise the nested serializable types.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientSend>(
+        HostRequestP3HttpClientSend {
+            request: SerializableP3HttpClientSend {
+                method: SerializableHttpMethod::Other("LINK".to_string()),
+                scheme: Some(SerializableP3HttpScheme::Other("foo".to_string())),
+                authority: None,
+                path_with_query: None,
+                headers: HashMap::new(),
+                options: None,
+            },
+        },
+        HostResponseP3HttpClientSendResult {
+            result: SerializableP3HttpClientSendResult::HttpError(
+                SerializableHttpErrorCode::InternalError(Some("boom".to_string())),
+            ),
+        },
+    );
+}
+
+#[test]
+fn p3_http_client_consume_body_host_payload_pairs_roundtrip() {
+    // Clean close with trailers: the delivered trailers round-trip in the
+    // parent `consume-body` terminal.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientConsumeBody>(
+        HostRequestNoInput {},
+        HostResponseP3HttpClientConsumeBodyResult {
+            result: SerializableP3HttpConsumeBodyResult::Trailers(Some(HashMap::from([(
+                "x-trailer".to_string(),
+                vec![b"trailer-value".to_vec()],
+            )]))),
+        },
+    );
+
+    // Clean close without trailers.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientConsumeBody>(
+        HostRequestNoInput {},
+        HostResponseP3HttpClientConsumeBodyResult {
+            result: SerializableP3HttpConsumeBodyResult::Trailers(None),
+        },
+    );
+
+    // Errored body: the ErrorCode round-trips (surfaced to the guest via the
+    // trailers future in p3). The partial bytes observed before the error are
+    // recorded as `Data` chunks, not here.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientConsumeBody>(
+        HostRequestNoInput {},
+        HostResponseP3HttpClientConsumeBodyResult {
+            result: SerializableP3HttpConsumeBodyResult::HttpError(
+                SerializableHttpErrorCode::HttpResponseBodySize(Some(123)),
+            ),
+        },
+    );
+}
+
+#[test]
+fn p3_http_client_consume_body_chunk_host_payload_pairs_roundtrip() {
+    // A body data chunk recorded before its bytes are delivered to the guest.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientConsumeBodyChunk>(
+        HostRequestNoInput {},
+        HostResponseP3HttpClientConsumeBodyChunk {
+            chunk: SerializableP3HttpBodyChunk::Data(b"a body chunk".to_vec()),
+        },
+    );
+
+    // An empty data chunk still round-trips (although the implementation never
+    // records empty frames).
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientConsumeBodyChunk>(
+        HostRequestNoInput {},
+        HostResponseP3HttpClientConsumeBodyChunk {
+            chunk: SerializableP3HttpBodyChunk::Data(Vec::new()),
+        },
+    );
+
+    // The terminal marker that ends the recorded body stream.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientConsumeBodyChunk>(
+        HostRequestNoInput {},
+        HostResponseP3HttpClientConsumeBodyChunk {
+            chunk: SerializableP3HttpBodyChunk::End,
+        },
+    );
+
+    // A pending body read cancelled by the guest before upstream bytes arrive.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientConsumeBodyChunk>(
+        HostRequestNoInput {},
+        HostResponseP3HttpClientConsumeBodyChunk {
+            chunk: SerializableP3HttpBodyChunk::Cancelled,
+        },
+    );
+}
+
+#[test]
+fn p3_http_client_request_body_transmission_host_payload_pairs_roundtrip() {
+    // Successful upload: the transmission future resolved `Ok(())`.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientRequestBodyTransmission>(
+        HostRequestNoInput {},
+        HostResponseP3HttpClientRequestBodyTransmission { result: Ok(()) },
+    );
+
+    // Mid-body network failure (the G8 case): the transport `ErrorCode`
+    // observed by the live upload round-trips so replay delivers the same
+    // error to the guest instead of `Ok(())`.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientRequestBodyTransmission>(
+        HostRequestNoInput {},
+        HostResponseP3HttpClientRequestBodyTransmission {
+            result: Err(SerializableHttpErrorCode::ConnectionTerminated),
+        },
+    );
+
+    // Deterministic body-validation failure with a payload (content-length
+    // mismatch), exercising a payload-carrying error variant.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientRequestBodyTransmission>(
+        HostRequestNoInput {},
+        HostResponseP3HttpClientRequestBodyTransmission {
+            result: Err(SerializableHttpErrorCode::HttpRequestBodySize(Some(1024))),
+        },
+    );
+}
+
+#[test]
+fn p3_http_client_send_recorded_request_body_result_roundtrips() {
+    let request = HostRequestP3HttpClientSend {
+        request: SerializableP3HttpClientSend {
+            method: SerializableHttpMethod::Post,
+            scheme: Some(SerializableP3HttpScheme::Https),
+            authority: Some("example.com".to_string()),
+            path_with_query: Some("/upload".to_string()),
+            headers: HashMap::new(),
+            options: None,
+        },
+    };
+
+    // Recording reached its terminal frame before the send's End was appended:
+    // replay can trust the recorded frames as the complete request body.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientSend>(
+        request.clone(),
+        HostResponseP3HttpClientSendResult {
+            result: SerializableP3HttpClientSendResult::SuccessWithRecordedRequestBody {
+                headers: SerializableResponseHeaders {
+                    status: 201,
+                    headers: HashMap::from([("etag".to_string(), vec![b"\"abc\"".to_vec()])]),
+                },
+                recording_complete_at_end: true,
+            },
+        },
+    );
+
+    // The request body was still streaming when End was appended: replay must
+    // treat the recording as potentially truncated.
+    assert_host_payload_pair_roundtrip::<host_functions::P3HttpClientSend>(
+        request,
+        HostResponseP3HttpClientSendResult {
+            result: SerializableP3HttpClientSendResult::SuccessWithRecordedRequestBody {
+                headers: SerializableResponseHeaders {
+                    status: 200,
+                    headers: HashMap::new(),
+                },
+                recording_complete_at_end: false,
+            },
+        },
+    );
+}
+
+#[test]
+fn p3_http_request_body_frame_host_request_roundtrips() {
+    // Frames are HostStreamFrame hint payloads, not host-call pairs, so they
+    // round-trip through the HostRequest binary codec directly.
+    let frames = vec![
+        SerializableP3HttpRequestBodyFrame::Data {
+            offset: 0,
+            bytes: b"first chunk".to_vec(),
+        },
+        SerializableP3HttpRequestBodyFrame::Data {
+            offset: u64::MAX,
+            bytes: Vec::new(),
+        },
+        SerializableP3HttpRequestBodyFrame::Trailers(None),
+        SerializableP3HttpRequestBodyFrame::Trailers(Some(HashMap::from([(
+            "grpc-status".to_string(),
+            vec![b"0".to_vec(), b"1".to_vec()],
+        )]))),
+        SerializableP3HttpRequestBodyFrame::End,
+        SerializableP3HttpRequestBodyFrame::Error(SerializableHttpErrorCode::ConnectionTerminated),
+        SerializableP3HttpRequestBodyFrame::Error(SerializableHttpErrorCode::InternalError(Some(
+            "guest body error".to_string(),
+        ))),
+    ];
+
+    for frame in frames {
+        let request = HostRequestP3HttpClientRequestBodyFrame {
+            frame: frame.clone(),
+        };
+        let payload: HostRequest = request.clone().into();
+        let bytes = desert_rust::serialize_to_byte_vec(&payload).unwrap();
+        let roundtrip: HostRequest = desert_rust::deserialize(&bytes).unwrap();
+        assert_eq!(
+            HostRequestP3HttpClientRequestBodyFrame::try_from(roundtrip).unwrap(),
+            request,
+            "frame variant {frame:?} did not roundtrip"
+        );
+    }
+}
+
+#[test]
+fn p3_keyvalue_cache_host_payload_pairs_roundtrip() {
+    assert_host_payload_pair_roundtrip::<host_functions::P3KeyvalueTypesIncomingValueConsumeAsync>(
+        HostRequestNoInput {},
+        HostResponseP3KeyvalueIncomingValueStream {
+            contents: b"incoming value bytes".to_vec(),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3BlobstoreTypesIncomingValueConsumeAsync>(
+        HostRequestNoInput {},
+        HostResponseP3BlobstoreIncomingValueStream {
+            contents: b"incoming blob bytes".to_vec(),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3KeyvalueCacheGet>(
+        HostRequestKVCacheKey {
+            key: "cache-key".to_string(),
+        },
+        HostResponseKVGet {
+            result: Ok(Some(b"cached".to_vec())),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3KeyvalueCacheExists>(
+        HostRequestKVCacheKey {
+            key: "cache-key".to_string(),
+        },
+        HostResponseKVDelete { result: Ok(true) },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3KeyvalueCacheSet>(
+        HostRequestKVCacheKeyValueAndTtl {
+            key: "cache-key".to_string(),
+            length: 6,
+            ttl_ms: Some(1_000),
+        },
+        HostResponseKVUnit { result: Ok(()) },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3KeyvalueCacheGetOrSet>(
+        HostRequestKVCacheKey {
+            key: "cache-key".to_string(),
+        },
+        HostResponseKVGet { result: Ok(None) },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3KeyvalueCacheDelete>(
+        HostRequestKVCacheKey {
+            key: "cache-key".to_string(),
+        },
+        HostResponseKVUnit { result: Ok(()) },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3KeyvalueCacheVacancyFill>(
+        HostRequestKVCacheKeyAndTtl {
+            key: "cache-key".to_string(),
+            ttl_ms: Some(1_000),
+        },
+        HostResponseKVUnit { result: Ok(()) },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3KeyvalueCacheVacancyDrop>(
+        HostRequestKVCacheKey {
+            key: "cache-key".to_string(),
+        },
+        HostResponseKVUnit { result: Ok(()) },
+    );
+}
+
+#[test]
+fn p3_filesystem_host_payload_pairs_roundtrip() {
+    assert_host_payload_pair_roundtrip::<host_functions::P3FilesystemTypesDescriptorStat>(
+        HostRequestFileSystemPath {
+            path: "/tmp/file.txt".to_string(),
+        },
+        HostResponseP3FileSystemStat {
+            result: Ok(SerializableFileTimes {
+                data_access_timestamp: Some(SerializableDateTime {
+                    seconds: 1,
+                    nanoseconds: 2,
+                }),
+                data_modification_timestamp: None,
+            }),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3FilesystemTypesDescriptorStatAt>(
+        HostRequestFileSystemPath {
+            path: "/tmp/missing.txt".to_string(),
+        },
+        HostResponseP3FileSystemStat {
+            result: Err(SerializableP3FileSystemError::ErrorCode(
+                SerializableP3FsErrorCode::NoEntry,
+            )),
+        },
+    );
+}
+
+fn assert_host_payload_pair_roundtrip<Pair>(request: Pair::Req, response: Pair::Resp)
+where
+    Pair: HostPayloadPair,
+    Pair::Req: Clone + std::fmt::Debug + PartialEq + TryFrom<HostRequest, Error = String>,
+    Pair::Resp: Clone + std::fmt::Debug + PartialEq,
+{
+    let request_payload: HostRequest = request.clone().into();
+    let request_bytes = desert_rust::serialize_to_byte_vec(&request_payload).unwrap();
+    let request_roundtrip: HostRequest = desert_rust::deserialize(&request_bytes).unwrap();
+    assert_eq!(Pair::Req::try_from(request_roundtrip).unwrap(), request);
+
+    let response_payload: HostResponse = response.clone().into();
+    let response_bytes = desert_rust::serialize_to_byte_vec(&response_payload).unwrap();
+    let response_roundtrip: HostResponse = desert_rust::deserialize(&response_bytes).unwrap();
+    assert_eq!(Pair::Resp::try_from(response_roundtrip).unwrap(), response);
+
+    let function_name_bytes =
+        desert_rust::serialize_to_byte_vec(&Pair::HOST_FUNCTION_NAME).unwrap();
+    let function_name_roundtrip: host_functions::HostFunctionName =
+        desert_rust::deserialize(&function_name_bytes).unwrap();
+    assert_eq!(function_name_roundtrip, Pair::HOST_FUNCTION_NAME);
+}
+
+#[test]
+fn p3_http_payload_additions_keep_existing_host_request_binary_tags_stable() {
+    let old_kv_bucket_and_key_bytes = [
+        0, 25, 0, 0, 12, b'b', b'u', b'c', b'k', b'e', b't', 6, b'k', b'e', b'y',
+    ];
+
+    let decoded: HostRequest = desert_rust::deserialize(&old_kv_bucket_and_key_bytes).unwrap();
+
+    assert_eq!(
+        decoded,
+        HostRequest::KVBucketAndKey(crate::model::oplog::HostRequestKVBucketAndKey {
+            bucket: "bucket".to_string(),
+            key: "key".to_string(),
+        })
+    );
+}
+
+#[test]
+fn p3_http_payload_additions_keep_existing_host_function_name_binary_tags_stable() {
+    let old_random_get_random_bytes_name = [0, 36, 0];
+
+    let decoded: host_functions::HostFunctionName =
+        desert_rust::deserialize(&old_random_get_random_bytes_name).unwrap();
+
+    assert_eq!(
+        decoded,
+        host_functions::HostFunctionName::RandomGetRandomBytes
+    );
+}
+
+#[test]
+fn p3_http_payload_additions_keep_preexisting_blobstore_create_container_tag_stable() {
+    let old_blobstore_create_container_name = [0, 65, 0];
+
+    let decoded: host_functions::HostFunctionName =
+        desert_rust::deserialize(&old_blobstore_create_container_name).unwrap();
+
+    assert_eq!(
+        decoded,
+        host_functions::HostFunctionName::BlobstoreBlobstoreCreateContainer
+    );
+}
+
+#[test]
+fn main_payload_additions_keep_existing_p3_binary_tags_stable() {
+    let old_p3_monotonic_clock_unit_response = [0, 47, 0, 0];
+    let response = HostResponse::P3MonotonicClockUnit(
+        crate::model::oplog::HostResponseP3MonotonicClockUnit {},
+    );
+    assert_eq!(
+        desert_rust::serialize_to_byte_vec(&response).unwrap(),
+        old_p3_monotonic_clock_unit_response
+    );
+
+    let old_p3_http_request_body_transmission_name = [0, 142, 1, 0];
+    let function_name = host_functions::HostFunctionName::P3HttpClientRequestBodyTransmission;
+    assert_eq!(
+        desert_rust::serialize_to_byte_vec(&function_name).unwrap(),
+        old_p3_http_request_body_transmission_name
+    );
+}
+
+#[test]
+fn p3_http_payload_additions_p3_filesystem_stat_function_name_roundtrips_from_string() {
+    let function_name = host_functions::HostFunctionName::P3FilesystemTypesDescriptorStat;
+    let serialized = function_name.to_string();
+
+    assert_eq!(
+        host_functions::HostFunctionName::from(serialized.as_str()),
+        function_name
+    );
 }
 
 fn version_strat() -> impl Strategy<Value = Version> {

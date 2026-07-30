@@ -1190,7 +1190,7 @@ impl RustBridgeGenerator {
 
         if self.agent_type.mode == AgentMode::Ephemeral {
             return Ok(quote! {
-                pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) -> Result<golem_rust::golem_agentic::golem::agent::host::InvocationMetadata, crate::__golem_bridge_runtime::ClientError> {
+                pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<golem_rust::golem_agentic::golem::agent::host::InvocationMetadata, crate::__golem_bridge_runtime::ClientError> {
                     let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                     let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                         .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
@@ -1200,7 +1200,7 @@ impl RustBridgeGenerator {
         }
 
         Ok(quote! {
-            pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
+            pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
                 let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                 let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                     .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
@@ -1225,7 +1225,7 @@ impl RustBridgeGenerator {
 
         if self.agent_type.mode == AgentMode::Ephemeral {
             return Ok(quote! {
-                pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) -> Result<golem_rust::golem_agentic::golem::agent::host::CancelableScheduledInvocationReceipt, crate::__golem_bridge_runtime::ClientError> {
+                pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<golem_rust::golem_agentic::golem::agent::host::CancelableScheduledInvocationReceipt, crate::__golem_bridge_runtime::ClientError> {
                     let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                     let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                         .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
@@ -1235,7 +1235,7 @@ impl RustBridgeGenerator {
         }
 
         Ok(quote! {
-            pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::wasip2::clocks::wall_clock::Datetime) -> Result<golem_rust::golem_agentic::golem::agent::host::CancellationToken, crate::__golem_bridge_runtime::ClientError> {
+            pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<golem_rust::golem_agentic::golem::agent::host::CancellationToken, crate::__golem_bridge_runtime::ClientError> {
                 let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                 let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                     .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;

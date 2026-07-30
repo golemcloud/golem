@@ -191,7 +191,6 @@ export interface Container {
 // ---------------------------------------------------------------------------
 
 const CHUNK_SIZE = 4096;
-const LIST_PAGE_SIZE = 256n;
 
 const consumeIncoming = (iv: Types.IncomingValue): Uint8Array =>
   wrap('incomingValueConsumeSync', () => iv.incomingValueConsumeSync());
@@ -199,15 +198,12 @@ const consumeIncoming = (iv: Types.IncomingValue): Uint8Array =>
 const buildOutgoingValue = (bytes: Uint8Array): Types.OutgoingValue =>
   wrap('outgoingValueWriteBody', () => {
     const ov = Types.OutgoingValue.newOutgoingValue();
-    const stream = ov.outgoingValueWriteBody();
-    const total = bytes.length;
-    let offset = 0;
-    while (offset < total) {
-      const remaining = total - offset;
-      const chunkLen = remaining > CHUNK_SIZE ? CHUNK_SIZE : remaining;
-      stream.blockingWriteAndFlush(bytes.subarray(offset, offset + chunkLen));
-      offset += chunkLen;
-    }
+    const chunks = async function* (): AsyncIterable<number> {
+      for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
+        yield* bytes.subarray(offset, offset + CHUNK_SIZE);
+      }
+    };
+    ov.outgoingValueWriteBody(chunks());
     return ov;
   });
 
@@ -315,13 +311,10 @@ const makeContainer = (name: string, handle: ContainerNS.Container): Container =
     async listObjects() {
       const iter = wrap('container.listObjects', () => handle.listObjects());
       const out: string[] = [];
-      let done = false;
-      while (!done) {
-        const [names, end] = wrap('streamObjectNames.read', () =>
-          iter.readStreamObjectNames(LIST_PAGE_SIZE),
-        );
-        out.push(...names);
-        done = end;
+      try {
+        for await (const name of iter) out.push(name);
+      } catch (cause) {
+        throw new BlobstoreError(cause, 'container.listObjects');
       }
       return out;
     },

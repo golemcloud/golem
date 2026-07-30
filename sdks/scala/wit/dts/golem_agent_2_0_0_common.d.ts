@@ -1,6 +1,6 @@
 declare module 'golem:agent/common@2.0.0' {
   import * as golemCore200Types from 'golem:core/types@2.0.0';
-  import * as wasiClocks023MonotonicClock from 'wasi:clocks/monotonic-clock@0.2.3';
+  import * as wasiClocks030Types from 'wasi:clocks/types@0.3.0';
   export type SchemaGraph = golemCore200Types.SchemaGraph;
   export type TypeNodeIndex = golemCore200Types.TypeNodeIndex;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
@@ -8,10 +8,10 @@ declare module 'golem:agent/common@2.0.0' {
   export type AgentId = golemCore200Types.AgentId;
   export type AccountId = golemCore200Types.AccountId;
   export type ComponentId = golemCore200Types.ComponentId;
-  export type Duration = wasiClocks023MonotonicClock.Duration;
+  export type Duration = wasiClocks030Types.Duration;
   export type AgentMode = "durable" | "ephemeral";
   export type AutoInjectedKind = "principal";
-  export type FieldSource = 
+  export type FieldSource =
   {
     tag: 'user-supplied'
   } |
@@ -29,7 +29,7 @@ declare module 'golem:agent/common@2.0.0' {
   /**
    * Ordered, named input parameters with per-field source annotation.
    */
-  export type InputSchema = 
+  export type InputSchema =
   {
     tag: 'parameters'
     val: NamedField[]
@@ -37,7 +37,7 @@ declare module 'golem:agent/common@2.0.0' {
   /**
    * Output is either unit (no value) or a single value of the given type.
    */
-  export type OutputSchema = 
+  export type OutputSchema =
   {
     tag: 'unit'
   } |
@@ -46,7 +46,7 @@ declare module 'golem:agent/common@2.0.0' {
     tag: 'single'
     val: TypeNodeIndex
   };
-  export type CachePolicy = 
+  export type CachePolicy =
   {
     tag: 'no-cache'
   } |
@@ -64,7 +64,7 @@ declare module 'golem:agent/common@2.0.0' {
   export type CorsOptions = {
     allowedPatterns: string[];
   };
-  export type HttpMethod = 
+  export type HttpMethod =
   {
     tag: 'get'
   } |
@@ -100,7 +100,7 @@ declare module 'golem:agent/common@2.0.0' {
   export type PathVariable = {
     variableName: string;
   };
-  export type PathSegment = 
+  export type PathSegment =
   {
     tag: 'literal'
     val: string
@@ -171,7 +171,7 @@ declare module 'golem:agent/common@2.0.0' {
   export type GolemUserPrincipal = {
     accountId: AccountId;
   };
-  export type Principal = 
+  export type Principal =
   {
     tag: 'oidc'
     val: OidcPrincipal
@@ -204,7 +204,7 @@ declare module 'golem:agent/common@2.0.0' {
     constructor: AgentConstructor;
     methods: AgentMethod[];
   };
-  export type SnapshottingConfig = 
+  export type SnapshottingConfig =
   {
     tag: 'default'
   } |
@@ -217,7 +217,7 @@ declare module 'golem:agent/common@2.0.0' {
     tag: 'every-n-invocation'
     val: number
   };
-  export type Snapshotting = 
+  export type Snapshotting =
   {
     tag: 'disabled'
   } |
@@ -266,7 +266,7 @@ declare module 'golem:agent/common@2.0.0' {
   /**
    * Agent-level failures
    */
-  export type AgentError = 
+  export type AgentError =
   {
     tag: 'invalid-input'
     val: string

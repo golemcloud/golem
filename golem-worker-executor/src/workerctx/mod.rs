@@ -14,8 +14,8 @@
 
 pub mod default;
 
-use crate::durable_host::DurableWorkerCtxView;
 use crate::durable_host::websocket::WebSocketConnectionPool;
+use crate::durable_host::{DurableWorkerCtxView, SnapshotBoundaryBlocker};
 use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
@@ -67,6 +67,7 @@ use wasmtime::component::Instance;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::p2::WasiHttpCtxView;
+use wasmtime_wasi_http::p3::WasiHttpView;
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
@@ -84,6 +85,8 @@ pub trait WorkerCtx:
     + FileSystemReading
     + InvocationContextManagement
     + DurableWorkerCtxView<Self>
+    + WasiView
+    + WasiHttpView
     + Send
     + Sync
     + Sized
@@ -96,6 +99,17 @@ pub trait WorkerCtx:
 
     /// Static log event behaviour configuration for workers
     const LOG_EVENT_EMIT_BEHAVIOUR: LogEventEmitBehaviour;
+
+    /// Whether an incomplete durable call encountered during replay (a committed `Start` whose
+    /// terminal `End`/`Cancelled` entry is missing before the replay target) may be repaired by
+    /// switching to live re-execution of the side effect.
+    ///
+    /// Regular workers allow this for re-executable function types. Debug sessions disable it:
+    /// a debugging session must never perform real side effects, and its oplog silently discards
+    /// writes, so the repaired call's `End` could never be persisted anyway. When disabled, such
+    /// a call fails with an explicit "replay target inside an in-flight durable call" error
+    /// instead of re-executing.
+    const ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS: bool = true;
 
     /// Creates a new worker context
     ///
@@ -344,6 +358,15 @@ pub trait InvocationHooks {
     /// by this information. The current oplog index is a good default.
     async fn get_current_retry_point(&self) -> OplogIndex;
 
+    /// Ambient fallback for trap classification: whether any atomic region is currently active.
+    /// Used only for traps that do not carry a call-owned `DurableCallTrapContext` (guest-originated
+    /// traps); durable-call traps carry their own membership.
+    fn current_in_atomic_region(&self) -> bool;
+
+    /// Ambient fallback for trap classification: whether the outermost active atomic region has
+    /// recorded side effects. Used only for traps that do not carry a call-owned context.
+    fn current_atomic_region_had_side_effects(&self) -> bool;
+
     /// Switches the invocation strictness mode to `ReadOnly` for the duration of a single agent
     /// method invocation. Under read-only strictness, outgoing HTTP and RPC host calls trap
     /// with `AgentError::ReadOnlyViolation` before any oplog entry is written.
@@ -360,6 +383,15 @@ pub trait InvocationHooks {
 
 #[async_trait]
 pub trait UpdateManagement {
+    /// The first condition currently blocking a snapshot from being taken and committed, or
+    /// `None` when the worker is at a safe snapshot boundary.
+    ///
+    /// A committed snapshot is a replay cut point: snapshot-based recovery and snapshot-based
+    /// update skip every oplog entry before the snapshot. No durable construct may span that
+    /// cut, so this is `Some` while any durable host call is in flight or any durable scope or
+    /// atomic region is open. The returned blocker names the specific condition for diagnostics.
+    fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker>;
+
     /// Marks the beginning of a snapshot function call. This can be used to disabled persistence
     fn begin_call_snapshotting_function(&mut self);
 

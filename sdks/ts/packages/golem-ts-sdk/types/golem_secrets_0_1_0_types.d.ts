@@ -6,7 +6,7 @@
  */
 declare module 'golem:secrets/types@0.1.0' {
   import * as golemCore200Types from 'golem:core/types@2.0.0';
-  import * as wasiClocks023WallClock from 'wasi:clocks/wall-clock@0.2.3';
+  import * as wasiClocks030SystemClock from 'wasi:clocks/system-clock@0.3.0';
   /**
    * Stable opaque identifier. Comparing equal across two `secret` handles
    * means "same secret material, same version" — useful for caching and audit
@@ -18,7 +18,7 @@ declare module 'golem:secrets/types@0.1.0' {
    * path, the resolved version, and the resolution timestamp. No plaintext.
    */
   export function metadata(s: Secret): SecretMetadata;
-  export type Datetime = wasiClocks023WallClock.Datetime;
+  export type Datetime = wasiClocks030SystemClock.Instant;
   export type Secret = golemCore200Types.Secret;
   /**
    * The opaque handle to a sensitive value is defined in
@@ -68,7 +68,7 @@ declare module 'golem:secrets/types@0.1.0' {
   /**
    * Errors common to operations on secrets.
    */
-  export type SecretError = 
+  export type SecretError =
   /**
    * The secret was bound but its current resolution failed
    * (e.g., the secret-store entry was deleted between binding

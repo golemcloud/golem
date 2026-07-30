@@ -2,13 +2,10 @@
 package "golemcloud/golem_sdk/interface/wasi/http/types"
 
 import {
-  "golemcloud/golem_sdk/interface/wasi/io/error",
-  "golemcloud/golem_sdk/interface/wasi/io/poll",
-  "golemcloud/golem_sdk/interface/wasi/io/streams",
+  "golemcloud/golem_sdk/async-core",
 }
 
 // Values
-pub fn http_error_code(@error.Error_) -> ErrorCode?
 
 // Errors
 pub(all) suberror ErrorCode {
@@ -57,6 +54,14 @@ pub(all) suberror HeaderError {
   InvalidSyntax
   Forbidden
   Immutable
+  SizeExceeded
+  Other(String?)
+} derive(Eq, Show)
+
+pub(all) suberror RequestOptionsError {
+  NotSupported
+  Immutable
+  Other(String?)
 } derive(Eq, Show)
 
 // Types and methods
@@ -73,44 +78,15 @@ pub(all) struct FieldSizePayload {
 pub(all) struct Fields(Int) derive(Eq, Show)
 pub fn Fields::append(Self, String, FixedArray[Byte]) -> Result[Unit, HeaderError]
 pub fn Fields::clone(Self) -> Self
+pub fn Fields::copy_all(Self) -> Array[(String, FixedArray[Byte])]
 pub fn Fields::delete(Self, String) -> Result[Unit, HeaderError]
 pub fn Fields::drop(Self) -> Unit
-pub fn Fields::entries(Self) -> Array[(String, FixedArray[Byte])]
 pub fn Fields::fields() -> Self
 pub fn Fields::from_list(Array[(String, FixedArray[Byte])]) -> Result[Self, HeaderError]
 pub fn Fields::get(Self, String) -> Array[FixedArray[Byte]]
+pub fn Fields::get_and_delete(Self, String) -> Result[Array[FixedArray[Byte]], HeaderError]
 pub fn Fields::has(Self, String) -> Bool
 pub fn Fields::set(Self, String, Array[FixedArray[Byte]]) -> Result[Unit, HeaderError]
-
-pub(all) struct FutureIncomingResponse(Int) derive(Eq, Show)
-pub fn FutureIncomingResponse::drop(Self) -> Unit
-pub fn FutureIncomingResponse::get(Self) -> Result[Result[IncomingResponse, ErrorCode], Unit]?
-pub fn FutureIncomingResponse::subscribe(Self) -> @poll.Pollable
-
-pub(all) struct FutureTrailers(Int) derive(Eq, Show)
-pub fn FutureTrailers::drop(Self) -> Unit
-pub fn FutureTrailers::get(Self) -> Result[Result[Fields?, ErrorCode], Unit]?
-pub fn FutureTrailers::subscribe(Self) -> @poll.Pollable
-
-pub(all) struct IncomingBody(Int) derive(Eq, Show)
-pub fn IncomingBody::drop(Self) -> Unit
-pub fn IncomingBody::finish(Self) -> FutureTrailers
-pub fn IncomingBody::stream(Self) -> Result[@streams.InputStream, Unit]
-
-pub(all) struct IncomingRequest(Int) derive(Eq, Show)
-pub fn IncomingRequest::authority(Self) -> String?
-pub fn IncomingRequest::consume(Self) -> Result[IncomingBody, Unit]
-pub fn IncomingRequest::drop(Self) -> Unit
-pub fn IncomingRequest::headers(Self) -> Fields
-pub fn IncomingRequest::method_(Self) -> Method
-pub fn IncomingRequest::path_with_query(Self) -> String?
-pub fn IncomingRequest::scheme(Self) -> Scheme?
-
-pub(all) struct IncomingResponse(Int) derive(Eq, Show)
-pub fn IncomingResponse::consume(Self) -> Result[IncomingBody, Unit]
-pub fn IncomingResponse::drop(Self) -> Unit
-pub fn IncomingResponse::headers(Self) -> Fields
-pub fn IncomingResponse::status(Self) -> UInt
 
 pub(all) enum Method {
   Get
@@ -125,46 +101,39 @@ pub(all) enum Method {
   Other(String)
 } derive(Eq, Show)
 
-pub(all) struct OutgoingBody(Int) derive(Eq, Show)
-pub fn OutgoingBody::drop(Self) -> Unit
-pub fn OutgoingBody::finish(Self, Fields?) -> Result[Unit, ErrorCode]
-pub fn OutgoingBody::write(Self) -> Result[@streams.OutputStream, Unit]
-
-pub(all) struct OutgoingRequest(Int) derive(Eq, Show)
-pub fn OutgoingRequest::authority(Self) -> String?
-pub fn OutgoingRequest::body(Self) -> Result[OutgoingBody, Unit]
-pub fn OutgoingRequest::drop(Self) -> Unit
-pub fn OutgoingRequest::headers(Self) -> Fields
-pub fn OutgoingRequest::method_(Self) -> Method
-pub fn OutgoingRequest::outgoing_request(Fields) -> Self
-pub fn OutgoingRequest::path_with_query(Self) -> String?
-pub fn OutgoingRequest::scheme(Self) -> Scheme?
-pub fn OutgoingRequest::set_authority(Self, String?) -> Result[Unit, Unit]
-pub fn OutgoingRequest::set_method(Self, Method) -> Result[Unit, Unit]
-pub fn OutgoingRequest::set_path_with_query(Self, String?) -> Result[Unit, Unit]
-pub fn OutgoingRequest::set_scheme(Self, Scheme?) -> Result[Unit, Unit]
-
-pub(all) struct OutgoingResponse(Int) derive(Eq, Show)
-pub fn OutgoingResponse::body(Self) -> Result[OutgoingBody, Unit]
-pub fn OutgoingResponse::drop(Self) -> Unit
-pub fn OutgoingResponse::headers(Self) -> Fields
-pub fn OutgoingResponse::outgoing_response(Fields) -> Self
-pub fn OutgoingResponse::set_status_code(Self, UInt) -> Result[Unit, Unit]
-pub fn OutgoingResponse::status_code(Self) -> UInt
+pub(all) struct Request(Int) derive(Eq, Show)
+pub fn Request::consume_body(Self, @async-core.Future[Result[Unit, ErrorCode]]) -> (@async-core.Stream[Byte], @async-core.Future[Result[Fields?, ErrorCode]])
+pub fn Request::drop(Self) -> Unit
+pub fn Request::get_authority(Self) -> String?
+pub fn Request::get_headers(Self) -> Fields
+pub fn Request::get_method(Self) -> Method
+pub fn Request::get_options(Self) -> RequestOptions?
+pub fn Request::get_path_with_query(Self) -> String?
+pub fn Request::get_scheme(Self) -> Scheme?
+pub fn Request::new(Fields, @async-core.Stream[Byte]?, @async-core.Future[Result[Fields?, ErrorCode]], RequestOptions?) -> (Self, @async-core.Future[Result[Unit, ErrorCode]])
+pub fn Request::set_authority(Self, String?) -> Result[Unit, Unit]
+pub fn Request::set_method(Self, Method) -> Result[Unit, Unit]
+pub fn Request::set_path_with_query(Self, String?) -> Result[Unit, Unit]
+pub fn Request::set_scheme(Self, Scheme?) -> Result[Unit, Unit]
 
 pub(all) struct RequestOptions(Int) derive(Eq, Show)
-pub fn RequestOptions::between_bytes_timeout(Self) -> UInt64?
-pub fn RequestOptions::connect_timeout(Self) -> UInt64?
+pub fn RequestOptions::clone(Self) -> Self
 pub fn RequestOptions::drop(Self) -> Unit
-pub fn RequestOptions::first_byte_timeout(Self) -> UInt64?
+pub fn RequestOptions::get_between_bytes_timeout(Self) -> UInt64?
+pub fn RequestOptions::get_connect_timeout(Self) -> UInt64?
+pub fn RequestOptions::get_first_byte_timeout(Self) -> UInt64?
 pub fn RequestOptions::request_options() -> Self
-pub fn RequestOptions::set_between_bytes_timeout(Self, UInt64?) -> Result[Unit, Unit]
-pub fn RequestOptions::set_connect_timeout(Self, UInt64?) -> Result[Unit, Unit]
-pub fn RequestOptions::set_first_byte_timeout(Self, UInt64?) -> Result[Unit, Unit]
+pub fn RequestOptions::set_between_bytes_timeout(Self, UInt64?) -> Result[Unit, RequestOptionsError]
+pub fn RequestOptions::set_connect_timeout(Self, UInt64?) -> Result[Unit, RequestOptionsError]
+pub fn RequestOptions::set_first_byte_timeout(Self, UInt64?) -> Result[Unit, RequestOptionsError]
 
-pub(all) struct ResponseOutparam(Int) derive(Eq, Show)
-pub fn ResponseOutparam::drop(Self) -> Unit
-pub fn ResponseOutparam::set(Self, Result[OutgoingResponse, ErrorCode]) -> Unit
+pub(all) struct Response(Int) derive(Eq, Show)
+pub fn Response::consume_body(Self, @async-core.Future[Result[Unit, ErrorCode]]) -> (@async-core.Stream[Byte], @async-core.Future[Result[Fields?, ErrorCode]])
+pub fn Response::drop(Self) -> Unit
+pub fn Response::get_headers(Self) -> Fields
+pub fn Response::get_status_code(Self) -> UInt
+pub fn Response::new(Fields, @async-core.Stream[Byte]?, @async-core.Future[Result[Fields?, ErrorCode]]) -> (Self, @async-core.Future[Result[Unit, ErrorCode]])
+pub fn Response::set_status_code(Self, UInt) -> Result[Unit, Unit]
 
 pub(all) enum Scheme {
   Http

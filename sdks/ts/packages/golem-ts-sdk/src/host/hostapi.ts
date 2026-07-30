@@ -34,8 +34,8 @@ import {
 } from 'golem:api/host@1.5.0';
 import { ComponentId as RawComponentId } from 'golem:core/types@2.0.0';
 import { ParsedAgentId } from '../agentId';
-import { awaitPollable } from '../internal/pollableUtils';
-import * as wasiEnv from 'wasi:cli/environment@0.2.3';
+import { awaitAbortable } from '../internal/pollableUtils';
+import * as wasiEnv from 'wasi:cli/environment@0.3.0';
 import { Uuid } from '../uuid';
 import { ComponentId, EnvironmentId } from '../ids';
 
@@ -68,7 +68,6 @@ export { GetPromiseResult } from 'golem:api/host@1.5.0';
 export type {
   PromiseId,
   OplogIndex,
-  Pollable,
   ComponentRevision,
   PersistenceLevel,
   UpdateMode,
@@ -332,9 +331,7 @@ export function fork(): ForkResult {
 }
 
 export async function awaitPromise(promiseId: PromiseId): Promise<Uint8Array> {
-  const promise = getPromise(promiseId);
-  await promise.subscribe().promise();
-  return promise.get()!;
+  return getPromise(promiseId).get();
 }
 
 /**
@@ -349,8 +346,7 @@ export async function awaitAbortablePromise(
   signal: AbortSignal,
 ): Promise<Uint8Array> {
   const promise = getPromise(promiseId);
-  await awaitPollable(promise.subscribe(), signal);
-  return promise.get()!;
+  return awaitAbortable(promise.get(), signal);
 }
 
 /**

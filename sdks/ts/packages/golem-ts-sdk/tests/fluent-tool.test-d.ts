@@ -16,7 +16,6 @@
 // the package typecheck script; NOT executed by vitest (`.test-d.ts` suffix).
 
 import { z } from 'zod/v4';
-import type { InputStream, OutputStream } from 'wasi:io/streams@0.2.3';
 import {
   KeyValue,
   Path,
@@ -595,7 +594,7 @@ const wrongRootKey: ToolImplementation<typeof grepDef> = { grepTool: async () =>
 void wrongRootKey;
 
 declare const grepClient: ToolClient<typeof grepDef>;
-declare const clientStdin: InputStream;
+declare const clientStdin: AsyncIterable<number>;
 const grepCall = grepClient.grep({
   pattern: 'TODO',
   files: ['./src'],
@@ -606,14 +605,14 @@ const grepCall = grepClient.grep({
 });
 const grepResult: Promise<{
   result: Array<{ file: unknown; line: number; text: string }>;
-  stdout: OutputStream;
+  stdout: AsyncIterable<number>;
 }> = grepCall;
 type GrepClientResult = Expect<
   Equal<
     typeof grepCall,
     Promise<{
       result: Array<{ file: unknown; line: number; text: string }>;
-      stdout: OutputStream;
+      stdout: AsyncIterable<number>;
     }>
   >
 >;
@@ -698,9 +697,12 @@ const requiredStdoutDef = toolDefinition('required-stdout').body((body) =>
   body.stdout({ required: true }).returns(z.void()),
 );
 declare const requiredStdoutClient: ToolClient<typeof requiredStdoutDef>;
-const requiredStdout: Promise<OutputStream> = requiredStdoutClient['required-stdout']({});
+const requiredStdout: Promise<AsyncIterable<number>> = requiredStdoutClient['required-stdout']({});
 type RequiredStdoutResult = Expect<
-  Equal<ReturnType<(typeof requiredStdoutClient)['required-stdout']>, Promise<OutputStream>>
+  Equal<
+    ReturnType<(typeof requiredStdoutClient)['required-stdout']>,
+    Promise<AsyncIterable<number>>
+  >
 >;
 void requiredStdout;
 void (undefined as unknown as RequiredStdoutResult);
@@ -711,13 +713,13 @@ const optionalStdoutDef = toolDefinition('optional-stdout').body((body) =>
   body.stdout({ required: false }).returns(z.void()),
 );
 declare const optionalStdoutClient: ToolClient<typeof optionalStdoutDef>;
-const optionalStdout: Promise<OutputStream | undefined> = optionalStdoutClient['optional-stdout'](
-  {},
-);
+const optionalStdout: Promise<AsyncIterable<number> | undefined> = optionalStdoutClient[
+  'optional-stdout'
+]({});
 type OptionalStdoutResult = Expect<
   Equal<
     ReturnType<(typeof optionalStdoutClient)['optional-stdout']>,
-    Promise<OutputStream | undefined>
+    Promise<AsyncIterable<number> | undefined>
   >
 >;
 void optionalStdout;
@@ -729,12 +731,12 @@ const optionalStructuredStdoutDef = toolDefinition('optional-structured-stdout')
 declare const optionalStructuredStdoutClient: ToolClient<typeof optionalStructuredStdoutDef>;
 const optionalStructuredStdout: Promise<{
   result: string;
-  stdout?: OutputStream;
+  stdout?: AsyncIterable<number>;
 }> = optionalStructuredStdoutClient['optional-structured-stdout']({});
 type OptionalStructuredStdoutResult = Expect<
   Equal<
     ReturnType<(typeof optionalStructuredStdoutClient)['optional-structured-stdout']>,
-    Promise<{ result: string; stdout?: OutputStream }>
+    Promise<{ result: string; stdout?: AsyncIterable<number> }>
   >
 >;
 void optionalStructuredStdout;
@@ -756,7 +758,7 @@ requiredStdinClient['required-stdin']({ stdin: clientStdin });
 // @ts-expect-error required stdin must be supplied by the caller
 requiredStdinClient['required-stdin']({});
 requiredStdinClient['required-stdin']({
-  // @ts-expect-error caller-side typed clients accept raw WIT streams, not Web streams
+  // @ts-expect-error caller-side typed clients accept Preview 3 byte async iterables
   stdin: new ReadableStream<Uint8Array>(),
 });
 

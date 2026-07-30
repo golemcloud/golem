@@ -21,8 +21,13 @@ use golem_common::model::AgentId;
 use wasmtime_wasi::cli::WasiCliView as _;
 use wasmtime_wasi::p2::bindings::cli::environment::Host;
 
-impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn get_environment(&mut self) -> wasmtime::Result<Vec<(String, String)>> {
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// Builds the deterministic enriched worker environment visible to the guest: the worker
+    /// metadata env merged with the agent type's default env, plus the Golem-provided variables
+    /// (`GOLEM_AGENT_ID`, `GOLEM_WORKER_NAME`, `GOLEM_COMPONENT_ID`, ...). Shared by the P2 and
+    /// P3 `cli::environment` host implementations. The result is a pure function of already
+    /// persisted worker state, so it needs no oplog entry.
+    pub(crate) fn build_enriched_environment(&self) -> wasmtime::Result<Vec<(String, String)>> {
         let default_agent_env = self
             .agent_type_provision_config()
             .map(|c| c.env.clone())
@@ -52,6 +57,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         );
 
         Ok(env)
+    }
+}
+
+impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
+    async fn get_environment(&mut self) -> wasmtime::Result<Vec<(String, String)>> {
+        self.build_enriched_environment()
     }
 
     async fn get_arguments(&mut self) -> wasmtime::Result<Vec<String>> {

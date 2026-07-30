@@ -22,7 +22,8 @@ use crate::worker::invocation::{
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
-    FinalWorkerState, QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand,
+    FinalWorkerState, PendingWorkerInterrupt, QueuedWorkerInvocation, RetryDecision, RunningWorker,
+    Worker, WorkerCommand, WorkerInterruptState,
 };
 use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
 use anyhow::anyhow;
@@ -54,7 +55,7 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
-use tracing::{Instrument, Level, Span, debug, span, warn};
+use tracing::{Instrument, Level, Span, debug, error, span, warn};
 use wasmtime::Store;
 use wasmtime::component::Instance;
 
@@ -65,7 +66,7 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub owned_agent_id: OwnedAgentId,
     pub parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     pub waiting_for_command: Arc<AtomicBool>,
-    pub interrupt_signal: Arc<Mutex<Option<InterruptKind>>>,
+    pub interrupt_signal: Arc<Mutex<WorkerInterruptState>>,
     pub oom_retry_count: u32,
     /// Concurrent-agent permit owned by this invocation loop task. Released
     /// (set to `None`) when the agent goes idle, re-acquired when it wakes up.
@@ -77,20 +78,24 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub resume_replay_pending: Arc<AtomicBool>,
 }
 
-impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
-    fn interrupt_decision(kind: InterruptKind) -> RetryDecision {
-        match kind {
-            InterruptKind::Restart | InterruptKind::Jump => RetryDecision::Immediate,
-            _ => RetryDecision::None,
-        }
-    }
+/// Outcome of creating the worker instance for one iteration of the invocation loop.
+enum CreateInstanceResult<Ctx: WorkerCtx> {
+    Created {
+        instance: Instance,
+        store: Mutex<Store<Ctx>>,
+    },
+    /// Wasm executing during instantiation trapped with an [`InterruptKind`] (e.g. a fuel
+    /// suspension from the epoch deadline callback). The worker itself was created successfully.
+    Interrupted(InterruptKind),
+    /// Instance creation failed; the worker was already stopped with the startup failure.
+    Failed,
+}
 
+impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     async fn pending_interrupt(&self) -> Option<(InterruptKind, RetryDecision)> {
-        self.interrupt_signal
-            .lock()
+        take_pending_interrupt(&self.interrupt_signal)
             .await
-            .take()
-            .map(|kind| (kind, Self::interrupt_decision(kind)))
+            .map(|interrupt| (interrupt.kind, interrupt.retry_decision()))
     }
 
     /// Runs the invocation loop of a running worker, responsible for processing incoming
@@ -109,11 +114,49 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         'outer: loop {
             debug!("Invocation queue loop creating the instance");
 
-            let (instance, store) = if let Some((instance, store)) = self.create_instance().await {
-                (instance, store)
-            } else {
-                // early return, can't retry a failed instance creation
-                break;
+            let (instance, store) = match self.create_instance().await {
+                CreateInstanceResult::Created { instance, store } => (instance, store),
+                CreateInstanceResult::Interrupted(kind) => {
+                    let pending_interrupt = take_pending_interrupt(&self.interrupt_signal).await;
+                    let kind = pending_interrupt
+                        .map(|interrupt| interrupt.kind)
+                        .unwrap_or(kind);
+                    // Interrupted while instantiating: record the same lifecycle oplog entry the
+                    // invocation failure path would (`Suspend`/`Interrupted`), then park or
+                    // restart. There is no store to run `on_invocation_failure` on, but no
+                    // invocation was running either — the status marker is all that is needed.
+                    match kind {
+                        InterruptKind::Restart | InterruptKind::Jump => {
+                            debug!("Instantiation interrupted for restart, retrying");
+                            continue;
+                        }
+                        InterruptKind::Suspend(ts) => {
+                            self.parent
+                                .add_and_commit_oplog(OplogEntry::suspend())
+                                .await;
+                            if ts < *self.parent.last_resume_request.lock().await {
+                                debug!(
+                                    "Suspend during instantiation ignored because there was a resume request since it"
+                                );
+                                continue;
+                            } else {
+                                self.stop_unloaded(None).await;
+                                break;
+                            }
+                        }
+                        InterruptKind::Interrupt(_) => {
+                            self.parent
+                                .add_and_commit_oplog(OplogEntry::interrupted())
+                                .await;
+                            self.stop_unloaded(None).await;
+                            break;
+                        }
+                    }
+                }
+                CreateInstanceResult::Failed => {
+                    // early return, can't retry a failed instance creation
+                    break;
+                }
             };
 
             debug!("Invocation queue loop preparing the instance");
@@ -152,6 +195,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
                 let result = inner_loop.run().await;
                 final_decision = result.retry_decision;
+                final_interrupt = result.final_interrupt;
+                if let Some((kind, decision)) = self.pending_interrupt().await {
+                    if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+                        final_interrupt = Some(kind);
+                    }
+                    final_decision = Some(decision);
+                }
                 cleanup_ephemeral_worker = result.cleanup_ephemeral_worker;
             }
 
@@ -307,14 +357,27 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 
     /// Create the worker instance and publish an event about it
-    async fn create_instance(&self) -> Option<(Instance, Mutex<Store<Ctx>>)> {
+    async fn create_instance(&self) -> CreateInstanceResult<Ctx> {
         match RunningWorker::create_instance(self.parent.clone()).await {
             Ok((instance, store)) => {
                 self.parent.events().publish(Event::WorkerLoaded {
                     agent_id: self.owned_agent_id.agent_id(),
                     result: Ok(()),
                 });
-                Some((instance, store))
+                CreateInstanceResult::Created { instance, store }
+            }
+            // Wasm executing during instantiation was interrupted (e.g. suspended by the fuel
+            // check in the epoch deadline callback). The worker exists — its metadata and
+            // `Create` oplog entry are already persisted — so this is not a creation failure:
+            // creation waiters are released successfully and the caller parks or restarts the
+            // worker like any other interrupt.
+            Err(WorkerExecutorError::Interrupted { kind }) => {
+                debug!("Worker instantiation interrupted: {kind:?}");
+                self.parent.events().publish(Event::WorkerLoaded {
+                    agent_id: self.owned_agent_id.agent_id(),
+                    result: Ok(()),
+                });
+                CreateInstanceResult::Interrupted(kind)
             }
             Err(err) => {
                 warn!("Failed to start the worker: {err}");
@@ -331,7 +394,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         },
                     )
                     .await;
-                None
+                CreateInstanceResult::Failed
             }
         }
     }
@@ -417,7 +480,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     owned_agent_id: OwnedAgentId,
     parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     waiting_for_command: Arc<AtomicBool>,
-    interrupt_signal: Arc<Mutex<Option<InterruptKind>>>,
+    interrupt_signal: Arc<Mutex<WorkerInterruptState>>,
     instance: &'a Instance,
     store: &'a Mutex<Store<Ctx>>,
     invocations_since_snapshot: u64,
@@ -449,10 +512,12 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         debug!("Invocation queue loop started");
 
         let mut final_decision = None;
+        let mut final_interrupt = None;
         let mut cleanup_ephemeral_worker = false;
 
         // Entering idle: release the concurrent-agent permit so other agents
         // from the same account can start without evicting this one.
+        self.check_no_active_tail_work_on_idle().await;
         self.waiting_for_command.store(true, Ordering::Release);
         self.release_concurrent_agent_permit();
         while let Some(cmd) = self.next_wakeup_or_initial().await {
@@ -463,8 +528,13 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             let outcome = match cmd {
                 WorkerCommand::WorkAvailable | WorkerCommand::InternalStatusChanged => {
                     loop {
-                        if let Some(kind) = self.interrupt_signal.lock().await.take() {
-                            break self.interrupt(kind).await;
+                        if let Some(interrupt) =
+                            take_pending_interrupt(&self.interrupt_signal).await
+                        {
+                            if interrupt.is_terminal() {
+                                final_interrupt = Some(interrupt.kind);
+                            }
+                            break self.interrupt(interrupt).await;
                         }
 
                         let message = self.active.write().await.pop_front();
@@ -516,6 +586,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             }
 
             // Returning to idle: release the concurrent-agent permit.
+            self.check_no_active_tail_work_on_idle().await;
             self.waiting_for_command.store(true, Ordering::Release);
             self.release_concurrent_agent_permit();
         }
@@ -526,6 +597,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
         InnerInvocationLoopResult {
             retry_decision: final_decision,
+            final_interrupt,
             cleanup_ephemeral_worker,
         }
     }
@@ -534,6 +606,34 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         match self.deferred_wakeups.pop_front() {
             Some(command) => Some(command),
             None => self.next_wakeup().await,
+        }
+    }
+
+    /// Checks — before publishing `waiting_for_command = true`, which makes the
+    /// worker eligible for idle eviction — that no Golem-spawned store task is
+    /// still active. Every guest call drains its tail work before returning
+    /// (either the tasks finished or they are parked at a safe park point
+    /// awaiting future guest action), so an active task here means the activity
+    /// accounting regressed and eviction could race live durable work. Flags
+    /// the violation instead of silently entering idle.
+    async fn check_no_active_tail_work_on_idle(&self) {
+        let active = self
+            .store
+            .lock()
+            .await
+            .data()
+            .durable_ctx()
+            .tail_work_tracker()
+            .active_count();
+        if active != 0 {
+            error!(
+                "Worker entering idle with {active} active store-spawned task(s); \
+                 tail work must settle before an invocation completes"
+            );
+            debug_assert!(
+                active == 0,
+                "worker entered idle with {active} active store-spawned task(s)"
+            );
         }
     }
 
@@ -793,14 +893,15 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     }
 
     /// Performs an interrupt request
-    async fn interrupt(&self, kind: InterruptKind) -> CommandOutcome {
-        match kind {
-            InterruptKind::Restart | InterruptKind::Jump => {
-                CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
-            }
-            _ => CommandOutcome::BreakInnerLoop(RetryDecision::None),
-        }
+    async fn interrupt(&self, interrupt: PendingWorkerInterrupt) -> CommandOutcome {
+        CommandOutcome::BreakInnerLoop(interrupt.retry_decision())
     }
+}
+
+async fn take_pending_interrupt(
+    signal: &Mutex<WorkerInterruptState>,
+) -> Option<PendingWorkerInterrupt> {
+    signal.lock().await.take()
 }
 
 /// Context for performing one `QueuedWorkerInvocation`
@@ -930,8 +1031,37 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 result: invocation_result,
                 consumed_fuel,
             }) => {
-                self.agent_invocation_finished(display_name, invocation_result, consumed_fuel, kind)
+                let mut interrupt_state = self.parent.interrupt_signal.lock().await;
+                if let Some(interrupt) = interrupt_state.claim_pending_terminal() {
+                    drop(interrupt_state);
+                    self.agent_invocation_failed(
+                        &display_name,
+                        Ok(InvokeResult::Interrupted {
+                            consumed_fuel,
+                            interrupt_kind: interrupt.kind,
+                        }),
+                    )
                     .await
+                } else {
+                    drop(interrupt_state);
+                    self.agent_invocation_finished(
+                        display_name,
+                        invocation_result,
+                        consumed_fuel,
+                        kind,
+                    )
+                    .await
+                }
+            }
+            result @ Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
+                if !matches!(interrupt_kind, InterruptKind::Restart | InterruptKind::Jump) {
+                    self.parent
+                        .interrupt_signal
+                        .lock()
+                        .await
+                        .claim_pending_terminal();
+                }
+                self.agent_invocation_failed(&display_name, result).await
             }
             _ => self.agent_invocation_failed(&display_name, result).await,
         }
@@ -1052,6 +1182,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         &TrapType::Error {
                             error: AgentError::InternalError(error.to_string()),
                             retry_from: OplogIndex::INITIAL,
+                            in_atomic_region: false,
+                            atomic_region_had_side_effects: false,
                             semantic_trap_retry_override: None,
                         },
                     )
@@ -1072,6 +1204,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Err(error) => Some(TrapType::from_error::<Ctx>(
                 &anyhow!(error),
                 OplogIndex::INITIAL,
+                false,
+                false,
                 self.parent.agent_mode(),
             )),
         };
@@ -1109,6 +1243,18 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
     /// The inner implementation of the manual update command
     async fn manual_update_inner(&mut self, target_revision: ComponentRevision) -> CommandOutcome {
+        // The saved snapshot becomes the replay cut point of the snapshot-based update: after the
+        // update, replay starts from the snapshot and skips everything before it. No durable call
+        // or scope may span that cut, so refuse the update while any is still open.
+        if let Some(blocker) = self.store.data().snapshot_boundary_blocker() {
+            return self
+                .fail_update(
+                    target_revision,
+                    format!("cannot take a snapshot for the update: {blocker}"),
+                )
+                .await;
+        }
+
         let idempotency_key = {
             let ctx = self.store.data_mut();
             let idempotency_key = IdempotencyKey::fresh();
@@ -1353,6 +1499,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     }
 
     async fn save_snapshot(&mut self) -> CommandOutcome {
+        // A committed snapshot is a replay cut point (snapshot-based recovery skips everything
+        // before it), so no durable call or scope may span it. Skip this periodic snapshot when
+        // the worker is not at a safe boundary; the next scheduled snapshot will retry.
+        if let Some(blocker) = self.store.data().snapshot_boundary_blocker() {
+            warn!("Skipping periodic snapshot: {blocker}");
+            return CommandOutcome::Continue;
+        }
+
         let component_metadata = self.store.data().component_metadata().metadata.clone();
 
         let save_snapshot_invocation = AgentInvocation::SaveSnapshot {
@@ -1502,6 +1656,7 @@ enum CommandOutcome {
 
 struct InnerInvocationLoopResult {
     retry_decision: Option<RetryDecision>,
+    final_interrupt: Option<InterruptKind>,
     cleanup_ephemeral_worker: bool,
 }
 
@@ -1637,6 +1792,8 @@ mod tests {
             consumed_fuel: 0,
             error: AgentError::InternalError("boom".to_string()),
             retry_from: OplogIndex::INITIAL,
+            in_atomic_region: false,
+            atomic_region_had_side_effects: false,
             semantic_trap_retry_override: None,
         });
 
