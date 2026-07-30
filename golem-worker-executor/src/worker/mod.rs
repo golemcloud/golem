@@ -210,6 +210,19 @@ impl<Ctx: WorkerCtx> UsesAllDeps for Worker<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    /// Builds the span context this worker's phase spans share.
+    fn trace(&self, startup_origin: TraceOrigin) -> WorkerTrace {
+        WorkerTrace {
+            startup_origin,
+            // `-` stands in for an agent id that could not be parsed into a type.
+            agent_type: self
+                .parsed_agent_id
+                .as_ref()
+                .map(|id| id.agent_type.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        }
+    }
+
     pub(crate) async fn remove_from_active_workers(&self) {
         self.deps
             .active_workers()
@@ -2796,20 +2809,6 @@ pub struct WorkerTrace {
     pub agent_type: String,
 }
 
-impl WorkerTrace {
-    fn of<Ctx: WorkerCtx>(worker: &Worker<Ctx>, startup_origin: TraceOrigin) -> Self {
-        Self {
-            startup_origin,
-            // `-` stands in for an agent id that could not be parsed into a type.
-            agent_type: worker
-                .parsed_agent_id
-                .as_ref()
-                .map(|id| id.agent_type.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-        }
-    }
-}
-
 #[derive(Debug)]
 struct WaitingWorker {
     handle: Option<JoinHandle<()>>,
@@ -2823,9 +2822,7 @@ impl WaitingWorker {
         filesystem_storage_requirement: u64,
         oom_retry_count: u32,
     ) -> Self {
-        // Each admission wait can block for an unbounded time under pressure, so
-        // each one spans itself rather than sharing a span covering all of them.
-        let worker_trace = WorkerTrace::of(&parent, TraceOrigin::triggered());
+        let worker_trace = parent.trace(TraceOrigin::triggered());
 
         let start_attempt = Uuid::new_v4();
 
@@ -3064,8 +3061,6 @@ impl RunningWorker {
         let resume_replay_pending = Arc::new(AtomicBool::new(false));
         let resume_replay_pending_clone = resume_replay_pending.clone();
 
-        // The loop and its task live as long as the worker is resident; each
-        // bounded phase inside spans itself.
         let handle = tokio::task::spawn(async move {
             RunningWorker::invocation_loop(
                 receiver,

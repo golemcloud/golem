@@ -222,19 +222,13 @@ impl SchedulerServiceDefault {
     /// Runs a scheduler storage operation, retrying transient errors (such as
     /// connection pool exhaustion) according to `storage_retry`. Panics on a
     /// non-transient error, or after the configured retries are exhausted.
-    /// `subject_kind` and `subject` name what the operation was acting on, and are
-    /// rendered only when an error has to be reported.
-    async fn retry_storage_op<T, F, Fut, S>(
-        &self,
-        op_name: &str,
-        subject_kind: &str,
-        subject: &S,
-        mut op: F,
-    ) -> T
+    /// `subject` names what the operation was acting on, and is rendered only when
+    /// an error has to be reported.
+    async fn retry_storage_op<T, F, Fut, S>(&self, op_name: &str, subject: &S, mut op: F) -> T
     where
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<T, SchedulerStorageError>>,
-        S: Display + ?Sized,
+        S: Display,
     {
         let mut attempts = 0u32;
         loop {
@@ -247,19 +241,17 @@ impl SchedulerServiceDefault {
                             op = op_name,
                             attempt = attempts,
                             delay_ms = delay.as_millis() as u64,
-                            "Transient scheduler storage error for {subject_kind} {subject}, retrying: {msg}"
+                            "Transient scheduler storage error for {subject}, retrying: {msg}"
                         );
                         tokio::time::sleep(delay).await;
                     } else {
                         panic!(
-                            "scheduler storage operation '{op_name}' failed for {subject_kind} {subject} after {attempts} attempts: Transient storage error: {msg}"
+                            "scheduler storage operation '{op_name}' failed for {subject} after {attempts} attempts: Transient storage error: {msg}"
                         );
                     }
                 }
                 Err(SchedulerStorageError::Other(msg)) => {
-                    panic!(
-                        "scheduler storage operation '{op_name}' failed for {subject_kind} {subject}: {msg}"
-                    );
+                    panic!("scheduler storage operation '{op_name}' failed for {subject}: {msg}");
                 }
             }
         }
@@ -662,7 +654,7 @@ impl SchedulerService for SchedulerServiceDefault {
             );
         }
 
-        self.retry_storage_op("insert", "action", &action, || {
+        self.retry_storage_op("insert", &action, || {
             self.scheduler_storage
                 .insert(schedule_id, time, shard_id, &action)
         })
@@ -671,10 +663,8 @@ impl SchedulerService for SchedulerServiceDefault {
     }
 
     async fn cancel(&self, id: ScheduleId) {
-        self.retry_storage_op("cancel", "schedule", &id, || {
-            self.scheduler_storage.cancel(&id)
-        })
-        .await;
+        self.retry_storage_op("cancel", &id, || self.scheduler_storage.cancel(&id))
+            .await;
     }
 }
 

@@ -54,7 +54,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
-use tracing::{Instrument, debug_span};
+use tracing::Instrument;
 use uuid::{Uuid, uuid};
 
 /// Per-plugin live state tracked by `ForwardingOplogState` for exactly-once delivery.
@@ -808,6 +808,9 @@ impl ForwardingOplog {
             state
         };
 
+        // Captured here, where the caller's context is still current: each flush
+        // tick links back to it rather than running inside it.
+        let flush_origin = TraceOrigin::triggered();
         let agent_id = initial_worker_metadata.agent_id.clone();
         let state = Arc::new(Mutex::new(ForwardingOplogState {
             buffer: VecDeque::new(),
@@ -837,7 +840,9 @@ impl ForwardingOplog {
                         state.try_locality_recovery().await;
                         state.try_flush().await;
                     }
-                    .instrument(debug_span!(
+                    .instrument(related_span!(
+                        flush_origin,
+                        tracing::Level::DEBUG,
                         "oplog_forwarding_flush",
                         agent_id = %agent_id
                     ))
