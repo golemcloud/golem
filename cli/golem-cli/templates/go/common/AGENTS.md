@@ -128,6 +128,14 @@ Wire names come from the SDK's declarations, not from Go identifiers:
   unused.
 - Multiple agents can coexist in one component (each its own package, all blank-imported by `main.go`);
   a worker is initialized as exactly one of them.
+- **Environment variables** use the standard library — `os.Getenv` / `os.Environ` read the worker's
+  environment with no special setup (they route to `wasi:cli/environment` via the toolchain's WASI
+  adapter). Alongside any vars you set (`env:` in `golem.yaml`, or `golem agent new --env`), the runtime
+  injects `GOLEM_AGENT_ID`, `GOLEM_WORKER_NAME`, `GOLEM_COMPONENT_ID`, `GOLEM_COMPONENT_REVISION` and
+  `GOLEM_AGENT_TYPE`.
+- **Logging** uses the standard library too — `fmt.Println`, `log`, `slog`, and writes to
+  `os.Stdout`/`os.Stderr` are all captured as worker log events (view them with the `golem-view-agent-logs`
+  skill). No logging library or wrapper is needed.
 - Do NOT edit files under `internal/wit/` in the SDK — they are generated.
 
 ## Coding Convention
