@@ -181,13 +181,20 @@ func (d *definitions) buildAgentType(e *agentEntry) (common.AgentType, map[refle
 		if m.outCodec != nil {
 			out = common.MakeOutputSchemaSingle(g.node(m.outCodec))
 		}
+		readOnly := witTypes.None[common.ReadOnlyConfig]()
+		if m.readOnly != nil {
+			readOnly = witTypes.Some(common.ReadOnlyConfig{
+				CachePolicy:   m.readOnly.policy.toWit(),
+				UsesPrincipal: false,
+			})
+		}
 		methods = append(methods, common.AgentMethod{
 			Name:         m.name,
 			Description:  m.desc,
 			InputSchema:  common.MakeInputSchemaParameters(in),
 			OutputSchema: out,
 			PromptHint:   witTypes.None[string](),
-			ReadOnly:     witTypes.None[common.ReadOnlyConfig](),
+			ReadOnly:     readOnly,
 		})
 	}
 

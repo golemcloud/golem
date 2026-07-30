@@ -34,8 +34,9 @@ type methodEntry struct {
 	name      string
 	desc      string
 	inFields  []fieldInfo
-	endpoints []Endpoint // HTTP routes, if any
-	outCodec  *codec     // nil => unit output
+	endpoints []Endpoint      // HTTP routes, if any
+	readOnly  *readOnlyConfig // non-nil => read-only method with a cache policy
+	outCodec  *codec          // nil => unit output
 	// invoke is the erased dispatcher produced by Implement. Calling it is a
 	// direct func-value call: no reflection is used to reach the handler.
 	invoke func(state any, agentID string, in types.SchemaValueTree) (out *types.SchemaValueTree, err error)
@@ -225,7 +226,10 @@ func DefineMethod[Id any, In any, Out any](name string, opts ...MethodOpt) Metho
 	// descCount is carried on the descriptor and validated at Implement time,
 	// where the target definitions is known — DefineMethod itself is instance
 	// independent (it just returns a descriptor).
-	return MethodDef[Id, In, Out]{name: name, desc: o.desc, descCount: o.descCount, endpoints: o.endpoints}
+	return MethodDef[Id, In, Out]{
+		name: name, desc: o.desc, descCount: o.descCount, endpoints: o.endpoints,
+		readOnly: o.readOnly, readOnlyCount: o.readOnlyCount, cacheCount: o.cacheCount,
+	}
 }
 
 // Implement binds a handler to a method descriptor. S, In and Out are inferred
@@ -273,6 +277,20 @@ func implementInto[Id any, S any, Cfg any, In any, Out any](
 	if m.descCount > 1 {
 		d.recordErr(a.name, m.name, "method %q: Desc set %d times (a method has one description)", m.name, m.descCount)
 	}
+	if m.readOnlyCount > 1 {
+		d.recordErr(a.name, m.name, "method %q: ReadOnly set %d times (a method is read-only once)", m.name, m.readOnlyCount)
+	}
+	if m.cacheCount > 1 {
+		d.recordErr(a.name, m.name, "method %q: ReadOnly accepts at most one cache policy, got %d", m.name, m.cacheCount)
+	}
+	if m.readOnly != nil {
+		if m.readOnly.policy.kind == cacheTTL && m.readOnly.policy.ttl <= 0 {
+			d.recordErr(a.name, m.name, "method %q: CacheFor requires a positive ttl, got %v (use NoCache to disable caching)", m.name, m.readOnly.policy.ttl)
+		}
+		if e.mode == common.AgentModeEphemeral {
+			d.recordErr(a.name, m.name, "method %q: ReadOnly is only valid on a Durable agent (an ephemeral agent has no shared state to cache)", m.name)
+		}
+	}
 	if _, dup := e.methods[m.name]; dup {
 		d.recordErr(a.name, m.name, "method already implemented")
 		return
@@ -281,7 +299,7 @@ func implementInto[Id any, S any, Cfg any, In any, Out any](
 	// Codecs are compiled once, here at registration — not per invocation.
 	inType := reflect.TypeFor[In]()
 	outType := reflect.TypeFor[Out]()
-	me := &methodEntry{name: m.name, desc: m.desc, inFields: d.structFields(inType), endpoints: m.endpoints}
+	me := &methodEntry{name: m.name, desc: m.desc, inFields: d.structFields(inType), endpoints: m.endpoints, readOnly: m.readOnly}
 	if outType != reflect.TypeFor[Unit]() {
 		me.outCodec = d.compile(outType)
 	}

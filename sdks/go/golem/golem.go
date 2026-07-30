@@ -215,10 +215,13 @@ func (a *Agent[Id, S, Cfg]) Name() string { return a.name }
 // agents. Id is the target agent's identity type, so a descriptor cannot be
 // used against another agent's client.
 type MethodDef[Id any, In any, Out any] struct {
-	name      string
-	desc      string
-	descCount int // how many times Desc was set; validated at Implement time
-	endpoints []Endpoint
+	name          string
+	desc          string
+	descCount     int // how many times Desc was set; validated at Implement time
+	endpoints     []Endpoint
+	readOnly      *readOnlyConfig // non-nil => method is read-only; validated at Implement
+	readOnlyCount int             // how many times ReadOnly was set
+	cacheCount    int             // how many CachePolicy args were passed to ReadOnly
 }
 
 // Name returns the method's wire-level name.
@@ -228,9 +231,12 @@ func (m MethodDef[Id, In, Out]) Name() string { return m.name }
 type MethodOpt func(*methodOpts)
 
 type methodOpts struct {
-	desc      string
-	descCount int
-	endpoints []Endpoint
+	desc          string
+	descCount     int
+	endpoints     []Endpoint
+	readOnly      *readOnlyConfig
+	readOnlyCount int
+	cacheCount    int
 }
 
 // Desc sets a method's description, surfaced in the agent type metadata. Setting
@@ -248,4 +254,70 @@ func Desc(s string) MethodOpt {
 //	    golem.HTTP(golem.POST("/add?by={by}"), golem.GET("/add/{by}")))
 func HTTP(endpoints ...Endpoint) MethodOpt {
 	return func(o *methodOpts) { o.endpoints = append(o.endpoints, endpoints...) }
+}
+
+// CachePolicy controls how a read-only method's result is cached. Build one with
+// [NoCache], [CacheUntilWrite], or [CacheFor], and pass it to [ReadOnly]. Its zero
+// value is CacheUntilWrite.
+type CachePolicy struct {
+	kind cacheKind
+	ttl  time.Duration // for cacheTTL
+}
+
+type cacheKind uint8
+
+const (
+	cacheUntilWrite cacheKind = iota // zero value = the default policy
+	cacheNone
+	cacheTTL
+)
+
+// NoCache never caches the method's result (the method still runs read-only).
+func NoCache() CachePolicy { return CachePolicy{kind: cacheNone} }
+
+// CacheUntilWrite caches the result until any mutating (non-read-only) method of
+// the agent completes. It is the default policy for [ReadOnly].
+func CacheUntilWrite() CachePolicy { return CachePolicy{kind: cacheUntilWrite} }
+
+// CacheFor caches the result for the given duration. ttl must be positive; a
+// zero/negative ttl is a definition error (use [NoCache] to disable caching).
+func CacheFor(ttl time.Duration) CachePolicy { return CachePolicy{kind: cacheTTL, ttl: ttl} }
+
+func (c CachePolicy) toWit() common.CachePolicy {
+	switch c.kind {
+	case cacheNone:
+		return common.MakeCachePolicyNoCache()
+	case cacheTTL:
+		return common.MakeCachePolicyTtl(uint64(c.ttl.Nanoseconds()))
+	default:
+		return common.MakeCachePolicyUntilWrite()
+	}
+}
+
+type readOnlyConfig struct {
+	policy CachePolicy
+	// usesPrincipal is always false until the SDK has a Principal parameter type;
+	// the other SDKs derive it from a Principal method parameter.
+}
+
+// ReadOnly marks a method read-only: it must not perform remote side effects —
+// the runtime traps outgoing HTTP and agent RPC from a read-only method — and in
+// return its result is cached per the [CachePolicy]. With no argument the policy
+// is [CacheUntilWrite]; pass at most one policy. Read-only is only valid on
+// Durable agents (an [Ephemeral] agent has no shared state to read); violating
+// that, passing more than one policy, or setting ReadOnly more than once is a
+// definition error reported at discovery.
+//
+//	golem.DefineMethod[ShopId, golem.Unit, Catalog]("catalog", golem.ReadOnly())
+//	golem.DefineMethod[ShopId, golem.Unit, Rates]("rates", golem.ReadOnly(golem.CacheFor(time.Minute)))
+func ReadOnly(cache ...CachePolicy) MethodOpt {
+	return func(o *methodOpts) {
+		o.readOnlyCount++
+		o.cacheCount += len(cache)
+		rc := &readOnlyConfig{policy: CacheUntilWrite()}
+		if len(cache) >= 1 {
+			rc.policy = cache[0]
+		}
+		o.readOnly = rc
+	}
 }
