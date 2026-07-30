@@ -93,6 +93,11 @@ func toAgentError(err error) common.AgentError {
 
 func init() {
 	guestExports.Exports.Initialize = func(agentType string, input types.SchemaValueTree, _ common.Principal) witTypes.Result[witTypes.Unit, common.AgentError] {
+		// Route structured logging (slog, and via it the standard log package)
+		// through the host logging channel so it carries a real level + context.
+		// Build-tag-gated to the wasm target so native `go test` never links the
+		// host call (see loginstall_*.go).
+		installDefaultLogger()
 		if _, ds := defs.discover(); agentDefErrors(ds, agentType) != "" {
 			return witTypes.Err[witTypes.Unit](customError("agent definition errors:\n" + agentDefErrors(ds, agentType)))
 		}

@@ -30,6 +30,8 @@ world agent-guest {
 
   import wasi:config/store@0.2.0-draft;
 
+  import wasi:logging/logging;
+
   import golem:websocket/client@1.5.0;
 
   // Outgoing HTTP. HTTP is not part of the agent world: each SDK imports it

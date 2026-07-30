@@ -133,9 +133,12 @@ Wire names come from the SDK's declarations, not from Go identifiers:
   adapter). Alongside any vars you set (`env:` in `golem.yaml`, or `golem agent new --env`), the runtime
   injects `GOLEM_AGENT_ID`, `GOLEM_WORKER_NAME`, `GOLEM_COMPONENT_ID`, `GOLEM_COMPONENT_REVISION` and
   `GOLEM_AGENT_TYPE`.
-- **Logging** uses the standard library too — `fmt.Println`, `log`, `slog`, and writes to
-  `os.Stdout`/`os.Stderr` are all captured as worker log events (view them with the `golem-view-agent-logs`
-  skill). No logging library or wrapper is needed.
+- **Logging** uses the standard library — the SDK installs an `slog` handler on startup that routes
+  `slog` (and, via slog, the standard `log` package) through the host logging channel, so records carry a
+  real level and context in worker logs (`slog.Info(...)` → an `INFO` event, `slog.Warn`/`Error`
+  likewise). Plain `fmt.Println` / direct `os.Stdout`/`os.Stderr` writes are still captured, but as raw
+  stdout/stderr with no level. Tune it with `golem/log`'s `SetDefault(&log.Options{Level: ...})`; view
+  output with the `golem-view-agent-logs` skill.
 - Do NOT edit files under `internal/wit/` in the SDK — they are generated.
 
 ## Coding Convention

@@ -16,6 +16,7 @@
 //     wasi:blobstore
 //     wasi:keyvalue@0.1.0
 //     wasi:config@0.2.0-draft
+//     wasi:logging
 //     golem:websocket@1.5.0
 //     wasi:http@0.3.0
 //     golem:agent-guest
@@ -27,7 +28,6 @@
 //     wasi:random@0.2.6
 //     wasi:cli@0.2.6
 //     wasi:http@0.2.6
-//     wasi:logging
 
 package wasi_keyvalue_wasi_keyvalue_error
 
