@@ -29,7 +29,6 @@ pub mod invoke_result_view;
 pub mod language;
 pub mod masking;
 pub mod plugin;
-pub mod plugin_manifest;
 pub mod repl;
 pub mod template;
 pub mod text;
