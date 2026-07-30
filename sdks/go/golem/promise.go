@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	apiHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
@@ -116,6 +117,20 @@ func (p *Promise[T]) Await() T {
 	data := res.Get()
 	res.Drop()
 	return decodePromisePayload[T](data)
+}
+
+// WebhookURL mints an external URL that completes this promise: a POST to the URL
+// completes the promise with the request body, so a later [Promise.Await] returns
+// that body decoded as T (JSON, or the raw bytes when T is []byte). Hand the URL
+// to an off-platform system to drive a webhook-style callback.
+//
+// It requires the agent type to be currently deployed behind an HTTP API (set
+// [Spec].HTTP on the agent and declare the agent in the manifest's httpApi
+// deployment) — it is fail-loud: the runtime traps, surfacing an agent-error, if
+// the agent is not http-api-deployed, or if a different agent type created the
+// promise. Typically called once per promise.
+func (p *Promise[T]) WebhookURL() string {
+	return host.CreateWebhook(p.id.toWit())
 }
 
 // CompletePromise completes the promise identified by id, from within any agent
