@@ -25,6 +25,7 @@ use self::agent_config::{
 use self::status::update_status_with_new_entries;
 use crate::durable_host::recover_stderr_logs;
 use crate::metrics::storage::record_filesystem_pool_released;
+use crate::metrics::workers::AdmissionPhase;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::active_workers::{
     FilesystemStoragePermit, HeldComponentCharge, MemoryGrant, RegisteredConcurrentAccount,
@@ -2837,11 +2838,17 @@ impl WaitingWorker {
             // Not spanned: this retries on a 500ms delay and logs once per attempt,
             // so a span covering the whole call would accumulate two events a second
             // for as long as resolution keeps failing - the pathology this change
-            // exists to remove. The retry events stay in the logs; how long
-            // admission took is a metrics question.
+            // exists to remove. The retry events stay in the logs, and how long the
+            // wait took is recorded as a metric rather than a span.
+            let phase_start = std::time::Instant::now();
             let (component_id, component_revision, component_module_bytes) =
                 parent.startup_component_charge_requirement().await;
+            crate::metrics::workers::record_worker_admission_wait(
+                AdmissionPhase::ResolveComponentCharge,
+                phase_start.elapsed(),
+            );
 
+            let phase_start = std::time::Instant::now();
             let concurrent_agent_permit = registered_concurrent_account
                 .acquire(agent_id.clone())
                 .instrument(related_span!(
@@ -2852,6 +2859,10 @@ impl WaitingWorker {
                     %agent_type
                 ))
                 .await;
+            crate::metrics::workers::record_worker_admission_wait(
+                AdmissionPhase::ConcurrencySlot,
+                phase_start.elapsed(),
+            );
 
             // `memory_grant` and `component_charge` own their reservations
             // from here on: held as locals until the worker becomes resident
@@ -2864,6 +2875,7 @@ impl WaitingWorker {
             // Admission is not gated while waiting for a per-account
             // concurrency slot above; otherwise one account could exhaust the
             // memory headroom with workers that are not allowed to run yet.
+            let phase_start = std::time::Instant::now();
             let (memory_grant, component_charge) = parent
                 .active_workers()
                 .acquire_with_component_charge(
@@ -2874,8 +2886,12 @@ impl WaitingWorker {
                 )
                 // Not spanned, for the same reason as the charge resolution above:
                 // `acquire_memory` retries on the same 500ms delay and logs once per
-                // attempt.
+                // attempt. Its duration is recorded as a metric instead.
                 .await;
+            crate::metrics::workers::record_worker_admission_wait(
+                AdmissionPhase::Memory,
+                phase_start.elapsed(),
+            );
 
             // Pre-acquire storage permits for this restart.
             //
@@ -2902,6 +2918,7 @@ impl WaitingWorker {
                 .load(Ordering::Relaxed);
             let acquire_bytes = filesystem_storage_requirement + desired_extra;
             let filesystem_storage_permit = if acquire_bytes > 0 {
+                let phase_start = std::time::Instant::now();
                 let mut permit = parent
                     .active_workers()
                     .acquire_filesystem_storage(acquire_bytes)
@@ -2913,6 +2930,10 @@ impl WaitingWorker {
                         %agent_type
                     ))
                     .await;
+                crate::metrics::workers::record_worker_admission_wait(
+                    AdmissionPhase::FilesystemStorage,
+                    phase_start.elapsed(),
+                );
                 // Release the `desired_extra` portion back to the pool.
                 if desired_extra > 0 {
                     let extra_permits =
