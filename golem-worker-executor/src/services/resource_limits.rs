@@ -13,9 +13,8 @@
 // limitations under the License.
 
 use crate::metrics::resources::{
-    record_durable_storage_byte_seconds, record_ephemeral_overdraft_fuel,
-    record_ephemeral_storage_byte_seconds, record_fuel_borrow, record_fuel_return,
-    record_resource_usage_batch_update_failure,
+    record_ephemeral_overdraft_fuel, record_fuel_borrow, record_fuel_return,
+    record_resource_usage_batch_update_failure, record_storage_byte_seconds,
 };
 use crate::services::agent_storage_meter::AgentStorageMeter;
 use crate::services::golem_config::ResourceLimitsConfig;
@@ -609,10 +608,10 @@ impl ResourceLimitsGrpc {
 
                     let account_id = account_id.to_string();
                     if durable > 0 {
-                        record_durable_storage_byte_seconds(&account_id, durable);
+                        record_storage_byte_seconds(&account_id, AgentMode::Durable, durable);
                     }
                     if ephemeral > 0 {
-                        record_ephemeral_storage_byte_seconds(&account_id, ephemeral);
+                        record_storage_byte_seconds(&account_id, AgentMode::Ephemeral, ephemeral);
                     }
                 }
                 for (account_id, resource_limits) in updated_limits.0 {

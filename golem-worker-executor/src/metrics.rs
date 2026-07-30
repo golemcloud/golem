@@ -958,6 +958,7 @@ pub mod oplog {
 }
 
 pub mod resources {
+    use golem_common::model::agent::AgentMode;
     use lazy_static::lazy_static;
     use prometheus::*;
 
@@ -971,16 +972,10 @@ pub mod resources {
             "Total amount of ephemeral overdraft fuel consumed"
         )
         .unwrap();
-        static ref DURABLE_STORAGE_BYTE_SECONDS_TOTAL: CounterVec = register_counter_vec!(
-            "durable_storage_byte_seconds_total",
-            "Durable filesystem storage byte-seconds billed by account",
-            &["account_id"]
-        )
-        .unwrap();
-        static ref EPHEMERAL_STORAGE_BYTE_SECONDS_TOTAL: CounterVec = register_counter_vec!(
-            "ephemeral_storage_byte_seconds_total",
-            "Ephemeral filesystem storage byte-seconds billed by account",
-            &["account_id"]
+        static ref STORAGE_BYTE_SECONDS_TOTAL: CounterVec = register_counter_vec!(
+            "storage_byte_seconds_total",
+            "Filesystem storage byte-seconds billed, by account and agent mode",
+            &["account_id", "agent_mode"]
         )
         .unwrap();
         static ref RESOURCE_USAGE_BATCH_UPDATE_FAILURE_TOTAL: Counter = register_counter!(
@@ -1002,15 +997,15 @@ pub mod resources {
         EPHEMERAL_OVERDRAFT_FUEL_TOTAL.inc_by(amount as f64);
     }
 
-    pub fn record_durable_storage_byte_seconds(account_id: &str, amount: i64) {
-        DURABLE_STORAGE_BYTE_SECONDS_TOTAL
-            .with_label_values(&[account_id])
-            .inc_by(amount as f64);
-    }
-
-    pub fn record_ephemeral_storage_byte_seconds(account_id: &str, amount: i64) {
-        EPHEMERAL_STORAGE_BYTE_SECONDS_TOTAL
-            .with_label_values(&[account_id])
+    pub fn record_storage_byte_seconds(account_id: &str, mode: AgentMode, amount: i64) {
+        // Lower-cased here rather than via `Display`, which renders for humans and is
+        // free to change; label values are a query interface and must stay stable.
+        let agent_mode = match mode {
+            AgentMode::Durable => "durable",
+            AgentMode::Ephemeral => "ephemeral",
+        };
+        STORAGE_BYTE_SECONDS_TOTAL
+            .with_label_values(&[account_id, agent_mode])
             .inc_by(amount as f64);
     }
 
