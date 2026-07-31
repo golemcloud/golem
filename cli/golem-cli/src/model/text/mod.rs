@@ -24,6 +24,5 @@ pub mod http_api_security;
 pub mod profile;
 pub mod resource_definition;
 pub mod retry_policy;
-pub mod secret;
 pub mod server;
 pub mod template;

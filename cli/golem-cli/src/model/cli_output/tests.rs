@@ -1033,27 +1033,27 @@ fn cli_output_schema_validates_schema_native_secret_outputs() {
 
     let outputs = vec![
         to_structured_output_value_masked(
-            crate::model::text::secret::SecretCreateView(secret.clone().into()),
+            crate::model::secret::SecretCreateView(secret.clone().into()),
             MaskingConfig::hide_secrets(),
         )
         .expect("secret.create should serialize"),
         to_structured_output_value_masked(
-            crate::model::text::secret::SecretDeleteView(secret.clone().into()),
+            crate::model::secret::SecretDeleteView(secret.clone().into()),
             MaskingConfig::hide_secrets(),
         )
         .expect("secret.delete should serialize"),
         to_structured_output_value_masked(
-            crate::model::text::secret::SecretGetView(secret.clone().into()),
+            crate::model::secret::SecretGetView(secret.clone().into()),
             MaskingConfig::hide_secrets(),
         )
         .expect("secret.get should serialize"),
         to_structured_output_value_masked(
-            crate::model::text::secret::SecretUpdateView(secret.clone().into()),
+            crate::model::secret::SecretUpdateView(secret.clone().into()),
             MaskingConfig::hide_secrets(),
         )
         .expect("secret.update-value should serialize"),
         to_structured_output_value_masked(
-            crate::model::text::secret::SecretListView {
+            crate::model::secret::SecretListView {
                 secrets: vec![secret.into()],
                 environment_name: "generated-environment".to_string(),
                 show_ids: false,
@@ -5406,7 +5406,7 @@ fn arb_secret_create_result() -> OutputDocumentStrategy {
     arb_secret()
         .prop_map(|secret| {
             to_structured_output_value_masked(
-                crate::model::text::secret::SecretCreateView(secret.into()),
+                crate::model::secret::SecretCreateView(secret.into()),
                 MaskingConfig::hide_secrets(),
             )
             .expect("generated secret create should serialize")
@@ -5418,7 +5418,7 @@ fn arb_secret_delete_result() -> OutputDocumentStrategy {
     arb_secret()
         .prop_map(|secret| {
             to_structured_output_value_masked(
-                crate::model::text::secret::SecretDeleteView(secret.into()),
+                crate::model::secret::SecretDeleteView(secret.into()),
                 MaskingConfig::hide_secrets(),
             )
             .expect("generated secret delete should serialize")
@@ -5430,7 +5430,7 @@ fn arb_secret_get_result() -> OutputDocumentStrategy {
     arb_secret()
         .prop_map(|secret| {
             to_structured_output_value_masked(
-                crate::model::text::secret::SecretGetView(secret.into()),
+                crate::model::secret::SecretGetView(secret.into()),
                 MaskingConfig::hide_secrets(),
             )
             .expect("generated secret get should serialize")
@@ -5442,7 +5442,7 @@ fn arb_secret_update_value_result() -> OutputDocumentStrategy {
     arb_secret()
         .prop_map(|secret| {
             to_structured_output_value_masked(
-                crate::model::text::secret::SecretUpdateView(secret.into()),
+                crate::model::secret::SecretUpdateView(secret.into()),
                 MaskingConfig::hide_secrets(),
             )
             .expect("generated secret update should serialize")
@@ -5454,7 +5454,7 @@ fn arb_secret_list_result() -> OutputDocumentStrategy {
     proptest::collection::vec(arb_secret(), 0..5)
         .prop_map(|secrets| {
             to_structured_output_value_masked(
-                crate::model::text::secret::SecretListView {
+                crate::model::secret::SecretListView {
                     secrets: secrets.into_iter().map(Into::into).collect(),
                     environment_name: "generated-environment".to_string(),
                     show_ids: false,

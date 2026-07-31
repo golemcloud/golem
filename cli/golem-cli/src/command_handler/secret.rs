@@ -21,7 +21,7 @@ use crate::error::service::MapServiceError;
 use crate::log::log_error;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::language::GuestLanguage;
-use crate::model::text::secret::{
+use crate::model::secret::{
     SecretCreateView, SecretDeleteView, SecretGetView, SecretListView, SecretUpdateView,
 };
 use anyhow::bail;

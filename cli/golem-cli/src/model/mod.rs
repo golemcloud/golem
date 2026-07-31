@@ -33,6 +33,7 @@ pub mod language;
 pub mod masking;
 pub mod plugin;
 pub mod repl;
+pub mod secret;
 pub mod template;
 pub mod text;
 pub mod token;
