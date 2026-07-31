@@ -29,6 +29,13 @@ use crate::log::{
     LogColorize, LogIndent, log_action, log_error, log_error_action, log_failed_to, log_warn,
     log_warn_action, logln,
 };
+use crate::model::agent::action_result::{
+    AgentCancelInvocationResult, AgentDeleteResult, AgentFileContentsResult, AgentInterruptResult,
+    AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
+};
+use crate::model::agent::files::{AgentFilesView, FileNodeView};
+use crate::model::agent::oplog::AgentOplogEntryView;
+use crate::model::agent::{AgentCreateView, AgentGetView, format_agent_id_match, format_timestamp};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{AgentUpdateMeta, TryUpdateAllWorkersResult};
 use crate::model::help::{
@@ -36,15 +43,6 @@ use crate::model::help::{
     ParameterErrorTableView,
 };
 use crate::model::invoke_result_view::InvokeResultView;
-use crate::model::text::agent::action_result::{
-    AgentCancelInvocationResult, AgentDeleteResult, AgentFileContentsResult, AgentInterruptResult,
-    AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
-};
-use crate::model::text::agent::files::{AgentFilesView, FileNodeView};
-use crate::model::text::agent::oplog::AgentOplogEntryView;
-use crate::model::text::agent::{
-    AgentCreateView, AgentGetView, format_agent_id_match, format_timestamp,
-};
 use crate::model::text::fmt::{log_fuzzy_match, log_text_view};
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use chrono::{DateTime, Utc};

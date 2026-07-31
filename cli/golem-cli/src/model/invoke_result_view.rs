@@ -13,13 +13,15 @@
 // limitations under the License.
 
 use crate::agent_id_display::{SourceLanguage, render_typed_schema_value};
-use crate::log::log_error;
+use crate::log::{log_error, logln};
 use crate::model::cli_output::StructuredOutput;
+use crate::model::text::fmt::{TextOutput, format_message_highlight, format_warn};
 use anyhow::anyhow;
 use golem_client::model::AgentInvocationResult;
 use golem_common::model::IdempotencyKey;
 use golem_common::schema::TypedSchemaValue;
 use golem_common::schema::agent::{AgentTypeSchema, OutputSchema};
+use indoc::indoc;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -38,6 +40,45 @@ pub struct InvokeResultView {
 
 impl StructuredOutput for InvokeResultView {
     const KIND: &'static str = "agent.invoke";
+}
+
+impl TextOutput for InvokeResultView {
+    fn log(&self) {
+        fn log_result_format(format: Option<&str>, multiple: bool) {
+            let result_label = if multiple { "results" } else { "result" };
+            match format {
+                Some(format) => logln(format!(
+                    "Invocation {result_label} in {}:",
+                    format_message_highlight(format),
+                )),
+                None => logln(format!("Invocation {result_label}:")),
+            }
+        }
+
+        if self.is_void_result {
+            log_result_format(None, false);
+            logln("void");
+            return;
+        }
+
+        if self.result.is_none() && self.result_json.is_none() {
+            return;
+        }
+
+        if let Some(result) = &self.result {
+            log_result_format(self.result_format.as_deref(), false);
+            logln(result);
+        } else if let Some(json) = &self.result_json {
+            logln(format_warn(indoc!(
+                "
+                Failed to convert invocation result to the requested format.
+                At the moment it does not support Handle (aka Resource) data type.
+                "
+            )));
+            log_result_format(Some("JSON"), false);
+            logln(serde_json::to_string_pretty(json).unwrap());
+        }
+    }
 }
 
 impl InvokeResultView {

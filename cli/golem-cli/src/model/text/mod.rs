@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod action_result;
-pub mod agent;
 pub mod deployment;
 pub mod diff;
 pub mod fmt;

@@ -25,6 +25,9 @@ use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
 use crate::log::{LogColorize, LogIndent, log_action, log_error, log_warn_action, logln};
 use crate::model::agent::AgentUpdateMode;
+use crate::model::agent::action_result::{
+    AgentDeleteAllResult, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
+};
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::app_raw;
@@ -45,9 +48,6 @@ use crate::model::environment::{
 use crate::model::help::ComponentNameHelp;
 use crate::model::language::GuestLanguage;
 use crate::model::plugin::PluginNameAndVersion;
-use crate::model::text::agent::action_result::{
-    AgentDeleteAllResult, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
-};
 use crate::model::text::fmt::log_text_view;
 use crate::validation::ValidationBuilder;
 use anyhow::{Context as AnyhowContext, anyhow, bail};
