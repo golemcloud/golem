@@ -1,12 +1,12 @@
 use crate::Tracing;
 use crate::app::{TestContext, cmd, flag};
 
+use golem_cli::app::template::TemplateListView;
 use golem_cli::bridge_gen::BridgeMode;
 use golem_cli::fs;
+use golem_cli::model::agent::AgentTypeListView;
 use golem_cli::model::app::BridgeSdkTargetKind;
 use golem_cli::model::language::GuestLanguage;
-use golem_cli::model::text::agent::AgentTypeListView;
-use golem_cli::model::text::template::TemplateListView;
 use strum::IntoEnumIterator;
 use test_r::{inherit_test_dep, test};
 
