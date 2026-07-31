@@ -1218,7 +1218,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     // The returned handle is owned by a guest resource, so this task can outlive
     // the invocation. It links back rather than running inside its span. See
     // `TraceOrigin`.
-    let origin = TraceOrigin::triggered();
+    let origin = TraceOrigin::capture_current();
     let caller_agent_id = agent_id.clone();
     let invoke = move || {
         let rpc = rpc.clone();
@@ -1287,7 +1287,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         }
         .instrument(related_span!(
             origin,
-            Level::DEBUG,
+            Level::INFO,
             "rpc_invoke_retry",
             agent_id = %caller_agent_id
         )),

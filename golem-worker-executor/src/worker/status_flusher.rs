@@ -45,7 +45,7 @@ use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, debug, debug_span, error};
+use tracing::{Instrument, debug, error, info_span};
 
 use golem_common::model::{AgentStatusRecord, OwnedAgentId};
 
@@ -375,7 +375,7 @@ impl AgentStatusFlushQueue {
                 })
                 .await;
         }
-        .instrument(debug_span!("agent_status_flush_sweep"))
+        .instrument(info_span!("agent_status_flush_sweep"))
         .await
     }
 
@@ -571,7 +571,7 @@ mod tests {
     }
 
     /// An idle sweep is still spanned, so that every tick of the sweeper is
-    /// represented the same way. Volume is controlled by the span's debug level.
+    /// represented the same way.
     #[test]
     async fn sweep_records_one_closed_span_when_nothing_is_dirty() {
         let ws = MockWorkerService::arc();

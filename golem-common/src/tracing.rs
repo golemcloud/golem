@@ -39,7 +39,7 @@ use crate::SafeDisplay;
 use crate::config::env_config_provider;
 use crate::tracing::format::JsonFlattenSpanFormatter;
 
-pub use origin::{TraceOrigin, TraceParent};
+pub use origin::{SPAN_TARGET, TraceOrigin};
 
 mod origin;
 
@@ -982,6 +982,7 @@ pub(crate) mod test {
         use test_r::test;
         use tracing_subscriber::EnvFilter;
 
+        use crate::tracing::SPAN_TARGET;
         use crate::tracing::directive::otlp_spec;
         use crate::tracing::test::otel::{exported_spans_filtered, named};
 
@@ -1028,6 +1029,47 @@ pub(crate) mod test {
             );
         }
 
+        /// Silencing a module must stop its events without taking its spans with
+        /// them: the spans are bounded and are the thing worth exporting, and they
+        /// are declared under [`SPAN_TARGET`] precisely so a directive aimed at the
+        /// module cannot reach them.
+        ///
+        /// Covers both routes into a span, since a plain `span!` in such a module is
+        /// just as easy to write as a `related_span!` and just as easily silenced.
+        #[test]
+        fn a_span_declared_in_a_silenced_module_still_exports() {
+            let filter = EnvFilter::builder().parse_lossy(otlp_spec(None));
+            let spans = exported_spans_filtered(Box::new(filter), || {
+                // As if written inside the silenced module, which is where the
+                // host-call retry and replay spans live.
+                let origin = crate::tracing::TraceOrigin::none();
+                let linked = crate::related_span!(origin, tracing::Level::INFO, "host_call_retry");
+                linked.in_scope(|| {
+                    tracing::info!(target: HOST_CALL, "silenced host call event");
+                });
+
+                tracing::info_span!(target: SPAN_TARGET, "replaying").in_scope(|| {});
+            });
+
+            assert!(
+                named(&spans, "host_call_retry").events.is_empty(),
+                "the module's events stay silenced even inside its own span"
+            );
+            named(&spans, "replaying");
+        }
+
+        /// The mistake the target exists to prevent, pinned so it stays visible: a
+        /// span left on its module's own target is silenced along with its events.
+        #[test]
+        fn a_span_left_on_a_silenced_modules_target_does_not_export() {
+            let filter = EnvFilter::builder().parse_lossy(otlp_spec(None));
+            let spans = exported_spans_filtered(Box::new(filter), || {
+                tracing::info_span!(target: HOST_CALL, "forgot_the_span_target").in_scope(|| {});
+            });
+
+            assert!(spans.is_empty());
+        }
+
         #[test]
         fn events_from_other_targets_are_untouched() {
             let filter = EnvFilter::builder().parse_lossy(otlp_spec(None));
@@ -1062,51 +1104,22 @@ pub(crate) mod test {
         }
     }
 
-    /// Tests for [`crate::tracing::TraceParent`].
-    mod trace_parent {
+    /// Tests for [`crate::tracing::TraceOrigin`].
+    mod trace_origin {
         use opentelemetry::trace::SpanId;
         use test_r::test;
 
-        use crate::tracing::TraceParent;
+        use crate::tracing::TraceOrigin;
         use crate::tracing::test::otel::{exported_spans, named};
 
-        /// The synchronous invoke-and-await shape: the caller's span encloses the
-        /// execution, so the picked-up work is a child in the caller's trace.
-        #[test]
-        fn set_as_parent_of_adopts_the_captured_trace_and_parent() {
-            let spans = exported_spans(|| {
-                let caller = tracing::info_span!("caller");
-                let captured = caller.in_scope(TraceParent::capture_current);
-
-                let picked_up = tracing::info_span!(parent: None, "picked_up");
-                captured.set_as_parent_of(&picked_up);
-                drop(picked_up);
-                drop(caller);
-            });
-
-            let caller = named(&spans, "caller");
-            let picked_up = named(&spans, "picked_up");
-
-            assert_eq!(
-                picked_up.span_context.trace_id(),
-                caller.span_context.trace_id(),
-                "child should join the captured parent's trace"
-            );
-            assert_eq!(
-                picked_up.parent_span_id,
-                caller.span_context.span_id(),
-                "child's parent should be the captured span"
-            );
-        }
-
-        /// The asynchronous enqueue shape: the enqueuing request has already
-        /// returned, so execution is a new trace linked back to it. Per the
-        /// OpenTelemetry messaging conventions the link lives on the consumer span.
+        /// Work is handed off, so execution is a new trace linked back to whatever
+        /// enqueued it. Per the OpenTelemetry messaging conventions the link lives
+        /// on the consumer span.
         #[test]
         fn add_as_link_to_starts_a_new_trace_linked_to_the_captured_span() {
             let spans = exported_spans(|| {
                 let enqueue = tracing::info_span!("enqueue");
-                let captured = enqueue.in_scope(TraceParent::capture_current);
+                let captured = enqueue.in_scope(TraceOrigin::capture_current);
                 // The enqueuing request returns before the work is picked up.
                 drop(enqueue);
 
@@ -1147,11 +1160,11 @@ pub(crate) mod test {
         /// remembered for later use still closes and exports on its own schedule.
         #[test]
         fn capturing_a_parent_does_not_keep_the_captured_span_open() {
-            let mut held: Option<TraceParent> = None;
+            let mut held: Option<TraceOrigin> = None;
 
             let spans = exported_spans(|| {
                 let request = tracing::info_span!("request");
-                held = Some(request.in_scope(TraceParent::capture_current));
+                held = Some(request.in_scope(TraceOrigin::capture_current));
                 drop(request);
                 // `held` is still alive here, as the pending-invocation map holds it
                 // while the invocation waits to be picked up.
@@ -1161,7 +1174,7 @@ pub(crate) mod test {
             assert_eq!(
                 spans.len(),
                 1,
-                "the captured span must still close and export while its TraceParent is held"
+                "the captured span must still close and export while its TraceOrigin is held"
             );
             assert_eq!(spans[0].name, "request");
         }
@@ -1170,12 +1183,11 @@ pub(crate) mod test {
         /// parent is empty and applying it changes nothing.
         #[test]
         fn an_empty_parent_leaves_the_span_as_a_root() {
-            let empty = TraceParent::default();
+            let empty = TraceOrigin::default();
             assert!(empty.is_empty());
 
             let spans = exported_spans(|| {
                 let root = tracing::info_span!(parent: None, "root");
-                empty.set_as_parent_of(&root);
                 empty.add_as_link_to(&root);
                 drop(root);
             });
@@ -1185,51 +1197,33 @@ pub(crate) mod test {
             assert!(root.links.is_empty());
         }
 
-        /// `TraceOrigin` picks the relationship for us, so a call site only has to
-        /// say whether the caller waits.
+        /// Handed-off work is a linked root, not a child - including the invocation
+        /// path where the caller waits for the result, since the worker runs it
+        /// independently and the caller is only notified.
         #[test]
-        fn an_awaited_origin_makes_the_work_a_child_in_the_callers_trace() {
-            use crate::tracing::TraceOrigin;
-
+        fn related_span_makes_the_work_a_linked_root() {
             let spans = exported_spans(|| {
                 let caller = tracing::info_span!("caller");
-                let origin = caller.in_scope(TraceOrigin::awaited);
+                let origin = caller.in_scope(TraceOrigin::capture_current);
 
-                let work = tracing::info_span!(parent: None, "work");
-                origin.relate(&work);
+                let work = crate::related_span!(origin, tracing::Level::INFO, "work");
                 drop(work);
                 drop(caller);
             });
 
             let caller = named(&spans, "caller");
             let work = named(&spans, "work");
-            assert_eq!(work.span_context.trace_id(), caller.span_context.trace_id());
-            assert_eq!(work.parent_span_id, caller.span_context.span_id());
-            assert!(work.links.is_empty(), "an awaited origin uses a parent");
-        }
-
-        #[test]
-        fn a_triggered_origin_makes_the_work_a_linked_root() {
-            use crate::tracing::TraceOrigin;
-
-            let spans = exported_spans(|| {
-                let caller = tracing::info_span!("caller");
-                let origin = caller.in_scope(TraceOrigin::triggered);
-                drop(caller);
-
-                let work = tracing::info_span!(parent: None, "work");
-                origin.relate(&work);
-                drop(work);
-            });
-
-            let caller = named(&spans, "caller");
-            let work = named(&spans, "work");
-            assert_ne!(work.span_context.trace_id(), caller.span_context.trace_id());
+            assert_ne!(
+                work.span_context.trace_id(),
+                caller.span_context.trace_id(),
+                "linked work is the root of its own trace"
+            );
             assert_eq!(work.parent_span_id, SpanId::INVALID);
+            assert_eq!(work.links.iter().count(), 1);
             assert_eq!(
-                work.links.iter().count(),
-                1,
-                "a triggered origin uses a link"
+                work.links.iter().next().unwrap().span_context.span_id(),
+                caller.span_context.span_id(),
+                "the link points back at whatever handed the work off"
             );
         }
 
@@ -1237,7 +1231,7 @@ pub(crate) mod test {
         fn capture_current_outside_any_span_is_empty() {
             let mut captured = None;
             exported_spans(|| {
-                captured = Some(TraceParent::capture_current());
+                captured = Some(TraceOrigin::capture_current());
             });
             assert!(captured.is_some_and(|parent| parent.is_empty()));
         }

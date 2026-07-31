@@ -29,7 +29,7 @@ use std::time::Duration;
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
-use tracing::{Instrument, debug_span, error};
+use tracing::{Instrument, error, info_span};
 
 #[derive(Debug)]
 pub struct AtomicResourceEntry {
@@ -573,7 +573,7 @@ impl ResourceLimitsGrpc {
                 }
             }
         }
-        .instrument(debug_span!("resource_limits_batch_update"))
+        .instrument(info_span!("resource_limits_batch_update"))
         .await
     }
 

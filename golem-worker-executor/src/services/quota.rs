@@ -29,7 +29,7 @@ use std::time::Duration;
 use tokio::sync::{Mutex, RwLock, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
-use tracing::{Instrument, debug_span, info};
+use tracing::{Instrument, info, info_span};
 
 type ResourceKey = (EnvironmentId, ResourceName);
 
@@ -956,7 +956,7 @@ impl GrpcQuotaService {
                 }
             }
         }
-        .instrument(debug_span!("quota_renewal"))
+        .instrument(info_span!("quota_renewal"))
         .await
     }
 

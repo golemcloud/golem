@@ -76,7 +76,7 @@ use golem_common::model::{
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
 use golem_common::related_span;
-use golem_common::tracing::{TraceOrigin, TraceParent};
+use golem_common::tracing::TraceOrigin;
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
@@ -463,15 +463,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             let init_idempotency_key = IdempotencyKey::new(format!("init-{}", worker.agent_id()));
             worker
-                .enqueue_worker_invocation(
-                    AgentInvocation::AgentInitialization {
-                        idempotency_key: init_idempotency_key,
-                        input: agent_id.parameters.clone().into(),
-                        invocation_context: invocation_context_stack.clone(),
-                        principal,
-                    },
-                    EnqueueCaller::Returns,
-                )
+                .enqueue_worker_invocation(AgentInvocation::AgentInitialization {
+                    idempotency_key: init_idempotency_key,
+                    input: agent_id.parameters.clone().into(),
+                    invocation_context: invocation_context_stack.clone(),
+                    principal,
+                })
                 .await
                 .expect("Failed enqueuing initial agent invocations to worker");
         };
@@ -744,8 +741,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<ResultOrSubscription, WorkerExecutorError> {
         let idempotency_key = Self::require_idempotency_key(&invocation)?;
 
-        self.invoke_internal(&idempotency_key, invocation, EnqueueCaller::Returns)
-            .await
+        self.invoke_internal(&idempotency_key, invocation).await
     }
 
     /// Invokes the worker and awaits the result.
@@ -755,15 +751,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         let idempotency_key = Self::require_idempotency_key(&invocation)?;
 
-        // This call stays open until the invocation completes, so its span encloses
-        // the execution and can be its parent.
-        let outcome = self
-            .invoke_internal(
-                &idempotency_key,
-                invocation,
-                EnqueueCaller::Awaits(TraceParent::capture_current()),
-            )
-            .await?;
+        let outcome = self.invoke_internal(&idempotency_key, invocation).await?;
 
         match outcome {
             ResultOrSubscription::Finished(Ok(output)) => Ok(output),
@@ -771,11 +759,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ResultOrSubscription::Pending(subscription) => {
                 debug!("Waiting for idempotency key to complete",);
 
+                // The caller's honest share of the work: the execution runs in the
+                // worker's own trace, linked from here, and only its outcome comes
+                // back. This span measures the waiting, which is what the request
+                // actually spent its time on.
                 let result = async {
                     self.wait_for_invocation_result(&idempotency_key, subscription)
                         .await
                 }
-                .instrument(span!(Level::INFO, "wait_for_invocation_result"))
+                .instrument(span!(
+                    Level::INFO,
+                    "wait_for_invocation_result",
+                    agent_id = %self.owned_agent_id.agent_id,
+                    idempotency_key = %idempotency_key,
+                ))
                 .await;
 
                 match result {
@@ -806,7 +803,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         idempotency_key: &IdempotencyKey,
         invocation: AgentInvocation,
-        caller: EnqueueCaller,
     ) -> Result<ResultOrSubscription, WorkerExecutorError> {
         // We need to create the subscription before checking whether the result is still pending, otherwise there is a race.
         let subscription = self.events().subscribe();
@@ -819,7 +815,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             LookupResult::Interrupted => Err(InterruptKind::Interrupt(Timestamp::now_utc()).into()),
             LookupResult::Pending => Ok(ResultOrSubscription::Pending(subscription)),
             LookupResult::New => {
-                self.enqueue_worker_invocation(invocation, caller).await?;
+                self.enqueue_worker_invocation(invocation).await?;
                 Ok(ResultOrSubscription::Pending(subscription))
             }
         }
@@ -842,11 +838,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         target_revision: ComponentRevision,
     ) -> Result<(), WorkerExecutorError> {
-        self.enqueue_worker_invocation(
-            AgentInvocation::ManualUpdate { target_revision },
-            EnqueueCaller::Returns,
-        )
-        .await
+        self.enqueue_worker_invocation(AgentInvocation::ManualUpdate { target_revision })
+            .await
     }
 
     pub async fn pending_invocations(&self) -> Vec<PendingInvocationRef> {
@@ -950,10 +943,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         self.external_invocation_origins.write().await.remove(key);
         debug!("Stored invocation success for {key}");
+        self.publish_completion(key, Ok(output));
+    }
+
+    fn publish_completion(
+        &self,
+        key: &IdempotencyKey,
+        result: Result<AgentInvocationOutput, WorkerExecutorError>,
+    ) {
         self.events().publish(Event::InvocationCompleted {
             agent_id: self.owned_agent_id.agent_id(),
             idempotency_key: key.clone(),
-            result: Ok(output),
+            result,
         });
     }
 
@@ -983,11 +984,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             );
             let golem_error = trap_type.as_golem_error(&stderr);
             if let Some(golem_error) = golem_error {
-                self.events().publish(Event::InvocationCompleted {
-                    agent_id: self.owned_agent_id.agent_id(),
-                    idempotency_key: key.clone(),
-                    result: Err(golem_error),
-                });
+                self.publish_completion(key, Err(golem_error));
             }
             completed_keys.push(key.clone());
         }
@@ -1426,7 +1423,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn enqueue_worker_invocation(
         &self,
         invocation: AgentInvocation,
-        caller: EnqueueCaller,
     ) -> Result<(), WorkerExecutorError> {
         async {
             let instance_guard = self.lock_non_stopping_worker().await;
@@ -1474,19 +1470,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
 
             if let Some(idempotency_key) = timestamped_invocation.invocation.idempotency_key() {
-                // A consumer links back to the *creation context* of the work, so a
-                // returning caller is captured here, inside the producer span,
-                // rather than wherever it happened to call from. A waiting caller
-                // keeps its own span instead: that is the one enclosing the
-                // execution.
-                let origin = match caller {
-                    EnqueueCaller::Awaits(parent) => TraceOrigin::AwaitedBy(parent),
-                    EnqueueCaller::Returns => TraceOrigin::triggered(),
-                };
+                // Captured here, inside the producer span, because a consumer links
+                // back to the *creation context* of the work rather than to wherever
+                // the caller happened to call from.
                 self.external_invocation_origins
                     .write()
                     .await
-                    .insert(idempotency_key.clone(), origin);
+                    .insert(idempotency_key.clone(), TraceOrigin::capture_current());
             }
 
             if let WorkerInstance::Running(running) = &*instance_guard {
@@ -2125,11 +2115,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }),
                 },
             );
-            self.events().publish(Event::InvocationCompleted {
-                agent_id: self.owned_agent_id.agent_id(),
-                idempotency_key: idempotency_key.clone(),
-                result: Err(error.clone()),
-            });
+            self.publish_completion(idempotency_key, Err(error.clone()));
             origins.remove(idempotency_key);
         }
     }
@@ -2787,17 +2773,6 @@ impl WorkerInstance {
     }
 }
 
-/// What the caller of [`Worker::enqueue_worker_invocation`] intends to do next,
-/// which is what decides how the execution relates to its trace.
-enum EnqueueCaller {
-    /// The caller waits for the result, so its span encloses the execution and
-    /// becomes the parent of the pickup span.
-    Awaits(TraceParent),
-    /// The caller returns before the work runs, so the execution becomes a new trace
-    /// linked back to the producer span.
-    Returns,
-}
-
 /// What a resident worker's phase spans need in order to be traceable: the startup
 /// they link back to, and the agent fields they carry.
 ///
@@ -2822,7 +2797,7 @@ impl WaitingWorker {
         filesystem_storage_requirement: u64,
         oom_retry_count: u32,
     ) -> Self {
-        let worker_trace = parent.trace(TraceOrigin::triggered());
+        let worker_trace = parent.trace(TraceOrigin::capture_current());
 
         let start_attempt = Uuid::new_v4();
 

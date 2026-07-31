@@ -44,7 +44,7 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Level, debug, debug_span, error, info, span, warn};
+use tracing::{Instrument, Level, debug, debug_span, error, info, info_span, span, warn};
 
 #[async_trait]
 pub trait SchedulerService: Send + Sync {
@@ -315,7 +315,7 @@ impl SchedulerServiceDefault {
             }
             result
         }
-        .instrument(debug_span!("scheduler_tick"))
+        .instrument(info_span!("scheduler_tick"))
         .await
     }
 
@@ -460,9 +460,9 @@ impl SchedulerServiceDefault {
                         // TODO: this is probably redundant with the wakeup in PromiseService. check and fix
                         {
                             let span = span!(
-                                Level::INFO,
-                                "scheduler",
-                                agent_id = owned_agent_id.agent_id.to_string()
+                                Level::DEBUG,
+                                "scheduler_activate_worker",
+                                agent_id = %owned_agent_id.agent_id
                             );
 
                             self.worker_access

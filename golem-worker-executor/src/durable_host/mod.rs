@@ -3069,7 +3069,12 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             "Replay state: {:?}",
                             store.as_context().data().durable_ctx().state.replay_state
                         );
+                        // Declared under `SPAN_TARGET` because this module's own
+                        // target is silenced for OTLP to keep its per-host-call
+                        // events off open spans - a directive cannot tell a span
+                        // from an event. See `TraceOrigin`.
                         let span = span!(
+                            target: golem_common::tracing::SPAN_TARGET,
                             Level::INFO,
                             "replaying",
                             function = full_function_name.as_str()

@@ -648,22 +648,15 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             // Then, try to process a pending invocation
             if let Some(pending_invocation) = status.pending_invocations.first() {
                 let idempotency_key = pending_invocation.idempotency_key();
-                let origin = if let Some(idempotency_key) = idempotency_key {
-                    let mut origins = self.parent.external_invocation_origins.write().await;
-                    let origin = origins.get(idempotency_key).cloned();
-                    // Only the first pickup can claim the awaited caller as its
-                    // parent. A retry runs after that caller may already have given
-                    // up and closed its span, so downgrade the record to a link now;
-                    // a later attempt then relates truthfully instead of claiming a
-                    // parent that has ended.
-                    if let Some(recorded) = origins.get_mut(idempotency_key)
-                        && recorded.is_awaited()
-                    {
-                        *recorded = recorded.as_link();
-                    }
-                    origin
-                } else {
-                    None
+                let origin = match idempotency_key {
+                    Some(idempotency_key) => self
+                        .parent
+                        .external_invocation_origins
+                        .read()
+                        .await
+                        .get(idempotency_key)
+                        .cloned(),
+                    None => None,
                 };
 
                 // An invocation with no recorded origin was enqueued in an earlier
@@ -687,13 +680,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     }
                 };
 
-                // The span for picking work off the queue and running it. It is
-                // created parentless and then related to whatever enqueued the
-                // work: a child of the enqueuing request when that request is
-                // waiting for the result, or the root of its own linked trace when
-                // the request has already returned. `otel.kind = consumer` is what
-                // the OpenTelemetry messaging conventions prescribe for processing
-                // work a producer handed off.
+                // The span for picking work off the queue and running it: the root
+                // of its own trace, linked back to whatever enqueued the work.
+                // `otel.kind = consumer` is what the OpenTelemetry messaging
+                // conventions prescribe for processing work a producer handed off.
                 let pickup_span = related_span!(
                     origin,
                     Level::INFO,

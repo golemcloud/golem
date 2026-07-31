@@ -458,17 +458,16 @@ impl EnvVarBuilder {
 
     fn with_optional_otlp(mut self, service_name: &str, enabled: bool) -> Self {
         if enabled {
-            let endpoint = OtlpEndpoint::from_env();
             self.env_vars.insert(
                 "GOLEM__TRACING__OTLP__ENABLED".to_string(),
                 "true".to_string(),
             );
-            self.env_vars
-                .insert("GOLEM__TRACING__OTLP__HOST".to_string(), endpoint.host);
             self.env_vars.insert(
-                "GOLEM__TRACING__OTLP__PORT".to_string(),
-                endpoint.port.to_string(),
+                "GOLEM__TRACING__OTLP__HOST".to_string(),
+                "localhost".to_string(),
             );
+            self.env_vars
+                .insert("GOLEM__TRACING__OTLP__PORT".to_string(), "4318".to_string());
             self.env_vars.insert(
                 "GOLEM__TRACING__OTLP__SERVICE_NAME".to_string(),
                 service_name.to_string(),
@@ -483,36 +482,6 @@ impl EnvVarBuilder {
 
     fn build(self) -> HashMap<String, String> {
         self.env_vars
-    }
-}
-
-/// Where a spawned service should send its OTLP spans.
-///
-/// A container-backed collector publishes on a port chosen at runtime, so a test
-/// that asserts on exported spans overrides the default by setting
-/// `GOLEM_TEST_OTLP_HOST` / `GOLEM_TEST_OTLP_PORT` before the test dependencies are
-/// constructed - they are read as each service's environment is built.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OtlpEndpoint {
-    pub host: String,
-    pub port: u16,
-}
-
-impl OtlpEndpoint {
-    pub const DEFAULT_HOST: &'static str = "localhost";
-    pub const DEFAULT_PORT: u16 = 4318;
-
-    /// Reads the endpoint from the environment, falling back to the local
-    /// collector's conventional address.
-    pub fn from_env() -> Self {
-        Self {
-            host: std::env::var("GOLEM_TEST_OTLP_HOST")
-                .unwrap_or_else(|_| Self::DEFAULT_HOST.to_string()),
-            port: std::env::var("GOLEM_TEST_OTLP_PORT")
-                .ok()
-                .and_then(|port| port.parse().ok())
-                .unwrap_or(Self::DEFAULT_PORT),
-        }
     }
 }
 

@@ -918,7 +918,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
     let between_bytes_timeout = config.between_bytes_timeout;
 
     // Links back rather than running inside the invocation's span, as above.
-    let origin = TraceOrigin::triggered();
+    let origin = TraceOrigin::capture_current();
     let agent_id = worker.agent_id();
 
     wasmtime_wasi::runtime::spawn(
@@ -1116,7 +1116,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
         }
         .instrument(related_span!(
             origin,
-            Level::DEBUG,
+            Level::INFO,
             "http_request_retry",
             %agent_id
         )),

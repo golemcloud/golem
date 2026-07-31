@@ -57,10 +57,6 @@ pub struct EnvBasedTestDependenciesConfig {
     pub redis_key_prefix: String,
     pub golem_repo_root: PathBuf,
     pub unique_network_id: String,
-    /// Whether spawned services export their own spans over OTLP. Off by default;
-    /// tests that assert on exported spans turn it on and name the collector
-    /// through the environment variables read by `OtlpEndpoint::from_env`.
-    pub otlp: bool,
 }
 
 impl EnvBasedTestDependenciesConfig {
@@ -148,7 +144,6 @@ impl Default for EnvBasedTestDependenciesConfig {
             redis_key_prefix: "".to_string(),
             golem_repo_root: PathBuf::from(".."),
             unique_network_id: Uuid::new_v4().to_string(),
-            otlp: false,
         }
     }
 }
@@ -232,7 +227,7 @@ impl EnvBasedTestDependencies {
                 config.default_verbosity(),
                 config.default_stdout_level(),
                 config.default_stderr_level(),
-                config.otlp,
+                false,
             )
             .await,
         )
@@ -255,7 +250,7 @@ impl EnvBasedTestDependencies {
                 config.default_verbosity(),
                 config.default_stdout_level(),
                 config.default_stderr_level(),
-                config.otlp,
+                false,
             )
             .await,
         )
@@ -278,7 +273,7 @@ impl EnvBasedTestDependencies {
                 config.default_stdout_level(),
                 config.default_stderr_level(),
                 true,
-                config.otlp,
+                false,
             )
             .await,
         )
@@ -307,7 +302,7 @@ impl EnvBasedTestDependencies {
                 config.default_stderr_level(),
                 registry_service,
                 true,
-                config.otlp,
+                false,
             )
             .await,
         )
@@ -336,7 +331,7 @@ impl EnvBasedTestDependencies {
                 registry_service,
                 config.environment_state_cache_capacity,
                 config.oplog_archive_interval,
-                config.otlp,
+                false,
             )
             .await,
         )

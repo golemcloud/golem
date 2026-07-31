@@ -810,7 +810,7 @@ impl ForwardingOplog {
 
         // Captured here, where the caller's context is still current: each flush
         // tick links back to it rather than running inside it.
-        let flush_origin = TraceOrigin::triggered();
+        let flush_origin = TraceOrigin::capture_current();
         let agent_id = initial_worker_metadata.agent_id.clone();
         let state = Arc::new(Mutex::new(ForwardingOplogState {
             buffer: VecDeque::new(),
@@ -842,7 +842,7 @@ impl ForwardingOplog {
                     }
                     .instrument(related_span!(
                         flush_origin,
-                        tracing::Level::DEBUG,
+                        tracing::Level::INFO,
                         "oplog_forwarding_flush",
                         agent_id = %agent_id
                     ))
@@ -1289,10 +1289,9 @@ impl ForwardingOplogState {
                 let target_clone = target_agent_id.clone();
                 // The task polls on after this flush returned, so it links back to
                 // the flush rather than running inside its span. See `TraceOrigin`.
-                let monitor_origin = TraceOrigin::triggered();
                 let monitor_span = related_span!(
-                    monitor_origin,
-                    tracing::Level::DEBUG,
+                    TraceOrigin::capture_current(),
+                    tracing::Level::INFO,
                     "oplog_plugin_batch_monitor",
                     agent_id = %metadata.agent_id,
                     grant_id = %grant_id,

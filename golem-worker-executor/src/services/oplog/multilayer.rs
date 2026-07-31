@@ -985,7 +985,7 @@ impl MultiLayerOplog {
                     last_transferred_idx: this.primary.current_oplog_index().await,
                     keep_alive: Some(this.clone()),
                     done: done_tx,
-                    transfer_origin: TraceOrigin::triggered(),
+                    transfer_origin: TraceOrigin::capture_current(),
                 })
                 .expect("Failed to enqueue transfer of primary oplog entries");
 
@@ -1016,7 +1016,7 @@ impl MultiLayerOplog {
                         keep_alive: Some(this.clone()),
                         done: done_tx,
                         drain: false,
-                        transfer_origin: TraceOrigin::triggered(),
+                        transfer_origin: TraceOrigin::capture_current(),
                     })
                     .expect("Failed to enqueue transfer of primary oplog entries");
 
@@ -1086,7 +1086,7 @@ impl Oplog for MultiLayerOplog {
                 last_transferred_idx: last_committed_idx,
                 keep_alive: None,
                 done: None,
-                transfer_origin: TraceOrigin::triggered(),
+                transfer_origin: TraceOrigin::capture_current(),
             });
             self.last_transfer_point.set(last_committed_idx);
         }
@@ -1279,7 +1279,7 @@ impl OplogArchive for WrappedOplogArchive {
                     keep_alive: None,
                     done: None,
                     drain: false,
-                    transfer_origin: TraceOrigin::triggered(),
+                    transfer_origin: TraceOrigin::capture_current(),
                 });
                 // Resetting the counter, otherwise it would trigger additional transfers until the background process finishes
                 self.entry_count.store(0, Ordering::Release);

@@ -175,7 +175,7 @@ impl EphemeralOplog {
                     keep_alive: Some(keep_alive),
                     done: done_tx,
                     drain,
-                    transfer_origin: TraceOrigin::triggered(),
+                    transfer_origin: TraceOrigin::capture_current(),
                 })
                 .expect("Failed to enqueue transfer of ephemeral oplog entries");
             // Return true if there are more movable layers that could still hold data
