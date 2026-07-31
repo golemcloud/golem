@@ -540,7 +540,7 @@ render_verb!(CardVerb { Derive => "derive", Revoke => "revoke", Inspect => "insp
 render_verb!(SystemVerb { CreateAccount => "create-account", ImpersonateUser => "impersonate-user", ViewDefaultPlan => "view-default-plan", ViewAccountSummariesReport => "view-account-summaries-report", ViewAccountCountsReport => "view-account-counts-report" });
 render_verb!(PlanVerb { View => "view", Create => "create", Update => "update" });
 render_verb!(AccountVerb { View => "view", Update => "update", Delete => "delete", SetPlan => "set-plan", ViewPlan => "view-plan" });
-render_verb!(AccountUsageVerb { View => "view" });
+render_verb!(AccountUsageVerb { View => "view", Update => "update" });
 render_verb!(AccountTokenVerb { View => "view", Create => "create", Delete => "delete" });
 render_verb!(AccountPluginVerb { View => "view", Register => "register", Delete => "delete", Restore => "restore" });
 render_verb!(ApplicationVerb { View => "view", Create => "create", Update => "update", Delete => "delete" });

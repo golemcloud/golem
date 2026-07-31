@@ -304,6 +304,11 @@ mod tests {
             arb_account_delete_result
         ),
         registry_entry!("AccountGetView", "account.get", arb_account_get_result),
+        registry_entry!(
+            "AccountLimitsView",
+            "account.limits.show",
+            arb_account_limits_result
+        ),
         registry_entry!("AccountNewView", "account.new", arb_account_new_result),
         registry_entry!(
             "PermissionShareDeleteResult",
@@ -334,6 +339,16 @@ mod tests {
             "AccountUpdateView",
             "account.update",
             arb_account_update_result
+        ),
+        registry_entry!(
+            "AccountUsageView",
+            "account.usage.show",
+            arb_account_usage_result
+        ),
+        registry_entry!(
+            "AccountUsageListView",
+            "account.usage.history",
+            arb_account_usage_list_result
         ),
         registry_entry!("CardGetView", "card.get", arb_card_get_result),
         registry_entry!("CardListView", "card.list", arb_card_list_result),
@@ -3287,12 +3302,84 @@ mod tests {
         serialized_output(arb_account().prop_map(crate::model::text::account::AccountGetView))
     }
 
+    fn arb_account_limits_result() -> OutputDocumentStrategy {
+        serialized_output(
+            (
+                arb_small_u64(),
+                arb_small_u64(),
+                proptest::option::of(arb_small_u64()),
+                arb_small_u64(),
+                any::<bool>(),
+            )
+                .prop_map(
+                    |(
+                        effective_value,
+                        plan_default,
+                        override_value,
+                        ceiling,
+                        user_configurable,
+                    )| {
+                        crate::model::text::account::AccountLimitsView(
+                            golem_common::model::account_usage::StorageLimit {
+                                effective_value,
+                                plan_default,
+                                override_value,
+                                ceiling,
+                                user_configurable,
+                            },
+                        )
+                    },
+                ),
+        )
+    }
+
     fn arb_account_new_result() -> OutputDocumentStrategy {
         serialized_output(arb_account().prop_map(crate::model::text::account::AccountNewView))
     }
 
     fn arb_account_update_result() -> OutputDocumentStrategy {
         serialized_output(arb_account().prop_map(crate::model::text::account::AccountUpdateView))
+    }
+
+    fn arb_account_usage_view() -> BoxedStrategy<crate::model::text::account::AccountUsageView> {
+        (
+            0.0f64..1_000_000.0,
+            0.0f64..1_000_000.0,
+            0.0f64..1_000_000.0,
+            1900i32..=2200,
+            1u32..=12,
+        )
+            .prop_map(
+                |(
+                    compute_gcu,
+                    durable_storage_gb_month,
+                    ephemeral_storage_gb_month,
+                    year,
+                    month,
+                )| {
+                    crate::model::text::account::AccountUsageView {
+                        compute_gcu,
+                        durable_storage_gb_month,
+                        ephemeral_storage_gb_month,
+                        period: golem_common::model::account_usage::StorageUsagePeriod {
+                            year,
+                            month,
+                        },
+                    }
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_account_usage_result() -> OutputDocumentStrategy {
+        serialized_output(arb_account_usage_view())
+    }
+
+    fn arb_account_usage_list_result() -> OutputDocumentStrategy {
+        serialized_output(
+            proptest::collection::vec(arb_account_usage_view(), 0..4)
+                .prop_map(|usage| crate::model::text::account::AccountUsageListView { usage }),
+        )
     }
 
     fn arb_account() -> BoxedStrategy<golem_client::model::Account> {
