@@ -20,10 +20,10 @@ use crate::error::NonSuccessfulExit;
 use crate::log::log_error;
 use crate::log::logln;
 use crate::log::log_action;
+use crate::model::config::profile::ProfileConfigSetFormatResult;
 use crate::model::format::Format;
 use crate::model::help::AvailableProfileNamesHelp;
 use crate::model::text::fmt::log_text_view;
-use crate::model::text::profile::ProfileConfigSetFormatResult;
 use anyhow::bail;
 use std::sync::Arc;
 

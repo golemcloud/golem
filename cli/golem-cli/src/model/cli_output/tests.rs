@@ -4880,7 +4880,7 @@ fn arb_plugin_registration()
 
 fn arb_profile_create_result() -> OutputDocumentStrategy {
     serialized_output((any::<bool>(), arb_small_string(), any::<bool>()).prop_map(
-        |(created, profile, set_active)| crate::model::text::profile::ProfileCreateResult {
+        |(created, profile, set_active)| crate::model::config::profile::ProfileCreateResult {
             created,
             profile: crate::config::ProfileName(profile),
             set_active,
@@ -4895,7 +4895,7 @@ fn arb_profile_get_result() -> OutputDocumentStrategy {
 fn arb_profile_list_result() -> OutputDocumentStrategy {
     serialized_output(
         proptest::collection::vec(arb_profile_view(), 0..5)
-            .prop_map(|profiles| crate::model::text::profile::ProfileListView { profiles }),
+            .prop_map(|profiles| crate::model::config::profile::ProfileListView { profiles }),
     )
 }
 
@@ -4933,7 +4933,7 @@ fn arb_profile_view() -> BoxedStrategy<crate::model::config::ProfileView> {
 fn arb_profile_switch_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string()).prop_map(|(switched, profile)| {
-            crate::model::text::profile::ProfileSwitchResult {
+            crate::model::config::profile::ProfileSwitchResult {
                 switched,
                 profile: crate::config::ProfileName(profile),
             }
@@ -4944,7 +4944,7 @@ fn arb_profile_switch_result() -> OutputDocumentStrategy {
 fn arb_profile_delete_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string()).prop_map(|(deleted, profile)| {
-            crate::model::text::profile::ProfileDeleteResult {
+            crate::model::config::profile::ProfileDeleteResult {
                 deleted,
                 profile: crate::config::ProfileName(profile),
             }
@@ -4954,7 +4954,7 @@ fn arb_profile_delete_result() -> OutputDocumentStrategy {
 
 fn arb_profile_config_set_format_result() -> OutputDocumentStrategy {
     serialized_output((any::<bool>(), arb_small_string(), arb_format()).prop_map(
-        |(updated, profile, format)| crate::model::text::profile::ProfileConfigSetFormatResult {
+        |(updated, profile, format)| crate::model::config::profile::ProfileConfigSetFormatResult {
             updated,
             profile: crate::config::ProfileName(profile),
             format,

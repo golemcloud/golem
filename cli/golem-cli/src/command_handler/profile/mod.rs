@@ -24,10 +24,10 @@ use crate::error::NonSuccessfulExit;
 use crate::log::log_error;
 use crate::log::{LogColorize, log_action, log_warn_action};
 use crate::model::config::ProfileView;
-use crate::model::format::Format;
-use crate::model::text::profile::{
+use crate::model::config::profile::{
     ProfileCreateResult, ProfileDeleteResult, ProfileListView, ProfileSwitchResult,
 };
+use crate::model::format::Format;
 use anyhow::bail;
 use std::collections::BTreeMap;
 use std::sync::Arc;

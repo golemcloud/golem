@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod profile;
+
 use crate::config::{AuthenticationConfig, NamedProfile, ProfileConfig, ProfileName};
 use serde::{Deserialize, Serialize};
 use url::Url;
