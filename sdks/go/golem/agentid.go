@@ -21,16 +21,13 @@ import (
 
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
+	"github.com/golemcloud/golem/sdks/go/golem/uuid"
 )
 
 // UUID is a 128-bit identifier, used here for the phantom id of an ephemeral
-// agent instance.
-type UUID [16]byte
-
-// String renders the canonical 8-4-4-4-12 hex form.
-func (u UUID) String() string {
-	return fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:16])
-}
+// agent instance. It aliases [uuid.UUID] so capability wrappers can use the type
+// without importing the agent runtime.
+type UUID = uuid.UUID
 
 func uuidFromWit(w types.Uuid) UUID {
 	var u UUID
