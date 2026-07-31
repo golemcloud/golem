@@ -3070,7 +3070,7 @@ fn arb_agent_simulate_crash_result() -> OutputDocumentStrategy {
 fn arb_account_delete_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string()).prop_map(|(deleted, account_id)| {
-            crate::model::text::account::AccountDeleteResult {
+            crate::model::account::AccountDeleteResult {
                 deleted,
                 account_id: golem_common::model::account::AccountId(
                     uuid::Uuid::parse_str(&account_id).expect("generated UUID should parse"),
@@ -3081,15 +3081,15 @@ fn arb_account_delete_result() -> OutputDocumentStrategy {
 }
 
 fn arb_account_get_result() -> OutputDocumentStrategy {
-    serialized_output(arb_account().prop_map(crate::model::text::account::AccountGetView))
+    serialized_output(arb_account().prop_map(crate::model::account::AccountGetView))
 }
 
 fn arb_account_new_result() -> OutputDocumentStrategy {
-    serialized_output(arb_account().prop_map(crate::model::text::account::AccountNewView))
+    serialized_output(arb_account().prop_map(crate::model::account::AccountNewView))
 }
 
 fn arb_account_update_result() -> OutputDocumentStrategy {
-    serialized_output(arb_account().prop_map(crate::model::text::account::AccountUpdateView))
+    serialized_output(arb_account().prop_map(crate::model::account::AccountUpdateView))
 }
 
 fn arb_account() -> BoxedStrategy<golem_client::model::Account> {
@@ -3130,7 +3130,7 @@ fn arb_account_role() -> BoxedStrategy<golem_common::model::auth::AccountRole> {
 
 fn arb_permission_share_delete_result() -> OutputDocumentStrategy {
     serialized_output((any::<bool>(), arb_small_string()).prop_map(
-        |(deleted, permission_share_id)| crate::model::text::account::PermissionShareDeleteResult {
+        |(deleted, permission_share_id)| crate::model::account::PermissionShareDeleteResult {
             deleted,
             permission_share_id: golem_common::model::permission_share::PermissionShareId(
                 uuid::Uuid::parse_str(&permission_share_id).expect("generated UUID should parse"),
@@ -3141,26 +3141,26 @@ fn arb_permission_share_delete_result() -> OutputDocumentStrategy {
 
 fn arb_permission_share_get_result() -> OutputDocumentStrategy {
     serialized_output(
-        arb_permission_share().prop_map(crate::model::text::account::PermissionShareGetView),
+        arb_permission_share().prop_map(crate::model::account::PermissionShareGetView),
     )
 }
 
 fn arb_permission_share_new_result() -> OutputDocumentStrategy {
     serialized_output(
-        arb_permission_share().prop_map(crate::model::text::account::PermissionShareNewView),
+        arb_permission_share().prop_map(crate::model::account::PermissionShareNewView),
     )
 }
 
 fn arb_permission_share_update_result() -> OutputDocumentStrategy {
     serialized_output(
-        arb_permission_share().prop_map(crate::model::text::account::PermissionShareUpdateView),
+        arb_permission_share().prop_map(crate::model::account::PermissionShareUpdateView),
     )
 }
 
 fn arb_permission_share_list_result() -> OutputDocumentStrategy {
     serialized_output(
         proptest::collection::vec(arb_permission_share(), 0..5).prop_map(|permission_shares| {
-            crate::model::text::account::PermissionShareListView { permission_shares }
+            crate::model::account::PermissionShareListView { permission_shares }
         }),
     )
 }

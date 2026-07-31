@@ -20,7 +20,7 @@ use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
 use crate::log::log_warn_action;
-use crate::model::text::account::{
+use crate::model::account::{
     AccountDeleteResult, AccountGetView, AccountNewView, AccountUpdateView,
     PermissionShareDeleteResult, PermissionShareGetView, PermissionShareListView,
     PermissionShareNewView, PermissionShareUpdateView,
