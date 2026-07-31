@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"errors"
 	"testing"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
@@ -43,5 +44,20 @@ func TestAgentErrorToGoDistinguishesCases(t *testing.T) {
 	// (not render as a struct dump — see customErrorMessage).
 	if got := agentErrorToGo(customError("boom")).Error(); got != "custom error: boom" {
 		t.Errorf("custom error mapped to %q, want %q", got, "custom error: boom")
+	}
+}
+
+// TestAgentErrorIsRecoverable — the kind is inspectable via errors.As.
+func TestAgentErrorIsRecoverable(t *testing.T) {
+	err := agentErrorToGo(customError("boom"))
+	var ae *AgentError
+	if !errors.As(err, &ae) {
+		t.Fatalf("agentErrorToGo did not return an *AgentError: %T", err)
+	}
+	if ae.Kind != AgentCustom || ae.Message != "boom" {
+		t.Fatalf("AgentError = {Kind:%d Message:%q}, want {Custom, boom}", ae.Kind, ae.Message)
+	}
+	if got := agentErrorToGo(common.MakeAgentErrorInvalidMethod("nope")); got.(*AgentError).Kind != AgentInvalidMethod {
+		t.Fatalf("invalid-method kind = %d", got.(*AgentError).Kind)
 	}
 }

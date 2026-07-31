@@ -127,20 +127,58 @@ func NewPhantom[Id any, S any, Cfg any](a *Agent[Id, S, Cfg], id Id) Client[Id] 
 	return ClientFor(a, id, WithPhantomID(phantom))
 }
 
-// agentErrorToGo converts a host agent-error into a Go error, keeping the case
-// distinguishable rather than flattening everything to a string.
+// AgentErrorKind classifies an [AgentError].
+type AgentErrorKind uint8
+
+const (
+	// AgentInvalidInput — the input did not match the method's parameters.
+	AgentInvalidInput AgentErrorKind = iota
+	// AgentInvalidMethod — no such method on the agent.
+	AgentInvalidMethod
+	// AgentInvalidType — no such agent type.
+	AgentInvalidType
+	// AgentCustom — the agent failed (a returned error or a panic).
+	AgentCustom
+	// AgentUnknown — an error kind the SDK does not recognize.
+	AgentUnknown
+)
+
+// AgentError is a typed error from invoking an agent. Its Kind lets callers
+// classify the failure with errors.As, rather than string-matching the message.
+type AgentError struct {
+	Kind    AgentErrorKind
+	Message string
+}
+
+func (e *AgentError) Error() string {
+	switch e.Kind {
+	case AgentInvalidInput:
+		return "invalid input: " + e.Message
+	case AgentInvalidMethod:
+		return "invalid method: " + e.Message
+	case AgentInvalidType:
+		return "invalid type: " + e.Message
+	case AgentCustom:
+		return "custom error: " + e.Message
+	default:
+		return e.Message
+	}
+}
+
+// agentErrorToGo converts a host agent-error into a typed [AgentError], keeping
+// the case inspectable rather than flattening everything to a string.
 func agentErrorToGo(e common.AgentError) error {
 	switch e.Tag() {
 	case common.AgentErrorInvalidInput:
-		return fmt.Errorf("invalid input: %s", e.InvalidInput())
+		return &AgentError{Kind: AgentInvalidInput, Message: e.InvalidInput()}
 	case common.AgentErrorInvalidMethod:
-		return fmt.Errorf("invalid method: %s", e.InvalidMethod())
+		return &AgentError{Kind: AgentInvalidMethod, Message: e.InvalidMethod()}
 	case common.AgentErrorInvalidType:
-		return fmt.Errorf("invalid type: %s", e.InvalidType())
+		return &AgentError{Kind: AgentInvalidType, Message: e.InvalidType()}
 	case common.AgentErrorCustomError:
-		return fmt.Errorf("custom error: %s", customErrorMessage(e.CustomError()))
+		return &AgentError{Kind: AgentCustom, Message: customErrorMessage(e.CustomError())}
 	default:
-		return fmt.Errorf("agent error (tag %d)", e.Tag())
+		return &AgentError{Kind: AgentUnknown, Message: fmt.Sprintf("agent error (tag %d)", e.Tag())}
 	}
 }
 
