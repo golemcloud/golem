@@ -19,7 +19,8 @@ use golem_common::model::card::{
     CardId, CardManagedBy, CardManagedByAccountRoot, CardManagedByEnvironmentDefault,
 };
 use golem_common::model::environment::EnvironmentId;
-use golem_registry_service::repo::account::AccountRepo;
+use golem_registry_service::repo::account::{AccountRepo, DbAccountRepo};
+use golem_registry_service::repo::account_resource_override::AccountResourceOverrideRepo;
 use golem_registry_service::repo::account_usage::AccountUsageRepo;
 use golem_registry_service::repo::agent_secret::AgentSecretRepo;
 use golem_registry_service::repo::application::ApplicationRepo;
@@ -41,17 +42,20 @@ use golem_registry_service::repo::model::environment::{
 };
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plan::PlanRecord;
-use golem_registry_service::repo::plan::PlanRepo;
+use golem_registry_service::repo::plan::{DbPlanRepo, PlanRepo};
 use golem_registry_service::repo::plugin::PluginRepo;
 use golem_registry_service::repo::registry_change::{
     ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeRepo,
 };
+use golem_registry_service::services::account::AccountService;
 use golem_registry_service::services::account_usage::AccountUsageService;
+use golem_registry_service::services::plan::PlanService;
 use golem_registry_service::services::registry_change_notifier::RegistryChangeNotifier;
 use golem_service_base::db::Pool;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use std::str::FromStr;
+use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential_suite};
 use uuid::Uuid;
 
@@ -67,6 +71,7 @@ sequential_suite!(sqlite);
 pub struct Deps {
     pub account_repo: Box<dyn AccountRepo>,
     pub account_usage_repo: std::sync::Arc<dyn AccountUsageRepo>,
+    pub account_resource_override_repo: std::sync::Arc<dyn AccountResourceOverrideRepo>,
     pub agent_secret_repo: Box<dyn AgentSecretRepo>,
     pub application_repo: Box<dyn ApplicationRepo>,
     pub environment_repo: Box<dyn EnvironmentRepo>,
@@ -166,6 +171,8 @@ impl Deps {
                 max_memory_per_worker: 4000.into(),
                 max_table_elements_per_worker: 16384.into(),
                 max_disk_space_per_worker: 1073741824.into(),
+                max_disk_space_per_worker_ceiling: 1073741824.into(),
+                max_disk_space_per_worker_user_configurable: false,
                 per_invocation_http_call_limit: u64::MAX.into(),
                 per_invocation_rpc_call_limit: u64::MAX.into(),
                 monthly_http_call_limit: 5000.into(),
@@ -182,7 +189,28 @@ impl Deps {
     }
 
     pub fn account_usage_service(&self) -> AccountUsageService {
-        AccountUsageService::new(self.account_usage_repo.clone())
+        AccountUsageService::new(self.account_usage_repo.clone(), self.account_service())
+    }
+
+    pub fn account_service(&self) -> Arc<AccountService> {
+        match &self.test_db {
+            TestDb::Postgres(pool) => self.account_service_for_pool(pool.clone()),
+            TestDb::Sqlite(pool) => self.account_service_for_pool(pool.clone()),
+        }
+    }
+
+    fn account_service_for_pool<DBP>(&self, pool: DBP) -> Arc<AccountService>
+    where
+        DBP: Pool + Clone + 'static,
+        DbAccountRepo<DBP>: AccountRepo + 'static,
+        DbPlanRepo<DBP>: PlanRepo + 'static,
+    {
+        Arc::new(AccountService::new(
+            Arc::new(DbAccountRepo::new(pool.clone())),
+            Arc::new(PlanService::new(Arc::new(DbPlanRepo::new(pool)))),
+            golem_common::model::plan::PlanId(self.test_plan_id()),
+            self.test_registry_change_notifier(),
+        ))
     }
 
     pub async fn create_account(&self) -> AccountExtRevisionRecord {

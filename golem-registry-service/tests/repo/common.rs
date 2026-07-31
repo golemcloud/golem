@@ -14,12 +14,12 @@
 
 use crate::repo::{Deps, TestDb, test_environment_default_card_record};
 use assert2::{assert, check, let_assert};
-use chrono::Utc;
+use chrono::{Datelike, Utc};
 use futures::future::join_all;
 use golem_common::base_model::Empty;
 use golem_common::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::base_model::component_metadata::KnownExports;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountId, AccountRevision, AccountSetPlan};
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
@@ -35,6 +35,7 @@ use golem_common::model::environment::{
     EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentUpdate,
 };
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
+use golem_common::model::plan::PlanId;
 use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
@@ -48,6 +49,9 @@ use golem_registry_service::repo::environment::{
 };
 use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
+};
+use golem_registry_service::repo::model::account_resource_override::{
+    AccountResourceOverrideDimension, AccountResourceOverrideReason, AccountResourceOverrideRecord,
 };
 use golem_registry_service::repo::model::account_usage::{UsageTracking, UsageType};
 use golem_registry_service::repo::model::agent_secrets::{
@@ -73,6 +77,7 @@ use golem_registry_service::repo::model::mcp_deployment::{
     McpDeploymentData, McpDeploymentRepoError, McpDeploymentRevisionRecord,
 };
 use golem_registry_service::repo::model::new_repo_uuid;
+use golem_registry_service::repo::model::plan::PlanRecord;
 use golem_registry_service::repo::model::plugin::PluginRecord;
 use golem_registry_service::repo::permission_share::DbPermissionShareRepo;
 use golem_registry_service::repo::plan::DbPlanRepo;
@@ -1081,9 +1086,10 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 golem_common::model::plan::PlanId(deps.test_plan_id()),
                 notifier.clone(),
             ));
-            let account_usage_service = Arc::new(AccountUsageService::new(Arc::new(
-                DbAccountUsageRepo::new(pool.clone()),
-            )));
+            let account_usage_service = Arc::new(AccountUsageService::new(
+                Arc::new(DbAccountUsageRepo::new(pool.clone())),
+                account_service.clone(),
+            ));
             let application_service = Arc::new(ApplicationService::new(
                 Arc::new(DbApplicationRepo::new(pool.clone())),
                 account_service.clone(),
@@ -1140,9 +1146,10 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 golem_common::model::plan::PlanId(deps.test_plan_id()),
                 notifier.clone(),
             ));
-            let account_usage_service = Arc::new(AccountUsageService::new(Arc::new(
-                DbAccountUsageRepo::new(pool.clone()),
-            )));
+            let account_usage_service = Arc::new(AccountUsageService::new(
+                Arc::new(DbAccountUsageRepo::new(pool.clone())),
+                account_service.clone(),
+            ));
             let application_service = Arc::new(ApplicationService::new(
                 Arc::new(DbApplicationRepo::new(pool.clone())),
                 account_service.clone(),
@@ -2254,6 +2261,241 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
     assert!(created_after_delete.revision == revision_after_delete);
 }
 
+pub async fn test_account_resource_override_resolution(deps: &Deps) {
+    let account = deps.create_account().await;
+    let now = SqlDateTime::now();
+
+    deps.account_resource_override_repo
+        .upsert(AccountResourceOverrideRecord {
+            account_id: account.revision.account_id,
+            dimension: AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+            override_value: 1234.into(),
+            reason: AccountResourceOverrideReason::UserSelfServe,
+            expires_at: None,
+            created_by: account.revision.account_id,
+            created_at: now.clone(),
+        })
+        .await
+        .unwrap();
+    let assertion_now = SqlDateTime::now();
+    assert_eq!(
+        deps.account_resource_override_repo
+            .get_active_value(
+                account.revision.account_id,
+                AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+                &assertion_now,
+            )
+            .await
+            .unwrap()
+            .map(|value| value.get()),
+        Some(1234)
+    );
+
+    let usage = deps
+        .account_usage_repo
+        .get(account.revision.account_id, &assertion_now)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(usage.resource_limits().max_disk_space_per_worker == 1234);
+    assert_eq!(usage.storage_limit.effective_value, 1234);
+    assert_eq!(usage.storage_limit.plan_default, 1073741824);
+    assert_eq!(usage.storage_limit.override_value, Some(1234));
+
+    deps.account_resource_override_repo
+        .upsert(AccountResourceOverrideRecord {
+            account_id: account.revision.account_id,
+            dimension: AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+            override_value: 5678.into(),
+            reason: AccountResourceOverrideReason::UserSelfServe,
+            expires_at: Some(SqlDateTime::new(Utc::now() - chrono::Duration::seconds(1))),
+            created_by: account.revision.account_id,
+            created_at: now.clone(),
+        })
+        .await
+        .unwrap();
+    let expiry_assertion_now = SqlDateTime::now();
+    assert_eq!(
+        deps.account_resource_override_repo
+            .get_active_value(
+                account.revision.account_id,
+                AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+                &expiry_assertion_now,
+            )
+            .await
+            .unwrap(),
+        None
+    );
+
+    let usage = deps
+        .account_usage_repo
+        .get(account.revision.account_id, &expiry_assertion_now)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(usage.resource_limits().max_disk_space_per_worker == 1073741824);
+    assert_eq!(usage.storage_limit.effective_value, 1073741824);
+    assert_eq!(usage.storage_limit.override_value, None);
+}
+
+pub async fn test_storage_limit_is_clamped_after_plan_update(deps: &Deps) {
+    let account = deps.create_account().await;
+    let account_id = account.revision.account_id;
+    let mut plan = deps
+        .plan_repo
+        .get_by_id(account.revision.plan_id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    deps.account_resource_override_repo
+        .upsert(AccountResourceOverrideRecord {
+            account_id,
+            dimension: AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+            override_value: 2000.into(),
+            reason: AccountResourceOverrideReason::UserSelfServe,
+            expires_at: None,
+            created_by: account_id,
+            created_at: SqlDateTime::now(),
+        })
+        .await
+        .unwrap();
+
+    plan.max_disk_space_per_worker = 1500.into();
+    plan.max_disk_space_per_worker_ceiling = 1000.into();
+    plan.max_disk_space_per_worker_user_configurable = false;
+    deps.plan_repo.create_or_update(plan).await.unwrap();
+
+    let usage = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(usage.storage_limit.plan_default, 1500);
+    assert_eq!(usage.storage_limit.override_value, Some(2000));
+    assert_eq!(usage.storage_limit.ceiling, 1000);
+    assert_eq!(usage.storage_limit.effective_value, 1000);
+    assert_eq!(usage.plan.max_disk_space_per_worker.get(), 1500);
+    assert_eq!(usage.resource_limits().max_disk_space_per_worker, 1000);
+
+    deps.account_resource_override_repo
+        .delete(
+            account_id,
+            AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+        )
+        .await
+        .unwrap();
+    let storage_limit = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap()
+        .storage_limit;
+    assert_eq!(storage_limit.override_value, None);
+    assert_eq!(storage_limit.effective_value, 1000);
+}
+
+async fn create_disk_override_plan(deps: &Deps, account_id: Uuid, user_configurable: bool) -> Uuid {
+    let destination_plan_id = new_repo_uuid();
+    deps.plan_repo
+        .create_or_update(PlanRecord {
+            plan_id: destination_plan_id,
+            name: format!("DISK_OVERRIDE_PLAN_{destination_plan_id}"),
+            total_app_count: 3.into(),
+            total_env_count: 10.into(),
+            total_component_count: 15.into(),
+            total_worker_connection_count: 25.into(),
+            total_component_storage_bytes: 1000.into(),
+            monthly_gas_limit: 2000.into(),
+            monthly_component_upload_limit_bytes: 3000.into(),
+            max_memory_per_worker: 4000.into(),
+            max_table_elements_per_worker: 16384.into(),
+            max_disk_space_per_worker: 1024.into(),
+            max_disk_space_per_worker_ceiling: 2048.into(),
+            max_disk_space_per_worker_user_configurable: user_configurable,
+            per_invocation_http_call_limit: u64::MAX.into(),
+            per_invocation_rpc_call_limit: u64::MAX.into(),
+            monthly_http_call_limit: 5000.into(),
+            monthly_rpc_call_limit: 5000.into(),
+            max_concurrent_agents_per_executor: 1_000_000_000_000_000_000u64.into(),
+            oplog_writes_per_second: 1_000_000_000_000_000_000u64.into(),
+        })
+        .await
+        .unwrap();
+    deps.account_resource_override_repo
+        .upsert(AccountResourceOverrideRecord {
+            account_id,
+            dimension: AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+            override_value: 4096.into(),
+            reason: AccountResourceOverrideReason::UserSelfServe,
+            expires_at: None,
+            created_by: account_id,
+            created_at: SqlDateTime::now(),
+        })
+        .await
+        .unwrap();
+
+    destination_plan_id
+}
+
+pub async fn test_plan_change_clamps_disk_override(deps: &Deps) {
+    let account = deps.create_account().await;
+    let destination_plan_id =
+        create_disk_override_plan(deps, account.revision.account_id, true).await;
+
+    deps.account_service()
+        .set_plan(
+            AccountId(account.revision.account_id),
+            AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: PlanId(destination_plan_id),
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let storage_limit = deps
+        .account_usage_repo
+        .get(account.revision.account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap()
+        .storage_limit;
+    assert_eq!(storage_limit.override_value, Some(2048));
+    assert_eq!(storage_limit.effective_value, 2048);
+}
+
+pub async fn test_plan_change_clears_forbidden_disk_override(deps: &Deps) {
+    let account = deps.create_account().await;
+    let destination_plan_id =
+        create_disk_override_plan(deps, account.revision.account_id, false).await;
+
+    deps.account_service()
+        .set_plan(
+            AccountId(account.revision.account_id),
+            AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: PlanId(destination_plan_id),
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let storage_limit = deps
+        .account_usage_repo
+        .get(account.revision.account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap()
+        .storage_limit;
+    assert_eq!(storage_limit.override_value, None);
+    assert_eq!(storage_limit.effective_value, 1024);
+}
+
 pub async fn test_account_usage(deps: &Deps) {
     let user = deps.create_account().await;
     let now = SqlDateTime::now();
@@ -2276,6 +2518,8 @@ pub async fn test_account_usage(deps: &Deps) {
             UsageType::MonthlyComponentUploadLimitBytes => 3000,
             UsageType::MonthlyHttpCalls => 5000,
             UsageType::MonthlyRpcCalls => 5000,
+            UsageType::MonthlyDurableAgentStorageByteSeconds
+            | UsageType::MonthlyEphemeralStorageByteSeconds => u64::MAX,
         };
         let plan_limit = usage.plan.limit(usage_type);
         assert!(plan_limit == limit);
@@ -2334,7 +2578,37 @@ pub async fn test_account_usage(deps: &Deps) {
             .unwrap();
 
         for usage_type in UsageType::iter() {
-            check!(!usage.add_change(usage_type, 1000000));
+            let within_limit = matches!(
+                usage_type,
+                UsageType::MonthlyDurableAgentStorageByteSeconds
+                    | UsageType::MonthlyEphemeralStorageByteSeconds
+            );
+            check!(usage.add_change(usage_type, 1000000) == within_limit);
+        }
+    }
+
+    {
+        let mut usage = deps
+            .account_usage_repo
+            .get(user.revision.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+        for usage_type in UsageType::iter() {
+            usage.add_change(usage_type, -2);
+        }
+        deps.account_usage_repo.add(&usage).await.unwrap();
+
+        let usage = deps
+            .account_usage_repo
+            .get(user.revision.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+        for usage_type in UsageType::iter() {
+            if usage_type.tracking() == UsageTracking::Stats {
+                check!(usage.usage(usage_type) == 1, "{usage_type:?}");
+            }
         }
     }
 
@@ -2409,6 +2683,49 @@ pub async fn test_account_usage(deps: &Deps) {
         check!(usage.usage(UsageType::TotalEnvCount) == 1);
         check!(usage.usage(UsageType::TotalComponentCount) == 1);
     }
+}
+
+pub async fn test_storage_usage_history(deps: &Deps) {
+    let account = deps.create_account().await;
+    let previous_month = SqlDateTime::new(Utc::now() - chrono::Duration::days(40));
+    let older_month = SqlDateTime::new(Utc::now() - chrono::Duration::days(80));
+    let mut usage = deps
+        .account_usage_repo
+        .get(account.revision.account_id, &previous_month)
+        .await
+        .unwrap()
+        .unwrap();
+    usage.add_change(UsageType::MonthlyDurableAgentStorageByteSeconds, 123);
+    usage.add_change(UsageType::MonthlyEphemeralStorageByteSeconds, 456);
+    usage.add_change(UsageType::MonthlyGasLimit, 789);
+    deps.account_usage_repo.add(&usage).await.unwrap();
+
+    let mut older_usage = deps
+        .account_usage_repo
+        .get(account.revision.account_id, &older_month)
+        .await
+        .unwrap()
+        .unwrap();
+    older_usage.add_change(UsageType::MonthlyDurableAgentStorageByteSeconds, 999);
+    deps.account_usage_repo.add(&older_usage).await.unwrap();
+
+    let history = deps
+        .account_usage_repo
+        .get_storage_history(
+            account.revision.account_id,
+            golem_common::model::account_usage::StorageUsagePeriod {
+                year: Utc::now().year(),
+                month: Utc::now().month(),
+            },
+            1,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].durable_storage_byte_seconds, 123);
+    assert_eq!(history[0].ephemeral_storage_byte_seconds, 456);
+    assert_eq!(history[0].compute_fuel, 789);
 }
 
 fn compare_created_to_requested_account(
@@ -3248,6 +3565,8 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 10,
             rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
         },
     );
     let result = svc
@@ -3278,6 +3597,8 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 4990,
             rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
         },
     );
     let result = svc
@@ -3299,6 +3620,8 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 1,
             rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
         },
     );
     let result = svc
@@ -3310,6 +3633,55 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
         limits.available_http_calls == 0,
         "available_http_calls should saturate at 0, got {}",
         limits.available_http_calls
+    );
+
+    let mut updates = HashMap::new();
+    updates.insert(
+        account_id,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 123,
+            ephemeral_storage_byte_seconds_delta: 456,
+        },
+    );
+    svc.update_resource_usage(updates, &AuthCtx::System)
+        .await
+        .unwrap();
+
+    let mut updates = HashMap::new();
+    updates.insert(
+        account_id,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 10,
+            ephemeral_storage_byte_seconds_delta: 20,
+        },
+    );
+    svc.update_resource_usage(updates, &AuthCtx::System)
+        .await
+        .unwrap();
+
+    let usage = deps
+        .account_usage_repo
+        .get(account_id.0, &golem_service_base::repo::SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        usage.usage(
+            golem_registry_service::repo::model::account_usage::UsageType::MonthlyDurableAgentStorageByteSeconds
+        ),
+        133
+    );
+    assert_eq!(
+        usage.usage(
+            golem_registry_service::repo::model::account_usage::UsageType::MonthlyEphemeralStorageByteSeconds
+        ),
+        476
     );
 }
 
@@ -3341,6 +3713,8 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 0,
             rpc_call_count_delta: 100,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
         },
     );
     let result = svc
@@ -3371,6 +3745,8 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 0,
             rpc_call_count_delta: 4900,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
         },
     );
     let result = svc
@@ -3392,6 +3768,8 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 0,
             rpc_call_count_delta: 1,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
         },
     );
     let result = svc
@@ -3426,6 +3804,8 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 50,
             rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
         },
     );
     http_updates.insert(
@@ -3434,6 +3814,8 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 200,
             rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
         },
     );
     let result = svc
@@ -3462,6 +3844,8 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 0,
             rpc_call_count_delta: 300,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
         },
     );
     rpc_updates.insert(
@@ -3470,6 +3854,8 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             fuel_delta: 0,
             http_call_count_delta: 0,
             rpc_call_count_delta: 1000,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
         },
     );
     let result = svc

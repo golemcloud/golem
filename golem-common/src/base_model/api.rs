@@ -27,6 +27,8 @@ pub mod error_code {
 
     // --- Limits ---
     pub const LIMIT_EXCEEDED: &str = "LIMIT_EXCEEDED";
+    pub const RESOURCE_OVERRIDE_NOT_USER_CONFIGURABLE: &str =
+        "RESOURCE_OVERRIDE_NOT_USER_CONFIGURABLE";
 
     // --- CLI ---
     pub const CLI_UPDATE_REQUIRED: &str = "CLI_UPDATE_REQUIRED";
@@ -152,6 +154,7 @@ pub mod error_code {
     pub const INVALID_PERMISSION_SHARE_GRANT: &str = "INVALID_PERMISSION_SHARE_GRANT";
     pub const INVALID_REDIRECT_URL: &str = "INVALID_REDIRECT_URL";
     pub const INVALID_SCAN_CURSOR: &str = "INVALID_SCAN_CURSOR";
+    pub const INVALID_USAGE_PERIOD: &str = "INVALID_USAGE_PERIOD";
     pub const INVALID_WORKER_ID: &str = "INVALID_WORKER_ID";
     pub const MALFORMED_COMPONENT_ARCHIVE: &str = "MALFORMED_COMPONENT_ARCHIVE";
     pub const OAUTH_STATE_NOT_FOUND: &str = "OAUTH_STATE_NOT_FOUND";

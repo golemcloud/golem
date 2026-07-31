@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::command::account::{
-    AccountSubcommand, PermissionShareGrantArgs, PermissionShareSubcommand,
+    AccountLimitsSubcommand, AccountSubcommand, AccountUsageSubcommand, PermissionShareGrantArgs,
+    PermissionShareSubcommand,
 };
 use crate::command_handler::Handlers;
 use crate::context::Context;
@@ -21,9 +22,9 @@ use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
 use crate::log::log_warn_action;
 use crate::model::text::account::{
-    AccountDeleteResult, AccountGetView, AccountNewView, AccountUpdateView,
-    PermissionShareDeleteResult, PermissionShareGetView, PermissionShareListView,
-    PermissionShareNewView, PermissionShareUpdateView,
+    AccountDeleteResult, AccountGetView, AccountLimitsView, AccountNewView, AccountUpdateView,
+    AccountUsageListView, AccountUsageView, PermissionShareDeleteResult, PermissionShareGetView,
+    PermissionShareListView, PermissionShareNewView, PermissionShareUpdateView,
 };
 use anyhow::bail;
 use golem_client::api::{AccountClient, PermissionSharesClient};
@@ -32,6 +33,7 @@ use golem_client::model::{
     PermissionShareUpdate,
 };
 use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::account_usage::{SetStorageLimit, StorageUsagePeriod};
 use golem_common::model::permission_share::{
     PermissionShareData, PermissionShareId, PermissionShareName,
 };
@@ -60,8 +62,44 @@ impl AccountCommandHandler {
             AccountSubcommand::Delete { account_id } => {
                 self.cmd_delete(account_id.account_id).await
             }
+            AccountSubcommand::Usage { subcommand } => self.handle_usage_command(subcommand).await,
+            AccountSubcommand::Limits { subcommand } => {
+                self.handle_limits_command(subcommand).await
+            }
             AccountSubcommand::PermissionShare { subcommand } => {
                 self.handle_permission_share_command(subcommand).await
+            }
+        }
+    }
+
+    async fn handle_usage_command(&self, subcommand: AccountUsageSubcommand) -> anyhow::Result<()> {
+        match subcommand {
+            AccountUsageSubcommand::Show { account_id, period } => {
+                self.cmd_usage_show(account_id.account_id, period).await
+            }
+            AccountUsageSubcommand::History { account_id, last } => {
+                self.cmd_usage_history(account_id.account_id, last).await
+            }
+        }
+    }
+
+    async fn handle_limits_command(
+        &self,
+        subcommand: AccountLimitsSubcommand,
+    ) -> anyhow::Result<()> {
+        match subcommand {
+            AccountLimitsSubcommand::Show { account_id } => {
+                self.cmd_limits_show(account_id.account_id).await
+            }
+            AccountLimitsSubcommand::Set {
+                account_id,
+                max_storage_per_agent,
+            } => {
+                self.cmd_limits_set(account_id.account_id, max_storage_per_agent)
+                    .await
+            }
+            AccountLimitsSubcommand::Unset { account_id } => {
+                self.cmd_limits_unset(account_id.account_id).await
             }
         }
     }
@@ -192,6 +230,107 @@ impl AccountCommandHandler {
             account_id: account.id,
         })?;
 
+        Ok(())
+    }
+
+    async fn cmd_usage_show(
+        &self,
+        account_id: Option<AccountId>,
+        period: Option<StorageUsagePeriod>,
+    ) -> anyhow::Result<()> {
+        let account_id = self.select_account_id_or_err(account_id).await?;
+        let period = period.map(|period| period.to_string());
+        let usage = self
+            .ctx
+            .golem_clients()
+            .await?
+            .account
+            .get_account_storage_usage(&account_id.0, period.as_deref())
+            .await
+            .map_service_error()?;
+        self.ctx
+            .log_handler()
+            .log_output(AccountUsageView::from(usage))?;
+        Ok(())
+    }
+
+    async fn cmd_usage_history(
+        &self,
+        account_id: Option<AccountId>,
+        last: usize,
+    ) -> anyhow::Result<()> {
+        let account_id = self.select_account_id_or_err(account_id).await?;
+        let last = last.try_into()?;
+        let usage = self
+            .ctx
+            .golem_clients()
+            .await?
+            .account
+            .get_account_storage_usage_history(&account_id.0, Some(last))
+            .await
+            .map_service_error()?
+            .into_iter()
+            .map(AccountUsageView::from)
+            .collect();
+        self.ctx
+            .log_handler()
+            .log_output(AccountUsageListView { usage })?;
+        Ok(())
+    }
+
+    async fn cmd_limits_show(&self, account_id: Option<AccountId>) -> anyhow::Result<()> {
+        let account_id = self.select_account_id_or_err(account_id).await?;
+        let limit = self
+            .ctx
+            .golem_clients()
+            .await?
+            .account
+            .get_account_storage_override(&account_id.0)
+            .await
+            .map_service_error()?;
+        self.ctx
+            .log_handler()
+            .log_output(AccountLimitsView::from(limit))?;
+        Ok(())
+    }
+
+    async fn cmd_limits_set(
+        &self,
+        account_id: Option<AccountId>,
+        value: u64,
+    ) -> anyhow::Result<()> {
+        let account_id = self.select_account_id_or_err(account_id).await?;
+        let limit = self
+            .ctx
+            .golem_clients()
+            .await?
+            .account
+            .set_account_storage_override(
+                &account_id.0,
+                &SetStorageLimit {
+                    value,
+                    expires_at: None,
+                },
+            )
+            .await
+            .map_service_error()?;
+        self.ctx
+            .log_handler()
+            .log_output(AccountLimitsView::from(limit))?;
+        Ok(())
+    }
+
+    async fn cmd_limits_unset(&self, account_id: Option<AccountId>) -> anyhow::Result<()> {
+        let account_id = self.select_account_id_or_err(account_id).await?;
+        let clients = self.ctx.golem_clients().await?;
+        let limit = clients
+            .account
+            .clear_account_storage_override(&account_id.0)
+            .await
+            .map_service_error()?;
+        self.ctx
+            .log_handler()
+            .log_output(AccountLimitsView::from(limit))?;
         Ok(())
     }
 

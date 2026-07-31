@@ -180,6 +180,8 @@ impl Default for RegistryServiceConfig {
                 max_memory_per_worker: 1024 * 1024 * 1024, // 1 GB
                 max_table_elements_per_worker: 16_384,
                 max_disk_space_per_worker: 1024 * 1024 * 1024, // 1 GB
+                max_disk_space_per_worker_ceiling: None,       // tracks the limit above
+                max_disk_space_per_worker_user_configurable: false,
                 per_invocation_http_call_limit: 1_000_000_000_000_000_000,
                 per_invocation_rpc_call_limit: 1_000_000_000_000_000_000,
                 monthly_http_call_limit: 1_000_000_000_000_000_000,
@@ -491,6 +493,13 @@ pub struct PrecreatedPlan {
     pub max_table_elements_per_worker: u64,
     #[serde(default = "default_max_disk_space_per_worker")]
     pub max_disk_space_per_worker: u64,
+    /// Upper bound a user may raise `max_disk_space_per_worker` to. Left unset it
+    /// tracks `max_disk_space_per_worker`; see
+    /// [`PrecreatedPlan::resolved_max_disk_space_per_worker_ceiling`].
+    #[serde(default)]
+    pub max_disk_space_per_worker_ceiling: Option<u64>,
+    #[serde(default)]
+    pub max_disk_space_per_worker_user_configurable: bool,
     #[serde(default = "default_unlimited")]
     pub per_invocation_http_call_limit: u64,
     #[serde(default = "default_unlimited")]
@@ -503,6 +512,19 @@ pub struct PrecreatedPlan {
     pub max_concurrent_agents_per_executor: u64,
     #[serde(default = "default_unlimited")]
     pub oplog_writes_per_second: u64,
+}
+
+impl PrecreatedPlan {
+    /// The ceiling this plan's effective per-agent disk limit is clamped to.
+    ///
+    /// An unset ceiling tracks `max_disk_space_per_worker` rather than falling back to a
+    /// fixed constant: a deployment that raises the per-agent disk limit without also
+    /// declaring a ceiling would otherwise have its own configured limit clamped straight
+    /// back down, silently and below what it asked for.
+    pub fn resolved_max_disk_space_per_worker_ceiling(&self) -> u64 {
+        self.max_disk_space_per_worker_ceiling
+            .unwrap_or(self.max_disk_space_per_worker)
+    }
 }
 
 fn default_max_table_elements_per_worker() -> u64 {
@@ -538,10 +560,45 @@ pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {
 mod tests {
     use test_r::test;
 
-    use crate::config::make_config_loader;
+    use crate::config::{RegistryServiceConfig, make_config_loader};
 
     #[test]
     pub fn config_is_loadable() {
         make_config_loader().load().expect("Failed to load config");
+    }
+
+    /// A plan that raises the per-agent disk limit without declaring a ceiling must not
+    /// have its own configured limit clamped back down.
+    #[test]
+    pub fn unset_ceiling_tracks_the_configured_disk_limit() {
+        let mut plan = RegistryServiceConfig::default()
+            .initial_plans
+            .remove("default")
+            .expect("default plan must exist");
+
+        plan.max_disk_space_per_worker = 10 * 1024 * 1024 * 1024;
+        plan.max_disk_space_per_worker_ceiling = None;
+
+        assert_eq!(
+            plan.resolved_max_disk_space_per_worker_ceiling(),
+            10 * 1024 * 1024 * 1024
+        );
+    }
+
+    /// An explicit ceiling still wins, including one below the plan default.
+    #[test]
+    pub fn explicit_ceiling_is_honoured() {
+        let mut plan = RegistryServiceConfig::default()
+            .initial_plans
+            .remove("default")
+            .expect("default plan must exist");
+
+        plan.max_disk_space_per_worker = 10 * 1024 * 1024 * 1024;
+        plan.max_disk_space_per_worker_ceiling = Some(2 * 1024 * 1024 * 1024);
+
+        assert_eq!(
+            plan.resolved_max_disk_space_per_worker_ceiling(),
+            2 * 1024 * 1024 * 1024
+        );
     }
 }
