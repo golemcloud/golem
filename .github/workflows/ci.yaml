@@ -845,6 +845,29 @@ jobs:
         working-directory: sdks/ts
         run: pnpm install --frozen-lockfile
 
+      - name: Setup Go
+        if: matrix.chunk.needs-go
+        uses: actions/setup-go@v5
+        with:
+          # Stock Go, tracking the SDK's pinned version; componentize-go is a
+          # pinned `go tool` that fetches its own toolchain (cached below).
+          go-version-file: sdks/go/golem/go.mod
+          cache-dependency-path: sdks/go/golem/go.sum
+
+      - name: Cache componentize-go toolchain
+        if: matrix.chunk.needs-go
+        uses: actions/cache@v5
+        with:
+          # componentize-go downloads a patched Go toolchain here on first build.
+          path: ~/.cache/componentize-go
+          key: componentize-go-${{ runner.os }}-${{ hashFiles('sdks/go/golem/go.sum') }}
+          restore-keys: |
+            componentize-go-${{ runner.os }}-
+
+      - name: Install wasm-tools for Go components
+        if: matrix.chunk.needs-go
+        run: cargo binstall --force --locked wasm-tools@1.248.0
+
       - name: Remove any pre-existing WASMs
         run: find test-components -maxdepth 1 -name '*.wasm' -delete
 
