@@ -649,13 +649,13 @@ func (d *definitions) compileVariant(c *codec, vd *variantDef) {
 		concrete := v
 		if v.Kind() == reflect.Interface {
 			if v.IsNil() {
-				panic(fmt.Sprintf("golem: nil %s cannot be encoded; a variant must hold one of its cases", c.typ))
+				panic(&encodeError{fmt.Sprintf("nil %s cannot be encoded; a variant must hold one of its cases", c.typ)})
 			}
 			concrete = v.Elem()
 		}
 		i, ok := byType[concrete.Type()]
 		if !ok {
-			panic(fmt.Sprintf("golem: %s is not a registered case of variant %s", concrete.Type(), c.typ))
+			panic(&encodeError{fmt.Sprintf("%s is not a registered case of variant %s", concrete.Type(), c.typ)})
 		}
 		payload := caseCodecs[i].encode(b, concrete)
 		return b.push(types.MakeSchemaValueNodeVariantValue(types.VariantValuePayload{
@@ -706,8 +706,8 @@ func compileEnum(c *codec, d *enumDef) {
 			i = int64(v.Uint())
 		}
 		if i < 0 || int(i) >= len(d.names) {
-			panic(fmt.Sprintf("golem: %s value %d is outside the declared enum range 0..%d",
-				c.typ, i, len(d.names)-1))
+			panic(&encodeError{fmt.Sprintf("%s value %d is outside the declared enum range 0..%d",
+				c.typ, i, len(d.names)-1)})
 		}
 		return b.push(types.MakeSchemaValueNodeEnumValue(uint32(i)))
 	}
@@ -800,7 +800,7 @@ func compileSecret(c *codec, inner *codec) {
 	// instead of silently shipping plaintext. Config never reaches these — it uses
 	// c.body for the graph and reveal for the value.
 	c.encode = func(*valBuilder, reflect.Value) int32 {
-		panic("golem: Secret[T] is config-only; it cannot be a method parameter or return value")
+		panic(&encodeError{"Secret[T] is config-only; it cannot be a method parameter or return value"})
 	}
 	c.decode = func(*decoder, reflect.Value, int32) error {
 		return fmt.Errorf("golem: Secret[T] is config-only; it cannot be a method parameter or return value")

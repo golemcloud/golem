@@ -48,15 +48,33 @@ type PanicError struct {
 }
 
 // Internal reports whether the panic came from SDK machinery (marshaling)
-// rather than from the agent's handler — i.e. whether it is our bug.
-func (e *PanicError) Internal() bool { return e.Stage != stageHandler }
+// rather than from the agent's handler — i.e. whether it is our bug. An
+// [encodeError] is the agent supplying an unencodable value, so it is not
+// internal even though it surfaces in the encode stage.
+func (e *PanicError) Internal() bool {
+	if _, ok := e.Value.(*encodeError); ok {
+		return false
+	}
+	return e.Stage != stageHandler
+}
 
 func (e *PanicError) Error() string {
+	if ee, ok := e.Value.(*encodeError); ok {
+		return fmt.Sprintf("agent method %q returned a value that cannot be encoded: %s", e.Method, ee.Error())
+	}
 	if e.Internal() {
 		return fmt.Sprintf("INTERNAL SDK ERROR while %s for method %q: %v", e.Stage, e.Method, e.Value)
 	}
 	return fmt.Sprintf("agent method %q panicked: %v", e.Method, e.Value)
 }
+
+// encodeError marks an encode-stage panic caused by the agent supplying a value
+// the wire cannot carry — a nil or unregistered variant case, an out-of-range
+// enum value, or a Secret used as a parameter/return. It is the agent's mistake,
+// so it is reported as an agent error rather than an INTERNAL SDK error.
+type encodeError struct{ msg string }
+
+func (e *encodeError) Error() string { return e.msg }
 
 // decodeError marks failures that really are the caller's bad input, so they can
 // be reported as invalid-input rather than a generic failure.

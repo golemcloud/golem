@@ -211,6 +211,17 @@ func TestPanicErrorAttribution(t *testing.T) {
 	if !sdkSide.Internal() || !strings.Contains(sdkSide.Error(), "INTERNAL SDK ERROR") {
 		t.Fatalf("unexpected message: %s", sdkSide)
 	}
+
+	// An encode-stage panic caused by the agent returning an unencodable value is
+	// the agent's mistake, not an SDK bug — even though it occurs in encode.
+	userSide := &PanicError{Method: "m", Stage: stageEncode, Value: &encodeError{"not a registered case"}}
+	if userSide.Internal() {
+		t.Fatal("an unencodable agent value is not an SDK bug")
+	}
+	if msg := userSide.Error(); strings.Contains(msg, "INTERNAL SDK ERROR") ||
+		!strings.Contains(msg, "cannot be encoded") {
+		t.Fatalf("unexpected message: %s", msg)
+	}
 }
 
 // A component may define several agent types; a worker is initialized as exactly
