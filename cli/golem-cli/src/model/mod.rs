@@ -37,6 +37,6 @@ pub mod repl;
 pub mod resource_definition;
 pub mod retry_policy;
 pub mod secret;
-pub mod template;
+pub mod template_render;
 pub mod text;
 pub mod token;

@@ -4,7 +4,7 @@ use minijinja::{Environment, Error};
 use serde::Serialize;
 use std::collections::HashMap;
 
-pub trait Template<C>
+pub trait TemplateRender<C>
 where
     C: Serialize,
     Self: Sized,
@@ -22,13 +22,13 @@ where
     }
 }
 
-impl<C: Serialize> Template<C> for String {
+impl<C: Serialize> TemplateRender<C> for String {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         env.render_str(self, ctx)
     }
 }
 
-impl<C: Serialize, T: Template<C>> Template<C> for Option<T> {
+impl<C: Serialize, T: TemplateRender<C>> TemplateRender<C> for Option<T> {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         match self {
             Some(template) => Ok(Some(template.render(env, ctx)?)),
@@ -37,13 +37,13 @@ impl<C: Serialize, T: Template<C>> Template<C> for Option<T> {
     }
 }
 
-impl<C: Serialize, T: Template<C>> Template<C> for Vec<T> {
+impl<C: Serialize, T: TemplateRender<C>> TemplateRender<C> for Vec<T> {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         self.iter().map(|elem| elem.render(env, ctx)).collect()
     }
 }
 
-impl<C: Serialize, T: Template<C>> Template<C> for HashMap<String, T> {
+impl<C: Serialize, T: TemplateRender<C>> TemplateRender<C> for HashMap<String, T> {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         let mut rendered = HashMap::<String, T>::with_capacity(self.len());
         for (key, template) in self {
@@ -53,7 +53,7 @@ impl<C: Serialize, T: Template<C>> Template<C> for HashMap<String, T> {
     }
 }
 
-impl<C: Serialize, T: Template<C>> Template<C> for IndexMap<String, T> {
+impl<C: Serialize, T: TemplateRender<C>> TemplateRender<C> for IndexMap<String, T> {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         let mut rendered = IndexMap::<String, T>::with_capacity(self.len());
         for (key, template) in self {
@@ -63,7 +63,7 @@ impl<C: Serialize, T: Template<C>> Template<C> for IndexMap<String, T> {
     }
 }
 
-impl<C: Serialize> Template<C> for app_raw::BuildCommand {
+impl<C: Serialize> TemplateRender<C> for app_raw::BuildCommand {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         match self {
             app_raw::BuildCommand::External(external) => {
@@ -87,7 +87,7 @@ impl<C: Serialize> Template<C> for app_raw::BuildCommand {
     }
 }
 
-impl<C: Serialize> Template<C> for app_raw::ComponentDependencies {
+impl<C: Serialize> TemplateRender<C> for app_raw::ComponentDependencies {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(app_raw::ComponentDependencies {
             agents: self.agents.render(env, ctx)?,
@@ -96,7 +96,7 @@ impl<C: Serialize> Template<C> for app_raw::ComponentDependencies {
     }
 }
 
-impl<C: Serialize> Template<C> for app_raw::ComponentDependencyReference {
+impl<C: Serialize> TemplateRender<C> for app_raw::ComponentDependencyReference {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         match self {
             app_raw::ComponentDependencyReference::Shortcut(shortcut) => Ok(
@@ -109,7 +109,7 @@ impl<C: Serialize> Template<C> for app_raw::ComponentDependencyReference {
     }
 }
 
-impl<C: Serialize> Template<C> for app_raw::ComponentDependencyReferenceStruct {
+impl<C: Serialize> TemplateRender<C> for app_raw::ComponentDependencyReferenceStruct {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(app_raw::ComponentDependencyReferenceStruct {
             component: self.component.render(env, ctx)?,
@@ -118,7 +118,7 @@ impl<C: Serialize> Template<C> for app_raw::ComponentDependencyReferenceStruct {
     }
 }
 
-impl<C: Serialize> Template<C> for app_raw::ExternalCommand {
+impl<C: Serialize> TemplateRender<C> for app_raw::ExternalCommand {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(app_raw::ExternalCommand {
             command: self.command.render(env, ctx)?,
@@ -132,7 +132,7 @@ impl<C: Serialize> Template<C> for app_raw::ExternalCommand {
     }
 }
 
-impl<C: Serialize> Template<C> for app_raw::GenerateQuickJSCrate {
+impl<C: Serialize> TemplateRender<C> for app_raw::GenerateQuickJSCrate {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(app_raw::GenerateQuickJSCrate {
             generate_quickjs_crate: self.generate_quickjs_crate.render(env, ctx)?,
@@ -151,7 +151,7 @@ impl<C: Serialize> Template<C> for app_raw::GenerateQuickJSCrate {
     }
 }
 
-impl<C: Serialize> Template<C> for app_raw::GenerateQuickJSDTS {
+impl<C: Serialize> TemplateRender<C> for app_raw::GenerateQuickJSDTS {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(app_raw::GenerateQuickJSDTS {
             generate_quickjs_dts: self.generate_quickjs_dts.render(env, ctx)?,
@@ -161,7 +161,7 @@ impl<C: Serialize> Template<C> for app_raw::GenerateQuickJSDTS {
     }
 }
 
-impl<C: Serialize> Template<C> for app_raw::InjectToPrebuiltQuickJs {
+impl<C: Serialize> TemplateRender<C> for app_raw::InjectToPrebuiltQuickJs {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(app_raw::InjectToPrebuiltQuickJs {
             inject_to_prebuilt_quickjs: self.inject_to_prebuilt_quickjs.render(env, ctx)?,
@@ -171,7 +171,7 @@ impl<C: Serialize> Template<C> for app_raw::InjectToPrebuiltQuickJs {
     }
 }
 
-impl<C: Serialize> Template<C> for app_raw::PreinitializeJs {
+impl<C: Serialize> TemplateRender<C> for app_raw::PreinitializeJs {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(app_raw::PreinitializeJs {
             preinitialize_js: self.preinitialize_js.render(env, ctx)?,
@@ -180,7 +180,7 @@ impl<C: Serialize> Template<C> for app_raw::PreinitializeJs {
     }
 }
 
-impl<C: Serialize> Template<C> for serde_json::Value {
+impl<C: Serialize> TemplateRender<C> for serde_json::Value {
     #[allow(clippy::only_used_in_recursion)]
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(match self {
@@ -207,7 +207,7 @@ impl<C: Serialize> Template<C> for serde_json::Value {
     }
 }
 
-impl<C: Serialize> Template<C> for serde_json::Map<String, serde_json::Value> {
+impl<C: Serialize> TemplateRender<C> for serde_json::Map<String, serde_json::Value> {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         let mut rendered = serde_json::Map::<String, serde_json::Value>::with_capacity(self.len());
         for (key, template) in self {
