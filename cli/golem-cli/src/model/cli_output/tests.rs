@@ -2,8 +2,8 @@ use crate::model::cli_output::{
     CLI_OUTPUT_TYPE_FIELD, StructuredOutput, command_output_type_names,
     focused_command_output_schema, to_structured_output_value, to_structured_output_value_masked,
 };
+use crate::model::deploy::DeployPlanView;
 use crate::model::masking::MaskingConfig;
-use crate::model::text::diff::DeployPlanView;
 use golem_common::model::card::{CardId, PolymorphicCard};
 use proptest::prelude::*;
 use quote::ToTokens;
@@ -4492,7 +4492,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
 fn arb_environment_setup_plan_result() -> OutputDocumentStrategy {
     arb_environment_setup_plan()
         .prop_map(|output| {
-            to_structured_output_value(crate::model::text::diff::EnvironmentSetupPlanView(&output))
+            to_structured_output_value(crate::model::deploy::EnvironmentSetupPlanView(&output))
                 .expect("generated environment setup plan should serialize")
         })
         .boxed()
@@ -4590,7 +4590,7 @@ fn arb_deployment_create_result() -> OutputDocumentStrategy {
             arb_current_deployment(),
         )
             .prop_map(|(application_name, environment_name, deployment)| {
-                crate::model::text::deployment::DeploymentNewView {
+                crate::model::deploy::DeploymentNewView {
                     application_name: golem_common::model::application::ApplicationName(
                         application_name,
                     ),
@@ -4605,9 +4605,8 @@ fn arb_deployment_create_result() -> OutputDocumentStrategy {
 
 fn arb_deployment_list_result() -> OutputDocumentStrategy {
     serialized_output(
-        proptest::collection::vec(arb_deployment(), 0..5).prop_map(|deployments| {
-            crate::model::text::deployment::DeploymentListView { deployments }
-        }),
+        proptest::collection::vec(arb_deployment(), 0..5)
+            .prop_map(|deployments| crate::model::deploy::DeploymentListView { deployments }),
     )
 }
 

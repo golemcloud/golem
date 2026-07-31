@@ -55,11 +55,11 @@ use crate::model::deploy::{
     PostDeployResult, PostDeploySummary, UpdateStagedComponentError, build_environment_setup_plan,
     preferred_source_language_for_setup,
 };
+use crate::model::deploy::{DeployPlanView, log_unified_diff, log_unified_diff_for_path};
+use crate::model::deploy::{DeploymentListView, DeploymentNewView};
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::help::AvailableComponentNamesHelp;
 use crate::model::language::GuestLanguage;
-use crate::model::text::deployment::{DeploymentListView, DeploymentNewView};
-use crate::model::text::diff::{DeployPlanView, log_unified_diff, log_unified_diff_for_path};
 use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::template::TemplateListView;
 use anyhow::{anyhow, bail};

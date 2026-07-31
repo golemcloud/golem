@@ -22,13 +22,13 @@ use crate::error::service::MapServiceError;
 use crate::log::{
     LogColorize, LogIndent, log_action, log_error, log_skipping_up_to_date, log_warn_action, logln,
 };
+use crate::model::deploy::log_unified_diff;
 use crate::model::environment::{EnvironmentListView, EnvironmentSyncDeploymentOptionsResult};
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
 use crate::model::help::EnvironmentNameHelp;
 use crate::model::plugin::PluginNameAndVersion;
-use crate::model::text::diff::log_unified_diff;
 use crate::model::text::fmt::log_text_view;
 use anyhow::{anyhow, bail};
 use golem_client::api::{EnvironmentClient, MeClient};
