@@ -14,4 +14,3 @@
 
 pub mod action_result;
 pub mod fmt;
-pub mod template;

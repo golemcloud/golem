@@ -14,6 +14,7 @@
 
 mod description;
 mod generator;
+mod list_view;
 mod metadata;
 mod plan;
 mod repo;
@@ -23,6 +24,7 @@ mod template;
 
 pub use description::TemplateDescription;
 pub use generator::InMemoryFs;
+pub use list_view::TemplateListView;
 pub use metadata::AppTemplateMetadata;
 pub use plan::{
     MultiComponentLayoutUpgradePlan, MultiComponentLayoutUpgradePlanStep, SafeTemplatePlan,

@@ -19,6 +19,7 @@ use crate::app::context::BuildContext;
 use crate::app::error::CustomCommandError;
 use crate::app::template::AppTemplateName;
 use crate::app::template::TemplateDescription;
+use crate::app::template::TemplateListView;
 use crate::command::builtin_exec_subcommands;
 use crate::command::exec::ExecSubcommand;
 use crate::command::shared_args::{
@@ -61,7 +62,6 @@ use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdent
 use crate::model::help::AvailableComponentNamesHelp;
 use crate::model::language::GuestLanguage;
 use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
-use crate::model::text::template::TemplateListView;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use futures_util::{StreamExt, TryStreamExt, stream};

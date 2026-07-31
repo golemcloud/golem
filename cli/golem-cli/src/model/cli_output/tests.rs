@@ -3738,7 +3738,7 @@ fn arb_new_app_result() -> OutputDocumentStrategy {
 fn arb_template_list_result() -> OutputDocumentStrategy {
     serialized_output(
         proptest::collection::vec(arb_template_description(), 0..5)
-            .prop_map(|templates| crate::model::text::template::TemplateListView { templates }),
+            .prop_map(|templates| crate::app::template::TemplateListView { templates }),
     )
 }
 
