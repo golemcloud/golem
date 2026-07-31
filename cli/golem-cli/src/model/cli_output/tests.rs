@@ -3435,7 +3435,7 @@ fn arb_agent_plugin_toggle_result() -> OutputDocumentStrategy {
 fn arb_token_delete_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string()).prop_map(|(deleted, token_id)| {
-            crate::model::text::token::TokenDeleteResult {
+            crate::model::token::TokenDeleteResult {
                 deleted,
                 token_id: golem_common::model::auth::TokenId(
                     uuid::Uuid::parse_str(&token_id).expect("generated UUID should parse"),
@@ -3448,12 +3448,12 @@ fn arb_token_delete_result() -> OutputDocumentStrategy {
 fn arb_token_list_result() -> OutputDocumentStrategy {
     serialized_output(
         proptest::collection::vec(arb_token(), 0..5)
-            .prop_map(|tokens| crate::model::text::token::TokenListView { tokens }),
+            .prop_map(|tokens| crate::model::token::TokenListView { tokens }),
     )
 }
 
 fn arb_token_new_result() -> OutputDocumentStrategy {
-    serialized_output(arb_token_with_secret().prop_map(crate::model::text::token::TokenNewView))
+    serialized_output(arb_token_with_secret().prop_map(crate::model::token::TokenNewView))
 }
 
 fn arb_token() -> BoxedStrategy<golem_common::model::auth::Token> {

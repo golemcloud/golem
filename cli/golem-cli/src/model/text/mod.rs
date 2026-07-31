@@ -27,4 +27,3 @@ pub mod retry_policy;
 pub mod secret;
 pub mod server;
 pub mod template;
-pub mod token;

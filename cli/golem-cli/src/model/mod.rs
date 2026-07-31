@@ -35,3 +35,4 @@ pub mod plugin;
 pub mod repl;
 pub mod template;
 pub mod text;
+pub mod token;
