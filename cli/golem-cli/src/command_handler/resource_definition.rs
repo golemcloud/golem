@@ -19,7 +19,7 @@ use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
 use crate::log::log_error;
 use crate::model::environment::EnvironmentResolveMode;
-use crate::model::text::resource_definition::{
+use crate::model::resource_definition::{
     ResourceDefinitionCreateView, ResourceDefinitionDeleteView, ResourceDefinitionGetView,
     ResourceDefinitionListView, ResourceDefinitionUpdateView,
 };

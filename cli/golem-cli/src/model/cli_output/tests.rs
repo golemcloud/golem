@@ -4967,35 +4967,35 @@ fn arb_profile_config_set_format_result() -> OutputDocumentStrategy {
 fn arb_resource_create_result() -> OutputDocumentStrategy {
     serialized_output(
         arb_resource_definition()
-            .prop_map(crate::model::text::resource_definition::ResourceDefinitionCreateView),
+            .prop_map(crate::model::resource_definition::ResourceDefinitionCreateView),
     )
 }
 
 fn arb_resource_delete_result() -> OutputDocumentStrategy {
     serialized_output(
         arb_resource_definition()
-            .prop_map(crate::model::text::resource_definition::ResourceDefinitionDeleteView),
+            .prop_map(crate::model::resource_definition::ResourceDefinitionDeleteView),
     )
 }
 
 fn arb_resource_get_result() -> OutputDocumentStrategy {
     serialized_output(
         arb_resource_definition()
-            .prop_map(crate::model::text::resource_definition::ResourceDefinitionGetView),
+            .prop_map(crate::model::resource_definition::ResourceDefinitionGetView),
     )
 }
 
 fn arb_resource_update_result() -> OutputDocumentStrategy {
     serialized_output(
         arb_resource_definition()
-            .prop_map(crate::model::text::resource_definition::ResourceDefinitionUpdateView),
+            .prop_map(crate::model::resource_definition::ResourceDefinitionUpdateView),
     )
 }
 
 fn arb_resource_list_result() -> OutputDocumentStrategy {
     serialized_output(
         proptest::collection::vec(arb_resource_definition(), 0..5).prop_map(|resources| {
-            crate::model::text::resource_definition::ResourceDefinitionListView { resources }
+            crate::model::resource_definition::ResourceDefinitionListView { resources }
         }),
     )
 }
