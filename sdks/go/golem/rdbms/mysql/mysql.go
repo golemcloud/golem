@@ -37,6 +37,9 @@
 // query/execute/commit is journaled and replayed — and because these are remote
 // side effects, using it inside a read-only method traps. Unlike postgres, MySQL
 // has no recursive value families, so every value maps to a Go value.
+//
+// Pair a fallible call with golem.Must / golem.Must0 / golem.Must2 to abort the
+// invocation on error.
 package mysql
 
 import (

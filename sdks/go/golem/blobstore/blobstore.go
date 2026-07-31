@@ -19,6 +19,9 @@
 // object is reported as found=false, not an error), distinct from the fail-loud
 // exactly-once control-flow surface. The store is durable, and because operations
 // are remote side effects, calling them inside a read-only method traps.
+//
+// Pair a fallible call with golem.Must / golem.Must0 / golem.Must2 to abort the
+// invocation on error.
 package blobstore
 
 import (
@@ -333,6 +336,9 @@ func (s *Store[T]) Set(name string, value T) error {
 
 // Delete removes the named object.
 func (s *Store[T]) Delete(name string) error { return s.c.Delete(name) }
+
+// Exists reports whether the named object is present.
+func (s *Store[T]) Exists(name string) (bool, error) { return s.c.Has(name) }
 
 // List returns the object names.
 func (s *Store[T]) List() ([]string, error) { return s.c.ListObjects() }

@@ -13,10 +13,10 @@
 // limitations under the License.
 
 // Package log routes Go logging through Golem's structured host logging channel
-// (golem:rdbms's sibling wasi:logging). Unlike writing to stdout/stderr — which
-// the host records as raw bytes with no level — a wasi:logging record carries a
-// typed level and a context (category) string, so it shows up in worker logs and
-// the oplog with the right severity.
+// (wasi:logging). Unlike writing to stdout/stderr — which the host records as raw
+// bytes with no level — a wasi:logging record carries a typed level and a context
+// (category) string, so it shows up in worker logs and the oplog with the right
+// severity.
 //
 // The Golem runtime installs this as the default slog handler on agent startup,
 // so ordinary structured logging just works:

@@ -22,6 +22,9 @@
 // returns (nil, false, nil). The store is durable — operations are journaled and
 // replayed — but because they are remote side effects, calling them inside a
 // read-only method traps.
+//
+// Pair a fallible call with golem.Must / golem.Must0 / golem.Must2 to abort the
+// invocation on error.
 package keyvalue
 
 import (

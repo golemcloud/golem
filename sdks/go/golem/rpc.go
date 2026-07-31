@@ -159,7 +159,7 @@ func decodeOutput[Out any](target, method string, out witTypes.Option[types.Sche
 	if out.IsNone() {
 		return zero, &RemoteCallError{
 			Target: target, Method: method, Kind: RemoteProtocol,
-			Msg: "remote returned no value for a non-unit output",
+			Message: "remote returned no value for a non-unit output",
 		}
 	}
 	tree := out.Some()
@@ -168,7 +168,7 @@ func decodeOutput[Out any](target, method string, out witTypes.Option[types.Sche
 	if err := defs.compile(outType).decode(&dec, dst, tree.Root); err != nil {
 		return zero, &RemoteCallError{
 			Target: target, Method: method, Kind: RemoteProtocol,
-			Msg: "remote returned an undecodable value: " + err.Error(),
+			Message: "remote returned an undecodable value: " + err.Error(),
 		}
 	}
 	return dst.Interface().(Out), nil
@@ -249,11 +249,11 @@ func (k RemoteErrorKind) String() string {
 // A remote domain error keeps its Cause rather than being flattened into a
 // string, so a remote custom-error stays inspectable by the caller.
 type RemoteCallError struct {
-	Target string
-	Method string
-	Kind   RemoteErrorKind
-	Msg    string
-	Cause  error
+	Target  string
+	Method  string
+	Kind    RemoteErrorKind
+	Message string
+	Cause   error
 }
 
 func (e *RemoteCallError) Error() string {
@@ -261,7 +261,7 @@ func (e *RemoteCallError) Error() string {
 	if target == "" {
 		target = "<unknown agent>"
 	}
-	return fmt.Sprintf("golem: calling %s.%s: %s: %s", target, e.Method, e.Kind, e.Msg)
+	return fmt.Sprintf("golem: calling %s.%s: %s: %s", target, e.Method, e.Kind, e.Message)
 }
 
 func (e *RemoteCallError) Unwrap() error { return e.Cause }
@@ -270,20 +270,20 @@ func rpcErrorToGo(target, method string, e host.RpcError) error {
 	err := &RemoteCallError{Target: target, Method: method}
 	switch e.Tag() {
 	case host.RpcErrorProtocolError:
-		err.Kind, err.Msg = RemoteProtocol, e.ProtocolError()
+		err.Kind, err.Message = RemoteProtocol, e.ProtocolError()
 	case host.RpcErrorDenied:
-		err.Kind, err.Msg = RemoteDenied, e.Denied()
+		err.Kind, err.Message = RemoteDenied, e.Denied()
 	case host.RpcErrorNotFound:
-		err.Kind, err.Msg = RemoteNotFound, e.NotFound()
+		err.Kind, err.Message = RemoteNotFound, e.NotFound()
 	case host.RpcErrorRemoteInternalError:
-		err.Kind, err.Msg = RemoteInternal, e.RemoteInternalError()
+		err.Kind, err.Message = RemoteInternal, e.RemoteInternalError()
 	case host.RpcErrorRemoteAgentError:
 		remote := e.RemoteAgentError()
 		err.Kind = RemoteAgent
 		err.Cause = agentErrorToGo(remote)
-		err.Msg = err.Cause.Error()
+		err.Message = err.Cause.Error()
 	default:
-		err.Kind, err.Msg = RemoteProtocol, fmt.Sprintf("unknown rpc-error (tag %d)", e.Tag())
+		err.Kind, err.Message = RemoteProtocol, fmt.Sprintf("unknown rpc-error (tag %d)", e.Tag())
 	}
 	return err
 }

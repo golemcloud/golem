@@ -20,6 +20,9 @@
 // surface. The connection is durable — sends/receives are journaled and replayed
 // — and because they are remote side effects, using it inside a read-only method
 // traps.
+//
+// Pair a fallible call with golem.Must / golem.Must0 / golem.Must2 to abort the
+// invocation on error.
 package websocket
 
 import (

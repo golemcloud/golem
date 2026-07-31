@@ -357,8 +357,10 @@ func (n NamedPolicy) Applicability() Predicate {
 // first problem found (nil if valid). It is the non-panicking counterpart to the
 // checks [Set] and [With] perform.
 func (n NamedPolicy) Validate() error {
-	_, err := n.lower()
-	return err
+	if _, err := n.lower(); err != nil {
+		return fmt.Errorf("golem/retry: %w", err)
+	}
+	return nil
 }
 
 // ── Apply / scope (worker-global; see the package "Concurrency" note) ─────────
@@ -788,13 +790,13 @@ func decodePolicy(raw apiRetry.RetryPolicy) (Policy, error) {
 
 func decodePolicyNode(nodes []apiRetry.PolicyNode, idx int32, path map[int32]bool) (*policyNode, error) {
 	if len(nodes) == 0 {
-		return nil, errors.New("retry: empty policy node list")
+		return nil, errors.New("golem/retry: empty policy node list")
 	}
 	if idx < 0 || int(idx) >= len(nodes) {
-		return nil, fmt.Errorf("retry: policy node index %d out of range [0,%d)", idx, len(nodes))
+		return nil, fmt.Errorf("golem/retry: policy node index %d out of range [0,%d)", idx, len(nodes))
 	}
 	if path[idx] {
-		return nil, fmt.Errorf("retry: cycle in policy graph at node %d", idx)
+		return nil, fmt.Errorf("golem/retry: cycle in policy graph at node %d", idx)
 	}
 	path[idx] = true
 	defer delete(path, idx)
@@ -880,7 +882,7 @@ func decodePolicyNode(nodes []apiRetry.PolicyNode, idx int32, path map[int32]boo
 		}
 		return &policyNode{kind: kind, left: left, right: right}, nil
 	default:
-		return nil, fmt.Errorf("retry: unknown policy node tag %d", w.Tag())
+		return nil, fmt.Errorf("golem/retry: unknown policy node tag %d", w.Tag())
 	}
 }
 
@@ -894,13 +896,13 @@ func decodePredicate(raw apiRetry.RetryPredicate) (Predicate, error) {
 
 func decodePredicateNode(nodes []apiRetry.PredicateNode, idx int32, path map[int32]bool) (*predicateNode, error) {
 	if len(nodes) == 0 {
-		return nil, errors.New("retry: empty predicate node list")
+		return nil, errors.New("golem/retry: empty predicate node list")
 	}
 	if idx < 0 || int(idx) >= len(nodes) {
-		return nil, fmt.Errorf("retry: predicate node index %d out of range [0,%d)", idx, len(nodes))
+		return nil, fmt.Errorf("golem/retry: predicate node index %d out of range [0,%d)", idx, len(nodes))
 	}
 	if path[idx] {
-		return nil, fmt.Errorf("retry: cycle in predicate graph at node %d", idx)
+		return nil, fmt.Errorf("golem/retry: cycle in predicate graph at node %d", idx)
 	}
 	path[idx] = true
 	defer delete(path, idx)
@@ -968,7 +970,7 @@ func decodePredicateNode(nodes []apiRetry.PredicateNode, idx int32, path map[int
 	case apiRetry.PredicateNodePredFalse:
 		return &predicateNode{kind: prFalse}, nil
 	default:
-		return nil, fmt.Errorf("retry: unknown predicate node tag %d", w.Tag())
+		return nil, fmt.Errorf("golem/retry: unknown predicate node tag %d", w.Tag())
 	}
 }
 

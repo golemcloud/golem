@@ -37,10 +37,13 @@
 // query/execute/commit is journaled and replayed — and because these are remote
 // side effects, using it inside a read-only method traps.
 //
-// The recursive/composite value families (arrays, composites, domains, ranges)
-// are surfaced from queries as an opaque [DbValue] for now; first-class support
-// is a planned follow-up. Everything else — including json, uuid, temporal,
-// inet/cidr/macaddr, bit strings and vectors — maps to a Go value.
+// Every value family maps to a Go value: the common types (ints, floats, text,
+// json, uuid, temporal, inet/cidr/macaddr, bit strings, vectors) and the
+// composite families (arrays, composites, domains, ranges) through their typed
+// [Row] getters and matching constructors.
+//
+// Pair a fallible call with golem.Must / golem.Must0 / golem.Must2 to abort the
+// invocation on error.
 package postgres
 
 import (
