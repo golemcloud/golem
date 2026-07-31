@@ -15,7 +15,6 @@
 package golem
 
 import (
-	"strings"
 	"testing"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
@@ -40,9 +39,9 @@ func TestAgentErrorToGoDistinguishesCases(t *testing.T) {
 		}
 	}
 
-	// The custom-error case carries a payload; it stays distinguishable rather
-	// than collapsing into one of the above.
-	if got := agentErrorToGo(customError("boom")).Error(); !strings.HasPrefix(got, "custom error:") {
-		t.Errorf("custom error mapped to %q, want a \"custom error:\" prefix", got)
+	// The custom-error case carries a string payload; it must round-trip intact
+	// (not render as a struct dump — see customErrorMessage).
+	if got := agentErrorToGo(customError("boom")).Error(); got != "custom error: boom" {
+		t.Errorf("custom error mapped to %q, want %q", got, "custom error: boom")
 	}
 }

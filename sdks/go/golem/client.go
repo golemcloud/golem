@@ -138,8 +138,21 @@ func agentErrorToGo(e common.AgentError) error {
 	case common.AgentErrorInvalidType:
 		return fmt.Errorf("invalid type: %s", e.InvalidType())
 	case common.AgentErrorCustomError:
-		return fmt.Errorf("custom error: %v", e.CustomError())
+		return fmt.Errorf("custom error: %s", customErrorMessage(e.CustomError()))
 	default:
 		return fmt.Errorf("agent error (tag %d)", e.Tag())
 	}
+}
+
+// customErrorMessage recovers the string payload the SDK encodes into the
+// custom-error case (see customError). Without this the TypedSchemaValue would
+// render as a struct dump, and — on the RPC path — a remote agent's panic message
+// would reach the caller as that dump. Non-string payloads fall back to %v.
+func customErrorMessage(tsv types.TypedSchemaValue) string {
+	nodes := tsv.Value.ValueNodes
+	root := int(tsv.Value.Root)
+	if root >= 0 && root < len(nodes) && nodes[root].Tag() == types.SchemaValueNodeStringValue {
+		return nodes[root].StringValue()
+	}
+	return fmt.Sprintf("%v", tsv)
 }

@@ -15,6 +15,8 @@
 package golem
 
 import (
+	"fmt"
+
 	apiHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
 )
 
@@ -153,8 +155,9 @@ func InfallibleTransaction[Out, E any](f func(*Transaction[E]) Result[Out, E]) O
 	if r.IsErr() {
 		if compFail := tx.compensate(); compFail.IsSome() {
 			// A compensation failed while rolling back for a retry — the
-			// transaction cannot be made consistent, so fail loudly.
-			panic("golem: compensation failed during an infallible transaction rollback")
+			// transaction cannot be made consistent, so fail loudly, surfacing
+			// which compensation failed.
+			panic(fmt.Errorf("golem: compensation failed during an infallible transaction rollback: %v", compFail.Unwrap()))
 		}
 		// Rewind to the start; this interrupts the invocation and the runtime
 		// replays the transaction, so it does not return.
