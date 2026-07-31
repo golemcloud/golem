@@ -3493,7 +3493,7 @@ fn arb_api_domain_delete_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string(), arb_small_string()).prop_map(
             |(deleted, domain, id)| {
-                crate::model::text::http_api_domain::DomainRegistrationDeleteResult {
+                crate::model::http_api::domain::DomainRegistrationDeleteResult {
                     deleted,
                     domain: golem_common::model::domain_registration::Domain(domain),
                     id: golem_common::model::domain_registration::DomainRegistrationId(
@@ -3508,15 +3508,14 @@ fn arb_api_domain_delete_result() -> OutputDocumentStrategy {
 fn arb_api_domain_register_result() -> OutputDocumentStrategy {
     serialized_output(
         arb_domain_registration()
-            .prop_map(crate::model::text::http_api_domain::DomainRegistrationNewView),
+            .prop_map(crate::model::http_api::domain::DomainRegistrationNewView),
     )
 }
 
 fn arb_api_domain_list_result() -> OutputDocumentStrategy {
     serialized_output(
-        proptest::collection::vec(arb_domain_registration(), 0..5).prop_map(|domains| {
-            crate::model::text::http_api_domain::HttpApiDomainListView { domains }
-        }),
+        proptest::collection::vec(arb_domain_registration(), 0..5)
+            .prop_map(|domains| crate::model::http_api::domain::HttpApiDomainListView { domains }),
     )
 }
 
@@ -3536,14 +3535,14 @@ fn arb_domain_registration()
 fn arb_api_deployment_get_result() -> OutputDocumentStrategy {
     serialized_output(
         arb_http_api_deployment()
-            .prop_map(crate::model::text::http_api_deployment::HttpApiDeploymentGetView),
+            .prop_map(crate::model::http_api::deployment::HttpApiDeploymentGetView),
     )
 }
 
 fn arb_api_deployment_list_result() -> OutputDocumentStrategy {
     serialized_output(
         proptest::collection::vec(arb_http_api_deployment(), 0..5).prop_map(|deployments| {
-            crate::model::text::http_api_deployment::HttpApiDeploymentListView { deployments }
+            crate::model::http_api::deployment::HttpApiDeploymentListView { deployments }
         }),
     )
 }
@@ -3627,35 +3626,34 @@ fn arb_http_api_deployment_agent_options()
 fn arb_api_security_scheme_create_result() -> OutputDocumentStrategy {
     serialized_output(
         arb_security_scheme()
-            .prop_map(crate::model::text::http_api_security::HttpSecuritySchemeCreateView),
+            .prop_map(crate::model::http_api::security::HttpSecuritySchemeCreateView),
     )
 }
 
 fn arb_api_security_scheme_delete_result() -> OutputDocumentStrategy {
     serialized_output(
         arb_security_scheme()
-            .prop_map(crate::model::text::http_api_security::HttpSecuritySchemeDeleteView),
+            .prop_map(crate::model::http_api::security::HttpSecuritySchemeDeleteView),
     )
 }
 
 fn arb_api_security_scheme_get_result() -> OutputDocumentStrategy {
     serialized_output(
-        arb_security_scheme()
-            .prop_map(crate::model::text::http_api_security::HttpSecuritySchemeGetView),
+        arb_security_scheme().prop_map(crate::model::http_api::security::HttpSecuritySchemeGetView),
     )
 }
 
 fn arb_api_security_scheme_update_result() -> OutputDocumentStrategy {
     serialized_output(
         arb_security_scheme()
-            .prop_map(crate::model::text::http_api_security::HttpSecuritySchemeUpdateView),
+            .prop_map(crate::model::http_api::security::HttpSecuritySchemeUpdateView),
     )
 }
 
 fn arb_api_security_scheme_list_result() -> OutputDocumentStrategy {
     serialized_output(
         proptest::collection::vec(arb_security_scheme(), 0..5).prop_map(|security_schemes| {
-            crate::model::text::http_api_security::HttpSecuritySchemeListView { security_schemes }
+            crate::model::http_api::security::HttpSecuritySchemeListView { security_schemes }
         }),
     )
 }

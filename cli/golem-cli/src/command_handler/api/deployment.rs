@@ -18,10 +18,8 @@ use crate::context::Context;
 use crate::error::service::{MapServiceError, ServiceError};
 use crate::log::{LogColorize, LogIndent, log_action, log_warn_action};
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
+use crate::model::http_api::deployment::{HttpApiDeploymentGetView, HttpApiDeploymentListView};
 use crate::model::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
-use crate::model::text::http_api_deployment::{
-    HttpApiDeploymentGetView, HttpApiDeploymentListView,
-};
 use anyhow::{anyhow, bail};
 use golem_client::api::{ApiDeploymentClient, McpDeploymentClient};
 use golem_common::cache::SimpleCache;

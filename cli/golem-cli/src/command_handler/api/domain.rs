@@ -15,7 +15,7 @@
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::MapServiceError;
-use crate::model::text::http_api_domain::{
+use crate::model::http_api::domain::{
     DomainRegistrationDeleteResult, DomainRegistrationNewView, HttpApiDomainListView,
 };
 

@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod deployment;
+pub mod domain;
+pub mod security;
+
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use std::collections::BTreeMap;
