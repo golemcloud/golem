@@ -48,6 +48,7 @@ use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
     WithSource,
 };
+use crate::model::config::server::ToFormattedServerContext;
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
 use crate::model::deploy::{
     DeployConfig, DeployError, DeployResult, DeploySummary, EnvironmentSetupPlan, PostDeployError,
@@ -60,7 +61,6 @@ use crate::model::language::GuestLanguage;
 use crate::model::text::deployment::{DeploymentListView, DeploymentNewView};
 use crate::model::text::diff::{DeployPlanView, log_unified_diff, log_unified_diff_for_path};
 use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
-use crate::model::text::server::ToFormattedServerContext;
 use crate::model::text::template::TemplateListView;
 use anyhow::{anyhow, bail};
 use colored::Colorize;

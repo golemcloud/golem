@@ -16,5 +16,4 @@ pub mod action_result;
 pub mod deployment;
 pub mod diff;
 pub mod fmt;
-pub mod server;
 pub mod template;

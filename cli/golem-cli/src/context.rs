@@ -33,12 +33,12 @@ use crate::model::app_raw::{
     AppVersionSource, BuiltinServer, CustomServerAuth, DeploymentOptions, Environment, Marker,
     Server,
 };
+use crate::model::config::server::ToFormattedServerContext;
 use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
 use crate::model::format::Format;
 use crate::model::masking::MaskingConfig;
 use crate::model::plugin::PluginNameAndVersion;
 use crate::model::repl::ReplLanguage;
-use crate::model::text::server::ToFormattedServerContext;
 use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
 use golem_client::model::EnvironmentPluginGrantWithDetails;

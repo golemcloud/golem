@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod profile;
+pub mod server;
 
 use crate::config::{AuthenticationConfig, NamedProfile, ProfileConfig, ProfileName};
 use serde::{Deserialize, Serialize};
