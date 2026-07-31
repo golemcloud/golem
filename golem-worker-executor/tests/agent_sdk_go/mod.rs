@@ -16,6 +16,8 @@
 //! by `test-components/build-components.sh go`). This is the foundational suite —
 //! more scenarios (durability/replay, RPC, config, …) build on this wiring.
 
+pub mod durability;
+
 use crate::Tracing;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;

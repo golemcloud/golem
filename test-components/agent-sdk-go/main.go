@@ -5,6 +5,7 @@ package main
 
 import (
 	_ "agent-sdk-go/counter"
+	_ "agent-sdk-go/httpcall"
 
 	_ "github.com/golemcloud/golem/sdks/go/golem"
 )
