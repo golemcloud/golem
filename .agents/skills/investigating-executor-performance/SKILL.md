@@ -35,6 +35,7 @@ GOLEM__TRACING__OTLP__ENABLED=true \
 GOLEM__TRACING__OTLP__HOST=localhost \
 GOLEM__TRACING__OTLP__PORT=4318 \
 GOLEM__TRACING__OTLP__SERVICE_NAME=worker-executor-tests \
+GOLEM_OTLP_FILTER=info \
 RUST_LOG=info,h2=warn,hyper=warn \
 cargo make worker-executor-tests-group1
 ```
@@ -46,6 +47,7 @@ GOLEM__TRACING__OTLP__ENABLED=true \
 GOLEM__TRACING__OTLP__HOST=localhost \
 GOLEM__TRACING__OTLP__PORT=4318 \
 GOLEM__TRACING__OTLP__SERVICE_NAME=worker-executor-tests \
+GOLEM_OTLP_FILTER=info \
 RUST_LOG=info,h2=warn,hyper=warn \
 cargo test -p golem-worker-executor --test integration -- <test_name> --report-time --nocapture
 ```
@@ -58,6 +60,31 @@ TracingConfig::test_pretty_without_time("worker-executor-tests").with_env_overri
 ```
 
 The `.with_env_overrides()` call uses Figment to merge `GOLEM__*` env vars into the `TracingConfig`, which includes `OtlpConfig` (defined in `golem-common/src/tracing.rs`). Since worker-executor tests run in-process (not spawned as child processes), the OTLP config applies to the single test process directly.
+
+### Choosing what to export
+
+`GOLEM_OTLP_FILTER` is `RUST_LOG` syntax over the trace pipeline, and it is required:
+unset means `off`, so the four `GOLEM__TRACING__OTLP__*` variables on their own export
+nothing. It is separate from `RUST_LOG` because console verbosity and what is worth
+sending to a trace store are different questions.
+
+`info` is the level worth starting from: the spans bounding an operation — requests,
+invocations, worker admission, background loop ticks — are `info`, and the detail inside
+them is `debug`, so `debug` deepens a trace rather than changing what it is about.
+Anything less verbose than `info` exports nothing at all, since no span is emitted at
+`warn` or `error`.
+
+Two high-volume sources have targets of their own and can be turned up when you are
+chasing them specifically:
+
+| Target | What it is |
+|---|---|
+| `golem::plugin_log` | log output from oplog-processor plugin agents |
+| `golem::agent_rdbms` | SQL an agent runs against its own database |
+
+So `GOLEM_OTLP_FILTER=info,golem::agent_rdbms=debug` adds per-statement SQL without
+raising anything else. The filter actually in force is logged at startup as
+`otlp_filter`, alongside which variable it came from.
 
 ### Suppressing noise
 
@@ -193,7 +220,9 @@ Background-loop spans can dominate the trace data. Filter them out for focused a
 python3 -c "
 import json
 data = json.load(open('tmp/traces.json'))
-NOISE = {'oplog_background_transfer', 'scheduler_tick', 'quota_renewal', 'broadcast loop'}
+NOISE = {'oplog_background_transfer', 'ephemeral_oplog_background_transfer',
+         'oplog_forwarding_flush', 'scheduler_tick', 'quota_renewal',
+         'resource_limits_batch_update', 'agent_status_flush_sweep'}
 clean = [t for t in data['data']
          if not any(s['operationName'] in NOISE for s in t['spans'])]
 print(f'Total: {len(data[\"data\"])}, After filtering noise: {len(clean)}')

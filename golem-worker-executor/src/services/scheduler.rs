@@ -239,9 +239,10 @@ impl SchedulerServiceDefault {
                     if let Some(delay) = get_delay(&self.storage_retry, attempts) {
                         warn!(
                             op = op_name,
+                            subject = %subject,
                             attempt = attempts,
                             delay_ms = delay.as_millis() as u64,
-                            "Transient scheduler storage error for {subject}, retrying: {msg}"
+                            "Transient scheduler storage error, retrying: {msg}"
                         );
                         tokio::time::sleep(delay).await;
                     } else {

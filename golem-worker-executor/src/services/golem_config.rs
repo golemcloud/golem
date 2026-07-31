@@ -609,9 +609,10 @@ pub struct SchedulerConfig {
     pub lease_ttl: Duration,
     pub max_batches_per_tick: u32,
     pub max_concurrent_action_processing: u32,
-    /// Retry policy applied to SQL-backed scheduler storage operations when the connection pool
-    /// is briefly exhausted (a pool acquisition timeout). The scheduler background loop panics
-    /// on exhaustion because its `schedule`/`cancel` entry points cannot propagate errors.
+    /// Retry policy applied when scheduling or cancelling hits a briefly exhausted connection
+    /// pool (a pool acquisition timeout). Those two panic once it is exhausted, because their
+    /// entry points return no error for a caller to act on; the tick's own storage calls
+    /// propagate their errors instead.
     #[serde(default = "default_scheduler_storage_retry")]
     pub storage_retry: RetryConfig,
 }

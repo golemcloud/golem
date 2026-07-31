@@ -239,7 +239,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 Some(RetryDecision::Delayed(delay)) => {
                     debug!(
                         %agent_id,
-                        "Invocation queue loop sleeping for {delay:?} for delayed restart"
+                        ?delay,
+                        "Invocation queue loop sleeping for a delayed restart"
                     );
                     tokio::select! {
                         _ = tokio::time::sleep(delay) => {
@@ -308,7 +309,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     let delay = get_delay(self.parent.oom_retry_config(), self.oom_retry_count);
                     debug!(
                         %agent_id,
-                        "Invocation queue loop dropping memory permits and triggering restart with a delay of {delay:?}"
+                        ?delay,
+                        "Invocation queue loop dropping memory permits and triggering restart"
                     );
                     let _ = Worker::restart_on_oom(
                         self.parent.clone(),

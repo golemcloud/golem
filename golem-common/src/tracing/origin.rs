@@ -17,20 +17,6 @@
 //! Separate from the subscriber configuration in the parent module: this is a
 //! domain model for span relationships, not tracing setup.
 
-/// The target every [`related_span!`] span is declared under, rather than the
-/// module it happens to be written in.
-///
-/// Filter directives silence a *module* to stop its high-volume events reaching a
-/// layer, and a directive cannot distinguish a span from an event. Without a target
-/// of their own, spans declared in such a module would be silenced along with its
-/// events - which is backwards, since the spans are bounded and are the thing worth
-/// exporting. Under this target a span is selected by its level alone.
-///
-/// A plain `tracing::span!` in a silenced module needs `target: SPAN_TARGET` for the
-/// same reason. It also means these spans are tuned as a group: `golem::span=debug`,
-/// not a per-module directive.
-pub const SPAN_TARGET: &str = "golem::span";
-
 /// Creates a parentless span and links it back to a [`TraceOrigin`], yielding the
 /// span.
 ///
@@ -39,23 +25,12 @@ pub const SPAN_TARGET: &str = "golem::span";
 #[macro_export]
 macro_rules! related_span {
     ($origin:expr, $level:expr, $name:expr) => {{
-        let span = ::tracing::span!(
-            target: $crate::tracing::SPAN_TARGET,
-            parent: None,
-            $level,
-            $name
-        );
+        let span = ::tracing::span!(parent: None, $level, $name);
         $origin.add_as_link_to(&span);
         span
     }};
     ($origin:expr, $level:expr, $name:expr, $($fields:tt)*) => {{
-        let span = ::tracing::span!(
-            target: $crate::tracing::SPAN_TARGET,
-            parent: None,
-            $level,
-            $name,
-            $($fields)*
-        );
+        let span = ::tracing::span!(parent: None, $level, $name, $($fields)*);
         $origin.add_as_link_to(&span);
         span
     }};
@@ -116,18 +91,14 @@ pub struct TraceOrigin(Option<opentelemetry::trace::SpanContext>);
 impl TraceOrigin {
     /// Captures the currently active span as the origin. Yields an empty origin
     /// when there is no active span, or when no OTLP layer is installed.
-    pub fn capture_current() -> Self {
-        Self::of(&tracing::Span::current())
-    }
-
-    /// Captures `span` as the origin. Yields an empty origin if `span` is
-    /// disabled, or if no OTLP layer is installed.
     ///
-    /// Note that this forces `span`'s sampling decision, since its span id has to
-    /// be known to be recorded as a parent or link.
-    fn of(span: &tracing::Span) -> Self {
+    /// Note that this forces the span's sampling decision, since its span id has to
+    /// be known before it can be recorded as a link.
+    pub fn capture_current() -> Self {
         use opentelemetry::trace::TraceContextExt;
         use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+        let span = tracing::Span::current();
 
         // `context()` is not cheap: it takes the registry's extensions lock and
         // forces a sampling decision. A disabled span can never yield a valid

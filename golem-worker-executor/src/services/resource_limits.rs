@@ -1658,8 +1658,7 @@ mod tests {
 
     /// An idle tick is still spanned: discovering that there is nothing to send is
     /// itself work that can fail, and events recorded outside a span never reach
-    /// the trace. Volume is controlled by the span's debug level, not by omitting
-    /// it.
+    /// the trace.
     #[test]
     async fn send_batch_records_one_closed_span_when_there_is_nothing_to_send() {
         let mock = Arc::new(MockRegistryService::new(1000, 512));

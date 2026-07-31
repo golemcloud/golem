@@ -27,7 +27,7 @@ use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::SdkTracer;
 use serde::{Deserialize, Serialize};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::Layer;
 use tracing_subscriber::Registry;
 use tracing_subscriber::fmt::MakeWriter;
@@ -39,7 +39,58 @@ use crate::SafeDisplay;
 use crate::config::env_config_provider;
 use crate::tracing::format::JsonFlattenSpanFormatter;
 
-pub use origin::{SPAN_TARGET, TraceOrigin};
+pub use origin::TraceOrigin;
+
+/// Environment variable holding the OTLP layer's filter.
+const OTLP_FILTER_VAR: &str = "GOLEM_OTLP_FILTER";
+
+/// What [`OTLP_FILTER_VAR`] was called before this filter became trace-only. Still
+/// honoured so an existing deployment keeps working.
+const DEPRECATED_OTLP_FILTER_VAR: &str = "GOLEM_OTLP_LOG";
+
+/// The OTLP filter from the environment, with the variable it came from, so a
+/// caller can report what is actually in force rather than what it assumes.
+///
+/// A variable set to nothing counts as unset, so `GOLEM_OTLP_FILTER=` behaves the
+/// same as leaving it out rather than quietly meaning something else.
+pub fn otlp_filter_from_env() -> Option<(String, &'static str)> {
+    for name in [OTLP_FILTER_VAR, DEPRECATED_OTLP_FILTER_VAR] {
+        if let Some(value) = std::env::var(name).ok().and_then(set_to_something) {
+            return Some((value, name));
+        }
+    }
+    None
+}
+
+/// A variable set to nothing counts as unset, so `GOLEM_OTLP_FILTER=` behaves the
+/// same as leaving it out. Without this a caller's fallback is skipped and it
+/// silently exports nothing.
+fn set_to_something(value: String) -> Option<String> {
+    (!value.trim().is_empty()).then_some(value)
+}
+
+/// Targets naming a source of telemetry that an operator is likely to want to turn
+/// up or down on its own.
+///
+/// Only sources whose volume is decided by something outside the executor are named
+/// here; everything else keeps its module's target, so the usual `RUST_LOG`
+/// conventions apply and `golem_worker_executor=debug` means what it looks like.
+///
+/// These names are deliberately not module paths. A module path is unguessable from
+/// outside the codebase and changes whenever the code is reorganised, which makes it
+/// a poor thing to put in a deployment. Changing one of these is a breaking change
+/// to the operator-facing contract.
+pub mod target {
+    /// Log output from oplog-processor plugin agents, which is mirrored into the
+    /// server log because it cannot be watched with the CLI. How much of it there
+    /// is, is decided by the plugin, so a long-running invocation can hold a great
+    /// many of these on its span before it finishes.
+    pub const PLUGIN_LOG: &str = "golem::plugin_log";
+
+    /// SQL an agent runs against its own database, emitted per statement and per
+    /// transaction. Nothing to do with the database Golem itself stores state in.
+    pub const AGENT_RDBMS: &str = "golem::agent_rdbms";
+}
 
 mod origin;
 
@@ -364,7 +415,7 @@ impl Default for OtlpConfig {
 }
 
 pub mod directive {
-    use tracing_subscriber::filter::Directive;
+    use tracing_subscriber::filter::{Directive, LevelFilter};
 
     pub mod default {
         use tracing_subscriber::filter::Directive;
@@ -402,10 +453,6 @@ pub mod directive {
         format!("{target}=error").parse().unwrap()
     }
 
-    pub fn off(target: &str) -> Directive {
-        format!("{target}=off").parse().unwrap()
-    }
-
     pub fn default_deps() -> Vec<Directive> {
         vec![
             warn("cranelift_codegen"),
@@ -424,56 +471,30 @@ pub mod directive {
         ]
     }
 
-    /// Directives for the OTLP layer: same as default_deps but also
-    /// enables trace-level for `otel::tracing` target so that spans
-    /// created by `tonic-tracing-opentelemetry` (which uses TRACE level)
-    /// are exported and can propagate trace context across services.
+    /// The OTLP layer's filter, as an `EnvFilter` spec.
     ///
-    /// These targets emit events far more often than once per operation - the WASM
-    /// host-call implementations (one or more per host call, including
-    /// guest-controlled log output) and the RDBMS layer (per query and per row as
-    /// the guest pulls results) - and every one of them records onto the enclosing
-    /// invocation span, which stays open for as long as the invocation runs.
+    /// `user` is the raw `GOLEM_OTLP_FILTER` value and is used verbatim when set:
+    /// nothing is merged into it, so a directive means what it says and `info`
+    /// means info everywhere, third-party crates included. Which crates are worth
+    /// quietening differs per service, so that judgement belongs to whoever writes
+    /// the deployment, not here.
     ///
-    /// `tracing-opentelemetry` holds an event for as long as its span is open, and
-    /// the SDK applies `max_events_per_span` only at span close, keeping the *first*
-    /// N. So a long invocation accumulates every event it emits and exports almost
-    /// none of them. Silencing these targets for the OTLP layer is what keeps that
-    /// bounded; console and file output still log them.
+    /// Unset means `off`. Exporting needs an endpoint configured
+    /// (`GOLEM__TRACING__OTLP__ENABLED`, `__HOST`, `__PORT`), and this is the
+    /// remaining switch. `off` rather than `error` because this feeds a span sink:
+    /// the spans bounding an operation are `info` and the detail inside them
+    /// `debug`, so anything less verbose than `info` exports nothing at all while
+    /// still paying for the exporter - errors reach a trace as events on an
+    /// operation's span, never as spans of their own.
     ///
-    /// This is a default, not a rule: a `GOLEM_OTLP_LOG` directive naming one of
-    /// these targets wins over it, which is how you get RDBMS or host-call detail
-    /// into a trace when chasing a specific bottleneck.
-    fn otlp_silenced_targets() -> Vec<Directive> {
-        vec![
-            off("golem_worker_executor::durable_host"),
-            off("golem_worker_executor::services::rdbms"),
-        ]
-    }
-
-    pub fn otlp_deps() -> Vec<Directive> {
-        let mut deps = default_deps();
-        deps.push("otel::tracing=trace".parse().unwrap());
-        deps.extend(otlp_silenced_targets());
-        deps
-    }
-
-    /// The full directive list for the OTLP layer, as an `EnvFilter` spec.
-    ///
-    /// `user` is the raw `GOLEM_OTLP_LOG` value. It is appended last because
-    /// `EnvFilter` lets a later directive replace an earlier one for the same
-    /// target, so every default here stays overridable per target.
+    /// Directives name crates and modules as usual; the sources worth turning up
+    /// or down on their own also have stable names of their own, in
+    /// [`target`](crate::tracing::target).
     pub fn otlp_spec(user: Option<&str>) -> String {
-        let mut spec = default::info().to_string();
-        for directive in otlp_deps() {
-            spec.push(',');
-            spec.push_str(&directive.to_string());
+        match user.map(str::trim).filter(|user| !user.is_empty()) {
+            Some(user) => user.to_string(),
+            None => LevelFilter::OFF.to_string(),
         }
-        if let Some(user) = user.map(str::trim).filter(|user| !user.is_empty()) {
-            spec.push(',');
-            spec.push_str(user);
-        }
-        spec
     }
 }
 
@@ -485,7 +506,7 @@ pub mod filter {
 
     pub mod boxed {
         use tracing_subscriber::EnvFilter;
-        use tracing_subscriber::filter::Directive;
+        use tracing_subscriber::filter::{Directive, LevelFilter};
 
         use crate::tracing::directive;
         use crate::tracing::filter::Boxed;
@@ -525,23 +546,25 @@ pub mod filter {
             env_with_directives(directive::default::info(), directive::default_deps())
         }
 
-        /// Filter for the OTLP layer: info level by default, with
-        /// `otel::tracing=trace` so context-propagation spans are exported.
-        ///
-        /// Info is the level at which spans describe whole operations - requests,
-        /// invocations, worker admission - which is what a trace is read for. The
-        /// detail below that (per-host-call retries, background loop ticks) is at
-        /// debug, so raising the level deepens a trace rather than changing what it
-        /// is about.
-        ///
-        /// Unlike the other filters this reads `GOLEM_OTLP_LOG` rather than
-        /// `RUST_LOG`, because `RUST_LOG` controls console verbosity and is often set
-        /// to `warn` in benchmark and CI runs, which would silently suppress every
-        /// exported span. Its value is applied on top of the defaults in
-        /// [`directive::otlp_spec`], so it can raise or lower any individual target.
+        /// The OTLP layer's filter, from `GOLEM_OTLP_FILTER`. See
+        /// [`directive::otlp_spec`] for what it accepts and what unset means.
         pub fn default_otlp_env() -> Boxed {
-            let user = std::env::var("GOLEM_OTLP_LOG").ok();
-            Box::new(EnvFilter::builder().parse_lossy(directive::otlp_spec(user.as_deref())))
+            otlp_env_or(&LevelFilter::OFF.to_string())
+        }
+
+        /// As [`default_otlp_env`], but falling back to `default_spec` instead of
+        /// `off` when the environment sets no filter.
+        ///
+        /// For a caller where enabling OTLP is already a deliberate act of its own -
+        /// a `--otlp` flag rather than the service configuration - and where
+        /// exporting nothing would be surprising.
+        pub fn otlp_env_or(default_spec: &str) -> Boxed {
+            let user = crate::tracing::otlp_filter_from_env();
+            let spec = user
+                .as_ref()
+                .map(|(value, _)| directive::otlp_spec(Some(value)))
+                .unwrap_or_else(|| default_spec.to_string());
+            Box::new(EnvFilter::builder().parse_lossy(spec))
         }
     }
 
@@ -551,30 +574,46 @@ pub mod filter {
         use crate::tracing::Output;
         use crate::tracing::filter::{Boxed, boxed};
 
-        /// For OTLP, uses a permissive debug-level filter with
-        /// `otel::tracing=trace` so that context-propagation spans created
-        /// by `tonic-tracing-opentelemetry` (at TRACE level) are always
-        /// exported. For other outputs falls back to the RUST_LOG-based
-        /// env filter.
-        pub const DEFAULT_ENV: fn(Output) -> Boxed = |output| match output {
-            Output::Otlp => boxed::default_otlp_env(),
-            _ => boxed::default_env(),
-        };
+        /// OTLP always reads `GOLEM_OTLP_FILTER`; every other output takes the
+        /// filter the caller chose.
+        ///
+        /// The two are separate because console verbosity and what is worth
+        /// exporting to a trace store are different questions - `RUST_LOG=warn` is
+        /// common in benchmark and CI runs and would otherwise leave no spans at
+        /// all. Routing every constructor through here means that holds whichever
+        /// one a service picked, so `GOLEM_OTLP_FILTER` is the single answer to
+        /// "what is being exported".
+        fn otlp_or(output: Output, other: impl FnOnce() -> Boxed) -> Boxed {
+            match output {
+                Output::Otlp => boxed::default_otlp_env(),
+                _ => other(),
+            }
+        }
+
+        pub const DEFAULT_ENV: fn(Output) -> Boxed = |output| otlp_or(output, boxed::default_env);
 
         pub fn debug_env_with_directives(directives: Vec<Directive>) -> impl Fn(Output) -> Boxed {
-            move |_output| boxed::debug_env_with_directives(directives.clone())
+            move |output| {
+                otlp_or(output, || {
+                    boxed::debug_env_with_directives(directives.clone())
+                })
+            }
         }
 
         pub fn default_debug_env() -> impl Fn(Output) -> Boxed {
-            move |_output| boxed::default_debug_env()
+            move |output| otlp_or(output, boxed::default_debug_env)
         }
 
         pub fn info_env_with_directives(directives: Vec<Directive>) -> impl Fn(Output) -> Boxed {
-            move |_output| boxed::info_env_with_directives(directives.clone())
+            move |output| {
+                otlp_or(output, || {
+                    boxed::info_env_with_directives(directives.clone())
+                })
+            }
         }
 
         pub fn default_info_env() -> impl Fn(Output) -> Boxed {
-            move |_output| boxed::default_info_env()
+            move |output| otlp_or(output, boxed::default_info_env)
         }
     }
 }
@@ -684,10 +723,27 @@ where
         })
     });
 
+    let otlp_filter_env = otlp_filter_from_env();
+    if otlp_filter_env.as_ref().map(|(_, name)| *name) == Some(DEPRECATED_OTLP_FILTER_VAR)
+        && !config.dtor_friendly
+    {
+        warn!(
+            "{DEPRECATED_OTLP_FILTER_VAR} is deprecated and will be removed; \
+             set {OTLP_FILTER_VAR} instead. It filters traces, not logs."
+        );
+    }
+
     if !config.dtor_friendly {
         info!(
             // NOTE: intentionally logged as string and not as structured
             tracing_config = serde_json::to_string(&config).expect("cannot serialize log config"),
+            // The filter actually in force, and where it came from, so an operator
+            // seeing no spans can tell whether it is the filter or the exporter
+            // without reading the source.
+            otlp_filter = %directive::otlp_spec(
+                otlp_filter_env.as_ref().map(|(value, _)| value.as_str())
+            ),
+            otlp_filter_from = otlp_filter_env.as_ref().map_or("unset", |(_, name)| *name),
             "Tracing initialized"
         );
     }
@@ -977,130 +1033,174 @@ pub(crate) mod test {
         }
     }
 
-    /// Tests for the OTLP layer's directive set.
+    /// Tests for the OTLP layer's filter.
     mod otlp_spec {
         use test_r::test;
         use tracing_subscriber::EnvFilter;
 
-        use crate::tracing::SPAN_TARGET;
         use crate::tracing::directive::otlp_spec;
+        use crate::tracing::target;
         use crate::tracing::test::otel::{exported_spans_filtered, named};
 
-        const HOST_CALL: &str = "golem_worker_executor::durable_host::http";
-        const RDBMS: &str = "golem_worker_executor::services::rdbms::postgres";
-
-        /// The span is deliberately still open while the events are emitted, since
-        /// that is the state in which they accumulate.
-        fn events_on_span(user: Option<&str>) -> usize {
+        fn exported(user: Option<&str>) -> Vec<String> {
             let filter = EnvFilter::builder().parse_lossy(otlp_spec(user));
             let spans = exported_spans_filtered(Box::new(filter), || {
-                let span = tracing::info_span!("invocation");
-                let _guard = span.enter();
-                tracing::error!(target: HOST_CALL, "host call failed");
-                tracing::info!(target: HOST_CALL, "host call");
-                tracing::info!(target: RDBMS, "query");
-            });
-            named(&spans, "invocation").events.len()
-        }
-
-        #[test]
-        fn high_volume_targets_contribute_no_events_by_default() {
-            assert_eq!(events_on_span(None), 0);
-        }
-
-        /// The deployed setting, which must not weaken the default.
-        #[test]
-        fn a_bare_level_does_not_re_enable_them() {
-            assert_eq!(events_on_span(Some("info")), 0);
-            assert_eq!(events_on_span(Some("debug")), 0);
-        }
-
-        #[test]
-        fn naming_a_target_explicitly_re_enables_it() {
-            assert_eq!(
-                events_on_span(Some("golem_worker_executor::services::rdbms=info")),
-                1
-            );
-            assert_eq!(
-                events_on_span(Some(
-                    "golem_worker_executor::durable_host=info,golem_worker_executor::services::rdbms=info"
-                )),
-                3
-            );
-        }
-
-        /// Silencing a module must stop its events without taking its spans with
-        /// them: the spans are bounded and are the thing worth exporting, and they
-        /// are declared under [`SPAN_TARGET`] precisely so a directive aimed at the
-        /// module cannot reach them.
-        ///
-        /// Covers both routes into a span, since a plain `span!` in such a module is
-        /// just as easy to write as a `related_span!` and just as easily silenced.
-        #[test]
-        fn a_span_declared_in_a_silenced_module_still_exports() {
-            let filter = EnvFilter::builder().parse_lossy(otlp_spec(None));
-            let spans = exported_spans_filtered(Box::new(filter), || {
-                // As if written inside the silenced module, which is where the
-                // host-call retry and replay spans live.
-                let origin = crate::tracing::TraceOrigin::none();
-                let linked = crate::related_span!(origin, tracing::Level::INFO, "host_call_retry");
-                linked.in_scope(|| {
-                    tracing::info!(target: HOST_CALL, "silenced host call event");
+                tracing::info_span!("golem_operation").in_scope(|| {
+                    tracing::info!(target: target::PLUGIN_LOG, "plugin said something");
+                    tracing::debug!(target: target::AGENT_RDBMS, "select 1");
+                    tracing::info!(target: "hyper::client", "third-party at info");
                 });
-
-                tracing::info_span!(target: SPAN_TARGET, "replaying").in_scope(|| {});
             });
+            spans.iter().map(|s| s.name.to_string()).collect()
+        }
 
-            assert!(
-                named(&spans, "host_call_retry").events.is_empty(),
-                "the module's events stay silenced even inside its own span"
+        fn events_on_operation(user: Option<&str>) -> usize {
+            let filter = EnvFilter::builder().parse_lossy(otlp_spec(user));
+            let spans = exported_spans_filtered(Box::new(filter), || {
+                tracing::info_span!("golem_operation").in_scope(|| {
+                    tracing::info!(target: target::PLUGIN_LOG, "plugin said something");
+                    tracing::debug!(target: target::AGENT_RDBMS, "select 1");
+                    tracing::info!(target: "hyper::client", "third-party at info");
+                });
+            });
+            named(&spans, "golem_operation").events.len()
+        }
+
+        /// Exporting already needs an endpoint configured; this is the remaining
+        /// switch, and until it is set nothing is produced.
+        #[test]
+        fn unset_exports_nothing() {
+            assert_eq!(otlp_spec(None), "off");
+            assert!(exported(None).is_empty());
+        }
+
+        #[test]
+        fn blank_is_treated_as_unset() {
+            assert_eq!(otlp_spec(Some("   ")), "off");
+        }
+
+        /// A variable set to nothing must reach callers as absent, not as a filter
+        /// that happens to mean `off` - otherwise `otlp_env_or`'s fallback is
+        /// skipped and a caller that asked for OTLP exports nothing.
+        #[test]
+        fn a_blank_variable_does_not_count_as_set() {
+            use crate::tracing::set_to_something;
+
+            assert_eq!(set_to_something(String::new()), None);
+            assert_eq!(set_to_something("   ".to_string()), None);
+            assert_eq!(
+                set_to_something("info".to_string()),
+                Some("info".to_string())
             );
-            named(&spans, "replaying");
         }
 
-        /// The mistake the target exists to prevent, pinned so it stays visible: a
-        /// span left on its module's own target is silenced along with its events.
+        /// `info` means info, with nothing quietly merged in - including for
+        /// third-party crates, whose noise is the deployment's judgement to make.
         #[test]
-        fn a_span_left_on_a_silenced_modules_target_does_not_export() {
-            let filter = EnvFilter::builder().parse_lossy(otlp_spec(None));
-            let spans = exported_spans_filtered(Box::new(filter), || {
-                tracing::info_span!(target: HOST_CALL, "forgot_the_span_target").in_scope(|| {});
-            });
+        fn info_means_info_everywhere() {
+            assert_eq!(otlp_spec(Some("info")), "info");
+            assert_eq!(exported(Some("info")), vec!["golem_operation"]);
+            assert_eq!(
+                events_on_operation(Some("info")),
+                2,
+                "plugin log and the third-party event, but not the debug SQL"
+            );
+        }
 
-            assert!(spans.is_empty());
+        /// The shape a deployment actually writes, quietening what it knows to be
+        /// noisy for that service.
+        #[test]
+        fn a_deployment_can_quieten_what_it_chooses() {
+            assert_eq!(
+                events_on_operation(Some("info,hyper=warn,golem::plugin_log=off")),
+                0
+            );
+        }
+
+        /// Each source can be turned up on its own without raising anything else.
+        #[test]
+        fn a_label_can_be_raised_on_its_own() {
+            assert_eq!(
+                events_on_operation(Some("info,golem::agent_rdbms=debug")),
+                3,
+                "the debug SQL joins the two info events"
+            );
+        }
+
+        /// Quietening the named event sources leaves the operation spans they were
+        /// recorded on, since those are selected by their own module and level.
+        #[test]
+        fn quietening_an_event_source_keeps_the_spans() {
+            assert_eq!(
+                exported(Some("info,golem::plugin_log=off,golem::agent_rdbms=off")),
+                vec!["golem_operation"]
+            );
         }
 
         #[test]
-        fn events_from_other_targets_are_untouched() {
-            let filter = EnvFilter::builder().parse_lossy(otlp_spec(None));
+        fn an_unparseable_directive_is_ignored_rather_than_fatal() {
+            let filter = EnvFilter::builder().parse_lossy(otlp_spec(Some("info,not a level")));
             let spans = exported_spans_filtered(Box::new(filter), || {
-                let span = tracing::info_span!("invocation");
-                let _guard = span.enter();
-                tracing::info!(target: "golem_worker_executor::services::worker", "unrelated");
+                tracing::info_span!("golem_operation").in_scope(|| {});
             });
-            assert_eq!(named(&spans, "invocation").events.len(), 1);
+            named(&spans, "golem_operation");
+        }
+    }
+
+    /// Tests for which filter each output gets.
+    ///
+    /// The dispatch has regressed more than once: a constructor that ignored its
+    /// `Output` silently handed the OTLP layer the `RUST_LOG` filter, so
+    /// `GOLEM_OTLP_FILTER` did nothing and the startup diagnostic reported a filter
+    /// that was not in force.
+    mod output_dispatch {
+        use test_r::test;
+        use tracing_subscriber::filter::LevelFilter;
+
+        use crate::tracing::Output;
+        use crate::tracing::filter::for_all_outputs;
+
+        fn max_level(filter: crate::tracing::filter::Boxed) -> Option<LevelFilter> {
+            use tracing_subscriber::layer::Filter;
+            Filter::<tracing_subscriber::Registry>::max_level_hint(&filter)
+        }
+
+        /// Compared against `default_otlp_env` rather than a fixed level, so this
+        /// holds whatever `GOLEM_OTLP_FILTER` happens to be in the running
+        /// environment - the perf skill tells developers to export it.
+        ///
+        /// A constructor that ignored its `Output` would hand the OTLP layer the
+        /// `RUST_LOG` filter instead, and fail here. Only in the coincidence where
+        /// both filters resolve to the same level would that pass unnoticed, which
+        /// is why this asserts identity with the OTLP filter rather than difference
+        /// from the other one - the latter false-fails on the same coincidence.
+        fn otlp_gets_its_own_filter(make: impl Fn(Output) -> crate::tracing::filter::Boxed) {
+            assert_eq!(
+                max_level(make(Output::Otlp)),
+                max_level(crate::tracing::filter::boxed::default_otlp_env()),
+                "the OTLP layer must take the OTLP filter"
+            );
         }
 
         #[test]
-        fn the_default_level_is_info() {
-            let filter = EnvFilter::builder().parse_lossy(otlp_spec(None));
-            let spans = exported_spans_filtered(Box::new(filter), || {
-                tracing::info_span!("kept").in_scope(|| {});
-                tracing::debug_span!("dropped").in_scope(|| {});
-            });
-            named(&spans, "kept");
-            assert!(spans.iter().all(|s| s.name != "dropped"));
+        fn default_env_routes_otlp_separately() {
+            otlp_gets_its_own_filter(for_all_outputs::DEFAULT_ENV);
         }
 
         #[test]
-        fn an_unparseable_user_directive_does_not_discard_the_defaults() {
-            let filter = EnvFilter::builder().parse_lossy(otlp_spec(Some("not a level")));
-            let spans = exported_spans_filtered(Box::new(filter), || {
-                let span = tracing::info_span!("invocation");
-                let _guard = span.enter();
-                tracing::info!(target: HOST_CALL, "host call");
-            });
-            assert_eq!(named(&spans, "invocation").events.len(), 0);
+        fn default_debug_env_routes_otlp_separately() {
+            otlp_gets_its_own_filter(for_all_outputs::default_debug_env());
+        }
+
+        #[test]
+        fn default_info_env_routes_otlp_separately() {
+            otlp_gets_its_own_filter(for_all_outputs::default_info_env());
+        }
+
+        #[test]
+        fn env_with_directives_routes_otlp_separately() {
+            otlp_gets_its_own_filter(for_all_outputs::debug_env_with_directives(vec![]));
+            otlp_gets_its_own_filter(for_all_outputs::info_env_with_directives(vec![]));
         }
     }
 
