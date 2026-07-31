@@ -33,6 +33,7 @@ use crate::model::component::{
     ComponentRevisionSelection, ComponentView, SelectedComponents,
     initial_permission_from_manifest_card, initial_permission_recipient_context,
 };
+use crate::model::component::{ComponentGetView, ComponentListView, ComponentManifestTraceView};
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
 use crate::model::deploy::{
     DeployConfig, TryUpdateAllWorkersResult, UpdateStagedComponentError,
@@ -45,9 +46,6 @@ use crate::model::language::GuestLanguage;
 use crate::model::plugin::PluginNameAndVersion;
 use crate::model::text::agent::action_result::{
     AgentDeleteAllResult, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
-};
-use crate::model::text::component::{
-    ComponentGetView, ComponentListView, ComponentManifestTraceView,
 };
 use crate::model::text::fmt::log_text_view;
 use crate::model::text::help::ComponentNameHelp;

@@ -680,10 +680,9 @@ fn agent_get_structured_output_masks_secret_config_paths() {
 fn component_get_and_list_structured_outputs_mask_secret_payloads() {
     let component = sample_component_view();
 
-    let get = hidden_structured_output(crate::model::text::component::ComponentGetView(
-        component.clone(),
-    ));
-    let list = hidden_structured_output(crate::model::text::component::ComponentListView {
+    let get =
+        hidden_structured_output(crate::model::component::ComponentGetView(component.clone()));
+    let list = hidden_structured_output(crate::model::component::ComponentListView {
         components: vec![component],
     });
 
@@ -702,11 +701,10 @@ fn component_get_and_list_structured_outputs_mask_secret_payloads() {
 
 #[test]
 fn component_manifest_trace_structured_output_masks_secret_payloads() {
-    let value =
-        hidden_structured_output(crate::model::text::component::ComponentManifestTraceView {
-            component_name: golem_common::model::component::ComponentName("component".to_string()),
-            properties: sample_component_layer_properties(),
-        });
+    let value = hidden_structured_output(crate::model::component::ComponentManifestTraceView {
+        component_name: golem_common::model::component::ComponentName("component".to_string()),
+        properties: sample_component_layer_properties(),
+    });
 
     assert_no_plaintext(
         &value,
@@ -1105,11 +1103,9 @@ fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
         .current();
 
     let outputs = vec![
-        to_structured_output_value(crate::model::text::component::ComponentGetView(
-            component.clone(),
-        ))
-        .expect("component.get should serialize"),
-        to_structured_output_value(crate::model::text::component::ComponentListView {
+        to_structured_output_value(crate::model::component::ComponentGetView(component.clone()))
+            .expect("component.get should serialize"),
+        to_structured_output_value(crate::model::component::ComponentListView {
             components: vec![component],
         })
         .expect("component.list should serialize"),
@@ -3772,26 +3768,22 @@ fn arb_guest_language() -> BoxedStrategy<crate::model::language::GuestLanguage> 
 }
 
 fn arb_component_get_result() -> OutputDocumentStrategy {
-    serialized_output(
-        arb_component_view().prop_map(crate::model::text::component::ComponentGetView),
-    )
+    serialized_output(arb_component_view().prop_map(crate::model::component::ComponentGetView))
 }
 
 fn arb_component_list_result() -> OutputDocumentStrategy {
     serialized_output(
         proptest::collection::vec(arb_component_view(), 0..5)
-            .prop_map(|components| crate::model::text::component::ComponentListView { components }),
+            .prop_map(|components| crate::model::component::ComponentListView { components }),
     )
 }
 
 fn arb_component_manifest_trace_result() -> OutputDocumentStrategy {
     serialized_output(
         (arb_small_string(), arb_component_layer_properties()).prop_map(
-            |(component_name, properties)| {
-                crate::model::text::component::ComponentManifestTraceView {
-                    component_name: golem_common::model::component::ComponentName(component_name),
-                    properties,
-                }
+            |(component_name, properties)| crate::model::component::ComponentManifestTraceView {
+                component_name: golem_common::model::component::ComponentName(component_name),
+                properties,
             },
         ),
     )
@@ -4625,14 +4617,14 @@ fn arb_deployment_list_result() -> OutputDocumentStrategy {
 fn arb_environment_list_result() -> OutputDocumentStrategy {
     serialized_output(
         proptest::collection::vec(arb_environment_with_details(), 0..5).prop_map(|environments| {
-            crate::model::text::environment::EnvironmentListView { environments }
+            crate::model::environment::EnvironmentListView { environments }
         }),
     )
 }
 
 fn arb_environment_sync_deployment_options_result() -> OutputDocumentStrategy {
     serialized_output(any::<bool>().prop_map(|updated| {
-        crate::model::text::environment::EnvironmentSyncDeploymentOptionsResult { updated }
+        crate::model::environment::EnvironmentSyncDeploymentOptionsResult { updated }
     }))
 }
 
