@@ -19,7 +19,6 @@ pub mod card;
 pub mod deployment;
 pub mod diff;
 pub mod fmt;
-pub mod grant;
 pub mod help;
 pub mod http_api_deployment;
 pub mod http_api_domain;

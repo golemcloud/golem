@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::model::cli_output::StructuredOutput;
+use crate::model::grant::format_grants;
 use crate::model::masking::Masked;
 use crate::model::text::fmt::*;
-use crate::model::text::grant::format_grants;
 use golem_client::model::{CardManagedBy, StoredCard};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
