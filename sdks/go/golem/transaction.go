@@ -162,7 +162,7 @@ func InfallibleTransaction[Out, E any](f func(*Transaction[E]) Result[Out, E]) O
 		// Rewind to the start; this interrupts the invocation and the runtime
 		// replays the transaction, so it does not return.
 		apiHost.SetOplogIndex(txBegin)
-		panic("golem: unreachable after oplog rewind")
+		panic(fmt.Errorf("golem: unreachable after oplog rewind"))
 	}
 
 	apiHost.MarkEndOperation(begin)

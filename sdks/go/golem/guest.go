@@ -68,6 +68,16 @@ func (e *PanicError) Error() string {
 	return fmt.Sprintf("agent method %q panicked: %v", e.Method, e.Value)
 }
 
+// Unwrap exposes the recovered value when it is itself an error, so a wrapped
+// cause (e.g. a RemoteCallError from a nested call, or an encodeError) stays
+// reachable via errors.As/Is.
+func (e *PanicError) Unwrap() error {
+	if err, ok := e.Value.(error); ok {
+		return err
+	}
+	return nil
+}
+
 // encodeError marks an encode-stage panic caused by the agent supplying a value
 // the wire cannot carry — a nil or unregistered variant case, an out-of-range
 // enum value, or a Secret used as a parameter/return. It is the agent's mistake,
@@ -196,11 +206,11 @@ func init() {
 	// reports failures through its result.
 	saveExports.Exports.Save = func() apihost.Snapshot {
 		if active == nil {
-			panic("golem: save-snapshot before initialize")
+			panic(fmt.Errorf("golem: save-snapshot before initialize"))
 		}
 		snap, err := saveState(active.state)
 		if err != nil {
-			panic("golem: snapshot save failed: " + err.Error())
+			panic(fmt.Errorf("golem: snapshot save failed: %w", err))
 		}
 		return snap
 	}

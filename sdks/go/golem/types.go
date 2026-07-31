@@ -70,7 +70,7 @@ func (o Option[T]) Or(def T) T {
 // absence is expected.
 func (o Option[T]) Unwrap() T {
 	if !o.some {
-		panic("golem: Unwrap on an empty Option")
+		panic(fmt.Errorf("golem: Unwrap on an empty Option"))
 	}
 	return o.value
 }
@@ -150,7 +150,7 @@ func (r Result[Ok, Err]) Ok() Ok {
 // Err returns the typed failure value, panicking if the Result is a success.
 func (r Result[Ok, Err]) Err() Err {
 	if !r.isErr {
-		panic("golem: Result.Err() on a successful Result")
+		panic(fmt.Errorf("golem: Result.Err() on a successful Result"))
 	}
 	return r.err
 }
@@ -270,7 +270,7 @@ func (s Secret[T]) Get() T {
 		// operational state; Go cannot forbid the zero value of an exported struct,
 		// so this guard turns the otherwise-cryptic nil-closure panic into a clear
 		// message.
-		panic("golem: Secret has no source; obtain it from the agent's config")
+		panic(fmt.Errorf("golem: Secret has no source; obtain it from the agent's config"))
 	}
 	v, err := s.read()
 	if err != nil {
