@@ -14,7 +14,6 @@
 
 pub mod action_result;
 pub mod agent;
-pub mod card;
 pub mod deployment;
 pub mod diff;
 pub mod fmt;

@@ -3216,21 +3216,20 @@ fn arb_permission_share_data()
 }
 
 fn arb_card_get_result() -> OutputDocumentStrategy {
-    serialized_output(arb_stored_card().prop_map(crate::model::text::card::CardGetView))
+    serialized_output(arb_stored_card().prop_map(crate::model::card::CardGetView))
 }
 
 fn arb_card_list_result() -> OutputDocumentStrategy {
     serialized_output(
         proptest::collection::vec(arb_stored_card(), 0..5)
-            .prop_map(|cards| crate::model::text::card::CardListView { cards }),
+            .prop_map(|cards| crate::model::card::CardListView { cards }),
     )
 }
 
 fn arb_card_revoke_result() -> OutputDocumentStrategy {
     serialized_output(
-        proptest::collection::vec(arb_uuid(), 0..5).prop_map(|revoked_card_ids| {
-            crate::model::text::card::CardRevokeResult { revoked_card_ids }
-        }),
+        proptest::collection::vec(arb_uuid(), 0..5)
+            .prop_map(|revoked_card_ids| crate::model::card::CardRevokeResult { revoked_card_ids }),
     )
 }
 

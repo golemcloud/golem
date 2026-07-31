@@ -16,6 +16,7 @@ pub mod account;
 pub mod agent;
 pub mod app;
 pub mod app_raw;
+pub mod card;
 pub mod cascade;
 pub mod cli_command_metadata;
 pub mod cli_output;
