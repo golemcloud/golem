@@ -25,11 +25,11 @@ use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::format::Format;
-use crate::model::text::fmt::{DecoratedIndent, log_text_view};
-use crate::model::text::help::{
+use crate::model::help::{
     AgentNameHelp, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp,
     AvailableProfileNamesHelp, EnvironmentNameHelp,
 };
+use crate::model::text::fmt::{DecoratedIndent, log_text_view};
 use colored::Colorize;
 use indoc::indoc;
 use std::sync::Arc;

@@ -42,13 +42,13 @@ use crate::model::deploy::{
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
+use crate::model::help::ComponentNameHelp;
 use crate::model::language::GuestLanguage;
 use crate::model::plugin::PluginNameAndVersion;
 use crate::model::text::agent::action_result::{
     AgentDeleteAllResult, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
 };
 use crate::model::text::fmt::log_text_view;
-use crate::model::text::help::ComponentNameHelp;
 use crate::validation::ValidationBuilder;
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use futures_util::future::OptionFuture;

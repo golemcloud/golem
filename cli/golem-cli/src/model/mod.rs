@@ -26,6 +26,7 @@ pub mod deploy;
 pub mod environment;
 pub mod format;
 pub mod grant;
+pub mod help;
 pub mod http_api;
 pub mod input;
 pub mod invoke_result_view;

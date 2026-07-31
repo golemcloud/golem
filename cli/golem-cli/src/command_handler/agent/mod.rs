@@ -31,6 +31,10 @@ use crate::log::{
 };
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{AgentUpdateMeta, TryUpdateAllWorkersResult};
+use crate::model::help::{
+    AgentNameHelp, ArgumentError, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp,
+    ParameterErrorTableView,
+};
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::agent::action_result::{
     AgentCancelInvocationResult, AgentDeleteResult, AgentFileContentsResult, AgentInterruptResult,
@@ -42,10 +46,6 @@ use crate::model::text::agent::{
     AgentCreateView, AgentGetView, format_agent_id_match, format_timestamp,
 };
 use crate::model::text::fmt::{log_fuzzy_match, log_text_view};
-use crate::model::text::help::{
-    AgentNameHelp, ArgumentError, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp,
-    ParameterErrorTableView,
-};
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
