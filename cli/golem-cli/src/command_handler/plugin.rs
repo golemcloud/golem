@@ -19,11 +19,11 @@ use crate::error::service::MapServiceError;
 use crate::log::{LogColorize, LogIndent, log_action, log_warn_action};
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::input::PathBufOrStdin;
-use crate::model::plugin::{PluginManifest, PluginTypeSpecificManifest};
-use crate::model::text::plugin::{
+use crate::model::plugin::{
     PluginListEntry, PluginListView, PluginRegistrationGetView, PluginRegistrationRegisterView,
     PluginSource, PluginUnregisterResult,
 };
+use crate::model::plugin::{PluginManifest, PluginTypeSpecificManifest};
 use anyhow::{Context as AnyhowContext, anyhow};
 use golem_client::api::PluginClient;
 use golem_client::model::PluginRegistrationCreation;

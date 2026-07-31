@@ -25,13 +25,13 @@ use crate::log::{
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
+use crate::model::plugin::PluginNameAndVersion;
 use crate::model::text::diff::log_unified_diff;
 use crate::model::text::environment::{
     EnvironmentListView, EnvironmentSyncDeploymentOptionsResult,
 };
 use crate::model::text::fmt::log_text_view;
 use crate::model::text::help::EnvironmentNameHelp;
-use crate::model::text::plugin::PluginNameAndVersion;
 use anyhow::{anyhow, bail};
 use golem_client::api::{EnvironmentClient, MeClient};
 use golem_client::model::{EnvironmentCreation, EnvironmentPluginGrantWithDetails};

@@ -4796,7 +4796,7 @@ fn arb_plugin_unregister_result() -> OutputDocumentStrategy {
             arb_small_string(),
         )
             .prop_map(|(unregistered, plugin_id, name, version)| {
-                crate::model::text::plugin::PluginUnregisterResult {
+                crate::model::plugin::PluginUnregisterResult {
                     unregistered,
                     plugin_id,
                     name,
@@ -4808,35 +4808,34 @@ fn arb_plugin_unregister_result() -> OutputDocumentStrategy {
 
 fn arb_plugin_get_result() -> OutputDocumentStrategy {
     serialized_output(
-        arb_plugin_registration().prop_map(crate::model::text::plugin::PluginRegistrationGetView),
+        arb_plugin_registration().prop_map(crate::model::plugin::PluginRegistrationGetView),
     )
 }
 
 fn arb_plugin_register_result() -> OutputDocumentStrategy {
     serialized_output(
-        arb_plugin_registration()
-            .prop_map(crate::model::text::plugin::PluginRegistrationRegisterView),
+        arb_plugin_registration().prop_map(crate::model::plugin::PluginRegistrationRegisterView),
     )
 }
 
 fn arb_plugin_list_result() -> OutputDocumentStrategy {
     serialized_output(
         proptest::collection::vec(arb_plugin_list_entry(), 0..5)
-            .prop_map(|plugins| crate::model::text::plugin::PluginListView { plugins }),
+            .prop_map(|plugins| crate::model::plugin::PluginListView { plugins }),
     )
 }
 
-fn arb_plugin_list_entry() -> BoxedStrategy<crate::model::text::plugin::PluginListEntry> {
+fn arb_plugin_list_entry() -> BoxedStrategy<crate::model::plugin::PluginListEntry> {
     (arb_plugin_registration(), arb_plugin_source())
-        .prop_map(|(plugin, source)| crate::model::text::plugin::PluginListEntry { plugin, source })
+        .prop_map(|(plugin, source)| crate::model::plugin::PluginListEntry { plugin, source })
         .boxed()
 }
 
-fn arb_plugin_source() -> BoxedStrategy<crate::model::text::plugin::PluginSource> {
+fn arb_plugin_source() -> BoxedStrategy<crate::model::plugin::PluginSource> {
     prop_oneof![
-        Just(crate::model::text::plugin::PluginSource::Own),
-        Just(crate::model::text::plugin::PluginSource::Builtin),
-        Just(crate::model::text::plugin::PluginSource::Shared),
+        Just(crate::model::plugin::PluginSource::Own),
+        Just(crate::model::plugin::PluginSource::Builtin),
+        Just(crate::model::plugin::PluginSource::Shared),
     ]
     .boxed()
 }

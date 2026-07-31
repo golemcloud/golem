@@ -25,7 +25,7 @@ use crate::model::app_raw;
 use crate::model::component::initial_permission_recipient_context;
 use crate::model::component::{AgentTypeManifestProvisionConfig, ComponentDeployProperties};
 use crate::model::environment::ResolvedEnvironmentIdentity;
-use crate::model::text::plugin::PluginNameAndVersion;
+use crate::model::plugin::PluginNameAndVersion;
 use anyhow::{Context as AnyhowContext, anyhow};
 use golem_client::model::EnvironmentPluginGrantWithDetails;
 use golem_common::model::agent::AgentTypeName;
