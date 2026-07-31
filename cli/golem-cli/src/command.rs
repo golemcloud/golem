@@ -84,7 +84,6 @@ impl GolemCliCommand {
             &CliMetadataFilter {
                 command_path_prefix_exclude: vec![
                     vec!["account"],
-                    vec!["api"], // TODO: recheck after code-first routes is implemented
                     vec!["api-token"],
                     vec!["clean"],
                     vec!["completion"],
