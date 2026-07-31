@@ -61,20 +61,17 @@ import (
 
 // ── Errors ──────────────────────────────────────────────────────────────────
 
-// ErrorKind classifies an [Error].
-type ErrorKind uint8
+// ErrorKind classifies an [Error]. It is shared with the mysql driver via
+// [types.ErrorKind].
+type ErrorKind = types.ErrorKind
 
+// The error kinds (see [types] for docs).
 const (
-	// ConnectionFailure means the connection could not be established or was lost.
-	ConnectionFailure ErrorKind = iota
-	// QueryParameterFailure means a parameter could not be encoded for the query.
-	QueryParameterFailure
-	// QueryExecutionFailure means the database rejected or failed the statement.
-	QueryExecutionFailure
-	// QueryResponseFailure means the result could not be decoded.
-	QueryResponseFailure
-	// Other is any error the host did not classify.
-	Other
+	ConnectionFailure     = types.ConnectionFailure
+	QueryParameterFailure = types.QueryParameterFailure
+	QueryExecutionFailure = types.QueryExecutionFailure
+	QueryResponseFailure  = types.QueryResponseFailure
+	Other                 = types.Other
 )
 
 // Error is a Postgres host error.

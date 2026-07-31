@@ -109,3 +109,20 @@ type MacAddr [6]byte
 func (m MacAddr) String() string {
 	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", m[0], m[1], m[2], m[3], m[4], m[5])
 }
+
+// ErrorKind classifies a database error. It is shared by the postgres and mysql
+// drivers, whose host error variants are identical.
+type ErrorKind uint8
+
+const (
+	// ConnectionFailure means the connection could not be established or was lost.
+	ConnectionFailure ErrorKind = iota
+	// QueryParameterFailure means a parameter could not be encoded for the query.
+	QueryParameterFailure
+	// QueryExecutionFailure means the database rejected or failed the statement.
+	QueryExecutionFailure
+	// QueryResponseFailure means the result could not be decoded.
+	QueryResponseFailure
+	// Other is any error the host did not classify.
+	Other
+)
