@@ -5339,32 +5339,30 @@ fn arb_api_retry_policy_with_depth(
 
 fn arb_retry_policy_create_result() -> OutputDocumentStrategy {
     serialized_output(
-        arb_retry_policy().prop_map(crate::model::text::retry_policy::RetryPolicyCreateView),
+        arb_retry_policy().prop_map(crate::model::retry_policy::RetryPolicyCreateView),
     )
 }
 
 fn arb_retry_policy_delete_result() -> OutputDocumentStrategy {
     serialized_output(
-        arb_retry_policy().prop_map(crate::model::text::retry_policy::RetryPolicyDeleteView),
+        arb_retry_policy().prop_map(crate::model::retry_policy::RetryPolicyDeleteView),
     )
 }
 
 fn arb_retry_policy_get_result() -> OutputDocumentStrategy {
-    serialized_output(
-        arb_retry_policy().prop_map(crate::model::text::retry_policy::RetryPolicyGetView),
-    )
+    serialized_output(arb_retry_policy().prop_map(crate::model::retry_policy::RetryPolicyGetView))
 }
 
 fn arb_retry_policy_update_result() -> OutputDocumentStrategy {
     serialized_output(
-        arb_retry_policy().prop_map(crate::model::text::retry_policy::RetryPolicyUpdateView),
+        arb_retry_policy().prop_map(crate::model::retry_policy::RetryPolicyUpdateView),
     )
 }
 
 fn arb_retry_policy_list_result() -> OutputDocumentStrategy {
     serialized_output(
         proptest::collection::vec(arb_retry_policy(), 0..5).prop_map(|retry_policies| {
-            crate::model::text::retry_policy::RetryPolicyListView { retry_policies }
+            crate::model::retry_policy::RetryPolicyListView { retry_policies }
         }),
     )
 }

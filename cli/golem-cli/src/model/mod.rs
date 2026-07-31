@@ -34,6 +34,7 @@ pub mod masking;
 pub mod plugin;
 pub mod repl;
 pub mod resource_definition;
+pub mod retry_policy;
 pub mod secret;
 pub mod template;
 pub mod text;

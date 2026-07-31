@@ -19,7 +19,7 @@ use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
 use crate::log::log_error;
 use crate::model::environment::EnvironmentResolveMode;
-use crate::model::text::retry_policy::{
+use crate::model::retry_policy::{
     RetryPolicyCreateView, RetryPolicyDeleteView, RetryPolicyGetView, RetryPolicyListView,
     RetryPolicyUpdateView,
 };
