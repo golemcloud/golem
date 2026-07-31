@@ -27,8 +27,8 @@ use crate::model::masking::{
     mask_secret_with_fingerprint,
 };
 use crate::model::text::fmt::{
-    Column, FieldsBuilder, MessageWithFields, TextOutput, format_id, format_main_id, log_table,
-    new_table_full_condensed,
+    Column, FieldsBuilder, MessageWithFields, NoTextOutput, TextOutput, format_id, format_main_id,
+    log_table, new_table_full_condensed,
 };
 use colored::Colorize;
 use golem_client::model::{AgentSecretDto, Deployment, RetryPolicyDto};
@@ -2191,4 +2191,17 @@ enum DiffRun<'a> {
         lines: Vec<DiffLine<'a>>,
     },
     Other(Vec<DiffLine<'a>>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeployResultView {
+    pub deployed: bool,
+}
+
+impl NoTextOutput for DeployResultView {}
+impl TextOutput for DeployResultView {}
+
+impl StructuredOutput for DeployResultView {
+    const KIND: &'static str = "deploy";
 }

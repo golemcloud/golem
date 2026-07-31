@@ -2058,29 +2058,25 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
 }
 
 fn arb_build_result() -> OutputDocumentStrategy {
-    serialized_output(
-        any::<bool>().prop_map(|built| crate::model::text::action_result::BuildResult { built }),
-    )
+    serialized_output(any::<bool>().prop_map(|built| crate::model::app::BuildResult { built }))
 }
 
 fn arb_clean_result() -> OutputDocumentStrategy {
-    serialized_output(
-        any::<bool>()
-            .prop_map(|cleaned| crate::model::text::action_result::CleanResult { cleaned }),
-    )
+    serialized_output(any::<bool>().prop_map(|cleaned| crate::model::app::CleanResult { cleaned }))
 }
 
 fn arb_deploy_result() -> OutputDocumentStrategy {
     serialized_output(
-        any::<bool>()
-            .prop_map(|deployed| crate::model::text::action_result::DeployResultView { deployed }),
+        any::<bool>().prop_map(|deployed| crate::model::deploy::DeployResultView { deployed }),
     )
 }
 
 fn arb_generate_bridge_result() -> OutputDocumentStrategy {
-    serialized_output(any::<bool>().prop_map(|generated| {
-        crate::model::text::action_result::GenerateBridgeResult { generated }
-    }))
+    serialized_output(
+        any::<bool>().prop_map(
+            |generated| crate::app::build::gen_bridge::GenerateBridgeResult { generated },
+        ),
+    )
 }
 
 fn arb_agent_type_get_result() -> OutputDocumentStrategy {
@@ -3724,12 +3720,10 @@ fn arb_security_scheme_provider() -> BoxedStrategy<golem_common::model::security
 fn arb_new_app_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string(), arb_small_string()).prop_map(
-            |(created, application_name, application_dir)| {
-                crate::model::text::action_result::NewAppResult {
-                    created,
-                    application_name,
-                    application_dir: PathBuf::from(application_dir),
-                }
+            |(created, application_name, application_dir)| crate::model::app::NewAppResult {
+                created,
+                application_name,
+                application_dir: PathBuf::from(application_dir),
             },
         ),
     )

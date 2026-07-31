@@ -163,7 +163,7 @@ impl AppCommandHandler {
         if outcome.is_ok() {
             self.ctx
                 .log_handler()
-                .log_output(crate::model::text::action_result::BuildResult { built: true })?;
+                .log_output(crate::model::app::BuildResult { built: true })?;
         }
         outcome
     }
@@ -181,7 +181,7 @@ impl AppCommandHandler {
         if outcome.is_ok() {
             self.ctx
                 .log_handler()
-                .log_output(crate::model::text::action_result::CleanResult { cleaned: true })?;
+                .log_output(crate::model::app::CleanResult { cleaned: true })?;
         }
         outcome
     }
@@ -365,9 +365,9 @@ impl AppCommandHandler {
             },
         };
         if outcome.is_ok() {
-            self.ctx.log_handler().log_output(
-                crate::model::text::action_result::DeployResultView { deployed: true },
-            )?;
+            self.ctx
+                .log_handler()
+                .log_output(crate::model::deploy::DeployResultView { deployed: true })?;
         }
         outcome
     }

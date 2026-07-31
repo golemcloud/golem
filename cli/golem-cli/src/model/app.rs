@@ -27,9 +27,11 @@ use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
 use crate::model::cascade::property::optional::OptionalProperty;
 use crate::model::cascade::property::vec::{VecMergeMode, VecProperty};
 use crate::model::cascade::store::Store;
+use crate::model::cli_output::StructuredOutput;
 use crate::model::language::GuestLanguage;
 use crate::model::repl::ReplLanguage;
 use crate::model::template::Template;
+use crate::model::text::fmt::{NoTextOutput, TextOutput};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::{Context, anyhow};
 use golem_common::model::agent::AgentTypeName;
@@ -48,7 +50,7 @@ use heck::{
 };
 use indexmap::IndexMap;
 use itertools::Itertools;
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Formatter;
@@ -4111,6 +4113,47 @@ mod app_builder {
             (None, None) => None,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanResult {
+    pub cleaned: bool,
+}
+
+impl NoTextOutput for CleanResult {}
+impl TextOutput for CleanResult {}
+
+impl StructuredOutput for CleanResult {
+    const KIND: &'static str = "clean";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildResult {
+    pub built: bool,
+}
+
+impl NoTextOutput for BuildResult {}
+impl TextOutput for BuildResult {}
+
+impl StructuredOutput for BuildResult {
+    const KIND: &'static str = "build";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewAppResult {
+    pub created: bool,
+    pub application_name: String,
+    pub application_dir: PathBuf,
+}
+
+impl NoTextOutput for NewAppResult {}
+impl TextOutput for NewAppResult {}
+
+impl StructuredOutput for NewAppResult {
+    const KIND: &'static str = "new";
 }
 
 #[cfg(test)]
