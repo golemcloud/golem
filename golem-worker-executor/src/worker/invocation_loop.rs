@@ -692,8 +692,18 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     "invocation_queue_pickup",
                     agent_id = %self.owned_agent_id.agent_id,
                     agent_type = %self.worker_trace.agent_type,
+                    // The root of the execution's own trace, so it has to say which
+                    // invocation it is: the link points back at the producer, but
+                    // this key is what a search can join the two traces on. Left
+                    // unset rather than empty when there is none, so a search for
+                    // one key cannot collide with every keyless pickup.
+                    idempotency_key = tracing::field::Empty,
                     otel.kind = "consumer",
                 );
+
+                if let Some(idempotency_key) = idempotency_key {
+                    pickup_span.record("idempotency_key", tracing::field::display(idempotency_key));
+                }
 
                 let outcome = async {
                     let mut store = self.store.lock().await;
@@ -937,11 +947,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Level::INFO,
             "invocation",
             agent_id = %self.owned_agent_id.agent_id,
-            agent_type = self.parent
-                .parsed_agent_id
-                .as_ref()
-                .map(|id| id.agent_type.to_string())
-                .unwrap_or_else(|| "-".to_string()),
+            agent_type = self.parent.agent_type_label(),
             %idempotency_key,
             function = display_name
         );

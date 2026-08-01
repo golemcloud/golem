@@ -270,7 +270,14 @@ impl EphemeralOplog {
                             let _ = done.send(());
                         }
                     }
-                    .instrument(related_span!(transfer_origin, Level::INFO, "ephemeral_oplog_background_transfer"))
+                    .instrument(related_span!(
+                        transfer_origin,
+                        Level::INFO,
+                        "ephemeral_oplog_background_transfer",
+                        agent_id = %owned_agent_id.agent_id,
+                        from = %format!("layer-{source}"),
+                        last_transferred_idx = %last_transferred_idx,
+                    ))
                     .await;
                 }
                 BackgroundTransferMessage::TransferFromPrimary {
@@ -293,7 +300,9 @@ impl EphemeralOplog {
                     .instrument(related_span!(
                         transfer_origin,
                         Level::INFO,
-                        "ephemeral_oplog_background_transfer"
+                        "ephemeral_oplog_background_transfer",
+                        agent_id = %owned_agent_id.agent_id,
+                        from = "primary",
                     ))
                     .await;
                 }

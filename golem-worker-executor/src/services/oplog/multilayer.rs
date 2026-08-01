@@ -921,7 +921,14 @@ impl MultiLayerOplog {
                             }
                         }
                     }
-                    .instrument(related_span!(transfer_origin, Level::INFO, "oplog_background_transfer"))
+                    .instrument(related_span!(
+                        transfer_origin,
+                        Level::INFO,
+                        "oplog_background_transfer",
+                        agent_id = %owned_agent_id.agent_id,
+                        from = "primary",
+                        last_transferred_idx = %last_transferred_idx,
+                    ))
                     .await;
                 }
                 TransferFromLower {
@@ -954,7 +961,16 @@ impl MultiLayerOplog {
                             done.send(()).unwrap()
                         }
                     }
-                    .instrument(related_span!(transfer_origin, Level::INFO, "oplog_background_transfer"))
+                    .instrument(related_span!(
+                        transfer_origin,
+                        Level::INFO,
+                        "oplog_background_transfer",
+                        agent_id = %owned_agent_id.agent_id,
+                        // A string in both arms: the same field name typed
+                        // differently per call site conflicts in a typed store.
+                        from = %format!("layer-{source}"),
+                        last_transferred_idx = %last_transferred_idx,
+                    ))
                     .await;
                 }
             }

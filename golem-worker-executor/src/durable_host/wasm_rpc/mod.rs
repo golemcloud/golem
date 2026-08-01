@@ -1220,6 +1220,21 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     // `TraceOrigin`.
     let origin = TraceOrigin::capture_current();
     let caller_agent_id = agent_id.clone();
+
+    // Built here, while the values are still borrowable, so nothing is cloned for
+    // it and the fields stay lazy. The root of its own trace, so it has to say
+    // which call is retrying: the caller alone matches every RPC that worker
+    // ever made.
+    let retry_span = related_span!(
+        origin,
+        Level::INFO,
+        "rpc_invoke_retry",
+        agent_id = %caller_agent_id,
+        target_agent_id = %remote_agent_id.agent_id,
+        method = %method_name,
+        idempotency_key = %idempotency_key,
+    );
+
     let invoke = move || {
         let rpc = rpc.clone();
         let remote_agent_id = remote_agent_id.clone();
@@ -1285,12 +1300,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
             };
             Ok(result)
         }
-        .instrument(related_span!(
-            origin,
-            Level::INFO,
-            "rpc_invoke_retry",
-            agent_id = %caller_agent_id
-        )),
+        .instrument(retry_span),
     )
 }
 

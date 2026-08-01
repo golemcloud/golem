@@ -920,6 +920,21 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
     // Links back rather than running inside the invocation's span, as above.
     let origin = TraceOrigin::capture_current();
     let agent_id = worker.agent_id();
+    // Built here, while the request is still borrowable, so nothing is cloned for
+    // it and the fields stay lazy. The root of its own trace, so it has to say
+    // which request is retrying: the agent alone matches every outgoing call that
+    // worker ever made.
+    let retry_span = related_span!(
+        origin,
+        Level::INFO,
+        "http_request_retry",
+        %agent_id,
+        method = %request.method,
+        // Endpoint only: a query string routinely carries credentials, and the full
+        // URL is unbounded cardinality besides. Evaluated lazily by `span!`, so it
+        // costs nothing when the span is disabled.
+        uri = %request.uri.split('?').next().unwrap_or(&request.uri),
+    );
 
     wasmtime_wasi::runtime::spawn(
         async move {
@@ -1114,12 +1129,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                 }
             }
         }
-        .instrument(related_span!(
-            origin,
-            Level::INFO,
-            "http_request_retry",
-            %agent_id
-        )),
+        .instrument(retry_span),
     )
 }
 

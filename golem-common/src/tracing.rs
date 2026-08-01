@@ -69,6 +69,17 @@ fn set_to_something(value: String) -> Option<String> {
     (!value.trim().is_empty()).then_some(value)
 }
 
+/// Resolves `service.instance.id` from the pod name, falling back to the hostname.
+///
+/// Both are subject to [`set_to_something`]: a downward-API field or a Helm
+/// template can render a variable that is set but empty, and taking that at face
+/// value would both blank the attribute and skip the fallback.
+fn instance_id_from(pod_name: Option<String>, hostname: Option<String>) -> Option<String> {
+    pod_name
+        .and_then(set_to_something)
+        .or_else(|| hostname.and_then(set_to_something))
+}
+
 /// Targets naming a source of telemetry that an operator is likely to want to turn
 /// up or down on its own.
 ///
@@ -649,9 +660,24 @@ where
             .build()
             .expect("Failed to build OTLP exporter");
 
-        let resource = Resource::builder()
-            .with_service_name(config.otlp.service_name.clone())
-            .build();
+        // Without an instance id every span from a multi-replica deployment looks
+        // the same, and a background tick - which has no request to identify it -
+        // cannot be attributed to a pod at all.
+        let mut resource = Resource::builder().with_service_name(config.otlp.service_name.clone());
+
+        // Set only when it resolves to something: a shared literal would collapse
+        // every replica into one instance, which is worse than the attribute being
+        // absent, and would override whatever the SDK's own env detector found.
+        if let Some(instance_id) = instance_id_from(
+            std::env::var("POD_NAME").ok(),
+            std::env::var("HOSTNAME").ok(),
+        ) {
+            resource = resource.with_attribute(opentelemetry::KeyValue::new(
+                "service.instance.id",
+                instance_id,
+            ));
+        }
+        let resource = resource.build();
 
         let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
             .with_resource(resource)
@@ -1077,6 +1103,25 @@ pub(crate) mod test {
         #[test]
         fn blank_is_treated_as_unset() {
             assert_eq!(otlp_spec(Some("   ")), "off");
+        }
+
+        /// A set-but-empty `POD_NAME` - a downward-API field or Helm template that
+        /// rendered blank - must fall through to the hostname rather than blanking
+        /// the attribute for every replica.
+        #[test]
+        fn a_blank_pod_name_falls_through_to_the_hostname() {
+            use crate::tracing::instance_id_from;
+
+            assert_eq!(
+                instance_id_from(Some("  ".to_string()), Some("node-7".to_string())),
+                Some("node-7".to_string())
+            );
+            assert_eq!(
+                instance_id_from(Some("pod-3".to_string()), Some("node-7".to_string())),
+                Some("pod-3".to_string())
+            );
+            assert_eq!(instance_id_from(Some(String::new()), None), None);
+            assert_eq!(instance_id_from(None, None), None);
         }
 
         /// A variable set to nothing must reach callers as absent, not as a filter

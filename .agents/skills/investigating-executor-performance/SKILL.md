@@ -193,9 +193,13 @@ for size, count in sorted(sizes.items()):
 "
 ```
 
-#### Detect single-span orphan traces
+#### Detect single-span traces
 
-Single-span traces often indicate missing context propagation — the span was created but not linked to a parent trace.
+Handed-off work is a linked root by design, so a single-span trace is usually expected
+rather than broken: `invocation_queue_pickup`, `rpc_invoke_retry`, `http_request_retry`
+and the `*_background_transfer` spans all start their own trace and carry a link back to
+whatever handed the work off. What this is good for is spotting a span that is *neither*
+one of those *nor* connected — that is a genuine propagation gap.
 
 ```python
 python3 -c "
@@ -206,7 +210,7 @@ orphans = Counter()
 for t in data['data']:
     if len(t['spans']) == 1:
         orphans[t['spans'][0]['operationName']] += 1
-print(f'Total single-span orphan traces: {sum(orphans.values())}')
+print(f'Total single-span traces: {sum(orphans.values())}')
 for op, count in orphans.most_common(15):
     print(f'{count:4d}  {op}')
 "
@@ -231,7 +235,8 @@ print(f'Total: {len(data[\"data\"])}, After filtering noise: {len(clean)}')
 
 ## Known Caveats
 
-- **Trace context propagation works end-to-end**: The `OtelGrpcLayer` on both client and server sides correctly injects/extracts `traceparent` headers. Test spans, gRPC client spans, and gRPC server handler spans (e.g., `invocation`, `replaying`) all appear in a single connected trace. If you see orphan traces, verify the `GOLEM__TRACING__OTLP__*` env vars are set — without them, the `tracing_opentelemetry` layer is not added to the subscriber, so spans have no OTel context and the propagator injects nothing.
+- **An invocation spans two traces, joined by a link**: the request side ends at `wait_for_invocation_result`, and the execution is the root of its own trace linked back to `enqueue_invocation`. That is deliberate — the worker runs the invocation independently and outlives the caller, so nesting would report a child outliving its parent. To follow one to the other, search on the `idempotency_key` both sides carry. gRPC client and server spans within a single service's request path do still connect normally via `traceparent`.
+- **Nothing exported at all**: check `GOLEM_OTLP_FILTER` first — unset means `off`, so the `GOLEM__TRACING__OTLP__*` variables on their own produce nothing. The effective filter is logged at startup as `otlp_filter`. If that looks right, then verify the `GOLEM__TRACING__OTLP__*` variables, without which the `tracing_opentelemetry` layer is never added to the subscriber.
 - **Span queue size (`OTEL_BSP_MAX_QUEUE_SIZE`)**: The `BatchSpanProcessor` has a default queue size of 2048 spans. Under high-throughput tests this queue can overflow, causing spans to be silently dropped. Set `OTEL_BSP_MAX_QUEUE_SIZE=65536` alongside the other env vars to avoid this. Example: `OTEL_BSP_MAX_QUEUE_SIZE=65536 GOLEM__TRACING__OTLP__ENABLED=true ... cargo test ...`.
 - **Background loop noise**: Long-lived background tasks create traces spanning the entire test duration (~90s). These are not performance issues but can obscure real test traces.
 - **Fresh Jaeger**: Always restart Jaeger with `docker compose down && docker compose up -d` before a new investigation to avoid mixing traces from different runs.

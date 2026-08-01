@@ -214,13 +214,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     fn trace(&self, startup_origin: TraceOrigin) -> WorkerTrace {
         WorkerTrace {
             startup_origin,
-            // `-` stands in for an agent id that could not be parsed into a type.
-            agent_type: self
-                .parsed_agent_id
-                .as_ref()
-                .map(|id| id.agent_type.to_string())
-                .unwrap_or_else(|| "-".to_string()),
+            agent_type: self.agent_type_label(),
         }
+    }
+
+    /// The agent type as a span field value, `-` for an agent id that could not be
+    /// parsed into one. Shared so every span labels it the same way.
+    pub(crate) fn agent_type_label(&self) -> String {
+        self.parsed_agent_id
+            .as_ref()
+            .map(|id| id.agent_type.to_string())
+            .unwrap_or_else(|| "-".to_string())
     }
 
     pub(crate) async fn remove_from_active_workers(&self) {
@@ -808,7 +812,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let subscription = self.events().subscribe();
 
         let output = async { self.lookup_invocation_result(idempotency_key).await }
-            .instrument(span!(Level::INFO, "lookup_invocation_result"))
+            .instrument(span!(
+                Level::INFO,
+                "lookup_invocation_result",
+                agent_id = %self.owned_agent_id.agent_id,
+                idempotency_key = %idempotency_key,
+            ))
             .await;
         match output {
             LookupResult::Complete(output) => Ok(ResultOrSubscription::Finished(output)),
@@ -1424,6 +1433,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
+        // Carried on the span so the two sides of the hand-off share a searchable
+        // key: the execution runs in its own trace, linked rather than nested, so
+        // `idempotency_key` is what joins them. Left unset rather than empty when
+        // there is none, so a search for one key cannot collide with every
+        // keyless enqueue.
+        let span = span!(
+            Level::INFO,
+            "enqueue_invocation",
+            agent_id = %self.owned_agent_id.agent_id,
+            idempotency_key = tracing::field::Empty,
+            // Pairs with the `consumer` span the invocation loop creates when it
+            // picks the work up.
+            otel.kind = "producer"
+        );
+        if let Some(idempotency_key) = invocation.idempotency_key() {
+            span.record("idempotency_key", tracing::field::display(idempotency_key));
+        }
+
         async {
             let instance_guard = self.lock_non_stopping_worker().await;
 
@@ -1487,13 +1514,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             Ok(())
         }
-        // `otel.kind = producer` pairs this with the `consumer` span the invocation
-        // loop creates when it picks the work up.
-        .instrument(span!(
-            Level::INFO,
-            "enqueue_invocation",
-            otel.kind = "producer"
-        ))
+        .instrument(span)
         .await
     }
 
