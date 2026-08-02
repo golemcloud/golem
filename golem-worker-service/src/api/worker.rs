@@ -1043,11 +1043,15 @@ impl WorkerApi {
             .connect_to_worker(component_id.0, agent_name.0, token.0.secret())
             .await?;
 
-        let upgraded: BoxWebSocketUpgraded = websocket.on_upgrade(Box::new(|socket_stream| {
+        // The stream captured this when it was built, inside the request span.
+        let origin = worker_stream.origin();
+
+        let upgraded: BoxWebSocketUpgraded = websocket.on_upgrade(Box::new(move |socket_stream| {
             Box::pin(async move {
                 let (sink, stream) = socket_stream.split();
                 let _ = proxy_worker_connection(
                     agent_id,
+                    origin,
                     worker_stream,
                     sink,
                     stream,
