@@ -27,6 +27,9 @@ pub mod worker;
 pub mod workerctx;
 
 #[cfg(test)]
+pub mod span_test_support;
+
+#[cfg(test)]
 test_r::enable!();
 
 use self::durable_host::{DurableWorkerCtx, DurableWorkerCtxView};
@@ -900,6 +903,7 @@ pub async fn create_worker_executor_impl<
         golem_config.scheduler.claim_batch_size,
         golem_config.scheduler.lease_ttl,
         golem_config.scheduler.max_batches_per_tick,
+        golem_config.scheduler.storage_retry.clone(),
         golem_config.scheduler.max_concurrent_action_processing,
         shutdown_token.clone(),
     );

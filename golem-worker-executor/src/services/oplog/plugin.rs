@@ -43,6 +43,8 @@ use golem_common::model::{
     OwnedAgentId, ScanCursor, ShardId,
 };
 use golem_common::read_only_lock;
+use golem_common::related_span;
+use golem_common::tracing::TraceOrigin;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::component::Component;
 use std::collections::hash_map::Entry;
@@ -806,6 +808,10 @@ impl ForwardingOplog {
             state
         };
 
+        // Captured here, where the caller's context is still current: each flush
+        // tick links back to it rather than running inside it.
+        let flush_origin = TraceOrigin::capture_current();
+        let agent_id = initial_worker_metadata.agent_id.clone();
         let state = Arc::new(Mutex::new(ForwardingOplogState {
             buffer: VecDeque::new(),
             buffer_start_idx: last_oplog_idx.next(),
@@ -829,12 +835,20 @@ impl ForwardingOplog {
             async move {
                 loop {
                     tokio::time::sleep(max_elapsed_time).await;
-                    let mut state = state.lock().await;
-                    state.try_locality_recovery().await;
-                    state.try_flush().await;
+                    async {
+                        let mut state = state.lock().await;
+                        state.try_locality_recovery().await;
+                        state.try_flush().await;
+                    }
+                    .instrument(related_span!(
+                        flush_origin,
+                        tracing::Level::INFO,
+                        "oplog_forwarding_flush",
+                        agent_id = %agent_id
+                    ))
+                    .await;
                 }
             }
-            .in_current_span()
         });
         Self {
             inner,
@@ -1273,6 +1287,17 @@ impl ForwardingOplogState {
                 let caller_account_id = metadata.created_by;
                 let plugin_clone = plugin.clone();
                 let target_clone = target_agent_id.clone();
+                // The task polls on after this flush returned, so it links back to
+                // the flush rather than running inside its span. See `TraceOrigin`.
+                let monitor_span = related_span!(
+                    TraceOrigin::capture_current(),
+                    tracing::Level::INFO,
+                    "oplog_plugin_batch_monitor",
+                    agent_id = %metadata.agent_id,
+                    grant_id = %grant_id,
+                    batch_start = %batch_start,
+                    batch_end = %batch_end
+                );
                 let monitor = tokio::spawn(
                     async move {
                         // Poll until the invocation completes, with a timeout
@@ -1328,7 +1353,7 @@ impl ForwardingOplogState {
                             }
                         }
                     }
-                    .in_current_span(),
+                    .instrument(monitor_span),
                 );
                 self.monitor_tasks.push(monitor);
             }

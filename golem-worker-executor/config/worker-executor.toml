@@ -251,6 +251,13 @@ max_batches_per_tick = 10
 max_concurrent_action_processing = 64
 refresh_interval = "2s"
 
+[scheduler.storage_retry]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
+
 [scheduler_storage]
 type = "Sqlite"
 
@@ -596,6 +603,13 @@ without_time = false
 # max_concurrent_action_processing = 64
 # refresh_interval = "2s"
 # 
+# [scheduler.storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+# 
 # [scheduler_storage]
 # type = "Sqlite"
 # 
@@ -910,6 +924,13 @@ without_time = false
 # max_batches_per_tick = 10
 # max_concurrent_action_processing = 64
 # refresh_interval = "2s"
+# 
+# [scheduler.storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
 # 
 # [scheduler_storage]
 # type = "Sqlite"

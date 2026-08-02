@@ -1094,9 +1094,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // they cannot be easily watched with CLI tools.
             if self.state.component_metadata.metadata.has_oplog_processor() {
                 let agent_id = &self.owned_agent_id;
+                // Under `target::PLUGIN_LOG` rather than this module: the plugin
+                // decides how much of this there is, so an operator needs to be
+                // able to name it on its own.
+                use golem_common::tracing::target::PLUGIN_LOG;
                 match level {
                     LogLevel::Stdout | LogLevel::Debug | LogLevel::Trace => {
                         tracing::debug!(
+                            target: PLUGIN_LOG,
                             plugin_agent = %agent_id,
                             context,
                             "Plugin: {message}"
@@ -1104,6 +1109,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     }
                     LogLevel::Stderr | LogLevel::Info => {
                         tracing::info!(
+                            target: PLUGIN_LOG,
                             plugin_agent = %agent_id,
                             context,
                             "Plugin: {message}"
@@ -1111,6 +1117,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     }
                     LogLevel::Warn => {
                         tracing::warn!(
+                            target: PLUGIN_LOG,
                             plugin_agent = %agent_id,
                             context,
                             "Plugin: {message}"
@@ -1118,6 +1125,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     }
                     LogLevel::Error | LogLevel::Critical => {
                         tracing::error!(
+                            target: PLUGIN_LOG,
                             plugin_agent = %agent_id,
                             context,
                             "Plugin: {message}"

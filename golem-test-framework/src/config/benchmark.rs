@@ -317,8 +317,10 @@ impl BenchmarkTestDependencies {
                 .use_stderr()
                 .with_otlp(params.otlp, "localhost", 4318, "benchmarks"),
             |output| match output {
+                // `--otlp` is the deliberate act here, so exporting nothing unless a
+                // second variable is also set would just be surprising.
                 golem_common::tracing::Output::Otlp => {
-                    golem_common::tracing::filter::boxed::default_otlp_env()
+                    golem_common::tracing::filter::boxed::otlp_env_or("info")
                 }
                 _ => golem_common::tracing::filter::boxed::env_with_directives(
                     params

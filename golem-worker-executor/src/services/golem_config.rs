@@ -609,6 +609,12 @@ pub struct SchedulerConfig {
     pub lease_ttl: Duration,
     pub max_batches_per_tick: u32,
     pub max_concurrent_action_processing: u32,
+    /// Retry policy applied when scheduling or cancelling hits a briefly exhausted connection
+    /// pool (a pool acquisition timeout). Those two panic once it is exhausted, because their
+    /// entry points return no error for a caller to act on; the tick's own storage calls
+    /// propagate their errors instead.
+    #[serde(default = "default_scheduler_storage_retry")]
+    pub storage_retry: RetryConfig,
 }
 
 impl SafeDisplay for SchedulerConfig {
@@ -627,6 +633,7 @@ impl SafeDisplay for SchedulerConfig {
             "max concurrent action processing: {}",
             self.max_concurrent_action_processing
         );
+        let _ = writeln!(&mut result, "storage retry: {:?}", self.storage_retry);
         result
     }
 }
@@ -721,6 +728,10 @@ impl SafeDisplay for OplogConfig {
         );
         result
     }
+}
+
+fn default_scheduler_storage_retry() -> RetryConfig {
+    RetryConfig::max_attempts_3()
 }
 
 fn default_oplog_indexed_storage_retry() -> RetryConfig {
@@ -1619,6 +1630,7 @@ impl Default for SchedulerConfig {
             lease_ttl: Duration::from_secs(30),
             max_batches_per_tick: 10,
             max_concurrent_action_processing: 64,
+            storage_retry: default_scheduler_storage_retry(),
         }
     }
 }

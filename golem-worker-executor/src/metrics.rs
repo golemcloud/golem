@@ -71,6 +71,14 @@ const SCHEDULER_LAG_BUCKETS: &[f64; 22] = &[
     10.0, 30.0, 60.0, 300.0, 600.0,
 ];
 
+/// Admission-wait buckets. A worker normally clears admission in milliseconds, but
+/// under memory pressure a single phase can block for minutes, so the tail reaches
+/// well past the scheduler buckets.
+const ADMISSION_WAIT_BUCKETS: &[f64; 18] = &[
+    0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0,
+    1800.0, 3600.0,
+];
+
 /// Tick-duration buckets for the scheduler. Values are dense at low latencies
 /// because slow ticks directly add scheduling delay.
 const SCHEDULER_TICK_DURATION_BUCKETS: &[f64; 24] = &[
@@ -334,6 +342,7 @@ pub mod workers {
     use lazy_static::lazy_static;
     use prometheus::core::Number;
     use prometheus::*;
+    use std::time::Duration;
 
     lazy_static! {
         static ref WORKER_EXECUTOR_CALL_TOTAL: CounterVec = register_counter_vec!(
@@ -369,6 +378,13 @@ pub mod workers {
             "worker_waiting_for_memory_count",
             "Workers blocked waiting to acquire a memory permit on this executor",
             &["executor_id"]
+        )
+        .unwrap();
+        pub static ref WORKER_ADMISSION_WAIT_SECONDS: HistogramVec = register_histogram_vec!(
+            "worker_admission_wait_seconds",
+            "Time a starting worker spent blocked in one phase of admission before it could become resident, labelled by phase (resolve_component_charge, concurrency_slot, memory, filesystem_storage). Observed once per phase per worker start. Sum across phases for the total wait; read per phase to see which resource is the constraint. worker_waiting_for_memory_count says how many workers are waiting, this says for how long",
+            &["executor_id", "phase"],
+            crate::metrics::ADMISSION_WAIT_BUCKETS.to_vec()
         )
         .unwrap();
         pub static ref WORKER_STORE_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
@@ -571,6 +587,34 @@ pub mod workers {
             .dec();
     }
 
+    /// Phases a starting worker waits through before it can become resident. Each is
+    /// a separate blocking acquisition, so recording them apart shows which resource
+    /// a stalled start is actually waiting on.
+    #[derive(Debug, Clone, Copy)]
+    pub enum AdmissionPhase {
+        ResolveComponentCharge,
+        ConcurrencySlot,
+        Memory,
+        FilesystemStorage,
+    }
+
+    impl AdmissionPhase {
+        fn as_str(self) -> &'static str {
+            match self {
+                AdmissionPhase::ResolveComponentCharge => "resolve_component_charge",
+                AdmissionPhase::ConcurrencySlot => "concurrency_slot",
+                AdmissionPhase::Memory => "memory",
+                AdmissionPhase::FilesystemStorage => "filesystem_storage",
+            }
+        }
+    }
+
+    pub fn record_worker_admission_wait(phase: AdmissionPhase, elapsed: Duration) {
+        WORKER_ADMISSION_WAIT_SECONDS
+            .with_label_values(&[crate::metrics::storage::executor_id(), phase.as_str()])
+            .observe(elapsed.as_secs_f64());
+    }
+
     pub fn inc_worker_waiting_for_memory() {
         WORKER_WAITING_FOR_MEMORY_COUNT
             .with_label_values(&[crate::metrics::storage::executor_id()])
@@ -724,12 +768,6 @@ pub mod scheduler {
             &["executor_id"]
         )
         .unwrap();
-        pub static ref SCHEDULER_DUE_ACTION_BACKLOG: GaugeVec = register_gauge_vec!(
-            "scheduler_due_action_backlog",
-            "Due scheduled actions not yet acknowledged at scheduler tick start, including currently leased actions",
-            &["executor_id"]
-        )
-        .unwrap();
         pub static ref SCHEDULER_DUE_ACTION_BACKLOG_AFTER_TICK: GaugeVec = register_gauge_vec!(
             "scheduler_due_action_backlog_after_tick",
             "Due scheduled actions not yet acknowledged after scheduler tick processing",
@@ -769,12 +807,6 @@ pub mod scheduler {
         SCHEDULER_QUEUE_DEPTH
             .with_label_values(&[crate::metrics::storage::executor_id()])
             .set(depth as f64);
-    }
-
-    pub fn set_scheduler_due_action_backlog(backlog: u64) {
-        SCHEDULER_DUE_ACTION_BACKLOG
-            .with_label_values(&[crate::metrics::storage::executor_id()])
-            .set(backlog as f64);
     }
 
     pub fn set_scheduler_due_action_backlog_after_tick(backlog: u64) {

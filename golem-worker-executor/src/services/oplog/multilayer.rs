@@ -34,6 +34,8 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
 use golem_common::read_only_lock;
+use golem_common::related_span;
+use golem_common::tracing::TraceOrigin;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use nonempty_collections::NEVec;
 use std::cmp::min;
@@ -44,7 +46,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::Sender;
-use tracing::{Instrument, Level, Span, debug, error, info, span, warn};
+use tracing::{Instrument, Level, debug, error, info, warn};
 
 pub(crate) type TransferFiber = Arc<Mutex<TransferFiberState>>;
 type TransferFibers = Arc<Mutex<HashMap<AgentId, Weak<Mutex<TransferFiberState>>>>>;
@@ -851,26 +853,19 @@ impl MultiLayerOplog {
             &result.transfer_fiber,
         );
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
-        let transfer_fiber = tokio::spawn(
-            async move {
-                if start_rx.await.is_ok() {
-                    Self::background_transfer(
-                        owned_agent_id,
-                        agent_mode,
-                        Arc::downgrade(&result_oplog),
-                        lower,
-                        multi_layer_oplog_service.clone(),
-                        rx,
-                    )
-                    .await;
-                }
+        let transfer_fiber = tokio::spawn(async move {
+            if start_rx.await.is_ok() {
+                Self::background_transfer(
+                    owned_agent_id,
+                    agent_mode,
+                    Arc::downgrade(&result_oplog),
+                    lower,
+                    multi_layer_oplog_service.clone(),
+                    rx,
+                )
+                .await;
             }
-            .instrument(
-                span!(parent: None, Level::INFO, "Oplog background transfer")
-                    .follows_from(Span::current())
-                    .clone(),
-            ),
-        );
+        });
         result
             .set_background_transfer(start_tx, transfer_fiber)
             .await;
@@ -898,7 +893,7 @@ impl MultiLayerOplog {
                     last_transferred_idx,
                     mut keep_alive,
                     done,
-                    transfer_span,
+                    transfer_origin,
                 } => {
                     async {
                         info!(
@@ -926,11 +921,14 @@ impl MultiLayerOplog {
                             }
                         }
                     }
-                    .instrument(
-                        span!(parent: None, Level::INFO, "Oplog background transfer")
-                            .follows_from(transfer_span)
-                            .clone(),
-                    )
+                    .instrument(related_span!(
+                        transfer_origin,
+                        Level::INFO,
+                        "oplog_background_transfer",
+                        agent_id = %owned_agent_id.agent_id,
+                        from = "primary",
+                        last_transferred_idx = %last_transferred_idx,
+                    ))
                     .await;
                 }
                 TransferFromLower {
@@ -939,7 +937,7 @@ impl MultiLayerOplog {
                     mut keep_alive,
                     done,
                     drain: _,
-                    transfer_span,
+                    transfer_origin,
                 } => {
                     async {
                         info!(
@@ -963,11 +961,16 @@ impl MultiLayerOplog {
                             done.send(()).unwrap()
                         }
                     }
-                    .instrument(
-                        span!(parent: None, Level::INFO, "Oplog background transfer")
-                            .follows_from(transfer_span)
-                            .clone(),
-                    )
+                    .instrument(related_span!(
+                        transfer_origin,
+                        Level::INFO,
+                        "oplog_background_transfer",
+                        agent_id = %owned_agent_id.agent_id,
+                        // A string in both arms: the same field name typed
+                        // differently per call site conflicts in a typed store.
+                        from = %format!("layer-{source}"),
+                        last_transferred_idx = %last_transferred_idx,
+                    ))
                     .await;
                 }
             }
@@ -998,7 +1001,7 @@ impl MultiLayerOplog {
                     last_transferred_idx: this.primary.current_oplog_index().await,
                     keep_alive: Some(this.clone()),
                     done: done_tx,
-                    transfer_span: Span::current(),
+                    transfer_origin: TraceOrigin::capture_current(),
                 })
                 .expect("Failed to enqueue transfer of primary oplog entries");
 
@@ -1029,7 +1032,7 @@ impl MultiLayerOplog {
                         keep_alive: Some(this.clone()),
                         done: done_tx,
                         drain: false,
-                        transfer_span: Span::current(),
+                        transfer_origin: TraceOrigin::capture_current(),
                     })
                     .expect("Failed to enqueue transfer of primary oplog entries");
 
@@ -1099,7 +1102,7 @@ impl Oplog for MultiLayerOplog {
                 last_transferred_idx: last_committed_idx,
                 keep_alive: None,
                 done: None,
-                transfer_span: Span::current(),
+                transfer_origin: TraceOrigin::capture_current(),
             });
             self.last_transfer_point.set(last_committed_idx);
         }
@@ -1206,7 +1209,7 @@ pub enum BackgroundTransferMessage {
         last_transferred_idx: OplogIndex,
         keep_alive: Option<Arc<dyn Oplog>>,
         done: Option<Sender<()>>,
-        transfer_span: Span,
+        transfer_origin: TraceOrigin,
     },
     TransferFromLower {
         source: usize,
@@ -1214,7 +1217,7 @@ pub enum BackgroundTransferMessage {
         keep_alive: Option<Arc<dyn Oplog>>,
         done: Option<Sender<()>>,
         drain: bool,
-        transfer_span: Span,
+        transfer_origin: TraceOrigin,
     },
 }
 
@@ -1292,7 +1295,7 @@ impl OplogArchive for WrappedOplogArchive {
                     keep_alive: None,
                     done: None,
                     drain: false,
-                    transfer_span: Span::current(),
+                    transfer_origin: TraceOrigin::capture_current(),
                 });
                 // Resetting the counter, otherwise it would trigger additional transfers until the background process finishes
                 self.entry_count.store(0, Ordering::Release);

@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{ClaimedScheduledAction, SchedulerStorage, datetime_to_millis, millis_to_datetime};
+use super::{
+    ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError, datetime_to_millis,
+    millis_to_datetime,
+};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::FutureExt;
-use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
 use golem_common::serialization::{deserialize, serialize};
@@ -69,7 +71,7 @@ impl SchedulerStorage for SqliteSchedulerStorage {
         due_at: DateTime<Utc>,
         shard_id: ShardId,
         action: &ScheduledAction,
-    ) -> Result<(), String> {
+    ) -> Result<(), SchedulerStorageError> {
         let action = serialize(action)?;
         let due_at_ms = datetime_to_millis(due_at);
         let query = sqlx::query(
@@ -86,10 +88,10 @@ impl SchedulerStorage for SqliteSchedulerStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(SchedulerStorageError::from)
     }
 
-    async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), String> {
+    async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), SchedulerStorageError> {
         let query = sqlx::query("DELETE FROM scheduled_actions WHERE schedule_id = ?;")
             .bind(schedule_id.id.to_string());
 
@@ -98,7 +100,7 @@ impl SchedulerStorage for SqliteSchedulerStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(SchedulerStorageError::from)
     }
 
     async fn claim_due(
@@ -107,7 +109,7 @@ impl SchedulerStorage for SqliteSchedulerStorage {
         assignment: &ShardAssignment,
         limit: u32,
         lease_ttl: Duration,
-    ) -> Result<Vec<ClaimedScheduledAction>, String> {
+    ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError> {
         if limit == 0 || assignment.shard_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -168,7 +170,7 @@ impl SchedulerStorage for SqliteSchedulerStorage {
                 .boxed()
             })
             .await
-            .map_err(|err| err.to_safe_string())?;
+            .map_err(SchedulerStorageError::from)?;
 
         rows.into_iter()
             .map(|row| {
@@ -189,7 +191,7 @@ impl SchedulerStorage for SqliteSchedulerStorage {
         &self,
         now: DateTime<Utc>,
         assignment: &ShardAssignment,
-    ) -> Result<u64, String> {
+    ) -> Result<u64, SchedulerStorageError> {
         if assignment.shard_ids.is_empty() {
             return Ok(0);
         }
@@ -215,7 +217,7 @@ impl SchedulerStorage for SqliteSchedulerStorage {
             .fetch_one_as(query)
             .await
             .map(|(count,)| count as u64)
-            .map_err(|err| err.to_safe_string())
+            .map_err(SchedulerStorageError::from)
     }
 
     async fn extend_lease(
@@ -223,7 +225,7 @@ impl SchedulerStorage for SqliteSchedulerStorage {
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
         lease_until: DateTime<Utc>,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, SchedulerStorageError> {
         let lease_until_ms = datetime_to_millis(lease_until);
         let query = sqlx::query(
             "UPDATE scheduled_actions SET lease_until_ms = ?, available_at_ms = ? WHERE schedule_id = ? AND lease_owner = ?;",
@@ -238,10 +240,14 @@ impl SchedulerStorage for SqliteSchedulerStorage {
             .execute(query)
             .await
             .map(|result| result.rows_affected() == 1)
-            .map_err(|err| err.to_safe_string())
+            .map_err(SchedulerStorageError::from)
     }
 
-    async fn ack(&self, schedule_id: &ScheduleId, lease_owner: Uuid) -> Result<bool, String> {
+    async fn ack(
+        &self,
+        schedule_id: &ScheduleId,
+        lease_owner: Uuid,
+    ) -> Result<bool, SchedulerStorageError> {
         let query =
             sqlx::query("DELETE FROM scheduled_actions WHERE schedule_id = ? AND lease_owner = ?;")
                 .bind(schedule_id.id.to_string())
@@ -252,6 +258,6 @@ impl SchedulerStorage for SqliteSchedulerStorage {
             .execute(query)
             .await
             .map(|result| result.rows_affected() == 1)
-            .map_err(|err| err.to_safe_string())
+            .map_err(SchedulerStorageError::from)
     }
 }

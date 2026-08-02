@@ -4313,6 +4313,7 @@ dependencies = [
  "tonic-reflection",
  "tonic-tracing-opentelemetry",
  "tracing",
+ "tracing-subscriber",
  "try_match",
  "url",
  "uuid",
