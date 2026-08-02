@@ -45,7 +45,7 @@ use futures::StreamExt;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Level, debug, error, span};
+use tracing::{Instrument, debug, error, info_span};
 
 use golem_common::model::{AgentStatusRecord, OwnedAgentId};
 
@@ -321,31 +321,28 @@ impl AgentStatusFlushQueue {
         });
 
         let weak = Arc::downgrade(&queue);
-        let handle = tokio::spawn(
-            async move {
-                loop {
-                    tokio::select! {
-                        _ = shutdown_token.cancelled() => {
-                            debug!("Shutdown requested, draining agent status flush queue once before stopping");
-                            // Best-effort final drain so a graceful shutdown leaves the cache as
-                            // fresh as possible. Not required for correctness (the oplog is the
-                            // source of truth and a cold load re-folds), but avoids an avoidable
-                            // re-fold on next load of every dirty worker.
-                            if let Some(queue) = weak.upgrade() {
-                                queue.sweep().await;
-                            }
-                            break;
+        let handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => {
+                        debug!("Shutdown requested, draining agent status flush queue once before stopping");
+                        // Best-effort final drain so a graceful shutdown leaves the cache as
+                        // fresh as possible. Not required for correctness (the oplog is the
+                        // source of truth and a cold load re-folds), but avoids an avoidable
+                        // re-fold on next load of every dirty worker.
+                        if let Some(queue) = weak.upgrade() {
+                            queue.sweep().await;
                         }
-                        _ = tokio::time::sleep(interval) => {}
+                        break;
                     }
-                    match weak.upgrade() {
-                        Some(queue) => queue.sweep().await,
-                        None => break,
-                    }
+                    _ = tokio::time::sleep(interval) => {}
+                }
+                match weak.upgrade() {
+                    Some(queue) => queue.sweep().await,
+                    None => break,
                 }
             }
-            .instrument(span!(parent: None, Level::INFO, "Agent status flush sweeper")),
-        );
+        });
         *queue.background_handle.lock().unwrap() = Some(handle);
         queue
     }
@@ -359,23 +356,27 @@ impl AgentStatusFlushQueue {
     /// Drains all currently-dirty flushers and flushes them with bounded concurrency. Entries
     /// enqueued while a sweep is running are picked up by the next tick.
     async fn sweep(&self) {
-        let entries: Vec<Weak<AgentStatusFlusher>> = {
-            let mut dirty = self.dirty.lock().unwrap();
-            dirty.drain().map(|(_, weak)| weak).collect()
-        };
-        if entries.is_empty() {
-            return;
-        }
+        async {
+            let entries: Vec<Weak<AgentStatusFlusher>> = {
+                let mut dirty = self.dirty.lock().unwrap();
+                dirty.drain().map(|(_, weak)| weak).collect()
+            };
+            if entries.is_empty() {
+                return;
+            }
 
-        futures::stream::iter(entries)
-            .for_each_concurrent(self.max_concurrency, |weak| async move {
-                if let Some(flusher) = weak.upgrade() {
-                    // Failures are logged, metered and re-queued inside `flush`; nothing more to do
-                    // here (the next sweep will retry).
-                    let _ = flusher.flush(FlushReason::Background).await;
-                }
-            })
-            .await;
+            futures::stream::iter(entries)
+                .for_each_concurrent(self.max_concurrency, |weak| async move {
+                    if let Some(flusher) = weak.upgrade() {
+                        // Failures are logged, metered and re-queued inside `flush`; nothing more to do
+                        // here (the next sweep will retry).
+                        let _ = flusher.flush(FlushReason::Background).await;
+                    }
+                })
+                .await;
+        }
+        .instrument(info_span!("agent_status_flush_sweep"))
+        .await
     }
 
     #[cfg(test)]
@@ -550,6 +551,37 @@ mod tests {
     fn test_queue() -> Arc<AgentStatusFlushQueue> {
         // Long interval so the background sweeper never fires; tests drive `sweep` manually.
         AgentStatusFlushQueue::new(Duration::from_secs(3600), 16, CancellationToken::new())
+    }
+
+    /// One span per sweep, not one for the lifetime of the sweeper.
+    #[test]
+    async fn sweep_records_one_closed_span_when_it_has_work() {
+        let ws = MockWorkerService::arc();
+        let queue = test_queue();
+        let (flusher, current, _) = make_flusher(false, true, ws.clone(), queue.clone());
+
+        current.store(Arc::new(status(AgentStatus::Running, 1)));
+        flusher.mark_dirty();
+
+        let recorder = crate::span_test_support::record_spans();
+        queue.sweep().await;
+
+        recorder.assert_closed_span("agent_status_flush_sweep");
+        recorder.assert_all_closed();
+    }
+
+    /// An idle sweep is still spanned, so that every tick of the sweeper is
+    /// represented the same way.
+    #[test]
+    async fn sweep_records_one_closed_span_when_nothing_is_dirty() {
+        let ws = MockWorkerService::arc();
+        let queue = test_queue();
+        let (_flusher, _current, _) = make_flusher(false, true, ws.clone(), queue.clone());
+
+        let recorder = crate::span_test_support::record_spans();
+        queue.sweep().await;
+
+        recorder.assert_closed_span("agent_status_flush_sweep");
     }
 
     #[test]

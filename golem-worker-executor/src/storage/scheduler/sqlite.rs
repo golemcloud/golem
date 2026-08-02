@@ -19,7 +19,6 @@ use super::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::FutureExt;
-use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
 use golem_common::serialization::{deserialize, serialize};
@@ -192,7 +191,7 @@ impl SchedulerStorage for SqliteSchedulerStorage {
         &self,
         now: DateTime<Utc>,
         assignment: &ShardAssignment,
-    ) -> Result<u64, String> {
+    ) -> Result<u64, SchedulerStorageError> {
         if assignment.shard_ids.is_empty() {
             return Ok(0);
         }
@@ -218,7 +217,7 @@ impl SchedulerStorage for SqliteSchedulerStorage {
             .fetch_one_as(query)
             .await
             .map(|(count,)| count as u64)
-            .map_err(|err| err.to_safe_string())
+            .map_err(SchedulerStorageError::from)
     }
 
     async fn extend_lease(

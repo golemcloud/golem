@@ -44,6 +44,8 @@ use golem_common::model::{
     OwnedAgentId, ScanCursor, ShardId,
 };
 use golem_common::read_only_lock;
+use golem_common::related_span;
+use golem_common::tracing::TraceOrigin;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
@@ -900,6 +902,11 @@ impl ForwardingOplog {
             state
         };
 
+        // Captured here, where the caller's context is still current: each flush
+        // tick links back to it rather than running inside it.
+        let flush_origin = TraceOrigin::capture_current();
+        let agent_id = initial_worker_metadata.agent_id.clone();
+
         let mut state = ForwardingOplogState {
             buffer: VecDeque::new(),
             buffer_start_idx: last_oplog_idx.next(),
@@ -919,85 +926,106 @@ impl ForwardingOplog {
         };
 
         let (jobs, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<ForwardingJob>();
-        let actor = tokio::spawn(
-            async move {
-                while let Some(job) = job_rx.recv().await {
-                    match job {
-                        ForwardingJob::Add { entry, done } => {
-                            state.buffer.push_back(entry.clone());
+        let actor = tokio::spawn(async move {
+            while let Some(job) = job_rx.recv().await {
+                match job {
+                    ForwardingJob::Add { entry, done } => {
+                        state.buffer.push_back(entry.clone());
+                        state.last_oplog_idx = state.last_oplog_idx.next();
+                        let idx = state.inner.add(entry).await;
+                        let _ = done.send(idx);
+                    }
+                    ForwardingJob::AddPair {
+                        start,
+                        make_second,
+                        done,
+                    } => {
+                        // The `Start` will be appended at the next index; this wrapper tracks
+                        // `last_oplog_idx` in lockstep with the inner oplog, so the predicted
+                        // index matches the one the inner oplog assigns.
+                        let first_idx = state.last_oplog_idx.next();
+                        let second = make_second(first_idx);
+                        state.buffer.push_back(start.clone());
+                        state.last_oplog_idx = state.last_oplog_idx.next();
+                        state.buffer.push_back(second.clone());
+                        state.last_oplog_idx = state.last_oplog_idx.next();
+                        let result = state.inner.add_pair(start, Box::new(move |_| second)).await;
+                        let _ = done.send(result);
+                    }
+                    ForwardingJob::AddStart {
+                        serialized_request,
+                        build_start,
+                        done,
+                    } => {
+                        // The `Start` entry is built deep in the leaf from the reserved payload
+                        // reference, so — unlike `Add`/`AddPair` — it is mirrored into the
+                        // buffer only after the delegation returns it.
+                        let result = state
+                            .inner
+                            .add_start_with_reserved_raw_payload(serialized_request, build_start)
+                            .await;
+                        if let Ok(ordered) = &result {
+                            state.buffer.push_back(ordered.entry.clone());
                             state.last_oplog_idx = state.last_oplog_idx.next();
-                            let idx = state.inner.add(entry).await;
-                            let _ = done.send(idx);
                         }
-                        ForwardingJob::AddPair {
-                            start,
-                            make_second,
-                            done,
-                        } => {
-                            // The `Start` will be appended at the next index; this wrapper tracks
-                            // `last_oplog_idx` in lockstep with the inner oplog, so the predicted
-                            // index matches the one the inner oplog assigns.
-                            let first_idx = state.last_oplog_idx.next();
-                            let second = make_second(first_idx);
-                            state.buffer.push_back(start.clone());
-                            state.last_oplog_idx = state.last_oplog_idx.next();
-                            state.buffer.push_back(second.clone());
-                            state.last_oplog_idx = state.last_oplog_idx.next();
-                            let result =
-                                state.inner.add_pair(start, Box::new(move |_| second)).await;
-                            let _ = done.send(result);
+                        let _ = done.send(result);
+                    }
+                    ForwardingJob::Commit { level, done } => {
+                        let mut result = state.inner.commit(level).await;
+                        // Update last_committed_idx from committed entries
+                        if let Some(max_idx) = result.keys().max()
+                            && *max_idx > state.last_committed_idx
+                        {
+                            state.last_committed_idx = *max_idx;
                         }
-                        ForwardingJob::AddStart {
-                            serialized_request,
-                            build_start,
-                            done,
-                        } => {
-                            // The `Start` entry is built deep in the leaf from the reserved payload
-                            // reference, so — unlike `Add`/`AddPair` — it is mirrored into the
-                            // buffer only after the delegation returns it.
-                            let result = state
-                                .inner
-                                .add_start_with_reserved_raw_payload(
-                                    serialized_request,
-                                    build_start,
-                                )
+                        state.commit_count += 1;
+                        if state.commit_count >= max_commit_count {
+                            // Spanned inside the threshold check, not around the commit:
+                            // this arm runs per oplog commit, the flush only every
+                            // `max_commit_count` of them. The actor has no ambient span,
+                            // so without this the flush would be untraceable.
+                            //
+                            // Named apart from the periodic `oplog_forwarding_flush` so the
+                            // two triggers stay distinguishable in a trace backend. The link
+                            // points at the worker's startup rather than at the commit that
+                            // tripped the threshold: the actor receives commits over a
+                            // channel, so the committing invocation's context is not
+                            // available here.
+                            state
+                                .try_flush()
+                                .instrument(related_span!(
+                                    flush_origin,
+                                    tracing::Level::INFO,
+                                    "oplog_forwarding_threshold_flush",
+                                    agent_id = %agent_id
+                                ))
                                 .await;
-                            if let Ok(ordered) = &result {
-                                state.buffer.push_back(ordered.entry.clone());
-                                state.last_oplog_idx = state.last_oplog_idx.next();
-                            }
-                            let _ = done.send(result);
                         }
-                        ForwardingJob::Commit { level, done } => {
-                            let mut result = state.inner.commit(level).await;
-                            // Update last_committed_idx from committed entries
-                            if let Some(max_idx) = result.keys().max()
-                                && *max_idx > state.last_committed_idx
-                            {
-                                state.last_committed_idx = *max_idx;
-                            }
-                            state.commit_count += 1;
-                            if state.commit_count >= max_commit_count {
-                                state.try_flush().await;
-                            }
-                            // Merge entries committed directly to inner during flush
-                            // so the Worker folds them into AgentStatusRecord
-                            result.append(&mut state.pending_direct_commits);
-                            let _ = done.send(result);
-                        }
-                        ForwardingJob::SetWorkerEventService { service, done } => {
-                            state.worker_event_service = Some(service);
-                            let _ = done.send(());
-                        }
-                        ForwardingJob::Tick => {
+                        // Merge entries committed directly to inner during flush
+                        // so the Worker folds them into AgentStatusRecord
+                        result.append(&mut state.pending_direct_commits);
+                        let _ = done.send(result);
+                    }
+                    ForwardingJob::SetWorkerEventService { service, done } => {
+                        state.worker_event_service = Some(service);
+                        let _ = done.send(());
+                    }
+                    ForwardingJob::Tick => {
+                        async {
                             state.try_locality_recovery().await;
                             state.try_flush().await;
                         }
+                        .instrument(related_span!(
+                            flush_origin,
+                            tracing::Level::INFO,
+                            "oplog_forwarding_flush",
+                            agent_id = %agent_id
+                        ))
+                        .await;
                     }
                 }
             }
-            .in_current_span(),
-        );
+        });
 
         let timer = tokio::spawn({
             let jobs = jobs.clone();
@@ -1009,7 +1037,6 @@ impl ForwardingOplog {
                     }
                 }
             }
-            .in_current_span()
         });
         Self {
             inner,
@@ -1480,6 +1507,17 @@ impl ForwardingOplogState {
                 let environment_id = metadata.environment_id;
                 let caller_account_id = metadata.created_by;
                 let target_clone = target_agent_id.clone();
+                // The task polls on after this flush returned, so it links back to
+                // the flush rather than running inside its span. See `TraceOrigin`.
+                let monitor_span = related_span!(
+                    TraceOrigin::capture_current(),
+                    tracing::Level::INFO,
+                    "oplog_plugin_batch_monitor",
+                    agent_id = %metadata.agent_id,
+                    grant_id = %grant_id,
+                    batch_start = %batch_start,
+                    batch_end = %batch_end
+                );
                 let monitor = tokio::spawn(
                     async move {
                         // Poll until the invocation completes, with a timeout
@@ -1534,7 +1572,7 @@ impl ForwardingOplogState {
                             }
                         }
                     }
-                    .in_current_span(),
+                    .instrument(monitor_span),
                 );
                 self.monitor_tasks.push(monitor.into());
             }
