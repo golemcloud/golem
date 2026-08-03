@@ -12,14 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Runtime tests for the Go SDK, driven through the `agent-sdk-go` guest (built
-//! by `test-components/build-components.sh go`). This is the foundational suite —
-//! more scenarios (durability/replay, RPC, config, …) build on this wiring.
-
-pub mod config;
-pub mod durability;
-pub mod rich_types;
-pub mod rpc;
+//! Composite value types round-trip through the invocation wire for the Go SDK:
+//! a list + optional argument in, and a list out.
 
 use crate::Tracing;
 use golem_common::{agent_id, data_value};
@@ -38,13 +32,10 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 
-/// A durable Go counter agent registers, dispatches its methods, and keeps state
-/// across invocations — the smoke test that proves the agent-sdk-go guest builds
-/// and runs under the worker executor.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn go_counter_basic_invoke(
+async fn go_rich_types_round_trip(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -57,29 +48,41 @@ async fn go_counter_basic_invoke(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-
-    let agent_id = agent_id!("CounterAgent", "go-counter-1");
+    let agent_id = agent_id!("RichAgent", "go-rich-1");
     executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
 
-    let v1 = executor
-        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+    // list + Some(option) in.
+    let described = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "describe",
+            data_value!(vec!["a".to_string(), "b".to_string()], Some("hi".to_string())),
+        )
         .await?
-        .into_typed::<i64>()?;
-    assert_eq!(v1, 1);
+        .into_typed::<String>()?;
+    assert_eq!(described, "tags=a,b note=hi");
 
-    let v2 = executor
-        .invoke_and_await_agent(&component, &agent_id, "add", data_value!(5i64))
+    // empty list + None option.
+    let empty = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "describe",
+            data_value!(Vec::<String>::new(), Option::<String>::None),
+        )
         .await?
-        .into_typed::<i64>()?;
-    assert_eq!(v2, 6);
+        .into_typed::<String>()?;
+    assert_eq!(empty, "tags= note=none");
 
-    let v3 = executor
-        .invoke_and_await_agent(&component, &agent_id, "value", data_value!())
+    // list out.
+    let repeated = executor
+        .invoke_and_await_agent(&component, &agent_id, "repeat", data_value!("x".to_string(), 3i64))
         .await?
-        .into_typed::<i64>()?;
-    assert_eq!(v3, 6);
+        .into_typed::<Vec<String>>()?;
+    assert_eq!(repeated, vec!["x".to_string(), "x".to_string(), "x".to_string()]);
 
     Ok(())
 }

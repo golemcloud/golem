@@ -8,6 +8,7 @@ import (
 	_ "agent-sdk-go/counter"
 	_ "agent-sdk-go/httpcall"
 	_ "agent-sdk-go/ledger"
+	_ "agent-sdk-go/richtypes"
 	_ "agent-sdk-go/rpccaller"
 
 	_ "github.com/golemcloud/golem/sdks/go/golem"
