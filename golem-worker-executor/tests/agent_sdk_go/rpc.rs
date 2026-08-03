@@ -12,12 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Runtime tests for the Go SDK, driven through the `agent-sdk-go` guest (built
-//! by `test-components/build-components.sh go`). This is the foundational suite —
-//! more scenarios (durability/replay, RPC, config, …) build on this wiring.
-
-pub mod durability;
-pub mod rpc;
+//! Cross-agent RPC for the Go SDK: a caller agent invokes a durable ledger agent
+//! synchronously (Call) and asynchronously (CallAsync + Future.Get), and the
+//! ledger's accumulating state confirms the calls reached a real target.
 
 use crate::Tracing;
 use golem_common::{agent_id, data_value};
@@ -36,13 +33,12 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 
-/// A durable Go counter agent registers, dispatches its methods, and keeps state
-/// across invocations — the smoke test that proves the agent-sdk-go guest builds
-/// and runs under the worker executor.
+/// Synchronous Call accumulates on the target (same region → same durable ledger
+/// instance), and CallAsync + Future.Get works and routes by region.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn go_counter_basic_invoke(
+async fn go_rpc_call_and_async(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -55,29 +51,30 @@ async fn go_counter_basic_invoke(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-
-    let agent_id = agent_id!("CounterAgent", "go-counter-1");
+    let agent_id = agent_id!("RpcAgent", "go-rpc-1");
     executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
 
-    let v1 = executor
-        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+    // Two synchronous calls to the same region accumulate on that ledger instance.
+    let r1 = executor
+        .invoke_and_await_agent(&component, &agent_id, "call", data_value!("eu", 10i64))
         .await?
         .into_typed::<i64>()?;
-    assert_eq!(v1, 1);
+    assert_eq!(r1, 10);
 
-    let v2 = executor
-        .invoke_and_await_agent(&component, &agent_id, "add", data_value!(5i64))
+    let r2 = executor
+        .invoke_and_await_agent(&component, &agent_id, "call", data_value!("eu", 5i64))
         .await?
         .into_typed::<i64>()?;
-    assert_eq!(v2, 6);
+    assert_eq!(r2, 15);
 
-    let v3 = executor
-        .invoke_and_await_agent(&component, &agent_id, "value", data_value!())
+    // An async call to a different region hits a fresh ledger instance.
+    let r3 = executor
+        .invoke_and_await_agent(&component, &agent_id, "async", data_value!("us", 7i64))
         .await?
         .into_typed::<i64>()?;
-    assert_eq!(v3, 6);
+    assert_eq!(r3, 7);
 
     Ok(())
 }
