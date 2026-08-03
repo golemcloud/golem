@@ -31,6 +31,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 pub mod cleanup;
 pub mod cold_start_unknown;
+pub mod density;
 pub mod durability_overhead;
 pub mod latency;
 pub mod sleep;
@@ -171,10 +172,28 @@ pub async fn invoke_and_await_agent(
     .await
 }
 
+/// Whether a non-success HTTP status is worth retrying.
+///
+/// 5xx, 408 and 429 are transient: the same request can succeed later. Every
+/// other 4xx is a permanent client error — the request is malformed, unroutable
+/// or unauthorized, so replaying it byte-for-byte will fail identically forever.
+/// Retrying those turns a config bug into an unbounded hang instead of an error.
+fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    status.is_server_error()
+        || status == reqwest::StatusCode::REQUEST_TIMEOUT
+        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+}
+
 pub async fn invoke_and_await_http(client: Client, request: impl Fn() -> Request) -> InvokeResult {
     async {
         const TIMEOUT: Duration = Duration::from_secs(180);
         const RETRY_DELAY: Duration = Duration::from_millis(100);
+        /// Upper bound on retries for transient failures. At RETRY_DELAY this is
+        /// ~30s of retrying before the benchmark gives up and reports the cause.
+        const MAX_RETRIES: usize = 300;
+        /// Timeouts are bounded separately: each one already costs TIMEOUT, so a
+        /// retry budget of 300 would mean 15 hours of hanging.
+        const MAX_TIMEOUTS: usize = 5;
 
         let key = IdempotencyKey::fresh();
 
@@ -185,6 +204,7 @@ pub async fn invoke_and_await_http(client: Client, request: impl Fn() -> Request
         loop {
             let start = SystemTime::now();
             let mut req = request();
+            let url = req.url().clone();
             req.headers_mut().insert(
                 HeaderName::from_str("Idempotency-Key").unwrap(),
                 HeaderValue::from_str(&key.value).unwrap(),
@@ -206,9 +226,30 @@ pub async fn invoke_and_await_http(client: Client, request: impl Fn() -> Request
                             accumulated_time,
                         };
                     } else {
-                        // non-200 status
-                        println!("Invocation returned with status {}, retrying", r.status());
+                        // non-200 status. Read the body before deciding what to
+                        // do with it: without it a failure is undiagnosable.
+                        let status = r.status();
+                        let body = r.text().await.unwrap_or_default();
+
+                        if !is_retryable_status(status) {
+                            panic!(
+                                "Invocation failed permanently with status {status} for {url}; \
+                                 not retrying. Response body: {body}"
+                            );
+                        }
+
                         retries += 1;
+                        if retries > MAX_RETRIES {
+                            panic!(
+                                "Invocation still failing with status {status} for {url} after \
+                                 {MAX_RETRIES} retries; giving up. Response body: {body}"
+                            );
+                        }
+
+                        println!(
+                            "Invocation returned with status {status} for {url} \
+                             (retry {retries}/{MAX_RETRIES}), body: {body}"
+                        );
                         let duration = start.elapsed().expect("SystemTime elapsed failed");
                         accumulated_time += duration;
                         tokio::time::sleep(RETRY_DELAY).await;
@@ -216,8 +257,14 @@ pub async fn invoke_and_await_http(client: Client, request: impl Fn() -> Request
                 }
                 Ok(Err(e)) => {
                     // reqwest error
-                    println!("Invocation failed, retrying: {e:?}");
                     retries += 1;
+                    if retries > MAX_RETRIES {
+                        panic!(
+                            "Invocation to {url} still failing after {MAX_RETRIES} retries; \
+                             giving up. Last error: {e:?}"
+                        );
+                    }
+                    println!("Invocation failed, retrying ({retries}/{MAX_RETRIES}): {e:?}");
                     let duration = start.elapsed().expect("SystemTime elapsed failed");
                     accumulated_time += duration;
                     tokio::time::sleep(RETRY_DELAY).await;
@@ -226,7 +273,13 @@ pub async fn invoke_and_await_http(client: Client, request: impl Fn() -> Request
                     // timeout
                     // not counting timeouts into the accumulated time
                     timeouts += 1;
-                    println!("Invocation timed out, retrying: {e:?}");
+                    if timeouts > MAX_TIMEOUTS {
+                        panic!(
+                            "Invocation to {url} timed out {MAX_TIMEOUTS} times \
+                             ({TIMEOUT:?} each); giving up. Last error: {e:?}"
+                        );
+                    }
+                    println!("Invocation timed out, retrying ({timeouts}/{MAX_TIMEOUTS}): {e:?}");
                 }
             }
         }

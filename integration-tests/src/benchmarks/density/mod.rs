@@ -1,0 +1,237 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Cloud density benchmarks.
+//!
+//! Density benchmarks measure the per-pod ceiling of a single worker-executor
+//! under realistic workload mixes. Unlike cloud-perf (which keeps load below
+//! saturation across the whole cluster), density deliberately ramps a single
+//! axis up to and past the point where the pod falls over, recording the soft,
+//! hard, and catastrophic ceilings.
+//!
+//! The buildspec drives the cell-by-cell loop (each cell runs in its own
+//! freshly-restarted, state-wiped executor) and invokes the benchmark binary
+//! once per cell via the `density` subcommand. Each invocation runs one cell,
+//! ramps its axis internally feeding the [`ceiling`] state machine, and emits
+//! one cell `BenchmarkResult` plus an optional timeseries file.
+//!
+//! Agent-density and schedule-density reuse [`prep`] and [`ceiling`].
+
+pub mod agent;
+pub mod ceiling;
+pub mod prep;
+pub mod promise;
+pub mod schedule;
+
+use clap::ValueEnum;
+use std::fmt::{self, Display, Formatter};
+
+/// Which density section a prep/run targets. Selects the component set and the
+/// account/app/env naming.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DensitySection {
+    Agent,
+    Schedule,
+    Promise,
+}
+
+impl DensitySection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DensitySection::Agent => "agent",
+            DensitySection::Schedule => "schedule",
+            DensitySection::Promise => "promise",
+        }
+    }
+}
+
+impl Display for DensitySection {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Agent durability mode. Scenario 4 (resume-under-saturation) is durable-only
+/// because ephemeral agents are not recoverable post-eviction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum AgentMode {
+    Durable,
+    Ephemeral,
+}
+
+impl AgentMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AgentMode::Durable => "durable",
+            AgentMode::Ephemeral => "ephemeral",
+        }
+    }
+}
+
+impl Display for AgentMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// How agents map to components within a cell.
+///
+/// - `Shared`: every agent is an instance of one shared component. The cell
+///   measures pure resident-agent capacity with no component-cache pressure.
+///   Identified in cell names and the result schema by `shared-component`.
+/// - `PerAgent`: each agent uses its own component. Density-prep uploads many
+///   byte-identical copies of the same WASM under distinct names, so the
+///   registry mints a distinct `component_id` per agent. The raw blob is
+///   deduplicated in object storage, but the executor's compiled-component
+///   cache keys on `component_id` and produces one entry per agent — the
+///   compiled-cache-thrash signal this mode exists to measure. Identified in
+///   cell names and the result schema by `per-agent-component`. When the ramp
+///   exceeds the number of distinct components density-prep uploaded
+///   ([`prep::PER_AGENT_COMPONENT_COUNT`]), agents reuse components round-robin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ComponentSharing {
+    Shared,
+    PerAgent,
+}
+
+impl ComponentSharing {
+    /// Label used in cell names and the S3 result schema.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ComponentSharing::Shared => "shared-component",
+            ComponentSharing::PerAgent => "per-agent-component",
+        }
+    }
+}
+
+impl Display for ComponentSharing {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Whether a schedule-density target remains resident when scheduled actions
+/// fire, or is deliberately unloaded by a staged executor restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ScheduleTargetResidency {
+    Warm,
+    Cold,
+}
+
+impl ScheduleTargetResidency {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ScheduleTargetResidency::Warm => "warm",
+            ScheduleTargetResidency::Cold => "cold",
+        }
+    }
+}
+
+impl Display for ScheduleTargetResidency {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// How scheduled actions are distributed across target agents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ScheduleTargetPattern {
+    Spread,
+    Realistic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PromiseWaiterPresence {
+    Cold,
+    Warm,
+    Mixed,
+}
+
+impl Display for PromiseWaiterPresence {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Cold => "cold",
+            Self::Warm => "warm",
+            Self::Mixed => "mixed",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PromiseTopology {
+    OnePod,
+    TwoPod,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PromiseRuntime {
+    Rust,
+    Ts,
+}
+
+impl Display for PromiseRuntime {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Rust => "rust",
+            Self::Ts => "ts",
+        })
+    }
+}
+
+impl Display for PromiseTopology {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::OnePod => "1pod",
+            Self::TwoPod => "2pod",
+        })
+    }
+}
+
+impl ScheduleTargetPattern {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ScheduleTargetPattern::Spread => "spread",
+            ScheduleTargetPattern::Realistic => "realistic",
+        }
+    }
+}
+
+impl Display for ScheduleTargetPattern {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Default agent-count ramp, used when a cell does not specify one in the suite
+/// YAML. Each step is an independent concurrent target: the driver measures that
+/// target, cleans it up, then advances until a catastrophic ceiling fires or the
+/// ramp is exhausted.
+///
+/// The first pass caps active scenarios at 2000 concurrent invocations.
+pub const DEFAULT_AGENT_RAMP: &[u32] = &[50, 100, 250, 500, 1000, 2000];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn default_ramp_is_strictly_increasing() {
+        assert!(
+            DEFAULT_AGENT_RAMP.windows(2).all(|w| w[0] < w[1]),
+            "default ramp must be strictly increasing"
+        );
+        assert!(!DEFAULT_AGENT_RAMP.is_empty());
+    }
+}
