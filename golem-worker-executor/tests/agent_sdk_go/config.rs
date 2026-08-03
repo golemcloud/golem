@@ -12,15 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Runtime tests for the Go SDK, driven through the `agent-sdk-go` guest (built
-//! by `test-components/build-components.sh go`). This is the foundational suite —
-//! more scenarios (durability/replay, RPC, config, …) build on this wiring.
-
-pub mod config;
-pub mod durability;
-pub mod rpc;
+//! Agent config for the Go SDK: values provided at deploy (a flat key and a
+//! nested path) are resolved and read back by a configured agent at runtime.
 
 use crate::Tracing;
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
@@ -37,13 +33,12 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 
-/// A durable Go counter agent registers, dispatches its methods, and keeps state
-/// across invocations — the smoke test that proves the agent-sdk-go guest builds
-/// and runs under the worker executor.
+/// A configured Go agent reads a flat config value ("greeting") and a nested one
+/// ("fee"/"cents") set at deploy time.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn go_counter_basic_invoke(
+async fn go_reads_agent_config(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -54,31 +49,38 @@ async fn go_counter_basic_invoke(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_go)
+        .with_agent_config(
+            "ConfigAgent",
+            vec![
+                AgentConfigEntryDto {
+                    path: vec!["greeting".to_string()],
+                    value: serde_json::Value::String("hello".to_string()).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["fee".to_string(), "cents".to_string()],
+                    value: serde_json::json!(30).into(),
+                },
+            ],
+        )
         .store()
         .await?;
 
-    let agent_id = agent_id!("CounterAgent", "go-counter-1");
+    let agent_id = agent_id!("ConfigAgent", "go-config-1");
     executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
 
-    let v1 = executor
-        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+    let greeting = executor
+        .invoke_and_await_agent(&component, &agent_id, "greeting", data_value!())
         .await?
-        .into_typed::<i64>()?;
-    assert_eq!(v1, 1);
+        .into_typed::<String>()?;
+    assert_eq!(greeting, "hello");
 
-    let v2 = executor
-        .invoke_and_await_agent(&component, &agent_id, "add", data_value!(5i64))
+    let cents = executor
+        .invoke_and_await_agent(&component, &agent_id, "cents", data_value!())
         .await?
         .into_typed::<i64>()?;
-    assert_eq!(v2, 6);
-
-    let v3 = executor
-        .invoke_and_await_agent(&component, &agent_id, "value", data_value!())
-        .await?
-        .into_typed::<i64>()?;
-    assert_eq!(v3, 6);
+    assert_eq!(cents, 30);
 
     Ok(())
 }

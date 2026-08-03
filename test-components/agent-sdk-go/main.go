@@ -4,6 +4,7 @@
 package main
 
 import (
+	_ "agent-sdk-go/configecho"
 	_ "agent-sdk-go/counter"
 	_ "agent-sdk-go/httpcall"
 	_ "agent-sdk-go/ledger"
