@@ -27,7 +27,7 @@ use crate::model::environment::{
     EnvironmentReference, ResolvedEnvironmentIdentity, ResolvedEnvironmentIdentitySource,
 };
 use crate::model::masking::{Masked, MaskingConfig, mask_agent_config_entries, mask_sensitive_map};
-use crate::model::text::fmt::*;
+use crate::model::text::*;
 use chrono::DateTime;
 use clap::ValueEnum;
 use colored::Colorize;

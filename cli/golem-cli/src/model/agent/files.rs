@@ -14,7 +14,7 @@
 
 use crate::log::logln;
 use crate::model::cli_output::StructuredOutput;
-use crate::model::text::fmt::*;
+use crate::model::text::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

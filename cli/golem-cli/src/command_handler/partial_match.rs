@@ -29,7 +29,7 @@ use crate::model::help::{
     AgentNameHelp, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp,
     AvailableProfileNamesHelp, EnvironmentNameHelp,
 };
-use crate::model::text::fmt::{DecoratedIndent, log_text_view};
+use crate::model::text::{DecoratedIndent, log_text_view};
 use colored::Colorize;
 use indoc::indoc;
 use std::sync::Arc;

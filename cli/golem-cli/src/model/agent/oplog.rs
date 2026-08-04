@@ -15,7 +15,7 @@
 use crate::agent_id_display::SourceLanguage;
 use crate::log::logln;
 use crate::model::cli_output::StructuredOutput;
-use crate::model::text::fmt::*;
+use crate::model::text::*;
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use golem_common::model::Timestamp;

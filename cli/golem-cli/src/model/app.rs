@@ -31,7 +31,7 @@ use crate::model::cli_output::StructuredOutput;
 use crate::model::language::GuestLanguage;
 use crate::model::repl::ReplLanguage;
 use crate::model::template_render::TemplateRender;
-use crate::model::text::fmt::{NoTextOutput, TextOutput};
+use crate::model::text::{NoTextOutput, TextOutput};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::{Context, anyhow};
 use golem_common::model::agent::AgentTypeName;

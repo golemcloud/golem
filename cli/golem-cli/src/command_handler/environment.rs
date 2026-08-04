@@ -29,7 +29,7 @@ use crate::model::environment::{
 };
 use crate::model::help::EnvironmentNameHelp;
 use crate::model::plugin::PluginNameAndVersion;
-use crate::model::text::fmt::log_text_view;
+use crate::model::text::log_text_view;
 use anyhow::{anyhow, bail};
 use golem_client::api::{EnvironmentClient, MeClient};
 use golem_client::model::{EnvironmentCreation, EnvironmentPluginGrantWithDetails};

@@ -14,7 +14,7 @@
 
 use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
-use crate::model::text::fmt::*;
+use crate::model::text::*;
 
 use golem_common::model::domain_registration::{Domain, DomainRegistration, DomainRegistrationId};
 use serde::{Deserialize, Serialize};

@@ -15,7 +15,7 @@
 use crate::model::cli_output::StructuredOutput;
 use crate::model::grant::{format_grants, grant_count};
 use crate::model::masking::Masked;
-use crate::model::text::fmt::*;
+use crate::model::text::*;
 use golem_client::model::{Account, PermissionShare};
 use golem_common::model::account::AccountId;
 use golem_common::model::permission_share::PermissionShareId;

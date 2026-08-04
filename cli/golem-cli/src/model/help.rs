@@ -17,7 +17,7 @@ use crate::config::{Config, ProfileName};
 use crate::log::{LogColorize, LogIndent, logln};
 use crate::model::component::show_exported_agent_constructors;
 use crate::model::masking::Masked;
-use crate::model::text::fmt::{
+use crate::model::text::{
     Column, FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode, TextOutput,
     format_export, log_table, new_table_full,
 };

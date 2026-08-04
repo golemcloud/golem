@@ -15,7 +15,7 @@
 use crate::agent_id_display::{SourceLanguage, render_type_for_language};
 use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::{Masked, MaskingConfig, mask_json_secret_value};
-use crate::model::text::fmt::*;
+use crate::model::text::*;
 
 use comfy_table::Cell;
 use golem_common::model::agent_secret::AgentSecretDto;

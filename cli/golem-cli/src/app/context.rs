@@ -35,7 +35,7 @@ use crate::model::config::server::ToFormattedServerContext;
 use crate::model::deploy::log_unified_diff_for_path;
 use crate::model::format::Format;
 use crate::model::language::GuestLanguage;
-use crate::model::text::fmt::DecoratedIndent;
+use crate::model::text::DecoratedIndent;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::{anyhow, bail};
 use colored::Colorize;

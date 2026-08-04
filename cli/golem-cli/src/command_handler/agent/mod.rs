@@ -43,7 +43,7 @@ use crate::model::help::{
     ParameterErrorTableView,
 };
 use crate::model::invoke_result_view::InvokeResultView;
-use crate::model::text::fmt::{log_fuzzy_match, log_text_view};
+use crate::model::text::{log_fuzzy_match, log_text_view};
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use chrono::{DateTime, Utc};
 use colored::Colorize;

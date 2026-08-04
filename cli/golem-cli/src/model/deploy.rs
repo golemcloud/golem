@@ -26,7 +26,7 @@ use crate::model::masking::{
     Masked, MaskingConfig, is_sensitive_key, mask_json_secret_for_deploy_diff,
     mask_secret_with_fingerprint,
 };
-use crate::model::text::fmt::{
+use crate::model::text::{
     Column, FieldsBuilder, MessageWithFields, NoTextOutput, TextOutput, format_id, format_main_id,
     log_table, new_table_full_condensed,
 };

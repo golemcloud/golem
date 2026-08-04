@@ -15,7 +15,7 @@
 use crate::app::template::TemplateDescription;
 use crate::log::current_indent_width;
 use crate::model::cli_output::StructuredOutput;
-use crate::model::text::fmt::*;
+use crate::model::text::*;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
