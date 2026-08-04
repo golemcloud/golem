@@ -37,7 +37,7 @@ use crate::model::agent::files::{AgentFilesView, FileNodeView};
 use crate::model::agent::oplog::AgentOplogEntryView;
 use crate::model::agent::{AgentCreateView, AgentGetView, format_agent_id_match, format_timestamp};
 use crate::model::component::ComponentNameMatchKind;
-use crate::model::deploy::{AgentUpdateMeta, TryUpdateAllWorkersResult};
+use crate::model::deploy::{AgentUpdateMeta, TryUpdateAllWorkersView};
 use crate::model::help::{
     AgentNameHelp, ArgumentError, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp,
     ParameterErrorTableView,
@@ -1287,7 +1287,7 @@ impl AgentCommandHandler {
             version: component.metadata.root_package_version().clone(),
         };
 
-        let mut update_results = TryUpdateAllWorkersResult::default();
+        let mut update_results = TryUpdateAllWorkersView::default();
         update_results.agents.push(meta);
         match self
             .update_agent(
@@ -1786,7 +1786,7 @@ impl AgentCommandHandler {
         target_revision: ComponentRevision,
         await_update: bool,
         disable_wakeup: bool,
-    ) -> anyhow::Result<TryUpdateAllWorkersResult> {
+    ) -> anyhow::Result<TryUpdateAllWorkersView> {
         let agent_filters = [
             // only consider durable agents
             AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable).to_string(),
@@ -1806,7 +1806,7 @@ impl AgentCommandHandler {
             .await?;
 
         if agents_to_update.is_empty() {
-            return Ok(TryUpdateAllWorkersResult::default());
+            return Ok(TryUpdateAllWorkersView::default());
         }
 
         log_action(
@@ -1825,7 +1825,7 @@ impl AgentCommandHandler {
             .component_handler()
             .component_version_at(component_id, target_revision)
             .await;
-        let mut update_results = TryUpdateAllWorkersResult::default();
+        let mut update_results = TryUpdateAllWorkersView::default();
         for agent in &agents_to_update {
             let result = self
                 .update_agent(

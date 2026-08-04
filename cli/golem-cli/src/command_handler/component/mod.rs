@@ -39,8 +39,7 @@ use crate::model::component::{
 use crate::model::component::{ComponentGetView, ComponentListView, ComponentManifestTraceView};
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
 use crate::model::deploy::{
-    DeployConfig, TryUpdateAllWorkersResult, UpdateStagedComponentError,
-    UpdateStagedComponentResult,
+    DeployConfig, TryUpdateAllWorkersView, UpdateStagedComponentError, UpdateStagedComponentResult,
 };
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
@@ -360,7 +359,7 @@ impl ComponentCommandHandler {
         log_action("Updating", format!("existing agents using {update} mode"));
         let _indent = LogIndent::new();
 
-        let mut update_results = TryUpdateAllWorkersResult::default();
+        let mut update_results = TryUpdateAllWorkersView::default();
         for component in components {
             let result = self
                 .ctx

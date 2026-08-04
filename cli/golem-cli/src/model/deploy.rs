@@ -1304,24 +1304,24 @@ fn mask_sensitive_key_value_for_deploy_diff(
 
 #[derive(Clone, Default, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TryUpdateAllWorkersResult {
+pub struct TryUpdateAllWorkersView {
     pub agents: Vec<AgentUpdateMeta>,
     /// Per-agent update errors, keyed by the (environment-unique) agent id.
     pub errors: BTreeMap<String, String>,
 }
 
-impl TryUpdateAllWorkersResult {
-    pub fn extend(&mut self, other: TryUpdateAllWorkersResult) {
+impl TryUpdateAllWorkersView {
+    pub fn extend(&mut self, other: TryUpdateAllWorkersView) {
         self.agents.extend(other.agents);
         self.errors.extend(other.errors);
     }
 }
 
-impl StructuredOutput for TryUpdateAllWorkersResult {
+impl StructuredOutput for TryUpdateAllWorkersView {
     const KIND: &'static str = "agent.update";
 }
 
-impl TextOutput for TryUpdateAllWorkersResult {
+impl TextOutput for TryUpdateAllWorkersView {
     fn log(&self) {
         // NOP
     }

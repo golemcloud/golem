@@ -83,7 +83,7 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
     ),
     registry_entry!("CardGetView", "card.get", arb_card_get_result),
     registry_entry!("CardListView", "card.list", arb_card_list_result),
-    registry_entry!("CardRevokeResult", "card.revoke", arb_card_revoke_result),
+    registry_entry!("CardRevokeView", "card.revoke", arb_card_revoke_result),
     registry_entry!("AgentTypeView", "agent-type.get", arb_agent_type_get_result),
     registry_entry!(
         "AgentTypeListView",
@@ -140,7 +140,7 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
     ),
     registry_entry!("AgentStreamEvent", "agent.stream", arb_agent_stream_event),
     registry_entry!(
-        "TryUpdateAllWorkersResult",
+        "TryUpdateAllWorkersView",
         "agent.update",
         arb_agent_update_result
     ),
@@ -2748,10 +2748,7 @@ fn arb_agent_update_result() -> OutputDocumentStrategy {
             proptest::collection::btree_map(arb_small_string(), arb_small_string(), 0..3),
         )
             .prop_map(
-                |(agents, errors)| crate::model::deploy::TryUpdateAllWorkersResult {
-                    agents,
-                    errors,
-                },
+                |(agents, errors)| crate::model::deploy::TryUpdateAllWorkersView { agents, errors },
             ),
     )
 }
@@ -3225,7 +3222,7 @@ fn arb_card_list_result() -> OutputDocumentStrategy {
 fn arb_card_revoke_result() -> OutputDocumentStrategy {
     serialized_output(
         proptest::collection::vec(arb_uuid(), 0..5)
-            .prop_map(|revoked_card_ids| crate::model::card::CardRevokeResult { revoked_card_ids }),
+            .prop_map(|revoked_card_ids| crate::model::card::CardRevokeView { revoked_card_ids }),
     )
 }
 

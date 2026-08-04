@@ -79,11 +79,11 @@ impl StructuredOutput for CardListView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CardRevokeResult {
+pub struct CardRevokeView {
     pub revoked_card_ids: Vec<Uuid>,
 }
 
-impl TextOutput for CardRevokeResult {
+impl TextOutput for CardRevokeView {
     fn log(&self) {
         let mut table = new_table_full_condensed(vec![Column::new("Revoked card ID")]);
 
@@ -95,7 +95,7 @@ impl TextOutput for CardRevokeResult {
     }
 }
 
-impl StructuredOutput for CardRevokeResult {
+impl StructuredOutput for CardRevokeView {
     const KIND: &'static str = "card.revoke";
 }
 
