@@ -24,7 +24,7 @@ use crate::model::masking::{
     Masked, MaskingConfig, is_sensitive_key, mask_secret, mask_sensitive_map,
     mask_typed_agent_config_entries,
 };
-use crate::model::text::*;
+use crate::model::text_format::*;
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;

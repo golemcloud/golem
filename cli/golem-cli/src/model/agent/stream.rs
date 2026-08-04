@@ -14,7 +14,7 @@
 
 use crate::model::agent::AgentLogStreamOptions;
 use crate::model::cli_output::StructuredOutput;
-use crate::model::text::format_stderr;
+use crate::model::text_format::format_stderr;
 use golem_common::model::{IdempotencyKey, LogLevel, Timestamp};
 use serde::{Deserialize, Serialize};
 

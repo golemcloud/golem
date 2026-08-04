@@ -61,7 +61,7 @@ use crate::model::deploy::{DeploymentListView, DeploymentNewView};
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::help::AvailableComponentNamesHelp;
 use crate::model::language::GuestLanguage;
-use crate::model::text::{log_fuzzy_matches, log_text_view};
+use crate::model::text_format::{log_fuzzy_matches, log_text_view};
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use futures_util::{StreamExt, TryStreamExt, stream};

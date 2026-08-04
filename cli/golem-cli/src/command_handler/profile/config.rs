@@ -23,7 +23,7 @@ use crate::log::logln;
 use crate::model::config::profile::ProfileConfigSetFormatResult;
 use crate::model::format::Format;
 use crate::model::help::AvailableProfileNamesHelp;
-use crate::model::text::log_text_view;
+use crate::model::text_format::log_text_view;
 use anyhow::bail;
 use std::sync::Arc;
 

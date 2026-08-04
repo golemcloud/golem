@@ -24,7 +24,7 @@
 
 use crate::model::agent::RawAgentId;
 use crate::model::cli_output::StructuredOutput;
-use crate::model::text::{NoTextOutput, TextOutput};
+use crate::model::text_format::{NoTextOutput, TextOutput};
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

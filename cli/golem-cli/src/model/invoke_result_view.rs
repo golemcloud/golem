@@ -15,7 +15,7 @@
 use crate::agent_id_display::{SourceLanguage, render_typed_schema_value};
 use crate::log::{log_error, logln};
 use crate::model::cli_output::StructuredOutput;
-use crate::model::text::{TextOutput, format_message_highlight, format_warn};
+use crate::model::text_format::{TextOutput, format_message_highlight, format_warn};
 use anyhow::anyhow;
 use golem_client::model::AgentInvocationResult;
 use golem_common::model::IdempotencyKey;

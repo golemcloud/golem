@@ -14,7 +14,7 @@
 
 use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
-use crate::model::text::*;
+use crate::model::text_format::*;
 use golem_common::model::quota::ResourceDefinition;
 use serde_derive::{Deserialize, Serialize};
 

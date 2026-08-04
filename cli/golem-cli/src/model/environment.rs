@@ -17,7 +17,7 @@ use crate::log::log_warn;
 use crate::log::{LogColorize, logln};
 use crate::model::app_raw::Environment;
 use crate::model::cli_output::StructuredOutput;
-use crate::model::text::*;
+use crate::model::text_format::*;
 use anyhow::bail;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{ApplicationId, ApplicationName};

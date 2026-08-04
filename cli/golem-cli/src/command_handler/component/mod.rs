@@ -48,7 +48,7 @@ use crate::model::environment::{
 use crate::model::help::ComponentNameHelp;
 use crate::model::language::GuestLanguage;
 use crate::model::plugin::PluginNameAndVersion;
-use crate::model::text::log_text_view;
+use crate::model::text_format::log_text_view;
 use crate::validation::ValidationBuilder;
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use futures_util::future::OptionFuture;

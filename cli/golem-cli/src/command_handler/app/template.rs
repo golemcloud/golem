@@ -36,7 +36,7 @@ use crate::log::{
 use crate::model::deploy::log_unified_diff_for_path;
 use crate::model::help::{AppNewNextStepsHint, AppNewNextStepsMode};
 use crate::model::language::GuestLanguage;
-use crate::model::text::log_text_view;
+use crate::model::text_format::log_text_view;
 use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail};
 use colored::Colorize;

@@ -14,7 +14,7 @@
 
 use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
-use crate::model::text::*;
+use crate::model::text_format::*;
 
 use colored::Colorize;
 use golem_client::model::{Token, TokenWithSecret};

@@ -71,7 +71,7 @@ impl Error for ContextInitHintError {}
 
 pub mod service {
     use crate::log::LogColorize;
-    use crate::model::text::{format_error, format_stderr};
+    use crate::model::text_format::{format_error, format_stderr};
     use bytes::Bytes;
     use colored::Colorize;
     use golem_common::base_model::api;

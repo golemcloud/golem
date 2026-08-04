@@ -14,7 +14,7 @@
 
 use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
-use crate::model::text::{
+use crate::model::text_format::{
     Column, FieldsBuilder, MessageWithFields, NoTextOutput, TextOutput, format_id, format_main_id,
     format_message_highlight, log_table, new_table_full_condensed,
 };

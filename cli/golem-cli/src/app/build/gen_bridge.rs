@@ -23,7 +23,7 @@ use crate::model::app::{
 use crate::model::cli_output::StructuredOutput;
 use crate::model::language::GuestLanguage;
 use crate::model::repl::{ReplAgentMetadata, ReplMetadata};
-use crate::model::text::{NoTextOutput, TextOutput};
+use crate::model::text_format::{NoTextOutput, TextOutput};
 use anyhow::bail;
 use camino::Utf8PathBuf;
 use golem_common::model::component::ComponentName;
