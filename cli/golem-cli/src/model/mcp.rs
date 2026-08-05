@@ -12,17 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod deployment;
-pub mod domain;
-pub mod security;
-
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug)]
-pub struct HttpApiDeploymentDeployProperties {
-    pub webhooks_prefix: String,
-    pub openapi_prefix: String,
-    pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
+pub struct McpDeploymentDeployProperties {
+    pub agents: BTreeMap<AgentTypeName, McpDeploymentAgentOptions>,
+}
+
+#[derive(Clone, Debug)]
+pub struct McpDeploymentAgentOptions {
+    pub security_scheme: Option<String>,
+}
+
+impl McpDeploymentAgentOptions {
+    pub fn to_diffable(&self) -> golem_common::model::diff::McpDeploymentAgentOptions {
+        golem_common::model::diff::McpDeploymentAgentOptions {
+            security_scheme: self.security_scheme.clone(),
+        }
+    }
 }

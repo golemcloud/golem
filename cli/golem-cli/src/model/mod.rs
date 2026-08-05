@@ -32,6 +32,7 @@ pub mod input;
 pub mod invoke_result_view;
 pub mod language;
 pub mod masking;
+pub mod mcp;
 pub mod plugin;
 pub mod repl;
 pub mod resource_definition;

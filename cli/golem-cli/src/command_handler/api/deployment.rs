@@ -18,8 +18,9 @@ use crate::context::Context;
 use crate::error::service::{MapServiceError, ServiceError};
 use crate::log::{LogColorize, LogIndent, log_action, log_warn_action};
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
+use crate::model::http_api::HttpApiDeploymentDeployProperties;
 use crate::model::http_api::deployment::{HttpApiDeploymentGetView, HttpApiDeploymentListView};
-use crate::model::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
+use crate::model::mcp::McpDeploymentDeployProperties;
 use anyhow::{anyhow, bail};
 use golem_client::api::{ApiDeploymentClient, McpDeploymentClient};
 use golem_common::cache::SimpleCache;
@@ -164,8 +165,7 @@ impl ApiDeploymentCommandHandler {
     pub async fn deployable_manifest_mcp_deployments(
         &self,
         environment_name: &EnvironmentName,
-    ) -> anyhow::Result<BTreeMap<Domain, crate::model::http_api::McpDeploymentDeployProperties>>
-    {
+    ) -> anyhow::Result<BTreeMap<Domain, crate::model::mcp::McpDeploymentDeployProperties>> {
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
         Ok(app_ctx
@@ -174,9 +174,7 @@ impl ApiDeploymentCommandHandler {
             .map(
                 |deployments: &BTreeMap<
                     golem_common::model::domain_registration::Domain,
-                    crate::model::app::WithSource<
-                        crate::model::http_api::McpDeploymentDeployProperties,
-                    >,
+                    crate::model::app::WithSource<crate::model::mcp::McpDeploymentDeployProperties>,
                 >| {
                     deployments
                         .iter()

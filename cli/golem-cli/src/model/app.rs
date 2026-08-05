@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
+use super::http_api::HttpApiDeploymentDeployProperties;
+use super::mcp::McpDeploymentDeployProperties;
 use crate::bridge_gen::{
     BridgeMode, bridge_client_directory_name, tool_bridge_client_directory_name,
 };
@@ -2651,9 +2652,8 @@ mod app_builder {
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
-    use crate::model::http_api::{
-        HttpApiDeploymentDeployProperties, McpDeploymentAgentOptions, McpDeploymentDeployProperties,
-    };
+    use crate::model::http_api::HttpApiDeploymentDeployProperties;
+    use crate::model::mcp::{McpDeploymentAgentOptions, McpDeploymentDeployProperties};
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use crate::{fs, fuzzy};
     use colored::Colorize;
