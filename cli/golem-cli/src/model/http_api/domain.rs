@@ -50,16 +50,32 @@ impl StructuredOutput for DomainRegistrationNewView {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DomainRegistrationDeleteResult {
+pub struct DomainRegistrationDeleteView {
     pub deleted: bool,
     pub domain: Domain,
     pub id: DomainRegistrationId,
 }
 
-impl NoTextOutput for DomainRegistrationDeleteResult {}
-impl TextOutput for DomainRegistrationDeleteResult {}
+impl Masked for DomainRegistrationDeleteView {}
 
-impl StructuredOutput for DomainRegistrationDeleteResult {
+impl MessageWithFields for DomainRegistrationDeleteView {
+    fn message(&self) -> String {
+        format!(
+            "Deleted API domain registration {}",
+            format_message_highlight(&self.domain.0)
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        let mut fields = FieldsBuilder::new();
+        fields
+            .fmt_field("Domain name", &self.domain.0, format_main_id)
+            .fmt_field("ID", &self.id, format_main_id);
+        fields.build()
+    }
+}
+
+impl StructuredOutput for DomainRegistrationDeleteView {
     const KIND: &'static str = "api.domain.delete";
 }
 

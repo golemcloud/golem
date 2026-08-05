@@ -19,10 +19,9 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
-use crate::log::log_warn_action;
 use crate::model::account::{
-    AccountDeleteResult, AccountGetView, AccountNewView, AccountUpdateView,
-    PermissionShareDeleteResult, PermissionShareGetView, PermissionShareListView,
+    AccountDeleteView, AccountGetView, AccountNewView, AccountUpdateView,
+    PermissionShareDeleteView, PermissionShareGetView, PermissionShareListView,
     PermissionShareNewView, PermissionShareUpdateView,
 };
 use anyhow::bail;
@@ -185,9 +184,7 @@ impl AccountCommandHandler {
             .await
             .map_service_error()?;
 
-        log_warn_action("Deleted", "account");
-
-        self.ctx.log_handler().log_output(AccountDeleteResult {
+        self.ctx.log_handler().log_output(AccountDeleteView {
             deleted: true,
             account_id: account.id,
         })?;
@@ -337,11 +334,9 @@ impl AccountCommandHandler {
             .await
             .map_service_error()?;
 
-        log_warn_action("Deleted", "permission share");
-
         self.ctx
             .log_handler()
-            .log_output(PermissionShareDeleteResult {
+            .log_output(PermissionShareDeleteView {
                 deleted: true,
                 permission_share_id,
             })?;

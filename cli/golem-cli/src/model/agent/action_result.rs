@@ -24,22 +24,34 @@
 
 use crate::model::agent::RawAgentId;
 use crate::model::cli_output::StructuredOutput;
-use crate::model::text_format::{NoTextOutput, TextOutput};
+use crate::model::masking::Masked;
+use crate::model::text_format::*;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentDeleteResult {
+pub struct AgentDeleteView {
     pub deleted: bool,
     pub agent_id: String,
 }
 
-impl NoTextOutput for AgentDeleteResult {}
-impl TextOutput for AgentDeleteResult {}
+impl Masked for AgentDeleteView {}
 
-impl StructuredOutput for AgentDeleteResult {
+impl MessageWithFields for AgentDeleteView {
+    fn message(&self) -> String {
+        format!("Deleted agent {}", format_message_highlight(&self.agent_id))
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        let mut fields = FieldsBuilder::new();
+        fields.fmt_field("Agent ID", &self.agent_id, format_main_id);
+        fields.build()
+    }
+}
+
+impl StructuredOutput for AgentDeleteView {
     const KIND: &'static str = "agent.delete";
 }
 

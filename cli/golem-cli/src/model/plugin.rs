@@ -15,7 +15,7 @@
 use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
 use crate::model::text_format::{
-    Column, FieldsBuilder, MessageWithFields, NoTextOutput, TextOutput, format_id, format_main_id,
+    Column, FieldsBuilder, MessageWithFields, TextOutput, format_id, format_main_id,
     format_message_highlight, log_table, new_table_full_condensed,
 };
 use golem_common::model::component::ComponentRevision;
@@ -183,17 +183,34 @@ impl StructuredOutput for PluginRegistrationGetView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PluginUnregisterResult {
+pub struct PluginUnregisterView {
     pub unregistered: bool,
     pub plugin_id: Uuid,
     pub name: String,
     pub version: String,
 }
 
-impl NoTextOutput for PluginUnregisterResult {}
-impl TextOutput for PluginUnregisterResult {}
+impl Masked for PluginUnregisterView {}
 
-impl StructuredOutput for PluginUnregisterResult {
+impl MessageWithFields for PluginUnregisterView {
+    fn message(&self) -> String {
+        format!(
+            "Unregistered plugin {}",
+            format_message_highlight(&self.name)
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        let mut fields = FieldsBuilder::new();
+        fields
+            .fmt_field("Name", &self.name, format_main_id)
+            .fmt_field("Version", &self.version, format_main_id)
+            .fmt_field("Plugin ID", &self.plugin_id, format_id);
+        fields.build()
+    }
+}
+
+impl StructuredOutput for PluginUnregisterView {
     const KIND: &'static str = "plugin.unregister";
 }
 

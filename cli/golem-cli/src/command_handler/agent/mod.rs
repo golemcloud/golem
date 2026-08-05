@@ -30,7 +30,7 @@ use crate::log::{
     log_warn_action, logln,
 };
 use crate::model::agent::action_result::{
-    AgentCancelInvocationResult, AgentDeleteResult, AgentFileContentsResult, AgentInterruptResult,
+    AgentCancelInvocationResult, AgentDeleteView, AgentFileContentsResult, AgentInterruptResult,
     AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
 };
 use crate::model::agent::files::{AgentFilesView, FileNodeView};
@@ -1374,12 +1374,7 @@ impl AgentCommandHandler {
 
         self.delete(component.id.0, &agent_id.0).await?;
 
-        log_action(
-            "Deleted",
-            format!("agent {}", format_agent_id_match(&agent_id_match)),
-        );
-
-        self.ctx.log_handler().log_output(AgentDeleteResult {
+        self.ctx.log_handler().log_output(AgentDeleteView {
             deleted: true,
             agent_id: agent_id.0.clone(),
         })?;

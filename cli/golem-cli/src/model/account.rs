@@ -97,15 +97,29 @@ impl StructuredOutput for AccountUpdateView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AccountDeleteResult {
+pub struct AccountDeleteView {
     pub deleted: bool,
     pub account_id: AccountId,
 }
 
-impl NoTextOutput for AccountDeleteResult {}
-impl TextOutput for AccountDeleteResult {}
+impl Masked for AccountDeleteView {}
 
-impl StructuredOutput for AccountDeleteResult {
+impl MessageWithFields for AccountDeleteView {
+    fn message(&self) -> String {
+        format!(
+            "Deleted account {}",
+            format_message_highlight(&self.account_id)
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        let mut fields = FieldsBuilder::new();
+        fields.fmt_field("Account ID", &self.account_id, format_main_id);
+        fields.build()
+    }
+}
+
+impl StructuredOutput for AccountDeleteView {
     const KIND: &'static str = "account.delete";
 }
 
@@ -192,15 +206,33 @@ impl StructuredOutput for PermissionShareUpdateView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PermissionShareDeleteResult {
+pub struct PermissionShareDeleteView {
     pub deleted: bool,
     pub permission_share_id: PermissionShareId,
 }
 
-impl NoTextOutput for PermissionShareDeleteResult {}
-impl TextOutput for PermissionShareDeleteResult {}
+impl Masked for PermissionShareDeleteView {}
 
-impl StructuredOutput for PermissionShareDeleteResult {
+impl MessageWithFields for PermissionShareDeleteView {
+    fn message(&self) -> String {
+        format!(
+            "Deleted permission share {}",
+            format_message_highlight(&self.permission_share_id)
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        let mut fields = FieldsBuilder::new();
+        fields.fmt_field(
+            "Permission share ID",
+            &self.permission_share_id,
+            format_main_id,
+        );
+        fields.build()
+    }
+}
+
+impl StructuredOutput for PermissionShareDeleteView {
     const KIND: &'static str = "account.permission-share.delete";
 }
 

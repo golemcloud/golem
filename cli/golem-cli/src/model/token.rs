@@ -86,14 +86,28 @@ impl StructuredOutput for TokenListView {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TokenDeleteResult {
+pub struct TokenDeleteView {
     pub deleted: bool,
     pub token_id: TokenId,
 }
 
-impl NoTextOutput for TokenDeleteResult {}
-impl TextOutput for TokenDeleteResult {}
+impl Masked for TokenDeleteView {}
 
-impl StructuredOutput for TokenDeleteResult {
+impl MessageWithFields for TokenDeleteView {
+    fn message(&self) -> String {
+        format!(
+            "Deleted token {}",
+            format_message_highlight(&self.token_id.0)
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        let mut fields = FieldsBuilder::new();
+        fields.fmt_field("Token ID", &self.token_id.0, format_main_id);
+        fields.build()
+    }
+}
+
+impl StructuredOutput for TokenDeleteView {
     const KIND: &'static str = "api-token.delete";
 }

@@ -6668,7 +6668,7 @@
   "x-golem-cli-output-types": [
     {
       "type": "account.delete",
-      "rustType": "AccountDeleteResult"
+      "rustType": "AccountDeleteView"
     },
     {
       "type": "account.get",
@@ -6680,7 +6680,7 @@
     },
     {
       "type": "account.permission-share.delete",
-      "rustType": "PermissionShareDeleteResult"
+      "rustType": "PermissionShareDeleteView"
     },
     {
       "type": "account.permission-share.get",
@@ -6728,7 +6728,7 @@
     },
     {
       "type": "agent.delete",
-      "rustType": "AgentDeleteResult"
+      "rustType": "AgentDeleteView"
     },
     {
       "type": "agent.delete-all",
@@ -6796,7 +6796,7 @@
     },
     {
       "type": "api-token.delete",
-      "rustType": "TokenDeleteResult"
+      "rustType": "TokenDeleteView"
     },
     {
       "type": "api-token.list",
@@ -6816,7 +6816,7 @@
     },
     {
       "type": "api.domain.delete",
-      "rustType": "DomainRegistrationDeleteResult"
+      "rustType": "DomainRegistrationDeleteView"
     },
     {
       "type": "api.domain.list",
@@ -6924,7 +6924,7 @@
     },
     {
       "type": "plugin.unregister",
-      "rustType": "PluginUnregisterResult"
+      "rustType": "PluginUnregisterView"
     },
     {
       "type": "profile.config.set-format",

@@ -45,14 +45,14 @@ macro_rules! registry_entry {
 
 static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
     registry_entry!(
-        "AccountDeleteResult",
+        "AccountDeleteView",
         "account.delete",
         arb_account_delete_result
     ),
     registry_entry!("AccountGetView", "account.get", arb_account_get_result),
     registry_entry!("AccountNewView", "account.new", arb_account_new_result),
     registry_entry!(
-        "PermissionShareDeleteResult",
+        "PermissionShareDeleteView",
         "account.permission-share.delete",
         arb_permission_share_delete_result
     ),
@@ -95,7 +95,7 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         "agent.cancel-invocation",
         arb_agent_cancel_invocation_result
     ),
-    registry_entry!("AgentDeleteResult", "agent.delete", arb_agent_delete_result),
+    registry_entry!("AgentDeleteView", "agent.delete", arb_agent_delete_result),
     registry_entry!(
         "AgentDeleteAllResult",
         "agent.delete-all",
@@ -145,7 +145,7 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         arb_agent_update_result
     ),
     registry_entry!(
-        "TokenDeleteResult",
+        "TokenDeleteView",
         "api-token.delete",
         arb_token_delete_result
     ),
@@ -162,7 +162,7 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         arb_api_deployment_list_result
     ),
     registry_entry!(
-        "DomainRegistrationDeleteResult",
+        "DomainRegistrationDeleteView",
         "api.domain.delete",
         arb_api_domain_delete_result
     ),
@@ -265,7 +265,7 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         arb_plugin_register_result
     ),
     registry_entry!(
-        "PluginUnregisterResult",
+        "PluginUnregisterView",
         "plugin.unregister",
         arb_plugin_unregister_result
     ),
@@ -2998,7 +2998,7 @@ fn arb_agent_resource_description() -> BoxedStrategy<golem_common::model::AgentR
 fn arb_agent_delete_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string()).prop_map(|(deleted, agent)| {
-            crate::model::agent::action_result::AgentDeleteResult {
+            crate::model::agent::action_result::AgentDeleteView {
                 deleted,
                 agent_id: agent,
             }
@@ -3063,7 +3063,7 @@ fn arb_agent_simulate_crash_result() -> OutputDocumentStrategy {
 fn arb_account_delete_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string()).prop_map(|(deleted, account_id)| {
-            crate::model::account::AccountDeleteResult {
+            crate::model::account::AccountDeleteView {
                 deleted,
                 account_id: golem_common::model::account::AccountId(
                     uuid::Uuid::parse_str(&account_id).expect("generated UUID should parse"),
@@ -3123,7 +3123,7 @@ fn arb_account_role() -> BoxedStrategy<golem_common::model::auth::AccountRole> {
 
 fn arb_permission_share_delete_result() -> OutputDocumentStrategy {
     serialized_output((any::<bool>(), arb_small_string()).prop_map(
-        |(deleted, permission_share_id)| crate::model::account::PermissionShareDeleteResult {
+        |(deleted, permission_share_id)| crate::model::account::PermissionShareDeleteView {
             deleted,
             permission_share_id: golem_common::model::permission_share::PermissionShareId(
                 uuid::Uuid::parse_str(&permission_share_id).expect("generated UUID should parse"),
@@ -3428,7 +3428,7 @@ fn arb_agent_plugin_toggle_result() -> OutputDocumentStrategy {
 fn arb_token_delete_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string()).prop_map(|(deleted, token_id)| {
-            crate::model::token::TokenDeleteResult {
+            crate::model::token::TokenDeleteView {
                 deleted,
                 token_id: golem_common::model::auth::TokenId(
                     uuid::Uuid::parse_str(&token_id).expect("generated UUID should parse"),
@@ -3485,14 +3485,12 @@ fn arb_token_with_secret() -> BoxedStrategy<golem_common::model::auth::TokenWith
 fn arb_api_domain_delete_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string(), arb_small_string()).prop_map(
-            |(deleted, domain, id)| {
-                crate::model::http_api::domain::DomainRegistrationDeleteResult {
-                    deleted,
-                    domain: golem_common::model::domain_registration::Domain(domain),
-                    id: golem_common::model::domain_registration::DomainRegistrationId(
-                        uuid::Uuid::parse_str(&id).expect("generated UUID should parse"),
-                    ),
-                }
+            |(deleted, domain, id)| crate::model::http_api::domain::DomainRegistrationDeleteView {
+                deleted,
+                domain: golem_common::model::domain_registration::Domain(domain),
+                id: golem_common::model::domain_registration::DomainRegistrationId(
+                    uuid::Uuid::parse_str(&id).expect("generated UUID should parse"),
+                ),
             },
         ),
     )
@@ -4775,7 +4773,7 @@ fn arb_plugin_unregister_result() -> OutputDocumentStrategy {
             arb_small_string(),
         )
             .prop_map(|(unregistered, plugin_id, name, version)| {
-                crate::model::plugin::PluginUnregisterResult {
+                crate::model::plugin::PluginUnregisterView {
                     unregistered,
                     plugin_id,
                     name,
