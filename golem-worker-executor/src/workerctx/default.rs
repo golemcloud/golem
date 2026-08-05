@@ -484,18 +484,22 @@ impl ResourceLimiterAsync for Context {
         {
             Err(GolemSpecificWasmTrap::WorkerExceededMemoryLimit)?;
         };
-        let (delta, _) = growth.unwrap();
+        Ok(true)
+    }
 
+    fn memory_grown(&mut self, current: usize, desired: usize) {
+        let delta = desired.saturating_sub(current) as u64;
         if delta > 0 {
-            // Request more permits from the host on a detached task; if that fails
-            // the worker gets restarted and reacquires memory on startup.
-            self.durable_ctx
-                .increase_memory(delta)
-                .map_err(wasmtime::Error::from_anyhow)?;
+            self.durable_ctx.increase_memory(delta);
             record_allocated_memory(self.durable_ctx.total_linear_memory_size() as usize);
         }
+    }
 
-        Ok(true)
+    fn memory_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
+        self.durable_ctx
+            .linear_memory_tracker()
+            .memory_grow_failed();
+        Ok(())
     }
 
     async fn table_growing(

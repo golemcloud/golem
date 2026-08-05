@@ -27,7 +27,6 @@ use self::agent_config::{
 };
 use crate::durable_host::{agent_effective_surface_from_component_metadata, recover_stderr_logs};
 use crate::metrics::storage::record_filesystem_pool_released;
-use crate::metrics::wasm::record_allocated_memory;
 use crate::metrics::workers::AdmissionPhase;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::active_workers::{
@@ -2002,11 +2001,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.state_actor.grow_memory(self.clone(), delta);
     }
 
-    pub fn record_reserved_memory_grow(self: &Arc<Self>, delta: u64) {
-        self.state_actor
-            .record_reserved_memory_growth(self.clone(), delta);
-    }
-
     // Should only be called from the worker-state actor's lifecycle queue (see
     // `request_memory_grow`).
     pub(crate) async fn increase_memory(&self, delta: u64) -> anyhow::Result<()> {
@@ -3969,14 +3963,10 @@ impl RunningWorker {
     ) -> Result<(), WorkerExecutorError> {
         let memories = store.linear_memories();
         let mut allocated_bytes = 0u64;
-        let mut conservatively_reserved_bytes = 0u64;
-        let mut shared_growth_reservation = 0u64;
         let durable = store.data().durable_ctx();
-        let initially_reserved_bytes = durable.total_linear_memory_size();
-        let limit = durable.max_linear_memory_size();
         let tracker = durable.linear_memory_tracker();
-        let pre_subscription_bytes = tracker.current_bytes();
-        let mut subscriptions = Vec::new();
+        let initially_reserved_bytes = tracker.initially_reserved_bytes();
+        let limit = durable.max_linear_memory_size();
 
         for memory in &memories {
             match memory {
@@ -3985,86 +3975,27 @@ impl RunningWorker {
                     allocated_bytes = allocated_bytes.checked_add(current).ok_or_else(|| {
                         WorkerExecutorError::runtime("linear-memory allocation total overflowed")
                     })?;
-                    conservatively_reserved_bytes = conservatively_reserved_bytes
-                        .checked_add(current)
-                        .ok_or_else(|| {
-                            WorkerExecutorError::runtime(
-                                "linear-memory reservation total overflowed",
-                            )
-                        })?;
                 }
-                StoreMemory::Shared(memory) => {
-                    let growth_tracker = tracker.clone();
-                    let worker = parent.clone();
-                    let (subscription, current) =
-                        memory.subscribe_to_growth_with_current_size(move |old_size, new_size| {
-                            let delta = new_size.saturating_sub(old_size) as u64;
-                            if delta == 0 {
-                                return;
-                            }
-                            let (total, replaying) =
-                                growth_tracker.grow_shared(delta, std::time::Instant::now());
-                            record_allocated_memory(total as usize);
-                            if !replaying {
-                                worker.record_reserved_memory_grow(delta);
-                            }
-                        });
-                    subscriptions.push(subscription);
-                    let current = current as u64;
-                    let ty = memory.ty();
-                    let maximum_pages = ty.maximum().ok_or_else(|| {
-                        WorkerExecutorError::runtime(
-                            "shared linear memory did not declare a maximum",
-                        )
-                    })?;
-                    let maximum = maximum_pages.checked_mul(ty.page_size()).ok_or_else(|| {
-                        WorkerExecutorError::runtime("shared linear-memory maximum overflowed")
-                    })?;
-                    allocated_bytes = allocated_bytes.checked_add(current).ok_or_else(|| {
-                        WorkerExecutorError::runtime("linear-memory allocation total overflowed")
-                    })?;
-                    conservatively_reserved_bytes = conservatively_reserved_bytes
-                        .checked_add(maximum)
-                        .ok_or_else(|| {
-                            WorkerExecutorError::runtime(
-                                "linear-memory reservation total overflowed",
-                            )
-                        })?;
-                    shared_growth_reservation = shared_growth_reservation
-                        .checked_add(maximum.saturating_sub(current))
-                        .ok_or_else(|| {
-                            WorkerExecutorError::runtime(
-                                "shared linear-memory growth reservation overflowed",
-                            )
-                        })?;
-                }
+                StoreMemory::Shared(_) => return Err(shared_linear_memory_error(parent)),
             }
         }
 
-        if conservatively_reserved_bytes > limit {
+        if allocated_bytes > limit {
             return Err(WorkerExecutorError::worker_creation_failed(
                 parent.owned_agent_id.agent_id(),
                 format!(
-                    "Linear memories require {conservatively_reserved_bytes} bytes including shared declared maxima, exceeding the per-worker limit of {limit} bytes"
+                    "Linear memories require {allocated_bytes} bytes, exceeding the per-worker limit of {limit} bytes"
                 ),
             ));
         }
 
-        tracker.reconcile_preserving_shared_growth(
-            allocated_bytes,
-            shared_growth_reservation,
-            pre_subscription_bytes,
-            std::time::Instant::now(),
-        );
+        tracker.reconcile(allocated_bytes, std::time::Instant::now());
 
-        store
-            .data_mut()
-            .durable_ctx_mut()
-            .retain_shared_memory_growth_subscriptions(subscriptions);
-
-        let additional_reservation =
-            conservatively_reserved_bytes.saturating_sub(initially_reserved_bytes);
+        let additional_reservation = allocated_bytes.saturating_sub(initially_reserved_bytes);
         if additional_reservation > 0 {
+            parent
+                .add_to_oplog(OplogEntry::grow_memory(additional_reservation))
+                .await;
             parent
                 .increase_memory(additional_reservation)
                 .await
@@ -4249,6 +4180,15 @@ impl RunningWorker {
                     .last_known_status
                     .component_revision_for_replay,
             );
+
+        if component_metadata
+            .metadata
+            .memories()
+            .iter()
+            .any(|memory| memory.shared)
+        {
+            return Err(shared_linear_memory_error(&parent));
+        }
 
         let component_metadata_for_replay =
             if component_metadata.revision == component_version_for_replay {
@@ -4445,6 +4385,13 @@ impl RunningWorker {
         };
         invocation_loop.run().await;
     }
+}
+
+fn shared_linear_memory_error<Ctx: WorkerCtx>(parent: &Arc<Worker<Ctx>>) -> WorkerExecutorError {
+    WorkerExecutorError::worker_creation_failed(
+        parent.owned_agent_id.agent_id(),
+        "Shared linear memories are not supported because their growth cannot be admitted through the worker resource limiter",
+    )
 }
 
 /// Classification of a loaded worker for eviction ordering.

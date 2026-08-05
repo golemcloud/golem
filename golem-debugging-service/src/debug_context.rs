@@ -357,18 +357,17 @@ impl FileSystemReading for DebugContext {
 impl ResourceLimiterAsync for DebugContext {
     async fn memory_growing(
         &mut self,
-        current: usize,
-        desired: usize,
+        _current: usize,
+        _desired: usize,
         _maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
+        Ok(true)
+    }
+
+    fn memory_grown(&mut self, current: usize, desired: usize) {
         let delta = desired.saturating_sub(current) as u64;
         if delta > 0 {
-            self.durable_ctx
-                .increase_memory(delta)
-                .map_err(wasmtime::Error::from_anyhow)?;
-            Ok(true)
-        } else {
-            Ok(true)
+            self.durable_ctx.increase_memory(delta);
         }
     }
 

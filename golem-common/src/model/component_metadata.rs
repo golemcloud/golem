@@ -319,6 +319,7 @@ impl From<wasmparser::MemoryType> for LinearMemory {
         Self {
             initial: value.initial * LinearMemory::PAGE_SIZE,
             maximum: value.maximum.map(|m| m * LinearMemory::PAGE_SIZE),
+            shared: value.shared,
         }
     }
 }
@@ -611,6 +612,7 @@ mod protobuf {
             Self {
                 initial: value.initial,
                 maximum: value.maximum,
+                shared: value.shared,
             }
         }
     }
@@ -620,6 +622,7 @@ mod protobuf {
             Self {
                 initial: value.initial,
                 maximum: value.maximum,
+                shared: value.shared,
             }
         }
     }
@@ -950,5 +953,26 @@ mod tests {
             decoded.agent_type_initial_permission_card(&agent_type),
             Some(&card)
         );
+    }
+
+    #[test]
+    fn component_metadata_grpc_roundtrip_preserves_shared_memory_flag() {
+        let metadata = ComponentMetadata::from_parts(
+            KnownExports::default(),
+            vec![LinearMemory {
+                initial: LinearMemory::PAGE_SIZE,
+                maximum: Some(2 * LinearMemory::PAGE_SIZE),
+                shared: true,
+            }],
+            None,
+            None,
+            Vec::new(),
+            BTreeMap::new(),
+        );
+
+        let proto: golem_api_grpc::proto::golem::component::ComponentMetadata = metadata.into();
+        let decoded = ComponentMetadata::try_from(proto).unwrap();
+
+        assert!(decoded.memories()[0].shared);
     }
 }

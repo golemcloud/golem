@@ -332,6 +332,10 @@ impl AccountCommandHandler {
         if storage.is_none() && max_memory.is_none() && monthly_memory.is_none() {
             bail!("at least one limit must be provided");
         }
+        if storage.is_some() as u8 + max_memory.is_some() as u8 + monthly_memory.is_some() as u8 > 1
+        {
+            bail!("only one limit can be changed per command");
+        }
         let account_id = self.select_account_id_or_err(account_id).await?;
         let clients = self.ctx.golem_clients().await?;
         if let Some(value) = storage {
@@ -383,6 +387,9 @@ impl AccountCommandHandler {
         max_memory: bool,
         monthly_memory: bool,
     ) -> anyhow::Result<()> {
+        if storage as u8 + max_memory as u8 + monthly_memory as u8 > 1 {
+            bail!("only one limit can be changed per command");
+        }
         let account_id = self.select_account_id_or_err(account_id).await?;
         let clients = self.ctx.golem_clients().await?;
         if storage || (!max_memory && !monthly_memory) {

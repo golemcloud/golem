@@ -374,7 +374,6 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
     linear_memory: LinearMemoryTracker,
-    shared_memory_growth_subscriptions: Vec<wasmtime::SharedMemoryGrowthSubscription>,
     storage_meter: AgentStorageMeter,
     /// Per-instance cache of resolved typed guest export handles, populated
     /// lazily on first use during invocation dispatch.
@@ -750,7 +749,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             execution_status,
             resource_limits,
             linear_memory,
-            shared_memory_growth_subscriptions: Vec::new(),
             storage_meter,
             agent_export_funcs: AgentExportFuncs::default(),
             _store_alive_guard: StoreAliveGuard::new(),
@@ -1303,13 +1301,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .desired_total_after_unshared_growth(current_memory, desired_memory)
     }
 
-    pub fn retain_shared_memory_growth_subscriptions(
-        &mut self,
-        subscriptions: Vec<wasmtime::SharedMemoryGrowthSubscription>,
-    ) {
-        self.shared_memory_growth_subscriptions = subscriptions;
-    }
-
     pub fn resume_memory_meter(&self) {
         self.linear_memory.resume(Instant::now());
     }
@@ -1497,9 +1488,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         );
     }
 
-    pub fn increase_memory(&mut self, delta: u64) -> anyhow::Result<()> {
-        self.linear_memory.grow(delta, Instant::now());
-        if self.state.is_live() {
+    pub fn increase_memory(&mut self, delta: u64) {
+        let (_, reconciling) = self.linear_memory.grow(delta, Instant::now());
+        if self.state.is_live() && !reconciling {
             // This is called from the `memory.grow` async resource limiter, which
             // Wasmtime runs through a blocking libcall on the store's fiber. While
             // that libcall waits, the store cannot make progress, so nothing may be
@@ -1509,7 +1500,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // `Worker::request_memory_grow` for the admission-failure semantics.
             self.public_state.worker().request_memory_grow(delta);
         }
-        Ok(())
     }
 
     /// Returns the deterministic, policy-independent recovery decision for a

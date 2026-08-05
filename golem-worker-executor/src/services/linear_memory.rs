@@ -27,7 +27,10 @@ pub struct LinearMemoryTracker {
 #[derive(Debug)]
 struct Inner {
     bytes: AtomicU64,
-    shared_growth_reservation: AtomicU64,
+    initially_reserved_bytes: u64,
+    startup_bytes_remaining: AtomicU64,
+    pending_growth_prepaid: AtomicU64,
+    reconciling: AtomicBool,
     replaying: AtomicBool,
     transitions: Mutex<()>,
     meter: AgentMemoryMeter,
@@ -44,7 +47,10 @@ impl LinearMemoryTracker {
         Self {
             inner: Arc::new(Inner {
                 bytes: AtomicU64::new(bytes),
-                shared_growth_reservation: AtomicU64::new(0),
+                initially_reserved_bytes: bytes,
+                startup_bytes_remaining: AtomicU64::new(bytes),
+                pending_growth_prepaid: AtomicU64::new(0),
+                reconciling: AtomicBool::new(true),
                 replaying: AtomicBool::new(replaying),
                 transitions: Mutex::new(()),
                 meter: AgentMemoryMeter::new(mode, bytes, true, resource_entry, now),
@@ -56,8 +62,8 @@ impl LinearMemoryTracker {
         self.inner.bytes.load(Ordering::Acquire)
     }
 
-    pub fn is_replaying(&self) -> bool {
-        self.inner.replaying.load(Ordering::Acquire)
+    pub fn initially_reserved_bytes(&self) -> u64 {
+        self.inner.initially_reserved_bytes
     }
 
     pub fn switch_to_live(&self) {
@@ -65,53 +71,41 @@ impl LinearMemoryTracker {
         self.inner.replaying.store(false, Ordering::Release);
     }
 
-    pub fn reconcile(&self, bytes: u64, shared_growth_reservation: u64, now: Instant) {
+    pub fn reconcile(&self, bytes: u64, now: Instant) {
         let _transition = self.inner.transitions.lock().unwrap();
         self.inner.meter.set_bytes(bytes, now);
         self.inner.bytes.store(bytes, Ordering::Release);
         self.inner
-            .shared_growth_reservation
-            .store(shared_growth_reservation, Ordering::Release);
-    }
-
-    pub fn reconcile_preserving_shared_growth(
-        &self,
-        bytes: u64,
-        shared_growth_reservation: u64,
-        pre_subscription_bytes: u64,
-        now: Instant,
-    ) {
-        let _transition = self.inner.transitions.lock().unwrap();
-        let concurrent_growth = self.current_bytes().saturating_sub(pre_subscription_bytes);
-        let bytes = bytes.saturating_add(concurrent_growth);
-        self.inner.meter.set_bytes(bytes, now);
-        self.inner.bytes.store(bytes, Ordering::Release);
-        self.inner.shared_growth_reservation.store(
-            shared_growth_reservation.saturating_sub(concurrent_growth),
-            Ordering::Release,
-        );
-    }
-
-    pub fn grow(&self, delta: u64, now: Instant) -> u64 {
-        let _transition = self.inner.transitions.lock().unwrap();
-        let bytes = self.current_bytes().saturating_add(delta);
-        self.inner.meter.set_bytes(bytes, now);
-        self.inner.bytes.store(bytes, Ordering::Release);
-        bytes
-    }
-
-    pub fn grow_shared(&self, delta: u64, now: Instant) -> (u64, bool) {
-        let _transition = self.inner.transitions.lock().unwrap();
-        let bytes = self.current_bytes().saturating_add(delta);
-        self.inner.meter.set_bytes(bytes, now);
-        self.inner.bytes.store(bytes, Ordering::Release);
+            .startup_bytes_remaining
+            .store(0, Ordering::Release);
         self.inner
-            .shared_growth_reservation
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |reserved| {
-                Some(reserved.saturating_sub(delta))
+            .pending_growth_prepaid
+            .store(0, Ordering::Release);
+        self.inner.reconciling.store(false, Ordering::Release);
+    }
+
+    pub fn grow(&self, delta: u64, now: Instant) -> (u64, bool) {
+        let _transition = self.inner.transitions.lock().unwrap();
+        let prepaid = self
+            .inner
+            .pending_growth_prepaid
+            .swap(0, Ordering::AcqRel)
+            .min(delta);
+        let bytes = self.current_bytes().saturating_add(delta - prepaid);
+        self.inner.meter.set_bytes(bytes, now);
+        self.inner.bytes.store(bytes, Ordering::Release);
+        (bytes, self.inner.reconciling.load(Ordering::Acquire))
+    }
+
+    pub fn memory_grow_failed(&self) {
+        let _transition = self.inner.transitions.lock().unwrap();
+        let prepaid = self.inner.pending_growth_prepaid.swap(0, Ordering::AcqRel);
+        self.inner
+            .startup_bytes_remaining
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                Some(remaining.saturating_add(prepaid))
             })
             .ok();
-        (bytes, self.inner.replaying.load(Ordering::Acquire))
     }
 
     pub fn desired_total_after_unshared_growth(
@@ -120,11 +114,28 @@ impl LinearMemoryTracker {
         desired_memory: usize,
     ) -> Option<(u64, u64)> {
         let _transition = self.inner.transitions.lock().unwrap();
+        let delta = desired_memory.saturating_sub(current_memory) as u64;
+        let reconciling = self.inner.reconciling.load(Ordering::Acquire);
+        let prepaid = if reconciling
+            && (current_memory == 0 || self.inner.replaying.load(Ordering::Acquire))
+        {
+            let remaining = self.inner.startup_bytes_remaining.load(Ordering::Acquire);
+            let prepaid = delta.min(remaining);
+            self.inner
+                .startup_bytes_remaining
+                .store(remaining - prepaid, Ordering::Release);
+            prepaid
+        } else {
+            0
+        };
+        if current_memory != 0 {
+            self.inner
+                .pending_growth_prepaid
+                .store(prepaid, Ordering::Release);
+        }
         self.current_bytes()
-            .checked_add(self.inner.shared_growth_reservation.load(Ordering::Acquire))
-            .and_then(|reserved_total| {
-                desired_total_after_growth(reserved_total, current_memory, desired_memory)
-            })
+            .checked_add(delta - prepaid)
+            .map(|total| (delta, total))
     }
 
     pub fn resume(&self, now: Instant) {
@@ -180,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn unshared_growth_cannot_consume_shared_declared_maximum() {
+    fn tracker_preserves_initial_reservation_across_growth_and_reconciliation() {
         let now = Instant::now();
         let tracker = LinearMemoryTracker::new(
             40,
@@ -189,17 +200,58 @@ mod tests {
             Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
             now,
         );
-        tracker.reconcile(40, 60, now);
+        tracker.grow(20, now);
+        tracker.reconcile(60, now);
 
-        assert_eq!(
-            tracker.desired_total_after_unshared_growth(20, 30),
-            Some((10, 110))
+        assert_eq!(tracker.initially_reserved_bytes(), 40);
+        assert_eq!(tracker.current_bytes(), 60);
+    }
+
+    #[test]
+    fn startup_minimums_consume_the_existing_reservation() {
+        let now = Instant::now();
+        let tracker = LinearMemoryTracker::new(
+            40,
+            AgentMode::Durable,
+            false,
+            Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
+            now,
         );
 
-        tracker.grow_shared(20, now);
         assert_eq!(
-            tracker.desired_total_after_unshared_growth(20, 30),
-            Some((10, 110))
+            tracker.desired_total_after_unshared_growth(0, 15),
+            Some((15, 40))
         );
+        assert_eq!(
+            tracker.desired_total_after_unshared_growth(0, 25),
+            Some((25, 40))
+        );
+        assert_eq!(
+            tracker.desired_total_after_unshared_growth(25, 35),
+            Some((10, 50))
+        );
+    }
+
+    #[test]
+    fn replay_growth_consumes_the_reconstructed_reservation() {
+        let now = Instant::now();
+        let tracker = LinearMemoryTracker::new(
+            50,
+            AgentMode::Durable,
+            true,
+            Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
+            now,
+        );
+
+        assert_eq!(
+            tracker.desired_total_after_unshared_growth(0, 40),
+            Some((40, 50))
+        );
+        assert_eq!(
+            tracker.desired_total_after_unshared_growth(40, 50),
+            Some((10, 50))
+        );
+        tracker.grow(10, now);
+        assert_eq!(tracker.current_bytes(), 50);
     }
 }

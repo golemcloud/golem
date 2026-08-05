@@ -317,10 +317,10 @@ x509-certificate = "0.23.1"
 zstd = "0.13"
 
 [patch.crates-io]
-wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", rev = "6f5d494a8309a743d43c6947da7a6ee6bb7af99c" }
-wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", rev = "6f5d494a8309a743d43c6947da7a6ee6bb7af99c" }
-wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", rev = "6f5d494a8309a743d43c6947da7a6ee6bb7af99c" }
-wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", rev = "6f5d494a8309a743d43c6947da7a6ee6bb7af99c" }
+wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3-memory-tracking" }
+wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3-memory-tracking" }
+wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3-memory-tracking" }
+wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3-memory-tracking" }
 
 [profile.dev]
 panic = "abort"
