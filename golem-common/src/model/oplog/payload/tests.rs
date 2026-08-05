@@ -19,7 +19,6 @@ use crate::model::Timestamp;
 use crate::model::card::{CardId, ScopeCard};
 use crate::model::component::ComponentId;
 use crate::model::invocation_context::{AttributeValue, SpanId};
-use crate::model::oplog::HostPayloadPair;
 use crate::model::oplog::host_functions::{
     GolemPermissionsDerivePersist, GolemPermissionsInstallChildPersist,
     GolemPermissionsInstallTransfer, HostFunctionName,

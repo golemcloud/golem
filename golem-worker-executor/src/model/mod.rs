@@ -988,6 +988,8 @@ mod tests {
                 ),
             ),
             OplogIndex::INITIAL,
+            false,
+            false,
             AgentMode::Durable,
         );
 
@@ -1001,7 +1003,7 @@ mod tests {
 
         let decision = crate::durable_host::DurableWorkerCtx::<
             crate::workerctx::default::Context,
-        >::fixed_decision_for_trap_type(&trap, false);
+        >::fixed_decision_for_trap_type(&trap);
         assert_eq!(decision, Some(RetryDecision::None));
     }
 

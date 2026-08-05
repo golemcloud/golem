@@ -2213,6 +2213,7 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => anyhow::bail!(
                 "SchemaType variant has no TypeScript bridge decoding yet; type = {typ:?}"
@@ -2610,6 +2611,7 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => anyhow::bail!(
                 "SchemaType variant has no TypeScript bridge encoding yet; type = {typ:?}"

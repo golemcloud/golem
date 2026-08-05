@@ -2896,8 +2896,8 @@ mod tests {
     use crate::services::rpc::RpcError as ServiceRpcError;
     use async_trait::async_trait;
     use golem_common::data_value;
+    use golem_common::model::card::CardId;
     use golem_common::model::component::ComponentId;
-    use golem_common::model::oplog::payload::CardId;
     use golem_schema::schema::wit::{QuotaTokenHandleRep, SecretHandleRep};
     use golem_service_base::model::auth::AuthCtx;
     use std::sync::Mutex;

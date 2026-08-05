@@ -15,9 +15,8 @@ use golem_common::model::oplog::{
     HostResponseMonotonicClockTimestamp, HostResponseP3HttpClientConsumeBodyChunk,
     HostResponseP3HttpClientConsumeBodyResult, OplogPayload, PayloadId, RawOplogPayload,
 };
-use golem_common::model::{
-    AgentId, AgentInvocationPayload, IdempotencyKey, OplogRegion, Timestamp,
-};
+use golem_common::model::regions::OplogRegion;
+use golem_common::model::{AgentId, AgentInvocationPayload, IdempotencyKey, Timestamp};
 use std::collections::BTreeMap;
 use std::time::Duration;
 use test_r::test;
