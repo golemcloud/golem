@@ -275,7 +275,7 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         arb_profile_config_set_format_result
     ),
     registry_entry!(
-        "ProfileDeleteResult",
+        "ProfileDeleteView",
         "profile.delete",
         arb_profile_delete_result
     ),
@@ -4926,7 +4926,7 @@ fn arb_profile_switch_result() -> OutputDocumentStrategy {
 fn arb_profile_delete_result() -> OutputDocumentStrategy {
     serialized_output(
         (any::<bool>(), arb_small_string()).prop_map(|(deleted, profile)| {
-            crate::model::config::profile::ProfileDeleteResult {
+            crate::model::config::profile::ProfileDeleteView {
                 deleted,
                 profile: crate::config::ProfileName(profile),
             }

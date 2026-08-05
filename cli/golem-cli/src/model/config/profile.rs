@@ -124,15 +124,29 @@ impl StructuredOutput for ProfileSwitchResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProfileDeleteResult {
+pub struct ProfileDeleteView {
     pub deleted: bool,
     pub profile: ProfileName,
 }
 
-impl NoTextOutput for ProfileDeleteResult {}
-impl TextOutput for ProfileDeleteResult {}
+impl Masked for ProfileDeleteView {}
 
-impl StructuredOutput for ProfileDeleteResult {
+impl MessageWithFields for ProfileDeleteView {
+    fn message(&self) -> String {
+        format!(
+            "Deleted profile {}",
+            format_message_highlight(&self.profile)
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        let mut fields = FieldsBuilder::new();
+        fields.fmt_field("Profile", &self.profile, format_main_id);
+        fields.build()
+    }
+}
+
+impl StructuredOutput for ProfileDeleteView {
     const KIND: &'static str = "profile.delete";
 }
 

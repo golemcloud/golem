@@ -6897,7 +6897,7 @@
     },
     {
       "type": "profile.delete",
-      "rustType": "ProfileDeleteResult"
+      "rustType": "ProfileDeleteView"
     },
     {
       "type": "profile.get",

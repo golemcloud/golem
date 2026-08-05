@@ -22,10 +22,10 @@ use crate::config::{
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::log_error;
-use crate::log::{LogColorize, log_action, log_warn_action};
+use crate::log::{LogColorize, log_action};
 use crate::model::config::ProfileView;
 use crate::model::config::profile::{
-    ProfileCreateResult, ProfileDeleteResult, ProfileListView, ProfileSwitchResult,
+    ProfileCreateResult, ProfileDeleteView, ProfileListView, ProfileSwitchResult,
 };
 use crate::model::format::Format;
 use anyhow::bail;
@@ -255,12 +255,7 @@ impl ProfileCommandHandler {
 
         Config::delete_profile(&profile_name, self.ctx.config_dir())?;
 
-        log_warn_action(
-            "Deleted",
-            format!("profile {}", profile_name.0.log_color_highlight()),
-        );
-
-        self.ctx.log_handler().log_output(ProfileDeleteResult {
+        self.ctx.log_handler().log_output(ProfileDeleteView {
             deleted: true,
             profile: profile_name,
         })?;
