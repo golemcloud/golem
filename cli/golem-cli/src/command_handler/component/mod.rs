@@ -26,7 +26,7 @@ use crate::error::service::MapServiceError;
 use crate::log::{LogColorize, LogIndent, log_action, log_error, log_warn_action, logln};
 use crate::model::agent::AgentUpdateMode;
 use crate::model::agent::action_result::{
-    AgentDeleteAllResult, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
+    AgentDeleteAllView, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
 };
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
@@ -459,7 +459,7 @@ impl ComponentCommandHandler {
             first_round = false;
         }
 
-        self.ctx.log_handler().log_output(AgentDeleteAllResult {
+        self.ctx.log_handler().log_output(AgentDeleteAllView {
             deleted: true,
             agents,
         })?;

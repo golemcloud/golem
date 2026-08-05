@@ -6697,7 +6697,7 @@
     },
     {
       "type": "agent.delete-all",
-      "rustType": "AgentDeleteAllResult"
+      "rustType": "AgentDeleteAllView"
     },
     {
       "type": "agent.file-contents",

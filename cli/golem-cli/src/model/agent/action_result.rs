@@ -176,15 +176,30 @@ pub struct AgentRedeploymentMeta {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentDeleteAllResult {
+pub struct AgentDeleteAllView {
     pub deleted: bool,
     pub agents: Vec<AgentDeletionMeta>,
 }
 
-impl NoTextOutput for AgentDeleteAllResult {}
-impl TextOutput for AgentDeleteAllResult {}
+impl TextOutput for AgentDeleteAllView {
+    fn log(&self) {
+        logln(format!("Deleted {} agent(s)", self.agents.len()));
 
-impl StructuredOutput for AgentDeleteAllResult {
+        let mut table =
+            new_table_full_condensed(vec![Column::new("Component"), Column::new("Agent ID")]);
+
+        for agent in &self.agents {
+            table.add_row(vec![
+                agent.component_name.to_string(),
+                agent.agent_id.to_string(),
+            ]);
+        }
+
+        log_table(table);
+    }
+}
+
+impl StructuredOutput for AgentDeleteAllView {
     const KIND: &'static str = "agent.delete-all";
 }
 

@@ -85,6 +85,8 @@ pub struct CardRevokeView {
 
 impl TextOutput for CardRevokeView {
     fn log(&self) {
+        logln(format!("Revoked {} card(s)", self.revoked_card_ids.len()));
+
         let mut table = new_table_full_condensed(vec![Column::new("Revoked card ID")]);
 
         for card_id in &self.revoked_card_ids {

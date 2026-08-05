@@ -97,7 +97,7 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
     ),
     registry_entry!("AgentDeleteView", "agent.delete", arb_agent_delete_result),
     registry_entry!(
-        "AgentDeleteAllResult",
+        "AgentDeleteAllView",
         "agent.delete-all",
         arb_agent_delete_all_result
     ),
@@ -3363,7 +3363,7 @@ fn arb_agent_delete_all_result() -> OutputDocumentStrategy {
             proptest::collection::vec(arb_agent_deletion_meta(), 0..5),
         )
             .prop_map(|(deleted, agents)| {
-                crate::model::agent::action_result::AgentDeleteAllResult { deleted, agents }
+                crate::model::agent::action_result::AgentDeleteAllView { deleted, agents }
             }),
     )
 }

@@ -18,7 +18,6 @@ use crate::command_handler::agent::AgentCommandHandler;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
-use crate::log::log_warn_action;
 use crate::model::agent::RawAgentId;
 use crate::model::card::{CardGetView, CardListView, CardRevokeView};
 use anyhow::bail;
@@ -192,8 +191,6 @@ impl CardCommandHandler {
             .revoke_card(&card_id.0)
             .await
             .map_service_error()?;
-
-        log_warn_action("Revoked", "card");
 
         self.ctx.log_handler().log_output(CardRevokeView {
             revoked_card_ids: response.revoked_card_ids,
