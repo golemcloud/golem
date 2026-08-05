@@ -227,7 +227,7 @@ impl ResourceDefinitionCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_output(ResourceDefinitionDeleteView(resource))?;
+            .log_output(ResourceDefinitionDeleteView::from(resource))?;
 
         Ok(())
     }

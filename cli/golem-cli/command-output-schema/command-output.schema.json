@@ -2058,46 +2058,27 @@
       "x-golem-command": "api security-scheme delete",
       "required": [
         "$type",
+        "deleted",
         "id",
-        "revision",
         "name",
-        "environmentId",
-        "providerType",
-        "clientId",
-        "redirectUrl",
-        "scopes"
+        "revision"
       ],
       "properties": {
         "$type": {
           "const": "api.security-scheme.delete"
         },
+        "deleted": {
+          "type": "boolean"
+        },
         "id": {
+          "type": "string"
+        },
+        "name": {
           "type": "string"
         },
         "revision": {
           "type": "integer",
           "minimum": 0
-        },
-        "name": {
-          "type": "string"
-        },
-        "environmentId": {
-          "type": "string"
-        },
-        "providerType": {
-          "$ref": "#/definitions/SecuritySchemeProvider"
-        },
-        "clientId": {
-          "type": "string"
-        },
-        "redirectUrl": {
-          "type": "string"
-        },
-        "scopes": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
         }
       },
       "additionalProperties": false
@@ -5393,27 +5374,21 @@
       "x-golem-command": "resource delete",
       "required": [
         "$type",
+        "deleted",
         "id",
         "revision",
         "environmentId",
-        "name",
-        "limit",
-        "enforcementAction",
-        "unit",
-        "units"
+        "name"
       ],
       "properties": {
         "$type": {
           "const": "resource.delete"
         },
+        "deleted": { "type": "boolean" },
         "id": { "type": "string" },
         "revision": { "type": "integer", "minimum": 0 },
         "environmentId": { "type": "string" },
-        "name": { "type": "string" },
-        "limit": { "$ref": "#/definitions/ResourceLimit" },
-        "enforcementAction": { "$ref": "#/definitions/EnforcementAction" },
-        "unit": { "type": "string" },
-        "units": { "type": "string" }
+        "name": { "type": "string" }
       },
       "additionalProperties": false
     },
@@ -5591,25 +5566,21 @@
       "x-golem-command": "retry-policy delete",
       "required": [
         "$type",
+        "deleted",
         "id",
         "environmentId",
         "name",
-        "revision",
-        "priority",
-        "predicate",
-        "policy"
+        "revision"
       ],
       "properties": {
         "$type": {
           "const": "retry-policy.delete"
         },
+        "deleted": { "type": "boolean" },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
         "name": { "type": "string" },
-        "revision": { "type": "integer", "minimum": 0 },
-        "priority": { "type": "integer", "minimum": 0 },
-        "predicate": { "$ref": "#/definitions/ApiPredicate" },
-        "policy": { "$ref": "#/definitions/ApiRetryPolicy" }
+        "revision": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": false
     },
@@ -6520,27 +6491,21 @@
       "x-golem-command": "secret delete",
       "required": [
         "$type",
+        "deleted",
         "id",
         "environmentId",
         "path",
-        "revision",
-        "secretType"
+        "revision"
       ],
       "properties": {
         "$type": {
           "const": "secret.delete"
         },
+        "deleted": { "type": "boolean" },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
         "path": { "type": "array", "items": { "type": "string" } },
-        "revision": { "type": "integer", "minimum": 0 },
-        "secretType": { "$ref": "#/definitions/SchemaGraph" },
-        "secretValue": {
-          "oneOf": [
-            { "$ref": "#/definitions/SchemaValue" },
-            { "type": "null" }
-          ]
-        }
+        "revision": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": false
     },

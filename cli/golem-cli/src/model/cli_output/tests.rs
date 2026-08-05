@@ -1038,11 +1038,6 @@ fn cli_output_schema_validates_schema_native_secret_outputs() {
         )
         .expect("secret.create should serialize"),
         to_structured_output_value_masked(
-            crate::model::secret::SecretDeleteView(secret.clone().into()),
-            MaskingConfig::hide_secrets(),
-        )
-        .expect("secret.delete should serialize"),
-        to_structured_output_value_masked(
             crate::model::secret::SecretGetView(secret.clone().into()),
             MaskingConfig::hide_secrets(),
         )
@@ -3622,10 +3617,9 @@ fn arb_api_security_scheme_create_result() -> OutputDocumentStrategy {
 }
 
 fn arb_api_security_scheme_delete_result() -> OutputDocumentStrategy {
-    serialized_output(
-        arb_security_scheme()
-            .prop_map(crate::model::http_api::security::HttpSecuritySchemeDeleteView),
-    )
+    serialized_output(arb_security_scheme().prop_map(|scheme| {
+        crate::model::http_api::security::HttpSecuritySchemeDeleteView::from(scheme)
+    }))
 }
 
 fn arb_api_security_scheme_get_result() -> OutputDocumentStrategy {
@@ -4958,10 +4952,9 @@ fn arb_resource_create_result() -> OutputDocumentStrategy {
 }
 
 fn arb_resource_delete_result() -> OutputDocumentStrategy {
-    serialized_output(
-        arb_resource_definition()
-            .prop_map(crate::model::resource_definition::ResourceDefinitionDeleteView),
-    )
+    serialized_output(arb_resource_definition().prop_map(|resource| {
+        crate::model::resource_definition::ResourceDefinitionDeleteView::from(resource)
+    }))
 }
 
 fn arb_resource_get_result() -> OutputDocumentStrategy {
@@ -5331,7 +5324,7 @@ fn arb_retry_policy_create_result() -> OutputDocumentStrategy {
 
 fn arb_retry_policy_delete_result() -> OutputDocumentStrategy {
     serialized_output(
-        arb_retry_policy().prop_map(crate::model::retry_policy::RetryPolicyDeleteView),
+        arb_retry_policy().prop_map(crate::model::retry_policy::RetryPolicyDeleteView::from),
     )
 }
 
@@ -5402,7 +5395,9 @@ fn arb_secret_delete_result() -> OutputDocumentStrategy {
     arb_secret()
         .prop_map(|secret| {
             to_structured_output_value_masked(
-                crate::model::secret::SecretDeleteView(secret.into()),
+                crate::model::secret::SecretDeleteView::from(
+                    crate::model::secret::SecretView::from(secret),
+                ),
                 MaskingConfig::hide_secrets(),
             )
             .expect("generated secret delete should serialize")

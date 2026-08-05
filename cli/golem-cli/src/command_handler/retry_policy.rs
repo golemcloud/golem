@@ -232,7 +232,7 @@ impl RetryPolicyCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_output(RetryPolicyDeleteView(result))?;
+            .log_output(RetryPolicyDeleteView::from(result))?;
 
         Ok(())
     }

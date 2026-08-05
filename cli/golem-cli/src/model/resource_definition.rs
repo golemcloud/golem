@@ -63,7 +63,26 @@ impl StructuredOutput for ResourceDefinitionUpdateView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResourceDefinitionDeleteView(pub ResourceDefinition);
+#[serde(rename_all = "camelCase")]
+pub struct ResourceDefinitionDeleteView {
+    pub deleted: bool,
+    pub id: golem_common::model::quota::ResourceDefinitionId,
+    pub environment_id: golem_common::model::environment::EnvironmentId,
+    pub name: golem_common::model::quota::ResourceName,
+    pub revision: golem_common::model::quota::ResourceDefinitionRevision,
+}
+
+impl From<ResourceDefinition> for ResourceDefinitionDeleteView {
+    fn from(r: ResourceDefinition) -> Self {
+        Self {
+            deleted: true,
+            id: r.id,
+            environment_id: r.environment_id,
+            name: r.name,
+            revision: r.revision,
+        }
+    }
+}
 
 impl Masked for ResourceDefinitionDeleteView {}
 
@@ -71,12 +90,18 @@ impl MessageWithFields for ResourceDefinitionDeleteView {
     fn message(&self) -> String {
         format!(
             "Deleted resource definition {}",
-            format_message_highlight(&self.0.name.0),
+            format_message_highlight(&self.name.0)
         )
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        resource_definition_fields(&self.0)
+        let mut fields = FieldsBuilder::new();
+        fields
+            .fmt_field("Environment ID", &self.environment_id.0, format_main_id)
+            .fmt_field("Name", &self.name.0, format_main_id)
+            .fmt_field("ID", &self.id, format_id)
+            .fmt_field("Revision", &self.revision.get(), format_id);
+        fields.build()
     }
 }
 

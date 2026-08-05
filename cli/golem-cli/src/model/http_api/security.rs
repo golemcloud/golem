@@ -86,7 +86,24 @@ impl StructuredOutput for HttpSecuritySchemeUpdateView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HttpSecuritySchemeDeleteView(pub SecuritySchemeDto);
+#[serde(rename_all = "camelCase")]
+pub struct HttpSecuritySchemeDeleteView {
+    pub deleted: bool,
+    pub id: golem_common::model::security_scheme::SecuritySchemeId,
+    pub name: golem_common::model::security_scheme::SecuritySchemeName,
+    pub revision: golem_common::model::security_scheme::SecuritySchemeRevision,
+}
+
+impl From<SecuritySchemeDto> for HttpSecuritySchemeDeleteView {
+    fn from(scheme: SecuritySchemeDto) -> Self {
+        Self {
+            deleted: true,
+            id: scheme.id,
+            name: scheme.name,
+            revision: scheme.revision,
+        }
+    }
+}
 
 impl Masked for HttpSecuritySchemeDeleteView {}
 
@@ -94,12 +111,17 @@ impl MessageWithFields for HttpSecuritySchemeDeleteView {
     fn message(&self) -> String {
         format!(
             "Deleted HTTP API Security scheme {}",
-            format_message_highlight(&self.0.name),
+            format_message_highlight(&self.name)
         )
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        security_scheme_view_fields(&self.0)
+        let mut fields = FieldsBuilder::new();
+        fields
+            .fmt_field("Name", &self.name.0, format_main_id)
+            .fmt_field("ID", &self.id, format_id)
+            .fmt_field("Revision", &self.revision.get(), format_id);
+        fields.build()
     }
 }
 

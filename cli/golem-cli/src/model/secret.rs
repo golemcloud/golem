@@ -162,36 +162,46 @@ impl StructuredOutput for SecretUpdateView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[serde(transparent)]
-pub struct SecretDeleteView(pub SecretView);
+pub struct SecretDeleteView {
+    pub deleted: bool,
+    pub id: golem_common::model::agent_secret::AgentSecretId,
+    pub environment_id: golem_common::model::environment::EnvironmentId,
+    pub path: golem_common::model::agent_secret::CanonicalAgentSecretPath,
+    pub revision: golem_common::model::agent_secret::AgentSecretRevision,
+}
 
-impl Masked for SecretDeleteView {
-    fn masked(self, config: MaskingConfig) -> anyhow::Result<Self> {
-        Ok(Self(self.0.masked(config)?))
+impl From<SecretView> for SecretDeleteView {
+    fn from(view: SecretView) -> Self {
+        Self {
+            deleted: true,
+            id: view.id,
+            environment_id: view.environment_id,
+            path: view.path,
+            revision: view.revision,
+        }
     }
 }
 
+impl Masked for SecretDeleteView {}
+
 impl MessageWithFields for SecretDeleteView {
     fn message(&self) -> String {
-        format!("Deleted secret {}", format_message_highlight(&self.0.id),)
+        format!("Deleted secret {}", format_message_highlight(&self.id))
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        secret_view_fields(&self.0)
+        let mut fields = FieldsBuilder::new();
+        fields
+            .fmt_field("Environment ID", &self.environment_id.0, format_main_id)
+            .fmt_field("Path", &self.path, format_main_id)
+            .fmt_field("ID", &self.id, format_id)
+            .fmt_field("Revision", &self.revision.get(), format_id);
+        fields.build()
     }
 }
 
 impl StructuredOutput for SecretDeleteView {
     const KIND: &'static str = "secret.delete";
-
-    fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.masked(config)
-            .map_err(serde::ser::Error::custom)?
-            .serialize(serializer)
-    }
 }
 
 fn secret_view_fields(view: &SecretView) -> Vec<(String, String)> {

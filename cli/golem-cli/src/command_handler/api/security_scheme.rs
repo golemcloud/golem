@@ -266,7 +266,7 @@ impl ApiSecuritySchemeCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_output(HttpSecuritySchemeDeleteView(result))?;
+            .log_output(HttpSecuritySchemeDeleteView::from(result))?;
 
         Ok(())
     }

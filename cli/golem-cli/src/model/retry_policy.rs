@@ -82,7 +82,26 @@ impl StructuredOutput for RetryPolicyUpdateView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RetryPolicyDeleteView(pub RetryPolicyDto);
+#[serde(rename_all = "camelCase")]
+pub struct RetryPolicyDeleteView {
+    pub deleted: bool,
+    pub id: golem_common::model::retry_policy::RetryPolicyId,
+    pub environment_id: golem_common::model::environment::EnvironmentId,
+    pub name: String,
+    pub revision: golem_common::model::retry_policy::RetryPolicyRevision,
+}
+
+impl From<RetryPolicyDto> for RetryPolicyDeleteView {
+    fn from(dto: RetryPolicyDto) -> Self {
+        Self {
+            deleted: true,
+            id: dto.id,
+            environment_id: dto.environment_id,
+            name: dto.name,
+            revision: dto.revision,
+        }
+    }
+}
 
 impl Masked for RetryPolicyDeleteView {}
 
@@ -90,12 +109,18 @@ impl MessageWithFields for RetryPolicyDeleteView {
     fn message(&self) -> String {
         format!(
             "Deleted retry policy {}",
-            format_message_highlight(&self.0.name),
+            format_message_highlight(&self.name)
         )
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        retry_policy_view_fields(&self.0)
+        let mut fields = FieldsBuilder::new();
+        fields
+            .fmt_field("Environment ID", &self.environment_id.0, format_main_id)
+            .fmt_field("Name", &self.name, format_main_id)
+            .fmt_field("ID", &self.id, format_id)
+            .fmt_field("Revision", &self.revision.get(), format_id);
+        fields.build()
     }
 }
 
