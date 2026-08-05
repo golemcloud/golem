@@ -688,14 +688,10 @@ pub mod host_functions {
         (GolemQuotaTokenNew => "golem::quota::quota-token", "[constructor]quota-token", QuotaTokenRequest, QuotaTokenAcquired),
         (GolemQuotaTokenReserve => "golem::quota::quota-token", "reserve", QuotaReserveRequest, QuotaReserveResult),
         (GolemQuotaReservationCommit => "golem::quota::reservation", "commit", QuotaCommitRequest, QuotaCommitResult),
-        (GolemPermissionsDerivePersist => "golem::permissions::derive", "persist-derived-card", PermissionCardDerive, PermissionCardDerived),
-        (GolemPermissionsRevokePersist => "golem::permissions::revoke", "persist-revoked-cards", PermissionCardRevoke, PermissionCardsRevoked),
         (GolemApiRetryGetRetryPolicies => "golem::api::retry", "get_retry_policies", NoInput, GolemRetryPolicies),
         (GolemApiRetryGetRetryPolicyByName => "golem::api::retry", "get_retry_policy_by_name", GolemRetryPolicyByName, GolemRetryNamedPolicy),
         (GolemApiRetryResolveRetryPolicy => "golem::api::retry", "resolve_retry_policy", GolemRetryResolvePolicy, GolemRetryResolvedPolicy),
         (GolemRpcWasmRpcNew => "golem::rpc::wasm-rpc", "new", GolemRpcCreate, GolemRpcCreate),
-        (GolemPermissionsInstallChildPersist => "golem::permissions::wallet", "persist-installed-child-card", PermissionCardDerive, PermissionCardDerived),
-        (GolemPermissionsInstallTransfer => "golem::permissions::wallet", "install-card-transfer", PermissionCardTransfer, PermissionCardTransferComplete),
         (P3KeyvalueCacheGet => "keyvalue::cache", "get", KVCacheKey, KVGet),
         (P3KeyvalueCacheExists => "keyvalue::cache", "exists", KVCacheKey, KVDelete),
         (P3KeyvalueCacheSet => "keyvalue::cache", "set", KVCacheKeyValueAndTtl, KVUnit),
@@ -733,7 +729,11 @@ pub mod host_functions {
         (GolemApiInstallCard => "golem::api", "install-card", GolemApiCard, GolemApiInstallCard),
         (FilesystemInputStreamRead => "filesystem::input_stream", "read", NoInput, StreamSkip),
         (FilesystemInputStreamSkip => "filesystem::input_stream", "skip", NoInput, StreamSkip),
-        (FilesystemOutputStreamCheckWrite => "filesystem::output_stream", "check_write", NoInput, StreamCheckWrite)
+        (FilesystemOutputStreamCheckWrite => "filesystem::output_stream", "check_write", NoInput, StreamCheckWrite),
+        (GolemPermissionsDerivePersist => "golem::permissions::derive", "persist-derived-card", PermissionCardDerive, PermissionCardDerived),
+        (GolemPermissionsRevokePersist => "golem::permissions::revoke", "persist-revoked-cards", PermissionCardRevoke, PermissionCardsRevoked),
+        (GolemPermissionsInstallChildPersist => "golem::permissions::wallet", "persist-installed-child-card", PermissionCardDerive, PermissionCardDerived),
+        (GolemPermissionsInstallTransfer => "golem::permissions::wallet", "install-card-transfer", PermissionCardTransfer, PermissionCardTransferComplete)
     }
 }
 

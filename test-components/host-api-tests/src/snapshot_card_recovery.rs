@@ -204,22 +204,19 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
             encode_parameters(vec![scope_card_id.to_value(), root_card_id.to_value()]),
             Some(&scope_card),
         );
-        loop {
-            let pollable = invocation.future.subscribe();
-            golem_rust::agentic::await_pollable(pollable).await;
-            if let Some(result) = invocation.future.get() {
-                let value = decode_schema_value(
-                    result
-                        .expect("scope-card async invocation failed")
-                        .expect("scope-card async observation result is missing"),
-                )
-                .expect("failed to decode async scope-card observation");
-                let (present, parent_matches, inspect_matches) =
-                    <(bool, bool, bool) as FromSchema>::from_value(&value)
-                        .expect("invalid async scope-card observation");
-                break (present, parent_matches, inspect_matches, scope_card_id);
-            }
-        }
+        let value = decode_schema_value(
+            invocation
+                .future
+                .get()
+                .await
+                .expect("scope-card async invocation failed")
+                .expect("scope-card async observation result is missing"),
+        )
+        .expect("failed to decode async scope-card observation");
+        let (present, parent_matches, inspect_matches) =
+            <(bool, bool, bool) as FromSchema>::from_value(&value)
+                .expect("invalid async scope-card observation");
+        (present, parent_matches, inspect_matches, scope_card_id)
     }
 
     async fn invoke_scope_after_promise(
