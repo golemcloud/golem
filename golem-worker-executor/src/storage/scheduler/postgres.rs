@@ -19,7 +19,6 @@ use super::{
 use crate::services::golem_config::SchedulerStoragePostgresConfig;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_common::SafeDisplay;
 use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::db::postgres::PostgresPool;
@@ -181,7 +180,7 @@ impl SchedulerStorage for PostgresSchedulerStorage {
         &self,
         now: DateTime<Utc>,
         assignment: &ShardAssignment,
-    ) -> Result<u64, String> {
+    ) -> Result<u64, SchedulerStorageError> {
         if assignment.shard_ids.is_empty() {
             return Ok(0);
         }
@@ -202,7 +201,7 @@ impl SchedulerStorage for PostgresSchedulerStorage {
             .fetch_one_as(query)
             .await
             .map(|(count,)| count as u64)
-            .map_err(|err| err.to_safe_string())
+            .map_err(SchedulerStorageError::from)
     }
 
     async fn extend_lease(

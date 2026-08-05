@@ -56,9 +56,11 @@ use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, NamedRetryPolicy, OplogIndex,
     OwnedAgentId, RetryContext, RetryProperties, ScheduleId, ScheduledAction,
 };
+use golem_common::related_span;
 use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::serialization::{deserialize, serialize};
+use golem_common::tracing::TraceOrigin;
 use golem_schema::schema::wit::{
     EncodeError, PermissionCardHandleDropper, PermissionCardHandleRep, QuotaTokenHandleDropper,
     SecretHandleDropper, decode_typed_rejecting_quota_with, decode_value_with, encode_value_with,
@@ -71,7 +73,7 @@ use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{Instrument, error};
+use tracing::{Instrument, Level, error};
 use wasmtime::component::{Accessor, HasSelf, Resource, ResourceTableError};
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 
@@ -2423,6 +2425,27 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     let first_dispatch = Arc::new(std::sync::atomic::AtomicBool::new(
         initial_freshness_disposition == InvocationFreshnessDisposition::KnownFresh,
     ));
+
+    // The returned handle is owned by a guest resource, so this task can outlive
+    // the invocation. It links back rather than running inside its span. See
+    // `TraceOrigin`.
+    let origin = TraceOrigin::capture_current();
+    let caller_agent_id = agent_id.clone();
+
+    // Built here, while the values are still borrowable, so nothing is cloned for
+    // it and the fields stay lazy. The root of its own trace, so it has to say
+    // which call is retrying: the caller alone matches every RPC that worker
+    // ever made.
+    let retry_span = related_span!(
+        origin,
+        Level::INFO,
+        "rpc_invoke_retry",
+        agent_id = %caller_agent_id,
+        target_agent_id = %remote_agent_id.agent_id,
+        method = %method_name,
+        idempotency_key = %idempotency_key,
+    );
+
     let invoke = move || {
         let rpc = rpc.clone();
         let remote_agent_id = remote_agent_id.clone();
@@ -2523,7 +2546,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                 Err(RpcTaskError::Host(err)) => Err(err),
             }
         }
-        .in_current_span(),
+        .instrument(retry_span),
     )
 }
 

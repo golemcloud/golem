@@ -211,6 +211,9 @@ impl RegistryServiceGrpcApi {
                         fuel_delta: u.fuel_delta,
                         http_call_count_delta: u.http_call_count_delta,
                         rpc_call_count_delta: u.rpc_call_count_delta,
+                        durable_storage_byte_seconds_delta: u.durable_storage_byte_seconds_delta,
+                        ephemeral_storage_byte_seconds_delta: u
+                            .ephemeral_storage_byte_seconds_delta,
                     },
                 ))
             })

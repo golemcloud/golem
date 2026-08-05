@@ -238,6 +238,7 @@ pub mod api {
     use prometheus::{Gauge, HistogramVec, register_gauge, register_histogram_vec};
     use std::fmt::Debug;
     use tracing::{Span, debug, error};
+    use tracing_opentelemetry::OpenTelemetrySpanExt;
 
     lazy_static! {
         static ref API_SUCCESS_SECONDS: HistogramVec = register_histogram_vec!(
@@ -396,26 +397,38 @@ pub mod api {
     impl Drop for RecordedApiRequest {
         fn drop(&mut self) {
             if let Some(start) = self.start_time.take() {
+                // Neither `succeed` nor `fail` ran: the caller went away before the
+                // request produced a result. Not an error status - the server did not
+                // fail - but recorded, because work this request started can outlive
+                // it.
+                self.span.set_attribute("cancelled", true);
                 record_api_failure(self.api_name, self.api_type, "Drop", start.elapsed());
             }
         }
     }
 
+    /// Creates the entry-point span for an inbound gRPC request.
+    ///
+    /// `otel.kind = "server"` marks it as the service's inbound edge, which is what
+    /// lets a trace backend derive the service graph. Without it every span Golem
+    /// emits is exported as `Internal`.
     #[macro_export]
     macro_rules! recorded_grpc_api_request {
         ($api_name:expr,  $($fields:tt)*) => {
             {
-                let span = tracing::span!(tracing::Level::INFO, concat!("gRPC ", $api_name), api = $api_name,  api_type = "grpc", $($fields)*);
+                let span = tracing::span!(tracing::Level::INFO, concat!("gRPC ", $api_name), api = $api_name,  api_type = "grpc", otel.kind = "server", $($fields)*);
                 $crate::metrics::api::RecordedApiRequest::new($api_name, "grpc", span)
             }
         };
     }
 
+    /// Creates the entry-point span for an inbound HTTP request. See
+    /// [`recorded_grpc_api_request!`] for why `otel.kind` is set.
     #[macro_export]
     macro_rules! recorded_http_api_request {
         ($api_name:expr,  $($fields:tt)*) => {
             {
-                let span = tracing::span!(tracing::Level::INFO, concat!("HTTP ", $api_name), api = $api_name,  api_type = "http", $($fields)*);
+                let span = tracing::span!(tracing::Level::INFO, concat!("HTTP ", $api_name), api = $api_name,  api_type = "http", otel.kind = "server", $($fields)*);
                 $crate::metrics::api::RecordedApiRequest::new($api_name, "http", span)
             }
         };
@@ -569,5 +582,79 @@ pub mod db {
         DB_DESERIALIZED_SIZE_BYTES
             .with_label_values(&[db_type, svc_name, entity_name])
             .observe(size as f64);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use opentelemetry::trace::{SpanKind, Status};
+    use test_r::test;
+
+    use crate::tracing::test::otel::{exported_spans, named};
+
+    /// Golem's own entry-point spans have to declare `otel.kind`, otherwise every
+    /// span the service emits is exported as `Internal` and a trace backend cannot
+    /// tell which spans are the inbound edges of the service.
+    #[test]
+    fn recorded_grpc_api_request_is_a_server_span() {
+        let spans = exported_spans(|| {
+            let record = crate::recorded_grpc_api_request!("test_api",);
+            drop(record);
+        });
+
+        assert_eq!(named(&spans, "gRPC test_api").span_kind, SpanKind::Server);
+    }
+
+    /// A request that is dropped without `succeed`/`fail` was abandoned by its
+    /// caller. The span has to say so: work the request started can outlive it, and
+    /// a reader seeing a child span run past its parent needs to be able to tell an
+    /// abandoned request from a broken trace.
+    #[test]
+    fn an_abandoned_request_is_marked_cancelled() {
+        let spans = exported_spans(|| {
+            let record = crate::recorded_grpc_api_request!("test_api",);
+            drop(record);
+        });
+
+        let span = named(&spans, "gRPC test_api");
+        assert!(
+            span.attributes
+                .iter()
+                .any(|kv| kv.key.as_str() == "cancelled" && kv.value.as_str() == "true"),
+            "expected a cancelled attribute, got {:?}",
+            span.attributes
+        );
+        assert!(
+            !matches!(span.status, Status::Error { .. }),
+            "an abandoned request is not a server error"
+        );
+    }
+
+    #[test]
+    fn a_completed_request_is_not_marked_cancelled() {
+        let spans = exported_spans(|| {
+            let record = crate::recorded_grpc_api_request!("test_api",);
+            record.succeed(());
+        });
+
+        let span = named(&spans, "gRPC test_api");
+        assert!(
+            !span
+                .attributes
+                .iter()
+                .any(|kv| kv.key.as_str() == "cancelled"),
+            "got {:?}",
+            span.attributes
+        );
+    }
+
+    #[test]
+    fn recorded_http_api_request_is_a_server_span() {
+        let spans = exported_spans(|| {
+            let record = crate::recorded_http_api_request!("test_api",);
+            drop(record);
+        });
+
+        assert_eq!(named(&spans, "HTTP test_api").span_kind, SpanKind::Server);
     }
 }

@@ -30,6 +30,7 @@ use crate::durable_host::{
     recover_stderr_logs,
 };
 use crate::metrics::storage::record_filesystem_pool_released;
+use crate::metrics::workers::AdmissionPhase;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::active_workers::{
     FilesystemStoragePermit, HeldComponentCharge, MemoryGrant, RegisteredConcurrentAccount,
@@ -86,6 +87,8 @@ use golem_common::model::{
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
+use golem_common::related_span;
+use golem_common::tracing::TraceOrigin;
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
@@ -99,7 +102,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Mutex, MutexGuard, RwLock};
 use tokio::task::JoinHandle;
-use tracing::{Instrument, Level, Span, debug, info, span, warn};
+use tracing::{Instrument, Level, debug, info, span, warn};
 use uuid::Uuid;
 use wasmtime::component::Instance;
 use wasmtime::{Store, UpdateDeadline};
@@ -260,7 +263,14 @@ pub struct Worker<Ctx: WorkerCtx> {
     deps: All<Ctx>,
 
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
-    external_invocation_spans: Arc<RwLock<HashMap<IdempotencyKey, Span>>>,
+    /// How each not-yet-completed external invocation should be related to the
+    /// trace of whatever enqueued it, so the invocation loop can attach the
+    /// invocation's spans correctly when it picks the work up.
+    ///
+    /// Holds captured origins rather than `tracing::Span`s: a durable invocation can
+    /// be picked up long after the request that enqueued it returned. See
+    /// [`TraceOrigin`].
+    external_invocation_origins: Arc<RwLock<HashMap<IdempotencyKey, TraceOrigin>>>,
 
     invocation_results: Arc<RwLock<HashMap<IdempotencyKey, InvocationResult>>>,
     ephemeral_invocation: StdMutex<EphemeralInvocationState>,
@@ -337,6 +347,23 @@ impl<Ctx: WorkerCtx> UsesAllDeps for Worker<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    /// Builds the span context this worker's phase spans share.
+    fn trace(&self, startup_origin: TraceOrigin) -> WorkerTrace {
+        WorkerTrace {
+            startup_origin,
+            agent_type: self.agent_type_label(),
+        }
+    }
+
+    /// The agent type as a span field value, `-` for an agent id that could not be
+    /// parsed into one. Shared so every span labels it the same way.
+    pub(crate) fn agent_type_label(&self) -> String {
+        self.parsed_agent_id
+            .as_ref()
+            .map(|id| id.agent_type.to_string())
+            .unwrap_or_else(|| "-".to_string())
+    }
+
     pub(crate) async fn remove_from_active_workers(&self) {
         self.deps
             .active_workers()
@@ -582,20 +609,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let current_status_snapshot = current_status.load_full();
         let metrics_status = Arc::new(WorkerStatusMetric::new(current_status_snapshot.status));
-        let initial_pending_invocations = current_status_snapshot.pending_invocations.clone();
         let initial_invocation_results = current_status_snapshot.invocation_results.clone();
         let last_oplog_idx = current_status_snapshot.oplog_idx;
         drop(current_status_snapshot);
 
-        let mut spans_map = HashMap::new();
-        for inv in initial_pending_invocations {
-            if let Some(idempotency_key) = inv.idempotency_key() {
-                spans_map.insert(idempotency_key.clone(), Span::current());
-            }
-        }
-
+        // Invocations already pending when this worker is loaded were enqueued by
+        // an earlier request, possibly in an earlier process, so there is no
+        // in-process originator to relate them to. They start with no origin rather
+        // than being attributed to whichever request happened to trigger the load,
+        // which is neither their true origin nor a span that outlives them.
         let queue = Arc::new(RwLock::new(VecDeque::new()));
-        let external_invocation_spans = Arc::new(RwLock::new(spans_map));
+        let external_invocation_origins = Arc::new(RwLock::new(HashMap::new()));
 
         let invocation_results = Arc::new(RwLock::new(HashMap::from_iter(
             initial_invocation_results.iter().map(|(key, oplog_idx)| {
@@ -685,7 +709,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )),
             deps: all_deps,
             queue,
-            external_invocation_spans,
+            external_invocation_origins,
             invocation_results,
             ephemeral_invocation: StdMutex::new(if reconstructed_ephemeral {
                 EphemeralInvocationState::Accepted(None)
@@ -1086,12 +1110,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: Arc<Self>,
         invocation: AgentInvocation,
     ) -> Result<ResultOrSubscription, WorkerExecutorError> {
-        let idempotency_key = invocation
-            .idempotency_key()
-            .ok_or_else(|| {
-                WorkerExecutorError::invalid_request("Invocation has no idempotency key")
-            })?
-            .clone();
+        let idempotency_key = Self::require_idempotency_key(&invocation)?;
 
         // Classification uses the in-memory component snapshot - no metadata
         // fetch on the hot path.
@@ -1158,7 +1177,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
 
         let output = async { self.lookup_invocation_result(&idempotency_key).await }
-            .instrument(span!(Level::INFO, "lookup_invocation_result"))
+            .instrument(span!(
+                Level::INFO,
+                "lookup_invocation_result",
+                agent_id = %self.owned_agent_id.agent_id,
+                idempotency_key = %idempotency_key,
+            ))
             .await;
         let (result, enqueue_epoch) = match output {
             LookupResult::Complete(output) => (ResultOrSubscription::Finished(output), None),
@@ -1243,12 +1267,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: Arc<Self>,
         invocation: AgentInvocation,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
-        let idempotency_key = invocation
-            .idempotency_key()
-            .ok_or_else(|| {
-                WorkerExecutorError::invalid_request("Invocation has no idempotency key")
-            })?
-            .clone();
+        let idempotency_key = Self::require_idempotency_key(&invocation)?;
 
         // Fast path: read-only Await coalescing.
         //
@@ -1270,7 +1289,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             && ro.cacheable
             && !is_no_cache(&ro.cfg.cache_policy)
         {
-            Some((ro, self.lookup_invocation_result(&idempotency_key).await))
+            Some((
+                ro,
+                async { self.lookup_invocation_result(&idempotency_key).await }
+                    .instrument(span!(
+                        Level::INFO,
+                        "lookup_invocation_result",
+                        agent_id = %self.owned_agent_id.agent_id,
+                        idempotency_key = %idempotency_key,
+                    ))
+                    .await,
+            ))
         } else {
             None
         };
@@ -1376,24 +1405,59 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let worker = self.clone();
             let invocation_for_closure = invocation;
             let idem_for_closure = idempotency_key.clone();
-            let entry_result = self
-                .read_only_cache
-                .get_or_insert_simple_spawned(&key, move || async move {
-                    let output = Worker::invoke_and_await_uncoalesced(
-                        worker,
-                        invocation_for_closure,
-                        idem_for_closure,
-                    )
-                    .await?;
-                    if !matches!(output.result, AgentInvocationResult::AgentMethod { .. }) {
-                        // Defensive: only `AgentMethod` outputs are cacheable.
-                        return Err(WorkerExecutorError::unknown(
-                            "read-only invocation produced a non-AgentMethod result",
-                        ));
-                    }
-                    Ok(build_read_only_cache_entry(&ro_for_closure, output))
-                })
-                .await;
+
+            // The owner future is spawned and deliberately survives this caller, so
+            // it cannot run inside the caller's span - that would hold the gRPC span
+            // open for the whole invocation. It links back instead, so the coalesced
+            // execution is still reachable from the request that started it.
+            //
+            // Captured before the wait span rather than inside it, unlike
+            // `enqueue_worker_invocation_with_effect`: N callers coalesce onto one
+            // execution, so linking to any one
+            // caller's wait would pick an arbitrary winner. The request that owns the
+            // execution is the honest originator.
+            let origin = TraceOrigin::capture_current();
+            let owner_agent_id = self.owned_agent_id.agent_id.clone();
+            let owner_idempotency_key = idempotency_key.clone();
+
+            let entry_result = async {
+                self.read_only_cache
+                    .get_or_insert_simple_spawned(&key, move || {
+                        let span = related_span!(
+                            origin,
+                            Level::INFO,
+                            "read_only_invocation",
+                            agent_id = %owner_agent_id,
+                            idempotency_key = %owner_idempotency_key,
+                        );
+                        async move {
+                            let output = Worker::invoke_and_await_uncoalesced(
+                                worker,
+                                invocation_for_closure,
+                                idem_for_closure,
+                            )
+                            .await?;
+                            if !matches!(output.result, AgentInvocationResult::AgentMethod { .. }) {
+                                // Defensive: only `AgentMethod` outputs are cacheable.
+                                return Err(WorkerExecutorError::unknown(
+                                    "read-only invocation produced a non-AgentMethod result",
+                                ));
+                            }
+                            Ok(build_read_only_cache_entry(&ro_for_closure, output))
+                        }
+                        .instrument(span)
+                    })
+                    .await
+            }
+            // The caller's own share: however long it waits for the coalesced
+            // execution, whether or not it is the one that owns it.
+            .instrument(span!(
+                Level::INFO,
+                "wait_for_read_only_invocation",
+                agent_id = %self.owned_agent_id.agent_id,
+                idempotency_key = %idempotency_key,
+            ))
+            .await;
 
             // Stale-populate guard: if the epoch bumped while the owner ran,
             // the entry we just inserted is keyed on the old epoch and is
@@ -1438,11 +1502,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 debug!("Waiting for idempotency key to complete",);
 
+                // The caller's honest share of the work: the execution runs in the
+                // worker's own trace, linked from here, and only its outcome comes
+                // back. This span measures the waiting, which is what the request
+                // actually spent its time on.
+
                 let result = async {
                     self.wait_for_invocation_result(&idempotency_key, subscription)
                         .await
                 }
-                .instrument(span!(Level::INFO, "wait_for_invocation_result"))
+                .instrument(span!(
+                    Level::INFO,
+                    "wait_for_invocation_result",
+                    agent_id = %self.owned_agent_id.agent_id,
+                    idempotency_key = %idempotency_key,
+                ))
                 .await;
 
                 match result {
@@ -1463,6 +1537,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
             }
         }
+    }
+
+    fn require_idempotency_key(
+        invocation: &AgentInvocation,
+    ) -> Result<IdempotencyKey, WorkerExecutorError> {
+        invocation.idempotency_key().cloned().ok_or_else(|| {
+            WorkerExecutorError::invalid_request("Invocation has no idempotency key")
+        })
     }
 
     /// Enqueue attempting an update.
@@ -1584,11 +1666,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 result: Ok(output.clone()),
             },
         );
+        // `drop` before taking `origins`: `fail_pending_invocations` locks
+        // origins -> invocation_results, so holding `map` here would invert that
+        // order and can deadlock. Not a scope tidy-up.
+        drop(map);
+        self.external_invocation_origins.write().await.remove(key);
         debug!("Stored invocation success for {key}");
+        self.publish_completion(key, Ok(output));
+    }
+
+    fn publish_completion(
+        &self,
+        key: &IdempotencyKey,
+        result: Result<AgentInvocationOutput, WorkerExecutorError>,
+    ) {
         self.events().publish(Event::InvocationCompleted {
             agent_id: self.owned_agent_id.agent_id(),
             idempotency_key: key.clone(),
-            result: Ok(output),
+            result,
         });
     }
 
@@ -1610,12 +1705,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 },
             );
             if let Some(golem_error) = &golem_error {
-                self.events().publish(Event::InvocationCompleted {
-                    agent_id: self.owned_agent_id.agent_id(),
-                    idempotency_key: key.clone(),
-                    result: Err(golem_error.clone()),
-                });
+                self.publish_completion(key, Err(golem_error.clone()));
             }
+        }
+        // See `store_invocation_success`: origins must not be taken while
+        // `invocation_results` is held.
+        drop(map);
+        let mut origins = self.external_invocation_origins.write().await;
+        for key in &keys_to_fail {
+            origins.remove(key);
         }
     }
 
@@ -2126,6 +2224,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         invocation: AgentInvocation,
         read_only_cache_effect: read_only_cache::InvocationEffect,
     ) -> Result<Option<u64>, WorkerExecutorError> {
+        // Carried on the span so the two sides of the hand-off share a searchable
+        // key: the execution runs in its own trace, linked rather than nested, so
+        // `idempotency_key` is what joins them. Left unset rather than empty when
+        // there is none, so a search for one key cannot collide with every
+        // keyless enqueue.
+        let span = span!(
+            Level::INFO,
+            "enqueue_invocation",
+            agent_id = %self.owned_agent_id.agent_id,
+            idempotency_key = tracing::field::Empty,
+            // Pairs with the `consumer` span the invocation loop creates when it
+            // picks the work up.
+            otel.kind = "producer"
+        );
+        if let Some(idempotency_key) = invocation.idempotency_key() {
+            span.record("idempotency_key", tracing::field::display(idempotency_key));
+        }
+
         async {
             self.accept_ephemeral_invocation(&invocation)?;
             let instance_guard = self.lock_non_stopping_worker().await;
@@ -2194,10 +2310,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
 
             if let Some(idempotency_key) = timestamped_invocation.invocation.idempotency_key() {
-                self.external_invocation_spans
+                // Captured here, inside the producer span, because a consumer links
+                // back to the *creation context* of the work rather than to wherever
+                // the caller happened to call from.
+                // Captured before taking the lock: `capture_current` reaches into the
+                // tracing registry, which has no business happening inside this map's
+                // critical section. Same-worker enqueues are already serialized by the
+                // instance guard held above, so this keeps the critical section
+                // minimal rather than fixing measurable contention.
+                let origin = TraceOrigin::capture_current();
+                self.external_invocation_origins
                     .write()
                     .await
-                    .insert(idempotency_key.clone(), Span::current());
+                    .insert(idempotency_key.clone(), origin);
             }
 
             if let WorkerInstance::Running(running) = &*instance_guard {
@@ -2208,7 +2333,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             Ok(read_only_epoch_snapshot)
         }
-        .instrument(span!(Level::INFO, "enqueue_invocation"))
+        .instrument(span)
         .await
     }
 
@@ -3111,7 +3236,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn fail_pending_invocations(&self, error: WorkerExecutorError) {
         let queued_items = self.queue.write().await.drain(..).collect::<VecDeque<_>>();
-        let mut spans_map = self.external_invocation_spans.write().await;
+        let mut origins = self.external_invocation_origins.write().await;
 
         // Publishing the provided initialization error to all queued internal operations
         for item in queued_items {
@@ -3157,13 +3282,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }),
                 },
             );
-            self.events().publish(Event::InvocationCompleted {
-                agent_id: self.owned_agent_id.agent_id(),
-                idempotency_key: idempotency_key.clone(),
-                result: Err(error.clone()),
-            });
-            // Clean up the span entry
-            spans_map.remove(idempotency_key);
+            self.publish_completion(idempotency_key, Err(error.clone()));
+            origins.remove(idempotency_key);
         }
     }
 
@@ -3535,6 +3655,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
         start_attempt: Uuid,
+        worker_trace: WorkerTrace,
     ) {
         let mut instance_guard = this.instance.lock().await;
         match &*instance_guard {
@@ -3549,6 +3670,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     component_charge,
                     concurrent_agent_permit,
                     oom_retry_count,
+                    worker_trace,
                 )
                 .await;
                 if let Some(sp) = filesystem_storage_permit {
@@ -3718,6 +3840,17 @@ impl WorkerInstance {
     }
 }
 
+/// What a resident worker's phase spans need in order to be traceable: the startup
+/// they link back to, and the agent fields they carry.
+///
+/// Built while the worker is admitted and passed to the loop rather than captured
+/// there, because the loop task has no ambient span by design.
+#[derive(Debug, Clone)]
+pub struct WorkerTrace {
+    pub startup_origin: TraceOrigin,
+    pub agent_type: String,
+}
+
 #[derive(Debug)]
 struct WaitingWorker {
     handle: Option<JoinHandle<()>>,
@@ -3731,132 +3864,163 @@ impl WaitingWorker {
         filesystem_storage_requirement: u64,
         oom_retry_count: u32,
     ) -> Self {
-        let span = span!(
-            parent: None,
-            Level::INFO,
-            "waiting-for-permits",
-            agent_id = parent.owned_agent_id.agent_id.to_string(),
-            agent_type = parent
-                .parsed_agent_id
-                .as_ref()
-                .map(|id| id.agent_type.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-        );
-        span.follows_from(Span::current());
+        let worker_trace = parent.trace(TraceOrigin::capture_current());
 
         let start_attempt = Uuid::new_v4();
 
-        let handle = tokio::task::spawn(
-            async move {
-                let agent_id = parent.owned_agent_id.agent_id();
-                let registered_concurrent_account = parent.registered_concurrent_account.clone();
+        let handle = tokio::task::spawn(async move {
+            let agent_id = parent.owned_agent_id.agent_id();
+            let registered_concurrent_account = parent.registered_concurrent_account.clone();
 
-                // Determine the component's compiled-module size before acquiring
-                // the per-account concurrency slot (and before reserving memory),
-                // so the worker's memory and its module are admitted together (the
-                // module is reserved first, then the memory admission accounts for
-                // it). The module is charged once per resident component and shared
-                // by all its workers.
-                //
-                // Charges the pending-update target revision when one is queued
-                // (matching what create_instance loads); only a non-existent
-                // target falls back to the current revision, and transient
-                // resolution failures are retried rather than wedging the worker
-                // in WaitingForPermit or under-reserving against the old revision.
-                //
-                // This resolution is read-only and holds no permits, so it is done
-                // before acquiring the concurrent-agent permit: its retry loop must
-                // not hold one of the account's active-agent slots while the worker
-                // is not yet running, otherwise a single worker whose target
-                // metadata is transiently unavailable could block unrelated workers
-                // of the same account from starting.
-                let (component_id, component_revision, component_module_bytes) =
-                    parent.startup_component_charge_requirement().await;
+            // Determine the component's compiled-module size before acquiring
+            // the per-account concurrency slot (and before reserving memory),
+            // so the worker's memory and its module are admitted together (the
+            // module is reserved first, then the memory admission accounts for
+            // it). The module is charged once per resident component and shared
+            // by all its workers.
+            //
+            // Charges the pending-update target revision when one is queued
+            // (matching what create_instance loads); only a non-existent
+            // target falls back to the current revision, and transient
+            // resolution failures are retried rather than wedging the worker
+            // in WaitingForPermit or under-reserving against the old revision.
+            //
+            // This resolution is read-only and holds no permits, so it is done
+            // before acquiring the concurrent-agent permit: its retry loop must
+            // not hold one of the account's active-agent slots while the worker
+            // is not yet running, otherwise a single worker whose target
+            // metadata is transiently unavailable could block unrelated workers
+            // of the same account from starting.
+            // Not spanned: this retries on a 500ms delay and logs once per attempt,
+            // so a span covering the whole call would accumulate two events a second
+            // for as long as resolution keeps failing, and never close to export
+            // them. The retry events stay in the logs, and how long the wait took
+            // is recorded as a metric rather than a span.
+            let phase_start = std::time::Instant::now();
+            let (component_id, component_revision, component_module_bytes) =
+                parent.startup_component_charge_requirement().await;
+            crate::metrics::workers::record_worker_admission_wait(
+                AdmissionPhase::ResolveComponentCharge,
+                phase_start.elapsed(),
+            );
 
-                let concurrent_agent_permit = registered_concurrent_account.acquire(agent_id).await;
+            let phase_start = std::time::Instant::now();
+            let concurrent_agent_permit = registered_concurrent_account
+                .acquire(agent_id.clone())
+                .instrument(related_span!(
+                    worker_trace.startup_origin,
+                    Level::INFO,
+                    "acquire_concurrent_agent_slot",
+                    %agent_id,
+                    agent_type = %worker_trace.agent_type
+                ))
+                .await;
+            crate::metrics::workers::record_worker_admission_wait(
+                AdmissionPhase::ConcurrencySlot,
+                phase_start.elapsed(),
+            );
 
-                // `memory_grant` and `component_charge` own their reservations
-                // from here on: held as locals until the worker becomes resident
-                // (when they move into the RunningWorker) or this task ends/aborts
-                // (when dropping them returns the reservations to the gate). This
-                // is what makes a start cancelled mid-flight — e.g. the worker
-                // being deleted while still waiting for its remaining permits —
-                // release rather than leak its grant and module charge.
-                //
-                // Admission is not gated while waiting for a per-account
-                // concurrency slot above; otherwise one account could exhaust the
-                // memory headroom with workers that are not allowed to run yet.
-                let (memory_grant, component_charge) = parent
+            // `memory_grant` and `component_charge` own their reservations
+            // from here on: held as locals until the worker becomes resident
+            // (when they move into the RunningWorker) or this task ends/aborts
+            // (when dropping them returns the reservations to the gate). This
+            // is what makes a start cancelled mid-flight — e.g. the worker
+            // being deleted while still waiting for its remaining permits —
+            // release rather than leak its grant and module charge.
+            //
+            // Admission is not gated while waiting for a per-account
+            // concurrency slot above; otherwise one account could exhaust the
+            // memory headroom with workers that are not allowed to run yet.
+            let phase_start = std::time::Instant::now();
+            let (memory_grant, component_charge) = parent
+                .active_workers()
+                .acquire_with_component_charge(
+                    memory_requirement,
+                    component_id,
+                    component_revision,
+                    component_module_bytes,
+                )
+                // Not spanned, for the same reason as the charge resolution above:
+                // `acquire_memory` retries on the same 500ms delay and logs once per
+                // attempt. Its duration is recorded as a metric instead.
+                .await;
+            crate::metrics::workers::record_worker_admission_wait(
+                AdmissionPhase::Memory,
+                phase_start.elapsed(),
+            );
+            // Pre-acquire storage permits for this restart.
+            //
+            // We need to acquire `filesystem_storage_requirement + desired_extra` total:
+            // - `filesystem_storage_requirement`: bytes to hold as the pre-acquired permit
+            //   for replay (mirrors what the worker held before being evicted).
+            //   The old RunningWorker already returned these bytes to the pool
+            //   when it dropped, so the pool likely already has them — the
+            //   blocking acquire will find them without needing to evict anyone.
+            // - `desired_extra`: bytes for the write that triggered NodeOutOfFilesystemStorage.
+            //   The pool may not have these yet, so the blocking acquire will
+            //   evict idle workers only for the missing portion.
+            //
+            // After acquiring, we release `desired_extra` back to the pool so
+            // it is available for the pending write to re-acquire at runtime.
+            //
+            // Example: prior writes = 3 KB, failing write needs 1 KB extra.
+            //   Old RunningWorker drops → 3 KB returned to pool.
+            //   acquire_bytes = 4 KB. Pool has 3 KB → 1 KB gap → evict 1 KB.
+            //   Hold 3 KB as filesystem_storage_permit, release 1 KB → pool has 1 KB free.
+            //   Pending write re-acquires 1 KB → succeeds.
+            let desired_extra = parent
+                .desired_extra_filesystem_storage
+                .load(Ordering::Relaxed);
+            let acquire_bytes = filesystem_storage_requirement + desired_extra;
+            let filesystem_storage_permit = if acquire_bytes > 0 {
+                let phase_start = std::time::Instant::now();
+                let mut permit = parent
                     .active_workers()
-                    .acquire_with_component_charge(
-                        memory_requirement,
-                        component_id,
-                        component_revision,
-                        component_module_bytes,
-                    )
+                    .acquire_filesystem_storage(acquire_bytes)
+                    .instrument(related_span!(
+                        worker_trace.startup_origin,
+                        Level::INFO,
+                        "acquire_filesystem_storage",
+                        %agent_id,
+                        agent_type = %worker_trace.agent_type
+                    ))
                     .await;
-                // Pre-acquire storage permits for this restart.
-                //
-                // We need to acquire `filesystem_storage_requirement + desired_extra` total:
-                // - `filesystem_storage_requirement`: bytes to hold as the pre-acquired permit
-                //   for replay (mirrors what the worker held before being evicted).
-                //   The old RunningWorker already returned these bytes to the pool
-                //   when it dropped, so the pool likely already has them — the
-                //   blocking acquire will find them without needing to evict anyone.
-                // - `desired_extra`: bytes for the write that triggered NodeOutOfFilesystemStorage.
-                //   The pool may not have these yet, so the blocking acquire will
-                //   evict idle workers only for the missing portion.
-                //
-                // After acquiring, we release `desired_extra` back to the pool so
-                // it is available for the pending write to re-acquire at runtime.
-                //
-                // Example: prior writes = 3 KB, failing write needs 1 KB extra.
-                //   Old RunningWorker drops → 3 KB returned to pool.
-                //   acquire_bytes = 4 KB. Pool has 3 KB → 1 KB gap → evict 1 KB.
-                //   Hold 3 KB as filesystem_storage_permit, release 1 KB → pool has 1 KB free.
-                //   Pending write re-acquires 1 KB → succeeds.
-                let desired_extra = parent
-                    .desired_extra_filesystem_storage
-                    .load(Ordering::Relaxed);
-                let acquire_bytes = filesystem_storage_requirement + desired_extra;
-                let filesystem_storage_permit = if acquire_bytes > 0 {
-                    let mut permit = parent
-                        .active_workers()
-                        .acquire_filesystem_storage(acquire_bytes)
-                        .await;
-                    // Release the `desired_extra` portion back to the pool.
-                    if desired_extra > 0 {
-                        let extra_permits =
-                            crate::services::active_workers::bytes_to_filesystem_storage_permits(
-                                desired_extra,
-                            ) as usize;
-                        if let Some(extra) = permit.split(extra_permits) {
-                            drop(extra); // returns to semaphore
-                        }
+                crate::metrics::workers::record_worker_admission_wait(
+                    AdmissionPhase::FilesystemStorage,
+                    phase_start.elapsed(),
+                );
+                // Release the `desired_extra` portion back to the pool.
+                if desired_extra > 0 {
+                    let extra_permits =
+                        crate::services::active_workers::bytes_to_filesystem_storage_permits(
+                            desired_extra,
+                        ) as usize;
+                    if let Some(extra) = permit.split(extra_permits) {
+                        drop(extra); // returns to semaphore
                     }
-                    if permit.num_permits() > 0 {
-                        Some(permit)
-                    } else {
-                        None
-                    }
+                }
+                if permit.num_permits() > 0 {
+                    Some(permit)
                 } else {
                     None
-                };
-                debug!("Attempting to start worker after acquiring enough permits");
-                Worker::start_waiting_worker(
-                    parent,
-                    memory_grant,
-                    component_charge,
-                    filesystem_storage_permit,
-                    concurrent_agent_permit,
-                    oom_retry_count,
-                    start_attempt,
-                )
-                .await;
-                // If we do not start the worker here we will drop the permits here, which will release them to the host.
-            }
-            .instrument(span),
-        );
+                }
+            } else {
+                None
+            };
+            debug!("Attempting to start worker after acquiring enough permits");
+            Worker::start_waiting_worker(
+                parent,
+                memory_grant,
+                component_charge,
+                filesystem_storage_permit,
+                concurrent_agent_permit,
+                oom_retry_count,
+                start_attempt,
+                worker_trace,
+            )
+            .await;
+            // If we do not start the worker here we will drop the permits here, which will release them to the host.
+        });
 
         WaitingWorker {
             handle: Some(handle),
@@ -4007,6 +4171,7 @@ impl RunningWorker {
         component_charge: WorkerComponentCharge,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
+        worker_trace: WorkerTrace,
     ) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         sender.send(WorkerCommand::WorkAvailable).unwrap();
@@ -4020,35 +4185,21 @@ impl RunningWorker {
         let resume_replay_pending = Arc::new(AtomicBool::new(false));
         let resume_replay_pending_clone = resume_replay_pending.clone();
 
-        let span = span!(
-            parent: None,
-            Level::INFO,
-            "invocation-loop",
-            agent_id = parent.owned_agent_id.agent_id.to_string(),
-            agent_type = parent
-                .parsed_agent_id
-                .as_ref()
-                .map(|id| id.agent_type.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-        );
-        let handle = tokio::task::spawn(
-            async move {
-                RunningWorker::invocation_loop(
-                    receiver,
-                    active_clone,
-                    owned_agent_id_clone,
-                    parent,
-                    waiting_for_command_clone,
-                    interrupt_signal_clone,
-                    oom_retry_count,
-                    concurrent_agent_permit,
-                    resume_replay_pending_clone,
-                )
-                .instrument(span)
-                .await;
-            }
-            .in_current_span(),
-        );
+        let handle = tokio::task::spawn(async move {
+            RunningWorker::invocation_loop(
+                receiver,
+                active_clone,
+                owned_agent_id_clone,
+                parent,
+                waiting_for_command_clone,
+                interrupt_signal_clone,
+                oom_retry_count,
+                concurrent_agent_permit,
+                resume_replay_pending_clone,
+                worker_trace,
+            )
+            .await;
+        });
 
         RunningWorker {
             handle: Some(handle),
@@ -4359,6 +4510,7 @@ impl RunningWorker {
         oom_retry_count: u32,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         resume_replay_pending: Arc<AtomicBool>,
+        worker_trace: WorkerTrace,
     ) {
         let mut invocation_loop = InvocationLoop {
             receiver,
@@ -4370,6 +4522,7 @@ impl RunningWorker {
             oom_retry_count,
             concurrent_agent_permit: Some(concurrent_agent_permit),
             resume_replay_pending,
+            worker_trace,
         };
         invocation_loop.run().await;
     }

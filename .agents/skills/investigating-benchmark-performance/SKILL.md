@@ -65,6 +65,11 @@ This produces the binary at `target/benchmarks/benchmarks`.
 
 The benchmarks binary is at `integration-tests/src/benchmarks/all.rs` and is built as the `benchmarks` binary from the `integration-tests` crate. It has a built-in `--otlp` flag that configures all spawned Golem services to export traces.
 
+`--otlp` exports at `info`. To change what is exported, set `GOLEM_OTLP_FILTER` — it takes
+`RUST_LOG` syntax and is used exactly as written, so `GOLEM_OTLP_FILTER=info,h2=off` quietens
+one crate and `debug` widens everything. The filter in force is logged at startup as
+`otlp_filter`. See the `investigating-executor-performance` skill for the target names.
+
 ### Running a single benchmark
 
 The CLI takes the benchmark name as a positional argument, followed by the `spawned` subcommand (which tells it to spawn services locally). The `--build-target` defaults to `target/release` which is the correct path for the service binaries.
@@ -280,7 +285,10 @@ Long-lived spans from background loops can dominate the trace data. Filter them 
 python3 -c "
 import json
 data = json.load(open('tmp/traces.json'))
-NOISE = {'Oplog background transfer', 'Scheduler loop', 'broadcast loop'}
+NOISE = {'oplog_background_transfer', 'ephemeral_oplog_background_transfer',
+         'oplog_forwarding_flush', 'oplog_forwarding_threshold_flush',
+         'scheduler_tick', 'quota_renewal',
+         'resource_limits_batch_update', 'agent_status_flush_sweep'}
 clean = [t for t in data['data']
          if not any(s['operationName'] in NOISE for s in t['spans'])]
 print(f'Total: {len(data[\"data\"])}, After filtering noise: {len(clean)}')

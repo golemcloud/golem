@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use crate::services::account::AccountError;
+use crate::services::account_resource_override::AccountResourceOverrideError;
+use crate::services::account_usage::error::AccountUsageError;
 use crate::services::account_usage::error::LimitExceededError;
 use crate::services::agent_secret::AgentSecretError;
 use crate::services::application::ApplicationError;
@@ -325,6 +327,56 @@ impl From<AccountError> for ApiError {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
             }
             AccountError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<AccountResourceOverrideError> for ApiError {
+    fn from(value: AccountResourceOverrideError) -> Self {
+        let error = value.to_safe_string();
+        match value {
+            AccountResourceOverrideError::NotUserConfigurable => Self::bad_request(
+                api::error_code::RESOURCE_OVERRIDE_NOT_USER_CONFIGURABLE,
+                error,
+            ),
+            AccountResourceOverrideError::ExceedsPlanCeiling(_) => {
+                Self::limit_exceeded(api::error_code::LIMIT_EXCEEDED, error)
+            }
+            AccountResourceOverrideError::ExpiryRequiresAdmin => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
+            AccountResourceOverrideError::AccountNotFound(_) => {
+                Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
+            }
+            AccountResourceOverrideError::Unauthorized(inner) => inner.into(),
+            AccountResourceOverrideError::InternalError(_) => {
+                Self::InternalError(Json(ErrorBody {
+                    error,
+                    code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                    cause: Some(value.into_anyhow()),
+                }))
+            }
+        }
+    }
+}
+
+impl From<AccountUsageError> for ApiError {
+    fn from(value: AccountUsageError) -> Self {
+        let error = value.to_safe_string();
+        match value {
+            AccountUsageError::LimitExceeded(inner) => inner.into(),
+            AccountUsageError::ComponentTooLarge(_) => {
+                Self::bad_request(api::error_code::LIMIT_EXCEEDED, error)
+            }
+            AccountUsageError::AccountNotfound(_) => {
+                Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
+            }
+            AccountUsageError::Unauthorized(inner) => inner.into(),
+            AccountUsageError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
                 code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),
@@ -1097,6 +1149,28 @@ mod tests {
     use golem_common::base_model::agent_secret::CanonicalAgentSecretPath;
     use golem_common::base_model::quota::ResourceName;
     use test_r::test;
+
+    #[test]
+    fn resource_override_errors_use_distinct_http_statuses() {
+        assert!(matches!(
+            ApiError::from(AccountResourceOverrideError::NotUserConfigurable),
+            ApiError::BadRequest(_)
+        ));
+        assert!(matches!(
+            ApiError::from(AccountResourceOverrideError::ExceedsPlanCeiling(10)),
+            ApiError::LimitExceeded(_)
+        ));
+        assert!(matches!(
+            ApiError::from(AccountResourceOverrideError::ExpiryRequiresAdmin),
+            ApiError::Forbidden(_)
+        ));
+        assert!(matches!(
+            ApiError::from(AccountResourceOverrideError::AccountNotFound(
+                golem_common::model::account::AccountId::new()
+            )),
+            ApiError::NotFound(_)
+        ));
+    }
 
     fn bad_request_from_validations(errors: Vec<DeployValidationError>) -> ErrorsBody {
         let api_error = ApiError::from(DeploymentWriteError::DeploymentValidationFailed(errors));

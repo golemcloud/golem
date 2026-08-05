@@ -12,15 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// A strict (fatal) UTF-8 TextDecoder that rejects invalid byte sequences,
-// falling back to a lenient decoder on runtimes that don't support the `fatal`
-// option. The QuickJS agent guest is compiled without ICU, where
-// `new TextDecoder('utf-8', { fatal: true })` throws at construction — so any
-// eager module-scope decoder must degrade gracefully there.
-export function strictTextDecoder() {
-  try {
-    return new TextDecoder('utf-8', { fatal: true });
-  } catch {
-    return new TextDecoder('utf-8');
-  }
-}
+pub use crate::base_model::account_usage::*;

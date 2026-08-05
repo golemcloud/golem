@@ -701,6 +701,16 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             }),
         ),
         (
+            "account_usage_update",
+            "account.usage(acme) @ acme : update :",
+            PermissionPattern::AccountUsage(ClassPermissionPattern::<AccountUsageClass> {
+                verb: Some(AccountUsageVerb::Update),
+                owner: account_owner("acme"),
+                recipient: account_recipient("acme"),
+                resource: AccountUsageResourcePattern,
+            }),
+        ),
+        (
             "account_token",
             "account.token(acme) @ acme : view : 550e8400-e29b-41d4-a716-446655440000",
             PermissionPattern::AccountToken(ClassPermissionPattern::<AccountTokenClass> {

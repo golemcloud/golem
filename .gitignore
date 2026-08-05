@@ -8,6 +8,7 @@ golem-worker-executor/data/
 golem-worker-executor/golem-wit/
 zig-cache/
 dump.rdb
+/golem_registry_service.db
 test-components/*.wat
 test-components/**/*.wat
 test-components/*.wasm

@@ -18,6 +18,7 @@ use futures::{Stream, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
+use golem_common::tracing::TraceOrigin;
 use std::sync::Arc;
 use tonic::Status;
 
@@ -26,6 +27,10 @@ pub struct ConnectWorkerStream {
     agent_id: AgentId,
     account_id: AccountId,
     limit_service: Arc<dyn LimitService>,
+    /// The request that opened this connection. Carried on the stream so that work
+    /// outliving the request - the websocket proxy - can link back to it without the
+    /// caller having to know where the span was still current.
+    origin: TraceOrigin,
 }
 
 impl ConnectWorkerStream {
@@ -40,7 +45,18 @@ impl ConnectWorkerStream {
             agent_id,
             account_id,
             limit_service,
+            // Captured here rather than at any use site: this constructor is only
+            // reached from `WorkerService::connect`, which the API layer runs under
+            // the `connect_worker` request span, so that span is current exactly
+            // here. See `TraceOrigin::capture_current` for the rule.
+            origin: TraceOrigin::capture_current(),
         }
+    }
+
+    /// The request this connection was opened by, for linking longer-lived work back
+    /// to it.
+    pub fn origin(&self) -> TraceOrigin {
+        self.origin.clone()
     }
 }
 

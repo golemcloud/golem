@@ -27,6 +27,9 @@ pub mod worker;
 pub mod workerctx;
 
 #[cfg(test)]
+pub mod span_test_support;
+
+#[cfg(test)]
 test_r::enable!();
 
 use self::durable_host::{DurableWorkerCtx, DurableWorkerCtxView};

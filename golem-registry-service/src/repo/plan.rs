@@ -113,6 +113,7 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                     sqlx::query(indoc! { r#"
                         INSERT INTO plans (
                             plan_id, name, max_memory_per_worker, max_table_elements_per_worker, max_disk_space_per_worker,
+                            max_disk_space_per_worker_ceiling, max_disk_space_per_worker_user_configurable,
                             max_concurrent_agents_per_executor,
                             total_app_count, total_env_count, total_component_count,
                             total_worker_connection_count, total_component_storage_bytes,
@@ -121,31 +122,35 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                             monthly_http_call_limit, monthly_rpc_call_limit,
                             oplog_writes_per_second
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
                         ON CONFLICT (plan_id) DO UPDATE SET
                             name = $2,
                             max_memory_per_worker = $3,
                             max_table_elements_per_worker = $4,
                             max_disk_space_per_worker = $5,
-                            max_concurrent_agents_per_executor = $6,
-                            total_app_count = $7,
-                            total_env_count = $8,
-                            total_component_count = $9,
-                            total_worker_connection_count = $10,
-                            total_component_storage_bytes = $11,
-                            monthly_gas_limit = $12,
-                            monthly_component_upload_limit_bytes = $13,
-                            per_invocation_http_call_limit = $14,
-                            per_invocation_rpc_call_limit = $15,
-                            monthly_http_call_limit = $16,
-                            monthly_rpc_call_limit = $17,
-                            oplog_writes_per_second = $18
+                            max_disk_space_per_worker_ceiling = $6,
+                            max_disk_space_per_worker_user_configurable = $7,
+                            max_concurrent_agents_per_executor = $8,
+                            total_app_count = $9,
+                            total_env_count = $10,
+                            total_component_count = $11,
+                            total_worker_connection_count = $12,
+                            total_component_storage_bytes = $13,
+                            monthly_gas_limit = $14,
+                            monthly_component_upload_limit_bytes = $15,
+                            per_invocation_http_call_limit = $16,
+                            per_invocation_rpc_call_limit = $17,
+                            monthly_http_call_limit = $18,
+                            monthly_rpc_call_limit = $19,
+                            oplog_writes_per_second = $20
                     "#})
                     .bind(plan.plan_id)
                     .bind(plan.name)
                     .bind(plan.max_memory_per_worker)
                     .bind(plan.max_table_elements_per_worker)
                     .bind(plan.max_disk_space_per_worker)
+                    .bind(plan.max_disk_space_per_worker_ceiling)
+                    .bind(plan.max_disk_space_per_worker_user_configurable)
                     .bind(plan.max_concurrent_agents_per_executor)
                     .bind(plan.total_app_count)
                     .bind(plan.total_env_count)
@@ -176,6 +181,7 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                 sqlx::query_as(indoc! { r#"
                     SELECT
                         plan_id, name, max_memory_per_worker, max_table_elements_per_worker, max_disk_space_per_worker,
+                        max_disk_space_per_worker_ceiling, max_disk_space_per_worker_user_configurable,
                         max_concurrent_agents_per_executor,
                         total_app_count, total_env_count, total_component_count,
                         total_worker_connection_count, total_component_storage_bytes,
@@ -202,6 +208,7 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
             .fetch_all_as(sqlx::query_as(indoc! { r#"
                 SELECT
                     plan_id, name, max_memory_per_worker, max_table_elements_per_worker, max_disk_space_per_worker,
+                    max_disk_space_per_worker_ceiling, max_disk_space_per_worker_user_configurable,
                     max_concurrent_agents_per_executor,
                     total_app_count, total_env_count, total_component_count,
                     total_worker_connection_count, total_component_storage_bytes,

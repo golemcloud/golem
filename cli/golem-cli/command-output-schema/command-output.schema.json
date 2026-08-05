@@ -10,6 +10,9 @@
       "$ref": "#/definitions/account.get"
     },
     {
+      "$ref": "#/definitions/account.limits.show"
+    },
+    {
       "$ref": "#/definitions/account.new"
     },
     {
@@ -29,6 +32,12 @@
     },
     {
       "$ref": "#/definitions/account.update"
+    },
+    {
+      "$ref": "#/definitions/account.usage.show"
+    },
+    {
+      "$ref": "#/definitions/account.usage.history"
     },
     {
       "$ref": "#/definitions/card.get"
@@ -330,6 +339,50 @@
       },
       "additionalProperties": false
     },
+    "account.limits.show": {
+      "type": "object",
+      "description": "Single structured output document emitted by account storage limit commands.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "account limits show",
+      "x-golem-commands": [
+        "account limits show",
+        "account limits set",
+        "account limits unset"
+      ],
+      "required": [
+        "$type",
+        "effectiveValue",
+        "planDefault",
+        "overrideValue",
+        "ceiling",
+        "userConfigurable"
+      ],
+      "properties": {
+        "$type": {
+          "const": "account.limits.show"
+        },
+        "effectiveValue": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "planDefault": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "overrideValue": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "ceiling": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "userConfigurable": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "account.new": {
       "type": "object",
       "description": "Single structured output document emitted by `golem account new`.",
@@ -594,6 +647,104 @@
         },
         "accountRootCardId": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "account.usage.show": {
+      "description": "Current or selected-period account storage usage.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "account usage show",
+      "allOf": [
+        {
+          "$ref": "#/definitions/AccountUsageView"
+        },
+        {
+          "required": [
+            "$type"
+          ]
+        }
+      ]
+    },
+    "account.usage.history": {
+      "type": "object",
+      "description": "Account storage usage history.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "account usage history",
+      "required": [
+        "$type",
+        "usage"
+      ],
+      "properties": {
+        "$type": {
+          "const": "account.usage.history"
+        },
+        "usage": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AccountUsageHistoryItem"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AccountUsageView": {
+      "type": "object",
+      "required": [
+        "computeGcu",
+        "durableStorageGbMonth",
+        "ephemeralStorageGbMonth",
+        "period"
+      ],
+      "properties": {
+        "$type": {
+          "const": "account.usage.show"
+        },
+        "computeGcu": {
+          "description": "Compute usage in GCU.",
+          "type": "number"
+        },
+        "durableStorageGbMonth": {
+          "type": "number"
+        },
+        "ephemeralStorageGbMonth": {
+          "type": "number"
+        },
+        "period": {
+          "$ref": "#/definitions/StorageUsagePeriod"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AccountUsageHistoryItem": {
+      "description": "Account usage values without the top-level show-command discriminator.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/AccountUsageView"
+        },
+        {
+          "not": {
+            "required": [
+              "$type"
+            ]
+          }
+        }
+      ]
+    },
+    "StorageUsagePeriod": {
+      "type": "object",
+      "required": [
+        "year",
+        "month"
+      ],
+      "properties": {
+        "year": {
+          "type": "integer"
+        },
+        "month": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 12
         }
       },
       "additionalProperties": false
@@ -6854,6 +7005,10 @@
       "rustType": "AccountGetView"
     },
     {
+      "type": "account.limits.show",
+      "rustType": "AccountLimitsView"
+    },
+    {
       "type": "account.new",
       "rustType": "AccountNewView"
     },
@@ -6880,6 +7035,14 @@
     {
       "type": "account.update",
       "rustType": "AccountUpdateView"
+    },
+    {
+      "type": "account.usage.show",
+      "rustType": "AccountUsageView"
+    },
+    {
+      "type": "account.usage.history",
+      "rustType": "AccountUsageListView"
     },
     {
       "type": "card.get",

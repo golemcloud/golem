@@ -83,6 +83,8 @@ pub struct ResourceUsageUpdate {
     pub fuel_delta: i64,
     pub http_call_count_delta: u64,
     pub rpc_call_count_delta: u64,
+    pub durable_storage_byte_seconds_delta: i64,
+    pub ephemeral_storage_byte_seconds_delta: i64,
 }
 
 #[async_trait]
@@ -570,12 +572,16 @@ impl RegistryService for GrpcRegistryService {
                 fuel_delta: v.fuel_delta,
                 http_call_count_delta: v.http_call_count_delta,
                 rpc_call_count_delta: v.rpc_call_count_delta,
+                durable_storage_byte_seconds_delta: v.durable_storage_byte_seconds_delta,
+                ephemeral_storage_byte_seconds_delta: v.ephemeral_storage_byte_seconds_delta,
             })
             .collect();
 
         let response = self
             .client
-            .call("batch_update_resource_usage", move |client| {
+            // Every delta in this batch is additive. Retrying after an ambiguous transport failure
+            // could double-count fuel, HTTP calls, RPC calls, and storage usage.
+            .call_without_retry("batch_update_resource_usage", move |client| {
                 let request = BatchUpdateResourceUsageRequest {
                     updates: updates.clone(),
                 };

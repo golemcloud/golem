@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod account_tokens;
+pub mod account_usage;
 pub mod accounts;
 pub mod admin;
 pub mod agent_secrets;
@@ -35,6 +36,7 @@ pub mod retry_policies;
 pub mod security_schemes;
 pub mod tokens;
 
+use self::account_usage::AccountUsageApi;
 use self::accounts::AccountsApi;
 use self::admin::AdminApi;
 use self::agent_secrets::AgentSecretsApi;
@@ -63,6 +65,7 @@ use poem_openapi::OpenApiService;
 pub type Apis = (
     HealthcheckApi,
     AccountsApi,
+    AccountUsageApi,
     AgentSecretsApi,
     ApplicationsApi,
     CardsApi,
@@ -76,8 +79,7 @@ pub type Apis = (
         PermissionSharesApi,
         PluginRegistrationsApi,
     ),
-    ReportsApi,
-    ResourceDefinitionsApi,
+    (ReportsApi, ResourceDefinitionsApi),
     RetryPoliciesApi,
     SecuritySchemesApi,
     TokensApi,
@@ -90,6 +92,11 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
             AccountsApi::new(
                 services.account_service.clone(),
                 services.token_service.clone(),
+                services.auth_service.clone(),
+            ),
+            AccountUsageApi::new(
+                services.account_usage_service.clone(),
+                services.account_resource_override_service.clone(),
                 services.auth_service.clone(),
             ),
             AgentSecretsApi::new(
@@ -152,13 +159,15 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                     services.auth_service.clone(),
                 ),
             ),
-            ReportsApi::new(
-                services.reports_service.clone(),
-                services.auth_service.clone(),
-            ),
-            ResourceDefinitionsApi::new(
-                services.resource_definition_service.clone(),
-                services.auth_service.clone(),
+            (
+                ReportsApi::new(
+                    services.reports_service.clone(),
+                    services.auth_service.clone(),
+                ),
+                ResourceDefinitionsApi::new(
+                    services.resource_definition_service.clone(),
+                    services.auth_service.clone(),
+                ),
             ),
             RetryPoliciesApi::new(
                 services.retry_policy_service.clone(),

@@ -21,11 +21,13 @@ use futures::{Stream, StreamExt};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tonic::{Status, Streaming};
-use tracing::{Instrument, error};
+use tracing::{Instrument, Level, error};
 
 use golem_common::metrics::api::{
     record_closed_grpc_api_active_stream, record_new_grpc_api_active_stream,
 };
+use golem_common::related_span;
+use golem_common::tracing::TraceOrigin;
 
 pub struct WorkerStream<T> {
     receiver: mpsc::Receiver<Result<T, Status>>,
@@ -41,6 +43,16 @@ impl<T: Send + 'static> WorkerStream<T> {
 
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
+
+        // The pump lives as long as the stream does - a `connect` websocket can stay
+        // open for hours - so it links back to the request that opened it rather than
+        // running inside its span, which would keep that span open just as long.
+        //
+        // `new` is reached from `WorkerService::connect` and from the file-read path
+        // (`get_file_contents`), both of which the API layer runs under a request
+        // span, so a span is current here. See `TraceOrigin::capture_current` for the
+        // rule.
+        let origin = TraceOrigin::capture_current();
 
         tokio::spawn(
             async move {
@@ -70,7 +82,7 @@ impl<T: Send + 'static> WorkerStream<T> {
                 drop(sender);
                 record_closed_grpc_api_active_stream();
             }
-            .in_current_span(),
+            .instrument(related_span!(origin, Level::INFO, "worker_stream_pump")),
         );
 
         Self { receiver, cancel }
