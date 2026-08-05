@@ -2196,6 +2196,48 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
             &mut linker,
             <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
+        golem_worker_executor::preview2::golem::permissions::types::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Context>>,
+        >(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_worker_executor::preview2::golem::permissions::inspect::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Context>>,
+        >(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_worker_executor::preview2::golem::permissions::derive::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Context>>,
+        >(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_worker_executor::preview2::golem::permissions::revoke::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Context>>,
+        >(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_worker_executor::preview2::golem::permissions::wallet::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Context>>,
+        >(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_worker_executor::preview2::golem::permissions::kernel_introspection::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Context>>,
+        >(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
         golem_schema::schema::wit::wire::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
             &mut linker,
             <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
