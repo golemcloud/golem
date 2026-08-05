@@ -27,6 +27,7 @@ use self::agent_config::{
 };
 use crate::durable_host::{agent_effective_surface_from_component_metadata, recover_stderr_logs};
 use crate::metrics::storage::record_filesystem_pool_released;
+use crate::metrics::wasm::record_allocated_memory;
 use crate::metrics::workers::AdmissionPhase;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::active_workers::{
@@ -100,7 +101,7 @@ use tokio::task::JoinHandle;
 use tracing::{Instrument, Level, debug, info, span, warn};
 use uuid::Uuid;
 use wasmtime::component::Instance;
-use wasmtime::{Store, UpdateDeadline};
+use wasmtime::{Store, StoreMemory, UpdateDeadline};
 
 /// Resolved read-only `AgentMethod` invocation data needed to build the
 /// cache key and entry.
@@ -1999,6 +2000,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// reservation through the startup admission path.
     pub fn request_memory_grow(self: &Arc<Self>, delta: u64) {
         self.state_actor.grow_memory(self.clone(), delta);
+    }
+
+    pub fn record_reserved_memory_grow(self: &Arc<Self>, delta: u64) {
+        self.state_actor
+            .record_reserved_memory_growth(self.clone(), delta);
     }
 
     // Should only be called from the worker-state actor's lifecycle queue (see
@@ -3957,6 +3963,124 @@ impl Drop for RunningWorker {
 }
 
 impl RunningWorker {
+    async fn reconcile_linear_memories<Ctx: WorkerCtx>(
+        parent: &Arc<Worker<Ctx>>,
+        store: &mut Store<Ctx>,
+    ) -> Result<(), WorkerExecutorError> {
+        let memories = store.linear_memories();
+        let mut allocated_bytes = 0u64;
+        let mut conservatively_reserved_bytes = 0u64;
+        let mut shared_growth_reservation = 0u64;
+        let durable = store.data().durable_ctx();
+        let initially_reserved_bytes = durable.total_linear_memory_size();
+        let limit = durable.max_linear_memory_size();
+        let tracker = durable.linear_memory_tracker();
+        let pre_subscription_bytes = tracker.current_bytes();
+        let mut subscriptions = Vec::new();
+
+        for memory in &memories {
+            match memory {
+                StoreMemory::Unshared(memory) => {
+                    let current = memory.data_size(&*store) as u64;
+                    allocated_bytes = allocated_bytes.checked_add(current).ok_or_else(|| {
+                        WorkerExecutorError::runtime("linear-memory allocation total overflowed")
+                    })?;
+                    conservatively_reserved_bytes = conservatively_reserved_bytes
+                        .checked_add(current)
+                        .ok_or_else(|| {
+                            WorkerExecutorError::runtime(
+                                "linear-memory reservation total overflowed",
+                            )
+                        })?;
+                }
+                StoreMemory::Shared(memory) => {
+                    let growth_tracker = tracker.clone();
+                    let worker = parent.clone();
+                    let (subscription, current) =
+                        memory.subscribe_to_growth_with_current_size(move |old_size, new_size| {
+                            let delta = new_size.saturating_sub(old_size) as u64;
+                            if delta == 0 {
+                                return;
+                            }
+                            let (total, replaying) =
+                                growth_tracker.grow_shared(delta, std::time::Instant::now());
+                            record_allocated_memory(total as usize);
+                            if !replaying {
+                                worker.record_reserved_memory_grow(delta);
+                            }
+                        });
+                    subscriptions.push(subscription);
+                    let current = current as u64;
+                    let ty = memory.ty();
+                    let maximum_pages = ty.maximum().ok_or_else(|| {
+                        WorkerExecutorError::runtime(
+                            "shared linear memory did not declare a maximum",
+                        )
+                    })?;
+                    let maximum = maximum_pages.checked_mul(ty.page_size()).ok_or_else(|| {
+                        WorkerExecutorError::runtime("shared linear-memory maximum overflowed")
+                    })?;
+                    allocated_bytes = allocated_bytes.checked_add(current).ok_or_else(|| {
+                        WorkerExecutorError::runtime("linear-memory allocation total overflowed")
+                    })?;
+                    conservatively_reserved_bytes = conservatively_reserved_bytes
+                        .checked_add(maximum)
+                        .ok_or_else(|| {
+                            WorkerExecutorError::runtime(
+                                "linear-memory reservation total overflowed",
+                            )
+                        })?;
+                    shared_growth_reservation = shared_growth_reservation
+                        .checked_add(maximum.saturating_sub(current))
+                        .ok_or_else(|| {
+                            WorkerExecutorError::runtime(
+                                "shared linear-memory growth reservation overflowed",
+                            )
+                        })?;
+                }
+            }
+        }
+
+        if conservatively_reserved_bytes > limit {
+            return Err(WorkerExecutorError::worker_creation_failed(
+                parent.owned_agent_id.agent_id(),
+                format!(
+                    "Linear memories require {conservatively_reserved_bytes} bytes including shared declared maxima, exceeding the per-worker limit of {limit} bytes"
+                ),
+            ));
+        }
+
+        tracker.reconcile_preserving_shared_growth(
+            allocated_bytes,
+            shared_growth_reservation,
+            pre_subscription_bytes,
+            std::time::Instant::now(),
+        );
+
+        store
+            .data_mut()
+            .durable_ctx_mut()
+            .retain_shared_memory_growth_subscriptions(subscriptions);
+
+        let additional_reservation =
+            conservatively_reserved_bytes.saturating_sub(initially_reserved_bytes);
+        if additional_reservation > 0 {
+            parent
+                .increase_memory(additional_reservation)
+                .await
+                .map_err(|error| {
+                    WorkerExecutorError::worker_creation_failed(
+                        parent.owned_agent_id.agent_id(),
+                        format!(
+                            "Failed to reserve {additional_reservation} bytes for linear memories: {error}"
+                        ),
+                    )
+                })?;
+        }
+
+        Ok(())
+    }
+
     pub async fn new<Ctx: WorkerCtx>(
         owned_agent_id: OwnedAgentId,
         queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
@@ -4290,6 +4414,7 @@ impl RunningWorker {
                     )
                 }
             })?;
+        Self::reconcile_linear_memories(&parent, &mut store).await?;
         let store = async_lock::Mutex::new(store);
         Ok((instance, store))
     }

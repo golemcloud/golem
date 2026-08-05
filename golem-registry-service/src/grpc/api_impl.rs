@@ -201,6 +201,7 @@ impl RegistryServiceGrpcApi {
                         durable_storage_byte_seconds_delta: u.durable_storage_byte_seconds_delta,
                         ephemeral_storage_byte_seconds_delta: u
                             .ephemeral_storage_byte_seconds_delta,
+                        memory_gb_seconds_delta: u.memory_gb_seconds_delta,
                     },
                 ))
             })

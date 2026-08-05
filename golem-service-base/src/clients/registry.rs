@@ -83,6 +83,7 @@ pub struct ResourceUsageUpdate {
     pub rpc_call_count_delta: u64,
     pub durable_storage_byte_seconds_delta: i64,
     pub ephemeral_storage_byte_seconds_delta: i64,
+    pub memory_gb_seconds_delta: i64,
 }
 
 #[async_trait]
@@ -556,6 +557,7 @@ impl RegistryService for GrpcRegistryService {
                 rpc_call_count_delta: v.rpc_call_count_delta,
                 durable_storage_byte_seconds_delta: v.durable_storage_byte_seconds_delta,
                 ephemeral_storage_byte_seconds_delta: v.ephemeral_storage_byte_seconds_delta,
+                memory_gb_seconds_delta: v.memory_gb_seconds_delta,
             })
             .collect();
 

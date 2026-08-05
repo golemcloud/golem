@@ -277,6 +277,7 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
     oplog: Arc<dyn Oplog>,
     public_state: PublicDurableWorkerState<Ctx>,
     replay_state: crate::durable_host::replay_state::ReplayState,
+    linear_memory: crate::services::linear_memory::LinearMemoryTracker,
     execution_scope: BegunCallExecutionScope,
     retry: InFunctionRetryController,
     /// The registered atomic-region membership lease for a live persisted call initiated inside an
@@ -805,6 +806,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             oplog: ctx.state.oplog.clone(),
             public_state: ctx.public_state.clone(),
             replay_state: ctx.state.replay_state.clone(),
+            linear_memory: ctx.linear_memory.clone(),
             execution_scope,
             retry,
             atomic_lease,
@@ -1138,6 +1140,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     .is_none()
                 {
                     prepared.replay_state.switch_to_live().await;
+                    prepared.linear_memory.switch_to_live();
                     return Err((
                         WorkerExecutorError::runtime(
                             "Non-idempotent remote write operation was not completed, cannot retry",

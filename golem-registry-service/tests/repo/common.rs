@@ -2277,6 +2277,23 @@ pub async fn test_account_resource_override_resolution(deps: &Deps) {
         })
         .await
         .unwrap();
+    for dimension in [
+        AccountResourceOverrideDimension::MaxMemoryPerWorker,
+        AccountResourceOverrideDimension::MonthlyMemoryGbSeconds,
+    ] {
+        deps.account_resource_override_repo
+            .upsert(AccountResourceOverrideRecord {
+                account_id: account.revision.account_id,
+                dimension,
+                override_value: 1234.into(),
+                reason: AccountResourceOverrideReason::UserSelfServe,
+                expires_at: None,
+                created_by: account.revision.account_id,
+                created_at: now.clone(),
+            })
+            .await
+            .unwrap();
+    }
     let assertion_now = SqlDateTime::now();
     assert_eq!(
         deps.account_resource_override_repo
@@ -2301,11 +2318,45 @@ pub async fn test_account_resource_override_resolution(deps: &Deps) {
     assert_eq!(usage.storage_limit.effective_value, 1234);
     assert_eq!(usage.storage_limit.plan_default, 1073741824);
     assert_eq!(usage.storage_limit.override_value, Some(1234));
+    assert_eq!(usage.max_memory_per_worker.override_value, Some(1234));
+    assert_eq!(usage.resource_limits().max_memory_per_worker, 1234);
+    assert_eq!(usage.monthly_memory_gb_seconds.override_value, Some(1234));
+
+    deps.account_resource_override_repo
+        .delete(
+            account.revision.account_id,
+            AccountResourceOverrideDimension::MonthlyMemoryGbSeconds,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        deps.account_resource_override_repo
+            .get_active_value(
+                account.revision.account_id,
+                AccountResourceOverrideDimension::MonthlyMemoryGbSeconds,
+                &assertion_now,
+            )
+            .await
+            .unwrap(),
+        None
+    );
 
     deps.account_resource_override_repo
         .upsert(AccountResourceOverrideRecord {
             account_id: account.revision.account_id,
             dimension: AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+            override_value: 5678.into(),
+            reason: AccountResourceOverrideReason::UserSelfServe,
+            expires_at: Some(SqlDateTime::new(Utc::now() - chrono::Duration::seconds(1))),
+            created_by: account.revision.account_id,
+            created_at: now.clone(),
+        })
+        .await
+        .unwrap();
+    deps.account_resource_override_repo
+        .upsert(AccountResourceOverrideRecord {
+            account_id: account.revision.account_id,
+            dimension: AccountResourceOverrideDimension::MaxMemoryPerWorker,
             override_value: 5678.into(),
             reason: AccountResourceOverrideReason::UserSelfServe,
             expires_at: Some(SqlDateTime::new(Utc::now() - chrono::Duration::seconds(1))),
@@ -2336,6 +2387,8 @@ pub async fn test_account_resource_override_resolution(deps: &Deps) {
     assert!(usage.resource_limits().max_disk_space_per_worker == 1073741824);
     assert_eq!(usage.storage_limit.effective_value, 1073741824);
     assert_eq!(usage.storage_limit.override_value, None);
+    assert_eq!(usage.max_memory_per_worker.override_value, None);
+    assert_eq!(usage.resource_limits().max_memory_per_worker, 4000);
 }
 
 pub async fn test_storage_limit_is_clamped_after_plan_update(deps: &Deps) {
@@ -2411,6 +2464,11 @@ async fn create_disk_override_plan(deps: &Deps, account_id: Uuid, user_configura
             monthly_gas_limit: 2000.into(),
             monthly_component_upload_limit_bytes: 3000.into(),
             max_memory_per_worker: 4000.into(),
+            max_memory_per_worker_ceiling: 2048.into(),
+            max_memory_per_worker_user_configurable: user_configurable,
+            monthly_memory_gb_seconds: 1024.into(),
+            monthly_memory_gb_seconds_ceiling: 2048.into(),
+            monthly_memory_gb_seconds_user_configurable: user_configurable,
             max_table_elements_per_worker: 16384.into(),
             max_disk_space_per_worker: 1024.into(),
             max_disk_space_per_worker_ceiling: 2048.into(),
@@ -2436,6 +2494,23 @@ async fn create_disk_override_plan(deps: &Deps, account_id: Uuid, user_configura
         })
         .await
         .unwrap();
+    for dimension in [
+        AccountResourceOverrideDimension::MaxMemoryPerWorker,
+        AccountResourceOverrideDimension::MonthlyMemoryGbSeconds,
+    ] {
+        deps.account_resource_override_repo
+            .upsert(AccountResourceOverrideRecord {
+                account_id,
+                dimension,
+                override_value: 4096.into(),
+                reason: AccountResourceOverrideReason::UserSelfServe,
+                expires_at: None,
+                created_by: account_id,
+                created_at: SqlDateTime::now(),
+            })
+            .await
+            .unwrap();
+    }
 
     destination_plan_id
 }
@@ -2466,6 +2541,15 @@ pub async fn test_plan_change_clamps_disk_override(deps: &Deps) {
         .storage_limit;
     assert_eq!(storage_limit.override_value, Some(2048));
     assert_eq!(storage_limit.effective_value, 2048);
+    let usage = deps
+        .account_usage_repo
+        .get(account.revision.account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(usage.max_memory_per_worker.override_value, Some(2048));
+    assert_eq!(usage.max_memory_per_worker.effective_value, 2048);
+    assert_eq!(usage.monthly_memory_gb_seconds.override_value, Some(2048));
 }
 
 pub async fn test_plan_change_clears_forbidden_disk_override(deps: &Deps) {
@@ -2494,6 +2578,16 @@ pub async fn test_plan_change_clears_forbidden_disk_override(deps: &Deps) {
         .storage_limit;
     assert_eq!(storage_limit.override_value, None);
     assert_eq!(storage_limit.effective_value, 1024);
+    let usage = deps
+        .account_usage_repo
+        .get(account.revision.account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(usage.max_memory_per_worker.override_value, None);
+    assert_eq!(usage.max_memory_per_worker.effective_value, 2048);
+    assert_eq!(usage.monthly_memory_gb_seconds.override_value, None);
+    assert_eq!(usage.monthly_memory_gb_seconds.effective_value, 1024);
 }
 
 pub async fn test_account_usage(deps: &Deps) {
@@ -2520,6 +2614,7 @@ pub async fn test_account_usage(deps: &Deps) {
             UsageType::MonthlyRpcCalls => 5000,
             UsageType::MonthlyDurableAgentStorageByteSeconds
             | UsageType::MonthlyEphemeralStorageByteSeconds => u64::MAX,
+            UsageType::MonthlyMemoryGbSeconds => 6000,
         };
         let plan_limit = usage.plan.limit(usage_type);
         assert!(plan_limit == limit);
@@ -3567,6 +3662,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             rpc_call_count_delta: 0,
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
         },
     );
     let result = svc
@@ -3599,6 +3695,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             rpc_call_count_delta: 0,
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
         },
     );
     let result = svc
@@ -3622,6 +3719,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             rpc_call_count_delta: 0,
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
         },
     );
     let result = svc
@@ -3644,6 +3742,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             rpc_call_count_delta: 0,
             durable_storage_byte_seconds_delta: 123,
             ephemeral_storage_byte_seconds_delta: 456,
+            memory_gb_seconds_delta: 12,
         },
     );
     svc.update_resource_usage(updates, &AuthCtx::System)
@@ -3659,6 +3758,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             rpc_call_count_delta: 0,
             durable_storage_byte_seconds_delta: 10,
             ephemeral_storage_byte_seconds_delta: 20,
+            memory_gb_seconds_delta: 3,
         },
     );
     svc.update_resource_usage(updates, &AuthCtx::System)
@@ -3683,6 +3783,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
         ),
         476
     );
+    assert_eq!(usage.usage(UsageType::MonthlyMemoryGbSeconds), 15);
 }
 
 pub async fn test_update_rpc_call_counts(deps: &Deps) {
@@ -3715,6 +3816,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             rpc_call_count_delta: 100,
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
         },
     );
     let result = svc
@@ -3747,6 +3849,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             rpc_call_count_delta: 4900,
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
         },
     );
     let result = svc
@@ -3770,6 +3873,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             rpc_call_count_delta: 1,
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
         },
     );
     let result = svc
@@ -3806,6 +3910,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             rpc_call_count_delta: 0,
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
         },
     );
     http_updates.insert(
@@ -3816,6 +3921,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             rpc_call_count_delta: 0,
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
         },
     );
     let result = svc
@@ -3846,6 +3952,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             rpc_call_count_delta: 300,
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
         },
     );
     rpc_updates.insert(
@@ -3856,6 +3963,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             rpc_call_count_delta: 1000,
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
         },
     );
     let result = svc

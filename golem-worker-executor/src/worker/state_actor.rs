@@ -116,6 +116,12 @@ enum LifecycleJob<Ctx: WorkerCtx> {
         worker: Arc<Worker<Ctx>>,
         delta: u64,
     },
+    /// Records growth of shared memory whose declared maximum was reserved when the instance
+    /// was reconciled. No additional admission is needed for the committed delta.
+    RecordReservedMemoryGrowth {
+        worker: Arc<Worker<Ctx>>,
+        delta: u64,
+    },
 }
 
 /// The state exclusively owned by the status task.
@@ -217,6 +223,9 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                             worker.interrupt_for_permit_reacquire().await;
                         }
                     }
+                    LifecycleJob::RecordReservedMemoryGrowth { worker, delta } => {
+                        worker.add_to_oplog(OplogEntry::grow_memory(delta)).await;
+                    }
                 }
             }
         });
@@ -270,6 +279,19 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         if self
             .lifecycle_jobs
             .send(LifecycleJob::GrowMemory { worker, delta })
+            .is_err()
+        {
+            panic!(
+                "Worker state actor for {} terminated unexpectedly",
+                self.owned_agent_id
+            );
+        }
+    }
+
+    pub fn record_reserved_memory_growth(&self, worker: Arc<Worker<Ctx>>, delta: u64) {
+        if self
+            .lifecycle_jobs
+            .send(LifecycleJob::RecordReservedMemoryGrowth { worker, delta })
             .is_err()
         {
             panic!(

@@ -47,6 +47,7 @@ pub struct ResourceUsageUpdate {
     pub rpc_call_count_delta: u64,
     pub durable_storage_byte_seconds_delta: i64,
     pub ephemeral_storage_byte_seconds_delta: i64,
+    pub memory_gb_seconds_delta: i64,
 }
 
 pub struct AccountUsageService {
@@ -208,10 +209,15 @@ impl AccountUsageService {
                         UsageType::MonthlyEphemeralStorageByteSeconds,
                         update.ephemeral_storage_byte_seconds_delta,
                     );
+                    account_usage.add_change(
+                        UsageType::MonthlyMemoryGbSeconds,
+                        update.memory_gb_seconds_delta,
+                    );
 
                     tracing::debug!(
-                        "Updating usage for account {account_id}: fuel_delta={}, durable_storage_byte_seconds_delta={}, ephemeral_storage_byte_seconds_delta={}, http_call_count_delta={}, rpc_call_count_delta={}",
+                        "Updating usage for account {account_id}: fuel_delta={}, memory_gb_seconds_delta={}, durable_storage_byte_seconds_delta={}, ephemeral_storage_byte_seconds_delta={}, http_call_count_delta={}, rpc_call_count_delta={}",
                         update.fuel_delta,
+                        update.memory_gb_seconds_delta,
                         update.durable_storage_byte_seconds_delta,
                         update.ephemeral_storage_byte_seconds_delta,
                         update.http_call_count_delta,
@@ -287,9 +293,12 @@ impl AccountUsageService {
             account_id,
             &account_usage.plan,
             account_usage.storage_limit.clone(),
+            account_usage.max_memory_per_worker.clone(),
+            account_usage.monthly_memory_gb_seconds.clone(),
             StorageUsageHistoryRecord {
                 period,
                 compute_fuel: account_usage.usage(UsageType::MonthlyGasLimit),
+                memory_gb_seconds: account_usage.usage(UsageType::MonthlyMemoryGbSeconds),
                 durable_storage_byte_seconds: account_usage
                     .usage(UsageType::MonthlyDurableAgentStorageByteSeconds),
                 ephemeral_storage_byte_seconds: account_usage
@@ -335,6 +344,8 @@ impl AccountUsageService {
         account_id: AccountId,
         plan: &PlanRecord,
         storage_limit: StorageLimit,
+        max_memory_per_agent: golem_common::model::account_usage::MemoryLimit,
+        monthly_memory_gb_seconds: golem_common::model::account_usage::MemoryLimit,
         usage: StorageUsageHistoryRecord,
     ) -> StorageUsage {
         StorageUsage {
@@ -343,6 +354,8 @@ impl AccountUsageService {
             plan_name: PlanName(plan.name.clone()),
             usage: Self::storage_usage_metrics(usage),
             max_storage_per_agent: storage_limit,
+            max_memory_per_agent,
+            monthly_memory_gb_seconds,
         }
     }
 
@@ -360,6 +373,7 @@ impl AccountUsageService {
         StorageUsageMetrics {
             period: usage.period,
             compute_gcu: fuel_to_gcu(usage.compute_fuel),
+            memory_gb_seconds: usage.memory_gb_seconds,
             durable_storage_gb_month: byte_seconds_to_gb_month(usage.durable_storage_byte_seconds),
             ephemeral_storage_gb_month: byte_seconds_to_gb_month(
                 usage.ephemeral_storage_byte_seconds,
@@ -468,6 +482,11 @@ mod tests {
             plan_id: Uuid::new_v4(),
             name: "test".to_string(),
             max_memory_per_worker: NumericU64::new(u64::MAX),
+            max_memory_per_worker_ceiling: NumericU64::new(u64::MAX),
+            max_memory_per_worker_user_configurable: false,
+            monthly_memory_gb_seconds: NumericU64::new(u64::MAX),
+            monthly_memory_gb_seconds_ceiling: NumericU64::new(u64::MAX),
+            monthly_memory_gb_seconds_user_configurable: false,
             max_table_elements_per_worker: NumericU64::new(u64::MAX),
             max_disk_space_per_worker: NumericU64::new(u64::MAX),
             max_disk_space_per_worker_ceiling: NumericU64::new(u64::MAX),
@@ -495,6 +514,20 @@ mod tests {
             usage,
             plan,
             storage_limit: StorageLimit {
+                effective_value: u64::MAX,
+                plan_default: u64::MAX,
+                override_value: None,
+                ceiling: u64::MAX,
+                user_configurable: false,
+            },
+            max_memory_per_worker: golem_common::model::account_usage::MemoryLimit {
+                effective_value: u64::MAX,
+                plan_default: u64::MAX,
+                override_value: None,
+                ceiling: u64::MAX,
+                user_configurable: false,
+            },
+            monthly_memory_gb_seconds: golem_common::model::account_usage::MemoryLimit {
                 effective_value: u64::MAX,
                 plan_default: u64::MAX,
                 override_value: None,

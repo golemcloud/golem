@@ -1022,6 +1022,12 @@ pub mod resources {
             &["account_id", "agent_mode"]
         )
         .unwrap();
+        static ref MEMORY_GB_SECONDS_TOTAL: CounterVec = register_counter_vec!(
+            "memory_gb_seconds_total",
+            "Allocated linear-memory GB-seconds delivered to the registry, by account and agent mode",
+            &["account_id", "agent_mode"]
+        )
+        .unwrap();
         static ref RESOURCE_USAGE_BATCH_UPDATE_FAILURE_TOTAL: Counter = register_counter!(
             "resource_usage_batch_update_failure_total",
             "Number of resource usage batches dropped after registry update failures"
@@ -1051,6 +1057,27 @@ pub mod resources {
         STORAGE_BYTE_SECONDS_TOTAL
             .with_label_values(&[account_id, agent_mode])
             .inc_by(amount as f64);
+    }
+
+    pub fn record_memory_gb_seconds(account_id: &str, mode: AgentMode, amount: i64) {
+        let agent_mode = match mode {
+            AgentMode::Durable => "durable",
+            AgentMode::Ephemeral => "ephemeral",
+        };
+        MEMORY_GB_SECONDS_TOTAL
+            .with_label_values(&[account_id, agent_mode])
+            .inc_by(amount as f64);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn memory_gb_seconds_total(account_id: &str, mode: AgentMode) -> f64 {
+        let agent_mode = match mode {
+            AgentMode::Durable => "durable",
+            AgentMode::Ephemeral => "ephemeral",
+        };
+        MEMORY_GB_SECONDS_TOTAL
+            .with_label_values(&[account_id, agent_mode])
+            .get()
     }
 
     pub fn record_resource_usage_batch_update_failure() {

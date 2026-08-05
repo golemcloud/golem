@@ -566,8 +566,8 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         // Entering idle: release the concurrent-agent permit so other agents
         // from the same account can start without evicting this one.
         self.check_no_active_tail_work_on_idle().await;
+        self.release_concurrent_agent_permit().await;
         self.waiting_for_command.store(true, Ordering::Release);
-        self.release_concurrent_agent_permit();
         while let Some(cmd) = self.next_wakeup_or_initial().await {
             // Waking from idle: re-acquire the concurrent-agent permit before
             // processing any commands.
@@ -635,8 +635,8 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
             // Returning to idle: release the concurrent-agent permit.
             self.check_no_active_tail_work_on_idle().await;
+            self.release_concurrent_agent_permit().await;
             self.waiting_for_command.store(true, Ordering::Release);
-            self.release_concurrent_agent_permit();
         }
         self.abort_idle_snapshot_task();
         self.waiting_for_command.store(false, Ordering::Release);
@@ -687,8 +687,14 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
     /// Release the concurrent-agent permit back to the semaphore pool.
     /// Called when the agent enters idle state. No-op if already released.
-    fn release_concurrent_agent_permit(&mut self) {
+    async fn release_concurrent_agent_permit(&mut self) {
         if let Some(permit) = self.concurrent_agent_permit.take() {
+            self.store
+                .lock()
+                .await
+                .data()
+                .durable_ctx()
+                .pause_memory_meter();
             debug!(agent_id = %self.owned_agent_id.agent_id, "Releasing concurrent-agent permit (entering idle)");
             drop(permit);
         }
@@ -710,6 +716,12 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             .instrument(span)
             .await;
             *self.concurrent_agent_permit = Some(permit);
+            self.store
+                .lock()
+                .await
+                .data()
+                .durable_ctx()
+                .resume_memory_meter();
         }
     }
 

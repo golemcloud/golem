@@ -476,12 +476,15 @@ impl ResourceLimiterAsync for Context {
             current, desired, maximum, limit
         );
 
-        if desired > limit || maximum.map(|m| desired > m).unwrap_or_default() {
+        let growth = self
+            .durable_ctx
+            .desired_total_after_unshared_memory_growth(current, desired);
+        if growth.is_none_or(|(_, total)| total > limit as u64)
+            || maximum.map(|m| desired > m).unwrap_or_default()
+        {
             Err(GolemSpecificWasmTrap::WorkerExceededMemoryLimit)?;
         };
-
-        let current_known = self.durable_ctx.total_linear_memory_size();
-        let delta = (desired as u64).saturating_sub(current_known);
+        let (delta, _) = growth.unwrap();
 
         if delta > 0 {
             // Request more permits from the host on a detached task; if that fails
@@ -489,7 +492,7 @@ impl ResourceLimiterAsync for Context {
             self.durable_ctx
                 .increase_memory(delta)
                 .map_err(wasmtime::Error::from_anyhow)?;
-            record_allocated_memory(desired);
+            record_allocated_memory(self.durable_ctx.total_linear_memory_size() as usize);
         }
 
         Ok(true)

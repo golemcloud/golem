@@ -3319,14 +3319,24 @@ mod tests {
                         ceiling,
                         user_configurable,
                     )| {
-                        crate::model::text::account::AccountLimitsView(
-                            golem_common::model::account_usage::StorageLimit {
-                                effective_value,
-                                plan_default,
-                                override_value,
-                                ceiling,
-                                user_configurable,
-                            },
+                        let storage = golem_common::model::account_usage::StorageLimit {
+                            effective_value,
+                            plan_default,
+                            override_value,
+                            ceiling,
+                            user_configurable,
+                        };
+                        let memory = golem_common::model::account_usage::MemoryLimit {
+                            effective_value,
+                            plan_default,
+                            override_value,
+                            ceiling,
+                            user_configurable,
+                        };
+                        crate::model::text::account::AccountLimitsView::new(
+                            storage,
+                            memory.clone(),
+                            memory,
                         )
                     },
                 ),
@@ -3344,6 +3354,7 @@ mod tests {
     fn arb_account_usage_view() -> BoxedStrategy<crate::model::text::account::AccountUsageView> {
         (
             0.0f64..1_000_000.0,
+            arb_small_u64(),
             0.0f64..1_000_000.0,
             0.0f64..1_000_000.0,
             1900i32..=2200,
@@ -3352,6 +3363,7 @@ mod tests {
             .prop_map(
                 |(
                     compute_gcu,
+                    memory_gb_seconds,
                     durable_storage_gb_month,
                     ephemeral_storage_gb_month,
                     year,
@@ -3359,6 +3371,7 @@ mod tests {
                 )| {
                     crate::model::text::account::AccountUsageView {
                         compute_gcu,
+                        memory_gb_seconds,
                         durable_storage_gb_month,
                         ephemeral_storage_gb_month,
                         period: golem_common::model::account_usage::StorageUsagePeriod {

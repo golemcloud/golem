@@ -19,6 +19,7 @@ struct AccountUsageView {
 #[serde(rename_all = "camelCase")]
 struct AccountUsageItemView {
     compute_gcu: f64,
+    memory_gb_seconds: u64,
     durable_storage_gb_month: f64,
     ephemeral_storage_gb_month: f64,
     period: StorageUsagePeriod,
@@ -49,6 +50,7 @@ fn account_usage_history_items_have_no_discriminator() {
         "$type": "account.usage.history",
         "usage": [{
             "computeGcu": 1.5,
+            "memoryGbSeconds": 4,
             "durableStorageGbMonth": 2.5,
             "ephemeralStorageGbMonth": 3.5,
             "period": { "year": 2026, "month": 4 }
@@ -58,6 +60,7 @@ fn account_usage_history_items_have_no_discriminator() {
 
     assert_eq!(history.usage.len(), 1);
     assert_eq!(history.usage[0].compute_gcu, 1.5);
+    assert_eq!(history.usage[0].memory_gb_seconds, 4);
     assert_eq!(history.usage[0].period.month, 4);
 }
 
@@ -80,6 +83,7 @@ async fn account_storage_usage_and_limits_use_live_cli_wire_path(_tracing: &Trac
         .expect("account usage show produced no JSON output");
     assert_eq!(usage.kind, "account.usage.show");
     assert_eq!(usage.usage.compute_gcu, 0.0);
+    assert_eq!(usage.usage.memory_gb_seconds, 0);
     assert_eq!(usage.usage.durable_storage_gb_month, 0.0);
     assert_eq!(usage.usage.ephemeral_storage_gb_month, 0.0);
     assert!(

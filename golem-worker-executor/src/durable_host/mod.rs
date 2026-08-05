@@ -64,6 +64,7 @@ use crate::services::environment_state::EnvironmentStateService;
 use crate::services::file_loader::{FileLoader, FileUseToken};
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
+use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::quota::QuotaService;
@@ -372,6 +373,8 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     execution_status: Arc<RwLock<ExecutionStatus>>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
+    linear_memory: LinearMemoryTracker,
+    shared_memory_growth_subscriptions: Vec<wasmtime::SharedMemoryGrowthSubscription>,
     storage_meter: AgentStorageMeter,
     /// Per-instance cache of resolved typed guest export handles, populated
     /// lazily on first use during invocation dispatch.
@@ -381,6 +384,9 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
 
 impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
     fn drop(&mut self) {
+        self.linear_memory.stop(Instant::now());
+        self.resource_limits
+            .unregister_memory_meter(&self.owned_agent_id, self.linear_memory.meter());
         self.storage_meter.flush(Instant::now());
         self.resource_limits
             .unregister_storage_meter(&self.owned_agent_id, &self.storage_meter);
@@ -668,6 +674,61 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Instant::now(),
         );
         resource_limits.register_storage_meter(owned_agent_id.clone(), storage_meter.clone());
+        let linear_memory = LinearMemoryTracker::new(
+            worker_config.total_linear_memory_size,
+            execution_status.read().unwrap().agent_mode(),
+            true,
+            resource_limits.clone(),
+            Instant::now(),
+        );
+        let state = PrivateDurableWorkerState::new(
+            agent_id,
+            oplog_service,
+            oplog.clone(),
+            promise_service.clone(),
+            scheduler_service,
+            worker_service,
+            worker_enumeration_service,
+            key_value_service,
+            blob_store_service,
+            rdbms_service,
+            quota_service,
+            card_service,
+            card_interest_index,
+            component_service,
+            agent_types_service,
+            environment_state_service,
+            agent_webhooks_service,
+            config.clone(),
+            owned_agent_id.clone(),
+            rpc,
+            worker_proxy,
+            worker_config.deleted_regions.clone(),
+            component_metadata,
+            worker_config.current_filesystem_storage_usage,
+            worker_config.agent_effective_surface,
+            worker_fork,
+            RwLock::new(compute_read_only_paths(&files)),
+            TRwLock::new(files),
+            file_loader,
+            worker_config.created_by,
+            worker_config.created_by_email,
+            worker_config.initial_agent_config,
+            agent_config,
+            shard_service,
+            pending_update,
+            original_phantom_id,
+            worker_config.last_snapshot_index,
+            per_invocation_http_call_limit,
+            per_invocation_rpc_call_limit,
+            resource_limits.clone(),
+        )
+        .await?;
+        if state.is_live() {
+            linear_memory.switch_to_live();
+        }
+        resource_limits
+            .register_memory_meter(owned_agent_id.clone(), linear_memory.meter().clone());
 
         Ok(DurableWorkerCtx {
             table: Arc::new(Mutex::new(table)),
@@ -684,53 +745,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 invocation_queue,
                 oplog: oplog.clone(),
             },
-            state: PrivateDurableWorkerState::new(
-                agent_id,
-                oplog_service,
-                oplog,
-                promise_service,
-                scheduler_service,
-                worker_service,
-                worker_enumeration_service,
-                key_value_service,
-                blob_store_service,
-                rdbms_service,
-                quota_service,
-                card_service,
-                card_interest_index,
-                component_service,
-                agent_types_service,
-                environment_state_service,
-                agent_webhooks_service,
-                config.clone(),
-                owned_agent_id.clone(),
-                rpc,
-                worker_proxy,
-                worker_config.deleted_regions.clone(),
-                component_metadata,
-                worker_config.total_linear_memory_size,
-                worker_config.current_filesystem_storage_usage,
-                worker_config.agent_effective_surface,
-                worker_fork,
-                RwLock::new(compute_read_only_paths(&files)),
-                TRwLock::new(files),
-                file_loader,
-                worker_config.created_by,
-                worker_config.created_by_email,
-                worker_config.initial_agent_config,
-                agent_config,
-                shard_service,
-                pending_update,
-                original_phantom_id,
-                worker_config.last_snapshot_index,
-                per_invocation_http_call_limit,
-                per_invocation_rpc_call_limit,
-                resource_limits.clone(),
-            )
-            .await?,
+            state,
             worker_dir,
             execution_status,
             resource_limits,
+            linear_memory,
+            shared_memory_growth_subscriptions: Vec::new(),
             storage_meter,
             agent_export_funcs: AgentExportFuncs::default(),
             _store_alive_guard: StoreAliveGuard::new(),
@@ -1263,7 +1283,39 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn total_linear_memory_size(&self) -> u64 {
-        self.state.total_linear_memory_size
+        self.linear_memory.current_bytes()
+    }
+
+    pub fn max_linear_memory_size(&self) -> u64 {
+        self.resource_limits.max_memory_limit() as u64
+    }
+
+    pub fn linear_memory_tracker(&self) -> LinearMemoryTracker {
+        self.linear_memory.clone()
+    }
+
+    pub fn desired_total_after_unshared_memory_growth(
+        &self,
+        current_memory: usize,
+        desired_memory: usize,
+    ) -> Option<(u64, u64)> {
+        self.linear_memory
+            .desired_total_after_unshared_growth(current_memory, desired_memory)
+    }
+
+    pub fn retain_shared_memory_growth_subscriptions(
+        &mut self,
+        subscriptions: Vec<wasmtime::SharedMemoryGrowthSubscription>,
+    ) {
+        self.shared_memory_growth_subscriptions = subscriptions;
+    }
+
+    pub fn resume_memory_meter(&self) {
+        self.linear_memory.resume(Instant::now());
+    }
+
+    pub fn pause_memory_meter(&self) {
+        self.linear_memory.pause(Instant::now());
     }
 
     pub fn current_filesystem_storage_usage(&self) -> u64 {
@@ -1446,11 +1498,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn increase_memory(&mut self, delta: u64) -> anyhow::Result<()> {
-        if self.state.is_replay() {
-            // The increased amount was already recorded in live mode, so our worker
-            // was initialized with the correct amount of memory.
-            Ok(())
-        } else {
+        self.linear_memory.grow(delta, Instant::now());
+        if self.state.is_live() {
             // This is called from the `memory.grow` async resource limiter, which
             // Wasmtime runs through a blocking libcall on the store's fiber. While
             // that libcall waits, the store cannot make progress, so nothing may be
@@ -1458,10 +1507,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // The oplog hint and the global memory admission run as a fire-and-forget
             // job on the worker-state actor's lifecycle queue; see
             // `Worker::request_memory_grow` for the admission-failure semantics.
-            self.state.total_linear_memory_size += delta;
             self.public_state.worker().request_memory_grow(delta);
-            Ok(())
         }
+        Ok(())
     }
 
     /// Returns the deterministic, policy-independent recovery decision for a
@@ -1814,6 +1862,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     if end_index.is_none() {
                         // Must switch to live mode before failing to be able to commit an Error entry
                         self.state.replay_state.switch_to_live().await;
+                        self.linear_memory.switch_to_live();
                         Err(WorkerExecutorError::runtime(
                             "Non-idempotent remote write operation was not completed, cannot retry",
                         ))
@@ -1849,6 +1898,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         } => {
                             // Must switch to live mode before failing to be able to commit an Error entry
                             self.state.replay_state.switch_to_live().await;
+                            self.linear_memory.switch_to_live();
                             Err(WorkerExecutorError::runtime(
                                 "Non-idempotent remote write operation was not completed, cannot retry",
                             ))
@@ -1858,6 +1908,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         } if self.state.assume_idempotence => {
                             // We need to jump to the end of the oplog
                             self.state.replay_state.switch_to_live().await;
+                            self.linear_memory.switch_to_live();
 
                             // But this is not enough, because if the retried batched write operation succeeds,
                             // and later we replay it, we need to skip the first attempt and only replay the second.
@@ -1883,6 +1934,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             // assume_idempotence is false and the operation was not completed —
                             // we cannot safely retry a non-idempotent batched write.
                             self.state.replay_state.switch_to_live().await;
+                            self.linear_memory.switch_to_live();
                             Err(WorkerExecutorError::runtime(
                                 "Non-idempotent remote write operation was not completed, cannot retry",
                             ))
@@ -2261,6 +2313,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         } => {
                             // Must switch to live mode before failing to be able to commit an Error entry
                             self.state.replay_state.switch_to_live().await;
+                            self.linear_memory.switch_to_live();
                             return Err(WorkerExecutorError::runtime(
                                 "Transaction overlapped with other side effects was not completed, cannot retry",
                             ).into());
@@ -2277,6 +2330,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 } => {
                     // Must switch to live mode before failing to be able to commit an Error entry
                     self.state.replay_state.switch_to_live().await;
+                    self.linear_memory.switch_to_live();
                     return Err(WorkerExecutorError::runtime(
                         "Transaction overlapped with other side effects was not completed, cannot retry",
                     ).into());
@@ -2286,6 +2340,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let (result, tx) = if should_restart {
                 // We need to jump to the end of the oplog
                 self.state.replay_state.switch_to_live().await;
+                self.linear_memory.switch_to_live();
 
                 if !assume_idempotence {
                     Err(WorkerExecutorError::runtime(
@@ -3159,6 +3214,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");
+                    self.linear_memory.switch_to_live();
                     let pending_update = self.state.pending_update.lock().await.take();
                     if let Some(pending_update) = pending_update {
                         match pending_update.description {
@@ -6216,7 +6272,6 @@ struct PrivateDurableWorkerState {
     agent_wallet_cards: BTreeMap<CardId, StoredCard>,
     card_event_boundary_scan: Option<CardEventBoundaryScan>,
 
-    total_linear_memory_size: u64,
     /// Running total of storage bytes acquired from the executor semaphore pool
     /// by this worker since it last started. Incremented on every successful
     /// write; decremented when files are deleted or truncated.
@@ -6431,7 +6486,6 @@ impl PrivateDurableWorkerState {
         worker_proxy: Arc<dyn WorkerProxy>,
         deleted_regions: DeletedRegions,
         component_metadata: Component,
-        total_linear_memory_size: u64,
         current_filesystem_storage_usage: u64,
         _agent_effective_surface: golem_common::model::card::EffectiveSurface,
         worker_fork: Arc<dyn WorkerForkService>,
@@ -6550,7 +6604,6 @@ impl PrivateDurableWorkerState {
             agent_effective_surface,
             agent_wallet_cards,
             card_event_boundary_scan: None,
-            total_linear_memory_size,
             current_filesystem_storage_usage,
             replay_state,
             invocation_context,

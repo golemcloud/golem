@@ -24,6 +24,11 @@ pub struct PlanRecord {
     pub name: String,
 
     pub max_memory_per_worker: NumericU64,
+    pub max_memory_per_worker_ceiling: NumericU64,
+    pub max_memory_per_worker_user_configurable: bool,
+    pub monthly_memory_gb_seconds: NumericU64,
+    pub monthly_memory_gb_seconds_ceiling: NumericU64,
+    pub monthly_memory_gb_seconds_user_configurable: bool,
     pub max_table_elements_per_worker: NumericU64,
     pub max_disk_space_per_worker: NumericU64,
     pub max_disk_space_per_worker_ceiling: NumericU64,
@@ -57,6 +62,7 @@ impl PlanRecord {
             UsageType::TotalWorkerConnectionCount => self.total_worker_connection_count.get(),
             UsageType::MonthlyHttpCalls => self.monthly_http_call_limit.get(),
             UsageType::MonthlyRpcCalls => self.monthly_rpc_call_limit.get(),
+            UsageType::MonthlyMemoryGbSeconds => self.monthly_memory_gb_seconds.get(),
             UsageType::MonthlyDurableAgentStorageByteSeconds
             | UsageType::MonthlyEphemeralStorageByteSeconds => u64::MAX,
         }
@@ -74,6 +80,12 @@ impl From<PlanRecord> for Plan {
             monthly_gas_limit: value.monthly_gas_limit.get(),
             monthly_upload_limit: value.monthly_component_upload_limit_bytes.get(),
             max_memory_per_worker: value.max_memory_per_worker.get(),
+            max_memory_per_worker_ceiling: value.max_memory_per_worker_ceiling.get(),
+            max_memory_per_worker_user_configurable: value.max_memory_per_worker_user_configurable,
+            monthly_memory_gb_seconds: value.monthly_memory_gb_seconds.get(),
+            monthly_memory_gb_seconds_ceiling: value.monthly_memory_gb_seconds_ceiling.get(),
+            monthly_memory_gb_seconds_user_configurable: value
+                .monthly_memory_gb_seconds_user_configurable,
             max_table_elements_per_worker: value.max_table_elements_per_worker.get(),
             max_disk_space_per_worker: value.max_disk_space_per_worker.get(),
             max_disk_space_per_worker_ceiling: value.max_disk_space_per_worker_ceiling.get(),
