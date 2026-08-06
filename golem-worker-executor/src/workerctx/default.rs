@@ -470,10 +470,12 @@ impl ResourceLimiterAsync for Context {
         desired: usize,
         maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
-        let limit = self.get_max_memory();
         debug!(
             "memory_growing: current={}, desired={}, maximum={:?}, account limit={}",
-            current, desired, maximum, limit
+            current,
+            desired,
+            maximum,
+            self.get_max_memory()
         );
 
         self.durable_ctx

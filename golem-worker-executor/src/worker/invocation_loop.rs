@@ -575,7 +575,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         // Entering idle: release the concurrent-agent permit so other agents
         // from the same account can start without evicting this one.
         self.check_no_active_tail_work_on_idle().await;
-        self.release_concurrent_agent_permit().await;
+        self.release_concurrent_agent_permit();
         self.waiting_for_command.store(true, Ordering::Release);
         while let Some(cmd) = self.next_wakeup_or_initial().await {
             // Waking from idle: re-acquire the concurrent-agent permit before
@@ -644,7 +644,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
             // Returning to idle: release the concurrent-agent permit.
             self.check_no_active_tail_work_on_idle().await;
-            self.release_concurrent_agent_permit().await;
+            self.release_concurrent_agent_permit();
             self.waiting_for_command.store(true, Ordering::Release);
         }
         self.abort_idle_snapshot_task();
@@ -696,7 +696,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
     /// Release the concurrent-agent permit back to the semaphore pool.
     /// Called when the agent enters idle state. No-op if already released.
-    async fn release_concurrent_agent_permit(&mut self) {
+    fn release_concurrent_agent_permit(&mut self) {
         if let Some(permit) = self.concurrent_agent_permit.take() {
             self.linear_memory.pause(std::time::Instant::now());
             debug!(agent_id = %self.owned_agent_id.agent_id, "Releasing concurrent-agent permit (entering idle)");

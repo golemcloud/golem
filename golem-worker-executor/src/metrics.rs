@@ -375,6 +375,12 @@ pub mod workers {
             &["executor_id"]
         )
         .unwrap();
+        static ref WORKER_MEMORY_POOL_TOTAL_BYTES_GAUGE: Gauge = WORKER_MEMORY_POOL_TOTAL_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()]);
+        static ref WORKER_MEMORY_POOL_USED_BYTES_GAUGE: Gauge = WORKER_MEMORY_POOL_USED_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()]);
+        static ref WORKER_ADMISSION_RSS_BYTES_GAUGE: Gauge = WORKER_ADMISSION_RSS_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()]);
         pub static ref WORKER_MEMORY_GROW_REJECTED_TOTAL: CounterVec = register_counter_vec!(
             "golem_worker_memory_grow_rejected_total",
             "Invocations interrupted because a worker's linear-memory grow could not be admitted by the gate (out-of-memory trap, retried via reacquire)",
@@ -430,24 +436,26 @@ pub mod workers {
 
     /// Sets the gate's usable memory ceiling gauge.
     pub fn record_worker_memory_ceiling(bytes: u64) {
-        WORKER_MEMORY_POOL_TOTAL_BYTES
-            .with_label_values(&[crate::metrics::storage::executor_id()])
-            .set(bytes as f64);
+        WORKER_MEMORY_POOL_TOTAL_BYTES_GAUGE.set(bytes as f64);
     }
 
     /// Sets the gauge of total memory granted to live workers (the gate's
     /// reservation).
     pub fn record_worker_memory_granted(bytes: u64) {
-        WORKER_MEMORY_POOL_USED_BYTES
-            .with_label_values(&[crate::metrics::storage::executor_id()])
-            .set(bytes as f64);
+        WORKER_MEMORY_POOL_USED_BYTES_GAUGE.set(bytes as f64);
+    }
+
+    pub fn increase_worker_memory_granted(bytes: u64) {
+        WORKER_MEMORY_POOL_USED_BYTES_GAUGE.add(bytes as f64);
+    }
+
+    pub fn decrease_worker_memory_granted(bytes: u64) {
+        WORKER_MEMORY_POOL_USED_BYTES_GAUGE.sub(bytes as f64);
     }
 
     /// Sets the gauge of measured resident memory last read by the gate.
     pub fn record_worker_admission_rss(bytes: u64) {
-        WORKER_ADMISSION_RSS_BYTES
-            .with_label_values(&[crate::metrics::storage::executor_id()])
-            .set(bytes as f64);
+        WORKER_ADMISSION_RSS_BYTES_GAUGE.set(bytes as f64);
     }
 
     pub fn record_agent_status_flush(reason: &'static str) {

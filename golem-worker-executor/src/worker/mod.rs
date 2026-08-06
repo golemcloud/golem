@@ -2589,7 +2589,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         receiver.await.unwrap()
     }
 
-    // Should only be called from invocation loop
+    /// Appends an oplog entry without forcing a durable commit. Callers that
+    /// require ordering must await the append before exposing subsequent work.
     pub async fn add_to_oplog(&self, entry: OplogEntry) -> OplogIndex {
         self.oplog.add(entry).await
     }
@@ -4150,8 +4151,11 @@ impl RunningWorker {
         crate::metrics::wasm::record_worker_allocated_linear_memory(allocated_bytes);
         if live_instantiation_growth > 0 {
             parent
-                .add_and_commit_oplog(OplogEntry::grow_memory(live_instantiation_growth))
+                .add_to_oplog(OplogEntry::grow_memory(live_instantiation_growth))
                 .await;
+            parent
+                .startup_linear_memory_bytes
+                .store(allocated_bytes, Ordering::Release);
         }
 
         Ok(())

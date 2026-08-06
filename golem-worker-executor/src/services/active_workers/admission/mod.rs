@@ -56,7 +56,8 @@
 
 use super::memory_probe::{MemoryProbe, MemorySnapshot};
 use async_trait::async_trait;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Why an eviction candidate is worth evicting, in priority order. Lower
 /// variants are evicted first.
@@ -107,14 +108,15 @@ pub(crate) struct AdmissionPolicy {
 }
 
 /// Decides admission against measured headroom, evicting resident idle/warm
-/// work as needed. Holds its policy and probe; live usage is read fresh from the
-/// probe on each call. The only retained state is `granted`: the total linear
+/// work as needed. Holds its policy and probe; live usage is read from the
+/// probe's bounded-staleness snapshot on each call. The only retained state is
+/// `granted`: the total linear
 /// memory granted to live workers, maintained across admit and unload, which the
 /// gate reserves so a worker cannot OOM the node by faulting in granted pages.
 pub(crate) struct AdmissionController {
     probe: Box<dyn MemoryProbe>,
     policy: AdmissionPolicy,
-    granted: Mutex<u64>,
+    granted: AtomicU64,
 }
 
 impl AdmissionController {
@@ -122,18 +124,19 @@ impl AdmissionController {
         let snapshot = probe.snapshot();
         let ceiling = snapshot.usable_limit_bytes(policy.usable_ratio);
         crate::metrics::workers::record_worker_memory_ceiling(ceiling);
-        Self {
+        let controller = Self {
             probe,
             policy,
-            granted: Mutex::new(0),
-        }
+            granted: AtomicU64::new(0),
+        };
+        crate::metrics::workers::record_worker_memory_granted(0);
+        controller
     }
 
     /// Atomically admits `request_bytes` if the headroom computed against the
     /// current granted total covers it: reads `granted`, computes headroom, and
-    /// adds the reservation all under one lock so two concurrent admissions
-    /// cannot both pass the check against the same headroom and overshoot the
-    /// ceiling. Returns whether the request was admitted.
+    /// reserves with an atomic compare-and-exchange so concurrent admissions
+    /// cannot both pass against the same granted total and overshoot the ceiling.
     fn try_reserve_locked(&self, request_bytes: u64) -> Result<(), u64> {
         let snapshot = self.probe.snapshot();
         self.try_reserve_with_snapshot(request_bytes, snapshot)
@@ -147,16 +150,27 @@ impl AdmissionController {
         let ceiling = snapshot.usable_limit_bytes(self.policy.usable_ratio);
         crate::metrics::workers::record_worker_memory_ceiling(ceiling);
         crate::metrics::workers::record_worker_admission_rss(snapshot.current_bytes);
-        let mut granted = self.granted.lock().unwrap();
-        let headroom = ceiling.saturating_sub(snapshot.current_bytes.max(*granted));
-        if headroom >= request_bytes {
-            *granted += request_bytes;
-            let new_granted = *granted;
-            drop(granted);
-            crate::metrics::workers::record_worker_memory_granted(new_granted);
-            Ok(())
-        } else {
-            Err(headroom)
+        let mut granted = self.granted.load(Ordering::Acquire);
+        loop {
+            let headroom = ceiling.saturating_sub(snapshot.current_bytes.max(granted));
+            if headroom < request_bytes {
+                return Err(headroom);
+            }
+            let Some(new_granted) = granted.checked_add(request_bytes) else {
+                return Err(headroom);
+            };
+            match self.granted.compare_exchange_weak(
+                granted,
+                new_granted,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    crate::metrics::workers::increase_worker_memory_granted(request_bytes);
+                    return Ok(());
+                }
+                Err(current) => granted = current,
+            }
         }
     }
 
@@ -164,9 +178,15 @@ impl AdmissionController {
     /// gate reserves this until the worker unloads, because the worker may fault
     /// the granted pages in at any later time.
     fn reserve(&self, request_bytes: u64) {
-        let mut granted = self.granted.lock().unwrap();
-        *granted += request_bytes;
-        crate::metrics::workers::record_worker_memory_granted(*granted);
+        let previous = self
+            .granted
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |granted| {
+                Some(granted.saturating_add(request_bytes))
+            })
+            .unwrap();
+        crate::metrics::workers::increase_worker_memory_granted(
+            previous.saturating_add(request_bytes) - previous,
+        );
     }
 
     /// Reserve memory for a cost that is a committed consequence of an already
@@ -184,9 +204,15 @@ impl AdmissionController {
     /// not releasing it would permanently shrink admissible headroom as workers
     /// come and go.
     pub(crate) fn release(&self, reserved_bytes: u64) {
-        let mut granted = self.granted.lock().unwrap();
-        *granted = granted.saturating_sub(reserved_bytes);
-        crate::metrics::workers::record_worker_memory_granted(*granted);
+        let previous = self
+            .granted
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |granted| {
+                Some(granted.saturating_sub(reserved_bytes))
+            })
+            .unwrap();
+        crate::metrics::workers::decrease_worker_memory_granted(
+            previous - previous.saturating_sub(reserved_bytes),
+        );
     }
 
     /// Pre-register grant bytes for workers that were already live when the
@@ -194,7 +220,7 @@ impl AdmissionController {
     /// grant through admission.
     #[cfg(test)]
     pub fn seed_granted(&self, bytes: u64) {
-        *self.granted.lock().unwrap() += bytes;
+        self.granted.fetch_add(bytes, Ordering::Release);
     }
 
     /// Decide whether `request_bytes` can be admitted, evicting from `source` if
@@ -248,7 +274,7 @@ impl AdmissionController {
     pub(crate) fn headroom_bytes(&self) -> u64 {
         let snapshot = self.probe.snapshot();
         let ceiling = snapshot.usable_limit_bytes(self.policy.usable_ratio);
-        let granted = *self.granted.lock().unwrap();
+        let granted = self.granted.load(Ordering::Acquire);
         ceiling.saturating_sub(snapshot.current_bytes.max(granted))
     }
 

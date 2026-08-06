@@ -16,6 +16,8 @@
 //!
 //! Reports the measured resident memory and hard limit of the process's
 //! environment, used as the authoritative input to admission decisions.
+//! Production probes are cached briefly and refreshed on a blocking worker so
+//! guest memory growth never performs operating-system I/O on a Tokio reactor.
 //!
 //! The trait is abstract over where the limit comes from: a containerised Linux
 //! deployment reads it from the cgroup, an unconstrained process reads host RAM,
@@ -25,6 +27,12 @@
 //! Windows backends land.
 
 use std::fmt::Debug;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
+
+const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(10);
+const MAX_SNAPSHOT_STALENESS: Duration = Duration::from_millis(100);
 
 /// A snapshot of the executor environment's memory state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +72,97 @@ pub trait MemoryProbe: Send + Sync + Debug {
 
     fn headroom_bytes(&self) -> u64 {
         self.snapshot().headroom_bytes()
+    }
+}
+
+#[derive(Debug)]
+struct CachedMemoryProbe {
+    inner: Arc<CachedMemoryProbeInner>,
+}
+
+#[derive(Debug)]
+struct CachedMemoryProbeInner {
+    source: Arc<dyn MemoryProbe>,
+    started_at: Instant,
+    refresh_interval_nanos: u64,
+    max_staleness_nanos: u64,
+    last_refresh_nanos: AtomicU64,
+    snapshot: arc_swap::ArcSwap<MemorySnapshot>,
+    refresh_started_nanos: AtomicU64,
+}
+
+impl CachedMemoryProbe {
+    fn new(
+        source: Box<dyn MemoryProbe>,
+        refresh_interval: Duration,
+        max_staleness: Duration,
+    ) -> Self {
+        let source = Arc::<dyn MemoryProbe>::from(source);
+        let snapshot = source.snapshot();
+        Self {
+            inner: Arc::new(CachedMemoryProbeInner {
+                source,
+                started_at: Instant::now(),
+                refresh_interval_nanos: refresh_interval.as_nanos().min(u64::MAX as u128) as u64,
+                max_staleness_nanos: max_staleness.as_nanos().min(u64::MAX as u128) as u64,
+                last_refresh_nanos: AtomicU64::new(0),
+                snapshot: arc_swap::ArcSwap::new(Arc::new(snapshot)),
+                refresh_started_nanos: AtomicU64::new(0),
+            }),
+        }
+    }
+
+    fn elapsed_nanos(inner: &CachedMemoryProbeInner) -> u64 {
+        inner.started_at.elapsed().as_nanos().min(u64::MAX as u128) as u64
+    }
+
+    fn refresh(inner: Arc<CachedMemoryProbeInner>) {
+        let snapshot = inner.source.snapshot();
+        inner.snapshot.store(Arc::new(snapshot));
+        inner
+            .last_refresh_nanos
+            .store(Self::elapsed_nanos(&inner), Ordering::Release);
+        inner.refresh_started_nanos.store(0, Ordering::Release);
+    }
+
+    fn refresh_if_stale(&self) {
+        let now = Self::elapsed_nanos(&self.inner);
+        let last_refresh = self.inner.last_refresh_nanos.load(Ordering::Acquire);
+        if now.saturating_sub(last_refresh) < self.inner.refresh_interval_nanos
+            || self
+                .inner
+                .refresh_started_nanos
+                .compare_exchange(0, now.max(1), Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            return;
+        }
+
+        let inner = self.inner.clone();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn_blocking(move || Self::refresh(inner));
+        } else {
+            Self::refresh(inner);
+        }
+    }
+}
+
+impl MemoryProbe for CachedMemoryProbe {
+    fn snapshot(&self) -> MemorySnapshot {
+        self.refresh_if_stale();
+        let refresh_started = self.inner.refresh_started_nanos.load(Ordering::Acquire);
+        let snapshot = **self.inner.snapshot.load();
+        let refresh_overdue = refresh_started != 0
+            && Self::elapsed_nanos(&self.inner).saturating_sub(refresh_started)
+                >= self.inner.max_staleness_nanos;
+        if refresh_overdue {
+            MemorySnapshot {
+                limit_bytes: snapshot.limit_bytes,
+                current_bytes: snapshot.limit_bytes,
+            }
+        } else {
+            snapshot
+        }
     }
 }
 
@@ -205,7 +304,11 @@ pub fn default_probe(memory_override: Option<u64>) -> Box<dyn MemoryProbe> {
             limit_bytes = limit,
             "Memory probe: ProcessRssProbe (limit pinned by system_memory_override)"
         );
-        return Box::new(ProcessRssProbe::new(limit));
+        return Box::new(CachedMemoryProbe::new(
+            Box::new(ProcessRssProbe::new(limit)),
+            SNAPSHOT_CACHE_TTL,
+            MAX_SNAPSHOT_STALENESS,
+        ));
     }
 
     let host_ram = {
@@ -217,6 +320,8 @@ pub fn default_probe(memory_override: Option<u64>) -> Box<dyn MemoryProbe> {
     #[cfg(target_os = "linux")]
     {
         if let Some(probe) = CgroupV2Probe::try_new(host_ram) {
+            let probe =
+                CachedMemoryProbe::new(Box::new(probe), SNAPSHOT_CACHE_TTL, MAX_SNAPSHOT_STALENESS);
             let snapshot = probe.snapshot();
             tracing::info!(
                 limit_bytes = snapshot.limit_bytes,
@@ -230,5 +335,88 @@ pub fn default_probe(memory_override: Option<u64>) -> Box<dyn MemoryProbe> {
         limit_bytes = host_ram,
         "Memory probe: ProcessRssProbe (host RAM, no cgroup v2 limit)"
     );
-    Box::new(ProcessRssProbe::new(host_ram))
+    Box::new(CachedMemoryProbe::new(
+        Box::new(ProcessRssProbe::new(host_ram)),
+        SNAPSHOT_CACHE_TTL,
+        MAX_SNAPSHOT_STALENESS,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[derive(Debug)]
+    struct CountingProbe {
+        reads: Arc<AtomicU64>,
+        limit_bytes: Arc<AtomicU64>,
+        current_bytes: Arc<AtomicU64>,
+        refresh_delay: Duration,
+    }
+
+    impl MemoryProbe for CountingProbe {
+        fn snapshot(&self) -> MemorySnapshot {
+            if self.reads.fetch_add(1, Ordering::Relaxed) > 0 {
+                std::thread::sleep(self.refresh_delay);
+            }
+            MemorySnapshot {
+                limit_bytes: self.limit_bytes.load(Ordering::Relaxed),
+                current_bytes: self.current_bytes.load(Ordering::Relaxed),
+            }
+        }
+    }
+
+    #[test]
+    async fn cached_probe_coalesces_reads_and_refreshes_off_thread() {
+        let reads = Arc::new(AtomicU64::new(0));
+        let limit_bytes = Arc::new(AtomicU64::new(100));
+        let current_bytes = Arc::new(AtomicU64::new(1));
+        let probe = CachedMemoryProbe::new(
+            Box::new(CountingProbe {
+                reads: reads.clone(),
+                limit_bytes: limit_bytes.clone(),
+                current_bytes: current_bytes.clone(),
+                refresh_delay: Duration::from_millis(100),
+            }),
+            Duration::from_millis(10),
+            Duration::from_millis(15),
+        );
+
+        for _ in 0..100 {
+            assert_eq!(probe.snapshot().current_bytes, 1);
+        }
+        assert_eq!(reads.load(Ordering::Relaxed), 1);
+
+        limit_bytes.store(50, Ordering::Relaxed);
+        current_bytes.store(42, Ordering::Relaxed);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(probe.snapshot().current_bytes, 1);
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(
+            probe.snapshot(),
+            MemorySnapshot {
+                limit_bytes: 100,
+                current_bytes: 100,
+            },
+            "an overdue refresh must fail closed instead of admitting against unboundedly stale data"
+        );
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while probe.snapshot().limit_bytes != 50 || probe.snapshot().current_bytes != 42 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            probe.snapshot(),
+            MemorySnapshot {
+                limit_bytes: 50,
+                current_bytes: 42,
+            }
+        );
+        assert_eq!(reads.load(Ordering::Relaxed), 2);
+    }
 }

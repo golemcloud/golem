@@ -1554,7 +1554,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         desired: usize,
         maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
-        let tracker = self.linear_memory_tracker();
+        let tracker = &self.linear_memory;
         let growth = tracker.prepare_unshared_growth(current, desired);
         let Some(growth) = validate_unshared_memory_growth(
             growth,

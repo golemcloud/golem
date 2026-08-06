@@ -365,6 +365,7 @@ impl AtomicResourceEntry {
     }
 
     fn capture_usage_update(&self, refresh_threshold_secs: i64) -> Option<CapturedUsageUpdate> {
+        self.flush_memory_meters(Instant::now());
         let active = self.delta.load(Ordering::Acquire) != 0
             || self.memory_gb_seconds_delta.load(Ordering::Acquire) != 0
             || self.unsynced_http_calls.load(Ordering::Acquire) > 0
@@ -375,9 +376,7 @@ impl AtomicResourceEntry {
             return None;
         }
 
-        let now = Instant::now();
-        self.flush_memory_meters(now);
-        self.flush_storage_meters(now);
+        self.flush_storage_meters(Instant::now());
         let fuel_delta = self.delta.swap(0, Ordering::AcqRel);
         let (
             memory_gb_seconds_delta,
@@ -1084,7 +1083,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_idle_tick_defers_memory_meter_flush_until_refresh() {
+    fn fresh_tick_flushes_memory_meter_before_activity_check() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let owned_agent_id = OwnedAgentId::new(
             EnvironmentId(Uuid::new_v4()),
@@ -1104,10 +1103,7 @@ mod tests {
         entry.register_memory_meter(owned_agent_id, meter.clone());
         meter.pause(now + Duration::from_secs(3));
 
-        assert!(entry.capture_usage_update(i64::MAX).is_none());
-        assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 0);
-
-        let captured = entry.capture_usage_update(0).unwrap();
+        let captured = entry.capture_usage_update(i64::MAX).unwrap();
         assert_eq!(captured.update.memory_gb_seconds_delta, 3);
     }
 
