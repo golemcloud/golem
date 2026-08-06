@@ -65,7 +65,9 @@ use crate::services::environment_state::EnvironmentStateService;
 use crate::services::file_loader::{FileLoader, FileUseToken};
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
-use crate::services::linear_memory::{LinearMemoryTracker, SHARED_LINEAR_MEMORY_ERROR};
+use crate::services::linear_memory::{
+    LinearMemoryTracker, SHARED_LINEAR_MEMORY_ERROR, UnsharedMemoryGrowth,
+};
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::quota::QuotaService;
@@ -472,6 +474,18 @@ impl Drop for TailWorkDeadline {
         }
         self.latch.store(false, Ordering::Release);
     }
+}
+
+fn validate_unshared_memory_growth(
+    growth: Option<UnsharedMemoryGrowth>,
+    worker_limit: u64,
+    desired: usize,
+    memory_maximum: Option<usize>,
+) -> Option<UnsharedMemoryGrowth> {
+    growth.filter(|growth| {
+        growth.protected_total <= worker_limit
+            && memory_maximum.is_none_or(|maximum| desired <= maximum)
+    })
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -1328,14 +1342,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.linear_memory.clone()
     }
 
-    pub fn resume_memory_meter(&self) {
-        self.linear_memory.resume(Instant::now());
-    }
-
-    pub fn pause_memory_meter(&self) {
-        self.linear_memory.pause(Instant::now());
-    }
-
     async fn switch_to_live(&self) {
         self.state.replay_state.switch_to_live().await;
         self.linear_memory.switch_to_live();
@@ -1550,14 +1556,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     ) -> wasmtime::Result<bool> {
         let tracker = self.linear_memory_tracker();
         let growth = tracker.prepare_unshared_growth(current, desired);
-        if growth.is_none_or(|growth| growth.protected_total > self.max_linear_memory_size())
-            || maximum.is_some_and(|maximum| desired > maximum)
-        {
+        let Some(growth) = validate_unshared_memory_growth(
+            growth,
+            self.max_linear_memory_size(),
+            desired,
+            maximum,
+        ) else {
             tracker.memory_grow_failed();
             return Err(GolemSpecificWasmTrap::WorkerExceededMemoryLimit.into());
-        }
+        };
 
-        let growth = growth.unwrap();
         if growth.admission_delta > 0 {
             let Some(grant) = self.try_acquire_linear_memory(growth.admission_delta).await else {
                 tracker.memory_grow_failed();
@@ -4721,6 +4729,20 @@ mod tests {
     use test_r::test;
     use test_r::timeout;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn aggregate_memory_growth_over_worker_limit_is_rejected() {
+        let second_memory_growth = UnsharedMemoryGrowth {
+            admission_delta: 60,
+            protected_total: 120,
+        };
+
+        assert_eq!(
+            validate_unshared_memory_growth(Some(second_memory_growth), 100, 60, Some(100)),
+            None,
+            "two individually valid 60-byte memories must not bypass the 100-byte aggregate cap"
+        );
+    }
 
     #[test]
     fn snapshot_boundary_all_clear_has_no_blocker() {

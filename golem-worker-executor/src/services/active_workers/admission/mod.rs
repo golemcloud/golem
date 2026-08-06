@@ -135,12 +135,8 @@ impl AdmissionController {
     /// cannot both pass the check against the same headroom and overshoot the
     /// ceiling. Returns whether the request was admitted.
     fn try_reserve_locked(&self, request_bytes: u64) -> Result<(), u64> {
-        let snapshot = self.constraining_snapshot();
+        let snapshot = self.probe.snapshot();
         self.try_reserve_with_snapshot(request_bytes, snapshot)
-    }
-
-    fn constraining_snapshot(&self) -> MemorySnapshot {
-        self.probe.snapshot()
     }
 
     fn try_reserve_with_snapshot(
@@ -222,10 +218,6 @@ impl AdmissionController {
             Err(headroom) => headroom,
         };
 
-        if headroom >= request_bytes {
-            return AdmissionDecision::Admit;
-        }
-
         // Reclaim resident, idle-then-warm work up to the shortfall.
         let shortfall = request_bytes.saturating_sub(headroom);
         let mut remaining = shortfall;
@@ -254,7 +246,7 @@ impl AdmissionController {
     /// headroom indirectly through admission.
     #[cfg(test)]
     pub(crate) fn headroom_bytes(&self) -> u64 {
-        let snapshot = self.constraining_snapshot();
+        let snapshot = self.probe.snapshot();
         let ceiling = snapshot.usable_limit_bytes(self.policy.usable_ratio);
         let granted = *self.granted.lock().unwrap();
         ceiling.saturating_sub(snapshot.current_bytes.max(granted))

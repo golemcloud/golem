@@ -3,6 +3,39 @@ mod snapshot_test;
 
 use golem_rust::{agent_definition, agent_implementation, generate_idempotency_key};
 
+#[ctor::ctor]
+fn grow_memory_for_recovery_test() {
+    if std::env::var("GOLEM_AGENT_ID")
+        .is_ok_and(|agent_id| agent_id.contains("InstantiationGrowthCounter"))
+    {
+        let previous_pages = core::arch::wasm32::memory_grow::<0>(16);
+        assert_ne!(previous_pages, usize::MAX, "test memory growth failed");
+    }
+}
+
+#[agent_definition]
+trait InstantiationGrowthCounter {
+    fn new(id: String) -> Self;
+    fn increment(&mut self) -> u32;
+}
+
+struct InstantiationGrowthCounterImpl {
+    count: u32,
+    _id: String,
+}
+
+#[agent_implementation]
+impl InstantiationGrowthCounter for InstantiationGrowthCounterImpl {
+    fn new(id: String) -> Self {
+        Self { count: 0, _id: id }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+}
+
 #[agent_definition]
 trait Counter {
     fn new(id: String) -> Self;

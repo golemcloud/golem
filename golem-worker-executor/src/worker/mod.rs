@@ -179,10 +179,6 @@ fn classify_target_charge(
     }
 }
 
-fn initial_linear_memory_bytes(component: &golem_service_base::model::component::Component) -> u64 {
-    component.metadata.initial_linear_memory_bytes()
-}
-
 fn startup_component_requirement(
     component_id: ComponentId,
     component_revision: ComponentRevision,
@@ -1801,7 +1797,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 component_id,
                 current_revision,
                 current_size,
-                initial_linear_memory_bytes(&current),
+                current.metadata.initial_linear_memory_bytes(),
                 canonical_bytes,
             );
         }
@@ -1813,7 +1809,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .get_metadata(component_id, Some(component_revision))
                 .await
                 .map(|target| {
-                    let initial_linear_memory_bytes = initial_linear_memory_bytes(&target);
+                    let initial_linear_memory_bytes = target.metadata.initial_linear_memory_bytes();
                     ResolvedComponentCharge {
                         module_bytes: target.component_size,
                         initial_linear_memory_bytes,
@@ -1842,7 +1838,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         component_id,
                         current_revision,
                         current_size,
-                        initial_linear_memory_bytes(&current),
+                        current.metadata.initial_linear_memory_bytes(),
                         canonical_bytes,
                     );
                 }
@@ -2056,10 +2052,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Records a committed guest `memory.grow` without blocking the store callback.
     pub fn request_memory_grow(self: &Arc<Self>, delta: u64) {
         let growth = self.memory_growth.lock().unwrap();
-        self.request_memory_grow_locked(&growth, delta);
-    }
-
-    fn request_memory_grow_locked(self: &Arc<Self>, growth: &Arc<PendingMemoryGrowth>, delta: u64) {
         growth
             .delta
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
@@ -4086,28 +4078,39 @@ impl Drop for RunningWorker {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinearMemoryEnumerationError {
+    Shared,
+    Overflow,
+}
+
+fn allocated_linear_memory_bytes<T>(store: &Store<T>) -> Result<u64, LinearMemoryEnumerationError> {
+    store
+        .linear_memories()
+        .iter()
+        .try_fold(0u64, |allocated_bytes, memory| match memory {
+            StoreMemory::Unshared(memory) => allocated_bytes
+                .checked_add(memory.data_size(store) as u64)
+                .ok_or(LinearMemoryEnumerationError::Overflow),
+            StoreMemory::Shared(_) => Err(LinearMemoryEnumerationError::Shared),
+        })
+}
+
 impl RunningWorker {
     async fn reconcile_linear_memories<Ctx: WorkerCtx>(
         parent: &Arc<Worker<Ctx>>,
         store: &mut Store<Ctx>,
     ) -> Result<(), WorkerExecutorError> {
-        let memories = store.linear_memories();
-        let mut allocated_bytes = 0u64;
         let durable = store.data().durable_ctx();
         let tracker = durable.linear_memory_tracker();
         let limit = durable.max_linear_memory_size();
-
-        for memory in &memories {
-            match memory {
-                StoreMemory::Unshared(memory) => {
-                    let current = memory.data_size(&*store) as u64;
-                    allocated_bytes = allocated_bytes.checked_add(current).ok_or_else(|| {
-                        WorkerExecutorError::runtime("linear-memory allocation total overflowed")
-                    })?;
+        let allocated_bytes =
+            allocated_linear_memory_bytes(store).map_err(|error| match error {
+                LinearMemoryEnumerationError::Shared => shared_linear_memory_error(parent),
+                LinearMemoryEnumerationError::Overflow => {
+                    WorkerExecutorError::runtime("linear-memory allocation total overflowed")
                 }
-                StoreMemory::Shared(_) => return Err(shared_linear_memory_error(parent)),
-            }
-        }
+            })?;
 
         let required_grant_bytes = tracker.reconciliation_grant_bytes(allocated_bytes);
         if required_grant_bytes > limit {
@@ -4746,6 +4749,25 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn allocated_memory_sums_unique_untouched_backings() -> anyhow::Result<()> {
+        let engine = wasmtime::Engine::default();
+        let module = wasmtime::Module::new(
+            &engine,
+            r#"(module
+                (memory $aliased 2 3)
+                (export "a" (memory $aliased))
+                (export "b" (memory $aliased))
+                (memory 4 5)
+            )"#,
+        )?;
+        let mut store = Store::new(&engine, ());
+        wasmtime::Instance::new(&mut store, &module, &[])?;
+
+        assert_eq!(allocated_linear_memory_bytes(&store), Ok(6 * 65_536));
+        Ok(())
+    }
+
+    #[test]
     fn reconstructed_ephemeral_agent_is_terminal() {
         let instance = WorkerInstance::Unloaded {
             startup_failure: Some(inactive_ephemeral_agent_error()),
@@ -4947,21 +4969,6 @@ mod tests {
             TargetChargeAction::Retry,
             "a transient resolution failure must retry, not fall back: create_instance may still load the target, so charging the current revision would under-reserve and mis-key the charge"
         );
-    }
-
-    #[test]
-    fn successful_update_rotates_the_memory_growth_bucket() {
-        let mut growth = Arc::new(PendingMemoryGrowth::default());
-        let before_update = growth.clone();
-        before_update.delta.store(10, Ordering::Release);
-
-        growth = Arc::new(PendingMemoryGrowth::default());
-        let after_update = growth.clone();
-        after_update.delta.store(20, Ordering::Release);
-
-        assert!(!Arc::ptr_eq(&before_update, &after_update));
-        assert_eq!(before_update.delta.load(Ordering::Acquire), 10);
-        assert_eq!(after_update.delta.load(Ordering::Acquire), 20);
     }
 
     #[test]

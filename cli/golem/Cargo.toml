@@ -31,6 +31,7 @@ golem-worker-service = { workspace = true }
 anyhow = { workspace = true }
 clap-verbosity-flag = { workspace = true }
 dirs = { workspace = true }
+humantime = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-prometheus-text-exporter = { workspace = true }
 opentelemetry_sdk = { workspace = true }

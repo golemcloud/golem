@@ -171,6 +171,7 @@ impl CgroupV2Probe {
     }
 
     fn read_limit(&self) -> u64 {
+        // memory.max contains either a number of bytes or the literal "max".
         match std::fs::read_to_string(self.base.join("memory.max")) {
             Ok(raw) => raw
                 .trim()

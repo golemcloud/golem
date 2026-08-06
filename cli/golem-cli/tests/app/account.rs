@@ -1,7 +1,10 @@
 use crate::Tracing;
 use crate::app::{TestContext, cmd, flag};
+use golem_cli::{fs, versions};
 use golem_common::model::account_usage::StorageUsagePeriod;
+use indoc::{formatdoc, indoc};
 use serde::Deserialize;
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(Tracing);
@@ -151,4 +154,124 @@ async fn account_storage_usage_and_limits_use_live_cli_wire_path(_tracing: &Trac
     assert_eq!(limits.kind, "account.limits.show");
     assert_eq!(limits.effective_value, u64::MAX);
     assert_eq!(limits.override_value, None);
+}
+
+#[test]
+#[timeout("5m")]
+async fn account_usage_reports_sparse_allocated_memory(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    ctx.add_env_var(
+        "GOLEM__RESOURCE_LIMITS__CONFIG__BATCH_UPDATE_INTERVAL",
+        "200ms",
+    );
+    ctx.start_server().await;
+
+    let app_name = "memory-billing";
+    let output = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(output.success_or_dump());
+    ctx.cd(app_name);
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: memory-billing
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              memory-billing:rust-main:
+                templates: rust
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+    std::fs::write(
+        ctx.cwd_path_join("src/counter_agent.rs"),
+        indoc! {r#"
+            use golem_rust::{agent_definition, agent_implementation};
+
+            #[agent_definition]
+            pub trait SparseMemoryAgent {
+                fn new(name: String) -> Self;
+                fn allocate_and_work(&self) -> u32;
+            }
+
+            struct SparseMemoryAgentImpl;
+
+            #[agent_implementation]
+            impl SparseMemoryAgent for SparseMemoryAgentImpl {
+                fn new(_name: String) -> Self {
+                    Self
+                }
+
+                fn allocate_and_work(&self) -> u32 {
+                    let previous_pages = core::arch::wasm32::memory_grow::<0>(4096);
+                    assert_ne!(previous_pages, usize::MAX, "sparse memory growth failed");
+                    let started = std::time::Instant::now();
+                    let mut work = 0u64;
+                    while started.elapsed() < std::time::Duration::from_secs(5) {
+                        for _ in 0..10_000_000 {
+                            work = std::hint::black_box(work.wrapping_add(1));
+                        }
+                    }
+                    previous_pages as u32
+                }
+            }
+        "#},
+    )
+    .unwrap();
+
+    let output = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(output.success_or_dump());
+    let output = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "SparseMemoryAgent(\"memory-billing\")",
+            "allocate_and_work",
+        ])
+        .await;
+    assert!(output.success_or_dump());
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let billed_memory = loop {
+        let output = ctx
+            .cli([cmd::ACCOUNT, "usage", "show", flag::FORMAT, "json"])
+            .await;
+        assert!(output.success_or_dump());
+        let usage = output
+            .stdout_json::<AccountUsageView>()
+            .into_iter()
+            .next()
+            .expect("account usage show produced no JSON output");
+        if usage.usage.memory_gb_seconds > 0 {
+            break usage.usage.memory_gb_seconds;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "CLI reported zero Memory GB-seconds after sparse allocation"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    };
+
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let output = ctx
+        .cli([cmd::ACCOUNT, "usage", "show", flag::FORMAT, "json"])
+        .await;
+    assert!(output.success_or_dump());
+    let idle_usage = output
+        .stdout_json::<AccountUsageView>()
+        .into_iter()
+        .next()
+        .expect("account usage show produced no JSON output");
+    assert_eq!(
+        idle_usage.usage.memory_gb_seconds, billed_memory,
+        "a loaded idle agent must not accrue memory after releasing its concurrent-agent permit"
+    );
 }

@@ -153,6 +153,59 @@ async fn custom_durability_1(
     Ok(())
 }
 
+#[test]
+#[tracing::instrument]
+async fn immediate_recovery_does_not_duplicate_instantiation_memory_growth(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("InstantiationGrowthCounter", "memory-growth-recovery");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+    let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let growth_before: u64 = before
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::GrowMemory(params) => Some(params.delta),
+            _ => None,
+        })
+        .sum();
+    assert!(
+        growth_before > 0,
+        "fixture must produce instantiation-time memory growth"
+    );
+
+    executor.simulated_crash(&worker_id).await?;
+
+    let after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let growth_after: u64 = after
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::GrowMemory(params) => Some(params.delta),
+            _ => None,
+        })
+        .sum();
+    assert_eq!(
+        growth_after, growth_before,
+        "immediate recovery must not persist instantiation growth again"
+    );
+
+    Ok(())
+}
+
 const SNAPSHOT_TEST_INVOCATIONS: usize = 10;
 
 #[test]

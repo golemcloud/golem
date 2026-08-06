@@ -611,6 +611,7 @@ impl TestContext {
             Command::new(&self.golem_path)
                 .args(&args)
                 .current_dir(&self.working_dir)
+                .envs(&self.env)
                 .spawn()
                 .unwrap(),
         );

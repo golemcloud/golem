@@ -186,7 +186,7 @@ async fn start_components(
 
     let worker_executor = {
         let config =
-            worker_executor_config(args, &shard_manager, &registry_service, &worker_service);
+            worker_executor_config(args, &shard_manager, &registry_service, &worker_service)?;
         run_worker_executor(config, join_set).await?
     };
 
@@ -359,7 +359,15 @@ fn worker_executor_config(
     shard_manager_run_details: &golem_shard_manager::RunDetails,
     registry_service_run_details: &golem_registry_service::SingleExecutableRunDetails,
     worker_service_run_details: &golem_worker_service::TrafficReadyEndpoints,
-) -> WorkerExecutorConfig {
+) -> anyhow::Result<WorkerExecutorConfig> {
+    let batch_update_interval = duration_from_env(
+        "GOLEM__RESOURCE_LIMITS__CONFIG__BATCH_UPDATE_INTERVAL",
+        Duration::from_secs(60),
+    )?;
+    let limit_refresh_interval = duration_from_env(
+        "GOLEM__RESOURCE_LIMITS__CONFIG__LIMIT_REFRESH_INTERVAL",
+        Duration::from_secs(300),
+    )?;
     let mut config = WorkerExecutorConfig {
         http_port: 0,
         grpc: golem_worker_executor::services::golem_config::GrpcApiConfig {
@@ -398,8 +406,8 @@ fn worker_executor_config(
             ..Default::default()
         },
         resource_limits: ResourceLimitsConfig::Grpc(ResourceLimitsGrpcConfig {
-            batch_update_interval: Duration::from_secs(60),
-            limit_refresh_interval: Duration::from_secs(300),
+            batch_update_interval,
+            limit_refresh_interval,
         }),
         agent_types_service: AgentTypesServiceConfig::Grpc(
             golem_worker_executor::services::golem_config::AgentTypesServiceGrpcConfig {
@@ -427,7 +435,17 @@ fn worker_executor_config(
     };
 
     config.add_port_to_tracing_file_name_if_enabled();
-    config
+    Ok(config)
+}
+
+fn duration_from_env(name: &str, default: Duration) -> anyhow::Result<Duration> {
+    match std::env::var(name) {
+        Ok(value) => {
+            humantime::parse_duration(&value).with_context(|| format!("Invalid duration in {name}"))
+        }
+        Err(std::env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn worker_service_config(

@@ -3606,6 +3606,7 @@ dependencies = [
  "golem-shard-manager",
  "golem-worker-executor",
  "golem-worker-service",
+ "humantime",
  "opentelemetry 0.30.0",
  "opentelemetry-prometheus-text-exporter",
  "opentelemetry_sdk 0.30.0",
