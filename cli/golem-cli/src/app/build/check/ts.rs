@@ -336,7 +336,7 @@ mod test {
     }
 
     #[test]
-    fn ts_tsconfig_requires_bundler_resolution_without_decorators() {
+    fn ts_tsconfig_requires_only_bundler_resolution() {
         use crate::app::build::check::requirements::typescript_tsconfig_requirements;
         use crate::model::language::GuestLanguage;
 
@@ -347,7 +347,7 @@ mod test {
                 .collect()
         };
 
-        // The TS SDK only needs bundler resolution — no decorator options.
+        // Bundler resolution is the only required TypeScript compiler option.
         let ts = setting_keys(GuestLanguage::TypeScript);
         assert!(ts.contains(&"moduleResolution"));
         assert!(!ts.contains(&"experimentalDecorators"));

@@ -26,6 +26,8 @@ pub struct PlanRecord {
     pub max_memory_per_worker: NumericU64,
     pub max_table_elements_per_worker: NumericU64,
     pub max_disk_space_per_worker: NumericU64,
+    pub max_disk_space_per_worker_ceiling: NumericU64,
+    pub max_disk_space_per_worker_user_configurable: bool,
     pub max_concurrent_agents_per_executor: NumericU64,
     pub total_app_count: NumericU64,
     pub total_env_count: NumericU64,
@@ -55,6 +57,8 @@ impl PlanRecord {
             UsageType::TotalWorkerConnectionCount => self.total_worker_connection_count.get(),
             UsageType::MonthlyHttpCalls => self.monthly_http_call_limit.get(),
             UsageType::MonthlyRpcCalls => self.monthly_rpc_call_limit.get(),
+            UsageType::MonthlyDurableAgentStorageByteSeconds
+            | UsageType::MonthlyEphemeralStorageByteSeconds => u64::MAX,
         }
     }
 }
@@ -72,6 +76,9 @@ impl From<PlanRecord> for Plan {
             max_memory_per_worker: value.max_memory_per_worker.get(),
             max_table_elements_per_worker: value.max_table_elements_per_worker.get(),
             max_disk_space_per_worker: value.max_disk_space_per_worker.get(),
+            max_disk_space_per_worker_ceiling: value.max_disk_space_per_worker_ceiling.get(),
+            max_disk_space_per_worker_user_configurable: value
+                .max_disk_space_per_worker_user_configurable,
             per_invocation_http_call_limit: value.per_invocation_http_call_limit.get(),
             per_invocation_rpc_call_limit: value.per_invocation_rpc_call_limit.get(),
             monthly_http_call_limit: value.monthly_http_call_limit.get(),

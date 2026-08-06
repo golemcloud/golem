@@ -18,6 +18,9 @@ use crate::model::masking::Masked;
 use crate::model::text_format::*;
 use golem_client::model::{Account, PermissionShare};
 use golem_common::model::account::AccountId;
+use golem_common::model::account_usage::{
+    StorageLimit, StorageUsage, StorageUsageHistory, StorageUsageMetrics, StorageUsagePeriod,
+};
 use golem_common::model::permission_share::PermissionShareId;
 use serde::{Deserialize, Serialize};
 
@@ -121,6 +124,154 @@ impl MessageWithFields for AccountDeleteView {
 
 impl StructuredOutput for AccountDeleteView {
     const KIND: &'static str = "account.delete";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUsageView {
+    pub compute_gcu: f64,
+    pub durable_storage_gb_month: f64,
+    pub ephemeral_storage_gb_month: f64,
+    pub period: StorageUsagePeriod,
+}
+
+impl Masked for AccountUsageView {}
+
+impl From<StorageUsage> for AccountUsageView {
+    fn from(usage: StorageUsage) -> Self {
+        usage.usage.into()
+    }
+}
+
+impl From<StorageUsageHistory> for AccountUsageView {
+    fn from(usage: StorageUsageHistory) -> Self {
+        usage.usage.into()
+    }
+}
+
+impl From<StorageUsageMetrics> for AccountUsageView {
+    fn from(usage: StorageUsageMetrics) -> Self {
+        Self {
+            period: usage.period,
+            compute_gcu: usage.compute_gcu,
+            durable_storage_gb_month: usage.durable_storage_gb_month,
+            ephemeral_storage_gb_month: usage.ephemeral_storage_gb_month,
+        }
+    }
+}
+
+/// Column headings for the history table, which needs them even when there are no rows
+/// to take them from. Kept in step with [`AccountUsageView::rendered_fields`] by
+/// `account_usage_always_renders_the_same_labels_in_order`.
+const ACCOUNT_USAGE_LABELS: [&str; 4] =
+    ["Period", "Compute", "Durable storage", "Ephemeral storage"];
+
+impl AccountUsageView {
+    /// The single place usage values are turned into customer-visible strings. Both the
+    /// detail view and the history table render through this, so the same usage can never
+    /// be reported two different ways. Each label sits next to the value it names, so a
+    /// figure cannot end up under the wrong heading.
+    fn rendered_fields(&self) -> [(&'static str, String); 4] {
+        [
+            ("Period", self.period.to_string()),
+            ("Compute", format!("{} GCU", self.compute_gcu)),
+            (
+                "Durable storage",
+                format!("{} GB-month", self.durable_storage_gb_month),
+            ),
+            (
+                "Ephemeral storage",
+                format!("{} GB-month", self.ephemeral_storage_gb_month),
+            ),
+        ]
+    }
+}
+
+impl MessageWithFields for AccountUsageView {
+    fn message(&self) -> String {
+        format!("Storage usage for {}", self.period)
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        let mut fields = FieldsBuilder::new();
+        for (label, value) in self.rendered_fields() {
+            fields.field(label, &value);
+        }
+        fields.build()
+    }
+}
+
+impl StructuredOutput for AccountUsageView {
+    const KIND: &'static str = "account.usage.show";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUsageListView {
+    pub usage: Vec<AccountUsageView>,
+}
+
+impl TextOutput for AccountUsageListView {
+    fn log(&self) {
+        let mut table = new_table_full_condensed(
+            ACCOUNT_USAGE_LABELS
+                .iter()
+                .map(|label| Column::new(*label))
+                .collect(),
+        );
+
+        for usage in &self.usage {
+            table.add_row(usage.rendered_fields().map(|(_, value)| value));
+        }
+
+        log_table(table);
+    }
+}
+
+impl StructuredOutput for AccountUsageListView {
+    const KIND: &'static str = "account.usage.history";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountLimitsView(pub StorageLimit);
+
+impl Masked for AccountLimitsView {}
+
+impl From<StorageLimit> for AccountLimitsView {
+    fn from(limit: StorageLimit) -> Self {
+        Self(limit)
+    }
+}
+
+impl MessageWithFields for AccountLimitsView {
+    fn message(&self) -> String {
+        "Account storage limits".to_string()
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        let limit = &self.0;
+        let mut fields = FieldsBuilder::new();
+        fields
+            .field(
+                "Max storage per agent",
+                &format!("{} bytes", limit.effective_value),
+            )
+            .field("Plan default", &format!("{} bytes", limit.plan_default))
+            .field(
+                "Override",
+                &limit
+                    .override_value
+                    .map(|value| format!("{value} bytes"))
+                    .unwrap_or_else(|| "(none)".to_string()),
+            )
+            .field("Ceiling", &format!("{} bytes", limit.ceiling))
+            .field("User configurable", &limit.user_configurable);
+        fields.build()
+    }
+}
+
+impl StructuredOutput for AccountLimitsView {
+    const KIND: &'static str = "account.limits.show";
 }
 
 fn permission_share_fields(share: &PermissionShare) -> Vec<(String, String)> {
@@ -268,4 +419,151 @@ impl TextOutput for PermissionShareListView {
 
 impl StructuredOutput for PermissionShareListView {
     const KIND: &'static str = "account.permission-share.list";
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ACCOUNT_USAGE_LABELS, AccountUsageView, MessageWithFields};
+    use golem_common::model::account_usage::StorageUsagePeriod;
+    use proptest::prelude::*;
+    use test_r::test;
+
+    /// Usage magnitudes we actually bill on: exact zero, sub-GB fractions where a
+    /// rounded format would silently truncate, and up through implausibly large.
+    fn arb_usage_value() -> impl Strategy<Value = f64> {
+        prop_oneof![
+            Just(0.0),
+            0.0f64..1.0,
+            1.0f64..1_000_000.0,
+            1_000_000.0f64..1e12,
+        ]
+    }
+
+    fn arb_period() -> impl Strategy<Value = StorageUsagePeriod> {
+        (1970i32..=9999, 1u32..=12).prop_map(|(year, month)| StorageUsagePeriod { year, month })
+    }
+
+    fn arb_usage() -> impl Strategy<Value = AccountUsageView> {
+        (
+            arb_usage_value(),
+            arb_usage_value(),
+            arb_usage_value(),
+            arb_period(),
+        )
+            .prop_map(
+                |(compute_gcu, durable_storage_gb_month, ephemeral_storage_gb_month, period)| {
+                    AccountUsageView {
+                        compute_gcu,
+                        durable_storage_gb_month,
+                        ephemeral_storage_gb_month,
+                        period,
+                    }
+                },
+            )
+    }
+
+    fn sample_usage() -> AccountUsageView {
+        AccountUsageView {
+            compute_gcu: 1.5,
+            durable_storage_gb_month: 2.5,
+            ephemeral_storage_gb_month: 3.5,
+            period: StorageUsagePeriod {
+                year: 2026,
+                month: 4,
+            },
+        }
+    }
+
+    #[test]
+    fn account_usage_renders_customer_visible_units() {
+        let fields = sample_usage().fields();
+
+        assert_eq!(
+            fields,
+            vec![
+                ("Period".to_string(), "2026-04".to_string()),
+                ("Compute".to_string(), "1.5 GCU".to_string()),
+                ("Durable storage".to_string(), "2.5 GB-month".to_string()),
+                ("Ephemeral storage".to_string(), "3.5 GB-month".to_string()),
+            ]
+        );
+    }
+
+    proptest! {
+        /// The label set is a stable contract: no value may add, drop or reorder a field.
+        /// Asserting against the constant the history table's headers are built from is
+        /// what keeps the two commands labelled identically.
+        #[test]
+        fn account_usage_always_renders_the_same_labels_in_order(usage in arb_usage()) {
+            let labels = usage.fields().into_iter().map(|(name, _)| name).collect::<Vec<_>>();
+
+            prop_assert_eq!(
+                labels,
+                ACCOUNT_USAGE_LABELS.iter().map(|l| l.to_string()).collect::<Vec<_>>()
+            );
+        }
+
+        /// The detail view and the history table must render identical strings for the
+        /// same usage — this is the anti-drift guard between `usage show` and `usage history`.
+        #[test]
+        fn account_usage_detail_and_history_render_identically(usage in arb_usage()) {
+            let detail = usage.fields().into_iter().map(|(_, value)| value).collect::<Vec<_>>();
+            let history_row = usage
+                .rendered_fields()
+                .map(|(_, value)| value)
+                .to_vec();
+
+            prop_assert_eq!(detail, history_row);
+        }
+
+        /// Every metric carries its unit, and the number in front of that unit parses
+        /// back to exactly the value we were given. This is what rules out a rounded
+        /// format quietly under-reporting a small balance, and rules out a metric being
+        /// rendered into the wrong row.
+        #[test]
+        fn account_usage_metrics_round_trip_with_their_units(usage in arb_usage()) {
+            let fields = usage.fields();
+            let expected: [(&str, &str, f64); 3] = [
+                ("Compute", " GCU", usage.compute_gcu),
+                ("Durable storage", " GB-month", usage.durable_storage_gb_month),
+                ("Ephemeral storage", " GB-month", usage.ephemeral_storage_gb_month),
+            ];
+
+            for (label, unit, value) in expected {
+                let rendered = fields
+                    .iter()
+                    .find(|(name, _)| name == label)
+                    .map(|(_, rendered)| rendered.clone())
+                    .expect("field must be present");
+
+                let number = rendered
+                    .strip_suffix(unit)
+                    .ok_or_else(|| TestCaseError::fail(format!("{label} must end in '{unit}', got '{rendered}'")))?;
+
+                prop_assert_eq!(
+                    number.parse::<f64>().map_err(|e| TestCaseError::fail(e.to_string()))?,
+                    value,
+                    "{} must render losslessly, got '{}'",
+                    label,
+                    rendered
+                );
+            }
+        }
+
+        /// The period is always zero-padded YYYY-MM, for every month including single digits.
+        #[test]
+        fn account_usage_period_is_zero_padded(usage in arb_usage()) {
+            let fields = usage.fields();
+            let (_, period) = fields.first().expect("period must be the first field");
+
+            let (year, month) = period
+                .split_once('-')
+                .ok_or_else(|| TestCaseError::fail(format!("period must be YYYY-MM, got '{period}'")))?;
+
+            prop_assert_eq!(year.len(), 4, "year must be zero-padded, got '{}'", period);
+            prop_assert_eq!(month.len(), 2, "month must be zero-padded, got '{}'", period);
+            prop_assert_eq!(year.parse::<i32>().ok(), Some(usage.period.year));
+            prop_assert_eq!(month.parse::<u32>().ok(), Some(usage.period.month));
+        }
+    }
 }

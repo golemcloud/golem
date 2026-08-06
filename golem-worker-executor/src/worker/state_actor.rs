@@ -64,7 +64,7 @@ use golem_common::model::{AgentStatus, AgentStatusRecord, OwnedAgentId, Schedule
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Mutex, mpsc, oneshot};
-use tracing::{Instrument, debug, warn};
+use tracing::{debug, warn};
 
 /// Handle to the worker-state actor's two job queues. Owned by [`Worker`]; dropping it aborts
 /// both tasks.
@@ -173,58 +173,53 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         };
 
         let (status_jobs, mut status_rx) = mpsc::unbounded_channel::<StatusJob>();
-        let status_task = tokio::spawn(
-            async move {
-                while let Some(job) = status_rx.recv().await {
-                    match job {
-                        StatusJob::CommitAndUpdateState { level, done } => {
-                            let changed = state.commit_and_update_state(level).await;
-                            let index = state.oplog.current_oplog_index().await;
-                            let _ = done.send((index, changed));
-                        }
-                        StatusJob::NonDetachedStatus { done } => {
-                            let status = if state.detached.load(Ordering::Acquire) {
-                                None
-                            } else {
-                                Some(state.last_known_status.load_full().as_ref().clone())
-                            };
-                            let _ = done.send(status);
-                        }
-                        StatusJob::Reattach { done } => {
-                            state.reattach().await;
-                            let _ = done.send(());
-                        }
+        let status_task = tokio::spawn(async move {
+            while let Some(job) = status_rx.recv().await {
+                match job {
+                    StatusJob::CommitAndUpdateState { level, done } => {
+                        let changed = state.commit_and_update_state(level).await;
+                        let index = state.oplog.current_oplog_index().await;
+                        let _ = done.send((index, changed));
+                    }
+                    StatusJob::NonDetachedStatus { done } => {
+                        let status = if state.detached.load(Ordering::Acquire) {
+                            None
+                        } else {
+                            Some(state.last_known_status.load_full().as_ref().clone())
+                        };
+                        let _ = done.send(status);
+                    }
+                    StatusJob::Reattach { done } => {
+                        state.reattach().await;
+                        let _ = done.send(());
                     }
                 }
             }
-            .in_current_span(),
-        );
+        });
 
         let (lifecycle_jobs, mut lifecycle_rx) = mpsc::unbounded_channel::<LifecycleJob<Ctx>>();
-        let lifecycle_task = tokio::spawn(
-            async move {
-                while let Some(job) = lifecycle_rx.recv().await {
-                    match job {
-                        LifecycleJob::NotifyStatusChanged => {
-                            let instance_guard = instance.lock().await;
-                            if let WorkerInstance::Running(running) = &*instance_guard {
-                                let _ = running.sender.send(WorkerCommand::InternalStatusChanged);
-                            }
+        let lifecycle_task = tokio::spawn(async move {
+            while let Some(job) = lifecycle_rx.recv().await {
+                match job {
+                    LifecycleJob::NotifyStatusChanged => {
+                        let instance_guard = instance.lock().await;
+                        if let WorkerInstance::Running(running) = &*instance_guard {
+                            let _ = running.sender.send(WorkerCommand::InternalStatusChanged);
                         }
-                        LifecycleJob::GrowMemory { worker, delta } => {
-                            worker.add_to_oplog(OplogEntry::grow_memory(delta)).await;
-                            if let Err(error) = worker.increase_memory(delta).await {
-                                warn!(
-                                    "Failed to acquire {delta} bytes of additional memory: {error}; restarting the worker after releasing its memory permits"
-                                );
-                                worker.interrupt_for_permit_reacquire().await;
-                            }
+                    }
+                    LifecycleJob::GrowMemory { worker, delta } => {
+                        worker.add_to_oplog(OplogEntry::grow_memory(delta)).await;
+                        if let Err(error) = worker.increase_memory(delta).await {
+                            warn!(
+                                agent_id = %worker.owned_agent_id.agent_id,
+                                "Failed to acquire {delta} bytes of additional memory: {error}; restarting the worker after releasing its memory permits"
+                            );
+                            worker.interrupt_for_permit_reacquire().await;
                         }
                     }
                 }
             }
-            .in_current_span(),
-        );
+        });
 
         Self {
             status_jobs,
@@ -339,7 +334,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             } else {
                 // The status can no longer be incrementally computed by adding the new oplog entries, instead a full reload needs to be performed.
                 // This can happen during a revert or a snapshot update for example.
-                debug!("Detaching worker_status from oplog");
+                debug!(agent_id = %self.owned_agent_id.agent_id, "Detaching worker_status from oplog");
                 self.detached.store(true, Ordering::Release);
                 // The in-memory status is no longer authoritative, and after reattach it will be
                 // recomputed from scratch, so the persisted baseline can no longer be trusted: the
@@ -356,7 +351,10 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         self.commit_and_update_state(CommitLevel::Always).await;
 
         if self.detached.load(Ordering::Relaxed) {
-            debug!("Worker status was detached from oplog, recomputing it");
+            debug!(
+                agent_id = %self.owned_agent_id.agent_id,
+                "Worker status was detached from oplog, recomputing it"
+            );
 
             // The in-memory status is no longer foldable (a jump deleted its index, or a revert
             // moved the oplog behind it), so we recompute. Prefer folding forward from the clean
@@ -385,7 +383,10 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             // immediately consistent rather than waiting for the next background sweep. Best-effort:
             // a failure is logged/metered and re-queued inside `flush`.
             if let Err(err) = self.status_flusher.flush(FlushReason::Forced).await {
-                debug!("Forced status flush on reattach failed (will retry in background): {err}");
+                debug!(
+                    agent_id = %self.owned_agent_id.agent_id,
+                    "Forced status flush on reattach failed (will retry in background): {err}"
+                );
             }
         }
     }

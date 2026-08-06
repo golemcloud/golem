@@ -15,10 +15,10 @@
 import type { FlagShape, FlagSpec, OptionSpec, Tool } from 'golem:tool/common@0.1.0';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod/v4';
-import { compileSchema } from '../src/fluent/schema/adapter';
-import type { FluentCodec } from '../src/fluent/schema/codec';
-import { KeyValue, Path, s } from '../src/fluent/schema/markers';
-import { c, getExtendedToolDefinition, toolDefinition } from '../src/fluent/tool';
+import { compileSchema } from '../src/schema/adapter';
+import type { SchemaCodec } from '../src/schema/codec';
+import { KeyValue, Path, s } from '../src/schema/markers';
+import { c, getExtendedToolDefinition, toolDefinition } from '../src/tool';
 import {
   type ExtendedCommandBody,
   type ExtendedCommandNode,
@@ -39,7 +39,7 @@ function doc(summary = '') {
 
 function option(
   long: string,
-  codec: FluentCodec = stringCodec,
+  codec: SchemaCodec = stringCodec,
   overrides: Partial<ExtendedOptionSpec> = {},
 ): ExtendedOptionSpec {
   return {
@@ -640,7 +640,7 @@ function gitFixture(): ExtendedToolType {
 }
 
 describe('extended tool WIT encoding', () => {
-  it('builds canonical tool metadata through the fluent public surface', () => {
+  it('builds canonical tool metadata through the public surface', () => {
     const definition = toolDefinition('grep')
       .version('2.0.0')
       .doc({ summary: 'Search files', description: 'Search files for patterns.' })

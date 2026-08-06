@@ -125,7 +125,7 @@ environments:
 
 ### Server options
 
-- `local` — built-in local server (`http://localhost:9881`)
+- `local` — built-in local server (`http://localhost:9881` by default, configurable through manifest `localServer.routerAddr` and `localServer.routerPort`)
 - `cloud` — Golem Cloud (`https://release.api.golem.cloud`) with OAuth2
 - Custom object with `url`, optional `workerUrl`, optional `allowInsecure`, and `auth` (`oauth2: true` or `staticToken: "..."`)
 

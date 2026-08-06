@@ -32,7 +32,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.4.0"
+  WASM_RQUICKJS_VERSION: "0.4.1"
   MOONBIT_INSTALL_VERSION: "0.10.1+a46be2066"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
@@ -370,8 +370,6 @@ jobs:
             sdks/ts/packages/golem-ts-sdk/dist
             sdks/ts/packages/golem-ts-sdk/types
             sdks/ts/packages/golem-ts-sdk/wasm
-            sdks/ts/packages/golem-ts-typegen/dist
-            sdks/ts/packages/golem-ts-types-core/dist
             sdks/ts/packages/golem-ts-bridge/dist
             sdks/ts/packages/golem-ts-repl/dist
           key: golem-ts-sdk-${{ github.run_id }}
@@ -463,8 +461,6 @@ jobs:
             sdks/ts/packages/golem-ts-sdk/dist
             sdks/ts/packages/golem-ts-sdk/types
             sdks/ts/packages/golem-ts-sdk/wasm
-            sdks/ts/packages/golem-ts-typegen/dist
-            sdks/ts/packages/golem-ts-types-core/dist
             sdks/ts/packages/golem-ts-bridge/dist
             sdks/ts/packages/golem-ts-repl/dist
           key: golem-ts-sdk-${{ github.run_id }}
@@ -695,8 +691,6 @@ jobs:
             sdks/ts/packages/golem-ts-sdk/dist
             sdks/ts/packages/golem-ts-sdk/types
             sdks/ts/packages/golem-ts-sdk/wasm
-            sdks/ts/packages/golem-ts-typegen/dist
-            sdks/ts/packages/golem-ts-types-core/dist
             sdks/ts/packages/golem-ts-bridge/dist
             sdks/ts/packages/golem-ts-repl/dist
           key: golem-ts-sdk-${{ github.run_id }}
@@ -751,8 +745,6 @@ jobs:
             sdks/ts/packages/golem-ts-sdk/dist
             sdks/ts/packages/golem-ts-sdk/types
             sdks/ts/packages/golem-ts-sdk/wasm
-            sdks/ts/packages/golem-ts-typegen/dist
-            sdks/ts/packages/golem-ts-types-core/dist
             sdks/ts/packages/golem-ts-bridge/dist
             sdks/ts/packages/golem-ts-repl/dist
           key: golem-ts-sdk-${{ github.run_id }}

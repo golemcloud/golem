@@ -20,86 +20,105 @@ use std::{
 use futures::{Sink, SinkExt, Stream, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::{AgentEvent, AgentId};
+use golem_common::related_span;
+use golem_common::tracing::TraceOrigin;
 use poem::web::websocket::Message;
 use tonic::Status;
-use tracing::{error, info};
+use tracing::{Instrument, Level, error, info};
 
 /// Proxies a worker connection, listening for either connection to close. Websocket sink will be closed at the end.
 ///
+/// origin: the request that opened this connection, to link the proxy's span back to
 /// keep_alive_interval: Interval at which Ping messages are sent
 /// max_pong_timeout: Maximum time to wait for a Pong message before considering the connection dead
-#[tracing::instrument(skip_all, fields(agent_id = agent_id.to_string()))]
+// The proxy runs for the connection's whole life - hours, for a `connect` websocket -
+// so it is the root of its own trace, linked to the request that opened it rather than
+// nested under it. The origin has to be captured by the caller: poem drives the upgrade
+// callback from a bare `tokio::spawn`, so by the time this runs there is no current
+// span left to capture.
 pub async fn proxy_worker_connection(
     agent_id: AgentId,
+    origin: TraceOrigin,
     mut worker_stream: impl Stream<Item = Result<LogEvent, Status>> + Unpin,
     websocket_sender: impl Sink<Message, Error = IoError> + Unpin,
     websocket_receiver: impl Stream<Item = IoResult<Message>> + Unpin,
     keep_alive_interval: Duration,
     max_pong_timeout: Duration,
 ) -> Result<(), ConnectProxyError> {
-    info!("Proxying worker connection");
-
-    let mut websocket = keep_alive::WebSocketKeepAlive::from_sink_and_stream(
-        websocket_receiver,
-        websocket_sender,
-        keep_alive_interval,
-        max_pong_timeout,
+    let span = related_span!(
+        origin,
+        Level::INFO,
+        "proxy_worker_connection",
+        agent_id = %agent_id
     );
 
-    let result = loop {
-        tokio::select! {
-            // WebSocket is cancellation safe.
-            // https://github.com/snapview/tokio-tungstenite/issues/167
-            websocket_message = websocket.next() => {
-                match websocket_message {
-                    Some(Ok(Message::Close(payload))) => {
-                        info!(
-                            close_code=payload.as_ref().map(|p| u16::from(p.0)),
-                            close_message=payload.as_ref().map(|p| &p.1),
-                            "Client closed WebSocket connection",
-                        );
-                        break Ok(());
-                    }
-                    Some(Err(error)) => {
-                        let error: ConnectProxyError = error.into();
-                        info!(error=error.to_string(), "Received WebSocket Error");
-                        break Err(error);
-                    },
-                    Some(Ok(_)) => {
-                    }
-                    None => {
-                        info!("WebSocket connection closed");
-                        break Ok(());
-                    }
-                }
-            },
+    async move {
+        info!("Proxying worker connection");
 
-            worker_message = worker_stream.next() => {
-                if let Some(message) = worker_message {
-                    if let Err(error) = forward_worker_message(message, &mut websocket).await {
-                        info!(error=error.to_string(), "Error forwarding message to WebSocket client");
-                        break Err(error)
-
-                    }
-                } else {
-                    info!("Worker stream ended");
-                    break Ok(());
-                }
-            },
-        }
-    };
-
-    info!("Closing websocket connection");
-    if let Err(error) = websocket.close().await {
-        error!(
-            error = error.to_string(),
-            "Error closing WebSocket connection"
+        let mut websocket = keep_alive::WebSocketKeepAlive::from_sink_and_stream(
+            websocket_receiver,
+            websocket_sender,
+            keep_alive_interval,
+            max_pong_timeout,
         );
-    } else {
-        info!("WebSocket connection successfully closed");
-    }
 
-    result
+        let result = loop {
+            tokio::select! {
+                // WebSocket is cancellation safe.
+                // https://github.com/snapview/tokio-tungstenite/issues/167
+                websocket_message = websocket.next() => {
+                    match websocket_message {
+                        Some(Ok(Message::Close(payload))) => {
+                            info!(
+                                close_code=payload.as_ref().map(|p| u16::from(p.0)),
+                                close_message=payload.as_ref().map(|p| &p.1),
+                                "Client closed WebSocket connection",
+                            );
+                            break Ok(());
+                        }
+                        Some(Err(error)) => {
+                            let error: ConnectProxyError = error.into();
+                            info!(error=error.to_string(), "Received WebSocket Error");
+                            break Err(error);
+                        },
+                        Some(Ok(_)) => {
+                        }
+                        None => {
+                            info!("WebSocket connection closed");
+                            break Ok(());
+                        }
+                    }
+                },
+
+                worker_message = worker_stream.next() => {
+                    if let Some(message) = worker_message {
+                        if let Err(error) = forward_worker_message(message, &mut websocket).await {
+                            info!(error=error.to_string(), "Error forwarding message to WebSocket client");
+                            break Err(error)
+
+                        }
+                    } else {
+                        info!("Worker stream ended");
+                        break Ok(());
+                    }
+                },
+            }
+        };
+
+        info!("Closing websocket connection");
+        if let Err(error) = websocket.close().await {
+            error!(
+                error = error.to_string(),
+                "Error closing WebSocket connection"
+            );
+        } else {
+            info!("WebSocket connection successfully closed");
+        }
+
+        result
+    }
+    .instrument(span)
+    .await
 }
 
 async fn forward_worker_message<E>(

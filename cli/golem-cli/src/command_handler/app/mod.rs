@@ -49,7 +49,6 @@ use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
     WithSource,
 };
-use crate::model::config::server::ToFormattedServerContext;
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
 use crate::model::deploy::{
     DeployConfig, DeployError, DeployResult, DeploySummary, EnvironmentSetupPlan, PostDeployError,
@@ -689,11 +688,7 @@ impl AppCommandHandler {
             .confirm_deploy_by_plan(
                 &rollback_diff.environment.application_name,
                 &rollback_diff.environment.environment_name,
-                &self
-                    .ctx
-                    .manifest_environment()
-                    .map(|env| env.environment.to_formatted_server_context())
-                    .unwrap_or("???".to_string()),
+                &self.ctx.selected_server_description(),
             )
             .map_err(DeployError::PrepareError)?
         {
@@ -839,11 +834,7 @@ impl AppCommandHandler {
             .confirm_deploy_by_plan(
                 &deploy_diff.environment.application_name,
                 &deploy_diff.environment.environment_name,
-                &self
-                    .ctx
-                    .manifest_environment()
-                    .map(|env| env.environment.to_formatted_server_context())
-                    .unwrap_or("???".to_string()),
+                &self.ctx.selected_server_description(),
             )
             .map_err(DeployError::PrepareError)?
         {

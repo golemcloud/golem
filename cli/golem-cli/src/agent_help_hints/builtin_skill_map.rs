@@ -96,6 +96,8 @@ pub const SKILL_BINDINGS: &[SkillBinding] = &[
     // ── local server (only present when built with `server-commands`) ───
     #[cfg(feature = "server-commands")]
     SkillBinding { cli_path: &["server", "run"], basename: "golem-local-dev-server", kind: SkillKind::Common, summary: "Use the local Golem dev server." },
+    #[cfg(feature = "server-commands")]
+    SkillBinding { cli_path: &["server", "clean"], basename: "golem-local-dev-server", kind: SkillKind::Common, summary: "Clean local Golem dev server state." },
 
     // ── agents (top-level grouping) ──────────────────────────────────────
     SkillBinding { cli_path: &["agent", "new"],         basename: "golem-create-agent-instance", kind: SkillKind::PerLanguage(ALL_LANGS), summary: "Create a new agent instance." },

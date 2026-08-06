@@ -22,7 +22,7 @@ use crate::config::{
     ApplicationEnvironmentConfigId, AuthenticationConfig, AuthenticationConfigWithSource,
     AuthenticationSource, Config, NamedProfile,
 };
-use crate::config::{ClientConfig, ProfileName, builtin_local_url};
+use crate::config::{ClientConfig, ProfileName, resolved_builtin_local_url};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{LogColorize, LogOutput, Output, log_action, set_log_output};
 use crate::model::app::{
@@ -77,7 +77,7 @@ pub struct Context {
     http_parallelism: usize,
     agent_stream_ping_interval: Duration,
     auth_token_override: Option<String>,
-    client_config: ClientConfig,
+    server_config: ResolvedServerConfig,
     yes: bool,
     show_secrets: bool,
     dev_mode: bool,
@@ -295,15 +295,13 @@ impl Context {
 
         set_log_output(log_output);
 
-        let client_config = match &manifest_environment {
-            Some(env) => match env.environment.server.as_ref() {
-                Some(server) => ClientConfig::from(server),
-                None => ClientConfig::from(&Server::Builtin(BuiltinServer::Local)),
-            },
-            None => ClientConfig::from(&profile.profile),
-        };
+        let server_config = ResolvedServerConfig::new(
+            manifest_environment.as_ref(),
+            &profile,
+            manifest_local_server.as_ref(),
+        )?;
         let file_download_client =
-            new_raw_reqwest_client(&client_config.file_download_http_client_config)?;
+            new_raw_reqwest_client(&server_config.client_config.file_download_http_client_config)?;
 
         let app_context_config = manifest_environment.as_ref().zip(application_preload).map(
             |(selected_environment, application_preload)| {
@@ -327,6 +325,7 @@ impl Context {
                             }
                         },
                     },
+                    server_config.builtin_local_url.clone(),
                 )
             },
         );
@@ -352,7 +351,7 @@ impl Context {
             show_secrets: global_flags.show_secrets,
             server_no_limit_change: global_flags.server_no_limit_change,
             should_colorize: SHOULD_COLORIZE.should_colorize(),
-            client_config,
+            server_config,
             golem_clients: tokio::sync::OnceCell::new(),
             file_download_client,
             selected_context_logging: std::sync::OnceLock::new(),
@@ -464,7 +463,7 @@ impl Context {
         self.golem_clients
             .get_or_try_init(|| async {
                 let clients = GolemClients::new(
-                    &self.client_config,
+                    &self.server_config.client_config,
                     self.auth_token_override.clone(),
                     &self.auth_config()?,
                     self.config_dir(),
@@ -481,11 +480,24 @@ impl Context {
     }
 
     pub fn worker_service_url(&self) -> &Url {
-        &self.client_config.worker_url
+        &self.server_config.client_config.worker_url
+    }
+
+    pub fn selected_server_description(&self) -> String {
+        let builtin_local_url = &self.server_config.builtin_local_url;
+        match &self.manifest_environment {
+            Some(env) => env
+                .environment
+                .to_formatted_server_context(builtin_local_url),
+            None => self.profile.to_formatted_server_context(builtin_local_url),
+        }
     }
 
     pub fn allow_insecure(&self) -> bool {
-        self.client_config.service_http_client_config.allow_insecure
+        self.server_config
+            .client_config
+            .service_http_client_config
+            .allow_insecure
     }
 
     pub async fn account_id(&self) -> anyhow::Result<AccountId> {
@@ -506,7 +518,7 @@ impl Context {
                             ApplicationEnvironmentConfigId {
                                 application_name: env.application_name.clone(),
                                 environment_name: env.environment_name.clone(),
-                                server_url: builtin_local_url(),
+                                server_url: self.server_config.client_config.registry_url.clone(),
                             },
                         ),
                     })
@@ -612,12 +624,13 @@ impl Context {
                 return;
             }
 
+            let selected_server = self.selected_server_description();
             let (app, env, server, profile): (String, String, String, Option<String>) = {
                 if let Some(env) = &self.manifest_environment {
                     (
                         env.application_name.0.clone(),
                         env.environment_name.0.clone(),
-                        env.environment.to_formatted_server_context(),
+                        selected_server.clone(),
                         None,
                     )
                 } else if let Some(environment_ref) = &self.environment_reference {
@@ -625,7 +638,7 @@ impl Context {
                         EnvironmentReference::Environment { environment_name } => (
                             "-".to_string(),
                             environment_name.0.clone(),
-                            self.profile.to_formatted_server_context(),
+                            selected_server.clone(),
                             Some(self.profile.name.0.clone()),
                         ),
                         EnvironmentReference::ApplicationEnvironment {
@@ -634,7 +647,7 @@ impl Context {
                         } => (
                             application_name.0.clone(),
                             environment_name.0.clone(),
-                            self.profile.to_formatted_server_context(),
+                            selected_server.clone(),
                             Some(self.profile.name.0.clone()),
                         ),
                         EnvironmentReference::AccountApplicationEnvironment {
@@ -645,7 +658,7 @@ impl Context {
                         } => (
                             format!("{}/{}", account_email, application_name.0),
                             environment_name.0.clone(),
-                            self.profile.to_formatted_server_context(),
+                            selected_server.clone(),
                             Some(self.profile.name.0.clone()),
                         ),
                     }
@@ -653,7 +666,7 @@ impl Context {
                     (
                         "-".to_string(),
                         "-".to_string(),
-                        self.profile.to_formatted_server_context(),
+                        selected_server,
                         Some(self.profile.name.0.clone()),
                     )
                 }
@@ -703,6 +716,61 @@ impl Context {
     }
 }
 
+struct ResolvedServerConfig {
+    builtin_local_url: Url,
+    client_config: ClientConfig,
+}
+
+impl ResolvedServerConfig {
+    fn new(
+        manifest_environment: Option<&SelectedManifestEnvironment>,
+        profile: &NamedProfile,
+        manifest_local_server: Option<&ResolvedLocalServer>,
+    ) -> anyhow::Result<Self> {
+        // The manifest fields used here are validated while loading the manifest, so this only
+        // fails for manifests that never passed validation.
+        let builtin_local_url = resolved_builtin_local_url(
+            manifest_local_server.and_then(|server| server.router_addr.as_deref()),
+            manifest_local_server.and_then(|server| server.router_port),
+        )?;
+
+        Ok(Self::for_builtin_local_url(
+            manifest_environment,
+            profile,
+            builtin_local_url,
+        ))
+    }
+
+    /// Selects the client config for the resolved built-in local URL. A selected manifest
+    /// environment always wins over the profile; without one, only the built-in local profile
+    /// is bound to the built-in local server.
+    fn for_builtin_local_url(
+        manifest_environment: Option<&SelectedManifestEnvironment>,
+        profile: &NamedProfile,
+        builtin_local_url: Url,
+    ) -> Self {
+        let client_config = manifest_environment
+            .map(|env| {
+                ClientConfig::from_manifest_environment(&env.environment, &builtin_local_url)
+            })
+            .unwrap_or_else(|| {
+                if profile.name.is_builtin_local() {
+                    ClientConfig::from_server(
+                        &Server::Builtin(BuiltinServer::Local),
+                        &builtin_local_url,
+                    )
+                } else {
+                    ClientConfig::from(&profile.profile)
+                }
+            });
+
+        Self {
+            builtin_local_url,
+            client_config,
+        }
+    }
+}
+
 struct ApplicationContextConfig {
     #[allow(unused)]
     app_manifest_path: Option<PathBuf>,
@@ -712,6 +780,7 @@ struct ApplicationContextConfig {
     environments: BTreeMap<EnvironmentName, Environment>,
     local_server: Option<WithSource<crate::model::app_raw::LocalServer>>,
     component_presets: ComponentPresetSelector,
+    builtin_local_url: Url,
     wasm_rpc_client_build_offline: bool,
     dev_mode: bool,
     enable_wasmtime_fs_cache: bool,
@@ -722,6 +791,7 @@ impl ApplicationContextConfig {
         global_flags: &GolemCliGlobalFlags,
         application_preload: ApplicationPreload,
         component_presets: ComponentPresetSelector,
+        builtin_local_url: Url,
     ) -> Self {
         Self {
             app_manifest_path: global_flags.app_manifest_path.clone(),
@@ -730,6 +800,7 @@ impl ApplicationContextConfig {
             environments: application_preload.environments,
             local_server: application_preload.local_server,
             component_presets,
+            builtin_local_url,
             wasm_rpc_client_build_offline: global_flags.wasm_rpc_offline,
             dev_mode: global_flags.dev_mode,
             enable_wasmtime_fs_cache: global_flags.enable_wasmtime_fs_cache,
@@ -820,6 +891,7 @@ impl ApplicationContextState {
                 config.environments.clone(),
                 config.local_server.clone(),
                 config.component_presets.clone(),
+                config.builtin_local_url.clone(),
                 file_download_client.clone(),
             )
             .await
@@ -924,9 +996,20 @@ impl Caches {
 
 #[cfg(test)]
 mod test {
+    use super::ResolvedServerConfig;
+    use crate::config::{
+        AuthenticationConfig, DEFAULT_CLOUD_URL, NamedProfile, Profile, ProfileName,
+    };
     use crate::context::Context;
+    use crate::model::app_raw::{
+        BuiltinServer, CustomServer, CustomServerAuth, Environment, Server,
+    };
+    use crate::model::environment::SelectedManifestEnvironment;
+    use golem_common::model::application::ApplicationName;
+    use golem_common::model::environment::EnvironmentName;
     use std::marker::PhantomData;
     use test_r::test;
+    use url::Url;
 
     struct CheckSend<T: Send>(PhantomData<T>);
     struct CheckSync<T: Sync>(PhantomData<T>);
@@ -935,5 +1018,123 @@ mod test {
     fn test_context_is_send_sync() {
         let _ = CheckSend::<Context>(PhantomData);
         let _ = CheckSync::<Context>(PhantomData);
+    }
+
+    fn local_url() -> Url {
+        Url::parse("http://192.0.2.10:9891").unwrap()
+    }
+
+    fn manifest_environment(server: Option<Server>) -> SelectedManifestEnvironment {
+        SelectedManifestEnvironment {
+            application_name: ApplicationName("test-app".to_string()),
+            environment_name: EnvironmentName("test-env".to_string()),
+            environment: Environment {
+                default: None,
+                account: None,
+                server,
+                component_presets: Default::default(),
+                cli: None,
+                deployment: None,
+                version: None,
+            },
+        }
+    }
+
+    fn custom_profile(url: &Url) -> NamedProfile {
+        NamedProfile {
+            name: ProfileName("my-profile".to_string()),
+            profile: Profile {
+                custom_url: Some(url.clone()),
+                custom_worker_url: None,
+                allow_insecure: false,
+                config: Default::default(),
+                auth: AuthenticationConfig::static_builtin_local(),
+            },
+        }
+    }
+
+    fn local_profile() -> NamedProfile {
+        NamedProfile {
+            name: ProfileName::local(),
+            profile: Profile::default_local_profile(),
+        }
+    }
+
+    #[test]
+    fn manifest_local_environment_uses_resolved_local_url() {
+        for server in [Some(Server::Builtin(BuiltinServer::Local)), None] {
+            let config = ResolvedServerConfig::for_builtin_local_url(
+                Some(&manifest_environment(server.clone())),
+                &custom_profile(&Url::parse("http://unused-profile-url:1234").unwrap()),
+                local_url(),
+            );
+
+            assert_eq!(config.builtin_local_url, local_url());
+            assert_eq!(config.client_config.registry_url, local_url());
+            assert_eq!(config.client_config.worker_url, local_url());
+        }
+    }
+
+    #[test]
+    fn manifest_cloud_environment_ignores_resolved_local_url() {
+        let config = ResolvedServerConfig::for_builtin_local_url(
+            Some(&manifest_environment(Some(Server::Builtin(
+                BuiltinServer::Cloud,
+            )))),
+            &local_profile(),
+            local_url(),
+        );
+
+        let cloud_url = Url::parse(DEFAULT_CLOUD_URL).unwrap();
+        assert_eq!(config.client_config.registry_url, cloud_url);
+        assert_eq!(config.client_config.worker_url, cloud_url);
+    }
+
+    #[test]
+    fn manifest_custom_environment_ignores_resolved_local_url() {
+        let custom_url = Url::parse("http://custom-server:1234").unwrap();
+        let config = ResolvedServerConfig::for_builtin_local_url(
+            Some(&manifest_environment(Some(Server::Custom(Box::new(
+                CustomServer {
+                    url: custom_url.clone(),
+                    worker_url: None,
+                    allow_insecure: None,
+                    auth: CustomServerAuth::Static {
+                        static_token: "token".to_string(),
+                    },
+                },
+            ))))),
+            &local_profile(),
+            local_url(),
+        );
+
+        assert_eq!(config.client_config.registry_url, custom_url);
+        assert_eq!(config.client_config.worker_url, custom_url);
+    }
+
+    #[test]
+    fn builtin_local_profile_without_manifest_environment_uses_resolved_local_url() {
+        // The stored local profile pins `custom_url` at profile creation time, so the resolved
+        // built-in local URL has to win over it.
+        let config =
+            ResolvedServerConfig::for_builtin_local_url(None, &local_profile(), local_url());
+
+        assert_eq!(config.client_config.registry_url, local_url());
+        assert_eq!(config.client_config.worker_url, local_url());
+    }
+
+    #[test]
+    fn custom_profile_without_manifest_environment_ignores_resolved_local_url() {
+        let profile_url = Url::parse("http://profile-server:4321").unwrap();
+        let config = ResolvedServerConfig::for_builtin_local_url(
+            None,
+            &custom_profile(&profile_url),
+            local_url(),
+        );
+
+        assert_eq!(config.client_config.registry_url, profile_url);
+        assert_eq!(config.client_config.worker_url, profile_url);
+        // The built-in local URL stays resolved even when the client does not target it.
+        assert_eq!(config.builtin_local_url, local_url());
     }
 }

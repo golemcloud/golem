@@ -7,7 +7,7 @@ description: "Adding prompt and description annotations to TypeScript agents and
 
 ## Overview
 
-Golem agents can annotate the agent and its methods with human-readable metadata. This metadata drives AI/LLM tool discovery — agents with annotations can be used as tools by LLM-based systems. In the fluent SDK the annotations are plain fields on the `defineAgent(...)` spec and on each `method(...)`.
+Golem agents can annotate the agent and its methods with human-readable metadata. This metadata drives AI/LLM tool discovery — agents with annotations can be used as tools by LLM-based systems. In the TypeScript SDK the annotations are plain fields on the `defineAgent(...)` spec and on each `method(...)`.
 
 ## Annotations
 
