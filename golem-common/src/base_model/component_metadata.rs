@@ -96,7 +96,6 @@ pub struct KnownExports {
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
 )]
-#[cfg_attr(feature = "full", desert(evolution(FieldAdded("shared", false))))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct LinearMemory {
