@@ -858,9 +858,9 @@ pub mod wasm {
             crate::metrics::MEMORY_SIZE_BUCKETS.to_vec()
         )
         .unwrap();
-        static ref WORKER_RESIDENT_LINEAR_MEMORY_BYTES: Histogram = register_histogram!(
-            "worker_resident_linear_memory_bytes",
-            "Per-worker cumulative linear-memory grant (total_linear_memory_size = sum of memory.grow deltas) sampled when the worker is admitted. This is the linear memory the admission gate reserves for the worker; it is an upper bound on resident RSS, not measured resident memory, since grown pages are largely demand-paged. Compare to container_memory_working_set_bytes for the gap.",
+        static ref WORKER_ALLOCATED_LINEAR_MEMORY_BYTES: Histogram = register_histogram!(
+            "worker_allocated_linear_memory_bytes",
+            "Per-worker allocated linear-memory total sampled after instance reconciliation. This is the sum of current data_size values for unique linear-memory backings, not measured resident memory.",
             crate::metrics::MEMORY_SIZE_BUCKETS.to_vec()
         )
         .unwrap();
@@ -937,8 +937,8 @@ pub mod wasm {
         ALLOCATED_MEMORY_BYTES.observe(amount as f64);
     }
 
-    pub fn record_worker_resident_linear_memory(bytes: u64) {
-        WORKER_RESIDENT_LINEAR_MEMORY_BYTES.observe(bytes as f64);
+    pub fn record_worker_allocated_linear_memory(bytes: u64) {
+        WORKER_ALLOCATED_LINEAR_MEMORY_BYTES.observe(bytes as f64);
     }
 }
 

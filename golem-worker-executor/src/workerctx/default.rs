@@ -476,15 +476,9 @@ impl ResourceLimiterAsync for Context {
             current, desired, maximum, limit
         );
 
-        let growth = self
-            .durable_ctx
-            .desired_total_after_unshared_memory_growth(current, desired);
-        if growth.is_none_or(|(_, total)| total > limit as u64)
-            || maximum.map(|m| desired > m).unwrap_or_default()
-        {
-            Err(GolemSpecificWasmTrap::WorkerExceededMemoryLimit)?;
-        };
-        Ok(true)
+        self.durable_ctx
+            .admit_unshared_memory_growth(current, desired, maximum)
+            .await
     }
 
     fn memory_grown(&mut self, current: usize, desired: usize) {
@@ -496,9 +490,7 @@ impl ResourceLimiterAsync for Context {
     }
 
     fn memory_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
-        self.durable_ctx
-            .linear_memory_tracker()
-            .memory_grow_failed();
+        self.durable_ctx.unshared_memory_growth_failed();
         Ok(())
     }
 

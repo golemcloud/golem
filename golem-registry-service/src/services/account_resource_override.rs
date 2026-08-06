@@ -34,6 +34,8 @@ pub enum AccountResourceOverrideError {
     NotUserConfigurable(&'static str),
     #[error("{0} exceeds plan ceiling {1}")]
     ExceedsPlanCeiling(&'static str, u64),
+    #[error("{0} is below plan default {1}")]
+    BelowPlanDefault(&'static str, u64),
     #[error("Only admins may set an override expiry")]
     ExpiryRequiresAdmin,
     #[error("Account {0} not found")]
@@ -49,12 +51,37 @@ impl SafeDisplay for AccountResourceOverrideError {
         match self {
             Self::NotUserConfigurable(_)
             | Self::ExceedsPlanCeiling(_, _)
+            | Self::BelowPlanDefault(_, _)
             | Self::ExpiryRequiresAdmin
             | Self::AccountNotFound(_) => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
+}
+
+fn validate_memory_override(
+    label: &'static str,
+    value: u64,
+    plan_default: u64,
+    ceiling: u64,
+    configurable: bool,
+) -> Result<(), AccountResourceOverrideError> {
+    if !configurable {
+        return Err(AccountResourceOverrideError::NotUserConfigurable(label));
+    }
+    if value < plan_default {
+        return Err(AccountResourceOverrideError::BelowPlanDefault(
+            label,
+            plan_default,
+        ));
+    }
+    if value > ceiling {
+        return Err(AccountResourceOverrideError::ExceedsPlanCeiling(
+            label, ceiling,
+        ));
+    }
+    Ok(())
 }
 
 error_forwarding!(AccountResourceOverrideError, RepoError, AccountError);
@@ -255,27 +282,22 @@ impl AccountResourceOverrideService {
             return Err(AccountResourceOverrideError::ExpiryRequiresAdmin);
         }
         let plan = self.account_service.get_plan(account_id, auth).await?;
-        let (label, ceiling, configurable) = match dimension {
+        let (label, plan_default, ceiling, configurable) = match dimension {
             AccountResourceOverrideDimension::MaxMemoryPerWorker => (
                 "Maximum memory per agent",
+                plan.max_memory_per_worker,
                 plan.max_memory_per_worker_ceiling,
                 plan.max_memory_per_worker_user_configurable,
             ),
             AccountResourceOverrideDimension::MonthlyMemoryGbSeconds => (
                 "Monthly memory GB-seconds",
+                plan.monthly_memory_gb_seconds,
                 plan.monthly_memory_gb_seconds_ceiling,
                 plan.monthly_memory_gb_seconds_user_configurable,
             ),
             AccountResourceOverrideDimension::MaxDiskSpacePerWorker => unreachable!(),
         };
-        if !configurable {
-            return Err(AccountResourceOverrideError::NotUserConfigurable(label));
-        }
-        if value > ceiling {
-            return Err(AccountResourceOverrideError::ExceedsPlanCeiling(
-                label, ceiling,
-            ));
-        }
+        validate_memory_override(label, value, plan_default, ceiling, configurable)?;
         self.repo
             .upsert(AccountResourceOverrideRecord {
                 account_id: account_id.0,
@@ -381,4 +403,30 @@ impl AccountResourceOverrideService {
 
 fn can_set_expiry(auth: &AuthCtx) -> bool {
     auth.is_system() || auth.account_roles().contains(&AccountRole::Admin)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn memory_override_must_be_within_plan_range() {
+        assert!(validate_memory_override("Memory", 10, 10, 20, true).is_ok());
+        assert!(validate_memory_override("Memory", 20, 10, 20, true).is_ok());
+        assert!(matches!(
+            validate_memory_override("Memory", 9, 10, 20, true),
+            Err(AccountResourceOverrideError::BelowPlanDefault("Memory", 10))
+        ));
+        assert!(matches!(
+            validate_memory_override("Memory", 21, 10, 20, true),
+            Err(AccountResourceOverrideError::ExceedsPlanCeiling(
+                "Memory", 20
+            ))
+        ));
+        assert!(matches!(
+            validate_memory_override("Memory", 10, 10, 20, false),
+            Err(AccountResourceOverrideError::NotUserConfigurable("Memory"))
+        ));
+    }
 }

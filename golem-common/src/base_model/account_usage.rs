@@ -77,11 +77,6 @@ declare_structs! {
         pub user_configurable: bool,
     }
 
-    pub struct MemoryLimits {
-        pub max_memory_per_agent: MemoryLimit,
-        pub monthly_memory_gb_seconds: MemoryLimit,
-    }
-
     pub struct SetMemoryLimit {
         pub value: u64,
         pub expires_at: Option<DateTime<Utc>>,

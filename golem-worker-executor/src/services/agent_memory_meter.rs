@@ -14,6 +14,7 @@
 
 use crate::services::resource_limits::AtomicResourceEntry;
 use golem_common::model::agent::AgentMode;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
@@ -24,11 +25,22 @@ pub struct AgentMemoryMeter {
     inner: Arc<Inner>,
 }
 
-#[derive(Debug)]
 struct Inner {
     mode: AgentMode,
     entry: Weak<AtomicResourceEntry>,
+    protected_bytes: AtomicU64,
+    limit_exceeded: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     state: Mutex<State>,
+}
+
+impl std::fmt::Debug for Inner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Inner")
+            .field("mode", &self.mode)
+            .field("protected_bytes", &self.protected_bytes)
+            .field("state", &self.state)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug)]
@@ -37,6 +49,7 @@ struct State {
     active: bool,
     stopped: bool,
     last_sample: Instant,
+    pending_gb_seconds: i64,
     pending_byte_nanoseconds: u128,
 }
 
@@ -52,15 +65,45 @@ impl AgentMemoryMeter {
             inner: Arc::new(Inner {
                 mode,
                 entry: Arc::downgrade(&entry),
+                protected_bytes: AtomicU64::new(bytes),
+                limit_exceeded: Mutex::new(None),
                 state: Mutex::new(State {
                     bytes,
                     active,
                     stopped: false,
                     last_sample: now,
+                    pending_gb_seconds: 0,
                     pending_byte_nanoseconds: 0,
                 }),
             }),
         }
+    }
+
+    pub(crate) fn set_protected_bytes(&self, bytes: u64) {
+        self.inner.protected_bytes.store(bytes, Ordering::Release);
+    }
+
+    pub(crate) fn set_limit_exceeded_callback(&self, callback: Arc<dyn Fn() + Send + Sync>) {
+        *self.inner.limit_exceeded.lock().unwrap() = Some(callback);
+    }
+
+    pub(crate) fn enforce_limit(&self, limit: u64) {
+        if self.protected_bytes_exceed(limit)
+            && let Some(callback) = self.inner.limit_exceeded.lock().unwrap().as_ref()
+        {
+            callback();
+        }
+    }
+
+    pub(crate) fn exceeds_current_limit(&self) -> bool {
+        self.inner
+            .entry
+            .upgrade()
+            .is_some_and(|entry| self.protected_bytes_exceed(entry.max_memory_limit() as u64))
+    }
+
+    fn protected_bytes_exceed(&self, limit: u64) -> bool {
+        self.inner.protected_bytes.load(Ordering::Acquire) > limit
     }
 
     pub fn is_same_meter(&self, other: &Self) -> bool {
@@ -81,12 +124,21 @@ impl AgentMemoryMeter {
     }
 
     pub fn stop(&self, now: Instant) {
-        let remainder = self.inner.transition(now, |state| {
-            state.active = false;
-            state.stopped = true;
-            std::mem::take(&mut state.pending_byte_nanoseconds)
-        });
-        self.inner.transfer_remainder(remainder);
+        let settlement = {
+            let mut state = self.inner.state.lock().unwrap();
+            state.accrue(now);
+            if state.stopped {
+                None
+            } else {
+                state.active = false;
+                state.stopped = true;
+                Some(state.take_settlement())
+            }
+        };
+        if let Some((units, remainder)) = settlement {
+            self.inner.record(units);
+            self.inner.transfer_remainder(remainder);
+        }
     }
 
     pub fn set_bytes(&self, bytes: u64, now: Instant) {
@@ -94,20 +146,20 @@ impl AgentMemoryMeter {
     }
 
     pub fn flush(&self, now: Instant) {
-        self.inner.transition(now, |_| {});
+        let units = {
+            let mut state = self.inner.state.lock().unwrap();
+            state.accrue(now);
+            std::mem::take(&mut state.pending_gb_seconds)
+        };
+        self.inner.record(units);
     }
 }
 
 impl Inner {
     fn transition<R>(&self, now: Instant, update: impl FnOnce(&mut State) -> R) -> R {
-        let (units, result) = {
-            let mut state = self.state.lock().unwrap();
-            let units = state.take_complete_units(now);
-            let result = update(&mut state);
-            (units, result)
-        };
-        self.record(units);
-        result
+        let mut state = self.state.lock().unwrap();
+        state.accrue(now);
+        update(&mut state)
     }
 
     fn record(&self, units: i64) {
@@ -128,9 +180,9 @@ impl Inner {
 }
 
 impl State {
-    fn take_complete_units(&mut self, now: Instant) -> i64 {
+    fn accrue(&mut self, now: Instant) {
         if now <= self.last_sample {
-            return 0;
+            return;
         }
 
         let elapsed = now.saturating_duration_since(self.last_sample).as_nanos();
@@ -143,7 +195,16 @@ impl State {
 
         let units = self.pending_byte_nanoseconds / BYTE_NANOSECONDS_PER_GB_SECOND;
         self.pending_byte_nanoseconds %= BYTE_NANOSECONDS_PER_GB_SECOND;
-        units.min(i64::MAX as u128) as i64
+        self.pending_gb_seconds = self
+            .pending_gb_seconds
+            .saturating_add(units.min(i64::MAX as u128) as i64);
+    }
+
+    fn take_settlement(&mut self) -> (i64, u128) {
+        (
+            std::mem::take(&mut self.pending_gb_seconds),
+            std::mem::take(&mut self.pending_byte_nanoseconds),
+        )
     }
 }
 
@@ -151,8 +212,8 @@ impl Drop for Inner {
     fn drop(&mut self) {
         let (units, remainder) = {
             let state = self.state.get_mut().unwrap();
-            let units = state.take_complete_units(Instant::now());
-            (units, std::mem::take(&mut state.pending_byte_nanoseconds))
+            state.accrue(Instant::now());
+            state.take_settlement()
         };
         self.record(units);
         self.transfer_remainder(remainder);
@@ -162,6 +223,7 @@ impl Drop for Inner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
     use test_r::test;
 
@@ -194,6 +256,7 @@ mod tests {
         let meter = AgentMemoryMeter::new(AgentMode::Durable, gib(1), true, entry.clone(), now);
 
         meter.set_bytes(gib(2), now + Duration::from_secs(2));
+        assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 0);
         meter.flush(now + Duration::from_secs(5));
 
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 8);
@@ -219,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn account_remainder_keeps_agent_modes_separate() {
+    fn account_remainder_crosses_agent_modes() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
 
@@ -235,6 +298,37 @@ mod tests {
         ephemeral.stop(now + Duration::from_secs(1));
 
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 0);
-        assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Ephemeral), 0);
+        assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Ephemeral), 1);
+    }
+
+    #[test]
+    fn lowered_limit_notifies_an_over_limit_meter() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let meter = AgentMemoryMeter::new(AgentMode::Durable, 10, true, entry, Instant::now());
+        meter.set_protected_bytes(20);
+        let notified = Arc::new(AtomicBool::new(false));
+        let notified_clone = notified.clone();
+        meter.set_limit_exceeded_callback(Arc::new(move || {
+            notified_clone.store(true, Ordering::Release);
+        }));
+
+        meter.enforce_limit(10);
+
+        assert!(notified.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn normal_transitions_publish_only_on_flush() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let now = Instant::now();
+        let meter = AgentMemoryMeter::new(AgentMode::Durable, gib(1), true, entry.clone(), now);
+
+        meter.pause(now + Duration::from_secs(2));
+        meter.resume(gib(2), now + Duration::from_secs(3));
+        meter.set_bytes(gib(3), now + Duration::from_secs(4));
+        assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 0);
+
+        meter.flush(now + Duration::from_secs(5));
+        assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 7);
     }
 }

@@ -114,7 +114,6 @@ tail_work_settle_timeout = "30s"
 acquire_retry_delay = "500ms"
 component_size_coefficient = 2.0
 enable_measured_admission = true
-worker_estimate_coefficient = 1.1
 worker_memory_ratio = 0.8
 
 [memory.oom_retry_config]
@@ -403,7 +402,6 @@ without_time = false
 # acquire_retry_delay = "500ms"
 # component_size_coefficient = 2.0
 # enable_measured_admission = true
-# worker_estimate_coefficient = 1.1
 # worker_memory_ratio = 0.8
 # 
 # [memory.oom_retry_config]

@@ -55,7 +55,7 @@ pub struct AtomicResourceEntry {
     in_flight_durable_memory_gb_seconds_delta: AtomicI64,
     in_flight_ephemeral_memory_gb_seconds_delta: AtomicI64,
     memory_usage_transition: Mutex<()>,
-    memory_remainder: Mutex<(u128, u128)>,
+    memory_remainder: Mutex<u128>,
     memory_meters: Arc<scc::HashMap<OwnedAgentId, AgentMemoryMeter>>,
     // Current (cached) value of the account level worker memory limits
     max_memory: AtomicUsize,
@@ -181,7 +181,7 @@ impl AtomicResourceEntry {
             in_flight_durable_memory_gb_seconds_delta: AtomicI64::new(0),
             in_flight_ephemeral_memory_gb_seconds_delta: AtomicI64::new(0),
             memory_usage_transition: Mutex::new(()),
-            memory_remainder: Mutex::new((0, 0)),
+            memory_remainder: Mutex::new(0),
             memory_meters: Arc::new(scc::HashMap::new()),
             max_memory: AtomicUsize::new(max_memory),
             max_table_elements: AtomicUsize::new(max_table_elements),
@@ -344,11 +344,103 @@ impl AtomicResourceEntry {
             .remove_if_sync(owned_agent_id, |registered| registered.is_same_meter(meter));
     }
 
-    pub fn flush_memory_meters(&self, now: Instant) {
+    fn flush_memory_meters(&self, now: Instant) {
         self.memory_meters.iter_sync(|_, meter| {
             meter.flush(now);
             true
         });
+    }
+
+    fn enforce_memory_limit(&self, limit: u64) {
+        self.memory_meters.iter_sync(|_, meter| {
+            meter.enforce_limit(limit);
+            true
+        });
+    }
+
+    fn capture_usage_update(
+        &self,
+        refresh_threshold_secs: i64,
+    ) -> Option<(ResourceUsageUpdate, (i64, i64))> {
+        self.flush_memory_meters(Instant::now());
+        let fuel_delta = self.delta.swap(0, Ordering::AcqRel);
+        let (
+            memory_gb_seconds_delta,
+            durable_memory_gb_seconds_delta,
+            ephemeral_memory_gb_seconds_delta,
+        ) = {
+            let _transition = self.memory_usage_transition.lock().unwrap();
+            (
+                self.memory_gb_seconds_delta.swap(0, Ordering::AcqRel),
+                self.durable_memory_gb_seconds_delta
+                    .swap(0, Ordering::AcqRel),
+                self.ephemeral_memory_gb_seconds_delta
+                    .swap(0, Ordering::AcqRel),
+            )
+        };
+        let http_count = self.unsynced_http_calls.swap(0, Ordering::AcqRel);
+        let rpc_count = self.unsynced_rpc_calls.swap(0, Ordering::AcqRel);
+        let active =
+            fuel_delta != 0 || memory_gb_seconds_delta != 0 || http_count > 0 || rpc_count > 0;
+        let stale = self.secs_since_last_refresh() >= refresh_threshold_secs;
+
+        if !active && !stale {
+            return None;
+        }
+
+        self.flush_storage_meters(Instant::now());
+        let durable_storage_byte_seconds_delta =
+            self.durable_byte_seconds_delta.swap(0, Ordering::AcqRel);
+        let ephemeral_storage_byte_seconds_delta =
+            self.ephemeral_byte_seconds_delta.swap(0, Ordering::AcqRel);
+        if http_count > 0 {
+            self.syncing_http_calls
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                    Some(count.saturating_add(http_count))
+                })
+                .ok();
+        }
+        if rpc_count > 0 {
+            self.syncing_rpc_calls
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                    Some(count.saturating_add(rpc_count))
+                })
+                .ok();
+        }
+        self.in_flight_delta
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
+                Some(delta.saturating_add(fuel_delta))
+            })
+            .ok();
+        self.in_flight_memory_gb_seconds_delta
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
+                Some(delta.saturating_add(memory_gb_seconds_delta))
+            })
+            .ok();
+        self.in_flight_durable_memory_gb_seconds_delta
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
+                Some(delta.saturating_add(durable_memory_gb_seconds_delta))
+            })
+            .ok();
+        self.in_flight_ephemeral_memory_gb_seconds_delta
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
+                Some(delta.saturating_add(ephemeral_memory_gb_seconds_delta))
+            })
+            .ok();
+        Some((
+            ResourceUsageUpdate {
+                fuel_delta,
+                memory_gb_seconds_delta,
+                http_call_count_delta: http_count,
+                rpc_call_count_delta: rpc_count,
+                durable_storage_byte_seconds_delta,
+                ephemeral_storage_byte_seconds_delta,
+            },
+            (
+                durable_memory_gb_seconds_delta,
+                ephemeral_memory_gb_seconds_delta,
+            ),
+        ))
     }
 
     pub fn record_memory_gb_seconds(&self, mode: AgentMode, amount: i64) {
@@ -380,18 +472,15 @@ impl AtomicResourceEntry {
         if remainder == 0 {
             return;
         }
+        let _transition = self.memory_usage_transition.lock().unwrap();
         let units = {
             let mut account_remainder = self.memory_remainder.lock().unwrap();
-            let mode_remainder = match mode {
-                AgentMode::Durable => &mut account_remainder.0,
-                AgentMode::Ephemeral => &mut account_remainder.1,
-            };
-            *mode_remainder = mode_remainder.saturating_add(remainder);
-            let units = *mode_remainder / BYTE_NANOSECONDS_PER_GB_SECOND;
-            *mode_remainder %= BYTE_NANOSECONDS_PER_GB_SECOND;
+            *account_remainder = account_remainder.saturating_add(remainder);
+            let units = *account_remainder / BYTE_NANOSECONDS_PER_GB_SECOND;
+            *account_remainder %= BYTE_NANOSECONDS_PER_GB_SECOND;
             units.min(i64::MAX as u128) as i64
         };
-        self.record_memory_gb_seconds(mode, units);
+        self.record_memory_gb_seconds_locked(mode, units);
     }
 
     #[cfg(test)]
@@ -584,121 +673,42 @@ impl ResourceLimitsGrpc {
     /// double-counted next cycle; stale idle accounts are retried next tick.
     async fn send_batch(&self, refresh_threshold_secs: i64) {
         async {
-            let mut updates: HashMap<AccountId, ResourceUsageUpdate> = HashMap::new();
-            let mut memory_mode_updates: HashMap<AccountId, (i64, i64)> = HashMap::new();
-
+            let mut entries = Vec::new();
             self.entries
-                .iter_async(|k, cell| {
+                .iter_async(|account_id, cell| {
                     if let Some(entry) = cell.get() {
-                        // Memory occupancy is billed on every regular batch tick, including for
-                        // long-running agents that have not yielded since the previous tick.
-                        entry.flush_memory_meters(Instant::now());
-                        let fuel_delta = entry.delta.swap(0, Ordering::AcqRel);
-                        let (
-                            memory_gb_seconds_delta,
-                            durable_memory_gb_seconds_delta,
-                            ephemeral_memory_gb_seconds_delta,
-                        ) = {
-                            let _transition = entry.memory_usage_transition.lock().unwrap();
-                            (
-                                entry.memory_gb_seconds_delta.swap(0, Ordering::AcqRel),
-                                entry
-                                    .durable_memory_gb_seconds_delta
-                                    .swap(0, Ordering::AcqRel),
-                                entry
-                                    .ephemeral_memory_gb_seconds_delta
-                                    .swap(0, Ordering::AcqRel),
-                            )
-                        };
-                        // Move unsynced call counts into the syncing bucket for this batch.
-                        let http_count = entry.unsynced_http_calls.swap(0, Ordering::AcqRel);
-                        let rpc_count = entry.unsynced_rpc_calls.swap(0, Ordering::AcqRel);
-                        let active = fuel_delta != 0
-                            || memory_gb_seconds_delta != 0
-                            || http_count > 0
-                            || rpc_count > 0;
-                        let stale = entry.secs_since_last_refresh() >= refresh_threshold_secs;
-
-                        if active || stale {
-                            // Integrate the meters only when this batch will actually ship an
-                            // update. Neither `active` nor `stale` depends on storage, and
-                            // un-integrated byte-nanoseconds stay in the meter's own state until
-                            // the next flush or its `Drop`, so nothing is lost by deferring —
-                            // storage-only accounts simply settle on the limit refresh interval
-                            // instead of every batch tick.
-                            entry.flush_storage_meters(Instant::now());
-                            let durable_storage_byte_seconds_delta =
-                                entry.durable_byte_seconds_delta.swap(0, Ordering::AcqRel);
-                            let ephemeral_storage_byte_seconds_delta =
-                                entry.ephemeral_byte_seconds_delta.swap(0, Ordering::AcqRel);
-                            if http_count > 0 {
-                                entry
-                                    .syncing_http_calls
-                                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
-                                        Some(c.saturating_add(http_count))
-                                    })
-                                    .ok();
-                            }
-                            if rpc_count > 0 {
-                                entry
-                                    .syncing_rpc_calls
-                                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
-                                        Some(c.saturating_add(rpc_count))
-                                    })
-                                    .ok();
-                            }
-
-                            entry
-                                .in_flight_delta
-                                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |d| {
-                                    Some(d.saturating_add(fuel_delta))
-                                })
-                                .ok();
-                            entry
-                                .in_flight_memory_gb_seconds_delta
-                                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
-                                    Some(delta.saturating_add(memory_gb_seconds_delta))
-                                })
-                                .ok();
-                            entry
-                                .in_flight_durable_memory_gb_seconds_delta
-                                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
-                                    Some(delta.saturating_add(durable_memory_gb_seconds_delta))
-                                })
-                                .ok();
-                            entry
-                                .in_flight_ephemeral_memory_gb_seconds_delta
-                                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
-                                    Some(delta.saturating_add(ephemeral_memory_gb_seconds_delta))
-                                })
-                                .ok();
-                            memory_mode_updates.insert(
-                                *k,
-                                (
-                                    durable_memory_gb_seconds_delta,
-                                    ephemeral_memory_gb_seconds_delta,
-                                ),
-                            );
-                            updates.insert(
-                                *k,
-                                ResourceUsageUpdate {
-                                    fuel_delta,
-                                    memory_gb_seconds_delta,
-                                    http_call_count_delta: http_count,
-                                    rpc_call_count_delta: rpc_count,
-                                    durable_storage_byte_seconds_delta,
-                                    ephemeral_storage_byte_seconds_delta,
-                                },
-                            );
-                        }
+                        entries.push((*account_id, entry.clone()));
                     }
                     true
                 })
                 .await;
+            let captured = tokio::task::spawn_blocking(move || {
+                let mut updates = HashMap::new();
+                let mut memory_mode_updates = HashMap::new();
+                for (account_id, entry) in entries {
+                    if let Some((update, mode_update)) =
+                        entry.capture_usage_update(refresh_threshold_secs)
+                    {
+                        updates.insert(account_id, update);
+                        memory_mode_updates.insert(account_id, mode_update);
+                    }
+                }
+                (updates, memory_mode_updates)
+            })
+            .await
+            .expect("resource usage capture task panicked");
+            let (updates, memory_mode_updates) = captured;
 
             if updates.is_empty() {
                 return;
             }
+
+            let mut pending_updates = updates.into_iter();
+            loop {
+                let updates: HashMap<_, _> = pending_updates.by_ref().take(256).collect();
+                if updates.is_empty() {
+                    break;
+                }
 
             tracing::debug!(
                 "Sending batch: {} fuel, {} memory, {} durable storage, {} ephemeral storage, {} http, {} rpc, {} stale idle account(s)",
@@ -746,6 +756,17 @@ impl ResourceLimitsGrpc {
             {
                 Ok(updated_limits) => {
                     for (account_id, update) in &updates {
+                        let Some(resource_limits) = updated_limits.0.get(account_id) else {
+                            record_resource_usage_batch_update_failure();
+                            error!(
+                                "Registry did not apply resource usage update for account {account_id}; dropping the in-flight update"
+                            );
+                            self.reset_in_flight_delta(*account_id).await;
+                            continue;
+                        };
+                        if !resource_limits.usage_update_applied {
+                            continue;
+                        }
                         let durable = update.durable_storage_byte_seconds_delta;
                         let ephemeral = update.ephemeral_storage_byte_seconds_delta;
                         let (durable_memory, ephemeral_memory) = memory_mode_updates
@@ -812,6 +833,7 @@ impl ResourceLimitsGrpc {
                     }
                 }
             }
+            }
         }
         .instrument(info_span!("resource_limits_batch_update"))
         .await
@@ -838,10 +860,13 @@ impl ResourceLimitsGrpc {
             entry
                 .fuel
                 .store(updated_limits.available_fuel, Ordering::Release);
-            entry.max_memory.store(
+            let previous_max_memory = entry.max_memory.swap(
                 updated_limits.max_memory_per_worker as usize,
-                Ordering::Release,
+                Ordering::AcqRel,
             );
+            if updated_limits.max_memory_per_worker < previous_max_memory as u64 {
+                entry.enforce_memory_limit(updated_limits.max_memory_per_worker);
+            }
             entry.max_table_elements.store(
                 updated_limits.max_table_elements_per_worker as usize,
                 Ordering::Release,
@@ -1515,6 +1540,7 @@ mod tests {
             available_rpc_calls: 3,
             max_concurrent_agents_per_executor: u64::MAX,
             oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+            usage_update_applied: true,
         });
 
         let svc = make_grpc(mock.clone());
@@ -1540,6 +1566,7 @@ mod tests {
                 available_rpc_calls: 40,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                usage_update_applied: true,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1573,6 +1600,7 @@ mod tests {
             available_rpc_calls: 10,
             max_concurrent_agents_per_executor: u64::MAX,
             oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+            usage_update_applied: true,
         });
         let mut updated = HashMap::new();
         updated.insert(
@@ -1588,6 +1616,7 @@ mod tests {
                 available_rpc_calls: 10,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                usage_update_applied: true,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1686,6 +1715,7 @@ mod tests {
                     available_rpc_calls: u64::MAX,
                     max_concurrent_agents_per_executor: u64::MAX,
                     oplog_writes_per_second: u64::MAX,
+                    usage_update_applied: true,
                 })),
                 batch_update_result: Mutex::new(Ok(AccountResourceLimits(HashMap::new()))),
                 last_batch_updates: Mutex::new(HashMap::new()),
@@ -2061,6 +2091,7 @@ mod tests {
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                usage_update_applied: true,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -2103,6 +2134,7 @@ mod tests {
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                usage_update_applied: true,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -2165,6 +2197,7 @@ mod tests {
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                usage_update_applied: true,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -2199,6 +2232,7 @@ mod tests {
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                usage_update_applied: true,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -2298,6 +2332,7 @@ mod tests {
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                usage_update_applied: true,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -2330,6 +2365,7 @@ mod tests {
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                usage_update_applied: true,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -2389,6 +2425,7 @@ mod tests {
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                usage_update_applied: true,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -2428,6 +2465,7 @@ mod tests {
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                usage_update_applied: true,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -2501,6 +2539,7 @@ mod tests {
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                usage_update_applied: true,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -2533,6 +2572,7 @@ mod tests {
             available_rpc_calls: u64::MAX,
             max_concurrent_agents_per_executor: limit,
             oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+            usage_update_applied: true,
         });
         mock
     }
@@ -2583,6 +2623,7 @@ mod tests {
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: 10,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                usage_update_applied: true,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -2617,6 +2658,7 @@ mod tests {
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: 3,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                usage_update_applied: true,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));

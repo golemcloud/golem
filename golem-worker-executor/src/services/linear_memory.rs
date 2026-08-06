@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::active_workers::MemoryGrant;
 use crate::services::agent_memory_meter::AgentMemoryMeter;
 use crate::services::resource_limits::AtomicResourceEntry;
 use golem_common::model::agent::AgentMode;
@@ -30,36 +31,55 @@ struct Inner {
     initially_reserved_bytes: u64,
     startup_bytes_remaining: AtomicU64,
     pending_growth_prepaid: AtomicU64,
+    growth_has_pending_grant: AtomicBool,
+    pending_growth_grants: Mutex<Vec<MemoryGrant>>,
+    retained_growth_grant: Arc<Mutex<MemoryGrant>>,
     reconciling: AtomicBool,
     replaying: AtomicBool,
     transitions: Mutex<()>,
+    resource_entry: Arc<AtomicResourceEntry>,
     meter: AgentMemoryMeter,
 }
 
 impl LinearMemoryTracker {
-    pub fn new(
+    pub(crate) fn new(
         bytes: u64,
+        initially_reserved_bytes: u64,
         mode: AgentMode,
         replaying: bool,
         resource_entry: Arc<AtomicResourceEntry>,
+        retained_growth_grant: Arc<Mutex<MemoryGrant>>,
         now: Instant,
     ) -> Self {
-        Self {
+        let tracker = Self {
             inner: Arc::new(Inner {
                 bytes: AtomicU64::new(bytes),
-                initially_reserved_bytes: bytes,
-                startup_bytes_remaining: AtomicU64::new(bytes),
+                initially_reserved_bytes,
+                startup_bytes_remaining: AtomicU64::new(initially_reserved_bytes),
                 pending_growth_prepaid: AtomicU64::new(0),
+                growth_has_pending_grant: AtomicBool::new(false),
+                pending_growth_grants: Mutex::new(Vec::new()),
+                retained_growth_grant,
                 reconciling: AtomicBool::new(true),
                 replaying: AtomicBool::new(replaying),
                 transitions: Mutex::new(()),
+                resource_entry: resource_entry.clone(),
                 meter: AgentMemoryMeter::new(mode, bytes, true, resource_entry, now),
             }),
-        }
+        };
+        tracker
+            .inner
+            .meter
+            .set_protected_bytes(initially_reserved_bytes);
+        tracker
     }
 
     pub fn current_bytes(&self) -> u64 {
         self.inner.bytes.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set_limit_exceeded_callback(&self, callback: Arc<dyn Fn() + Send + Sync>) {
+        self.inner.meter.set_limit_exceeded_callback(callback);
     }
 
     pub fn initially_reserved_bytes(&self) -> u64 {
@@ -71,34 +91,88 @@ impl LinearMemoryTracker {
         self.inner.replaying.store(false, Ordering::Release);
     }
 
+    pub fn reconciliation_grant_bytes(&self, bytes: u64) -> u64 {
+        if self.inner.replaying.load(Ordering::Acquire) {
+            bytes.max(self.inner.initially_reserved_bytes)
+        } else {
+            bytes
+        }
+    }
+
     pub fn reconcile(&self, bytes: u64, now: Instant) {
         let _transition = self.inner.transitions.lock().unwrap();
         self.inner.meter.set_bytes(bytes, now);
         self.inner.bytes.store(bytes, Ordering::Release);
         self.inner
+            .meter
+            .set_protected_bytes(self.reconciliation_grant_bytes(bytes));
+        self.inner
+            .meter
+            .enforce_limit(self.inner.resource_entry.max_memory_limit() as u64);
+        let startup_bytes_remaining = if self.inner.replaying.load(Ordering::Acquire) {
+            self.inner.initially_reserved_bytes.saturating_sub(bytes)
+        } else {
+            0
+        };
+        self.inner
             .startup_bytes_remaining
-            .store(0, Ordering::Release);
+            .store(startup_bytes_remaining, Ordering::Release);
         self.inner
             .pending_growth_prepaid
             .store(0, Ordering::Release);
+        let pending_grants = std::mem::take(&mut *self.inner.pending_growth_grants.lock().unwrap());
+        let mut retained_grant = self.inner.retained_growth_grant.lock().unwrap();
+        for grant in pending_grants {
+            retained_grant.merge(grant);
+        }
+        self.inner
+            .growth_has_pending_grant
+            .store(false, Ordering::Release);
         self.inner.reconciling.store(false, Ordering::Release);
     }
 
     pub fn grow(&self, delta: u64, now: Instant) -> (u64, bool) {
         let _transition = self.inner.transitions.lock().unwrap();
+        if self
+            .inner
+            .growth_has_pending_grant
+            .swap(false, Ordering::AcqRel)
+            && let Some(grant) = self.inner.pending_growth_grants.lock().unwrap().pop()
+        {
+            self.inner
+                .retained_growth_grant
+                .lock()
+                .unwrap()
+                .merge(grant);
+        }
+        let reconciling = self.inner.reconciling.load(Ordering::Acquire);
         let prepaid = self
             .inner
             .pending_growth_prepaid
             .swap(0, Ordering::AcqRel)
             .min(delta);
-        let bytes = self.current_bytes().saturating_add(delta - prepaid);
+        let tracked_delta = if reconciling { delta - prepaid } else { delta };
+        let bytes = self.current_bytes().saturating_add(tracked_delta);
         self.inner.meter.set_bytes(bytes, now);
         self.inner.bytes.store(bytes, Ordering::Release);
-        (bytes, self.inner.reconciling.load(Ordering::Acquire))
+        self.inner
+            .meter
+            .set_protected_bytes(self.reconciliation_grant_bytes(bytes));
+        self.inner
+            .meter
+            .enforce_limit(self.inner.resource_entry.max_memory_limit() as u64);
+        (bytes, reconciling)
     }
 
     pub fn memory_grow_failed(&self) {
         let _transition = self.inner.transitions.lock().unwrap();
+        if self
+            .inner
+            .growth_has_pending_grant
+            .swap(false, Ordering::AcqRel)
+        {
+            self.inner.pending_growth_grants.lock().unwrap().pop();
+        }
         let prepaid = self.inner.pending_growth_prepaid.swap(0, Ordering::AcqRel);
         self.inner
             .startup_bytes_remaining
@@ -112,12 +186,15 @@ impl LinearMemoryTracker {
         &self,
         current_memory: usize,
         desired_memory: usize,
-    ) -> Option<(u64, u64)> {
+    ) -> Option<(u64, u64, u64)> {
         let _transition = self.inner.transitions.lock().unwrap();
+        self.inner
+            .growth_has_pending_grant
+            .store(false, Ordering::Release);
         let delta = desired_memory.saturating_sub(current_memory) as u64;
         let reconciling = self.inner.reconciling.load(Ordering::Acquire);
-        let prepaid = if reconciling
-            && (current_memory == 0 || self.inner.replaying.load(Ordering::Acquire))
+        let prepaid = if (reconciling && current_memory == 0)
+            || self.inner.replaying.load(Ordering::Acquire)
         {
             let remaining = self.inner.startup_bytes_remaining.load(Ordering::Acquire);
             let prepaid = delta.min(remaining);
@@ -128,14 +205,26 @@ impl LinearMemoryTracker {
         } else {
             0
         };
-        if current_memory != 0 {
-            self.inner
-                .pending_growth_prepaid
-                .store(prepaid, Ordering::Release);
-        }
-        self.current_bytes()
-            .checked_add(delta - prepaid)
-            .map(|total| (delta, total))
+        self.inner
+            .pending_growth_prepaid
+            .store(prepaid, Ordering::Release);
+        let admission_delta = delta - prepaid;
+        let protected_base = if reconciling {
+            self.inner.initially_reserved_bytes
+        } else {
+            self.current_bytes()
+        };
+        let protected_delta = if reconciling { admission_delta } else { delta };
+        let protected_total = protected_base.checked_add(protected_delta)?;
+        Some((delta, admission_delta, protected_total))
+    }
+
+    pub(crate) fn retain_growth_grant(&self, grant: MemoryGrant) {
+        let _transition = self.inner.transitions.lock().unwrap();
+        self.inner.pending_growth_grants.lock().unwrap().push(grant);
+        self.inner
+            .growth_has_pending_grant
+            .store(true, Ordering::Release);
     }
 
     pub fn resume(&self, now: Instant) {
@@ -172,8 +261,13 @@ mod tests {
     use super::*;
     use crate::services::resource_limits::AtomicResourceEntry;
     use golem_common::model::agent::AgentMode;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Instant;
     use test_r::test;
+
+    fn grant() -> Arc<Mutex<MemoryGrant>> {
+        Arc::new(Mutex::new(MemoryGrant::inert(0)))
+    }
 
     #[test]
     fn independent_memory_growth_uses_specific_memory_delta() {
@@ -186,6 +280,32 @@ mod tests {
     }
 
     #[test]
+    fn independent_memories_update_one_canonical_aggregate() {
+        let now = Instant::now();
+        let tracker = LinearMemoryTracker::new(
+            30,
+            30,
+            AgentMode::Durable,
+            false,
+            Arc::new(AtomicResourceEntry::new(0, 42, 0, 0, 0)),
+            grant(),
+            now,
+        );
+        tracker.reconcile(30, now);
+
+        assert_eq!(
+            tracker.desired_total_after_unshared_growth(10, 20),
+            Some((10, 10, 40))
+        );
+        assert_eq!(tracker.grow(10, now), (40, false));
+        assert_eq!(
+            tracker.desired_total_after_unshared_growth(20, 25),
+            Some((5, 5, 45))
+        );
+        assert_eq!(tracker.current_bytes(), 40);
+    }
+
+    #[test]
     fn growth_total_detects_overflow() {
         assert_eq!(desired_total_after_growth(u64::MAX, 0, 1), None);
     }
@@ -195,9 +315,11 @@ mod tests {
         let now = Instant::now();
         let tracker = LinearMemoryTracker::new(
             40,
+            40,
             AgentMode::Durable,
             false,
             Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
+            grant(),
             now,
         );
         tracker.grow(20, now);
@@ -212,24 +334,47 @@ mod tests {
         let now = Instant::now();
         let tracker = LinearMemoryTracker::new(
             40,
+            40,
             AgentMode::Durable,
             false,
             Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
+            grant(),
             now,
         );
 
         assert_eq!(
             tracker.desired_total_after_unshared_growth(0, 15),
-            Some((15, 40))
+            Some((15, 0, 40))
         );
         assert_eq!(
             tracker.desired_total_after_unshared_growth(0, 25),
-            Some((25, 40))
+            Some((25, 0, 40))
         );
         assert_eq!(
             tracker.desired_total_after_unshared_growth(25, 35),
-            Some((10, 50))
+            Some((10, 10, 50))
         );
+    }
+
+    #[test]
+    fn live_initialization_consumes_the_startup_grant_without_double_counting() {
+        let now = Instant::now();
+        let tracker = LinearMemoryTracker::new(
+            40,
+            40,
+            AgentMode::Durable,
+            true,
+            Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
+            grant(),
+            now,
+        );
+        tracker.switch_to_live();
+
+        assert_eq!(
+            tracker.desired_total_after_unshared_growth(0, 40),
+            Some((40, 0, 40))
+        );
+        assert_eq!(tracker.grow(40, now), (40, true));
     }
 
     #[test]
@@ -237,21 +382,70 @@ mod tests {
         let now = Instant::now();
         let tracker = LinearMemoryTracker::new(
             50,
+            50,
             AgentMode::Durable,
             true,
             Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
+            grant(),
             now,
         );
 
         assert_eq!(
             tracker.desired_total_after_unshared_growth(0, 40),
-            Some((40, 50))
+            Some((40, 0, 50))
         );
+        tracker.reconcile(40, now);
+        assert_eq!(tracker.reconciliation_grant_bytes(40), 50);
         assert_eq!(
             tracker.desired_total_after_unshared_growth(40, 50),
-            Some((10, 50))
+            Some((10, 0, 50))
         );
         tracker.grow(10, now);
         assert_eq!(tracker.current_bytes(), 50);
+    }
+
+    #[test]
+    fn failed_zero_page_growth_releases_its_pending_grant() {
+        let now = Instant::now();
+        let tracker = LinearMemoryTracker::new(
+            0,
+            0,
+            AgentMode::Durable,
+            false,
+            Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
+            grant(),
+            now,
+        );
+        tracker.reconcile(0, now);
+        tracker.retain_growth_grant(MemoryGrant::inert(0));
+
+        assert_eq!(tracker.inner.pending_growth_grants.lock().unwrap().len(), 1);
+        tracker.memory_grow_failed();
+        assert!(
+            tracker
+                .inner
+                .pending_growth_grants
+                .lock()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn committed_growth_rechecks_a_concurrently_lowered_limit() {
+        let now = Instant::now();
+        let entry = Arc::new(AtomicResourceEntry::new(0, 10, 0, 0, 0));
+        let tracker =
+            LinearMemoryTracker::new(5, 5, AgentMode::Durable, false, entry, grant(), now);
+        tracker.reconcile(5, now);
+        let exceeded = Arc::new(AtomicBool::new(false));
+        let exceeded_clone = exceeded.clone();
+        tracker.set_limit_exceeded_callback(Arc::new(move || {
+            exceeded_clone.store(true, Ordering::Release);
+        }));
+
+        tracker.grow(10, now);
+
+        assert!(exceeded.load(Ordering::Acquire));
     }
 }

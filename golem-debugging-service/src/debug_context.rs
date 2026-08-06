@@ -357,11 +357,13 @@ impl FileSystemReading for DebugContext {
 impl ResourceLimiterAsync for DebugContext {
     async fn memory_growing(
         &mut self,
-        _current: usize,
-        _desired: usize,
-        _maximum: Option<usize>,
+        current: usize,
+        desired: usize,
+        maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
-        Ok(true)
+        self.durable_ctx
+            .admit_unshared_memory_growth(current, desired, maximum)
+            .await
     }
 
     fn memory_grown(&mut self, current: usize, desired: usize) {
@@ -369,6 +371,11 @@ impl ResourceLimiterAsync for DebugContext {
         if delta > 0 {
             self.durable_ctx.increase_memory(delta);
         }
+    }
+
+    fn memory_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
+        self.durable_ctx.unshared_memory_growth_failed();
+        Ok(())
     }
 
     async fn table_growing(

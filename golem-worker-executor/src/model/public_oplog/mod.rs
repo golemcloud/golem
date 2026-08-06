@@ -587,6 +587,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 target_revision,
                 new_component_size,
+                new_total_linear_memory_size: _,
                 new_active_plugins,
             } => {
                 let metadata = components

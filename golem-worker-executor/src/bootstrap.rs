@@ -54,3 +54,22 @@ pub async fn run(
     )
     .await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::golem_config::EngineConfig;
+    use test_r::test;
+    use wasmtime::{Engine, Module};
+
+    #[test]
+    fn production_engine_rejects_shared_memory_modules() {
+        let config = <ServerBootstrap as Bootstrap<Context>>::create_wasmtime_config(
+            &ServerBootstrap,
+            &EngineConfig::default(),
+        );
+        let engine = Engine::new(&config).unwrap();
+
+        assert!(Module::new(&engine, "(module (memory 1 2 shared))").is_err());
+    }
+}

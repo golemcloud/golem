@@ -1181,6 +1181,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         violates_for_all: false,
                     } if prepared.retry.durable_execution_state().assume_idempotence => {
                         prepared.replay_state.switch_to_live().await;
+                        prepared.linear_memory.switch_to_live();
                         let deleted_region = OplogRegion {
                             start: begin_index.next(),
                             end: prepared.replay_state.replay_target().next(),
@@ -1203,6 +1204,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     }
                     OplogEntryLookupResult::NotFound { .. } => {
                         prepared.replay_state.switch_to_live().await;
+                        prepared.linear_memory.switch_to_live();
                         Err((
                             WorkerExecutorError::runtime(
                                 "Non-idempotent remote write operation was not completed, cannot retry",
@@ -3251,14 +3253,18 @@ where
     Ctx: WorkerCtx,
 {
     tracing::info!("Worker update to {} finished successfully", target_revision);
-    let public_state = store.with(|mut access| get_ctx(access.data_mut()).public_state.clone());
-    public_state
-        .worker()
-        .add_and_commit_oplog(OplogEntry::successful_update(
+    let (public_state, linear_memory) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        (ctx.public_state.clone(), ctx.linear_memory_tracker())
+    });
+    let worker = public_state.worker();
+    worker
+        .persist_successful_update(
+            &linear_memory,
             target_revision,
             component_size,
             active_plugins,
-        ))
+        )
         .await;
     Ok(())
 }

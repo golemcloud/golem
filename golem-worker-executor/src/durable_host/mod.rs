@@ -53,6 +53,7 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::{
     AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
 };
+use crate::services::active_workers::MemoryGrant;
 use crate::services::agent_storage_meter::AgentStorageMeter;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
@@ -77,7 +78,9 @@ use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration};
+use crate::services::{
+    HasActiveWorkers, HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration,
+};
 use crate::services::{HasComponentService, HasOplogService, HasWorkerService};
 use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
@@ -572,6 +575,34 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )
             .await?;
 
+        if component_metadata
+            .metadata
+            .memories()
+            .iter()
+            .any(|memory| memory.shared)
+        {
+            return Err(WorkerExecutorError::worker_creation_failed(
+                owned_agent_id.agent_id.clone(),
+                "Shared linear memories require WebAssembly threads, which are not supported",
+            ));
+        }
+
+        let initial_linear_memory = component_metadata
+            .metadata
+            .memories()
+            .iter()
+            .map(|memory| memory.initial)
+            .fold(0u64, u64::saturating_add);
+        if initial_linear_memory > resource_limits.max_memory_limit() as u64 {
+            return Err(WorkerExecutorError::worker_creation_failed(
+                owned_agent_id.agent_id.clone(),
+                format!(
+                    "Linear memories require {initial_linear_memory} bytes, exceeding the per-agent limit of {} bytes",
+                    resource_limits.max_memory_limit()
+                ),
+            ));
+        }
+
         let agent_type_provision_configs = agent_id.as_ref().and_then(|agent_id| {
             component_metadata
                 .metadata
@@ -673,13 +704,28 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Instant::now(),
         );
         resource_limits.register_storage_meter(owned_agent_id.clone(), storage_meter.clone());
+        let worker = invocation_queue
+            .upgrade()
+            .expect("worker must remain alive while creating its context");
+        let retained_memory_grant = worker.linear_memory_grant();
+        let canonical_startup_bytes = worker.startup_linear_memory_bytes();
+        let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
         let linear_memory = LinearMemoryTracker::new(
-            worker_config.total_linear_memory_size,
+            canonical_startup_bytes,
+            admitted_startup_bytes,
             execution_status.read().unwrap().agent_mode(),
             true,
             resource_limits.clone(),
+            retained_memory_grant,
             Instant::now(),
         );
+        let weak_worker = Arc::downgrade(&worker);
+        let memory_meter = linear_memory.meter().clone();
+        linear_memory.set_limit_exceeded_callback(Arc::new(move || {
+            if let Some(worker) = weak_worker.upgrade() {
+                worker.request_memory_limit_interrupt(memory_meter.clone());
+            }
+        }));
         let state = PrivateDurableWorkerState::new(
             agent_id,
             oplog_service,
@@ -1296,7 +1342,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self,
         current_memory: usize,
         desired_memory: usize,
-    ) -> Option<(u64, u64)> {
+    ) -> Option<(u64, u64, u64)> {
         self.linear_memory
             .desired_total_after_unshared_growth(current_memory, desired_memory)
     }
@@ -1495,11 +1541,51 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // Wasmtime runs through a blocking libcall on the store's fiber. While
             // that libcall waits, the store cannot make progress, so nothing may be
             // awaited here (see https://github.com/bytecodealliance/wasmtime/issues/11869).
-            // The oplog hint and the global memory admission run as a fire-and-forget
-            // job on the worker-state actor's lifecycle queue; see
-            // `Worker::request_memory_grow` for the admission-failure semantics.
+            // The oplog hint runs as a fire-and-forget job on the worker-state
+            // actor. Host-capacity admission completed before Wasmtime committed
+            // this growth.
             self.public_state.worker().request_memory_grow(delta);
         }
+    }
+
+    pub(crate) async fn try_acquire_linear_memory(&self, delta: u64) -> Option<MemoryGrant> {
+        self.public_state
+            .worker()
+            .active_workers()
+            .try_acquire(delta)
+            .await
+    }
+
+    pub async fn admit_unshared_memory_growth(
+        &self,
+        current: usize,
+        desired: usize,
+        maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        let tracker = self.linear_memory_tracker();
+        let growth = self.desired_total_after_unshared_memory_growth(current, desired);
+        if growth
+            .is_none_or(|(_, _, protected_total)| protected_total > self.max_linear_memory_size())
+            || maximum.is_some_and(|maximum| desired > maximum)
+        {
+            tracker.memory_grow_failed();
+            return Err(GolemSpecificWasmTrap::WorkerExceededMemoryLimit.into());
+        }
+
+        let (_, admission_delta, _) = growth.unwrap();
+        if admission_delta > 0 {
+            let Some(grant) = self.try_acquire_linear_memory(admission_delta).await else {
+                tracker.memory_grow_failed();
+                crate::metrics::workers::record_worker_memory_grow_rejected();
+                return Err(GolemSpecificWasmTrap::WorkerOutOfMemory.into());
+            };
+            tracker.retain_growth_grant(grant);
+        }
+        Ok(true)
+    }
+
+    pub fn unshared_memory_growth_failed(&self) {
+        self.linear_memory.memory_grow_failed();
     }
 
     /// Returns the deterministic, policy-independent recovery decision for a
@@ -3963,12 +4049,15 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         >,
     ) {
         info!("Worker update to {} finished successfully", target_revision);
-        let entry = OplogEntry::successful_update(
-            target_revision,
-            new_component_size,
-            new_active_plugins.clone(),
-        );
-        self.public_state.worker().add_and_commit_oplog(entry).await;
+        let worker = self.public_state.worker();
+        worker
+            .persist_successful_update(
+                &self.linear_memory,
+                target_revision,
+                new_component_size,
+                new_active_plugins,
+            )
+            .await;
     }
 }
 

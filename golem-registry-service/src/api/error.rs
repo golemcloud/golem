@@ -346,6 +346,9 @@ impl From<AccountResourceOverrideError> for ApiError {
             AccountResourceOverrideError::ExceedsPlanCeiling(_, _) => {
                 Self::limit_exceeded(api::error_code::LIMIT_EXCEEDED, error)
             }
+            AccountResourceOverrideError::BelowPlanDefault(_, _) => {
+                Self::bad_request(api::error_code::LIMIT_EXCEEDED, error)
+            }
             AccountResourceOverrideError::ExpiryRequiresAdmin => {
                 Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
             }

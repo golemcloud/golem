@@ -24,7 +24,7 @@ use crate::repo::model::account_usage::{
 use crate::repo::model::plan::PlanRecord;
 use crate::services::account_usage::error::AccountUsageError;
 use chrono::{TimeZone, Utc};
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::account_usage::{
     StorageLimit, StorageUsage, StorageUsageHistory, StorageUsageMetrics, StorageUsagePeriod,
@@ -197,7 +197,14 @@ impl AccountUsageService {
                     .acquire()
                     .await
                     .expect("resource usage concurrency semaphore must remain open");
-                let limits = match self.get_account_usage(account_id, None).await {
+                // The stats query loads every usage row for the monthly key,
+                // including gas, HTTP, RPC, storage, and memory, without the
+                // full account inventory aggregation.
+
+                match self
+                    .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
+                    .await
+                {
                     Ok(mut account_usage) => {
                         // Usage can slightly exceed the monthly limit. The worker executor
                         // will suspend the worker at the next opportunity.
@@ -233,13 +240,18 @@ impl AccountUsageService {
                             update.rpc_call_count_delta,
                         );
 
-                        self.account_usage_repo.add(&account_usage).await?;
-                        account_usage.resource_limits()
+                        match self.account_usage_repo.add(&account_usage).await {
+                            Ok(()) => Some((account_id, account_usage.resource_limits())),
+                            Err(error) => {
+                                tracing::error!(%account_id, %error, "Failed to apply resource usage update");
+                                None
+                            }
+                        }
                     }
                     Err(AccountUsageError::AccountNotfound(_)) => {
                         // we received an update for a deleted account
                         // return an empty set of limits to fence the executor more quickly
-                        ResourceLimits {
+                        Some((account_id, ResourceLimits {
                             available_fuel: 0,
                             max_memory_per_worker: 0,
                             max_table_elements_per_worker: 0,
@@ -250,15 +262,19 @@ impl AccountUsageService {
                             available_rpc_calls: 0,
                             max_concurrent_agents_per_executor: 0,
                             oplog_writes_per_second: 0,
-                        }
+                            usage_update_applied: false,
+                        }))
                     }
-                    Err(other) => return Err(other),
-                };
-                Ok((account_id, limits))
+                    Err(error) => {
+                        tracing::error!(%account_id, %error, "Failed to load account usage for resource update");
+                        None
+                    }
+                }
             })
             .buffer_unordered(4)
-            .try_collect::<HashMap<_, _>>()
-            .await?;
+            .filter_map(futures::future::ready)
+            .collect::<HashMap<_, _>>()
+            .await;
 
         Ok(AccountResourceLimits(limits))
     }
