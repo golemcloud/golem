@@ -4142,8 +4142,14 @@ impl RunningWorker {
             .memory_limit_interrupt_queued
             .store(false, Ordering::Release);
 
-        tracker.reconcile(allocated_bytes, std::time::Instant::now());
+        let live_instantiation_growth =
+            tracker.reconcile(allocated_bytes, std::time::Instant::now());
         crate::metrics::wasm::record_worker_allocated_linear_memory(allocated_bytes);
+        if live_instantiation_growth > 0 {
+            parent
+                .add_and_commit_oplog(OplogEntry::grow_memory(live_instantiation_growth))
+                .await;
+        }
 
         Ok(())
     }

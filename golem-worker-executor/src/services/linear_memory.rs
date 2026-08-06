@@ -37,6 +37,7 @@ pub(crate) struct UnsharedMemoryGrowth {
 #[derive(Debug)]
 struct Inner {
     bytes: AtomicU64,
+    persisted_startup_bytes: u64,
     initially_reserved_bytes: u64,
     startup_bytes_remaining: AtomicU64,
     pending_growth_prepaid: AtomicU64,
@@ -63,6 +64,7 @@ impl LinearMemoryTracker {
         let tracker = Self {
             inner: Arc::new(Inner {
                 bytes: AtomicU64::new(bytes),
+                persisted_startup_bytes: bytes,
                 initially_reserved_bytes,
                 startup_bytes_remaining: AtomicU64::new(initially_reserved_bytes),
                 pending_growth_prepaid: AtomicU64::new(0),
@@ -108,8 +110,13 @@ impl LinearMemoryTracker {
         }
     }
 
-    pub fn reconcile(&self, bytes: u64, now: Instant) {
+    pub fn reconcile(&self, bytes: u64, now: Instant) -> u64 {
         let _transition = self.inner.transitions.lock().unwrap();
+        let live_growth = if self.inner.replaying.load(Ordering::Acquire) {
+            0
+        } else {
+            bytes.saturating_sub(self.inner.persisted_startup_bytes)
+        };
         self.inner.meter.set_bytes(bytes, now);
         self.inner.bytes.store(bytes, Ordering::Release);
         self.inner
@@ -138,6 +145,7 @@ impl LinearMemoryTracker {
             .growth_has_pending_grant
             .store(false, Ordering::Release);
         self.inner.reconciling.store(false, Ordering::Release);
+        live_growth
     }
 
     pub fn grow(&self, delta: u64, now: Instant) -> (u64, bool) {
@@ -405,6 +413,29 @@ mod tests {
             })
         );
         assert_eq!(tracker.grow(40, now), (40, true));
+        assert_eq!(tracker.reconcile(40, now), 0);
+    }
+
+    #[test]
+    fn live_instantiation_growth_is_reported_for_persistence() {
+        let now = Instant::now();
+        let tracker = LinearMemoryTracker::new(
+            40,
+            40,
+            AgentMode::Durable,
+            true,
+            Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
+            grant(),
+            now,
+        );
+        tracker.switch_to_live();
+
+        tracker.prepare_unshared_growth(0, 40).unwrap();
+        tracker.grow(40, now);
+        tracker.prepare_unshared_growth(40, 50).unwrap();
+        tracker.grow(10, now);
+
+        assert_eq!(tracker.reconcile(50, now), 10);
     }
 
     #[test]
@@ -427,7 +458,7 @@ mod tests {
                 protected_total: 50,
             })
         );
-        tracker.reconcile(40, now);
+        assert_eq!(tracker.reconcile(40, now), 0);
         assert_eq!(tracker.reconciliation_grant_bytes(40), 50);
         assert_eq!(
             tracker.prepare_unshared_growth(40, 50),
