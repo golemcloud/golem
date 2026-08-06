@@ -11511,6 +11511,10 @@ components:
           type: integer
           format: uint64
           description: Optional maximal size of the linear memory in bytes
+        shared:
+          type: boolean
+          description: Whether the linear memory is shared between WebAssembly threads
+          default: false
     LiteralSegment:
       type: object
       title: LiteralSegment

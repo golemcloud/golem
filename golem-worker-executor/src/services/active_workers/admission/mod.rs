@@ -131,35 +131,6 @@ impl AdmissionController {
         }
     }
 
-    /// Bytes available for a new admission: the usable ceiling minus the larger
-    /// of measured RSS and the total memory granted to live workers. Saturating —
-    /// never underflows when already over the ceiling.
-    ///
-    /// A worker can fault in any page of the virtual memory it was granted at any
-    /// time, with no admission call to intercept it, so the gate must reserve the
-    /// full granted total even before it is resident. Measured RSS is only larger
-    /// than the granted total transiently (host/runtime overhead the grant does
-    /// not cover), so taking the maximum keeps the gate safe against both the
-    /// grant a worker may yet fault in and any usage the grant does not capture.
-    #[cfg(test)]
-    fn admissible_headroom(&self) -> u64 {
-        let granted = *self.granted.lock().unwrap();
-        self.headroom_with_granted(granted)
-    }
-
-    /// Computes admissible headroom for an already-read `granted` value. Reads
-    /// the probe and emits the ceiling/RSS metrics. Kept separate from the lock
-    /// acquisition so the decision-and-reserve sequence can hold the lock across
-    /// both steps (see [`Self::try_reserve_locked`]).
-    #[cfg(test)]
-    fn headroom_with_granted(&self, granted: u64) -> u64 {
-        let snapshot = self.constraining_snapshot();
-        let ceiling = (snapshot.limit_bytes as f64 * self.policy.usable_ratio) as u64;
-        crate::metrics::workers::record_worker_memory_ceiling(ceiling);
-        crate::metrics::workers::record_worker_admission_rss(snapshot.current_bytes);
-        ceiling.saturating_sub(snapshot.current_bytes.max(granted))
-    }
-
     /// Atomically admits `request_bytes` if the headroom computed against the
     /// current granted total covers it: reads `granted`, computes headroom, and
     /// adds the reservation all under one lock so two concurrent admissions
@@ -295,10 +266,14 @@ impl AdmissionController {
     }
 
     /// The current admissible headroom. Used by tests to assert the gate's
-    /// accounting; production reads headroom indirectly through admission.
+    /// accounting without publishing production metrics. Production reads
+    /// headroom indirectly through admission.
     #[cfg(test)]
     pub(crate) fn headroom_bytes(&self) -> u64 {
-        self.admissible_headroom()
+        let snapshot = self.constraining_snapshot();
+        let ceiling = (snapshot.limit_bytes as f64 * self.policy.usable_ratio) as u64;
+        let granted = *self.granted.lock().unwrap();
+        ceiling.saturating_sub(snapshot.current_bytes.max(granted))
     }
 
     /// Admit `request_bytes`, evicting resident idle-then-warm work if needed,
