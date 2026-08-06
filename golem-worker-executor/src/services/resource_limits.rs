@@ -682,22 +682,16 @@ impl ResourceLimitsGrpc {
                     true
                 })
                 .await;
-            let captured = tokio::task::spawn_blocking(move || {
-                let mut updates = HashMap::new();
-                let mut memory_mode_updates = HashMap::new();
-                for (account_id, entry) in entries {
-                    if let Some((update, mode_update)) =
-                        entry.capture_usage_update(refresh_threshold_secs)
-                    {
-                        updates.insert(account_id, update);
-                        memory_mode_updates.insert(account_id, mode_update);
-                    }
+            let mut updates = HashMap::new();
+            let mut memory_mode_updates = HashMap::new();
+            for (account_id, entry) in entries {
+                if let Some((update, mode_update)) =
+                    entry.capture_usage_update(refresh_threshold_secs)
+                {
+                    updates.insert(account_id, update);
+                    memory_mode_updates.insert(account_id, mode_update);
                 }
-                (updates, memory_mode_updates)
-            })
-            .await
-            .expect("resource usage capture task panicked");
-            let (updates, memory_mode_updates) = captured;
+            }
 
             if updates.is_empty() {
                 return;

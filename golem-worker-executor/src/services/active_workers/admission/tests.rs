@@ -1067,7 +1067,7 @@ mod grow_lock_ordering {
 
     /// Many workers growing concurrently under memory pressure (every grow takes
     /// the scanning slow path) must all complete without deadlocking.
-    #[test(flavor = "multi_thread", worker_threads = 4)]
+    #[test]
     async fn concurrent_grows_do_not_deadlock_under_pressure() {
         const WORKERS: usize = 32;
         const DEADLINE: Duration = Duration::from_secs(10);
@@ -1112,7 +1112,7 @@ mod grow_lock_ordering {
     /// scanning, so no worker's instance lock is taken during admission and
     /// concurrent grows complete. Confirms the deadlock risk is specific to the
     /// scan-under-pressure path.
-    #[test(flavor = "multi_thread", worker_threads = 4)]
+    #[test]
     async fn no_deadlock_with_ample_headroom() {
         const WORKERS: usize = 32;
         const DEADLINE: Duration = Duration::from_secs(10);
