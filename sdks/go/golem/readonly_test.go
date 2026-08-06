@@ -33,8 +33,8 @@ func TestReadOnlyLowering(t *testing.T) {
 		def := func(name string, opts ...MethodOpt) {
 			implementInto[Id, St, NoConfig, Unit, Unit](d, a, DefineMethod[Id, Unit, Unit](name, opts...), h)
 		}
-		def("rw")                                     // read-write
-		def("ro", ReadOnly())                         // default => until-write
+		def("rw")             // read-write
+		def("ro", ReadOnly()) // default => until-write
 		def("nc", ReadOnly(NoCache()))
 		def("uw", ReadOnly(CacheUntilWrite()))
 		def("ttl", ReadOnly(CacheFor(30*time.Second)))

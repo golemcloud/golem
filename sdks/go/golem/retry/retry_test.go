@@ -131,7 +131,7 @@ func TestValidationErrors(t *testing.T) {
 		{"clamp min>max", Named("x", Immediate().Clamp(2*time.Second, time.Second)), "must be <= max"},
 		{"negative duration", Named("x", Periodic(-time.Second)), "must be non-negative"},
 		{"bad predicate value", Named("x", Immediate().OnlyWhen(StatusCode.Eq(1.5))), "unsupported predicate value type"},
-		{"integer overflow", Named("x", Immediate().OnlyWhen(StatusCode.Eq(uint64(math.MaxInt64) + 1))), "overflows int64"},
+		{"integer overflow", Named("x", Immediate().OnlyWhen(StatusCode.Eq(uint64(math.MaxInt64)+1))), "overflows int64"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
