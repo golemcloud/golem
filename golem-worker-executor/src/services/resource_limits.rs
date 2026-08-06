@@ -14,22 +14,26 @@
 
 use crate::metrics::resources::{
     record_ephemeral_overdraft_fuel, record_fuel_borrow, record_fuel_return,
+    record_resource_usage_batch_update_failure, record_storage_byte_seconds,
 };
+use crate::services::agent_storage_meter::AgentStorageMeter;
 use crate::services::golem_config::ResourceLimitsConfig;
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::SafeDisplay;
+use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::AgentMode;
 use golem_service_base::clients::registry::{RegistryService, ResourceUsageUpdate};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
-use tracing::{Instrument, Level, error, span};
+use tracing::{Instrument, error, info_span};
 
 #[derive(Debug)]
 pub struct AtomicResourceEntry {
@@ -39,6 +43,9 @@ pub struct AtomicResourceEntry {
     delta: AtomicI64,
     // any fuel consumption that is currently in flight to the server
     in_flight_delta: AtomicI64,
+    durable_byte_seconds_delta: AtomicI64,
+    ephemeral_byte_seconds_delta: AtomicI64,
+    storage_meters: Arc<scc::HashMap<OwnedAgentId, AgentStorageMeter>>,
     // Current (cached) value of the account level worker memory limits
     max_memory: AtomicUsize,
     // Current (cached) value of the account level worker function table element limits
@@ -99,27 +106,18 @@ impl AtomicResourceEntry {
         max_disk_space: u64,
         max_concurrent_agents_per_executor: u64,
     ) -> Self {
-        Self {
-            fuel: AtomicU64::new(fuel),
-            delta: AtomicI64::new(0),
-            in_flight_delta: AtomicI64::new(0),
-            max_memory: AtomicUsize::new(max_memory),
-            max_table_elements: AtomicUsize::new(max_table_elements),
-            max_disk_space: AtomicU64::new(max_disk_space),
-            last_refresh_secs: AtomicI64::new(Utc::now().timestamp()),
-            per_invocation_http_call_limit: AtomicU64::new(u64::MAX),
-            per_invocation_rpc_call_limit: AtomicU64::new(u64::MAX),
-            available_http_calls_from_server: AtomicU64::new(u64::MAX),
-            unsynced_http_calls: AtomicU64::new(0),
-            syncing_http_calls: AtomicU64::new(0),
-            available_rpc_calls_from_server: AtomicU64::new(u64::MAX),
-            unsynced_rpc_calls: AtomicU64::new(0),
-            syncing_rpc_calls: AtomicU64::new(0),
-            max_concurrent_agents_per_executor: AtomicU64::new(max_concurrent_agents_per_executor),
-            oplog_writes_per_second: AtomicU64::new(
-                AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
-            ),
-        }
+        Self::new_with_all_limits(
+            fuel,
+            max_memory,
+            max_table_elements,
+            max_disk_space,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            max_concurrent_agents_per_executor,
+            Self::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+        )
     }
 
     pub fn new_with_invocation_limits(
@@ -130,29 +128,18 @@ impl AtomicResourceEntry {
         per_invocation_http_call_limit: u64,
         per_invocation_rpc_call_limit: u64,
     ) -> Self {
-        Self {
-            fuel: AtomicU64::new(fuel),
-            delta: AtomicI64::new(0),
-            in_flight_delta: AtomicI64::new(0),
-            max_memory: AtomicUsize::new(max_memory),
-            max_table_elements: AtomicUsize::new(max_table_elements),
-            max_disk_space: AtomicU64::new(max_disk_space),
-            last_refresh_secs: AtomicI64::new(Utc::now().timestamp()),
-            per_invocation_http_call_limit: AtomicU64::new(per_invocation_http_call_limit),
-            per_invocation_rpc_call_limit: AtomicU64::new(per_invocation_rpc_call_limit),
-            available_http_calls_from_server: AtomicU64::new(u64::MAX),
-            unsynced_http_calls: AtomicU64::new(0),
-            syncing_http_calls: AtomicU64::new(0),
-            available_rpc_calls_from_server: AtomicU64::new(u64::MAX),
-            unsynced_rpc_calls: AtomicU64::new(0),
-            syncing_rpc_calls: AtomicU64::new(0),
-            max_concurrent_agents_per_executor: AtomicU64::new(
-                AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
-            ),
-            oplog_writes_per_second: AtomicU64::new(
-                AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
-            ),
-        }
+        Self::new_with_all_limits(
+            fuel,
+            max_memory,
+            max_table_elements,
+            max_disk_space,
+            per_invocation_http_call_limit,
+            per_invocation_rpc_call_limit,
+            u64::MAX,
+            u64::MAX,
+            Self::UNLIMITED_CONCURRENT_AGENTS,
+            Self::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+        )
     }
 
     /// Full constructor used when all limits (including monthly HTTP/RPC) are available
@@ -173,6 +160,9 @@ impl AtomicResourceEntry {
             fuel: AtomicU64::new(fuel),
             delta: AtomicI64::new(0),
             in_flight_delta: AtomicI64::new(0),
+            durable_byte_seconds_delta: AtomicI64::new(0),
+            ephemeral_byte_seconds_delta: AtomicI64::new(0),
+            storage_meters: Arc::new(scc::HashMap::new()),
             max_memory: AtomicUsize::new(max_memory),
             max_table_elements: AtomicUsize::new(max_table_elements),
             max_disk_space: AtomicU64::new(max_disk_space),
@@ -283,6 +273,48 @@ impl AtomicResourceEntry {
 
     pub fn max_disk_space_limit(&self) -> u64 {
         self.max_disk_space.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn register_storage_meter(
+        &self,
+        owned_agent_id: OwnedAgentId,
+        meter: AgentStorageMeter,
+    ) {
+        self.storage_meters.upsert_sync(owned_agent_id, meter);
+    }
+
+    pub(crate) fn unregister_storage_meter(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        meter: &AgentStorageMeter,
+    ) {
+        self.storage_meters
+            .remove_if_sync(owned_agent_id, |registered| registered.is_same_meter(meter));
+    }
+
+    pub fn flush_storage_meters(&self, now: Instant) {
+        self.storage_meters.iter_sync(|_, meter| {
+            meter.flush(now);
+            true
+        });
+    }
+
+    pub fn record_storage_byte_seconds(&self, mode: AgentMode, amount: i64) {
+        let delta = match mode {
+            AgentMode::Durable => &self.durable_byte_seconds_delta,
+            AgentMode::Ephemeral => &self.ephemeral_byte_seconds_delta,
+        };
+        delta.fetch_add(amount, Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn durable_byte_seconds_delta(&self) -> i64 {
+        self.durable_byte_seconds_delta.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn ephemeral_byte_seconds_delta(&self) -> i64 {
+        self.ephemeral_byte_seconds_delta.load(Ordering::Acquire)
     }
 
     /// Returns the number of HTTP calls remaining in this billing period from the
@@ -401,31 +433,28 @@ impl ResourceLimitsGrpc {
         let svc_weak = Arc::downgrade(&svc);
 
         // Background task for batch updates
-        tokio::spawn(
-            async move {
-                let mut tick = tokio::time::interval(batch_update_interval);
-                let refresh_threshold_secs = limit_refresh_interval.as_secs() as i64;
-                loop {
-                    tokio::select! {
-                        _ = shutdown_token.cancelled() => {
-                            break;
-                        }
-                        _ = tick.tick() => {}
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(batch_update_interval);
+            let refresh_threshold_secs = limit_refresh_interval.as_secs() as i64;
+            loop {
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => {
+                        break;
                     }
-
-                    let svc_arc = match svc_weak.upgrade() {
-                        Some(s) => s,
-                        None => {
-                            // service itself was dropped, we can exit
-                            break;
-                        }
-                    };
-
-                    svc_arc.send_batch(refresh_threshold_secs).await;
+                    _ = tick.tick() => {}
                 }
+
+                let svc_arc = match svc_weak.upgrade() {
+                    Some(s) => s,
+                    None => {
+                        // service itself was dropped, we can exit
+                        break;
+                    }
+                };
+
+                svc_arc.send_batch(refresh_threshold_secs).await;
             }
-            .instrument(span!(parent: None, Level::INFO, "Resource limits batch updates")),
-        );
+        });
 
         svc
     }
@@ -452,128 +481,168 @@ impl ResourceLimitsGrpc {
 
     /// Builds and sends a single batch to the registry covering:
     /// - active accounts with non-zero fuel, HTTP call, or RPC call deltas
-    /// - stale idle accounts (all deltas zero, past the refresh threshold)
+    /// - stale accounts, including storage-only accounts, past the refresh threshold
     ///
     /// On success, updates all entries via `update_last_known_limits`. On
     /// failure, resets in-flight deltas for active accounts so they are not
     /// double-counted next cycle; stale idle accounts are retried next tick.
     async fn send_batch(&self, refresh_threshold_secs: i64) {
-        // Collect active updates (non-zero delta) and move delta → in_flight.
-        // An account is included if it has any non-zero delta OR has gone stale.
-        let mut updates: HashMap<AccountId, ResourceUsageUpdate> = HashMap::new();
+        async {
+            // Fuel and call usage need batch-interval freshness. Storage-only usage stays local until
+            // the limit refresh interval to avoid expensive registry limit queries every minute.
+            let mut updates: HashMap<AccountId, ResourceUsageUpdate> = HashMap::new();
 
-        self.entries
-            .iter_async(|k, cell| {
-                if let Some(entry) = cell.get() {
-                    let fuel_delta = entry.delta.swap(0, Ordering::AcqRel);
-                    // Move unsynced call counts into the syncing bucket for this batch.
-                    let http_count = entry.unsynced_http_calls.swap(0, Ordering::AcqRel);
-                    let rpc_count = entry.unsynced_rpc_calls.swap(0, Ordering::AcqRel);
+            self.entries
+                .iter_async(|k, cell| {
+                    if let Some(entry) = cell.get() {
+                        let fuel_delta = entry.delta.swap(0, Ordering::AcqRel);
+                        // Move unsynced call counts into the syncing bucket for this batch.
+                        let http_count = entry.unsynced_http_calls.swap(0, Ordering::AcqRel);
+                        let rpc_count = entry.unsynced_rpc_calls.swap(0, Ordering::AcqRel);
+                        let active = fuel_delta != 0 || http_count > 0 || rpc_count > 0;
+                        let stale = entry.secs_since_last_refresh() >= refresh_threshold_secs;
 
-                    if fuel_delta != 0 || http_count > 0 || rpc_count > 0 {
-                        if http_count > 0 {
+                        if active || stale {
+                            // Integrate the meters only when this batch will actually ship an
+                            // update. Neither `active` nor `stale` depends on storage, and
+                            // un-integrated byte-nanoseconds stay in the meter's own state until
+                            // the next flush or its `Drop`, so nothing is lost by deferring —
+                            // storage-only accounts simply settle on the limit refresh interval
+                            // instead of every batch tick.
+                            entry.flush_storage_meters(Instant::now());
+                            let durable_storage_byte_seconds_delta =
+                                entry.durable_byte_seconds_delta.swap(0, Ordering::AcqRel);
+                            let ephemeral_storage_byte_seconds_delta =
+                                entry.ephemeral_byte_seconds_delta.swap(0, Ordering::AcqRel);
+                            if http_count > 0 {
+                                entry
+                                    .syncing_http_calls
+                                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
+                                        Some(c.saturating_add(http_count))
+                                    })
+                                    .ok();
+                            }
+                            if rpc_count > 0 {
+                                entry
+                                    .syncing_rpc_calls
+                                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
+                                        Some(c.saturating_add(rpc_count))
+                                    })
+                                    .ok();
+                            }
+
                             entry
-                                .syncing_http_calls
-                                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
-                                    Some(c.saturating_add(http_count))
+                                .in_flight_delta
+                                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |d| {
+                                    Some(d.saturating_add(fuel_delta))
                                 })
                                 .ok();
+                            updates.insert(
+                                *k,
+                                ResourceUsageUpdate {
+                                    fuel_delta,
+                                    http_call_count_delta: http_count,
+                                    rpc_call_count_delta: rpc_count,
+                                    durable_storage_byte_seconds_delta,
+                                    ephemeral_storage_byte_seconds_delta,
+                                },
+                            );
                         }
-                        if rpc_count > 0 {
-                            entry
-                                .syncing_rpc_calls
-                                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
-                                    Some(c.saturating_add(rpc_count))
-                                })
-                                .ok();
-                        }
-
-                        entry
-                            .in_flight_delta
-                            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |d| {
-                                Some(d.saturating_add(fuel_delta))
-                            })
-                            .ok();
-                        updates.insert(
-                            *k,
-                            ResourceUsageUpdate {
-                                fuel_delta,
-                                http_call_count_delta: http_count,
-                                rpc_call_count_delta: rpc_count,
-                            },
-                        );
-                    } else if entry.secs_since_last_refresh() >= refresh_threshold_secs {
-                        // Stale idle account: include with zero delta to fetch
-                        // updated limits without reporting any consumption.
-                        updates.insert(
-                            *k,
-                            ResourceUsageUpdate {
-                                fuel_delta: 0,
-                                http_call_count_delta: 0,
-                                rpc_call_count_delta: 0,
-                            },
-                        );
                     }
-                }
-                true
-            })
-            .await;
-
-        if updates.is_empty() {
-            return;
-        }
-
-        tracing::debug!(
-            "Sending batch: {} fuel, {} http, {} rpc, {} stale idle account(s)",
-            updates.values().filter(|u| u.fuel_delta != 0).count(),
-            updates
-                .values()
-                .filter(|u| u.http_call_count_delta > 0)
-                .count(),
-            updates
-                .values()
-                .filter(|u| u.rpc_call_count_delta > 0)
-                .count(),
-            updates
-                .values()
-                .filter(|u| {
-                    u.fuel_delta == 0 && u.http_call_count_delta == 0 && u.rpc_call_count_delta == 0
+                    true
                 })
-                .count(),
-        );
+                .await;
 
-        // Send resource usage batch. The response refreshes all account limits
-        // (fuel, memory, disk, per-invocation caps, and monthly call budgets)
-        // for every account in `updates`.
-        match self
-            .client
-            .batch_update_resource_usage(updates.clone())
-            .await
-        {
-            Ok(updated_limits) => {
-                for (account_id, resource_limits) in updated_limits.0 {
-                    self.update_last_known_limits(account_id, resource_limits)
-                        .await;
-                }
+            if updates.is_empty() {
+                return;
             }
-            Err(err) => {
-                error!("Failed to send batched resource usage updates: {}", err);
-                for (account_id, update) in &updates {
-                    if update.fuel_delta != 0
-                        || update.http_call_count_delta > 0
-                        || update.rpc_call_count_delta > 0
-                    {
-                        error!(
-                            "Lost resource usage updates for account {account_id}: fuel_delta={}, http_call_count_delta={}, rpc_call_count_delta={}",
-                            update.fuel_delta,
-                            update.http_call_count_delta,
-                            update.rpc_call_count_delta,
-                        );
-                        self.reset_in_flight_delta(*account_id).await;
+
+            tracing::debug!(
+                "Sending batch: {} fuel, {} durable storage, {} ephemeral storage, {} http, {} rpc, {} stale idle account(s)",
+                updates.values().filter(|u| u.fuel_delta != 0).count(),
+                updates
+                    .values()
+                    .filter(|u| u.durable_storage_byte_seconds_delta != 0)
+                    .count(),
+                updates
+                    .values()
+                    .filter(|u| u.ephemeral_storage_byte_seconds_delta != 0)
+                    .count(),
+                updates
+                    .values()
+                    .filter(|u| u.http_call_count_delta > 0)
+                    .count(),
+                updates
+                    .values()
+                    .filter(|u| u.rpc_call_count_delta > 0)
+                    .count(),
+                updates
+                    .values()
+                    .filter(|u| {
+                        u.fuel_delta == 0
+                            && u.durable_storage_byte_seconds_delta == 0
+                            && u.ephemeral_storage_byte_seconds_delta == 0
+                            && u.http_call_count_delta == 0
+                            && u.rpc_call_count_delta == 0
+                    })
+                    .count(),
+            );
+
+            // Send resource usage batch. The response refreshes all account limits
+            // (fuel, memory, disk, per-invocation caps, and monthly call budgets)
+            // for every account in `updates`.
+            match self
+                .client
+                .batch_update_resource_usage(updates.clone())
+                .await
+            {
+                Ok(updated_limits) => {
+                    for (account_id, update) in &updates {
+                        let durable = update.durable_storage_byte_seconds_delta;
+                        let ephemeral = update.ephemeral_storage_byte_seconds_delta;
+                        if durable == 0 && ephemeral == 0 {
+                            continue;
+                        }
+
+                        let account_id = account_id.to_string();
+                        if durable > 0 {
+                            record_storage_byte_seconds(&account_id, AgentMode::Durable, durable);
+                        }
+                        if ephemeral > 0 {
+                            record_storage_byte_seconds(&account_id, AgentMode::Ephemeral, ephemeral);
+                        }
+                    }
+                    for (account_id, resource_limits) in updated_limits.0 {
+                        self.update_last_known_limits(account_id, resource_limits)
+                            .await;
+                    }
+                }
+                Err(err) => {
+                    record_resource_usage_batch_update_failure();
+                    error!("Failed to send batched resource usage updates: {}", err);
+                    for (account_id, update) in &updates {
+                        if update.fuel_delta != 0
+                            || update.durable_storage_byte_seconds_delta != 0
+                            || update.ephemeral_storage_byte_seconds_delta != 0
+                            || update.http_call_count_delta > 0
+                            || update.rpc_call_count_delta > 0
+                        {
+                            error!(
+                                "Lost resource usage updates for account {account_id}: fuel_delta={}, durable_storage_byte_seconds_delta={}, ephemeral_storage_byte_seconds_delta={}, http_call_count_delta={}, rpc_call_count_delta={}",
+                                update.fuel_delta,
+                                update.durable_storage_byte_seconds_delta,
+                                update.ephemeral_storage_byte_seconds_delta,
+                                update.http_call_count_delta,
+                                update.rpc_call_count_delta,
+                            );
+                            self.reset_in_flight_delta(*account_id).await;
+                        }
                     }
                 }
             }
         }
+        .instrument(info_span!("resource_limits_batch_update"))
+        .await
     }
 
     async fn update_last_known_limits(
@@ -719,6 +788,75 @@ mod tests {
     use uuid::Uuid;
 
     test_r::enable!();
+
+    #[test]
+    fn stale_storage_meter_unregister_preserves_reloaded_meter() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let owned_agent_id = OwnedAgentId::new(
+            EnvironmentId(Uuid::new_v4()),
+            &AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "storage-meter-race".to_string(),
+            },
+        );
+        let now = Instant::now();
+        let old = AgentStorageMeter::new(AgentMode::Durable, 1, entry.clone(), now);
+        let reloaded = AgentStorageMeter::new(AgentMode::Durable, 1, entry.clone(), now);
+
+        entry.register_storage_meter(owned_agent_id.clone(), old.clone());
+        entry.register_storage_meter(owned_agent_id.clone(), reloaded.clone());
+        entry.unregister_storage_meter(&owned_agent_id, &old);
+
+        let registered = entry.storage_meters.get_sync(&owned_agent_id).unwrap();
+        assert!(registered.get().is_same_meter(&reloaded));
+    }
+
+    #[test]
+    fn flush_storage_meters_integrates_inline() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let owned_agent_id = OwnedAgentId::new(
+            EnvironmentId(Uuid::new_v4()),
+            &AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "inline-storage-meter-flush".to_string(),
+            },
+        );
+        let now = Instant::now();
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
+        entry.register_storage_meter(owned_agent_id, meter);
+
+        entry.flush_storage_meters(now + Duration::from_secs(3));
+
+        assert_eq!(entry.durable_byte_seconds_delta(), 30);
+    }
+
+    /// `send_batch` only integrates the meters on ticks that actually ship an update,
+    /// so a meter routinely goes several ticks without being flushed. Time spanned by
+    /// those skipped ticks must still be billed, exactly once.
+    #[test]
+    fn skipped_flushes_are_billed_once_when_the_next_flush_happens() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let owned_agent_id = OwnedAgentId::new(
+            EnvironmentId(Uuid::new_v4()),
+            &AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "deferred-storage-meter-flush".to_string(),
+            },
+        );
+        let now = Instant::now();
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
+        entry.register_storage_meter(owned_agent_id, meter);
+
+        // A tick that ships integrates the first second.
+        entry.flush_storage_meters(now + Duration::from_secs(1));
+        assert_eq!(entry.durable_byte_seconds_delta(), 10);
+
+        // The next two ticks are skipped because the account is idle and its limits are
+        // still fresh. The following flush must bill both of those seconds, and neither
+        // re-bill the first nor drop anything.
+        entry.flush_storage_meters(now + Duration::from_secs(3));
+        assert_eq!(entry.durable_byte_seconds_delta(), 30);
+    }
 
     // -------------------------------------------------------------------------
     // AtomicResourceEntry
@@ -1341,6 +1479,7 @@ mod tests {
     struct MockRegistryService {
         get_limits_result: Mutex<Result<ServiceResourceLimits, RegistryServiceError>>,
         batch_update_result: Mutex<Result<AccountResourceLimits, RegistryServiceError>>,
+        last_batch_updates: Mutex<HashMap<AccountId, ResourceUsageUpdate>>,
     }
 
     impl MockRegistryService {
@@ -1359,6 +1498,7 @@ mod tests {
                     oplog_writes_per_second: u64::MAX,
                 })),
                 batch_update_result: Mutex::new(Ok(AccountResourceLimits(HashMap::new()))),
+                last_batch_updates: Mutex::new(HashMap::new()),
             }
         }
 
@@ -1380,6 +1520,15 @@ mod tests {
             *self.batch_update_result.lock().unwrap() = Err(
                 RegistryServiceError::InternalServerError("mock batch error".into()),
             );
+        }
+
+        fn last_batch_update(&self, account_id: AccountId) -> ResourceUsageUpdate {
+            *self
+                .last_batch_updates
+                .lock()
+                .unwrap()
+                .get(&account_id)
+                .unwrap()
         }
     }
 
@@ -1414,8 +1563,9 @@ mod tests {
 
         async fn batch_update_resource_usage(
             &self,
-            _updates: HashMap<AccountId, ResourceUsageUpdate>,
+            updates: HashMap<AccountId, ResourceUsageUpdate>,
         ) -> Result<AccountResourceLimits, RegistryServiceError> {
+            *self.last_batch_updates.lock().unwrap() = updates;
             self.batch_update_result
                 .lock()
                 .unwrap()
@@ -1644,6 +1794,36 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// One span per tick, not one for the lifetime of the batch loop.
+    #[test]
+    async fn send_batch_records_one_closed_span_when_it_sends_a_batch() {
+        let mock = Arc::new(MockRegistryService::new(1000, 512));
+        let svc = make_grpc(mock);
+        let entry = svc.initialize_account(account_id()).await.unwrap();
+        entry.borrow_fuel(300);
+
+        let recorder = crate::span_test_support::record_spans();
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
+
+        recorder.assert_closed_span("resource_limits_batch_update");
+        recorder.assert_all_closed();
+    }
+
+    /// An idle tick is still spanned: discovering that there is nothing to send is
+    /// itself work that can fail, and events recorded outside a span never reach
+    /// the trace.
+    #[test]
+    async fn send_batch_records_one_closed_span_when_there_is_nothing_to_send() {
+        let mock = Arc::new(MockRegistryService::new(1000, 512));
+        let svc = make_grpc(mock);
+        let _ = svc.initialize_account(account_id()).await.unwrap();
+
+        let recorder = crate::span_test_support::record_spans();
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
+
+        recorder.assert_closed_span("resource_limits_batch_update");
+    }
+
     #[test]
     async fn send_batch_does_nothing_when_no_consumption_and_no_stale_accounts() {
         // No borrows, entry is freshly initialised (last_refresh_secs = now).
@@ -1657,6 +1837,56 @@ mod tests {
         svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
 
         // Nothing changed — no panic, no server call expected.
+    }
+
+    #[test]
+    async fn send_batch_keeps_storage_only_delta_until_refresh_interval() {
+        let mock = Arc::new(MockRegistryService::new(1000, 512));
+        let svc = make_grpc(mock.clone());
+        let id = account_id();
+        let entry = svc.initialize_account(id).await.unwrap();
+        entry.record_storage_byte_seconds(AgentMode::Durable, 100);
+
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
+
+        assert_eq!(entry.durable_byte_seconds_delta(), 100);
+        assert!(mock.last_batch_updates.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    async fn send_batch_sends_storage_only_delta_when_limits_are_stale() {
+        let mock = Arc::new(MockRegistryService::new(1000, 512));
+        let id = account_id();
+        let mut updated = HashMap::new();
+        updated.insert(
+            id,
+            ServiceResourceLimits {
+                available_fuel: 1000,
+                max_memory_per_worker: 512,
+                max_table_elements_per_worker: u64::MAX,
+                max_disk_space_per_worker: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
+                available_http_calls: u64::MAX,
+                available_rpc_calls: u64::MAX,
+                max_concurrent_agents_per_executor: u64::MAX,
+                oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+            },
+        );
+        mock.set_batch_update_response(AccountResourceLimits(updated));
+        let svc = make_grpc(mock.clone());
+        let entry = svc.initialize_account(id).await.unwrap();
+        entry.last_refresh_secs.store(0, Ordering::Release);
+        entry.record_storage_byte_seconds(AgentMode::Durable, 100);
+
+        svc.send_batch(STALE_THRESHOLD_SECS).await;
+
+        assert_eq!(entry.durable_byte_seconds_delta(), 0);
+        assert_eq!(
+            mock.last_batch_update(id)
+                .durable_storage_byte_seconds_delta,
+            100
+        );
     }
 
     #[test]
@@ -1687,14 +1917,21 @@ mod tests {
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
 
-        let svc = make_grpc(mock);
+        let svc = make_grpc(mock.clone());
         let entry = svc.initialize_account(id).await.unwrap();
         entry.borrow_fuel(300);
+        entry.record_storage_byte_seconds(AgentMode::Durable, 100);
+        entry.record_storage_byte_seconds(AgentMode::Ephemeral, 200);
 
         svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
 
         assert_eq!(entry.delta.load(Ordering::Acquire), 0);
         assert_eq!(entry.in_flight_delta.load(Ordering::Acquire), 0);
+        assert_eq!(entry.durable_byte_seconds_delta(), 0);
+        assert_eq!(entry.ephemeral_byte_seconds_delta(), 0);
+        let update = mock.last_batch_update(id);
+        assert_eq!(update.durable_storage_byte_seconds_delta, 100);
+        assert_eq!(update.ephemeral_storage_byte_seconds_delta, 200);
     }
 
     #[test]
@@ -1774,6 +2011,8 @@ mod tests {
 
         let entry = svc.initialize_account(id).await.unwrap();
         entry.borrow_fuel(300);
+        entry.record_storage_byte_seconds(AgentMode::Durable, 100);
+        entry.record_storage_byte_seconds(AgentMode::Ephemeral, 200);
 
         svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
 

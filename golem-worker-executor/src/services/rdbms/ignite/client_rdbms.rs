@@ -464,6 +464,7 @@ impl Rdbms<IgniteType> for IgniteRdbms {
         DbValue: 'async_trait,
     {
         debug!(
+            target: golem_common::tracing::target::AGENT_RDBMS,
             pool_key = key.to_string(),
             "ignite execute: {statement}, params: {}",
             params.len()
@@ -492,6 +493,7 @@ impl Rdbms<IgniteType> for IgniteRdbms {
         DbValue: 'async_trait,
     {
         debug!(
+            target: golem_common::tracing::target::AGENT_RDBMS,
             pool_key = key.to_string(),
             "ignite query_stream: {statement}, params: {}",
             params.len()
@@ -525,6 +527,7 @@ impl Rdbms<IgniteType> for IgniteRdbms {
         DbValue: 'async_trait,
     {
         debug!(
+            target: golem_common::tracing::target::AGENT_RDBMS,
             pool_key = key.to_string(),
             "ignite query: {statement}, params: {}",
             params.len()
@@ -543,7 +546,7 @@ impl Rdbms<IgniteType> for IgniteRdbms {
         key: &RdbmsPoolKey,
         worker_id: &AgentId,
     ) -> Result<Arc<dyn DbTransaction<IgniteType> + Send + Sync>, RdbmsError> {
-        debug!(pool_key = key.to_string(), "ignite begin_transaction");
+        debug!(target: golem_common::tracing::target::AGENT_RDBMS, pool_key = key.to_string(), "ignite begin_transaction");
         let client = self.get_or_create_client(key, worker_id).await?;
         let tx = client.begin_transaction().await.map_err(|e| {
             error!(

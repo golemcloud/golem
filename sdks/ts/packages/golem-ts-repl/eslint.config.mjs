@@ -4,7 +4,7 @@ import parserTs from '@typescript-eslint/parser';
 
 export default [
   {
-    ignores: ['.metadata/**', 'tests/**', 'dist/**', 'types/**'],
+    ignores: ['tests/**', 'dist/**', 'types/**'],
   },
   {
     files: ['src/**/*.{ts,tsx}'],

@@ -124,7 +124,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
         &self,
         now: DateTime<Utc>,
         assignment: &ShardAssignment,
-    ) -> Result<u64, String> {
+    ) -> Result<u64, SchedulerStorageError> {
         let now_ms = datetime_to_millis(now);
         Ok(self
             .entries

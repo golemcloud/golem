@@ -24,8 +24,8 @@ import {
   toolDefinition,
   type ToolClientInvocationResult,
   type ToolClientTransport,
-} from '../src/fluent/tool';
-import { compileSchema } from '../src/fluent/schema/adapter';
+} from '../src/tool';
+import { compileSchema } from '../src/schema/adapter';
 import {
   deepEqual,
   t,
@@ -33,7 +33,7 @@ import {
   typedSchemaValueToWit,
   v,
 } from '../src/internal/schema-model';
-import { Bytes, s } from '../src/fluent/schema/markers';
+import { Bytes, s } from '../src/schema/markers';
 
 interface RecordedInvocation {
   readonly commandPath: readonly string[];
@@ -77,7 +77,7 @@ async function* bytes(...values: number[]): AsyncIterable<number> {
   yield* values;
 }
 
-describe('fluent tool runtime client', () => {
+describe('tool runtime client', () => {
   it('assembles root bodies, dispatchers, callable intersections, nested paths, and grafted subtrees', async () => {
     const subtree = toolDefinition('remote')
       .global('remote-global', z.string(), { required: true })

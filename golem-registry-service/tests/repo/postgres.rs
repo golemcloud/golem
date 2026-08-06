@@ -16,6 +16,7 @@ use crate::Tracing;
 use crate::repo::{Deps, TestDb};
 use golem_common::config::DbPostgresConfig;
 use golem_registry_service::repo::account::DbAccountRepo;
+use golem_registry_service::repo::account_resource_override::DbAccountResourceOverrideRepo;
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
 use golem_registry_service::repo::agent_secret::DbAgentSecretRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
@@ -209,6 +210,9 @@ async fn make_deps(pool: PostgresPool) -> Deps {
     let deps = Deps {
         account_repo: Box::new(DbAccountRepo::logged(pool.clone())),
         account_usage_repo: std::sync::Arc::new(DbAccountUsageRepo::logged(pool.clone())),
+        account_resource_override_repo: std::sync::Arc::new(DbAccountResourceOverrideRepo::new(
+            pool.clone(),
+        )),
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(pool.clone())),
         environment_repo: Box::new(DbEnvironmentRepo::logged(pool.clone())),
@@ -405,6 +409,35 @@ async fn test_http_api_deployment_stage(#[dimension(postgres_variant)] deps: &De
 #[test]
 async fn test_account_usage(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_account_usage(deps).await;
+}
+
+#[test]
+async fn test_storage_usage_history(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_storage_usage_history(deps).await;
+}
+
+#[test]
+async fn test_account_resource_override_resolution(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_account_resource_override_resolution(deps).await;
+}
+
+#[test]
+async fn test_storage_limit_is_clamped_after_plan_update(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_storage_limit_is_clamped_after_plan_update(deps).await;
+}
+
+#[test]
+async fn test_plan_change_clamps_disk_override(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_plan_change_clamps_disk_override(deps).await;
+}
+
+#[test]
+async fn test_plan_change_clears_forbidden_disk_override(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_plan_change_clears_forbidden_disk_override(deps).await;
 }
 
 #[test]

@@ -104,7 +104,7 @@ export const GatewayAgent = defineAgent({
 
 ## Return Type to HTTP Response Mapping
 
-Golem maps a method's returned value to HTTP status codes and response bodies according to the table below. **This mapping is currently not configurable.** In the fluent SDK the return *shape* is declared by the method's `returns` schema.
+Golem maps a method's returned value to HTTP status codes and response bodies according to the table below. **This mapping is currently not configurable.** In the TypeScript SDK the return *shape* is declared by the method's `returns` schema.
 
 | Returned value / `returns` schema | HTTP Status | Response Body |
 |---|---|---|

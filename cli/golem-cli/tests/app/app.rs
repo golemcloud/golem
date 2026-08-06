@@ -7563,7 +7563,7 @@ async fn build_check(_tracing: &Tracing) {
         &package_json_path,
         serde_json::to_string_pretty(&serde_json::json!({
             "name": "app",
-            // The fluent `ts` agents import `zod`; the build check treats zod as an
+            // The TypeScript agents import `zod`; the build check treats zod as an
             // optional dependency (only validated when present), so keep it here —
             // wiping it would leave the restored app unable to resolve the import.
             "dependencies": { "zod": versions::ts_dep::ZOD },

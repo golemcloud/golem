@@ -173,6 +173,15 @@ async fn otlp_basic_trace_export(
         "Found spans with ERROR status: {errors:?}"
     );
 
+    // A span must not escape its parent's time window. A child that outlives its
+    // parent means the parent does not contain the operation it appears to
+    // contain, which makes critical-path analysis meaningless.
+    let outliving = trace.spans_outliving_parent();
+    assert!(
+        outliving.is_empty(),
+        "Found spans outliving their parent (child, parent): {outliving:?}"
+    );
+
     Ok(())
 }
 

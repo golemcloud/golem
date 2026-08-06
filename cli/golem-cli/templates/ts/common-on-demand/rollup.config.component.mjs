@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-// Rollup config for a fluent (ts) agent component.
+// Rollup config for a TypeScript agent component.
 //
 // The component's tsconfig.json is the single source of truth: it decides which
 // files are compiled (`include`/`files`) and how module path aliases resolve
@@ -15,7 +15,7 @@ import process from "node:process";
 // @rollup/plugin-typescript rather than restating any of it here, so the build
 // and the type checker always agree on the same file set and resolution rules.
 //
-// The fluent SDK derives agent metadata at runtime from the schemas, so the
+// The SDK derives agent metadata at runtime from the schemas, so the
 // virtual entry only imports the user's main module for its side-effecting
 // `defineAgent(...).implement(...)` registrations. `@golemcloud/golem-ts-sdk` and
 // the `golem:*` host packages are externalized (provided by the prebuilt

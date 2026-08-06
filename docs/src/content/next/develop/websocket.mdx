@@ -7,7 +7,7 @@ Golem 1.5 introduces a dedicated WebSocket client API (`golem:websocket@1.5.0`) 
 
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
 <Tabs.Tab>
-    The Golem TypeScript SDK provides a fluent WebSocket client API. `connectWebsocket` opens a
+    The Golem TypeScript SDK provides a WebSocket client API. `connectWebsocket` opens a
     connection and returns a `WebSocketHandle` with `send`, `receive`, `receiveWithTimeout`, and
     `close` methods. Received messages are `{ tag: "text", val }` / `{ tag: "binary", val }`, and
     a graceful close surfaces as a `WebsocketError` with `tag === "closed"` and a `closeInfo`.

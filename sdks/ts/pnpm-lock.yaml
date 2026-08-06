@@ -105,9 +105,6 @@ importers:
       fast-check:
         specifier: ^4.2.0
         version: 4.7.0
-      reflect-metadata:
-        specifier: ^0.1.14
-        version: 0.1.14
       rollup:
         specifier: ^4.46.2
         version: 4.60.2
@@ -174,9 +171,6 @@ importers:
       prettier:
         specifier: ^3.6.2
         version: 3.8.3
-      reflect-metadata:
-        specifier: ^0.1.14
-        version: 0.1.14
       rollup:
         specifier: ^4.46.2
         version: 4.60.2
@@ -186,9 +180,6 @@ importers:
       rollup-plugin-typescript2:
         specifier: ^0.36.0
         version: 0.36.0(rollup@4.60.2)(typescript@5.9.3)
-      ts-morph:
-        specifier: ^26.0.0
-        version: 26.0.0
       typescript:
         specifier: ^5.8.3
         version: 5.9.3
@@ -1254,9 +1245,6 @@ packages:
 
   queue-microtask@1.2.3:
     resolution: {integrity: sha512-NuaNSa6flKT5JaSYQzJok04JzTL1CA6aGhv5rfLW3PgqA+M2ChpZQnAC8h8i4ZFkBS8X5RqkDBHA7r4hej3K9A==, tarball: https://registry.npmjs.org/queue-microtask/-/queue-microtask-1.2.3.tgz}
-
-  reflect-metadata@0.1.14:
-    resolution: {integrity: sha512-ZhYeb6nRaXCfhnndflDK8qI6ZQ/YcWZCISRAWICW9XYqMUwjZM9Z0DveWX/ABN01oxSHwVxKQmxeYZSsm0jh5A==, tarball: https://registry.npmjs.org/reflect-metadata/-/reflect-metadata-0.1.14.tgz}
 
   resolve-from@4.0.0:
     resolution: {integrity: sha512-pb/MYmXstAkysRFx8piNI1tGFNQIFA3vkE3Gq4EuA1dF6gHp/+vgZqsCGJapvy8N3Q+4o7FwvquPJcnZ7RYy4g==, tarball: https://registry.npmjs.org/resolve-from/-/resolve-from-4.0.0.tgz}
@@ -2491,8 +2479,6 @@ snapshots:
   pure-rand@8.4.0: {}
 
   queue-microtask@1.2.3: {}
-
-  reflect-metadata@0.1.14: {}
 
   resolve-from@4.0.0: {}
 

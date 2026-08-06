@@ -17,6 +17,9 @@ pub mod login;
 use self::login::LoginSystem;
 use crate::config::RegistryServiceConfig;
 use crate::repo::account::{AccountRepo, DbAccountRepo};
+use crate::repo::account_resource_override::{
+    AccountResourceOverrideRepo, DbAccountResourceOverrideRepo,
+};
 use crate::repo::account_usage::{AccountUsageRepo, DbAccountUsageRepo};
 use crate::repo::agent_secret::{AgentSecretRepo, DbAgentSecretRepo};
 use crate::repo::application::{ApplicationRepo, DbApplicationRepo};
@@ -42,6 +45,7 @@ use crate::repo::retry_policy::{DbRetryPolicyRepo, RetryPolicyRepo};
 use crate::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use crate::repo::token::{DbTokenRepo, TokenRepo};
 use crate::services::account::AccountService;
+use crate::services::account_resource_override::AccountResourceOverrideService;
 use crate::services::account_usage::AccountUsageService;
 use crate::services::agent_secret::AgentSecretService;
 use crate::services::application::ApplicationService;
@@ -91,6 +95,7 @@ static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/mi
 pub struct Services {
     pub account_service: Arc<AccountService>,
     pub account_usage_service: Arc<AccountUsageService>,
+    pub account_resource_override_service: Arc<AccountResourceOverrideService>,
     pub agent_secret_service: Arc<AgentSecretService>,
     pub application_service: Arc<ApplicationService>,
     pub auth_service: Arc<AuthService>,
@@ -125,6 +130,7 @@ pub struct Services {
 struct Repos {
     account_repo: Arc<dyn AccountRepo>,
     account_usage_repo: Arc<dyn AccountUsageRepo>,
+    account_resource_override_repo: Arc<dyn AccountResourceOverrideRepo>,
     agent_secret_repo: Arc<dyn AgentSecretRepo>,
     application_repo: Arc<dyn ApplicationRepo>,
     card_repo: Arc<dyn CardRepo>,
@@ -163,7 +169,7 @@ impl Services {
         let component_compilation_service =
             crate::services::component_compilation::configured(&config.component_compilation);
 
-        let plan_service = Arc::new(PlanService::new(repos.plan_repo));
+        let plan_service = Arc::new(PlanService::new(repos.plan_repo.clone()));
         plan_service
             .create_initial_plans(&config.initial_plans)
             .await
@@ -198,7 +204,11 @@ impl Services {
             .await
             .map_err(|e| e.into_anyhow())?;
 
-        let account_usage_service = Arc::new(AccountUsageService::new_with_account_service(
+        let account_resource_override_service = Arc::new(AccountResourceOverrideService::new(
+            repos.account_resource_override_repo.clone(),
+            account_service.clone(),
+        ));
+        let account_usage_service = Arc::new(AccountUsageService::new(
             repos.account_usage_repo,
             account_service.clone(),
         ));
@@ -426,6 +436,7 @@ impl Services {
         Ok(Self {
             account_service,
             account_usage_service,
+            account_resource_override_service,
             agent_secret_service,
             application_service,
             auth_service,
@@ -478,6 +489,8 @@ async fn make_repos(
 
             let account_repo = Arc::new(DbAccountRepo::logged(db_pool.clone()));
             let account_usage_repo = Arc::new(DbAccountUsageRepo::logged(db_pool.clone()));
+            let account_resource_override_repo =
+                Arc::new(DbAccountResourceOverrideRepo::logged(db_pool.clone()));
             let agent_secret_repo = Arc::new(DbAgentSecretRepo::logged(db_pool.clone()));
             let application_repo = Arc::new(DbApplicationRepo::logged(db_pool.clone()));
             let card_repo = Arc::new(DbCardRepo::logged(db_pool.clone()));
@@ -508,6 +521,7 @@ async fn make_repos(
             Ok(Repos {
                 account_repo,
                 account_usage_repo,
+                account_resource_override_repo,
                 agent_secret_repo,
                 application_repo,
                 card_repo: card_repo.clone(),
@@ -540,6 +554,8 @@ async fn make_repos(
 
             let account_repo = Arc::new(DbAccountRepo::logged(db_pool.clone()));
             let account_usage_repo = Arc::new(DbAccountUsageRepo::logged(db_pool.clone()));
+            let account_resource_override_repo =
+                Arc::new(DbAccountResourceOverrideRepo::logged(db_pool.clone()));
             let agent_secret_repo = Arc::new(DbAgentSecretRepo::logged(db_pool.clone()));
             let application_repo = Arc::new(DbApplicationRepo::logged(db_pool.clone()));
             let card_repo = Arc::new(DbCardRepo::logged(db_pool.clone()));
@@ -570,6 +586,7 @@ async fn make_repos(
             Ok(Repos {
                 account_repo,
                 account_usage_repo,
+                account_resource_override_repo,
                 agent_secret_repo,
                 application_repo,
                 card_repo: card_repo.clone(),

@@ -21,7 +21,7 @@
 // by the Rust executor tests in golem-worker-executor/tests/readonly.rs and by
 // the HTTP integration tests in integration-tests/tests/custom_api/readonly_http.rs.
 //
-// The fluent `method({ readOnly })` surface expresses every decorator-era
+// The `method({ readOnly })` surface expresses every legacy
 // cache-policy variant: `readOnly: true` (the base default, `until-write`),
 // `readOnly: { cache: 'no-cache' }`, `readOnly: { cache: { ttlNanos } }`, and
 // per-principal caching via `readOnly: { usesPrincipal: true }` (which replaces

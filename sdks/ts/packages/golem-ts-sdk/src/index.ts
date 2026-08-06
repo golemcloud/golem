@@ -35,8 +35,12 @@ import { encodeMultipart, decodeMultipart } from './internal/multipart';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { ToolRegistry } from './internal/registry/toolRegistry';
 import { sdkPrincipalFromHost } from './principal';
-import type { FluentCodec } from './fluent/schema/codec';
+import type { SchemaCodec } from './schema/codec';
 import { awaitAbortable, throwIfAborted } from './internal/pollableUtils';
+import './schema/zod';
+import './schema/valibot';
+import './schema/arktype';
+import './schema/effect';
 
 export { Uuid } from './uuid';
 export { ComponentId, AccountId, EnvironmentId } from './ids';
@@ -60,12 +64,92 @@ export * from './host/saga';
 export * from './host/checkpoint';
 export * from './host/durable';
 
-// The TypeScript agent authoring surface: `defineAgent` / `method`, the schema
-// markers `s`, `clientFor`, the typed host surfaces (keyvalue / blobstore /
-// websocket / rdbms), and the `http` helpers. Built on Standard Schema and
-// exported from the main entry so it is baked into the bundle injected into
-// `agent_guest.wasm` (sharing the runtime registries).
-export * from './fluent';
+export { defineAgent } from './defineAgent';
+export type {
+  AgentDefinition,
+  AgentImpl,
+  AgentImplementation,
+  AgentSpec,
+  ConfigSpec,
+  ConfigView,
+  AgentContext,
+  IdRecord,
+  InitContext,
+  MethodsRecord,
+} from './defineAgent';
+export { Secret } from './secret';
+export { method } from './method';
+export type { InputRecord, MethodSpec } from './method';
+export type { StandardSchemaV1 } from './schema/standardSchema';
+export { Bytes, KeyValue, Path, Quantity, s } from './schema/markers';
+export type { KeyValueOptions, PathOptions, QuantityOptions } from './schema/markers';
+export { registerSchemaWalker, registeredVendors, compileSchema } from './schema/adapter';
+export type { SchemaCodec, SchemaWalker } from './schema/codec';
+export {
+  c,
+  client,
+  command,
+  err,
+  ok,
+  renderArgumentHelp,
+  renderHelp,
+  ToolCallError,
+  toolDefinition,
+} from './tool';
+export type {
+  CamelCase,
+  ConstraintRef,
+  DocInput,
+  ErrorOptions,
+  FlagOptions,
+  FormatterInput,
+  GlobalCountFlagOptions,
+  GlobalFlagOptions,
+  GlobalValueOptions,
+  ImplementedTool,
+  NestedCommandImplementation,
+  OptionOptions,
+  PositionalOptions,
+  RepeatableMode,
+  ReturnsOptions,
+  StreamOptions,
+  TailOptions,
+  ToolBodyModel,
+  ToolCallErrorCause,
+  ToolClient,
+  ToolClientErrors,
+  ToolClientInvocationResult,
+  ToolClientMethod,
+  ToolClientOptions,
+  ToolClientTransport,
+  ToolCommandModel,
+  ToolCommandModelOf,
+  ToolConstraint,
+  ToolDefinition,
+  ToolErr,
+  ToolHandler,
+  ToolHelpError,
+  ToolHelpResult,
+  ToolImplementation,
+  ToolInvocationContext,
+  ToolOk,
+  ToolResult,
+  ToolSubtreeModel,
+} from './tool';
+export { clientFor, RemoteCallError } from './client';
+export type {
+  EphemeralInvocationResult,
+  EphemeralRemoteClientFactory,
+  PhantomClientDetails,
+  RemoteCallOptions,
+  RemoteClient,
+  RemoteClientFactory,
+} from './client';
+export * from './keyvalue';
+export * from './blobstore';
+export * from './websocket';
+export * from './rdbms';
+export * as http from './http';
 export * as bridge from './bridge';
 
 let resolvedAgent: ResolvedAgent | undefined = undefined;
@@ -296,7 +380,7 @@ function projectToolOutcome(
   throw invalidToolResult(`tool handler returned unknown outcome tag "${outcome.tag}"`);
 }
 
-function encodeToolValue(codec: FluentCodec, value: unknown, position: string): TypedSchemaValue {
+function encodeToolValue(codec: SchemaCodec, value: unknown, position: string): TypedSchemaValue {
   try {
     const encoded = codec.toValue(value);
     if (!schemaValueConforms(codec.graph, codec.graph.root, encoded)) {

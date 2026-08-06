@@ -149,6 +149,8 @@ Path|Method|Protected
   "maxMemoryPerWorker": 0,
   "maxTableElementsPerWorker": 0,
   "maxDiskSpacePerWorker": 0,
+  "maxDiskSpacePerWorkerCeiling": 0,
+  "maxDiskSpacePerWorkerUserConfigurable": true,
   "perInvocationHttpCallLimit": 0,
   "perInvocationRpcCallLimit": 0,
   "monthlyHttpCallLimit": 0,
@@ -245,6 +247,156 @@ The response not only contains the token data but also the secret which can be p
   "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
   "createdAt": "2019-08-24T14:15:22Z",
   "expiresAt": "2019-08-24T14:15:22Z"
+}
+```
+
+## Get current durable and ephemeral storage usage and storage limit.
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/usage`|GET|Yes
+
+
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+period|string|No|-
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
+  "planName": "string",
+  "usage": {
+    "period": {
+      "year": 0,
+      "month": 0
+    },
+    "computeGcu": 0.1,
+    "durableStorageGbMonth": 0.1,
+    "ephemeralStorageGbMonth": 0.1
+  },
+  "maxStoragePerAgent": {
+    "effectiveValue": 0,
+    "planDefault": 0,
+    "overrideValue": 0,
+    "ceiling": 0,
+    "userConfigurable": true
+  }
+}
+```
+
+## Get storage usage for closed billing periods, newest first.
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/usage/history`|GET|Yes
+
+
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+last|integer|No|-
+
+
+
+**Example Response JSON**
+
+```json copy
+[
+  {
+    "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+    "usage": {
+      "period": {
+        "year": 0,
+        "month": 0
+      },
+      "computeGcu": 0.1,
+      "durableStorageGbMonth": 0.1,
+      "ephemeralStorageGbMonth": 0.1
+    }
+  }
+]
+```
+
+## Get effective storage-per-agent override metadata for an account.
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/resource-overrides/max-storage-per-agent`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "effectiveValue": 0,
+  "planDefault": 0,
+  "overrideValue": 0,
+  "ceiling": 0,
+  "userConfigurable": true
+}
+```
+
+## Set a storage-per-agent override for an account. Setting an expiry requires an admin token.
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/resource-overrides/max-storage-per-agent`|PUT|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "value": 0,
+  "expiresAt": "2019-08-24T14:15:22Z"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "effectiveValue": 0,
+  "planDefault": 0,
+  "overrideValue": 0,
+  "ceiling": 0,
+  "userConfigurable": true
+}
+```
+
+## Clear a storage-per-agent override for an account.
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/resource-overrides/max-storage-per-agent`|DELETE|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "effectiveValue": 0,
+  "planDefault": 0,
+  "overrideValue": 0,
+  "ceiling": 0,
+  "userConfigurable": true
 }
 ```
 

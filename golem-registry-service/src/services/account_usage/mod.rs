@@ -17,13 +17,22 @@ pub mod error;
 use self::error::LimitExceededError;
 use super::account::{AccountError, AccountService};
 use crate::repo::account_usage::AccountUsageRepo;
-use crate::repo::model::account_usage::{AccountUsage as RepoAccountUsage, UsageType};
+use crate::repo::model::account_usage::{
+    AccountUsage as RepoAccountUsage, StorageUsageHistoryRecord, UsageType,
+    byte_seconds_to_gb_month, fuel_to_gcu,
+};
+use crate::repo::model::plan::PlanRecord;
 use crate::services::account_usage::error::AccountUsageError;
+use chrono::{TimeZone, Utc};
 use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::account_usage::{
+    StorageLimit, StorageUsage, StorageUsageHistory, StorageUsageMetrics, StorageUsagePeriod,
+};
 use golem_common::model::card::owner::AccountOwnerPattern;
 use golem_common::model::card::{
     AccountUsageResourcePattern, AccountUsageVerb, ClassPermissionTarget, PermissionTarget,
 };
+use golem_common::model::plan::PlanName;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::AuthorizationError;
 use golem_service_base::model::{AccountResourceLimits, ResourceLimits};
@@ -36,30 +45,25 @@ pub struct ResourceUsageUpdate {
     pub fuel_delta: i64,
     pub http_call_count_delta: u64,
     pub rpc_call_count_delta: u64,
+    pub durable_storage_byte_seconds_delta: i64,
+    pub ephemeral_storage_byte_seconds_delta: i64,
 }
 
 pub struct AccountUsageService {
     account_usage_repo: Arc<dyn AccountUsageRepo>,
-    account_service: Option<Arc<AccountService>>,
+    account_service: Arc<AccountService>,
 }
 
 // TODO: do we want to add component max size limit?
 //       if so, probably should be much bigger then the previous 50mb
 impl AccountUsageService {
-    pub fn new(account_usage_repo: Arc<dyn AccountUsageRepo>) -> Self {
-        Self {
-            account_usage_repo,
-            account_service: None,
-        }
-    }
-
-    pub fn new_with_account_service(
+    pub fn new(
         account_usage_repo: Arc<dyn AccountUsageRepo>,
         account_service: Arc<AccountService>,
     ) -> Self {
         Self {
             account_usage_repo,
-            account_service: Some(account_service),
+            account_service,
         }
     }
 
@@ -196,10 +200,20 @@ impl AccountUsageService {
                         UsageType::MonthlyRpcCalls,
                         i64::try_from(update.rpc_call_count_delta).unwrap_or(i64::MAX),
                     );
+                    account_usage.add_change(
+                        UsageType::MonthlyDurableAgentStorageByteSeconds,
+                        update.durable_storage_byte_seconds_delta,
+                    );
+                    account_usage.add_change(
+                        UsageType::MonthlyEphemeralStorageByteSeconds,
+                        update.ephemeral_storage_byte_seconds_delta,
+                    );
 
                     tracing::debug!(
-                        "Updating usage for account {account_id}: fuel_delta={}, http_call_count_delta={}, rpc_call_count_delta={}",
+                        "Updating usage for account {account_id}: fuel_delta={}, durable_storage_byte_seconds_delta={}, ephemeral_storage_byte_seconds_delta={}, http_call_count_delta={}, rpc_call_count_delta={}",
                         update.fuel_delta,
+                        update.durable_storage_byte_seconds_delta,
+                        update.ephemeral_storage_byte_seconds_delta,
                         update.http_call_count_delta,
                         update.rpc_call_count_delta,
                     );
@@ -237,20 +251,11 @@ impl AccountUsageService {
         account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<ResourceLimits, AccountUsageError> {
-        let account_service = self
+        let account = self
             .account_service
-            .as_ref()
-            .ok_or_else(|| AccountUsageError::AccountNotfound(account_id))?;
-
-        let account = account_service
             .get(account_id, auth)
             .await
-            .map_err(|err| match err {
-                AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
-                    AccountUsageError::AccountNotfound(account_id)
-                }
-                other => AccountUsageError::InternalError(other.into()),
-            })?;
+            .map_err(map_account_error(account_id))?;
 
         authorize_account_usage_permission(auth, &account.email, AccountUsageVerb::View)?;
 
@@ -261,22 +266,134 @@ impl AccountUsageService {
         Ok(account_usage.resource_limits())
     }
 
+    pub async fn get_storage_usage(
+        &self,
+        account_id: AccountId,
+        auth: &AuthCtx,
+    ) -> Result<StorageUsage, AccountUsageError> {
+        self.get_storage_usage_for_period(account_id, StorageUsagePeriod::current(), auth)
+            .await
+    }
+
+    pub async fn get_storage_usage_for_period(
+        &self,
+        account_id: AccountId,
+        period: StorageUsagePeriod,
+        auth: &AuthCtx,
+    ) -> Result<StorageUsage, AccountUsageError> {
+        self.authorize_storage_usage(account_id, auth).await?;
+        let account_usage = self.get_account_usage_at(account_id, None, period).await?;
+        Ok(Self::storage_usage(
+            account_id,
+            &account_usage.plan,
+            account_usage.storage_limit.clone(),
+            StorageUsageHistoryRecord {
+                period,
+                compute_fuel: account_usage.usage(UsageType::MonthlyGasLimit),
+                durable_storage_byte_seconds: account_usage
+                    .usage(UsageType::MonthlyDurableAgentStorageByteSeconds),
+                ephemeral_storage_byte_seconds: account_usage
+                    .usage(UsageType::MonthlyEphemeralStorageByteSeconds),
+            },
+        ))
+    }
+
+    pub async fn get_storage_usage_history(
+        &self,
+        account_id: AccountId,
+        last: usize,
+        auth: &AuthCtx,
+    ) -> Result<Vec<StorageUsageHistory>, AccountUsageError> {
+        let current_period = StorageUsagePeriod::current();
+        self.authorize_storage_usage(account_id, auth).await?;
+        let history = self
+            .account_usage_repo
+            .get_storage_history(account_id.0, current_period, last)
+            .await?;
+
+        Ok(history
+            .into_iter()
+            .map(|history| Self::storage_usage_history(account_id, history))
+            .collect())
+    }
+
+    async fn authorize_storage_usage(
+        &self,
+        account_id: AccountId,
+        auth: &AuthCtx,
+    ) -> Result<(), AccountUsageError> {
+        let account = self
+            .account_service
+            .get(account_id, auth)
+            .await
+            .map_err(map_account_error(account_id))?;
+        authorize_account_usage_permission(auth, &account.email, AccountUsageVerb::View)?;
+        Ok(())
+    }
+
+    fn storage_usage(
+        account_id: AccountId,
+        plan: &PlanRecord,
+        storage_limit: StorageLimit,
+        usage: StorageUsageHistoryRecord,
+    ) -> StorageUsage {
+        StorageUsage {
+            account_id,
+            plan_id: plan.plan_id.into(),
+            plan_name: PlanName(plan.name.clone()),
+            usage: Self::storage_usage_metrics(usage),
+            max_storage_per_agent: storage_limit,
+        }
+    }
+
+    fn storage_usage_history(
+        account_id: AccountId,
+        usage: StorageUsageHistoryRecord,
+    ) -> StorageUsageHistory {
+        StorageUsageHistory {
+            account_id,
+            usage: Self::storage_usage_metrics(usage),
+        }
+    }
+
+    fn storage_usage_metrics(usage: StorageUsageHistoryRecord) -> StorageUsageMetrics {
+        StorageUsageMetrics {
+            period: usage.period,
+            compute_gcu: fuel_to_gcu(usage.compute_fuel),
+            durable_storage_gb_month: byte_seconds_to_gb_month(usage.durable_storage_byte_seconds),
+            ephemeral_storage_gb_month: byte_seconds_to_gb_month(
+                usage.ephemeral_storage_byte_seconds,
+            ),
+        }
+    }
+
     async fn get_account_usage(
         &self,
         account_id: AccountId,
         usage_type: Option<UsageType>,
     ) -> Result<RepoAccountUsage, AccountUsageError> {
+        self.get_account_usage_at(account_id, usage_type, StorageUsagePeriod::current())
+            .await
+    }
+
+    async fn get_account_usage_at(
+        &self,
+        account_id: AccountId,
+        usage_type: Option<UsageType>,
+        period: StorageUsagePeriod,
+    ) -> Result<RepoAccountUsage, AccountUsageError> {
+        let date = SqlDateTime::new(
+            Utc.with_ymd_and_hms(period.year, period.month, 1, 0, 0, 0)
+                .single()
+                .expect("validated storage usage period"),
+        );
         let usage = match usage_type {
             Some(usage_type) => {
                 self.account_usage_repo
-                    .get_for_type(account_id.0, &SqlDateTime::now(), usage_type)
+                    .get_for_type(account_id.0, &date, usage_type)
                     .await?
             }
-            None => {
-                self.account_usage_repo
-                    .get(account_id.0, &SqlDateTime::now())
-                    .await?
-            }
+            None => self.account_usage_repo.get(account_id.0, &date).await?,
         };
 
         match usage {
@@ -303,7 +420,18 @@ impl AccountUsageService {
     }
 }
 
-fn authorize_account_usage_permission(
+pub(crate) fn map_account_error(
+    account_id: AccountId,
+) -> impl FnOnce(AccountError) -> AccountUsageError {
+    move |err| match err {
+        AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
+            AccountUsageError::AccountNotfound(account_id)
+        }
+        other => AccountUsageError::InternalError(other.into()),
+    }
+}
+
+pub(crate) fn authorize_account_usage_permission(
     auth: &AuthCtx,
     account_email: &AccountEmail,
     verb: AccountUsageVerb,
@@ -334,8 +462,6 @@ mod tests {
     use test_r::test;
     use uuid::Uuid;
 
-    test_r::enable!();
-
     /// Build a minimal `AccountUsage` with a given storage quota and current usage.
     fn make_usage(storage_limit: u64, current_storage_bytes: u64) -> AccountUsage {
         let plan = PlanRecord {
@@ -344,6 +470,8 @@ mod tests {
             max_memory_per_worker: NumericU64::new(u64::MAX),
             max_table_elements_per_worker: NumericU64::new(u64::MAX),
             max_disk_space_per_worker: NumericU64::new(u64::MAX),
+            max_disk_space_per_worker_ceiling: NumericU64::new(u64::MAX),
+            max_disk_space_per_worker_user_configurable: false,
             max_concurrent_agents_per_executor: NumericU64::new(u64::MAX),
             total_app_count: NumericU64::new(u64::MAX),
             total_env_count: NumericU64::new(u64::MAX),
@@ -366,6 +494,13 @@ mod tests {
             month: 1,
             usage,
             plan,
+            storage_limit: StorageLimit {
+                effective_value: u64::MAX,
+                plan_default: u64::MAX,
+                override_value: None,
+                ceiling: u64::MAX,
+                user_configurable: false,
+            },
             changes: BTreeMap::new(),
         }
     }

@@ -14,6 +14,7 @@
 
 // Repos
 pub mod account;
+pub mod account_resource_override;
 pub mod account_usage;
 pub mod agent_secret;
 pub mod application;

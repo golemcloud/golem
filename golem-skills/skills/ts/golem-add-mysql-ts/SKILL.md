@@ -5,7 +5,7 @@ description: "Using golem:rdbms/mysql from a TypeScript Golem agent. Use when th
 
 # Using MySQL from a TypeScript Agent
 
-The fluent TypeScript SDK ships a typed MySQL helper built on the
+The TypeScript SDK ships a typed MySQL helper built on the
 `golem:rdbms/mysql@1.5.0` host interface. Every operation returns a `Promise` and
 throws a typed `MySqlError` on failure.
 

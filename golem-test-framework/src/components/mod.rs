@@ -472,6 +472,14 @@ impl EnvVarBuilder {
                 "GOLEM__TRACING__OTLP__SERVICE_NAME".to_string(),
                 service_name.to_string(),
             );
+            // The OTLP layer exports nothing unless its filter is set, and a test
+            // that asked for OTLP wants the spans. An inherited value wins, so a
+            // developer chasing one source can turn it up for the spawned services.
+            let filter = golem_common::tracing::otlp_filter_from_env()
+                .map(|(value, _)| value)
+                .unwrap_or_else(|| "info".to_string());
+            self.env_vars
+                .insert("GOLEM_OTLP_FILTER".to_string(), filter);
             // Increase the BatchSpanProcessor queue size from the default (2048)
             // to avoid dropping spans under high throughput (e.g. benchmarks).
             self.env_vars

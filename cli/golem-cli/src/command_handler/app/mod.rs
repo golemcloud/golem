@@ -57,7 +57,6 @@ use crate::model::text::deployment::{DeploymentListView, DeploymentNewView};
 use crate::model::text::diff::{DeployPlanView, log_unified_diff, log_unified_diff_for_path};
 use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
-use crate::model::text::server::ToFormattedServerContext;
 use crate::model::text::template::TemplateListView;
 use crate::model::worker::AgentUpdateMode;
 use crate::model::{GuestLanguage, TemplateDescription};
@@ -688,11 +687,7 @@ impl AppCommandHandler {
             .confirm_deploy_by_plan(
                 &rollback_diff.environment.application_name,
                 &rollback_diff.environment.environment_name,
-                &self
-                    .ctx
-                    .manifest_environment()
-                    .map(|env| env.environment.to_formatted_server_context())
-                    .unwrap_or("???".to_string()),
+                &self.ctx.selected_server_description(),
             )
             .map_err(DeployError::PrepareError)?
         {
@@ -838,11 +833,7 @@ impl AppCommandHandler {
             .confirm_deploy_by_plan(
                 &deploy_diff.environment.application_name,
                 &deploy_diff.environment.environment_name,
-                &self
-                    .ctx
-                    .manifest_environment()
-                    .map(|env| env.environment.to_formatted_server_context())
-                    .unwrap_or("???".to_string()),
+                &self.ctx.selected_server_description(),
             )
             .map_err(DeployError::PrepareError)?
         {

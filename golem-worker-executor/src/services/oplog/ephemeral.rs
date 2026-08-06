@@ -34,7 +34,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
-use tracing::{Instrument, Level, Span, debug, info, span, warn};
+use golem_common::related_span;
+use golem_common::tracing::TraceOrigin;
+use tracing::{Instrument, Level, debug, info, warn};
 
 /// Oplog implementation for ephemeral agents, writing directly to archive layers.
 ///
@@ -171,46 +173,43 @@ impl EphemeralOplog {
         };
 
         let (jobs, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<EphemeralJob>();
-        let actor = tokio::spawn(
-            async move {
-                while let Some(job) = job_rx.recv().await {
-                    match job {
-                        EphemeralJob::Add { entry, done } => {
-                            let idx = state.add(entry).await;
-                            let _ = done.send(idx);
-                        }
-                        EphemeralJob::AddPair {
-                            start,
-                            make_second,
-                            done,
-                        } => {
-                            let first_idx = state.push(start);
-                            let second = make_second(first_idx);
-                            let second_idx = state.push(second);
-                            state.maybe_commit().await;
-                            let _ = done.send((first_idx, second_idx));
-                        }
-                        EphemeralJob::Commit { done } => {
-                            let result = state.commit().await;
-                            let _ = done.send(result);
-                        }
-                        EphemeralJob::CurrentIndex { done } => {
-                            let _ = done.send(state.last_oplog_idx);
-                        }
-                        EphemeralJob::LastAddedNonHintEntry { done } => {
-                            let _ = done.send(state.last_added_non_hint_entry);
-                        }
-                        EphemeralJob::ReadSnapshot { done } => {
-                            let _ = done.send(EphemeralReadSnapshot {
-                                buffer: state.buffer.iter().cloned().collect(),
-                                last_committed_idx: state.last_committed_idx,
-                            });
-                        }
+        let actor = tokio::spawn(async move {
+            while let Some(job) = job_rx.recv().await {
+                match job {
+                    EphemeralJob::Add { entry, done } => {
+                        let idx = state.add(entry).await;
+                        let _ = done.send(idx);
+                    }
+                    EphemeralJob::AddPair {
+                        start,
+                        make_second,
+                        done,
+                    } => {
+                        let first_idx = state.push(start);
+                        let second = make_second(first_idx);
+                        let second_idx = state.push(second);
+                        state.maybe_commit().await;
+                        let _ = done.send((first_idx, second_idx));
+                    }
+                    EphemeralJob::Commit { done } => {
+                        let result = state.commit().await;
+                        let _ = done.send(result);
+                    }
+                    EphemeralJob::CurrentIndex { done } => {
+                        let _ = done.send(state.last_oplog_idx);
+                    }
+                    EphemeralJob::LastAddedNonHintEntry { done } => {
+                        let _ = done.send(state.last_added_non_hint_entry);
+                    }
+                    EphemeralJob::ReadSnapshot { done } => {
+                        let _ = done.send(EphemeralReadSnapshot {
+                            buffer: state.buffer.iter().cloned().collect(),
+                            last_committed_idx: state.last_committed_idx,
+                        });
                     }
                 }
             }
-            .in_current_span(),
-        );
+        });
 
         Self {
             owned_agent_id,
@@ -302,6 +301,7 @@ impl EphemeralOplog {
                     keep_alive: Some(keep_alive),
                     done: done_tx,
                     drain,
+                    transfer_origin: TraceOrigin::capture_current(),
                 })
                 .expect("Failed to enqueue transfer of ephemeral oplog entries");
             // Return true if there are more movable layers that could still hold data
@@ -328,18 +328,11 @@ impl EphemeralOplog {
         rx: UnboundedReceiver<BackgroundTransferMessage>,
         start: tokio::sync::oneshot::Receiver<()>,
     ) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(
-            async move {
-                if start.await.is_ok() {
-                    Self::background_transfer(owned_agent_id, lower, rx).await;
-                }
+        tokio::spawn(async move {
+            if start.await.is_ok() {
+                Self::background_transfer(owned_agent_id, lower, rx).await;
             }
-            .instrument(
-                span!(parent: None, Level::INFO, "Ephemeral oplog background transfer")
-                    .follows_from(Span::current())
-                    .clone(),
-            ),
-        )
+        })
     }
 
     async fn background_transfer(
@@ -355,66 +348,89 @@ impl EphemeralOplog {
                     mut keep_alive,
                     done,
                     drain,
+                    transfer_origin,
                 } => {
-                    if source + 1 >= lower.len().get() {
+                    async {
+                        if source + 1 >= lower.len().get() {
+                            warn!(
+                                "Invalid TransferFromLower source layer {source} — no target layer exists"
+                            );
+                            let _ = keep_alive.take();
+                            if let Some(done) = done {
+                                let _ = done.send(());
+                            }
+                            return;
+                        }
+
+                        info!(
+                            "Transferring oplog entries up to index {last_transferred_idx} of ephemeral oplog layer {source} to the next layer"
+                        );
+                        debug!("Reading entries from ephemeral oplog layer {source}");
+
+                        let source_layer = lower[source].clone();
+                        let target_layer = lower[source + 1].clone();
+
+                        let entries: Vec<_> = source_layer
+                            .read_prefix(last_transferred_idx)
+                            .await
+                            .into_iter()
+                            .collect();
+
+                        match entries.last() {
+                            Some(last_entry) => {
+                                let last_dropped_id = last_entry.0;
+                                let _ = target_layer.append(entries).await;
+                                source_layer.drop_prefix(last_dropped_id).await;
+                            }
+                            None => {
+                                warn!("No entries to transfer from ephemeral oplog layer {source}");
+                            }
+                        }
+
+                        if drain && let Some(oplog) = keep_alive.as_ref() {
+                            let _ = EphemeralOplog::try_archive_background(oplog).await;
+                        }
+
+                        let _ = keep_alive.take();
+                        if let Some(done) = done {
+                            let _ = done.send(());
+                        }
+                    }
+                    .instrument(related_span!(
+                        transfer_origin,
+                        Level::INFO,
+                        "ephemeral_oplog_background_transfer",
+                        agent_id = %owned_agent_id.agent_id,
+                        from = %format!("layer-{source}"),
+                        last_transferred_idx = %last_transferred_idx,
+                    ))
+                    .await;
+                }
+                BackgroundTransferMessage::TransferFromPrimary {
+                    mut keep_alive,
+                    done,
+                    transfer_origin,
+                    ..
+                } => {
+                    async {
+                        // Ephemeral oplogs do not use primary storage — ignore.
                         warn!(
-                            "Invalid TransferFromLower source layer {source} — no target layer exists"
+                            "Unexpected TransferFromPrimary message in ephemeral oplog for {}",
+                            owned_agent_id
                         );
                         let _ = keep_alive.take();
                         if let Some(done) = done {
                             let _ = done.send(());
                         }
-                        continue;
                     }
-
-                    info!(
-                        "Transferring oplog entries up to index {last_transferred_idx} of ephemeral oplog layer {source} to the next layer"
-                    );
-                    debug!("Reading entries from ephemeral oplog layer {source}");
-
-                    let source_layer = lower[source].clone();
-                    let target_layer = lower[source + 1].clone();
-
-                    let entries: Vec<_> = source_layer
-                        .read_prefix(last_transferred_idx)
-                        .await
-                        .into_iter()
-                        .collect();
-
-                    match entries.last() {
-                        Some(last_entry) => {
-                            let last_dropped_id = last_entry.0;
-                            let _ = target_layer.append(entries).await;
-                            source_layer.drop_prefix(last_dropped_id).await;
-                        }
-                        None => {
-                            warn!("No entries to transfer from ephemeral oplog layer {source}");
-                        }
-                    }
-
-                    if drain && let Some(oplog) = keep_alive.as_ref() {
-                        let _ = EphemeralOplog::try_archive_background(oplog).await;
-                    }
-
-                    let _ = keep_alive.take();
-                    if let Some(done) = done {
-                        let _ = done.send(());
-                    }
-                }
-                BackgroundTransferMessage::TransferFromPrimary {
-                    mut keep_alive,
-                    done,
-                    ..
-                } => {
-                    // Ephemeral oplogs do not use primary storage — ignore.
-                    warn!(
-                        "Unexpected TransferFromPrimary message in ephemeral oplog for {}",
-                        owned_agent_id
-                    );
-                    let _ = keep_alive.take();
-                    if let Some(done) = done {
-                        let _ = done.send(());
-                    }
+                    .instrument(related_span!(
+                        transfer_origin,
+                        Level::INFO,
+                        "ephemeral_oplog_background_transfer",
+                        agent_id = %owned_agent_id.agent_id,
+                        from = "primary",
+                    ))
+                    .await;
                 }
             }
         }

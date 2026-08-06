@@ -49,6 +49,31 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "AccountUpdate",
                 "golem_common::model::account::AccountUpdate",
             ),
+            // account usage
+            (
+                "StorageUsage",
+                "golem_common::model::account_usage::StorageUsage",
+            ),
+            (
+                "StorageUsageHistory",
+                "golem_common::model::account_usage::StorageUsageHistory",
+            ),
+            (
+                "StorageUsageMetrics",
+                "golem_common::model::account_usage::StorageUsageMetrics",
+            ),
+            (
+                "StorageLimit",
+                "golem_common::model::account_usage::StorageLimit",
+            ),
+            (
+                "SetStorageLimit",
+                "golem_common::model::account_usage::SetStorageLimit",
+            ),
+            (
+                "StorageUsagePeriod",
+                "golem_common::model::account_usage::StorageUsagePeriod",
+            ),
             // agent
             (
                 "JsonComponentModelValue",

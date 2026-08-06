@@ -217,6 +217,7 @@ where
     {
         let start = Instant::now();
         debug!(
+            target: golem_common::tracing::target::AGENT_RDBMS,
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = key.to_string(),
             "execute - statement: {}, params count: {}",
@@ -255,6 +256,7 @@ where
     {
         let start = Instant::now();
         debug!(
+            target: golem_common::tracing::target::AGENT_RDBMS,
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = key.to_string(),
             "query stream - statement: {}, params count: {}",
@@ -301,6 +303,7 @@ where
     {
         let start = Instant::now();
         debug!(
+            target: golem_common::tracing::target::AGENT_RDBMS,
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = key.to_string(),
             "query - statement: {}, params count: {}",
@@ -334,6 +337,7 @@ where
     ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, RdbmsError> {
         let start = Instant::now();
         debug!(
+            target: golem_common::tracing::target::AGENT_RDBMS,
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = key.to_string(),
             "begin transaction",
@@ -367,6 +371,7 @@ where
     ) -> Result<RdbmsTransactionStatus, RdbmsError> {
         let start = Instant::now();
         debug!(
+            target: golem_common::tracing::target::AGENT_RDBMS,
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = key.to_string(),
             transaction_id = transaction_id.to_string(),
@@ -400,6 +405,7 @@ where
     ) -> Result<(), RdbmsError> {
         let start = Instant::now();
         debug!(
+            target: golem_common::tracing::target::AGENT_RDBMS,
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = key.to_string(),
             transaction_id = transaction_id.to_string(),
@@ -657,6 +663,7 @@ where
     {
         let start = Instant::now();
         debug!(
+            target: golem_common::tracing::target::AGENT_RDBMS,
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = self.pool_key.to_string(),
             transaction_id = self.transaction_id.to_string(),
@@ -693,6 +700,7 @@ where
     {
         let start = Instant::now();
         debug!(
+            target: golem_common::tracing::target::AGENT_RDBMS,
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = self.pool_key.to_string(),
             transaction_id = self.transaction_id.to_string(),
@@ -728,6 +736,7 @@ where
     {
         let start = Instant::now();
         debug!(
+            target: golem_common::tracing::target::AGENT_RDBMS,
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = self.pool_key.to_string(),
             transaction_id = self.transaction_id.to_string(),
@@ -759,6 +768,7 @@ where
     async fn pre_commit(&self) -> Result<(), RdbmsError> {
         let start = Instant::now();
         debug!(
+            target: golem_common::tracing::target::AGENT_RDBMS,
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = self.pool_key.to_string(),
             transaction_id = self.transaction_id.to_string(),
@@ -783,6 +793,7 @@ where
     async fn pre_rollback(&self) -> Result<(), RdbmsError> {
         let start = Instant::now();
         debug!(
+            target: golem_common::tracing::target::AGENT_RDBMS,
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = self.pool_key.to_string(),
             transaction_id = self.transaction_id.to_string(),
@@ -807,6 +818,7 @@ where
     async fn commit(&self) -> Result<(), RdbmsError> {
         let start = Instant::now();
         debug!(
+            target: golem_common::tracing::target::AGENT_RDBMS,
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = self.pool_key.to_string(),
             transaction_id = self.transaction_id.to_string(),
@@ -837,6 +849,7 @@ where
     async fn rollback(&self) -> Result<(), RdbmsError> {
         let start = Instant::now();
         debug!(
+            target: golem_common::tracing::target::AGENT_RDBMS,
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = self.pool_key.to_string(),
             transaction_id = self.transaction_id.to_string(),
@@ -867,6 +880,7 @@ where
     async fn rollback_if_open(&self) -> Result<(), RdbmsError> {
         let start = Instant::now();
         debug!(
+            target: golem_common::tracing::target::AGENT_RDBMS,
             rdbms_type = self.rdbms_type.to_string(),
             pool_key = self.pool_key.to_string(),
             transaction_id = self.transaction_id.to_string(),
@@ -982,7 +996,7 @@ where
     DbRow<T::DbValue>: for<'a> TryFrom<&'a DB::Row, Error = String>,
 {
     async fn get_columns(&self) -> Result<Vec<T::DbColumn>, RdbmsError> {
-        debug!(rdbms_type = self.rdbms_type.to_string(), "get columns");
+        debug!(target: golem_common::tracing::target::AGENT_RDBMS, rdbms_type = self.rdbms_type.to_string(), "get columns");
         Ok(self.columns.clone())
     }
 
@@ -990,6 +1004,7 @@ where
         let mut rows = self.first_rows.lock().await;
         if rows.is_some() {
             debug!(
+                target: golem_common::tracing::target::AGENT_RDBMS,
                 rdbms_type = self.rdbms_type.to_string(),
                 "get next - initial"
             );
@@ -997,7 +1012,7 @@ where
             *rows = None;
             Ok(result)
         } else {
-            debug!(rdbms_type = self.rdbms_type.to_string(), "get next");
+            debug!(target: golem_common::tracing::target::AGENT_RDBMS, rdbms_type = self.rdbms_type.to_string(), "get next");
             let mut stream = self.row_stream.lock().await;
             let next = stream.next().await;
 

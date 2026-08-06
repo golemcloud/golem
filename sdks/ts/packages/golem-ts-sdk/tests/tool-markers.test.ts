@@ -16,9 +16,9 @@ import { type as arkType } from 'arktype';
 import * as z3 from 'zod3';
 import * as z4 from 'zod/v4';
 import { describe, expect, it } from 'vitest';
-import { Bytes, KeyValue, Path, Quantity, s } from '../src/fluent/schema/markers';
-import { compileSchema } from '../src/fluent/schema/adapter';
-import { getExtendedToolDefinition, toolDefinition } from '../src/fluent/tool';
+import { Bytes, KeyValue, Path, Quantity, s } from '../src/schema/markers';
+import { compileSchema } from '../src/schema/adapter';
+import { getExtendedToolDefinition, toolDefinition } from '../src/tool';
 import { encodeTool } from '../src/internal/tool';
 
 describe('tool schema markers', () => {

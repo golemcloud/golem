@@ -19,6 +19,9 @@ use crate::repo::card::DbCardRepo;
 use crate::repo::model::BindFields;
 pub use crate::repo::model::account::AccountRecord;
 use crate::repo::model::account::AccountRepoError;
+use crate::repo::model::account_resource_override::{
+    AccountResourceOverrideDimension, AccountResourceOverrideReason,
+};
 use crate::repo::model::card::CardRecord;
 use crate::repo::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
@@ -29,10 +32,16 @@ use futures::FutureExt;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
-use golem_service_base::repo::ResultExt;
+use golem_service_base::repo::{NumericU64, ResultExt, SqlDateTime};
 use indoc::indoc;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy)]
+pub struct DiskOverridePolicy {
+    pub ceiling: u64,
+    pub user_configurable: bool,
+}
 
 #[async_trait]
 pub trait AccountRepo: Send + Sync {
@@ -45,6 +54,12 @@ pub trait AccountRepo: Send + Sync {
     async fn update(
         &self,
         revision: AccountRevisionRecord,
+    ) -> Result<AccountExtRevisionRecord, AccountRepoError>;
+
+    async fn update_plan_and_reconcile_overrides(
+        &self,
+        revision: AccountRevisionRecord,
+        disk_override_policy: DiskOverridePolicy,
     ) -> Result<AccountExtRevisionRecord, AccountRepoError>;
 
     async fn delete(
@@ -108,6 +123,18 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
     ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
         let span = Self::span_account_id(revision.account_id);
         self.repo.update(revision).instrument(span).await
+    }
+
+    async fn update_plan_and_reconcile_overrides(
+        &self,
+        revision: AccountRevisionRecord,
+        disk_override_policy: DiskOverridePolicy,
+    ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
+        let span = Self::span_account_id(revision.account_id);
+        self.repo
+            .update_plan_and_reconcile_overrides(revision, disk_override_policy)
+            .instrument(span)
+            .await
     }
 
     async fn delete(
@@ -196,6 +223,37 @@ impl DbAccountRepo<PostgresPool> {
 
         Ok(revision)
     }
+
+    async fn update_in_tx(
+        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        revision: AccountRevisionRecord,
+    ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
+        let revision_record = Self::insert_revision(tx, revision.clone()).await?;
+
+        let account_record: AccountRecord = tx
+            .fetch_optional_as(
+                sqlx::query_as(indoc! {r#"
+                    UPDATE accounts
+                    SET updated_at = $1, modified_by = $2, current_revision_id = $3, email = $4
+                    WHERE account_id = $5
+                    RETURNING account_id, email, account_root_card_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                "#})
+                .bind(&revision.audit.created_at)
+                .bind(revision.audit.created_by)
+                .bind(revision.revision_id)
+                .bind(&revision.email)
+                .bind(revision.account_id),
+            )
+            .await
+            .to_error_on_unique_violation(AccountRepoError::AccountViolatesUniqueness)?
+            .ok_or(AccountRepoError::ConcurrentModification)?;
+
+        Ok(AccountExtRevisionRecord {
+            entity_created_at: account_record.audit.created_at,
+            account_root_card_id: account_record.account_root_card_id,
+            revision: revision_record,
+        })
+    }
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -242,34 +300,71 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
         &self,
         revision: AccountRevisionRecord,
     ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
-        self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
-            async move {
-                let revision_record = Self::insert_revision(tx, revision.clone()).await?;
+        self.db_pool
+            .with_tx_err(METRICS_SVC_NAME, "update", |tx| {
+                async move { Self::update_in_tx(tx, revision).await }.boxed()
+            })
+            .await
+    }
 
-                let account_record: AccountRecord = tx
-                    .fetch_optional_as(
-                        sqlx::query_as(indoc! {r#"
-                            UPDATE accounts
-                            SET updated_at = $1, modified_by = $2, current_revision_id = $3, email = $4
-                            WHERE account_id = $5
-                            RETURNING account_id, email, account_root_card_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
-                        "#})
-                            .bind(&revision.audit.created_at)
-                            .bind(revision.audit.created_by)
-                            .bind(revision.revision_id)
-                            .bind(&revision.email)
-                            .bind(revision.account_id)
-                    ).await
-                    .to_error_on_unique_violation(AccountRepoError::AccountViolatesUniqueness)?
-                    .ok_or(AccountRepoError::ConcurrentModification)?;
+    async fn update_plan_and_reconcile_overrides(
+        &self,
+        revision: AccountRevisionRecord,
+        disk_override_policy: DiskOverridePolicy,
+    ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
+        self.db_pool
+            .with_tx_err(
+                METRICS_SVC_NAME,
+                "update_plan_and_reconcile_overrides",
+                |tx| {
+                    async move {
+                        let account = Self::update_in_tx(tx, revision.clone()).await?;
+                        let now = SqlDateTime::now();
 
-                Ok(AccountExtRevisionRecord {
-                    entity_created_at: account_record.audit.created_at,
-                    account_root_card_id: account_record.account_root_card_id,
-                    revision: revision_record
-                })
-            }.boxed()
-        }).await
+                        if disk_override_policy.user_configurable {
+                            tx.execute(
+                                sqlx::query(indoc! { r#"
+                                UPDATE account_resource_overrides
+                                SET override_value = $1, reason = $2
+                                WHERE account_id = $3
+                                  AND dimension = $4
+                                  AND (expires_at IS NULL OR expires_at > $5)
+                                  AND override_value > $1
+                            "# })
+                                .bind(NumericU64::new(disk_override_policy.ceiling))
+                                .bind(AccountResourceOverrideReason::DowngradeClamp.as_str())
+                                .bind(revision.account_id)
+                                .bind(
+                                    AccountResourceOverrideDimension::MaxDiskSpacePerWorker
+                                        .as_str(),
+                                )
+                                .bind(now),
+                            )
+                            .await?;
+                        } else {
+                            tx.execute(
+                                sqlx::query(indoc! { r#"
+                                DELETE FROM account_resource_overrides
+                                WHERE account_id = $1
+                                  AND dimension = $2
+                                  AND (expires_at IS NULL OR expires_at > $3)
+                            "# })
+                                .bind(revision.account_id)
+                                .bind(
+                                    AccountResourceOverrideDimension::MaxDiskSpacePerWorker
+                                        .as_str(),
+                                )
+                                .bind(now),
+                            )
+                            .await?;
+                        }
+
+                        Ok(account)
+                    }
+                    .boxed()
+                },
+            )
+            .await
     }
 
     async fn delete(

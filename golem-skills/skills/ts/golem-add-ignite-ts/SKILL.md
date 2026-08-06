@@ -5,7 +5,7 @@ description: "Using golem:rdbms/ignite2 from a TypeScript Golem agent. Use when 
 
 # Using Apache Ignite from a TypeScript Agent
 
-The fluent TypeScript SDK ships a typed Apache Ignite 2 helper built on the
+The TypeScript SDK ships a typed Apache Ignite 2 helper built on the
 `golem:rdbms/ignite2@1.5.0` host interface. Every operation returns a `Promise`
 and throws a typed `IgniteError` on failure.
 

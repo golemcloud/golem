@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::{DEFAULT_CLOUD_URL, NamedProfile, builtin_local_url};
+use crate::config::{DEFAULT_CLOUD_URL, NamedProfile};
 use crate::model::app_raw::{BuiltinServer, Environment, Server};
 use colored::Colorize;
+use url::Url;
 
 pub trait ToFormattedServerContext {
-    fn to_formatted_server_context(&self) -> String;
+    fn to_formatted_server_context(&self, builtin_local_url: &Url) -> String;
 }
 
 impl ToFormattedServerContext for NamedProfile {
-    fn to_formatted_server_context(&self) -> String {
+    fn to_formatted_server_context(&self, builtin_local_url: &Url) -> String {
         if self.name.is_builtin_local() {
-            local_builtin()
+            local_builtin(builtin_local_url)
         } else if self.name.is_builtin_cloud() {
             cloud_builtin()
         } else {
@@ -36,9 +37,9 @@ impl ToFormattedServerContext for NamedProfile {
 }
 
 impl ToFormattedServerContext for Environment {
-    fn to_formatted_server_context(&self) -> String {
+    fn to_formatted_server_context(&self, builtin_local_url: &Url) -> String {
         match &self.server {
-            Some(Server::Builtin(BuiltinServer::Local)) | None => local_builtin(),
+            Some(Server::Builtin(BuiltinServer::Local)) | None => local_builtin(builtin_local_url),
             Some(Server::Builtin(BuiltinServer::Cloud)) => cloud_builtin(),
             Some(Server::Custom(custom_server)) => {
                 custom_server.url.as_str().underline().to_string()
@@ -47,11 +48,8 @@ impl ToFormattedServerContext for Environment {
     }
 }
 
-fn local_builtin() -> String {
-    format!(
-        "local - builtin ({})",
-        builtin_local_url().to_string().underline()
-    )
+fn local_builtin(url: &Url) -> String {
+    format!("local - builtin ({})", url.to_string().underline())
 }
 
 fn cloud_builtin() -> String {

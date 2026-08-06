@@ -638,6 +638,367 @@ paths:
       - Cookie: []
       - Token: []
       operationId: create_token
+  /v1/accounts/{account_id}/usage:
+    get:
+      tags:
+      - RegistryService
+      - Account
+      summary: Get current durable and ephemeral storage usage and storage limit.
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: period
+        schema:
+          type: string
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/StorageUsage'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_account_storage_usage
+  /v1/accounts/{account_id}/usage/history:
+    get:
+      tags:
+      - RegistryService
+      - Account
+      summary: Get storage usage for closed billing periods, newest first.
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: last
+        schema:
+          type: integer
+          format: uint64
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StorageUsageHistory'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_account_storage_usage_history
+  /v1/accounts/{account_id}/resource-overrides/max-storage-per-agent:
+    get:
+      tags:
+      - RegistryService
+      - Account
+      summary: Get effective storage-per-agent override metadata for an account.
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/StorageLimit'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_account_storage_override
+    put:
+      tags:
+      - RegistryService
+      - Account
+      summary: Set a storage-per-agent override for an account. Setting an expiry requires an admin token.
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/SetStorageLimit'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/StorageLimit'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: set_account_storage_override
+    delete:
+      tags:
+      - RegistryService
+      - Account
+      summary: Clear a storage-per-agent override for an account.
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/StorageLimit'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: clear_account_storage_override
   /v1/envs/{environment_id}/agent-secrets:
     post:
       tags:
@@ -11425,6 +11786,8 @@ components:
       - maxMemoryPerWorker
       - maxTableElementsPerWorker
       - maxDiskSpacePerWorker
+      - maxDiskSpacePerWorkerCeiling
+      - maxDiskSpacePerWorkerUserConfigurable
       - perInvocationHttpCallLimit
       - perInvocationRpcCallLimit
       - monthlyHttpCallLimit
@@ -11467,6 +11830,11 @@ components:
         maxDiskSpacePerWorker:
           type: integer
           format: uint64
+        maxDiskSpacePerWorkerCeiling:
+          type: integer
+          format: uint64
+        maxDiskSpacePerWorkerUserConfigurable:
+          type: boolean
         perInvocationHttpCallLimit:
           type: integer
           format: uint64
@@ -13448,6 +13816,18 @@ components:
           type: array
           items:
             type: string
+    SetStorageLimit:
+      type: object
+      title: SetStorageLimit
+      required:
+      - value
+      properties:
+        value:
+          type: integer
+          format: uint64
+        expiresAt:
+          type: string
+          format: date-time
     Snapshotting:
       type: object
       oneOf:
@@ -13548,6 +13928,96 @@ components:
             - Enabled
             example: Enabled
       - $ref: '#/components/schemas/SnapshottingConfig'
+    StorageLimit:
+      type: object
+      title: StorageLimit
+      required:
+      - effectiveValue
+      - planDefault
+      - ceiling
+      - userConfigurable
+      properties:
+        effectiveValue:
+          type: integer
+          format: uint64
+        planDefault:
+          type: integer
+          format: uint64
+        overrideValue:
+          type: integer
+          format: uint64
+        ceiling:
+          type: integer
+          format: uint64
+        userConfigurable:
+          type: boolean
+    StorageUsage:
+      type: object
+      title: StorageUsage
+      required:
+      - accountId
+      - planId
+      - planName
+      - usage
+      - maxStoragePerAgent
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        planId:
+          type: string
+          format: uuid
+        planName:
+          type: string
+        usage:
+          $ref: '#/components/schemas/StorageUsageMetrics'
+        maxStoragePerAgent:
+          $ref: '#/components/schemas/StorageLimit'
+    StorageUsageHistory:
+      type: object
+      title: StorageUsageHistory
+      required:
+      - accountId
+      - usage
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        usage:
+          $ref: '#/components/schemas/StorageUsageMetrics'
+    StorageUsageMetrics:
+      type: object
+      title: StorageUsageMetrics
+      required:
+      - period
+      - computeGcu
+      - durableStorageGbMonth
+      - ephemeralStorageGbMonth
+      properties:
+        period:
+          $ref: '#/components/schemas/StorageUsagePeriod'
+        computeGcu:
+          type: number
+          format: double
+        durableStorageGbMonth:
+          type: number
+          format: double
+        ephemeralStorageGbMonth:
+          type: number
+          format: double
+    StorageUsagePeriod:
+      type: object
+      title: StorageUsagePeriod
+      required:
+      - year
+      - month
+      properties:
+        year:
+          type: integer
+          format: int32
+        month:
+          type: integer
+          format: uint32
     StoredCard:
       type: object
       oneOf:

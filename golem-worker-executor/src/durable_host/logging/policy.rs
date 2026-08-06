@@ -55,9 +55,14 @@ pub async fn emit_log_event_with_state<Ctx: WorkerCtx>(
         // Oplog processor plugin logs are emitted into the server log because
         // they cannot be easily watched with CLI tools.
         if has_oplog_processor {
+            // Under `target::PLUGIN_LOG` rather than this module: the plugin
+            // decides how much of this there is, so an operator needs to be
+            // able to name it on its own.
+            use golem_common::tracing::target::PLUGIN_LOG;
             match level {
                 LogLevel::Stdout | LogLevel::Debug | LogLevel::Trace => {
                     tracing::debug!(
+                        target: PLUGIN_LOG,
                         plugin_agent = %owned_agent_id,
                         context,
                         "Plugin: {message}"
@@ -65,6 +70,7 @@ pub async fn emit_log_event_with_state<Ctx: WorkerCtx>(
                 }
                 LogLevel::Stderr | LogLevel::Info => {
                     tracing::info!(
+                        target: PLUGIN_LOG,
                         plugin_agent = %owned_agent_id,
                         context,
                         "Plugin: {message}"
@@ -72,6 +78,7 @@ pub async fn emit_log_event_with_state<Ctx: WorkerCtx>(
                 }
                 LogLevel::Warn => {
                     tracing::warn!(
+                        target: PLUGIN_LOG,
                         plugin_agent = %owned_agent_id,
                         context,
                         "Plugin: {message}"
@@ -79,6 +86,7 @@ pub async fn emit_log_event_with_state<Ctx: WorkerCtx>(
                 }
                 LogLevel::Error | LogLevel::Critical => {
                     tracing::error!(
+                        target: PLUGIN_LOG,
                         plugin_agent = %owned_agent_id,
                         context,
                         "Plugin: {message}"

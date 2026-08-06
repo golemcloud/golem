@@ -13,14 +13,17 @@
 // limitations under the License.
 
 use crate::Tracing;
+use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::model::IFSEntry;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
     start_with_agent_storage_quota, start_with_executor_storage_pool,
 };
+use std::path::PathBuf;
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -1915,5 +1918,49 @@ async fn agent_quota_splice_exceeding_limit_fails(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn provisioned_read_write_file_counts_toward_agent_quota(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 3).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .with_files(
+            "FileSystem",
+            &[IFSEntry {
+                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadWrite,
+            }],
+        )
+        .store()
+        .await?;
+
+    let result = executor
+        .start_agent(
+            &component.id,
+            agent_id!("FileSystem", "provisioned-file-over-quota"),
+        )
+        .await;
+
+    let error = result.expect_err(
+        "4-byte provisioned read-write file must prevent creation under a 3-byte quota",
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains(
+            "Provisioned read-write files require 4 bytes, exceeding the per-agent disk limit of 3 bytes"
+        ),
+        "unexpected worker creation error: {message}"
+    );
     Ok(())
 }

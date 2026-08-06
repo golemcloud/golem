@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod account;
 mod agents;
 
 #[allow(clippy::module_inception)]
@@ -63,6 +64,7 @@ const GOLEM_CLI_TEST_BIN_PROFILE_ENV_VAR: &str = "GOLEM_CLI_TEST_BIN_PROFILE";
 mod cmd {
     pub static NO_ARGS: &[&str] = &[];
 
+    pub static ACCOUNT: &str = "account";
     pub static AGENT: &str = "agent";
     pub static AGENT_TYPE: &str = "agent-type";
     pub static BUILD: &str = "build";
@@ -472,6 +474,7 @@ impl TestContext {
 
         let mut child = Command::new(&self.golem_cli_path)
             .args(args)
+            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
             .envs(&self.env)
             .current_dir(&working_dir)
             .stdout(Stdio::piped())
@@ -518,7 +521,11 @@ impl TestContext {
 
         tokio::task::spawn_blocking(move || {
             let mut command = std::process::Command::new(golem_cli_path);
-            command.current_dir(working_dir).envs(env).args(args);
+            command
+                .current_dir(working_dir)
+                .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+                .envs(env)
+                .args(args);
             // The session runs in a PTY; ensure a capable terminal type so terminal
             // features like readline tab completion are not disabled (e.g. when the
             // parent environment has TERM=dumb or TERM unset).

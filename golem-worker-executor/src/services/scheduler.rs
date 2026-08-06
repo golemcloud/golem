@@ -45,7 +45,7 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Level, debug, error, info, span, warn};
+use tracing::{Instrument, Level, debug, debug_span, error, info, info_span, span, warn};
 
 #[async_trait]
 pub trait SchedulerService: Send + Sync {
@@ -199,35 +199,31 @@ impl SchedulerServiceDefault {
         let svc = Arc::new(svc);
         let background_handle = {
             let svc_weak = Arc::downgrade(&svc);
-            tokio::spawn(
-                async move {
-                    loop {
-                        tokio::select! {
-                            _ = shutdown_token.cancelled() => {
-                                info!("Shutdown requested, stopping scheduler background loop");
-                                break;
-                            }
-                            _ = tokio::time::sleep(process_interval) => {}
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = shutdown_token.cancelled() => {
+                            info!("Shutdown requested, stopping scheduler background loop");
+                            break;
                         }
-                        let svc = match svc_weak.upgrade() {
-                            Some(s) => s,
-                            None => {
-                                info!("Scheduler service dropped, stopping background loop");
-                                break;
-                            }
-                        };
-                        if svc.shard_service.is_ready() {
-                            let r = svc.process(Utc::now()).await;
-                            if let Err(err) = r {
-                                error!(err, "Error in scheduler background task");
-                            }
-                        } else {
-                            warn!("Skipping schedule, shard service is not ready")
+                        _ = tokio::time::sleep(process_interval) => {}
+                    }
+                    let svc = match svc_weak.upgrade() {
+                        Some(s) => s,
+                        None => {
+                            info!("Scheduler service dropped, stopping background loop");
+                            break;
                         }
+                    };
+                    if svc.shard_service.is_ready() {
+                        // A failed tick is logged inside `process`, where its span is
+                        // still open.
+                        let _ = svc.process(Utc::now()).await;
+                    } else {
+                        warn!("Skipping schedule, shard service is not ready")
                     }
                 }
-                .instrument(span!(parent: None, Level::INFO, "Scheduler loop")),
-            )
+            })
         };
         *svc.background_handle.lock().unwrap() = Some(background_handle);
 
@@ -269,45 +265,66 @@ impl SchedulerServiceDefault {
         }
     }
 
+    /// Performs one scheduler tick, spanned per tick rather than per loop: a span
+    /// wrapping the loop would never close, so it would never be exported.
     async fn process(&self, now: DateTime<Utc>) -> Result<(), String> {
-        let tick_start = std::time::Instant::now();
-        let assignment = self
-            .shard_service
-            .current_assignment()
-            .map_err(|err| err.to_string())?;
+        async {
+            let result = async {
+                let tick_start = std::time::Instant::now();
+                let assignment = self
+                    .shard_service
+                    .current_assignment()
+                    .map_err(|err| err.to_string())?;
 
-        for _ in 0..self.max_batches_per_tick {
-            let claimed = self
-                .scheduler_storage
-                .claim_due(now, &assignment, self.claim_batch_size, self.lease_ttl)
-                .await?;
+                for _ in 0..self.max_batches_per_tick {
+                    let claimed = self
+                        .scheduler_storage
+                        .claim_due(now, &assignment, self.claim_batch_size, self.lease_ttl)
+                        .instrument(debug_span!("scheduler_storage_claim_due"))
+                        .await?;
 
-            let claimed_count = claimed.len();
-            crate::metrics::scheduler::set_scheduler_queue_depth(claimed_count);
-            if claimed.is_empty() {
-                break;
+                    let claimed_count = claimed.len();
+                    crate::metrics::scheduler::set_scheduler_queue_depth(claimed_count);
+                    if claimed.is_empty() {
+                        break;
+                    }
+
+                    self.process_claimed_actions(claimed, now).await?;
+
+                    if claimed_count < self.claim_batch_size as usize {
+                        break;
+                    }
+                }
+
+                match self
+                    .scheduler_storage
+                    .count_due(Utc::now(), &assignment)
+                    .instrument(debug_span!("scheduler_storage_count_due"))
+                    .await
+                {
+                    Ok(backlog) => {
+                        crate::metrics::scheduler::set_scheduler_due_action_backlog_after_tick(
+                            backlog,
+                        )
+                    }
+                    Err(error) => {
+                        warn!(%error, "Failed to count due scheduled actions after tick")
+                    }
+                }
+
+                crate::metrics::scheduler::record_scheduler_tick_duration(tick_start.elapsed());
+                Ok(())
             }
-
-            self.process_claimed_actions(claimed, now).await?;
-
-            if claimed_count < self.claim_batch_size as usize {
-                break;
+            .await;
+            // Logged inside the span, so a failed tick is visible in the trace and
+            // not only in the logs.
+            if let Err(error) = &result {
+                error!(error, "Scheduler tick failed");
             }
+            result
         }
-
-        match self
-            .scheduler_storage
-            .count_due(Utc::now(), &assignment)
-            .await
-        {
-            Ok(backlog) => {
-                crate::metrics::scheduler::set_scheduler_due_action_backlog_after_tick(backlog)
-            }
-            Err(error) => warn!(error, "Failed to count due scheduled actions after tick"),
-        }
-
-        crate::metrics::scheduler::record_scheduler_tick_duration(tick_start.elapsed());
-        Ok(())
+        .instrument(info_span!("scheduler_tick"))
+        .await
     }
 
     async fn process_claimed_actions(
@@ -451,9 +468,9 @@ impl SchedulerServiceDefault {
                         // TODO: this is probably redundant with the wakeup in PromiseService. check and fix
                         {
                             let span = span!(
-                                Level::INFO,
-                                "scheduler",
-                                agent_id = owned_agent_id.agent_id.to_string()
+                                Level::DEBUG,
+                                "scheduler_activate_worker",
+                                agent_id = %owned_agent_id.agent_id
                             );
 
                             self.worker_access
@@ -1142,7 +1159,7 @@ mod tests {
             &self,
             now: DateTime<Utc>,
             assignment: &ShardAssignment,
-        ) -> Result<u64, String> {
+        ) -> Result<u64, SchedulerStorageError> {
             self.inner.count_due(now, assignment).await
         }
 
@@ -1216,7 +1233,7 @@ mod tests {
             &self,
             now: DateTime<Utc>,
             assignment: &ShardAssignment,
-        ) -> Result<u64, String> {
+        ) -> Result<u64, SchedulerStorageError> {
             self.inner.count_due(now, assignment).await
         }
 
@@ -1329,6 +1346,22 @@ mod tests {
             invocation_context: InvocationContextStack::fresh(),
             principal: Principal::anonymous(),
         }
+    }
+
+    /// The scheduler's span must cover one tick, not the whole background loop. A
+    /// loop-lifetime span never closes, so it is never exported and it retains
+    /// every event recorded inside it for as long as the process runs.
+    #[test]
+    async fn process_records_one_closed_span_per_tick() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let promise_service = create_promise_service_mock();
+        let svc = create_scheduler(storage, promise_service).await;
+
+        let recorder = crate::span_test_support::record_spans();
+        svc.process(Utc::now()).await.unwrap();
+
+        recorder.assert_closed_span("scheduler_tick");
+        recorder.assert_all_closed();
     }
 
     #[test]

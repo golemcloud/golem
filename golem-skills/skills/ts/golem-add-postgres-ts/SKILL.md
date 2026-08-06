@@ -5,7 +5,7 @@ description: "Using golem:rdbms/postgres from a TypeScript Golem agent. Use when
 
 # Using PostgreSQL from a TypeScript Agent
 
-The fluent TypeScript SDK ships a typed PostgreSQL helper built on the
+The TypeScript SDK ships a typed PostgreSQL helper built on the
 `golem:rdbms/postgres@1.5.0` host interface. Every operation returns a `Promise`
 and throws a typed `PostgresError` on failure, so use normal `try` / `catch`
 handling when needed.

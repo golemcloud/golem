@@ -65,6 +65,33 @@ impl<T: Clone> GrpcClient<T> {
         F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
             + Send,
     {
+        self.call_with_retry(description, true, f).await
+    }
+
+    /// Performs one attempt, even for `Unavailable`, for operations that are unsafe to retry
+    /// without an idempotency key.
+    pub async fn call_without_retry<F, R>(
+        &self,
+        description: impl AsRef<str>,
+        f: F,
+    ) -> Result<R, Status>
+    where
+        F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
+            + Send,
+    {
+        self.call_with_retry(description, false, f).await
+    }
+
+    async fn call_with_retry<F, R>(
+        &self,
+        description: impl AsRef<str>,
+        retry_on_unavailable: bool,
+        f: F,
+    ) -> Result<R, Status>
+    where
+        F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
+            + Send,
+    {
         let mut retries = RetryState::new(&self.config.retries_on_unavailable);
         let span = debug_span!(
             "gRPC call",
@@ -90,7 +117,7 @@ impl<T: Clone> GrpcClient<T> {
                 Err(e) => {
                     if requires_reconnect(&e) {
                         let _ = self.client.lock().await.take();
-                        if !retries.failed_attempt().await {
+                        if !retry_on_unavailable || !retries.failed_attempt().await {
                             span.in_scope(|| {
                                 warn!("gRPC call failed: {:?}, no more retries", e);
                             });

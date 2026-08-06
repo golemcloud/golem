@@ -71,6 +71,14 @@ const SCHEDULER_LAG_BUCKETS: &[f64; 22] = &[
     10.0, 30.0, 60.0, 300.0, 600.0,
 ];
 
+/// Admission-wait buckets. A worker normally clears admission in milliseconds, but
+/// under memory pressure a single phase can block for minutes, so the tail reaches
+/// well past the scheduler buckets.
+const ADMISSION_WAIT_BUCKETS: &[f64; 18] = &[
+    0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0,
+    1800.0, 3600.0,
+];
+
 /// Tick-duration buckets for the scheduler. Values are dense at low latencies
 /// because slow ticks directly add scheduling delay.
 const SCHEDULER_TICK_DURATION_BUCKETS: &[f64; 24] = &[
@@ -291,6 +299,7 @@ pub mod workers {
     use lazy_static::lazy_static;
     use prometheus::core::Number;
     use prometheus::*;
+    use std::time::Duration;
 
     lazy_static! {
         static ref WORKER_EXECUTOR_CALL_TOTAL: CounterVec = register_counter_vec!(
@@ -326,6 +335,13 @@ pub mod workers {
             "worker_waiting_for_memory_count",
             "Workers blocked waiting to acquire a memory permit on this executor",
             &["executor_id"]
+        )
+        .unwrap();
+        pub static ref WORKER_ADMISSION_WAIT_SECONDS: HistogramVec = register_histogram_vec!(
+            "worker_admission_wait_seconds",
+            "Time a starting worker spent blocked in one phase of admission before it could become resident, labelled by phase (resolve_component_charge, concurrency_slot, memory, filesystem_storage). Observed once per phase per worker start. Sum across phases for the total wait; read per phase to see which resource is the constraint. worker_waiting_for_memory_count says how many workers are waiting, this says for how long",
+            &["executor_id", "phase"],
+            crate::metrics::ADMISSION_WAIT_BUCKETS.to_vec()
         )
         .unwrap();
         pub static ref WORKER_STORE_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
@@ -526,6 +542,34 @@ pub mod workers {
         WORKER_STORE_ALIVE_COUNT
             .with_label_values(&[crate::metrics::storage::executor_id()])
             .dec();
+    }
+
+    /// Phases a starting worker waits through before it can become resident. Each is
+    /// a separate blocking acquisition, so recording them apart shows which resource
+    /// a stalled start is actually waiting on.
+    #[derive(Debug, Clone, Copy)]
+    pub enum AdmissionPhase {
+        ResolveComponentCharge,
+        ConcurrencySlot,
+        Memory,
+        FilesystemStorage,
+    }
+
+    impl AdmissionPhase {
+        fn as_str(self) -> &'static str {
+            match self {
+                AdmissionPhase::ResolveComponentCharge => "resolve_component_charge",
+                AdmissionPhase::ConcurrencySlot => "concurrency_slot",
+                AdmissionPhase::Memory => "memory",
+                AdmissionPhase::FilesystemStorage => "filesystem_storage",
+            }
+        }
+    }
+
+    pub fn record_worker_admission_wait(phase: AdmissionPhase, elapsed: Duration) {
+        WORKER_ADMISSION_WAIT_SECONDS
+            .with_label_values(&[crate::metrics::storage::executor_id(), phase.as_str()])
+            .observe(elapsed.as_secs_f64());
     }
 
     pub fn inc_worker_waiting_for_memory() {
@@ -958,6 +1002,7 @@ pub mod oplog {
 }
 
 pub mod resources {
+    use golem_common::model::agent::AgentMode;
     use lazy_static::lazy_static;
     use prometheus::*;
 
@@ -969,6 +1014,17 @@ pub mod resources {
         static ref EPHEMERAL_OVERDRAFT_FUEL_TOTAL: Counter = register_counter!(
             "ephemeral_overdraft_fuel_total",
             "Total amount of ephemeral overdraft fuel consumed"
+        )
+        .unwrap();
+        static ref STORAGE_BYTE_SECONDS_TOTAL: CounterVec = register_counter_vec!(
+            "storage_byte_seconds_total",
+            "Filesystem storage byte-seconds billed, by account and agent mode",
+            &["account_id", "agent_mode"]
+        )
+        .unwrap();
+        static ref RESOURCE_USAGE_BATCH_UPDATE_FAILURE_TOTAL: Counter = register_counter!(
+            "resource_usage_batch_update_failure_total",
+            "Number of resource usage batches dropped after registry update failures"
         )
         .unwrap();
     }
@@ -983,6 +1039,22 @@ pub mod resources {
 
     pub fn record_ephemeral_overdraft_fuel(amount: u64) {
         EPHEMERAL_OVERDRAFT_FUEL_TOTAL.inc_by(amount as f64);
+    }
+
+    pub fn record_storage_byte_seconds(account_id: &str, mode: AgentMode, amount: i64) {
+        // Lower-cased here rather than via `Display`, which renders for humans and is
+        // free to change; label values are a query interface and must stay stable.
+        let agent_mode = match mode {
+            AgentMode::Durable => "durable",
+            AgentMode::Ephemeral => "ephemeral",
+        };
+        STORAGE_BYTE_SECONDS_TOTAL
+            .with_label_values(&[account_id, agent_mode])
+            .inc_by(amount as f64);
+    }
+
+    pub fn record_resource_usage_batch_update_failure() {
+        RESOURCE_USAGE_BATCH_UPDATE_FAILURE_TOTAL.inc();
     }
 }
 

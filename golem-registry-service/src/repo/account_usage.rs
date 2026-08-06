@@ -13,13 +13,17 @@
 // limitations under the License.
 
 pub use crate::repo::model::account::AccountRecord;
-use crate::repo::model::account_usage::{AccountUsage, UsageGrouping, UsageTracking, UsageType};
-use crate::repo::model::plan::PlanRecord;
+use crate::repo::model::account_resource_override::AccountResourceOverrideDimension;
+use crate::repo::model::account_usage::{
+    AccountUsage, AccountUsagePlan, StorageUsageHistoryRecord, UsageGrouping, UsageTracking,
+    UsageType,
+};
 use async_trait::async_trait;
 use chrono::Datelike;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use golem_common::model::account_usage::{StorageLimit, StorageUsagePeriod};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
@@ -27,7 +31,7 @@ use golem_service_base::repo::NumericU64;
 use golem_service_base::repo::RepoResult;
 use golem_service_base::repo::SqlDateTime;
 use indoc::indoc;
-use sqlx::{Database, Row};
+use sqlx::{Database, QueryBuilder, Row};
 use std::collections::BTreeMap;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
@@ -42,6 +46,13 @@ pub trait AccountUsageRepo: Send + Sync {
         date: &SqlDateTime,
         usage_type: UsageType,
     ) -> RepoResult<Option<AccountUsage>>;
+
+    async fn get_storage_history(
+        &self,
+        account_id: Uuid,
+        before: StorageUsagePeriod,
+        last: usize,
+    ) -> RepoResult<Vec<StorageUsageHistoryRecord>>;
 
     async fn add(&self, account_usage: &AccountUsage) -> RepoResult<()>;
 }
@@ -79,6 +90,18 @@ impl<Repo: AccountUsageRepo> AccountUsageRepo for LoggedAccountUsageRepo<Repo> {
     ) -> RepoResult<Option<AccountUsage>> {
         self.repo
             .get_for_type(account_id, date, usage_type)
+            .instrument(Self::span_account_id(account_id))
+            .await
+    }
+
+    async fn get_storage_history(
+        &self,
+        account_id: Uuid,
+        before: StorageUsagePeriod,
+        last: usize,
+    ) -> RepoResult<Vec<StorageUsageHistoryRecord>> {
+        self.repo
+            .get_storage_history(account_id, before, last)
             .instrument(Self::span_account_id(account_id))
             .await
     }
@@ -129,7 +152,7 @@ impl<DBP: Pool> DbAccountUsageRepo<DBP> {
 #[async_trait]
 impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
     async fn get(&self, account_id: Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>> {
-        let Some(plan) = self.get_plan(account_id).await? else {
+        let Some(account_plan) = self.get_plan(account_id).await? else {
             return Ok(None);
         };
 
@@ -196,7 +219,8 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             year: date.as_utc().year(),
             month: date.as_utc().month(),
             usage,
-            plan,
+            storage_limit: storage_limit(&account_plan),
+            plan: account_plan.plan,
             changes: Default::default(),
         }))
     }
@@ -207,7 +231,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
         date: &SqlDateTime,
         usage_type: UsageType,
     ) -> RepoResult<Option<AccountUsage>> {
-        let Some(plan) = self.get_plan(account_id).await? else {
+        let Some(account_plan) = self.get_plan(account_id).await? else {
             return Ok(None);
         };
 
@@ -326,60 +350,164 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             year: date.as_utc().year(),
             month: date.as_utc().month(),
             usage,
-            plan,
+            storage_limit: storage_limit(&account_plan),
+            plan: account_plan.plan,
             changes: Default::default(),
         }))
     }
 
+    async fn get_storage_history(
+        &self,
+        account_id: Uuid,
+        before: StorageUsagePeriod,
+        last: usize,
+    ) -> RepoResult<Vec<StorageUsageHistoryRecord>> {
+        let rows = self
+            .with_ro("get_storage_history")
+            .fetch_all(
+                sqlx::query(indoc! { r#"
+                    WITH periods AS (
+                        SELECT DISTINCT usage_key
+                        FROM account_usage_stats
+                        WHERE account_id = $1
+                            AND usage_key < $2
+                            AND usage_type IN ($3, $4, $5)
+                        ORDER BY usage_key DESC
+                        LIMIT $6
+                    )
+                    SELECT stats.usage_key, stats.usage_type, stats.value
+                    FROM account_usage_stats stats
+                    JOIN periods ON periods.usage_key = stats.usage_key
+                    WHERE stats.account_id = $1
+                        AND stats.usage_type IN ($3, $4, $5)
+                    ORDER BY stats.usage_key DESC
+                "#})
+                .bind(account_id)
+                .bind(year_and_month_to_usage_key(before.year, before.month))
+                .bind(UsageType::MonthlyDurableAgentStorageByteSeconds)
+                .bind(UsageType::MonthlyEphemeralStorageByteSeconds)
+                .bind(UsageType::MonthlyGasLimit)
+                .bind(i64::try_from(last).unwrap_or(i64::MAX)),
+            )
+            .await?;
+
+        let mut periods = BTreeMap::<StorageUsagePeriod, (u64, u64, u64)>::new();
+        for row in rows {
+            let usage_key: String = row.try_get("usage_key")?;
+            let Some((year, month)) = usage_key.split_once('-') else {
+                continue;
+            };
+            let (Ok(year), Ok(month)) = (year.parse(), month.parse()) else {
+                continue;
+            };
+            let period = StorageUsagePeriod { year, month };
+            let values = periods.entry(period).or_default();
+            let value = row.try_get::<NumericU64, _>("value")?.get();
+            match row.try_get("usage_type")? {
+                UsageType::MonthlyDurableAgentStorageByteSeconds => values.0 = value,
+                UsageType::MonthlyEphemeralStorageByteSeconds => values.1 = value,
+                UsageType::MonthlyGasLimit => values.2 = value,
+                _ => continue,
+            }
+        }
+
+        Ok(periods
+            .into_iter()
+            .rev()
+            .map(
+                |(period, (durable, ephemeral, compute))| StorageUsageHistoryRecord {
+                    period,
+                    durable_storage_byte_seconds: durable,
+                    ephemeral_storage_byte_seconds: ephemeral,
+                    compute_fuel: compute,
+                },
+            )
+            .collect())
+    }
+
     async fn add(&self, account_usage: &AccountUsage) -> RepoResult<()> {
         let account_id = account_usage.account_id;
-        let changes = account_usage.changes.clone();
         let date_usage_key = year_and_month_to_usage_key(account_usage.year, account_usage.month);
+        let changes = account_usage
+            .changes
+            .iter()
+            .filter(|(usage_type, change)| {
+                usage_type.tracking() == UsageTracking::Stats && **change != 0
+            })
+            .map(|(usage_type, change)| {
+                let usage_key = match usage_type.grouping() {
+                    UsageGrouping::Total => USAGE_KEY_TOTAL.to_string(),
+                    UsageGrouping::Monthly => date_usage_key.clone(),
+                };
+                (*usage_type, usage_key, *change)
+            })
+            .collect::<Vec<_>>();
+
+        if changes.is_empty() {
+            return Ok(());
+        }
 
         self.with_tx("change_usage", |tx| {
             async move {
-                for (usage_type, change) in changes {
-                    if usage_type.tracking() != UsageTracking::Stats || change == 0 {
-                        continue;
-                    }
-
-                    tx.execute(
-                        sqlx::query(indoc! { r#"
-                            INSERT INTO account_usage_stats (
-                                account_id,
-                                usage_type,
-                                usage_key,
-                                value,
-                                updated_at
-                            )
-                            VALUES ($1, $2, $3, $4, $5)
-                            ON CONFLICT (account_id, usage_type, usage_key) DO UPDATE
-                            SET
-                                value = CASE
-                                    WHEN account_usage_stats.value + $6 < 0
-                                        THEN 0
-                                    WHEN account_usage_stats.value + $6 > 18446744073709551615
-                                        THEN 18446744073709551615
-                                    ELSE account_usage_stats.value + $6
-                                END,
-                                updated_at = $5;
-                        "#})
-                        .bind(account_id)
-                        .bind(usage_type)
-                        .bind(match usage_type.grouping() {
-                            UsageGrouping::Total => USAGE_KEY_TOTAL,
-                            UsageGrouping::Monthly => &date_usage_key,
-                        })
-                        .bind(if change < 0 {
-                            0.into()
-                        } else {
-                            NumericU64::new(change as u64)
-                        })
-                        .bind(SqlDateTime::now())
-                        .bind(change),
+                let updated_at = SqlDateTime::now();
+                let mut query = QueryBuilder::<<PostgresPool as Pool>::Db>::new(indoc! { r#"
+                    WITH changes (account_id, usage_type, usage_key, delta, updated_at) AS (
+                "#});
+                query.push_values(changes, |mut row, (usage_type, usage_key, change)| {
+                    row.push_bind(account_id)
+                        .push_bind(usage_type)
+                        .push_bind(usage_key)
+                        .push_bind(change)
+                        .push_bind(updated_at.clone());
+                });
+                query.push(indoc! { r#"
                     )
-                    .await?;
-                }
+                    INSERT INTO account_usage_stats (
+                        account_id,
+                        usage_type,
+                        usage_key,
+                        value,
+                        updated_at
+                    )
+                    SELECT
+                        account_id,
+                        usage_type,
+                        usage_key,
+                        CASE WHEN delta < 0 THEN 0 ELSE delta END,
+                        updated_at
+                    FROM changes
+                    WHERE true
+                    ON CONFLICT (account_id, usage_type, usage_key) DO UPDATE
+                    SET
+                        value = CASE
+                            WHEN account_usage_stats.value + (
+                                SELECT delta
+                                FROM changes
+                                WHERE changes.account_id = account_usage_stats.account_id
+                                  AND changes.usage_type = account_usage_stats.usage_type
+                                  AND changes.usage_key = account_usage_stats.usage_key
+                            ) < 0
+                                THEN 0
+                            WHEN account_usage_stats.value + (
+                                SELECT delta
+                                FROM changes
+                                WHERE changes.account_id = account_usage_stats.account_id
+                                  AND changes.usage_type = account_usage_stats.usage_type
+                                  AND changes.usage_key = account_usage_stats.usage_key
+                            ) > 18446744073709551615
+                                THEN 18446744073709551615
+                            ELSE account_usage_stats.value + (
+                                SELECT delta
+                                FROM changes
+                                WHERE changes.account_id = account_usage_stats.account_id
+                                  AND changes.usage_type = account_usage_stats.usage_type
+                                  AND changes.usage_key = account_usage_stats.usage_key
+                            )
+                        END,
+                        updated_at = excluded.updated_at;
+                "#});
+
+                tx.execute(query.build()).await?;
 
                 Ok(())
             }
@@ -394,7 +522,7 @@ trait AccountUsageRepoInternal: AccountUsageRepo {
     type Db: Database;
     type Tx: LabelledPoolTransaction;
 
-    async fn get_plan(&self, account_id: Uuid) -> RepoResult<Option<PlanRecord>>;
+    async fn get_plan(&self, account_id: Uuid) -> RepoResult<Option<AccountUsagePlan>>;
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -403,13 +531,16 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
 
-    async fn get_plan(&self, account_id: Uuid) -> RepoResult<Option<PlanRecord>> {
-        let plan: Option<PlanRecord> = self
+    async fn get_plan(&self, account_id: Uuid) -> RepoResult<Option<AccountUsagePlan>> {
+        let plan: Option<AccountUsagePlan> = self
             .with_ro("get_plan - plan")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                 SELECT
-                    p.plan_id, p.name, p.max_memory_per_worker, p.max_table_elements_per_worker, p.max_disk_space_per_worker,
+                    p.plan_id, p.name, p.max_memory_per_worker, p.max_table_elements_per_worker,
+                    p.max_disk_space_per_worker,
+                    aro.override_value AS storage_override_value,
+                    p.max_disk_space_per_worker_ceiling, p.max_disk_space_per_worker_user_configurable,
                     p.max_concurrent_agents_per_executor,
                     p.total_app_count,
                     p.total_env_count, p.total_component_count, p.total_worker_connection_count,
@@ -420,9 +551,15 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
                 FROM accounts a
                 JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
                 JOIN plans p ON p.plan_id = ar.plan_id
+                LEFT JOIN account_resource_overrides aro
+                    ON aro.account_id = a.account_id
+                    AND aro.dimension = $2
+                    AND (aro.expires_at IS NULL OR aro.expires_at > $3)
                 WHERE a.account_id = $1 AND a.deleted_at IS NULL
             "#})
-                .bind(account_id),
+                .bind(account_id)
+                .bind(AccountResourceOverrideDimension::MaxDiskSpacePerWorker.as_str())
+                .bind(SqlDateTime::now()),
             )
             .await?;
 
@@ -431,6 +568,23 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
 }
 
 static USAGE_KEY_TOTAL: &str = "total";
+
+fn storage_limit(account_plan: &AccountUsagePlan) -> StorageLimit {
+    let plan_default = account_plan.plan.max_disk_space_per_worker.get();
+    let ceiling = account_plan.plan.max_disk_space_per_worker_ceiling.get();
+    let override_value = account_plan
+        .storage_override_value
+        .as_ref()
+        .map(NumericU64::get);
+    StorageLimit::resolve(
+        plan_default,
+        override_value,
+        ceiling,
+        account_plan
+            .plan
+            .max_disk_space_per_worker_user_configurable,
+    )
+}
 
 fn date_to_usage_key(date: &SqlDateTime) -> String {
     year_and_month_to_usage_key(date.as_utc().year(), date.as_utc().month())

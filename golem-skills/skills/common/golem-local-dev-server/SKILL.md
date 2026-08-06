@@ -86,7 +86,7 @@ When `--ports-file` is specified, the server writes a JSON file with the actual 
 }
 ```
 
-The application manifest can mirror stable local ports with `localServer.customRequestPort` and `localServer.mcpPort`. Those fields control how deployment `subdomain` values expand: HTTP API domains resolve to `<label>.localhost:<customRequestPort>` and MCP domains resolve to `<label>.localhost:<mcpPort>`. Use nonzero ports for deployments that register persistent subdomains. Load `golem-configure-api-domain` or `golem-configure-mcp-server` for the full `subdomain` versus `domain` rules.
+The application manifest can configure the built-in local preset in its `localServer` section. `routerAddr` and `routerPort` define the main API endpoint used both by `golem server run` and by other `golem` commands that target the built-in local preset. `customRequestPort` and `mcpPort` control how deployment `subdomain` values expand: HTTP API domains resolve to `<label>.localhost:<customRequestPort>` and MCP domains resolve to `<label>.localhost:<mcpPort>`. Use nonzero ports for deployments that register persistent subdomains. Load `golem-configure-api-domain` or `golem-configure-mcp-server` for the full `subdomain` versus `domain` rules.
 
 #### Manual Testing with Free Ports
 
@@ -109,13 +109,15 @@ For persistent local deployment subdomains, use stable manifest ports or omit th
 
 ```yaml
 localServer:
+  routerAddr: 0.0.0.0
+  routerPort: 9881
   customRequestPort: 9006
   mcpPort: 9007
   portsFile: .golem/ports.json
   dataDir: .golem/data
 ```
 
-Setting only `portsFile` records the selected ports but does not request free ports. Explicit CLI flags such as `--router-port`, `--custom-request-port`, `--mcp-port`, `--ports-file`, and `--data-dir` override the manifest values.
+`routerAddr` and `routerPort` define where the built-in local preset is reachable: `golem server run` binds the server there, and other `golem` commands connect there. `routerAddr` must be an IPv4 address literal; host names are not supported. When the server binds to `0.0.0.0`, commands connect through `127.0.0.1`. Setting only `portsFile` records the selected ports but does not request free ports. Explicit CLI flags such as `--router-port`, `--custom-request-port`, `--mcp-port`, `--ports-file`, and `--data-dir` override the manifest values for `server run`.
 
 #### Warning: `--agent-filesystem-root`
 
@@ -131,9 +133,11 @@ golem server clean
 
 This removes all stored state including deployed components, agent data, and operation logs.
 
+When a manifest is discovered, this removes `localServer.dataDir`. Without a manifest it removes the platform default data directory. Pass `-X` to ignore a discovered manifest and clean the platform default. The CLI displays the resolved absolute path and asks for confirmation before deleting it; filesystem roots are always rejected.
+
 ## Important Notes
 
-- **`--clean` deletes all state**: Running `golem server run --clean` deletes all existing agents, deployed components, and data. Never run it without explicitly asking the user for confirmation first.
+- **Cleanup deletes all state**: Both `golem server clean` and `golem server run --clean` delete all existing agents, deployed components, and data from the resolved directory. Never run either command without explicitly asking the user for confirmation first. In a non-interactive workflow, pass `--yes` only after the user approves the exact target path.
 - **The server runs in the foreground**: It blocks the terminal. Run it in a separate terminal or background process before deploying or invoking agents.
 - **Deploy after starting**: Components must be deployed with `golem deploy` after the server is running before agents can be invoked.
 - **File limits**: On startup the server automatically attempts to increase the OS file descriptor limit to 1,000,000 for better performance.

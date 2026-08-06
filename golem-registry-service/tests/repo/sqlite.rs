@@ -16,6 +16,7 @@ use crate::Tracing;
 use crate::repo::{Deps, TestDb};
 use golem_common::config::DbSqliteConfig;
 use golem_registry_service::repo::account::DbAccountRepo;
+use golem_registry_service::repo::account_resource_override::DbAccountResourceOverrideRepo;
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
 use golem_registry_service::repo::agent_secret::DbAgentSecretRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
@@ -85,6 +86,9 @@ async fn deps(db: &SqliteDb) -> Deps {
     let deps = Deps {
         account_repo: Box::new(DbAccountRepo::logged(db.pool.clone())),
         account_usage_repo: std::sync::Arc::new(DbAccountUsageRepo::logged(db.pool.clone())),
+        account_resource_override_repo: std::sync::Arc::new(DbAccountResourceOverrideRepo::new(
+            db.pool.clone(),
+        )),
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(db.pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(db.pool.clone())),
         environment_repo: Box::new(DbEnvironmentRepo::logged(db.pool.clone())),
@@ -226,6 +230,31 @@ async fn test_http_api_deployment_stage(deps: &Deps) {
 #[test]
 async fn test_account_usage(deps: &Deps) {
     crate::repo::common::test_account_usage(deps).await;
+}
+
+#[test]
+async fn test_storage_usage_history(deps: &Deps) {
+    crate::repo::common::test_storage_usage_history(deps).await;
+}
+
+#[test]
+async fn test_account_resource_override_resolution(deps: &Deps) {
+    crate::repo::common::test_account_resource_override_resolution(deps).await;
+}
+
+#[test]
+async fn test_storage_limit_is_clamped_after_plan_update(deps: &Deps) {
+    crate::repo::common::test_storage_limit_is_clamped_after_plan_update(deps).await;
+}
+
+#[test]
+async fn test_plan_change_clamps_disk_override(deps: &Deps) {
+    crate::repo::common::test_plan_change_clamps_disk_override(deps).await;
+}
+
+#[test]
+async fn test_plan_change_clears_forbidden_disk_override(deps: &Deps) {
+    crate::repo::common::test_plan_change_clears_forbidden_disk_override(deps).await;
 }
 
 #[test]

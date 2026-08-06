@@ -69,7 +69,7 @@ getData: method({
 }),
 ```
 
-> **Note:** Unlike the old decorator API, the fluent `http.mount(...)` does **not** support a mount-level `headers` map. Every agent `id` field must be supplied by a mount **path** variable. Header binding is available on endpoints only, and binds to method inputs.
+> **Note:** Unlike the old decorator API, the `http.mount(...)` does **not** support a mount-level `headers` map. Every agent `id` field must be supplied by a mount **path** variable. Header binding is available on endpoints only, and binds to method inputs.
 
 ## Supported Schema Types for Path, Query, and Header Variables
 
