@@ -1047,36 +1047,31 @@ pub mod resources {
         EPHEMERAL_OVERDRAFT_FUEL_TOTAL.inc_by(amount as f64);
     }
 
+    fn agent_mode_label(mode: AgentMode) -> &'static str {
+        match mode {
+            AgentMode::Durable => "durable",
+            AgentMode::Ephemeral => "ephemeral",
+        }
+    }
+
     pub fn record_storage_byte_seconds(account_id: &str, mode: AgentMode, amount: i64) {
         // Lower-cased here rather than via `Display`, which renders for humans and is
         // free to change; label values are a query interface and must stay stable.
-        let agent_mode = match mode {
-            AgentMode::Durable => "durable",
-            AgentMode::Ephemeral => "ephemeral",
-        };
         STORAGE_BYTE_SECONDS_TOTAL
-            .with_label_values(&[account_id, agent_mode])
+            .with_label_values(&[account_id, agent_mode_label(mode)])
             .inc_by(amount as f64);
     }
 
     pub fn record_memory_gb_seconds(account_id: &str, mode: AgentMode, amount: i64) {
-        let agent_mode = match mode {
-            AgentMode::Durable => "durable",
-            AgentMode::Ephemeral => "ephemeral",
-        };
         MEMORY_GB_SECONDS_TOTAL
-            .with_label_values(&[account_id, agent_mode])
+            .with_label_values(&[account_id, agent_mode_label(mode)])
             .inc_by(amount as f64);
     }
 
     #[cfg(test)]
     pub(crate) fn memory_gb_seconds_total(account_id: &str, mode: AgentMode) -> f64 {
-        let agent_mode = match mode {
-            AgentMode::Durable => "durable",
-            AgentMode::Ephemeral => "ephemeral",
-        };
         MEMORY_GB_SECONDS_TOTAL
-            .with_label_values(&[account_id, agent_mode])
+            .with_label_values(&[account_id, agent_mode_label(mode)])
             .get()
     }
 

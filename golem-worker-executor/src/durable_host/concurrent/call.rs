@@ -297,6 +297,13 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
     _phantom: PhantomData<(Pair, P)>,
 }
 
+impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<Pair, P, Ctx> {
+    async fn switch_to_live(&self) {
+        self.replay_state.switch_to_live().await;
+        self.linear_memory.switch_to_live();
+    }
+}
+
 /// Options that make the durable records of a concurrent accessor call claim-safe on replay.
 ///
 /// Accessor host calls run concurrently, so their oplog `Start` entries are appended in
@@ -1139,8 +1146,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     .await
                     .is_none()
                 {
-                    prepared.replay_state.switch_to_live().await;
-                    prepared.linear_memory.switch_to_live();
+                    prepared.switch_to_live().await;
                     return Err((
                         WorkerExecutorError::runtime(
                             "Non-idempotent remote write operation was not completed, cannot retry",
@@ -1180,8 +1186,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     OplogEntryLookupResult::NotFound {
                         violates_for_all: false,
                     } if prepared.retry.durable_execution_state().assume_idempotence => {
-                        prepared.replay_state.switch_to_live().await;
-                        prepared.linear_memory.switch_to_live();
+                        prepared.switch_to_live().await;
                         let deleted_region = OplogRegion {
                             start: begin_index.next(),
                             end: prepared.replay_state.replay_target().next(),
@@ -1203,8 +1208,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         })
                     }
                     OplogEntryLookupResult::NotFound { .. } => {
-                        prepared.replay_state.switch_to_live().await;
-                        prepared.linear_memory.switch_to_live();
+                        prepared.switch_to_live().await;
                         Err((
                             WorkerExecutorError::runtime(
                                 "Non-idempotent remote write operation was not completed, cannot retry",

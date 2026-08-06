@@ -20,9 +20,18 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+pub(crate) const SHARED_LINEAR_MEMORY_ERROR: &str =
+    "Shared linear memories require WebAssembly threads, which are not supported";
+
 #[derive(Clone, Debug)]
 pub struct LinearMemoryTracker {
     inner: Arc<Inner>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct UnsharedMemoryGrowth {
+    pub admission_delta: u64,
+    pub protected_total: u64,
 }
 
 #[derive(Debug)]
@@ -182,11 +191,11 @@ impl LinearMemoryTracker {
             .ok();
     }
 
-    pub fn desired_total_after_unshared_growth(
+    pub(crate) fn prepare_unshared_growth(
         &self,
         current_memory: usize,
         desired_memory: usize,
-    ) -> Option<(u64, u64, u64)> {
+    ) -> Option<UnsharedMemoryGrowth> {
         let _transition = self.inner.transitions.lock().unwrap();
         self.inner
             .growth_has_pending_grant
@@ -216,7 +225,10 @@ impl LinearMemoryTracker {
         };
         let protected_delta = if reconciling { admission_delta } else { delta };
         let protected_total = protected_base.checked_add(protected_delta)?;
-        Some((delta, admission_delta, protected_total))
+        Some(UnsharedMemoryGrowth {
+            admission_delta,
+            protected_total,
+        })
     }
 
     pub(crate) fn retain_growth_grant(&self, grant: MemoryGrant) {
@@ -294,13 +306,19 @@ mod tests {
         tracker.reconcile(30, now);
 
         assert_eq!(
-            tracker.desired_total_after_unshared_growth(10, 20),
-            Some((10, 10, 40))
+            tracker.prepare_unshared_growth(10, 20),
+            Some(UnsharedMemoryGrowth {
+                admission_delta: 10,
+                protected_total: 40,
+            })
         );
         assert_eq!(tracker.grow(10, now), (40, false));
         assert_eq!(
-            tracker.desired_total_after_unshared_growth(20, 25),
-            Some((5, 5, 45))
+            tracker.prepare_unshared_growth(20, 25),
+            Some(UnsharedMemoryGrowth {
+                admission_delta: 5,
+                protected_total: 45,
+            })
         );
         assert_eq!(tracker.current_bytes(), 40);
     }
@@ -343,16 +361,25 @@ mod tests {
         );
 
         assert_eq!(
-            tracker.desired_total_after_unshared_growth(0, 15),
-            Some((15, 0, 40))
+            tracker.prepare_unshared_growth(0, 15),
+            Some(UnsharedMemoryGrowth {
+                admission_delta: 0,
+                protected_total: 40,
+            })
         );
         assert_eq!(
-            tracker.desired_total_after_unshared_growth(0, 25),
-            Some((25, 0, 40))
+            tracker.prepare_unshared_growth(0, 25),
+            Some(UnsharedMemoryGrowth {
+                admission_delta: 0,
+                protected_total: 40,
+            })
         );
         assert_eq!(
-            tracker.desired_total_after_unshared_growth(25, 35),
-            Some((10, 10, 50))
+            tracker.prepare_unshared_growth(25, 35),
+            Some(UnsharedMemoryGrowth {
+                admission_delta: 10,
+                protected_total: 50,
+            })
         );
     }
 
@@ -371,8 +398,11 @@ mod tests {
         tracker.switch_to_live();
 
         assert_eq!(
-            tracker.desired_total_after_unshared_growth(0, 40),
-            Some((40, 0, 40))
+            tracker.prepare_unshared_growth(0, 40),
+            Some(UnsharedMemoryGrowth {
+                admission_delta: 0,
+                protected_total: 40,
+            })
         );
         assert_eq!(tracker.grow(40, now), (40, true));
     }
@@ -391,14 +421,20 @@ mod tests {
         );
 
         assert_eq!(
-            tracker.desired_total_after_unshared_growth(0, 40),
-            Some((40, 0, 50))
+            tracker.prepare_unshared_growth(0, 40),
+            Some(UnsharedMemoryGrowth {
+                admission_delta: 0,
+                protected_total: 50,
+            })
         );
         tracker.reconcile(40, now);
         assert_eq!(tracker.reconciliation_grant_bytes(40), 50);
         assert_eq!(
-            tracker.desired_total_after_unshared_growth(40, 50),
-            Some((10, 0, 50))
+            tracker.prepare_unshared_growth(40, 50),
+            Some(UnsharedMemoryGrowth {
+                admission_delta: 0,
+                protected_total: 50,
+            })
         );
         tracker.grow(10, now);
         assert_eq!(tracker.current_bytes(), 50);

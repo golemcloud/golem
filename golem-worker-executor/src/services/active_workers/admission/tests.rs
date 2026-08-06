@@ -155,6 +155,10 @@ impl MemoryProbe for FakeProbe {
             current_bytes: state.usage(),
         }
     }
+
+    fn snapshot_for_ratio(&self, _usable_ratio: f64) -> MemorySnapshot {
+        self.snapshot()
+    }
 }
 
 struct FakeEvictionSource {
@@ -275,10 +279,7 @@ impl MemoryProbe for MultipleSnapshotsProbe {
         self.0
             .iter()
             .copied()
-            .min_by_key(|snapshot| {
-                ((snapshot.limit_bytes as f64 * usable_ratio) as u64)
-                    .saturating_sub(snapshot.current_bytes)
-            })
+            .min_by_key(|snapshot| snapshot.usable_headroom_bytes(usable_ratio))
             .unwrap()
     }
 }
@@ -289,6 +290,10 @@ impl MemoryProbe for ZeroUsageProbe {
             limit_bytes: self.limit,
             current_bytes: 0,
         }
+    }
+
+    fn snapshot_for_ratio(&self, _usable_ratio: f64) -> MemorySnapshot {
+        self.snapshot()
     }
 }
 
@@ -992,6 +997,10 @@ mod grow_lock_ordering {
                 current_bytes: u64::MAX,
             }
         }
+
+        fn snapshot_for_ratio(&self, _usable_ratio: f64) -> MemorySnapshot {
+            self.snapshot()
+        }
     }
 
     /// Probe reporting ample headroom so `try_admit` takes the fast path and
@@ -1005,6 +1014,10 @@ mod grow_lock_ordering {
                 limit_bytes: u64::MAX,
                 current_bytes: 0,
             }
+        }
+
+        fn snapshot_for_ratio(&self, _usable_ratio: f64) -> MemorySnapshot {
+            self.snapshot()
         }
     }
 

@@ -120,8 +120,8 @@ pub(crate) struct AdmissionController {
 
 impl AdmissionController {
     pub fn new(probe: Box<dyn MemoryProbe>, policy: AdmissionPolicy) -> Self {
-        let snapshot = probe.snapshot();
-        let ceiling = (snapshot.limit_bytes as f64 * policy.usable_ratio) as u64;
+        let snapshot = probe.snapshot_for_ratio(policy.usable_ratio);
+        let ceiling = snapshot.usable_limit_bytes(policy.usable_ratio);
         crate::metrics::workers::record_worker_memory_ceiling(ceiling);
         Self {
             probe,
@@ -150,7 +150,7 @@ impl AdmissionController {
         request_bytes: u64,
         snapshot: MemorySnapshot,
     ) -> Result<(), u64> {
-        let ceiling = (snapshot.limit_bytes as f64 * self.policy.usable_ratio) as u64;
+        let ceiling = snapshot.usable_limit_bytes(self.policy.usable_ratio);
         crate::metrics::workers::record_worker_memory_ceiling(ceiling);
         crate::metrics::workers::record_worker_admission_rss(snapshot.current_bytes);
         let mut granted = self.granted.lock().unwrap();
@@ -271,7 +271,7 @@ impl AdmissionController {
     #[cfg(test)]
     pub(crate) fn headroom_bytes(&self) -> u64 {
         let snapshot = self.constraining_snapshot();
-        let ceiling = (snapshot.limit_bytes as f64 * self.policy.usable_ratio) as u64;
+        let ceiling = snapshot.usable_limit_bytes(self.policy.usable_ratio);
         let granted = *self.granted.lock().unwrap();
         ceiling.saturating_sub(snapshot.current_bytes.max(granted))
     }

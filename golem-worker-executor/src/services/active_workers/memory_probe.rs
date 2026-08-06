@@ -39,6 +39,15 @@ pub struct MemorySnapshot {
 }
 
 impl MemorySnapshot {
+    pub fn usable_limit_bytes(&self, usable_ratio: f64) -> u64 {
+        (self.limit_bytes as f64 * usable_ratio) as u64
+    }
+
+    pub fn usable_headroom_bytes(&self, usable_ratio: f64) -> u64 {
+        self.usable_limit_bytes(usable_ratio)
+            .saturating_sub(self.current_bytes)
+    }
+
     /// Bytes between current usage and the hard limit. Saturating: never
     /// underflows if `current` momentarily exceeds the reported `limit`.
     pub fn headroom_bytes(&self) -> u64 {
@@ -50,9 +59,7 @@ impl MemorySnapshot {
 pub trait MemoryProbe: Send + Sync + Debug {
     fn snapshot(&self) -> MemorySnapshot;
 
-    fn snapshot_for_ratio(&self, _usable_ratio: f64) -> MemorySnapshot {
-        self.snapshot()
-    }
+    fn snapshot_for_ratio(&self, usable_ratio: f64) -> MemorySnapshot;
 
     fn limit_bytes(&self) -> u64 {
         self.snapshot().limit_bytes
@@ -98,6 +105,10 @@ impl MemoryProbe for ProcessRssProbe {
             current_bytes: Self::current_rss(),
         }
     }
+
+    fn snapshot_for_ratio(&self, _usable_ratio: f64) -> MemorySnapshot {
+        self.snapshot()
+    }
 }
 
 /// A probe with a fixed limit and a fixed current usage, both set at
@@ -130,6 +141,10 @@ impl MemoryProbe for FixedProbe {
             current_bytes: self.current_bytes,
         }
     }
+
+    fn snapshot_for_ratio(&self, _usable_ratio: f64) -> MemorySnapshot {
+        self.snapshot()
+    }
 }
 
 /// Linux cgroup v2 probe. Reads `memory.max` and `memory.current` from the
@@ -155,11 +170,7 @@ impl CgroupV2Probe {
     pub fn try_new(fallback_limit_bytes: u64) -> Option<Self> {
         let hierarchy = std::path::PathBuf::from(Self::DEFAULT_BASE);
         let cgroup = std::fs::read_to_string("/proc/self/cgroup").ok()?;
-        let relative = cgroup.lines().find_map(|line| {
-            let (hierarchy_id, path) = line.split_once("::")?;
-            (hierarchy_id == "0").then_some(path.trim_start_matches('/'))
-        })?;
-        let base = hierarchy.join(relative);
+        let base = resolve_cgroup_v2_path(&hierarchy, &cgroup)?;
         // cgroup v2 unified hierarchy exposes memory.current directly at the
         // delegated cgroup path. If it is not readable we are not on v2.
         if std::fs::read_to_string(base.join("memory.current")).is_ok() {
@@ -188,12 +199,9 @@ impl CgroupV2Probe {
                     limit_bytes,
                     current_bytes,
                 };
-                let candidate_headroom = ((candidate.limit_bytes as f64 * usable_ratio) as u64)
-                    .saturating_sub(candidate.current_bytes);
+                let candidate_headroom = candidate.usable_headroom_bytes(usable_ratio);
                 if constrained.is_none_or(|snapshot| {
-                    candidate_headroom
-                        < ((snapshot.limit_bytes as f64 * usable_ratio) as u64)
-                            .saturating_sub(snapshot.current_bytes)
+                    candidate_headroom < snapshot.usable_headroom_bytes(usable_ratio)
                 }) {
                     constrained = Some(candidate);
                 }
@@ -215,27 +223,36 @@ impl CgroupV2Probe {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn resolve_cgroup_v2_path(
+    hierarchy: &std::path::Path,
+    proc_self_cgroup: &str,
+) -> Option<std::path::PathBuf> {
+    let relative = proc_self_cgroup.lines().find_map(|line| {
+        let (hierarchy_id, path) = line.split_once("::")?;
+        (hierarchy_id == "0").then_some(path.trim_start_matches('/'))
+    })?;
+    Some(hierarchy.join(relative))
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod cgroup_tests {
-    use super::{CgroupV2Probe, MemoryProbe, MemorySnapshot};
+    use super::{CgroupV2Probe, MemoryProbe, MemorySnapshot, resolve_cgroup_v2_path};
     use std::path::Path;
     use tempfile::tempdir;
     use test_r::test;
 
     #[test]
     fn nested_cgroup_path_resolves_below_the_unified_hierarchy() {
-        let cgroup = "0::/system.slice/golem.service\n";
-        let relative = cgroup
-            .lines()
-            .find_map(|line| {
-                let (hierarchy_id, path) = line.split_once("::")?;
-                (hierarchy_id == "0").then_some(path.trim_start_matches('/'))
-            })
-            .unwrap();
+        let cgroup = "2:memory:/legacy\n0::/system.slice/golem.service\n";
 
         assert_eq!(
-            Path::new(CgroupV2Probe::DEFAULT_BASE).join(relative),
-            Path::new("/sys/fs/cgroup/system.slice/golem.service")
+            resolve_cgroup_v2_path(Path::new(CgroupV2Probe::DEFAULT_BASE), cgroup),
+            Some(Path::new("/sys/fs/cgroup/system.slice/golem.service").to_path_buf())
+        );
+        assert_eq!(
+            resolve_cgroup_v2_path(Path::new(CgroupV2Probe::DEFAULT_BASE), "2:memory:/legacy\n"),
+            None
         );
     }
 
@@ -263,6 +280,41 @@ mod cgroup_tests {
             MemorySnapshot {
                 limit_bytes: 500,
                 current_bytes: 450
+            }
+        );
+    }
+
+    #[test]
+    fn snapshot_applies_ratio_before_selecting_the_constraining_ancestor() {
+        let hierarchy = tempdir().unwrap();
+        let parent = hierarchy.path().join("parent");
+        let leaf = parent.join("leaf");
+        std::fs::create_dir_all(&leaf).unwrap();
+        std::fs::write(hierarchy.path().join("memory.current"), "0\n").unwrap();
+        std::fs::write(hierarchy.path().join("memory.max"), "max\n").unwrap();
+        std::fs::write(parent.join("memory.current"), "100\n").unwrap();
+        std::fs::write(parent.join("memory.max"), "500\n").unwrap();
+        std::fs::write(leaf.join("memory.current"), "500\n").unwrap();
+        std::fs::write(leaf.join("memory.max"), "1000\n").unwrap();
+
+        let probe = CgroupV2Probe {
+            base: leaf,
+            hierarchy: hierarchy.path().to_path_buf(),
+            fallback_limit_bytes: 2000,
+        };
+
+        assert_eq!(
+            probe.snapshot(),
+            MemorySnapshot {
+                limit_bytes: 500,
+                current_bytes: 100,
+            }
+        );
+        assert_eq!(
+            probe.snapshot_for_ratio(0.5),
+            MemorySnapshot {
+                limit_bytes: 1000,
+                current_bytes: 500,
             }
         );
     }

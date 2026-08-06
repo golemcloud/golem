@@ -65,7 +65,7 @@ use crate::services::environment_state::EnvironmentStateService;
 use crate::services::file_loader::{FileLoader, FileUseToken};
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
-use crate::services::linear_memory::LinearMemoryTracker;
+use crate::services::linear_memory::{LinearMemoryTracker, SHARED_LINEAR_MEMORY_ERROR};
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::quota::QuotaService;
@@ -575,24 +575,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )
             .await?;
 
-        if component_metadata
-            .metadata
-            .memories()
-            .iter()
-            .any(|memory| memory.shared)
-        {
+        if component_metadata.metadata.has_shared_linear_memory() {
             return Err(WorkerExecutorError::worker_creation_failed(
                 owned_agent_id.agent_id.clone(),
-                "Shared linear memories require WebAssembly threads, which are not supported",
+                SHARED_LINEAR_MEMORY_ERROR,
             ));
         }
 
-        let initial_linear_memory = component_metadata
-            .metadata
-            .memories()
-            .iter()
-            .map(|memory| memory.initial)
-            .fold(0u64, u64::saturating_add);
+        let initial_linear_memory = component_metadata.metadata.initial_linear_memory_bytes();
         if initial_linear_memory > resource_limits.max_memory_limit() as u64 {
             return Err(WorkerExecutorError::worker_creation_failed(
                 owned_agent_id.agent_id.clone(),
@@ -1338,21 +1328,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.linear_memory.clone()
     }
 
-    pub fn desired_total_after_unshared_memory_growth(
-        &self,
-        current_memory: usize,
-        desired_memory: usize,
-    ) -> Option<(u64, u64, u64)> {
-        self.linear_memory
-            .desired_total_after_unshared_growth(current_memory, desired_memory)
-    }
-
     pub fn resume_memory_meter(&self) {
         self.linear_memory.resume(Instant::now());
     }
 
     pub fn pause_memory_meter(&self) {
         self.linear_memory.pause(Instant::now());
+    }
+
+    async fn switch_to_live(&self) {
+        self.state.replay_state.switch_to_live().await;
+        self.linear_memory.switch_to_live();
     }
 
     pub fn current_filesystem_storage_usage(&self) -> u64 {
@@ -1563,18 +1549,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
         let tracker = self.linear_memory_tracker();
-        let growth = self.desired_total_after_unshared_memory_growth(current, desired);
-        if growth
-            .is_none_or(|(_, _, protected_total)| protected_total > self.max_linear_memory_size())
+        let growth = tracker.prepare_unshared_growth(current, desired);
+        if growth.is_none_or(|growth| growth.protected_total > self.max_linear_memory_size())
             || maximum.is_some_and(|maximum| desired > maximum)
         {
             tracker.memory_grow_failed();
             return Err(GolemSpecificWasmTrap::WorkerExceededMemoryLimit.into());
         }
 
-        let (_, admission_delta, _) = growth.unwrap();
-        if admission_delta > 0 {
-            let Some(grant) = self.try_acquire_linear_memory(admission_delta).await else {
+        let growth = growth.unwrap();
+        if growth.admission_delta > 0 {
+            let Some(grant) = self.try_acquire_linear_memory(growth.admission_delta).await else {
                 tracker.memory_grow_failed();
                 crate::metrics::workers::record_worker_memory_grow_rejected();
                 return Err(GolemSpecificWasmTrap::WorkerOutOfMemory.into());
@@ -1937,8 +1922,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .await;
                     if end_index.is_none() {
                         // Must switch to live mode before failing to be able to commit an Error entry
-                        self.state.replay_state.switch_to_live().await;
-                        self.linear_memory.switch_to_live();
+                        self.switch_to_live().await;
                         Err(WorkerExecutorError::runtime(
                             "Non-idempotent remote write operation was not completed, cannot retry",
                         ))
@@ -1973,8 +1957,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             violates_for_all: true,
                         } => {
                             // Must switch to live mode before failing to be able to commit an Error entry
-                            self.state.replay_state.switch_to_live().await;
-                            self.linear_memory.switch_to_live();
+                            self.switch_to_live().await;
                             Err(WorkerExecutorError::runtime(
                                 "Non-idempotent remote write operation was not completed, cannot retry",
                             ))
@@ -1983,8 +1966,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             violates_for_all: false,
                         } if self.state.assume_idempotence => {
                             // We need to jump to the end of the oplog
-                            self.state.replay_state.switch_to_live().await;
-                            self.linear_memory.switch_to_live();
+                            self.switch_to_live().await;
 
                             // But this is not enough, because if the retried batched write operation succeeds,
                             // and later we replay it, we need to skip the first attempt and only replay the second.
@@ -2009,8 +1991,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         OplogEntryLookupResult::NotFound { .. } => {
                             // assume_idempotence is false and the operation was not completed —
                             // we cannot safely retry a non-idempotent batched write.
-                            self.state.replay_state.switch_to_live().await;
-                            self.linear_memory.switch_to_live();
+                            self.switch_to_live().await;
                             Err(WorkerExecutorError::runtime(
                                 "Non-idempotent remote write operation was not completed, cannot retry",
                             ))
@@ -2388,8 +2369,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             violates_for_all: true,
                         } => {
                             // Must switch to live mode before failing to be able to commit an Error entry
-                            self.state.replay_state.switch_to_live().await;
-                            self.linear_memory.switch_to_live();
+                            self.switch_to_live().await;
                             return Err(WorkerExecutorError::runtime(
                                 "Transaction overlapped with other side effects was not completed, cannot retry",
                             ).into());
@@ -2405,8 +2385,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     violates_for_all: true,
                 } => {
                     // Must switch to live mode before failing to be able to commit an Error entry
-                    self.state.replay_state.switch_to_live().await;
-                    self.linear_memory.switch_to_live();
+                    self.switch_to_live().await;
                     return Err(WorkerExecutorError::runtime(
                         "Transaction overlapped with other side effects was not completed, cannot retry",
                     ).into());
@@ -2415,8 +2394,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             let (result, tx) = if should_restart {
                 // We need to jump to the end of the oplog
-                self.state.replay_state.switch_to_live().await;
-                self.linear_memory.switch_to_live();
+                self.switch_to_live().await;
 
                 if !assume_idempotence {
                     Err(WorkerExecutorError::runtime(

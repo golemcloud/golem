@@ -92,6 +92,18 @@ impl ComponentMetadata {
         &self.data.memories
     }
 
+    pub fn initial_linear_memory_bytes(&self) -> u64 {
+        self.data
+            .memories
+            .iter()
+            .map(|memory| memory.initial)
+            .fold(0, u64::saturating_add)
+    }
+
+    pub fn has_shared_linear_memory(&self) -> bool {
+        self.data.memories.iter().any(|memory| memory.shared)
+    }
+
     pub fn known_exports(&self) -> &KnownExports {
         &self.data.known_exports
     }

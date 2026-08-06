@@ -35,7 +35,7 @@ use crate::services::active_workers::{
 use crate::services::card_interest::CardInterestIndex;
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
-use crate::services::linear_memory::LinearMemoryTracker;
+use crate::services::linear_memory::{LinearMemoryTracker, SHARED_LINEAR_MEMORY_ERROR};
 use crate::services::oplog::plugin::ForwardingOplog;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, downcast_oplog};
 use crate::services::worker::GetWorkerMetadataResult;
@@ -140,11 +140,7 @@ fn component_charge_revision(
 #[derive(Debug, PartialEq, Eq)]
 enum TargetChargeAction {
     /// The target resolved: charge it with the resolved module size.
-    ChargeTarget {
-        module_bytes: u64,
-        initial_linear_memory_bytes: u64,
-        reserved_linear_memory_bytes: u64,
-    },
+    ChargeTarget(ResolvedComponentCharge),
     /// The target does not exist: `create_instance` will fail the update and load
     /// the current revision, so charge the current revision instead.
     FallBackToCurrent,
@@ -153,41 +149,55 @@ enum TargetChargeAction {
     Retry,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResolvedComponentCharge {
+    module_bytes: u64,
+    initial_linear_memory_bytes: u64,
+    reserved_linear_memory_bytes: u64,
+}
+
+struct StartupComponentChargeRequirement {
+    component_id: ComponentId,
+    component_revision: ComponentRevision,
+    module_bytes: u64,
+    startup_linear_memory_bytes: u64,
+    reserved_linear_memory_bytes: u64,
+}
+
 /// Classifies a `get_metadata(target)` result into the startup charge action,
 /// preserving the invariant that admission charges the target revision whenever
 /// `create_instance` can still load it. Only a definitely-absent target
 /// (`ComponentNotFound`) falls back to the current revision; transient errors
 /// are retried.
 fn classify_target_charge(
-    result: &Result<(u64, u64, u64), WorkerExecutorError>,
+    result: &Result<ResolvedComponentCharge, WorkerExecutorError>,
 ) -> TargetChargeAction {
     match result {
-        Ok((module_bytes, initial_linear_memory_bytes, reserved_linear_memory_bytes)) => {
-            TargetChargeAction::ChargeTarget {
-                module_bytes: *module_bytes,
-                initial_linear_memory_bytes: *initial_linear_memory_bytes,
-                reserved_linear_memory_bytes: *reserved_linear_memory_bytes,
-            }
-        }
+        Ok(charge) => TargetChargeAction::ChargeTarget(*charge),
         Err(WorkerExecutorError::ComponentNotFound { .. }) => TargetChargeAction::FallBackToCurrent,
         Err(_) => TargetChargeAction::Retry,
     }
 }
 
 fn initial_linear_memory_bytes(component: &golem_service_base::model::component::Component) -> u64 {
-    component
-        .metadata
-        .memories()
-        .iter()
-        .map(|memory| memory.initial)
-        .fold(0u64, u64::saturating_add)
+    component.metadata.initial_linear_memory_bytes()
 }
 
-fn reserved_linear_memory_bytes(
-    component: &golem_service_base::model::component::Component,
-    canonical_bytes: u64,
-) -> u64 {
-    canonical_bytes.max(initial_linear_memory_bytes(component))
+fn startup_component_requirement(
+    component_id: ComponentId,
+    component_revision: ComponentRevision,
+    module_bytes: u64,
+    initial_linear_memory_bytes: u64,
+    canonical_linear_memory_bytes: u64,
+) -> StartupComponentChargeRequirement {
+    StartupComponentChargeRequirement {
+        component_id,
+        component_revision,
+        module_bytes,
+        startup_linear_memory_bytes: canonical_linear_memory_bytes,
+        reserved_linear_memory_bytes: canonical_linear_memory_bytes
+            .max(initial_linear_memory_bytes),
+    }
 }
 
 /// Inserts `output` into the cache under `epoch`, which must be the value
@@ -257,6 +267,12 @@ fn build_read_only_cache_entry(
     Arc::new(read_only_cache::ReadOnlyCacheEntry { output, expires_at })
 }
 
+#[derive(Default)]
+pub(super) struct PendingMemoryGrowth {
+    delta: AtomicU64,
+    job_queued: AtomicBool,
+}
+
 /// Represents worker that may be running or suspended.
 ///
 /// It is responsible for receiving incoming worker invocations in a non-blocking way,
@@ -266,28 +282,6 @@ fn build_read_only_cache_entry(
 /// Invocations have an associated idempotency key used to ensure that the same invocation
 /// is not processed multiple times.
 ///
-#[derive(Default)]
-pub(super) struct PendingMemoryGrowth {
-    delta: AtomicU64,
-    job_queued: AtomicBool,
-}
-
-struct MemoryEventState {
-    growth: Arc<PendingMemoryGrowth>,
-}
-
-impl MemoryEventState {
-    fn new() -> Self {
-        Self {
-            growth: Arc::new(PendingMemoryGrowth::default()),
-        }
-    }
-
-    fn rotate_growth(&mut self) {
-        self.growth = Arc::new(PendingMemoryGrowth::default());
-    }
-}
-
 /// If the queue is empty, the service can trigger invocations directly as an optimization.
 ///
 /// Every worker invocation should be done through this service.
@@ -350,7 +344,7 @@ pub struct Worker<Ctx: WorkerCtx> {
     /// enough idle workers are evicted to satisfy the pending write.
     desired_extra_filesystem_storage: AtomicU64,
     startup_linear_memory_bytes: AtomicU64,
-    memory_events: StdMutex<MemoryEventState>,
+    memory_growth: StdMutex<Arc<PendingMemoryGrowth>>,
     memory_limit_interrupt_queued: AtomicBool,
 
     /// Snapshot of the active component, refreshed by `create_instance`.
@@ -776,7 +770,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             snapshot_recovery_disabled: AtomicBool::new(false),
             desired_extra_filesystem_storage: AtomicU64::new(0),
             startup_linear_memory_bytes: AtomicU64::new(0),
-            memory_events: StdMutex::new(MemoryEventState::new()),
+            memory_growth: StdMutex::new(Arc::new(PendingMemoryGrowth::default())),
             memory_limit_interrupt_queued: AtomicBool::new(false),
             current_component,
             read_only_cache,
@@ -1781,9 +1775,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///   and mis-key the charge). Back off and retry resolving the target, exactly
     ///   as the memory admission loop treats transient pressure, until it resolves
     ///   to a definite answer.
-    pub async fn startup_component_charge_requirement(
-        &self,
-    ) -> (ComponentId, ComponentRevision, u64, u64, u64) {
+    async fn startup_component_charge_requirement(&self) -> StartupComponentChargeRequirement {
         let metadata = self.get_latest_worker_metadata().await;
         let component_id = self.owned_agent_id.component_id();
         let current_revision = metadata.last_known_status.component_revision;
@@ -1804,14 +1796,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // metadata so the reservation matches the module create_instance loads.
         if component_revision == current_revision {
             let canonical_bytes = metadata.last_known_status.total_linear_memory_size;
-            let reserved_bytes =
-                reserved_linear_memory_bytes(&self.current_component.load(), canonical_bytes);
-            return (
+            let current = self.current_component.load();
+            return startup_component_requirement(
                 component_id,
                 current_revision,
                 current_size,
+                initial_linear_memory_bytes(&current),
                 canonical_bytes,
-                reserved_bytes,
             );
         }
 
@@ -1823,25 +1814,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await
                 .map(|target| {
                     let initial_linear_memory_bytes = initial_linear_memory_bytes(&target);
-                    (
-                        target.component_size,
+                    ResolvedComponentCharge {
+                        module_bytes: target.component_size,
                         initial_linear_memory_bytes,
-                        reserved_linear_memory_bytes(&target, initial_linear_memory_bytes),
-                    )
+                        reserved_linear_memory_bytes: initial_linear_memory_bytes,
+                    }
                 });
             match classify_target_charge(&result) {
-                TargetChargeAction::ChargeTarget {
-                    module_bytes,
-                    initial_linear_memory_bytes,
-                    reserved_linear_memory_bytes,
-                } => {
-                    return (
+                TargetChargeAction::ChargeTarget(charge) => {
+                    return StartupComponentChargeRequirement {
                         component_id,
                         component_revision,
-                        module_bytes,
-                        initial_linear_memory_bytes,
-                        reserved_linear_memory_bytes,
-                    );
+                        module_bytes: charge.module_bytes,
+                        startup_linear_memory_bytes: charge.initial_linear_memory_bytes,
+                        reserved_linear_memory_bytes: charge.reserved_linear_memory_bytes,
+                    };
                 }
                 TargetChargeAction::FallBackToCurrent => {
                     // The target revision does not exist; create_instance will fail
@@ -1850,16 +1837,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         "Pending-update target revision {component_revision} does not exist; charging against current revision and letting create_instance fail the update and recover"
                     );
                     let canonical_bytes = metadata.last_known_status.total_linear_memory_size;
-                    let reserved_bytes = reserved_linear_memory_bytes(
-                        &self.current_component.load(),
-                        canonical_bytes,
-                    );
-                    return (
+                    let current = self.current_component.load();
+                    return startup_component_requirement(
                         component_id,
                         current_revision,
                         current_size,
+                        initial_linear_memory_bytes(&current),
                         canonical_bytes,
-                        reserved_bytes,
                     );
                 }
                 TargetChargeAction::Retry => {
@@ -2071,21 +2055,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// Records a committed guest `memory.grow` without blocking the store callback.
     pub fn request_memory_grow(self: &Arc<Self>, delta: u64) {
-        let events = self.memory_events.lock().unwrap();
-        self.request_memory_grow_locked(&events, delta);
+        let growth = self.memory_growth.lock().unwrap();
+        self.request_memory_grow_locked(&growth, delta);
     }
 
-    fn request_memory_grow_locked(self: &Arc<Self>, events: &MemoryEventState, delta: u64) {
-        events
-            .growth
+    fn request_memory_grow_locked(self: &Arc<Self>, growth: &Arc<PendingMemoryGrowth>, delta: u64) {
+        growth
             .delta
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
                 Some(pending.saturating_add(delta))
             })
             .ok();
-        if !events.growth.job_queued.swap(true, Ordering::AcqRel) {
-            self.state_actor
-                .grow_memory(self.clone(), events.growth.clone());
+        if !growth.job_queued.swap(true, Ordering::AcqRel) {
+            self.state_actor.grow_memory(self.clone(), growth.clone());
         }
     }
 
@@ -2096,8 +2078,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 self.add_to_oplog(OplogEntry::grow_memory(delta)).await;
             }
 
-            let events = self.memory_events.lock().unwrap();
-            if Arc::ptr_eq(&events.growth, &growth) {
+            let current_growth = self.memory_growth.lock().unwrap();
+            if Arc::ptr_eq(&current_growth, &growth) {
                 growth.job_queued.store(false, Ordering::Release);
                 if growth.delta.load(Ordering::Acquire) > 0
                     && !growth.job_queued.swap(true, Ordering::AcqRel)
@@ -2125,14 +2107,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
     ) {
         let done = {
-            let mut events = self.memory_events.lock().unwrap();
+            let mut growth = self.memory_growth.lock().unwrap();
             let entry = OplogEntry::successful_update(
                 target_revision,
                 new_component_size,
                 Some(linear_memory.current_bytes()),
                 new_active_plugins,
             );
-            events.rotate_growth();
+            *growth = Arc::new(PendingMemoryGrowth::default());
             self.state_actor
                 .queue_ordered_oplog_entry(self.clone(), entry)
         };
@@ -3434,12 +3416,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     component_revision: component.revision,
                     component_revision_for_replay: component.revision,
                     component_size: component.component_size,
-                    total_linear_memory_size: component
-                        .metadata
-                        .memories()
-                        .iter()
-                        .map(|m| m.initial)
-                        .sum(),
+                    total_linear_memory_size: component.metadata.initial_linear_memory_bytes(),
                     active_plugins: agent_id
                         .as_ref()
                         .and_then(|agent_id| {
@@ -3820,17 +3797,12 @@ impl WaitingWorker {
             // them. The retry events stay in the logs, and how long the wait took
             // is recorded as a metric rather than a span.
             let phase_start = std::time::Instant::now();
-            let (
-                component_id,
-                component_revision,
-                component_module_bytes,
-                startup_linear_memory_bytes,
-                startup_reserved_linear_memory_bytes,
-            ) = parent.startup_component_charge_requirement().await;
+            let requirement = parent.startup_component_charge_requirement().await;
             parent
                 .startup_linear_memory_bytes
-                .store(startup_linear_memory_bytes, Ordering::Release);
-            let memory_requirement = memory_requirement.max(startup_reserved_linear_memory_bytes);
+                .store(requirement.startup_linear_memory_bytes, Ordering::Release);
+            let memory_requirement =
+                memory_requirement.max(requirement.reserved_linear_memory_bytes);
             crate::metrics::workers::record_worker_admission_wait(
                 AdmissionPhase::ResolveComponentCharge,
                 phase_start.elapsed(),
@@ -3868,9 +3840,9 @@ impl WaitingWorker {
                 .active_workers()
                 .acquire_with_component_charge(
                     memory_requirement,
-                    component_id,
-                    component_revision,
-                    component_module_bytes,
+                    requirement.component_id,
+                    requirement.component_revision,
+                    requirement.module_bytes,
                 )
                 // Not spanned, for the same reason as the charge resolution above:
                 // `acquire_memory` retries on the same 500ms delay and logs once per
@@ -4320,12 +4292,7 @@ impl RunningWorker {
             }?
         };
 
-        if component_metadata
-            .metadata
-            .memories()
-            .iter()
-            .any(|memory| memory.shared)
-        {
+        if component_metadata.metadata.has_shared_linear_memory() {
             return Err(shared_linear_memory_error(&parent));
         }
 
@@ -4549,7 +4516,7 @@ impl RunningWorker {
 fn shared_linear_memory_error<Ctx: WorkerCtx>(parent: &Arc<Worker<Ctx>>) -> WorkerExecutorError {
     WorkerExecutorError::worker_creation_failed(
         parent.owned_agent_id.agent_id(),
-        "Shared linear memories require WebAssembly threads, which are not supported",
+        SHARED_LINEAR_MEMORY_ERROR,
     )
 }
 
@@ -4940,12 +4907,16 @@ mod tests {
     #[test]
     fn classify_target_charge_charges_resolved_target() {
         assert_eq!(
-            classify_target_charge(&Ok((4096, 8192, 16384))),
-            TargetChargeAction::ChargeTarget {
+            classify_target_charge(&Ok(ResolvedComponentCharge {
                 module_bytes: 4096,
                 initial_linear_memory_bytes: 8192,
                 reserved_linear_memory_bytes: 16384,
-            },
+            })),
+            TargetChargeAction::ChargeTarget(ResolvedComponentCharge {
+                module_bytes: 4096,
+                initial_linear_memory_bytes: 8192,
+                reserved_linear_memory_bytes: 16384,
+            }),
             "a resolved target is charged with its own module size"
         );
     }
@@ -4974,12 +4945,12 @@ mod tests {
 
     #[test]
     fn successful_update_rotates_the_memory_growth_bucket() {
-        let mut events = MemoryEventState::new();
-        let before_update = events.growth.clone();
+        let mut growth = Arc::new(PendingMemoryGrowth::default());
+        let before_update = growth.clone();
         before_update.delta.store(10, Ordering::Release);
 
-        events.rotate_growth();
-        let after_update = events.growth.clone();
+        growth = Arc::new(PendingMemoryGrowth::default());
+        let after_update = growth.clone();
         after_update.delta.store(20, Ordering::Release);
 
         assert!(!Arc::ptr_eq(&before_update, &after_update));

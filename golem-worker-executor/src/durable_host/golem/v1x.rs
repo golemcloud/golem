@@ -500,8 +500,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     );
 
                     // We need to jump to the end of the oplog
-                    self.state.replay_state.switch_to_live().await;
-                    self.linear_memory.switch_to_live();
+                    self.switch_to_live().await;
 
                     // But this is not enough, because if the retried transactional block succeeds,
                     // and later we replay it, we need to skip the first attempt and only replay the second.

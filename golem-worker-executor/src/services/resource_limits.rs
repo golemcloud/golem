@@ -97,6 +97,12 @@ pub struct AtomicResourceEntry {
     oplog_writes_per_second: AtomicU64,
 }
 
+struct CapturedUsageUpdate {
+    update: ResourceUsageUpdate,
+    durable_memory_gb_seconds_delta: i64,
+    ephemeral_memory_gb_seconds_delta: i64,
+}
+
 impl AtomicResourceEntry {
     /// Sentinel value used in the database and service config to represent
     /// "unlimited" for the concurrent agents per executor limit.
@@ -358,10 +364,7 @@ impl AtomicResourceEntry {
         });
     }
 
-    fn capture_usage_update(
-        &self,
-        refresh_threshold_secs: i64,
-    ) -> Option<(ResourceUsageUpdate, (i64, i64))> {
+    fn capture_usage_update(&self, refresh_threshold_secs: i64) -> Option<CapturedUsageUpdate> {
         self.flush_memory_meters(Instant::now());
         let fuel_delta = self.delta.swap(0, Ordering::AcqRel);
         let (
@@ -427,8 +430,8 @@ impl AtomicResourceEntry {
                 Some(delta.saturating_add(ephemeral_memory_gb_seconds_delta))
             })
             .ok();
-        Some((
-            ResourceUsageUpdate {
+        Some(CapturedUsageUpdate {
+            update: ResourceUsageUpdate {
                 fuel_delta,
                 memory_gb_seconds_delta,
                 http_call_count_delta: http_count,
@@ -436,11 +439,9 @@ impl AtomicResourceEntry {
                 durable_storage_byte_seconds_delta,
                 ephemeral_storage_byte_seconds_delta,
             },
-            (
-                durable_memory_gb_seconds_delta,
-                ephemeral_memory_gb_seconds_delta,
-            ),
-        ))
+            durable_memory_gb_seconds_delta,
+            ephemeral_memory_gb_seconds_delta,
+        })
     }
 
     pub fn record_memory_gb_seconds(&self, mode: AgentMode, amount: i64) {
@@ -457,10 +458,7 @@ impl AtomicResourceEntry {
                 Some(delta.saturating_add(amount))
             })
             .ok();
-        let mode_delta = match mode {
-            AgentMode::Durable => &self.durable_memory_gb_seconds_delta,
-            AgentMode::Ephemeral => &self.ephemeral_memory_gb_seconds_delta,
-        };
+        let mode_delta = self.memory_delta_for_mode(mode);
         mode_delta
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
                 Some(delta.saturating_add(amount))
@@ -485,11 +483,14 @@ impl AtomicResourceEntry {
 
     #[cfg(test)]
     pub(crate) fn memory_gb_seconds_delta(&self, mode: AgentMode) -> i64 {
+        self.memory_delta_for_mode(mode).load(Ordering::Acquire)
+    }
+
+    fn memory_delta_for_mode(&self, mode: AgentMode) -> &AtomicI64 {
         match mode {
             AgentMode::Durable => &self.durable_memory_gb_seconds_delta,
             AgentMode::Ephemeral => &self.ephemeral_memory_gb_seconds_delta,
         }
-        .load(Ordering::Acquire)
     }
 
     #[cfg(test)]
@@ -685,11 +686,15 @@ impl ResourceLimitsGrpc {
             let mut updates = HashMap::new();
             let mut memory_mode_updates = HashMap::new();
             for (account_id, entry) in entries {
-                if let Some((update, mode_update)) =
-                    entry.capture_usage_update(refresh_threshold_secs)
-                {
-                    updates.insert(account_id, update);
-                    memory_mode_updates.insert(account_id, mode_update);
+                if let Some(captured) = entry.capture_usage_update(refresh_threshold_secs) {
+                    updates.insert(account_id, captured.update);
+                    memory_mode_updates.insert(
+                        account_id,
+                        (
+                            captured.durable_memory_gb_seconds_delta,
+                            captured.ephemeral_memory_gb_seconds_delta,
+                        ),
+                    );
                 }
             }
 
@@ -704,129 +709,137 @@ impl ResourceLimitsGrpc {
                     break;
                 }
 
-            tracing::debug!(
-                "Sending batch: {} fuel, {} memory, {} durable storage, {} ephemeral storage, {} http, {} rpc, {} stale idle account(s)",
-                updates.values().filter(|u| u.fuel_delta != 0).count(),
-                updates
-                    .values()
-                    .filter(|u| u.memory_gb_seconds_delta != 0)
-                    .count(),
-                updates
-                    .values()
-                    .filter(|u| u.durable_storage_byte_seconds_delta != 0)
-                    .count(),
-                updates
-                    .values()
-                    .filter(|u| u.ephemeral_storage_byte_seconds_delta != 0)
-                    .count(),
-                updates
-                    .values()
-                    .filter(|u| u.http_call_count_delta > 0)
-                    .count(),
-                updates
-                    .values()
-                    .filter(|u| u.rpc_call_count_delta > 0)
-                    .count(),
-                updates
-                    .values()
-                    .filter(|u| {
-                        u.fuel_delta == 0
-                            && u.memory_gb_seconds_delta == 0
-                            && u.durable_storage_byte_seconds_delta == 0
-                            && u.ephemeral_storage_byte_seconds_delta == 0
-                            && u.http_call_count_delta == 0
-                            && u.rpc_call_count_delta == 0
-                    })
-                    .count(),
-            );
+                tracing::debug!(
+                    "Sending batch: {} fuel, {} memory, {} durable storage, {} ephemeral storage, {} http, {} rpc, {} stale idle account(s)",
+                    updates.values().filter(|u| u.fuel_delta != 0).count(),
+                    updates
+                        .values()
+                        .filter(|u| u.memory_gb_seconds_delta != 0)
+                        .count(),
+                    updates
+                        .values()
+                        .filter(|u| u.durable_storage_byte_seconds_delta != 0)
+                        .count(),
+                    updates
+                        .values()
+                        .filter(|u| u.ephemeral_storage_byte_seconds_delta != 0)
+                        .count(),
+                    updates
+                        .values()
+                        .filter(|u| u.http_call_count_delta > 0)
+                        .count(),
+                    updates
+                        .values()
+                        .filter(|u| u.rpc_call_count_delta > 0)
+                        .count(),
+                    updates
+                        .values()
+                        .filter(|u| {
+                            u.fuel_delta == 0
+                                && u.memory_gb_seconds_delta == 0
+                                && u.durable_storage_byte_seconds_delta == 0
+                                && u.ephemeral_storage_byte_seconds_delta == 0
+                                && u.http_call_count_delta == 0
+                                && u.rpc_call_count_delta == 0
+                        })
+                        .count(),
+                );
 
-            // Send resource usage batch. The response refreshes all account limits
-            // (fuel, memory, disk, per-invocation caps, and monthly call budgets)
-            // for every account in `updates`.
-            match self
-                .client
-                .batch_update_resource_usage(updates.clone())
-                .await
-            {
-                Ok(updated_limits) => {
-                    for (account_id, update) in &updates {
-                        let Some(resource_limits) = updated_limits.0.get(account_id) else {
-                            record_resource_usage_batch_update_failure();
-                            error!(
-                                "Registry did not apply resource usage update for account {account_id}; dropping the in-flight update"
-                            );
-                            self.reset_in_flight_delta(*account_id).await;
-                            continue;
-                        };
-                        if !resource_limits.usage_update_applied {
-                            continue;
-                        }
-                        let durable = update.durable_storage_byte_seconds_delta;
-                        let ephemeral = update.ephemeral_storage_byte_seconds_delta;
-                        let (durable_memory, ephemeral_memory) = memory_mode_updates
-                            .get(account_id)
-                            .copied()
-                            .unwrap_or_default();
-                        if durable == 0
-                            && ephemeral == 0
-                            && durable_memory == 0
-                            && ephemeral_memory == 0
-                        {
-                            continue;
-                        }
+                // Send resource usage batch. The response refreshes all account limits
+                // (fuel, memory, disk, per-invocation caps, and monthly call budgets)
+                // for every account in `updates`.
+                match self
+                    .client
+                    .batch_update_resource_usage(updates.clone())
+                    .await
+                {
+                    Ok(updated_limits) => {
+                        for (account_id, update) in &updates {
+                            let Some(resource_limits) = updated_limits.0.get(account_id) else {
+                                record_resource_usage_batch_update_failure();
+                                error!(
+                                    "Registry did not apply resource usage update for account {account_id}; dropping the in-flight update"
+                                );
+                                self.reset_in_flight_delta(*account_id).await;
+                                continue;
+                            };
+                            if !resource_limits.usage_update_applied {
+                                continue;
+                            }
+                            let durable = update.durable_storage_byte_seconds_delta;
+                            let ephemeral = update.ephemeral_storage_byte_seconds_delta;
+                            let (durable_memory, ephemeral_memory) = memory_mode_updates
+                                .get(account_id)
+                                .copied()
+                                .unwrap_or_default();
+                            if durable == 0
+                                && ephemeral == 0
+                                && durable_memory == 0
+                                && ephemeral_memory == 0
+                            {
+                                continue;
+                            }
 
-                        let account_id = account_id.to_string();
-                        if durable > 0 {
-                            record_storage_byte_seconds(&account_id, AgentMode::Durable, durable);
+                            let account_id = account_id.to_string();
+                            if durable > 0 {
+                                record_storage_byte_seconds(
+                                    &account_id,
+                                    AgentMode::Durable,
+                                    durable,
+                                );
+                            }
+                            if ephemeral > 0 {
+                                record_storage_byte_seconds(
+                                    &account_id,
+                                    AgentMode::Ephemeral,
+                                    ephemeral,
+                                );
+                            }
+                            if durable_memory > 0 {
+                                record_memory_gb_seconds(
+                                    &account_id,
+                                    AgentMode::Durable,
+                                    durable_memory,
+                                );
+                            }
+                            if ephemeral_memory > 0 {
+                                record_memory_gb_seconds(
+                                    &account_id,
+                                    AgentMode::Ephemeral,
+                                    ephemeral_memory,
+                                );
+                            }
                         }
-                        if ephemeral > 0 {
-                            record_storage_byte_seconds(&account_id, AgentMode::Ephemeral, ephemeral);
-                        }
-                        if durable_memory > 0 {
-                            record_memory_gb_seconds(
-                                &account_id,
-                                AgentMode::Durable,
-                                durable_memory,
-                            );
-                        }
-                        if ephemeral_memory > 0 {
-                            record_memory_gb_seconds(
-                                &account_id,
-                                AgentMode::Ephemeral,
-                                ephemeral_memory,
-                            );
+                        for (account_id, resource_limits) in updated_limits.0 {
+                            self.update_last_known_limits(account_id, resource_limits)
+                                .await;
                         }
                     }
-                    for (account_id, resource_limits) in updated_limits.0 {
-                        self.update_last_known_limits(account_id, resource_limits)
-                            .await;
+                    Err(err) => {
+                        record_resource_usage_batch_update_failure();
+                        error!("Failed to send batched resource usage updates: {}", err);
+                        for (account_id, update) in &updates {
+                            if update.fuel_delta != 0
+                                || update.memory_gb_seconds_delta != 0
+                                || update.durable_storage_byte_seconds_delta != 0
+                                || update.ephemeral_storage_byte_seconds_delta != 0
+                                || update.http_call_count_delta > 0
+                                || update.rpc_call_count_delta > 0
+                            {
+                                error!(
+                                    "Lost resource usage updates for account {account_id}: fuel_delta={}, memory_gb_seconds_delta={}, durable_storage_byte_seconds_delta={}, ephemeral_storage_byte_seconds_delta={}, http_call_count_delta={}, rpc_call_count_delta={}",
+                                    update.fuel_delta,
+                                    update.memory_gb_seconds_delta,
+                                    update.durable_storage_byte_seconds_delta,
+                                    update.ephemeral_storage_byte_seconds_delta,
+                                    update.http_call_count_delta,
+                                    update.rpc_call_count_delta,
+                                );
+                                self.reset_in_flight_delta(*account_id).await;
+                            }
+                        }
                     }
                 }
-                Err(err) => {
-                    record_resource_usage_batch_update_failure();
-                    error!("Failed to send batched resource usage updates: {}", err);
-                    for (account_id, update) in &updates {
-                        if update.fuel_delta != 0
-                            || update.memory_gb_seconds_delta != 0
-                            || update.durable_storage_byte_seconds_delta != 0
-                            || update.ephemeral_storage_byte_seconds_delta != 0
-                            || update.http_call_count_delta > 0
-                            || update.rpc_call_count_delta > 0
-                        {
-                            error!(
-                                "Lost resource usage updates for account {account_id}: fuel_delta={}, memory_gb_seconds_delta={}, durable_storage_byte_seconds_delta={}, ephemeral_storage_byte_seconds_delta={}, http_call_count_delta={}, rpc_call_count_delta={}",
-                                update.fuel_delta,
-                                update.memory_gb_seconds_delta,
-                                update.durable_storage_byte_seconds_delta,
-                                update.ephemeral_storage_byte_seconds_delta,
-                                update.http_call_count_delta,
-                                update.rpc_call_count_delta,
-                            );
-                            self.reset_in_flight_delta(*account_id).await;
-                        }
-                    }
-                }
-            }
             }
         }
         .instrument(info_span!("resource_limits_batch_update"))
