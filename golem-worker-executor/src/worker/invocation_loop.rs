@@ -15,6 +15,7 @@
 use crate::model::{ReadFileResult, TrapType};
 use crate::services::events::Event;
 use crate::services::golem_config::SnapshotPolicy;
+use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
@@ -198,6 +199,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             }
 
             if final_decision.is_none() {
+                let linear_memory = store
+                    .lock()
+                    .await
+                    .data()
+                    .durable_ctx()
+                    .linear_memory_tracker();
                 let mut inner_loop = InnerInvocationLoop {
                     receiver: &mut self.receiver,
                     active: self.active.clone(),
@@ -207,6 +214,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     interrupt_signal: self.interrupt_signal.clone(),
                     instance: &instance,
                     store: &store,
+                    linear_memory,
                     invocations_since_snapshot: 0,
                     idle_snapshot_task: None,
                     concurrent_agent_permit: &mut self.concurrent_agent_permit,
@@ -528,6 +536,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     interrupt_signal: Arc<Mutex<WorkerInterruptState>>,
     instance: &'a Instance,
     store: &'a Mutex<Store<Ctx>>,
+    linear_memory: LinearMemoryTracker,
     invocations_since_snapshot: u64,
     idle_snapshot_task: Option<JoinHandle<()>>,
     /// Mutable reference to the concurrent-agent permit held by the outer
@@ -689,12 +698,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// Called when the agent enters idle state. No-op if already released.
     async fn release_concurrent_agent_permit(&mut self) {
         if let Some(permit) = self.concurrent_agent_permit.take() {
-            self.store
-                .lock()
-                .await
-                .data()
-                .durable_ctx()
-                .pause_memory_meter();
+            self.linear_memory.pause(std::time::Instant::now());
             debug!(agent_id = %self.owned_agent_id.agent_id, "Releasing concurrent-agent permit (entering idle)");
             drop(permit);
         }
@@ -716,12 +720,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             .instrument(span)
             .await;
             *self.concurrent_agent_permit = Some(permit);
-            self.store
-                .lock()
-                .await
-                .data()
-                .durable_ctx()
-                .resume_memory_meter();
+            self.linear_memory.resume(std::time::Instant::now());
         }
     }
 

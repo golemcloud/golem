@@ -43,11 +43,6 @@ impl MemorySnapshot {
         (self.limit_bytes as f64 * usable_ratio) as u64
     }
 
-    pub fn usable_headroom_bytes(&self, usable_ratio: f64) -> u64 {
-        self.usable_limit_bytes(usable_ratio)
-            .saturating_sub(self.current_bytes)
-    }
-
     /// Bytes between current usage and the hard limit. Saturating: never
     /// underflows if `current` momentarily exceeds the reported `limit`.
     pub fn headroom_bytes(&self) -> u64 {
@@ -58,8 +53,6 @@ impl MemorySnapshot {
 /// Reads the executor environment's real memory state.
 pub trait MemoryProbe: Send + Sync + Debug {
     fn snapshot(&self) -> MemorySnapshot;
-
-    fn snapshot_for_ratio(&self, usable_ratio: f64) -> MemorySnapshot;
 
     fn limit_bytes(&self) -> u64 {
         self.snapshot().limit_bytes
@@ -105,10 +98,6 @@ impl MemoryProbe for ProcessRssProbe {
             current_bytes: Self::current_rss(),
         }
     }
-
-    fn snapshot_for_ratio(&self, _usable_ratio: f64) -> MemorySnapshot {
-        self.snapshot()
-    }
 }
 
 /// A probe with a fixed limit and a fixed current usage, both set at
@@ -141,10 +130,6 @@ impl MemoryProbe for FixedProbe {
             current_bytes: self.current_bytes,
         }
     }
-
-    fn snapshot_for_ratio(&self, _usable_ratio: f64) -> MemorySnapshot {
-        self.snapshot()
-    }
 }
 
 /// Linux cgroup v2 probe. Reads `memory.max` and `memory.current` from the
@@ -154,7 +139,6 @@ impl MemoryProbe for FixedProbe {
 pub struct CgroupV2Probe {
     /// Resolved path to the cgroup directory, e.g. `/sys/fs/cgroup`.
     base: std::path::PathBuf,
-    hierarchy: std::path::PathBuf,
     /// Fallback limit used when `memory.max` reads `max` (unlimited) — usually
     /// host RAM or the configured override.
     fallback_limit_bytes: u64,
@@ -168,15 +152,12 @@ impl CgroupV2Probe {
     /// not running cgroup v2 (no unified `memory.current` at the base path), so
     /// the caller can fall back to [`ProcessRssProbe`].
     pub fn try_new(fallback_limit_bytes: u64) -> Option<Self> {
-        let hierarchy = std::path::PathBuf::from(Self::DEFAULT_BASE);
-        let cgroup = std::fs::read_to_string("/proc/self/cgroup").ok()?;
-        let base = resolve_cgroup_v2_path(&hierarchy, &cgroup)?;
+        let base = std::path::PathBuf::from(Self::DEFAULT_BASE);
         // cgroup v2 unified hierarchy exposes memory.current directly at the
         // delegated cgroup path. If it is not readable we are not on v2.
         if std::fs::read_to_string(base.join("memory.current")).is_ok() {
             Some(Self {
                 base,
-                hierarchy,
                 fallback_limit_bytes,
             })
         } else {
@@ -184,150 +165,29 @@ impl CgroupV2Probe {
         }
     }
 
-    fn read_snapshot(&self, usable_ratio: f64) -> MemorySnapshot {
-        let mut path = self.base.as_path();
-        let mut constrained: Option<MemorySnapshot> = None;
-        loop {
-            if let Ok(current) = std::fs::read_to_string(path.join("memory.current"))
-                && let Ok(current_bytes) = current.trim().parse::<u64>()
-            {
-                let limit_bytes = std::fs::read_to_string(path.join("memory.max"))
-                    .ok()
-                    .and_then(|raw| raw.trim().parse::<u64>().ok())
-                    .unwrap_or(self.fallback_limit_bytes);
-                let candidate = MemorySnapshot {
-                    limit_bytes,
-                    current_bytes,
-                };
-                let candidate_headroom = candidate.usable_headroom_bytes(usable_ratio);
-                if constrained.is_none_or(|snapshot| {
-                    candidate_headroom < snapshot.usable_headroom_bytes(usable_ratio)
-                }) {
-                    constrained = Some(candidate);
-                }
-            }
+    fn read_u64(&self, file: &str) -> Option<u64> {
+        let raw = std::fs::read_to_string(self.base.join(file)).ok()?;
+        raw.trim().parse::<u64>().ok()
+    }
 
-            if path == self.hierarchy {
-                break;
-            }
-            let Some(parent) = path.parent() else {
-                break;
-            };
-            path = parent;
+    fn read_limit(&self) -> u64 {
+        match std::fs::read_to_string(self.base.join("memory.max")) {
+            Ok(raw) => raw
+                .trim()
+                .parse::<u64>()
+                .unwrap_or(self.fallback_limit_bytes),
+            Err(_) => self.fallback_limit_bytes,
         }
-
-        constrained.unwrap_or(MemorySnapshot {
-            limit_bytes: self.fallback_limit_bytes,
-            current_bytes: 0,
-        })
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn resolve_cgroup_v2_path(
-    hierarchy: &std::path::Path,
-    proc_self_cgroup: &str,
-) -> Option<std::path::PathBuf> {
-    let relative = proc_self_cgroup.lines().find_map(|line| {
-        let (hierarchy_id, path) = line.split_once("::")?;
-        (hierarchy_id == "0").then_some(path.trim_start_matches('/'))
-    })?;
-    Some(hierarchy.join(relative))
-}
-
-#[cfg(all(test, target_os = "linux"))]
-mod cgroup_tests {
-    use super::{CgroupV2Probe, MemoryProbe, MemorySnapshot, resolve_cgroup_v2_path};
-    use std::path::Path;
-    use tempfile::tempdir;
-    use test_r::test;
-
-    #[test]
-    fn nested_cgroup_path_resolves_below_the_unified_hierarchy() {
-        let cgroup = "2:memory:/legacy\n0::/system.slice/golem.service\n";
-
-        assert_eq!(
-            resolve_cgroup_v2_path(Path::new(CgroupV2Probe::DEFAULT_BASE), cgroup),
-            Some(Path::new("/sys/fs/cgroup/system.slice/golem.service").to_path_buf())
-        );
-        assert_eq!(
-            resolve_cgroup_v2_path(Path::new(CgroupV2Probe::DEFAULT_BASE), "2:memory:/legacy\n"),
-            None
-        );
-    }
-
-    #[test]
-    fn snapshot_uses_the_constraining_ancestor() {
-        let hierarchy = tempdir().unwrap();
-        let parent = hierarchy.path().join("parent");
-        let leaf = parent.join("leaf");
-        std::fs::create_dir_all(&leaf).unwrap();
-        std::fs::write(hierarchy.path().join("memory.current"), "100\n").unwrap();
-        std::fs::write(hierarchy.path().join("memory.max"), "max\n").unwrap();
-        std::fs::write(parent.join("memory.current"), "450\n").unwrap();
-        std::fs::write(parent.join("memory.max"), "500\n").unwrap();
-        std::fs::write(leaf.join("memory.current"), "100\n").unwrap();
-        std::fs::write(leaf.join("memory.max"), "1000\n").unwrap();
-
-        let probe = CgroupV2Probe {
-            base: leaf,
-            hierarchy: hierarchy.path().to_path_buf(),
-            fallback_limit_bytes: 2000,
-        };
-
-        assert_eq!(
-            probe.snapshot(),
-            MemorySnapshot {
-                limit_bytes: 500,
-                current_bytes: 450
-            }
-        );
-    }
-
-    #[test]
-    fn snapshot_applies_ratio_before_selecting_the_constraining_ancestor() {
-        let hierarchy = tempdir().unwrap();
-        let parent = hierarchy.path().join("parent");
-        let leaf = parent.join("leaf");
-        std::fs::create_dir_all(&leaf).unwrap();
-        std::fs::write(hierarchy.path().join("memory.current"), "0\n").unwrap();
-        std::fs::write(hierarchy.path().join("memory.max"), "max\n").unwrap();
-        std::fs::write(parent.join("memory.current"), "100\n").unwrap();
-        std::fs::write(parent.join("memory.max"), "500\n").unwrap();
-        std::fs::write(leaf.join("memory.current"), "500\n").unwrap();
-        std::fs::write(leaf.join("memory.max"), "1000\n").unwrap();
-
-        let probe = CgroupV2Probe {
-            base: leaf,
-            hierarchy: hierarchy.path().to_path_buf(),
-            fallback_limit_bytes: 2000,
-        };
-
-        assert_eq!(
-            probe.snapshot(),
-            MemorySnapshot {
-                limit_bytes: 500,
-                current_bytes: 100,
-            }
-        );
-        assert_eq!(
-            probe.snapshot_for_ratio(0.5),
-            MemorySnapshot {
-                limit_bytes: 1000,
-                current_bytes: 500,
-            }
-        );
     }
 }
 
 #[cfg(target_os = "linux")]
 impl MemoryProbe for CgroupV2Probe {
     fn snapshot(&self) -> MemorySnapshot {
-        self.read_snapshot(1.0)
-    }
-
-    fn snapshot_for_ratio(&self, usable_ratio: f64) -> MemorySnapshot {
-        self.read_snapshot(usable_ratio)
+        MemorySnapshot {
+            limit_bytes: self.read_limit(),
+            current_bytes: self.read_u64("memory.current").unwrap_or(0),
+        }
     }
 }
 

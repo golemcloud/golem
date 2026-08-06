@@ -155,10 +155,6 @@ impl MemoryProbe for FakeProbe {
             current_bytes: state.usage(),
         }
     }
-
-    fn snapshot_for_ratio(&self, _usable_ratio: f64) -> MemorySnapshot {
-        self.snapshot()
-    }
 }
 
 struct FakeEvictionSource {
@@ -267,33 +263,12 @@ struct ZeroUsageProbe {
     limit: u64,
 }
 
-#[derive(Debug)]
-struct MultipleSnapshotsProbe(Vec<MemorySnapshot>);
-
-impl MemoryProbe for MultipleSnapshotsProbe {
-    fn snapshot(&self) -> MemorySnapshot {
-        self.0[0]
-    }
-
-    fn snapshot_for_ratio(&self, usable_ratio: f64) -> MemorySnapshot {
-        self.0
-            .iter()
-            .copied()
-            .min_by_key(|snapshot| snapshot.usable_headroom_bytes(usable_ratio))
-            .unwrap()
-    }
-}
-
 impl MemoryProbe for ZeroUsageProbe {
     fn snapshot(&self) -> MemorySnapshot {
         MemorySnapshot {
             limit_bytes: self.limit,
             current_bytes: 0,
         }
-    }
-
-    fn snapshot_for_ratio(&self, _usable_ratio: f64) -> MemorySnapshot {
-        self.snapshot()
     }
 }
 
@@ -313,25 +288,6 @@ async fn shrinking_a_reconciled_grant_returns_excess_headroom() {
 
     assert_eq!(grant.bytes(), 100);
     assert_eq!(controller.headroom_bytes(), 924);
-}
-
-#[test]
-async fn admission_ratio_is_applied_before_selecting_the_constraining_snapshot() {
-    let controller = Arc::new(AdmissionController::new(
-        Box::new(MultipleSnapshotsProbe(vec![
-            MemorySnapshot {
-                limit_bytes: 1000,
-                current_bytes: 700,
-            },
-            MemorySnapshot {
-                limit_bytes: 500,
-                current_bytes: 250,
-            },
-        ])),
-        AdmissionPolicy { usable_ratio: 0.8 },
-    ));
-
-    assert!(controller.admit(120, &NoEvictionSource).await.is_none());
 }
 
 #[test]
@@ -997,10 +953,6 @@ mod grow_lock_ordering {
                 current_bytes: u64::MAX,
             }
         }
-
-        fn snapshot_for_ratio(&self, _usable_ratio: f64) -> MemorySnapshot {
-            self.snapshot()
-        }
     }
 
     /// Probe reporting ample headroom so `try_admit` takes the fast path and
@@ -1014,10 +966,6 @@ mod grow_lock_ordering {
                 limit_bytes: u64::MAX,
                 current_bytes: 0,
             }
-        }
-
-        fn snapshot_for_ratio(&self, _usable_ratio: f64) -> MemorySnapshot {
-            self.snapshot()
         }
     }
 
@@ -1116,8 +1064,8 @@ mod grow_lock_ordering {
         );
         assert_eq!(
             scans.load(Ordering::Relaxed),
-            1,
-            "overlapping grows must share one worker scan"
+            WORKERS,
+            "each pressured grow should scan independently without a global eviction lock"
         );
     }
 

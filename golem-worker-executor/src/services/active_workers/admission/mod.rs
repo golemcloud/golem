@@ -115,19 +115,17 @@ pub(crate) struct AdmissionController {
     probe: Box<dyn MemoryProbe>,
     policy: AdmissionPolicy,
     granted: Mutex<u64>,
-    eviction: tokio::sync::Mutex<()>,
 }
 
 impl AdmissionController {
     pub fn new(probe: Box<dyn MemoryProbe>, policy: AdmissionPolicy) -> Self {
-        let snapshot = probe.snapshot_for_ratio(policy.usable_ratio);
+        let snapshot = probe.snapshot();
         let ceiling = snapshot.usable_limit_bytes(policy.usable_ratio);
         crate::metrics::workers::record_worker_memory_ceiling(ceiling);
         Self {
             probe,
             policy,
             granted: Mutex::new(0),
-            eviction: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -142,7 +140,7 @@ impl AdmissionController {
     }
 
     fn constraining_snapshot(&self) -> MemorySnapshot {
-        self.probe.snapshot_for_ratio(self.policy.usable_ratio)
+        self.probe.snapshot()
     }
 
     fn try_reserve_with_snapshot(
@@ -222,20 +220,6 @@ impl AdmissionController {
                 return AdmissionDecision::Admit;
             }
             Err(headroom) => headroom,
-        };
-
-        let _eviction = match self.eviction.try_lock() {
-            Ok(guard) => guard,
-            Err(_) => {
-                let _guard = self.eviction.lock().await;
-                // The caller that held the lock already performed the shared
-                // worker scan. Recheck its result, but do not make every
-                // overlapping admission repeat that O(N log N) work.
-                return match self.try_reserve_locked(request_bytes) {
-                    Ok(()) => AdmissionDecision::Admit,
-                    Err(_) => AdmissionDecision::Reject,
-                };
-            }
         };
 
         if headroom >= request_bytes {

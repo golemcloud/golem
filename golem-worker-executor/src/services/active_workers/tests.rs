@@ -761,10 +761,6 @@ mod component_module_charge {
                 current_bytes: 0,
             }
         }
-
-        fn snapshot_for_ratio(&self, _usable_ratio: f64) -> MemorySnapshot {
-            self.snapshot()
-        }
     }
 
     /// An eviction source with nothing to evict: a request that does not fit is
@@ -1436,10 +1432,6 @@ mod grant_guard_liveness {
                 limit_bytes: self.limit,
                 current_bytes: 0,
             }
-        }
-
-        fn snapshot_for_ratio(&self, _usable_ratio: f64) -> MemorySnapshot {
-            self.snapshot()
         }
     }
 

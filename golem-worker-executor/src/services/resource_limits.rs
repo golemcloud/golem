@@ -365,7 +365,19 @@ impl AtomicResourceEntry {
     }
 
     fn capture_usage_update(&self, refresh_threshold_secs: i64) -> Option<CapturedUsageUpdate> {
-        self.flush_memory_meters(Instant::now());
+        let active = self.delta.load(Ordering::Acquire) != 0
+            || self.memory_gb_seconds_delta.load(Ordering::Acquire) != 0
+            || self.unsynced_http_calls.load(Ordering::Acquire) > 0
+            || self.unsynced_rpc_calls.load(Ordering::Acquire) > 0;
+        let stale = self.secs_since_last_refresh() >= refresh_threshold_secs;
+
+        if !active && !stale {
+            return None;
+        }
+
+        let now = Instant::now();
+        self.flush_memory_meters(now);
+        self.flush_storage_meters(now);
         let fuel_delta = self.delta.swap(0, Ordering::AcqRel);
         let (
             memory_gb_seconds_delta,
@@ -383,15 +395,6 @@ impl AtomicResourceEntry {
         };
         let http_count = self.unsynced_http_calls.swap(0, Ordering::AcqRel);
         let rpc_count = self.unsynced_rpc_calls.swap(0, Ordering::AcqRel);
-        let active =
-            fuel_delta != 0 || memory_gb_seconds_delta != 0 || http_count > 0 || rpc_count > 0;
-        let stale = self.secs_since_last_refresh() >= refresh_threshold_secs;
-
-        if !active && !stale {
-            return None;
-        }
-
-        self.flush_storage_meters(Instant::now());
         let durable_storage_byte_seconds_delta =
             self.durable_byte_seconds_delta.swap(0, Ordering::AcqRel);
         let ephemeral_storage_byte_seconds_delta =
@@ -1078,6 +1081,34 @@ mod tests {
         // re-bill the first nor drop anything.
         entry.flush_storage_meters(now + Duration::from_secs(3));
         assert_eq!(entry.durable_byte_seconds_delta(), 30);
+    }
+
+    #[test]
+    fn fresh_idle_tick_defers_memory_meter_flush_until_refresh() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let owned_agent_id = OwnedAgentId::new(
+            EnvironmentId(Uuid::new_v4()),
+            &AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "deferred-memory-meter-flush".to_string(),
+            },
+        );
+        let now = Instant::now();
+        let meter = AgentMemoryMeter::new(
+            AgentMode::Durable,
+            1024 * 1024 * 1024,
+            true,
+            entry.clone(),
+            now,
+        );
+        entry.register_memory_meter(owned_agent_id, meter.clone());
+        meter.pause(now + Duration::from_secs(3));
+
+        assert!(entry.capture_usage_update(i64::MAX).is_none());
+        assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 0);
+
+        let captured = entry.capture_usage_update(0).unwrap();
+        assert_eq!(captured.update.memory_gb_seconds_delta, 3);
     }
 
     // -------------------------------------------------------------------------
