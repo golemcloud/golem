@@ -243,9 +243,6 @@ func DefineMethod[Id any, In any, Out any](name string, opts ...MethodOpt) Metho
 // agent-error surfaced to the caller — the worker survives). Reserve panic for
 // genuine failures; model expected, typed outcomes as a [Result] in the output.
 // Use [Must] to turn an inner (value, error) call into a panic-on-error.
-//
-// Thin wrapper over the package-global defs — keep all logic in [implementInto]
-// so it stays testable against an explicit *definitions. See [defs].
 func Implement[Id any, S any, Cfg any, In any, Out any](
 	a *Agent[Id, S, Cfg],
 	m MethodDef[Id, In, Out],

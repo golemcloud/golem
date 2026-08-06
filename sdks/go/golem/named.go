@@ -32,8 +32,6 @@ import "reflect"
 // compiled. Registering two different ids for the same type, or the same id for
 // two types, panics — an ambiguous id is a wire-compatibility bug, not a
 // tolerable one.
-// Thin wrapper over the package-global defs — keep all logic in [nameTypeInto]
-// so it stays testable against an explicit *definitions. See [defs].
 func NameType[T any](id string) struct{} {
 	return nameTypeInto[T](defs, id)
 }

@@ -29,8 +29,8 @@ import (
 //
 // Config is attached to an agent as a single struct type and read only from
 // within that agent's own execution — its methods and its constructor — for that
-// agent's config type. This mirrors the TS SDK (config is instance-bound); there
-// are no free-floating, read-from-anywhere descriptors.
+// agent's config type. It is instance-bound; there are no free-floating,
+// read-from-anywhere descriptors.
 //
 // Declare the config struct and attach it to the agent with
 // [DefineConfiguredAgent]; the config type Cfg rides on the returned [Agent], so
@@ -80,10 +80,9 @@ type configDecl struct {
 }
 
 // NoConfig is the empty config type used by an agent that declares no config. It
-// has no fields, so it flattens to zero config declarations. [DefineAgent] uses
-// it internally; config-less agents never name it.
+// has no fields, so it flattens to zero config declarations; config-less agents
+// created with [DefineAgent] never need to name it.
 type NoConfig struct{}
-
 
 func configKind(source common.AgentConfigSource) string {
 	if source == common.AgentConfigSourceSecret {
@@ -192,14 +191,13 @@ func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgTyp
 // method returns the agent's own Cfg — config can be read only from within the
 // owning agent's method (no free-floating read).
 //
-// The config is materialized ONCE per worker and cached (see [instance.config]),
-// so repeated calls on a hot method are near-free: its local fields are read from
-// the host on the first call and reused for the worker's life. Only its **secret**
-// fields stay live — a [Secret] field is a lazy handle whose [Secret.Get] re-reads
-// the host each call, so a rotated secret is observed and the user decides when to
-// read (and whether to store) it. A config read failing is a hard failure with no
-// in-band recovery, so — like the TS/Rust/Scala SDKs — Config fails loud: the
-// panic is recovered by the invoke dispatcher into an agent-error.
+// The config is materialized once per worker and cached, so repeated calls on a
+// hot method are near-free: its local fields are read from the host on the first
+// call and reused for the worker's life. Only its secret fields stay live — a
+// [Secret] field is a lazy handle whose [Secret.Get] re-reads the host each call,
+// so a rotated secret is observed and the user decides when to read (and whether
+// to store) it. A read failure has no in-band recovery, so it panics rather than
+// returning an error; the panic surfaces as an agent-error.
 func (a *Agent[Id, S, Cfg]) Config(scope agentScope[S]) Cfg {
 	// scope is a compile-time gate only: requiring it means the read can happen
 	// only from inside the agent's own execution.
@@ -207,18 +205,15 @@ func (a *Agent[Id, S, Cfg]) Config(scope agentScope[S]) Cfg {
 	return materializeAgentConfig[Cfg]()
 }
 
-// Config reads the agent's config from within its constructor (fail-loud, like
-// [Agent.Config], and populating the same per-worker cache the methods reuse). It
-// reads config off its own context rather than the agent because naming the agent
-// in its own package-level initializer would be a self-reference.
+// Config reads the agent's config from within its constructor. It behaves like
+// [Agent.Config] and populates the same per-worker cache the methods reuse.
 func (c *InitContext[Id, S, Cfg]) Config() Cfg {
 	return materializeAgentConfig[Cfg]()
 }
 
-// cachedAgentConfig returns the worker's already-materialized config, if any. It
-// is the pure cache-hit fast path — no host call — so it is safe to reference
-// from native tests (the host-backed miss path lives in materializeAgentConfig,
-// reachable only from the wasm Config methods above).
+// cachedAgentConfig returns the worker's already-materialized config, if any —
+// the cache-hit fast path with no host call. The host-backed miss path lives in
+// materializeAgentConfig.
 func cachedAgentConfig[Cfg any]() (Cfg, bool) {
 	if active != nil && active.config != nil {
 		return active.config.(Cfg), true
@@ -248,8 +243,7 @@ func materializeAgentConfig[Cfg any]() Cfg {
 }
 
 // materializeConfig assembles a Cfg value by reading each declared leaf through
-// readLeaf. Pure given readLeaf — [Agent.Config] / [InitContext.Config] supply
-// the host-backed reader, tests supply a fake.
+// readLeaf; [Agent.Config] / [InitContext.Config] supply the host-backed reader.
 func materializeConfig[Cfg any](readLeaf func(lf configLeaf) (reflect.Value, error)) (Cfg, error) {
 	var zero Cfg
 	cfgType := reflect.TypeFor[Cfg]()
@@ -286,9 +280,8 @@ func readConfigLeaf(d *definitions, lf configLeaf) (reflect.Value, error) {
 // readSecretLeaf builds the Secret[T] handle for a config secret leaf. It does
 // NOT touch the host here: the handle re-reads the current value lazily on each
 // [Secret.Get], so a rotated secret is observed. The bind is done by reflection
-// because the inner T is not statically known at this point. Keeping the host
-// call out of this path (it lives in the Secret's closure, reachable only from a
-// user's Secret.Get) is what lets native tests link.
+// because the inner T is not statically known at this point. The host call lives
+// in the Secret's closure, reached only from a user's [Secret.Get].
 func readSecretLeaf(lf configLeaf) (reflect.Value, error) {
 	ptr := reflect.New(lf.typ) // *Secret[T]
 	ptr.Interface().(secretBinder).secretBindPath(clonePath(lf.path))

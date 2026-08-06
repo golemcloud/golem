@@ -78,8 +78,7 @@ func mapLevel(l slog.Level) Level {
 }
 
 // formatMessage renders a record as "message key=value …", appending the
-// handler's accumulated attributes and then the record's own. It is pure (no host
-// call) so it is unit-tested directly.
+// handler's accumulated attributes and then the record's own.
 func formatMessage(base []slog.Attr, r slog.Record) string {
 	var b strings.Builder
 	b.WriteString(r.Message)

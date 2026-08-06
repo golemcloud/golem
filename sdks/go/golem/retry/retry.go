@@ -53,9 +53,8 @@
 //
 // # Concurrency
 //
-// [Set], [Remove] and [With] apply at the worker level — the retry scope is
-// currently per worker rather than per goroutine (the same model as the other
-// Golem SDKs). Golem runs an agent single-threaded with cooperative
+// [Set], [Remove] and [With] apply at the worker level — the retry scope is per
+// worker, not per goroutine. Golem runs an agent single-threaded with cooperative
 // task-switching only at await points (RPC, promise, sleep), so [With] is safe
 // when its scope does not await while other goroutines run concurrently; nesting
 // on a single logical flow is fine. To keep an override from affecting concurrent

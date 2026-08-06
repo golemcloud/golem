@@ -111,11 +111,9 @@ func (o *Option[T]) optionSetSome() reflect.Value {
 // Result is a value that is either a success or a typed failure.
 //
 // It is not how a method reports failure — a handler panics for that, which
-// surfaces as the WIT agent-error channel. Result is for a fallible value
-// delivered on a *successful* invocation: a return value the caller inspects, a
-// field, a list element, one arm of another Result. That distinction mirrors the
-// TS SDK, where a Result lowers to a component-model result inside the success
-// payload while throws stay on the agent-error channel.
+// surfaces as the agent-error channel. Result is for a fallible value delivered
+// on a *successful* invocation: a return value the caller inspects, a field, a
+// list element, or one arm of another Result.
 type Result[Ok any, Err any] struct {
 	isErr bool
 	ok    Ok
@@ -259,10 +257,9 @@ type Secret[T any] struct {
 
 // Get reads the secret's current plaintext from the host and returns it, or
 // panics if the read fails. Because it re-reads on every call, a rotated secret
-// is observed rather than a stale snapshot. A secret read failing is a hard
-// failure with no in-band recovery, so — like the TS/Rust/Scala SDKs — Get fails
-// loud: the panic is recovered by the invoke dispatcher into an agent-error. Must
-// be called inside an invocation (it calls the host).
+// is observed rather than a stale snapshot. A read failure has no in-band
+// recovery, so it panics rather than returning an error; the panic surfaces as
+// an agent-error. Must be called inside an invocation (it calls the host).
 func (s Secret[T]) Get() T {
 	if s.read == nil {
 		// Only reachable for a zero-value Secret — one never obtained from config

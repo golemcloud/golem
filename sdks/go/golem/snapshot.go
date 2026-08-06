@@ -22,8 +22,7 @@ import (
 
 // Snapshotting: the host can ask the guest to serialize the running agent's
 // state (save-snapshot) and later restore it (load-snapshot) — both are guest
-// exports, wired in guest.go. The serialization itself is pure Go over the state
-// value (no host imports), so it is unit-tested directly.
+// exports, wired in guest.go.
 //
 // Two modes, chosen per instance:
 //   - if the state implements [Snapshotter], its Save/Load bytes are used verbatim

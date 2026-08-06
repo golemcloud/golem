@@ -25,8 +25,7 @@ import (
 )
 
 // UUID is a 128-bit identifier, used here for the phantom id of an ephemeral
-// agent instance. It aliases [uuid.UUID] so capability wrappers can use the type
-// without importing the agent runtime.
+// agent instance. It is an alias of [uuid.UUID].
 type UUID = uuid.UUID
 
 func uuidFromWit(w types.Uuid) UUID {
@@ -57,9 +56,7 @@ type ParsedAgentID[Id any] struct {
 //
 // Id must be the target agent's Id struct — the same type used with
 // [DefineAgent]/[ClientFor] — so the constructor parameters decode back into it.
-// This calls the host `parse-agent-id`, so it runs only inside a component, not
-// in native tests; the decode itself ([decodeAgentIDParams]) is separately
-// testable.
+// It calls the host, so it must run inside an invocation.
 func ParseAgentID[Id any](agentID string) (ParsedAgentID[Id], error) {
 	res := host.ParseAgentId(agentID)
 	if res.IsErr() {
@@ -81,7 +78,7 @@ func ParseAgentID[Id any](agentID string) (ParsedAgentID[Id], error) {
 
 // decodeAgentIDParams decodes a constructor-parameter value tree into the Id
 // struct — the same positional record decode initialize uses for the raw
-// constructor input. Pure (no host import), so it is natively testable.
+// constructor input.
 func decodeAgentIDParams[Id any](value types.SchemaValueTree) (Id, error) {
 	var zero Id
 	idType := reflect.TypeFor[Id]()

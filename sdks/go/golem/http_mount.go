@@ -32,10 +32,9 @@ import (
 // then calls the ordinary initialize/invoke exports. The guest never handles a
 // raw HTTP request — there is no incoming-handler to implement here.
 //
-// Go has no compile-time layer for route strings (unlike the TS SDK's template
-// literals), so every binding rule the TS type system enforces is checked at
-// registration and reported through the definition-error channel (see
-// definition.go) rather than surfacing as a runtime surprise.
+// Route strings are not checked at compile time, so every binding rule is
+// validated at registration and reported at discovery rather than surfacing as a
+// runtime surprise.
 
 // Mount declares that an agent's methods are reachable over HTTP under a common
 // path prefix. Set it on [Spec.HTTP].

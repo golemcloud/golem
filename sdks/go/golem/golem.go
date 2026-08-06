@@ -180,7 +180,7 @@ type agentScope[S any] interface {
 // agentScopeState satisfies [agentScope] for a method context. It exists only to
 // gate [Agent.Config] at compile time.
 //
-//nolint:unused // false positive: staticcheck's unused can't trace generic-interface satisfaction (verified with a minimal repro); the compiler requires this method for agentScope[S].
+//nolint:unused // false positive: staticcheck's unused can't trace generic-interface satisfaction; the compiler requires this method for agentScope[S].
 func (c *Context[S]) agentScopeState() *S { return c.State }
 
 // InitContext is the execution scope passed to a [DefineConfiguredAgent]
@@ -296,8 +296,6 @@ func (c CachePolicy) toWit() common.CachePolicy {
 
 type readOnlyConfig struct {
 	policy CachePolicy
-	// usesPrincipal is always false until the SDK has a Principal parameter type;
-	// the other SDKs derive it from a Principal method parameter.
 }
 
 // ReadOnly marks a method read-only: it must not perform remote side effects —

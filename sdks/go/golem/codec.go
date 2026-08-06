@@ -285,10 +285,6 @@ func (d *definitions) sdkComposite(c *codec) bool {
 	return false
 }
 
-// scalar fills in a codec for a type that occupies a single node on both sides.
-// Decoding checks the tag first: the generated accessors panic on mismatch, and
-// malformed input must produce an error, not a panic.
-
 func isPrimitiveKind(k reflect.Kind) bool {
 	switch k {
 	case reflect.String, reflect.Bool,
@@ -319,6 +315,3 @@ func sortValues(vs []reflect.Value) {
 		return false
 	})
 }
-
-// optionValueOps drives Option[T] through the same codec as *T, so the two
-// spellings produce identical schemas and are interchangeable.

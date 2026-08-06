@@ -32,11 +32,9 @@ import (
 // Completion can come from another agent ([CompletePromise]) or from off-platform
 // via the worker REST API (POST /:component/workers/:agent/complete with the
 // PromiseID's fields), so the completion payload is arbitrary bytes with no
-// predefined meaning. [Promise] types those bytes as T via JSON, matching the
-// other Golem SDKs: this is a deliberate divergence from the WIT value-tree codec
-// used for RPC params/results ([MethodDef.Call]), because an external completer
-// (a webhook, a curl, a human) can produce JSON but not WIT wire bytes. As an
-// escape hatch, a Promise[[]byte] carries the raw bytes through unchanged.
+// predefined meaning. [Promise] types those bytes as T via JSON, so an external
+// completer (a webhook, a curl, a human) can produce them. As an escape hatch, a
+// Promise[[]byte] carries the raw bytes through unchanged.
 
 // PromiseID is the durable, serializable identity of a promise. Hand it to
 // whoever will complete the promise — another agent, or an external system via

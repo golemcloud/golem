@@ -219,8 +219,7 @@ func (s *Store[T]) Exists(key string) (bool, error) { return s.b.Exists(key) }
 // Keys lists all keys.
 func (s *Store[T]) Keys() ([]string, error) { return s.b.Keys() }
 
-// marshalValue/unmarshalValue are the pure JSON codec used by Store (no host
-// calls), so they are natively testable.
+// marshalValue/unmarshalValue are the JSON codec behind Store.
 func marshalValue[T any](v T) ([]byte, error) { return json.Marshal(v) }
 func unmarshalValue[T any](data []byte) (T, error) {
 	var v T

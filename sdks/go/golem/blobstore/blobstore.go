@@ -56,8 +56,8 @@ func (o ObjectID) toWit() bstypes.ObjectId {
 // ContainerMetadata describes a container.
 type ContainerMetadata struct {
 	Name string
-	// CreatedAt is the container's creation time (host millis). Some backends
-	// report last-modified here rather than creation.
+	// CreatedAt is the container's creation time. Some backends report
+	// last-modified here rather than creation.
 	CreatedAt time.Time
 }
 
@@ -65,7 +65,8 @@ type ContainerMetadata struct {
 type ObjectMetadata struct {
 	Name      string
 	Container string
-	// CreatedAt is the object's creation time (host millis; see [ContainerMetadata]).
+	// CreatedAt is the object's creation time. Some backends report last-modified
+	// here rather than creation.
 	CreatedAt time.Time
 	Size      uint64
 }
@@ -273,8 +274,6 @@ func (c *Container) WriteData(name string, data []byte) error {
 	if r := ov.OutgoingValueWriteBody(reader); r.IsErr() {
 		return bsError("outgoing-value write-body failed")
 	}
-	// Feed the bytes into the stream and close it, then hand the outgoing value
-	// to write-data (which reads the buffered stream).
 	writer.WriteAll(data)
 	writer.Drop()
 	if r := c.raw.WriteData(name, ov); r.IsErr() {
@@ -343,8 +342,7 @@ func (s *Store[T]) Exists(name string) (bool, error) { return s.c.Has(name) }
 // List returns the object names.
 func (s *Store[T]) List() ([]string, error) { return s.c.ListObjects() }
 
-// marshalValue/unmarshalValue are the pure JSON codec behind Store (no host
-// calls), so they are natively testable.
+// marshalValue/unmarshalValue are the JSON codec behind Store.
 func marshalValue[T any](v T) ([]byte, error) { return json.Marshal(v) }
 func unmarshalValue[T any](data []byte) (T, error) {
 	var v T

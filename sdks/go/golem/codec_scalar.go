@@ -22,6 +22,9 @@ import (
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
+// scalar fills in a codec for a type that occupies a single node on both sides.
+// Decoding checks the tag first: the generated accessors panic on mismatch, and
+// malformed input must produce an error, not a panic.
 func scalar(
 	c *codec,
 	body types.SchemaTypeBody,
@@ -44,10 +47,8 @@ func scalar(
 	}
 }
 
-// compileRecord handles Go structs, which lower to WIT records. Fields are
-// positional on the wire: declaration order is the order the schema reports and
-// the order values are written in.
-
+// optionOps abstracts the two Go spellings of an optional value, so *T and
+// Option[T] share one codec and therefore produce identical schemas.
 type optionOps struct {
 	// get reports whether the value is present, and if so yields the inner value.
 	get func(v reflect.Value) (reflect.Value, bool)
@@ -102,6 +103,8 @@ func compileOption(c *codec, inner *codec, ops optionOps) {
 	}
 }
 
+// optionValueOps drives Option[T] through the same codec as *T, so the two
+// spellings produce identical schemas and are interchangeable.
 func optionValueOps() optionOps {
 	return optionOps{
 		get: func(v reflect.Value) (reflect.Value, bool) {

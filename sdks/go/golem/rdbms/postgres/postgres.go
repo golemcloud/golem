@@ -104,10 +104,9 @@ func pgError(e pg.Error) error {
 // package ([Numeric], [JSONB], [Int4], [Array], [Composite], …) and pass it as a
 // query argument.
 //
-// A DbValue holds either a ready value (the flat constructors) or a deferred
-// encoder (the recursive [Array]/[Composite]/[Domain]/[CustomRange], whose host
-// resources are built only when the parameter is actually sent — so construction
-// stays side-effect free and a bad element surfaces as a normal parameter error).
+// Constructing a DbValue is side-effect free; a bad element (in a recursive
+// [Array]/[Composite]/[Domain]/[CustomRange]) surfaces as a normal parameter
+// error when the query runs, not at construction.
 type DbValue struct {
 	raw    pg.DbValue
 	encode func() (pg.DbValue, error)
@@ -549,9 +548,8 @@ func encodeParams(args []any) ([]pg.DbValue, error) {
 
 // ── Value decoding ────────────────────────────────────────────────────────────
 //
-// decode is split so the pure part (decodeFlat, every non-recursive family) is
-// natively testable, while the host-backed recursive part (decodeLazy, which
-// calls LazyDbValue.Get/Drop) stays reachable only from the query paths.
+// decode is split into a flat part (decodeFlat, every non-recursive family) and
+// the host-backed recursive part (decodeLazy, which calls LazyDbValue.Get/Drop).
 
 func decode(v pg.DbValue) any {
 	if x, ok := decodeFlat(v); ok {
@@ -1166,7 +1164,7 @@ func (r Row) Time(i int) (time.Time, error) {
 // Typed getters for the exotic families. The flat ones (ranges, enum, sparse
 // vector) read directly; the recursive ones (array, composite, domain, custom
 // range) go through the host lazy resources, so — like [Row.Get] — they only run
-// inside a query, not native tests.
+// inside a query.
 
 // Int4Range reads an int4range column.
 func (r Row) Int4Range(i int) (Range[int32], error) {

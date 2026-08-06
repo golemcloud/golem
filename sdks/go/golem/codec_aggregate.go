@@ -23,6 +23,9 @@ import (
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
+// compileRecord handles Go structs, which lower to WIT records. Fields are
+// positional on the wire: declaration order is the order the schema reports and
+// the order values are written in.
 func (d *definitions) compileRecord(c *codec) {
 	fields := d.structFields(c.typ)
 
@@ -67,9 +70,6 @@ func (d *definitions) compileRecord(c *codec) {
 // ---------------------------------------------------------------------------
 // containers
 // ---------------------------------------------------------------------------
-
-// optionOps abstracts the two Go spellings of an optional value, so *T and
-// Option[T] share one codec and therefore produce identical schemas.
 
 func compileList(c *codec, elem *codec) {
 	c.body = func(g *graphBuilder) types.SchemaTypeBody {

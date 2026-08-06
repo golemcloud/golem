@@ -65,10 +65,9 @@ func WithPhantomID(id UUID) ClientOpt {
 
 // ClientFor returns a client addressing the agent instance identified by id, or
 // panics if the target can't be resolved (unknown agent, a bad config override,
-// or invalid constructor parameters). Client creation failing is a programming/
-// configuration error with no in-band recovery, so — like the TS/Rust/Scala SDKs
-// — it fails loud: the panic is recovered by the invoke dispatcher into an
-// agent-error.
+// or invalid constructor parameters). Such a failure is a programming or
+// configuration error with no in-band recovery, so it panics rather than
+// returning an error; the panic surfaces to the caller as an agent-error.
 //
 // The id is encoded with the same codecs the target uses to decode its
 // constructor parameters — they are derived from the same Go types — so caller
@@ -131,15 +130,15 @@ func NewPhantom[Id any, S any, Cfg any](a *Agent[Id, S, Cfg], id Id) Client[Id] 
 type AgentErrorKind uint8
 
 const (
-	// AgentInvalidInput — the input did not match the method's parameters.
+	// AgentInvalidInput means the input did not match the method's parameters.
 	AgentInvalidInput AgentErrorKind = iota
-	// AgentInvalidMethod — no such method on the agent.
+	// AgentInvalidMethod means no such method exists on the agent.
 	AgentInvalidMethod
-	// AgentInvalidType — no such agent type.
+	// AgentInvalidType means no such agent type exists.
 	AgentInvalidType
-	// AgentCustom — the agent failed (a returned error or a panic).
+	// AgentCustom means the agent failed (a returned error or a panic).
 	AgentCustom
-	// AgentUnknown — an error kind the SDK does not recognize.
+	// AgentUnknown is an error kind the SDK does not recognize.
 	AgentUnknown
 )
 

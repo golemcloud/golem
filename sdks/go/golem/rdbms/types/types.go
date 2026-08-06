@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package types holds the temporal and network value types shared by the Golem
-// rdbms drivers (postgres today, mysql later). The everyday cases — timestamp,
+// postgres and mysql drivers. The everyday cases — timestamp,
 // timestamptz and date — round-trip through the standard library's time.Time
 // (see the driver's Row.Time getter); these structs exist for the cases time.Time
 // cannot hold on its own (a bare time of day, a time with an offset, an interval)
@@ -111,7 +111,7 @@ func (m MacAddr) String() string {
 }
 
 // ErrorKind classifies a database error. It is shared by the postgres and mysql
-// drivers, whose host error variants are identical.
+// drivers.
 type ErrorKind uint8
 
 const (

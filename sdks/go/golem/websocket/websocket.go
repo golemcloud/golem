@@ -81,13 +81,18 @@ func messageFromWit(m client.Message) Message {
 type ErrorKind uint8
 
 const (
+	// ConnectionFailure means the connection could not be established or was lost.
 	ConnectionFailure ErrorKind = iota
+	// SendFailure means a message could not be sent.
 	SendFailure
+	// ReceiveFailure means a message could not be received.
 	ReceiveFailure
+	// ProtocolError means the peer violated the WebSocket protocol.
 	ProtocolError
 	// Closed means the peer closed the connection; CloseCode/CloseReason may carry
 	// the close frame.
 	Closed
+	// Other is any error the host did not classify.
 	Other
 )
 

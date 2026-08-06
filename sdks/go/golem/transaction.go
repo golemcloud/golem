@@ -35,15 +35,13 @@ import (
 // Both share the [Operation]/[Step] building blocks. The E type parameter is the
 // common error type across a transaction's steps (often string). Model expected
 // step failures as the error arm of the step's [Result]; a panic (an infra
-// failure) leaves the atomic region open so the runtime replays it, matching the
-// fail-loud model used elsewhere in the SDK.
+// failure) leaves the atomic region open so the runtime replays it.
 //
-// Concurrency: a transaction opens a worker-GLOBAL atomic region (Golem has no
+// Concurrency: a transaction opens a worker-global atomic region (there is no
 // per-task scope). Because the agent runs single-threaded with cooperative
 // task-switching only at await points, keep the whole transaction on one logical
 // flow — do not run concurrent goroutines that perform durable side effects while
-// a transaction is open, or their operations fall inside its region. See the
-// concurrency note in durability.go.
+// a transaction is open, or their operations fall inside its region.
 
 // Operation is a compensable step: an action paired with the rollback to undo it.
 // compensate receives both the original input and the output execute produced, and
@@ -86,7 +84,7 @@ func (tx *Transaction[E]) compensate() Option[E] {
 // (to be run if the transaction later rolls back) and returns the Ok result; on
 // failure it returns the error result — return it from the transaction body to
 // trigger rollback. It is a free function because Go methods cannot take type
-// parameters, mirroring [MethodDef.Call].
+// parameters.
 func Step[In, Out, E any](tx *Transaction[E], op Operation[In, Out, E], input In) Result[Out, E] {
 	r := op.execute(input)
 	if r.IsErr() {

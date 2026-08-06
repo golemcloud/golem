@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package uuid holds the SDK's 128-bit identifier as a tiny leaf type, so
-// capability wrappers (e.g. rdbms/postgres) can use it without importing the
-// whole agent runtime. The root golem package re-exports it as golem.UUID.
+// Package uuid holds the SDK's 128-bit identifier as a small leaf type. The root
+// golem package re-exports it as golem.UUID.
 package uuid
 
 import "fmt"

@@ -25,8 +25,8 @@ import (
 // are thin, fail-loud wrappers (a host failure traps and surfaces as an
 // agent-error, matching the RPC/promise surface — no in-band error return).
 //
-// Concurrency: these knobs apply at the worker level — the scope is currently per
-// worker rather than per goroutine (the same model as the other Golem SDKs).
+// Concurrency: these knobs apply at the worker level — the scope is per worker,
+// not per goroutine.
 // Golem runs an agent single-threaded with cooperative task-switching only at
 // await points (RPC, promise, sleep), so an atomic region or a
 // WithPersistenceLevel/WithIdempotenceMode scope is safe when it does not await
