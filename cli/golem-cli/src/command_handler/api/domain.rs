@@ -165,6 +165,7 @@ impl ApiDomainCommandHandler {
                 deleted: true,
                 domain,
                 id: domain_to_delete.id,
+                environment_id: domain_to_delete.environment_id,
             })?;
 
         Ok(())

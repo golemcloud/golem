@@ -1817,7 +1817,8 @@
         "$type",
         "deleted",
         "domain",
-        "id"
+        "id",
+        "environmentId"
       ],
       "properties": {
         "$type": {
@@ -1830,6 +1831,9 @@
           "type": "string"
         },
         "id": {
+          "type": "string"
+        },
+        "environmentId": {
           "type": "string"
         }
       },
@@ -2061,6 +2065,7 @@
         "deleted",
         "id",
         "name",
+        "environmentId",
         "revision"
       ],
       "properties": {
@@ -2074,6 +2079,9 @@
           "type": "string"
         },
         "name": {
+          "type": "string"
+        },
+        "environmentId": {
           "type": "string"
         },
         "revision": {

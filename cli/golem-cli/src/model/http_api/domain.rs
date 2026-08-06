@@ -54,6 +54,7 @@ pub struct DomainRegistrationDeleteView {
     pub deleted: bool,
     pub domain: Domain,
     pub id: DomainRegistrationId,
+    pub environment_id: golem_common::model::environment::EnvironmentId,
 }
 
 impl Masked for DomainRegistrationDeleteView {}
@@ -70,6 +71,7 @@ impl MessageWithFields for DomainRegistrationDeleteView {
         let mut fields = FieldsBuilder::new();
         fields
             .fmt_field("Domain name", &self.domain.0, format_main_id)
+            .fmt_field("Environment ID", &self.environment_id.0, format_main_id)
             .fmt_field("ID", &self.id, format_main_id);
         fields.build()
     }

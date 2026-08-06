@@ -3479,15 +3479,25 @@ fn arb_token_with_secret() -> BoxedStrategy<golem_common::model::auth::TokenWith
 
 fn arb_api_domain_delete_result() -> OutputDocumentStrategy {
     serialized_output(
-        (any::<bool>(), arb_small_string(), arb_small_string()).prop_map(
-            |(deleted, domain, id)| crate::model::http_api::domain::DomainRegistrationDeleteView {
-                deleted,
-                domain: golem_common::model::domain_registration::Domain(domain),
-                id: golem_common::model::domain_registration::DomainRegistrationId(
-                    uuid::Uuid::parse_str(&id).expect("generated UUID should parse"),
-                ),
-            },
-        ),
+        (
+            any::<bool>(),
+            arb_small_string(),
+            arb_small_string(),
+            arb_small_string(),
+        )
+            .prop_map(|(deleted, domain, id, environment_id)| {
+                crate::model::http_api::domain::DomainRegistrationDeleteView {
+                    deleted,
+                    domain: golem_common::model::domain_registration::Domain(domain),
+                    id: golem_common::model::domain_registration::DomainRegistrationId(
+                        uuid::Uuid::parse_str(&id).expect("generated UUID should parse"),
+                    ),
+                    environment_id: golem_common::model::environment::EnvironmentId(
+                        uuid::Uuid::parse_str(&environment_id)
+                            .expect("generated UUID should parse"),
+                    ),
+                }
+            }),
     )
 }
 

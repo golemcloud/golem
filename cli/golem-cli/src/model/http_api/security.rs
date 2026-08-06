@@ -91,6 +91,7 @@ pub struct HttpSecuritySchemeDeleteView {
     pub deleted: bool,
     pub id: golem_common::model::security_scheme::SecuritySchemeId,
     pub name: golem_common::model::security_scheme::SecuritySchemeName,
+    pub environment_id: golem_common::model::environment::EnvironmentId,
     pub revision: golem_common::model::security_scheme::SecuritySchemeRevision,
 }
 
@@ -100,6 +101,7 @@ impl From<SecuritySchemeDto> for HttpSecuritySchemeDeleteView {
             deleted: true,
             id: scheme.id,
             name: scheme.name,
+            environment_id: scheme.environment_id,
             revision: scheme.revision,
         }
     }
@@ -118,6 +120,7 @@ impl MessageWithFields for HttpSecuritySchemeDeleteView {
     fn fields(&self) -> Vec<(String, String)> {
         let mut fields = FieldsBuilder::new();
         fields
+            .fmt_field("Environment ID", &self.environment_id.0, format_main_id)
             .fmt_field("Name", &self.name.0, format_main_id)
             .fmt_field("ID", &self.id, format_id)
             .fmt_field("Revision", &self.revision.get(), format_id);
