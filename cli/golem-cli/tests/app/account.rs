@@ -160,10 +160,6 @@ async fn account_storage_usage_and_limits_use_live_cli_wire_path(_tracing: &Trac
 #[timeout("5m")]
 async fn account_usage_reports_sparse_allocated_memory(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
-    ctx.add_env_var(
-        "GOLEM__RESOURCE_LIMITS__CONFIG__BATCH_UPDATE_INTERVAL",
-        "200ms",
-    );
     ctx.start_server().await;
 
     let app_name = "memory-billing";
@@ -190,8 +186,13 @@ async fn account_usage_reports_sparse_allocated_memory(_tracing: &Tracing) {
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
     .unwrap();
-    std::fs::write(
-        ctx.cwd_path_join("src/counter_agent.rs"),
+    fs::write_str(
+        ctx.cwd_path_join("src/lib.rs"),
+        "mod sparse_memory_agent;\n\npub use sparse_memory_agent::*;\n",
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("src/sparse_memory_agent.rs"),
         indoc! {r#"
             use golem_rust::{agent_definition, agent_implementation};
 
@@ -239,7 +240,7 @@ async fn account_usage_reports_sparse_allocated_memory(_tracing: &Tracing) {
         .await;
     assert!(output.success_or_dump());
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(75);
     let billed_memory = loop {
         let output = ctx
             .cli([cmd::ACCOUNT, "usage", "show", flag::FORMAT, "json"])

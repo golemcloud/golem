@@ -41,8 +41,8 @@ use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentWebhooksServiceConfig, EnvironmentStateServiceConfig,
     FilesystemStorageConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
     IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
-    KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceLimitsGrpcConfig,
-    SchedulerStorageConfig, WorkerServiceGrpcConfig,
+    KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, SchedulerStorageConfig,
+    WorkerServiceGrpcConfig,
 };
 use golem_worker_service::WorkerService;
 use golem_worker_service::config::{
@@ -360,14 +360,6 @@ fn worker_executor_config(
     registry_service_run_details: &golem_registry_service::SingleExecutableRunDetails,
     worker_service_run_details: &golem_worker_service::TrafficReadyEndpoints,
 ) -> anyhow::Result<WorkerExecutorConfig> {
-    let batch_update_interval = duration_from_env(
-        "GOLEM__RESOURCE_LIMITS__CONFIG__BATCH_UPDATE_INTERVAL",
-        Duration::from_secs(60),
-    )?;
-    let limit_refresh_interval = duration_from_env(
-        "GOLEM__RESOURCE_LIMITS__CONFIG__LIMIT_REFRESH_INTERVAL",
-        Duration::from_secs(300),
-    )?;
     let mut config = WorkerExecutorConfig {
         http_port: 0,
         grpc: golem_worker_executor::services::golem_config::GrpcApiConfig {
@@ -405,10 +397,7 @@ fn worker_executor_config(
             port: registry_service_run_details.grpc_port,
             ..Default::default()
         },
-        resource_limits: ResourceLimitsConfig::Grpc(ResourceLimitsGrpcConfig {
-            batch_update_interval,
-            limit_refresh_interval,
-        }),
+        resource_limits: ResourceLimitsConfig::default(),
         agent_types_service: AgentTypesServiceConfig::Grpc(
             golem_worker_executor::services::golem_config::AgentTypesServiceGrpcConfig {
                 ..Default::default()
@@ -436,16 +425,6 @@ fn worker_executor_config(
 
     config.add_port_to_tracing_file_name_if_enabled();
     Ok(config)
-}
-
-fn duration_from_env(name: &str, default: Duration) -> anyhow::Result<Duration> {
-    match std::env::var(name) {
-        Ok(value) => {
-            humantime::parse_duration(&value).with_context(|| format!("Invalid duration in {name}"))
-        }
-        Err(std::env::VarError::NotPresent) => Ok(default),
-        Err(error) => Err(error.into()),
-    }
 }
 
 fn worker_service_config(

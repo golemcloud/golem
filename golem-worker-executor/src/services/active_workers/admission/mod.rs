@@ -109,10 +109,10 @@ pub(crate) struct AdmissionPolicy {
 
 /// Decides admission against measured headroom, evicting resident idle/warm
 /// work as needed. Holds its policy and probe; live usage is read from the
-/// probe's bounded-staleness snapshot on each call. The only retained state is
-/// `granted`: the total linear
-/// memory granted to live workers, maintained across admit and unload, which the
-/// gate reserves so a worker cannot OOM the node by faulting in granted pages.
+/// probe's last coherent snapshot on each call. The only retained state is
+/// `granted`: the total linear memory granted to live workers, maintained across
+/// admit and unload, which the gate reserves so a worker cannot OOM the node by
+/// faulting in granted pages.
 pub(crate) struct AdmissionController {
     probe: Box<dyn MemoryProbe>,
     policy: AdmissionPolicy,
@@ -129,7 +129,7 @@ impl AdmissionController {
             policy,
             granted: AtomicU64::new(0),
         };
-        crate::metrics::workers::record_worker_memory_granted(0);
+        crate::metrics::workers::reset_worker_memory_granted();
         controller
     }
 
@@ -137,7 +137,7 @@ impl AdmissionController {
     /// current granted total covers it: reads `granted`, computes headroom, and
     /// reserves with an atomic compare-and-exchange so concurrent admissions
     /// cannot both pass against the same granted total and overshoot the ceiling.
-    fn try_reserve_locked(&self, request_bytes: u64) -> Result<(), u64> {
+    fn try_reserve(&self, request_bytes: u64) -> Result<(), u64> {
         let snapshot = self.probe.snapshot();
         self.try_reserve_with_snapshot(request_bytes, snapshot)
     }
@@ -178,15 +178,12 @@ impl AdmissionController {
     /// gate reserves this until the worker unloads, because the worker may fault
     /// the granted pages in at any later time.
     fn reserve(&self, request_bytes: u64) {
-        let previous = self
-            .granted
+        self.granted
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |granted| {
-                Some(granted.saturating_add(request_bytes))
+                granted.checked_add(request_bytes)
             })
-            .unwrap();
-        crate::metrics::workers::increase_worker_memory_granted(
-            previous.saturating_add(request_bytes) - previous,
-        );
+            .expect("committed memory reservation overflowed");
+        crate::metrics::workers::increase_worker_memory_granted(request_bytes);
     }
 
     /// Reserve memory for a cost that is a committed consequence of an already
@@ -210,9 +207,7 @@ impl AdmissionController {
                 Some(granted.saturating_sub(reserved_bytes))
             })
             .unwrap();
-        crate::metrics::workers::decrease_worker_memory_granted(
-            previous - previous.saturating_sub(reserved_bytes),
-        );
+        crate::metrics::workers::decrease_worker_memory_granted(previous.min(reserved_bytes));
     }
 
     /// Pre-register grant bytes for workers that were already live when the
@@ -220,7 +215,7 @@ impl AdmissionController {
     /// grant through admission.
     #[cfg(test)]
     pub fn seed_granted(&self, bytes: u64) {
-        self.granted.fetch_add(bytes, Ordering::Release);
+        self.reserve(bytes);
     }
 
     /// Decide whether `request_bytes` can be admitted, evicting from `source` if
@@ -237,7 +232,7 @@ impl AdmissionController {
         source: &dyn EvictionSource,
     ) -> AdmissionDecision {
         // Fast path: atomically admit if there is already enough real headroom.
-        let headroom = match self.try_reserve_locked(request_bytes) {
+        let headroom = match self.try_reserve(request_bytes) {
             Ok(()) => {
                 return AdmissionDecision::Admit;
             }
@@ -260,7 +255,7 @@ impl AdmissionController {
         // the probe is the authority, and other activity may have moved usage
         // in either direction while we were evicting. The check-and-reserve is
         // atomic so a concurrent admission cannot slip in between.
-        if self.try_reserve_locked(request_bytes).is_ok() {
+        if self.try_reserve(request_bytes).is_ok() {
             AdmissionDecision::Admit
         } else {
             AdmissionDecision::Reject

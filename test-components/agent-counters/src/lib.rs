@@ -4,7 +4,10 @@ mod snapshot_test;
 use golem_rust::{agent_definition, agent_implementation, generate_idempotency_key};
 
 #[ctor::ctor]
-fn grow_memory_for_recovery_test() {
+fn reserve_instantiation_memory_for_growth_counter() {
+    // This constructor runs for every agent exported by the component. Agent IDs
+    // embed the exported type name, so this predicate keeps the extra allocation
+    // from changing the memory footprint of the other agent types.
     if std::env::var("GOLEM_AGENT_ID")
         .is_ok_and(|agent_id| agent_id.contains("InstantiationGrowthCounter"))
     {
@@ -17,6 +20,7 @@ fn grow_memory_for_recovery_test() {
 trait InstantiationGrowthCounter {
     fn new(id: String) -> Self;
     fn increment(&mut self) -> u32;
+    fn delayed_increment(&mut self, delay_millis: u64) -> u32;
 }
 
 struct InstantiationGrowthCounterImpl {
@@ -33,6 +37,11 @@ impl InstantiationGrowthCounter for InstantiationGrowthCounterImpl {
     fn increment(&mut self) -> u32 {
         self.count += 1;
         self.count
+    }
+
+    fn delayed_increment(&mut self, delay_millis: u64) -> u32 {
+        std::thread::sleep(std::time::Duration::from_millis(delay_millis));
+        self.increment()
     }
 }
 

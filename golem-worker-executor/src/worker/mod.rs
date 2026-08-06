@@ -4151,7 +4151,7 @@ impl RunningWorker {
         crate::metrics::wasm::record_worker_allocated_linear_memory(allocated_bytes);
         if live_instantiation_growth > 0 {
             parent
-                .add_to_oplog(OplogEntry::grow_memory(live_instantiation_growth))
+                .add_and_commit_oplog(OplogEntry::grow_memory(live_instantiation_growth))
                 .await;
             parent
                 .startup_linear_memory_bytes
