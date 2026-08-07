@@ -376,7 +376,13 @@ impl ComponentCommandHandler {
             update_results.extend(result);
         }
 
+        let has_errors = !update_results.errors.is_empty();
+
         self.ctx.log_handler().log_output(update_results)?;
+
+        if has_errors {
+            bail!(NonSuccessfulExit);
+        }
 
         Ok(())
     }
