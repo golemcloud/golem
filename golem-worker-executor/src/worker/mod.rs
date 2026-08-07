@@ -30,12 +30,12 @@ use crate::metrics::storage::record_filesystem_pool_released;
 use crate::metrics::workers::AdmissionPhase;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::active_workers::{
-    FilesystemStoragePermit, HeldComponentCharge, MemoryGrant, RegisteredConcurrentAccount,
-    WorkerComponentCharge,
+    FilesystemStoragePermit, MemoryGrant, RegisteredConcurrentAccount, WorkerComponentCharge,
 };
 use crate::services::card_interest::CardInterestIndex;
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
+use crate::services::linear_memory::{LinearMemoryTracker, SHARED_LINEAR_MEMORY_ERROR};
 use crate::services::oplog::plugin::ForwardingOplog;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, downcast_oplog};
 use crate::services::worker::GetWorkerMetadataResult;
@@ -100,7 +100,7 @@ use tokio::task::JoinHandle;
 use tracing::{Instrument, Level, debug, info, span, warn};
 use uuid::Uuid;
 use wasmtime::component::Instance;
-use wasmtime::{Store, UpdateDeadline};
+use wasmtime::{Store, StoreMemory, UpdateDeadline};
 
 /// Resolved read-only `AgentMethod` invocation data needed to build the
 /// cache key and entry.
@@ -140,7 +140,7 @@ fn component_charge_revision(
 #[derive(Debug, PartialEq, Eq)]
 enum TargetChargeAction {
     /// The target resolved: charge it with the resolved module size.
-    ChargeTarget { module_bytes: u64 },
+    ChargeTarget(ResolvedComponentCharge),
     /// The target does not exist: `create_instance` will fail the update and load
     /// the current revision, so charge the current revision instead.
     FallBackToCurrent,
@@ -149,18 +149,50 @@ enum TargetChargeAction {
     Retry,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResolvedComponentCharge {
+    module_bytes: u64,
+    initial_linear_memory_bytes: u64,
+    reserved_linear_memory_bytes: u64,
+}
+
+struct StartupComponentChargeRequirement {
+    component_id: ComponentId,
+    component_revision: ComponentRevision,
+    module_bytes: u64,
+    startup_linear_memory_bytes: u64,
+    reserved_linear_memory_bytes: u64,
+}
+
 /// Classifies a `get_metadata(target)` result into the startup charge action,
 /// preserving the invariant that admission charges the target revision whenever
 /// `create_instance` can still load it. Only a definitely-absent target
 /// (`ComponentNotFound`) falls back to the current revision; transient errors
 /// are retried.
-fn classify_target_charge(result: &Result<u64, WorkerExecutorError>) -> TargetChargeAction {
+fn classify_target_charge(
+    result: &Result<ResolvedComponentCharge, WorkerExecutorError>,
+) -> TargetChargeAction {
     match result {
-        Ok(module_bytes) => TargetChargeAction::ChargeTarget {
-            module_bytes: *module_bytes,
-        },
+        Ok(charge) => TargetChargeAction::ChargeTarget(*charge),
         Err(WorkerExecutorError::ComponentNotFound { .. }) => TargetChargeAction::FallBackToCurrent,
         Err(_) => TargetChargeAction::Retry,
+    }
+}
+
+fn startup_component_requirement(
+    component_id: ComponentId,
+    component_revision: ComponentRevision,
+    module_bytes: u64,
+    initial_linear_memory_bytes: u64,
+    canonical_linear_memory_bytes: u64,
+) -> StartupComponentChargeRequirement {
+    StartupComponentChargeRequirement {
+        component_id,
+        component_revision,
+        module_bytes,
+        startup_linear_memory_bytes: canonical_linear_memory_bytes,
+        reserved_linear_memory_bytes: canonical_linear_memory_bytes
+            .max(initial_linear_memory_bytes),
     }
 }
 
@@ -231,6 +263,12 @@ fn build_read_only_cache_entry(
     Arc::new(read_only_cache::ReadOnlyCacheEntry { output, expires_at })
 }
 
+#[derive(Default)]
+pub(super) struct PendingMemoryGrowth {
+    delta: AtomicU64,
+    job_queued: AtomicBool,
+}
+
 /// Represents worker that may be running or suspended.
 ///
 /// It is responsible for receiving incoming worker invocations in a non-blocking way,
@@ -280,14 +318,14 @@ pub struct Worker<Ctx: WorkerCtx> {
     // Note: std lock for wasmtime reasons
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     /// Owns the commit + status-fold transaction and the fire-and-forget lifecycle jobs
-    /// (invocation-loop notification, memory-grow admission). See [`state_actor`] for the
+    /// (invocation-loop notification, memory-growth persistence). See [`state_actor`] for the
     /// concurrency invariants.
     state_actor: state_actor::WorkerStateActor<Ctx>,
-    worker_estimate_coefficient: f64,
     card_interest_index: Arc<CardInterestIndex>,
 
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
     instance: Arc<Mutex<WorkerInstance>>,
+    linear_memory_grant: StdMutex<Option<Arc<StdMutex<MemoryGrant>>>>,
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
     /// until the worker stops so permit reacquisition cannot lose it between `RunningWorker`s.
     interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
@@ -301,6 +339,9 @@ pub struct Worker<Ctx: WorkerCtx> {
     /// at least that many bytes from the blocking eviction path, ensuring
     /// enough idle workers are evicted to satisfy the pending write.
     desired_extra_filesystem_storage: AtomicU64,
+    startup_linear_memory_bytes: AtomicU64,
+    memory_growth: StdMutex<Arc<PendingMemoryGrowth>>,
+    memory_limit_interrupt_queued: AtomicBool,
 
     /// Snapshot of the active component, refreshed by `create_instance`.
     /// Used by the read-only cache lookup without taking the wasm `Store`
@@ -707,13 +748,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 EphemeralInvocationState::Available
             }),
             instance,
+            linear_memory_grant: StdMutex::new(None),
             interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
             execution_status,
             initial_worker_metadata,
             registered_concurrent_account,
             last_known_status: current_status,
             metrics_status,
-            worker_estimate_coefficient: deps.config().memory.worker_estimate_coefficient,
             card_interest_index,
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
             snapshot_policy,
@@ -724,6 +765,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_resume_request: Mutex::new(Timestamp::now_utc()),
             snapshot_recovery_disabled: AtomicBool::new(false),
             desired_extra_filesystem_storage: AtomicU64::new(0),
+            startup_linear_memory_bytes: AtomicU64::new(0),
+            memory_growth: StdMutex::new(Arc::new(PendingMemoryGrowth::default())),
+            memory_limit_interrupt_queued: AtomicBool::new(false),
             current_component,
             read_only_cache,
             read_only_cache_epoch: Arc::new(AtomicU64::new(0)),
@@ -798,12 +842,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::Unloaded { .. } => {
                 this.mark_as_loading();
                 crate::metrics::workers::inc_worker_waiting_for_memory();
-                crate::metrics::wasm::record_worker_resident_linear_memory(
-                    this.get_latest_worker_metadata()
-                        .await
-                        .last_known_status
-                        .total_linear_memory_size,
-                );
                 *instance_guard = WorkerInstance::WaitingForPermit(WaitingWorker::new(
                     this.clone(),
                     this.memory_requirement().await?,
@@ -959,11 +997,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///   supports recovering workers.
     pub async fn set_interrupting(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
         self.set_interrupting_internal(interrupt_kind, false).await
-    }
-
-    async fn interrupt_for_permit_reacquire(&self) {
-        self.set_interrupting_internal(InterruptKind::Restart, true)
-            .await;
     }
 
     async fn set_interrupting_internal(
@@ -1710,9 +1743,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn memory_requirement(&self) -> Result<u64, WorkerExecutorError> {
         let metadata = self.get_latest_worker_metadata().await;
 
-        let linear_memory_bytes = metadata.last_known_status.total_linear_memory_size as f64;
-        let estimate_coefficient = self.worker_estimate_coefficient;
-        Ok((estimate_coefficient * linear_memory_bytes) as u64)
+        Ok(metadata.last_known_status.total_linear_memory_size)
     }
 
     /// Startup module-charge requirement for a worker about to be (re)started.
@@ -1740,9 +1771,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///   and mis-key the charge). Back off and retry resolving the target, exactly
     ///   as the memory admission loop treats transient pressure, until it resolves
     ///   to a definite answer.
-    pub async fn startup_component_charge_requirement(
-        &self,
-    ) -> (ComponentId, ComponentRevision, u64) {
+    async fn startup_component_charge_requirement(&self) -> StartupComponentChargeRequirement {
         let metadata = self.get_latest_worker_metadata().await;
         let component_id = self.owned_agent_id.component_id();
         let current_revision = metadata.last_known_status.component_revision;
@@ -1762,7 +1791,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // status; a pending-update target's size must be resolved from its
         // metadata so the reservation matches the module create_instance loads.
         if component_revision == current_revision {
-            return (component_id, current_revision, current_size);
+            let canonical_bytes = metadata.last_known_status.total_linear_memory_size;
+            let current = self.current_component.load();
+            return startup_component_requirement(
+                component_id,
+                current_revision,
+                current_size,
+                current.metadata.initial_linear_memory_bytes(),
+                canonical_bytes,
+            );
         }
 
         let retry_delay = self.config().memory.acquire_retry_delay;
@@ -1771,10 +1808,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .component_service()
                 .get_metadata(component_id, Some(component_revision))
                 .await
-                .map(|target| target.component_size);
+                .map(|target| {
+                    let initial_linear_memory_bytes = target.metadata.initial_linear_memory_bytes();
+                    ResolvedComponentCharge {
+                        module_bytes: target.component_size,
+                        initial_linear_memory_bytes,
+                        reserved_linear_memory_bytes: initial_linear_memory_bytes,
+                    }
+                });
             match classify_target_charge(&result) {
-                TargetChargeAction::ChargeTarget { module_bytes } => {
-                    return (component_id, component_revision, module_bytes);
+                TargetChargeAction::ChargeTarget(charge) => {
+                    return StartupComponentChargeRequirement {
+                        component_id,
+                        component_revision,
+                        module_bytes: charge.module_bytes,
+                        startup_linear_memory_bytes: charge.initial_linear_memory_bytes,
+                        reserved_linear_memory_bytes: charge.reserved_linear_memory_bytes,
+                    };
                 }
                 TargetChargeAction::FallBackToCurrent => {
                     // The target revision does not exist; create_instance will fail
@@ -1782,7 +1832,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     debug!(
                         "Pending-update target revision {component_revision} does not exist; charging against current revision and letting create_instance fail the update and recover"
                     );
-                    return (component_id, current_revision, current_size);
+                    let canonical_bytes = metadata.last_known_status.total_linear_memory_size;
+                    let current = self.current_component.load();
+                    return startup_component_requirement(
+                        component_id,
+                        current_revision,
+                        current_size,
+                        current.metadata.initial_linear_memory_bytes(),
+                        canonical_bytes,
+                    );
                 }
                 TargetChargeAction::Retry => {
                     // Transient failure: create_instance may still load the target,
@@ -1991,52 +2049,103 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.execution_status.read().unwrap().timestamp()
     }
 
-    /// Requests additional memory for a guest `memory.grow` of `delta` bytes. Fire and forget:
-    /// the oplog hint and the global memory admission run on the worker-state actor's lifecycle
-    /// queue (see [`state_actor`]), so this is safe to call from the `memory.grow` resource
-    /// limiter, which runs on a store-keeping wasm fiber and must not await anything. If
-    /// admission fails, the worker is restarted, which reacquires its full (now larger) memory
-    /// reservation through the startup admission path.
+    /// Records a committed guest `memory.grow` without blocking the store callback.
     pub fn request_memory_grow(self: &Arc<Self>, delta: u64) {
-        self.state_actor.grow_memory(self.clone(), delta);
+        let growth = self.memory_growth.lock().unwrap();
+        growth
+            .delta
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
+                Some(pending.saturating_add(delta))
+            })
+            .ok();
+        if !growth.job_queued.swap(true, Ordering::AcqRel) {
+            self.state_actor.grow_memory(self.clone(), growth.clone());
+        }
     }
 
-    // Should only be called from the worker-state actor's lifecycle queue (see
-    // `request_memory_grow`).
-    pub(crate) async fn increase_memory(&self, delta: u64) -> anyhow::Result<()> {
-        // The instance lock must not be held while running the admission gate:
-        // it may run the eviction scan, which takes other workers' instance
-        // locks. Holding this worker's instance lock across that scan while
-        // another growing worker does the same is an AB-BA deadlock. So check the
-        // state, release the lock, then run the gate.
-        match &*self.instance.lock().await {
-            WorkerInstance::Running(_) => {}
-            WorkerInstance::Stopping(_)
-            | WorkerInstance::WaitingForPermit(_)
-            | WorkerInstance::Unloaded { .. }
-            | WorkerInstance::Deleting => return Ok(()),
-        }
-
-        let Some(extra_grant) = self.active_workers().try_acquire(delta).await else {
-            crate::metrics::workers::record_worker_memory_grow_rejected();
-            return Err(anyhow!(GolemSpecificWasmTrap::WorkerOutOfMemory));
-        };
-
-        // Re-check state under the lock: the worker may have changed state while
-        // the gate ran. If it is still running, merge the extra grant into the
-        // running worker so its whole reservation releases together on unload.
-        // Otherwise drop `extra_grant` here, returning the reservation to the
-        // gate, and treat the grow as a no-op (matching the non-running arms).
-        match &mut *self.instance.lock().await {
-            WorkerInstance::Running(running) => {
-                running.merge_extra_memory_grant(extra_grant);
+    async fn persist_pending_memory_growth(self: &Arc<Self>, growth: Arc<PendingMemoryGrowth>) {
+        loop {
+            let delta = growth.delta.swap(0, Ordering::AcqRel);
+            if delta > 0 {
+                self.add_to_oplog(OplogEntry::grow_memory(delta)).await;
             }
-            WorkerInstance::Stopping(_)
-            | WorkerInstance::WaitingForPermit(_)
-            | WorkerInstance::Unloaded { .. }
-            | WorkerInstance::Deleting => {}
+
+            let current_growth = self.memory_growth.lock().unwrap();
+            if Arc::ptr_eq(&current_growth, &growth) {
+                growth.job_queued.store(false, Ordering::Release);
+                if growth.delta.load(Ordering::Acquire) > 0
+                    && !growth.job_queued.swap(true, Ordering::AcqRel)
+                {
+                    self.state_actor.grow_memory(self.clone(), growth.clone());
+                }
+                return;
+            }
+
+            // A successful update rotated this accumulator before queueing its
+            // ordered entry. No producer can now add to it, so drain it fully
+            // here to keep all preceding growth ahead of that entry.
+            if growth.delta.load(Ordering::Acquire) == 0 {
+                growth.job_queued.store(false, Ordering::Release);
+                return;
+            }
         }
-        Ok(())
+    }
+
+    pub(crate) async fn persist_successful_update(
+        self: &Arc<Self>,
+        linear_memory: &LinearMemoryTracker,
+        target_revision: ComponentRevision,
+        new_component_size: u64,
+        new_active_plugins: HashSet<EnvironmentPluginGrantId>,
+    ) {
+        let done = {
+            let mut growth = self.memory_growth.lock().unwrap();
+            let entry = OplogEntry::successful_update(
+                target_revision,
+                new_component_size,
+                Some(linear_memory.current_bytes()),
+                new_active_plugins,
+            );
+            *growth = Arc::new(PendingMemoryGrowth::default());
+            self.state_actor
+                .queue_ordered_oplog_entry(self.clone(), entry)
+        };
+        if done.await.is_err() {
+            panic!(
+                "Worker state actor for {} dropped an ordered oplog entry",
+                self.owned_agent_id
+            );
+        }
+    }
+
+    pub(crate) fn request_memory_limit_interrupt(
+        self: &Arc<Self>,
+        meter: crate::services::agent_memory_meter::AgentMemoryMeter,
+    ) {
+        if !self
+            .memory_limit_interrupt_queued
+            .swap(true, Ordering::AcqRel)
+        {
+            self.state_actor.memory_limit_exceeded(self.clone(), meter);
+        }
+    }
+
+    pub(crate) fn linear_memory_grant(&self) -> Arc<StdMutex<MemoryGrant>> {
+        self.linear_memory_grant
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("linear memory grant requested while worker is not running")
+    }
+
+    fn release_linear_memory_grant(&self) {
+        if let Some(grant) = self.linear_memory_grant.lock().unwrap().take() {
+            *grant.lock().unwrap() = MemoryGrant::inert(0);
+        }
+    }
+
+    pub(crate) fn startup_linear_memory_bytes(&self) -> u64 {
+        self.startup_linear_memory_bytes.load(Ordering::Acquire)
     }
 
     /// Return `freed_bytes` to the storage semaphore pool.
@@ -2486,7 +2595,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         receiver.await.unwrap()
     }
 
-    // Should only be called from invocation loop
+    /// Appends an oplog entry without forcing a durable commit. Callers that
+    /// require ordering must await the append before exposing subsequent work.
     pub async fn add_to_oplog(&self, entry: OplogEntry) -> OplogIndex {
         self.oplog.add(entry).await
     }
@@ -2922,9 +3032,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // when stopping via the invocation loop we can stop immediately, no need to go via the stopping status
                 if called_from_invocation_loop {
                     crate::metrics::workers::dec_worker_memory_resident();
-                    // Dropping `running` at the end of this arm releases its
-                    // memory grant (and component/storage permits) back to the
-                    // gate.
+                    // The invocation-loop task retains the shared grant cell until it
+                    // exits. Release its reservation now so permit reacquisition can
+                    // register and admit the replacement generation without overlapping
+                    // the old generation's grant.
+                    self.release_linear_memory_grant();
                     **instance_guard = final_state.into_instance();
                     if let WorkerInstance::Unloaded { startup_failure } = &**instance_guard {
                         self.resolve_pending_readiness_awaiters_on_stop(startup_failure.as_ref())
@@ -3305,12 +3417,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     component_revision: component.revision,
                     component_revision_for_replay: component.revision,
                     component_size: component.component_size,
-                    total_linear_memory_size: component
-                        .metadata
-                        .memories()
-                        .iter()
-                        .map(|m| m.initial)
-                        .sum(),
+                    total_linear_memory_size: component.metadata.initial_linear_memory_bytes(),
                     active_plugins: agent_id
                         .as_ref()
                         .and_then(|agent_id| {
@@ -3691,8 +3798,12 @@ impl WaitingWorker {
             // them. The retry events stay in the logs, and how long the wait took
             // is recorded as a metric rather than a span.
             let phase_start = std::time::Instant::now();
-            let (component_id, component_revision, component_module_bytes) =
-                parent.startup_component_charge_requirement().await;
+            let requirement = parent.startup_component_charge_requirement().await;
+            parent
+                .startup_linear_memory_bytes
+                .store(requirement.startup_linear_memory_bytes, Ordering::Release);
+            let memory_requirement =
+                memory_requirement.max(requirement.reserved_linear_memory_bytes);
             crate::metrics::workers::record_worker_admission_wait(
                 AdmissionPhase::ResolveComponentCharge,
                 phase_start.elapsed(),
@@ -3730,9 +3841,9 @@ impl WaitingWorker {
                 .active_workers()
                 .acquire_with_component_charge(
                     memory_requirement,
-                    component_id,
-                    component_revision,
-                    component_module_bytes,
+                    requirement.component_id,
+                    requirement.component_revision,
+                    requirement.module_bytes,
                 )
                 // Not spanned, for the same reason as the charge resolution above:
                 // `acquire_memory` retries on the same 500ms delay and logs once per
@@ -3919,18 +4030,6 @@ struct RunningWorker {
     handle: Option<JoinHandle<()>>,
     sender: UnboundedSender<WorkerCommand>,
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
-    /// The worker's memory reservation with the admission gate, covering its
-    /// initial requirement plus any grow deltas merged in. Held only to be
-    /// dropped: dropping it (on stop, eviction, or this worker being dropped for
-    /// any reason) returns the reservation to the gate, keeping the granted total
-    /// symmetric with what was reserved.
-    #[allow(dead_code)]
-    memory_grant: MemoryGrant,
-    /// Keeps this worker's component module charge alive while it is resident.
-    /// Held only to be dropped: dropping it releases the component's residency
-    /// (and the module reservation if this was the last worker of the component).
-    #[allow(dead_code)]
-    component_charge: Box<dyn HeldComponentCharge>,
     /// Storage semaphore permits held by this worker. `None` until storage
     /// space is first acquired (at startup or on first write). Dropped
     /// automatically when `RunningWorker` is dropped, returning storage
@@ -3941,6 +4040,38 @@ struct RunningWorker {
     /// `ResumeReplay` is signalled directly through the command channel rather
     /// than the internal queue, so eviction must treat it as pending work.
     resume_replay_pending: Arc<AtomicBool>,
+}
+
+struct LinearMemoryGrantRegistration<Ctx: WorkerCtx> {
+    worker: Arc<Worker<Ctx>>,
+    grant: Arc<StdMutex<MemoryGrant>>,
+}
+
+impl<Ctx: WorkerCtx> LinearMemoryGrantRegistration<Ctx> {
+    fn new(worker: Arc<Worker<Ctx>>, grant: Arc<StdMutex<MemoryGrant>>) -> Self {
+        let previous = worker
+            .linear_memory_grant
+            .lock()
+            .unwrap()
+            .replace(grant.clone());
+        assert!(
+            previous.is_none(),
+            "worker already has a linear memory grant"
+        );
+        Self { worker, grant }
+    }
+}
+
+impl<Ctx: WorkerCtx> Drop for LinearMemoryGrantRegistration<Ctx> {
+    fn drop(&mut self) {
+        let mut registered = self.worker.linear_memory_grant.lock().unwrap();
+        if registered
+            .as_ref()
+            .is_some_and(|grant| Arc::ptr_eq(grant, &self.grant))
+        {
+            registered.take();
+        }
+    }
 }
 
 impl Drop for RunningWorker {
@@ -3956,7 +4087,90 @@ impl Drop for RunningWorker {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinearMemoryEnumerationError {
+    Shared,
+    Overflow,
+}
+
+fn allocated_linear_memory_bytes<T>(store: &Store<T>) -> Result<u64, LinearMemoryEnumerationError> {
+    store
+        .linear_memories()
+        .iter()
+        .try_fold(0u64, |allocated_bytes, memory| match memory {
+            StoreMemory::Unshared(memory) => allocated_bytes
+                .checked_add(memory.data_size(store) as u64)
+                .ok_or(LinearMemoryEnumerationError::Overflow),
+            StoreMemory::Shared(_) => Err(LinearMemoryEnumerationError::Shared),
+        })
+}
+
 impl RunningWorker {
+    async fn reconcile_linear_memories<Ctx: WorkerCtx>(
+        parent: &Arc<Worker<Ctx>>,
+        store: &mut Store<Ctx>,
+    ) -> Result<(), WorkerExecutorError> {
+        let durable = store.data().durable_ctx();
+        let tracker = durable.linear_memory_tracker();
+        let limit = durable.max_linear_memory_size();
+        let allocated_bytes =
+            allocated_linear_memory_bytes(store).map_err(|error| match error {
+                LinearMemoryEnumerationError::Shared => shared_linear_memory_error(parent),
+                LinearMemoryEnumerationError::Overflow => {
+                    WorkerExecutorError::runtime("linear-memory allocation total overflowed")
+                }
+            })?;
+
+        let required_grant_bytes = tracker.reconciliation_grant_bytes(allocated_bytes);
+        if required_grant_bytes > limit {
+            return Err(WorkerExecutorError::worker_creation_failed(
+                parent.owned_agent_id.agent_id(),
+                format!(
+                    "Linear memories require {required_grant_bytes} bytes, exceeding the per-worker limit of {limit} bytes"
+                ),
+            ));
+        }
+
+        let retained_grant = parent.linear_memory_grant();
+        let (grant_is_tracked, granted_bytes) = {
+            let grant = retained_grant.lock().unwrap();
+            (grant.is_tracked(), grant.bytes())
+        };
+        if grant_is_tracked && required_grant_bytes > granted_bytes {
+            let additional_grant = parent
+                .active_workers()
+                .acquire_memory(required_grant_bytes - granted_bytes)
+                .await;
+            retained_grant.lock().unwrap().merge(additional_grant);
+        }
+        if grant_is_tracked {
+            retained_grant
+                .lock()
+                .unwrap()
+                .shrink_to(required_grant_bytes);
+        }
+
+        parent
+            .memory_limit_interrupt_queued
+            .store(false, Ordering::Release);
+
+        let live_instantiation_growth =
+            tracker.reconcile(allocated_bytes, std::time::Instant::now());
+        crate::metrics::wasm::record_worker_allocated_linear_memory(allocated_bytes);
+        if live_instantiation_growth > 0 {
+            // Commit the growth oplog entry before publishing the instance. Otherwise a
+            // process crash can replay and persist the same instantiation growth again.
+            parent
+                .add_and_commit_oplog(OplogEntry::grow_memory(live_instantiation_growth))
+                .await;
+            parent
+                .startup_linear_memory_bytes
+                .store(allocated_bytes, Ordering::Release);
+        }
+
+        Ok(())
+    }
+
     pub async fn new<Ctx: WorkerCtx>(
         owned_agent_id: OwnedAgentId,
         queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
@@ -3978,6 +4192,9 @@ impl RunningWorker {
         let interrupt_signal_clone = interrupt_signal.clone();
         let resume_replay_pending = Arc::new(AtomicBool::new(false));
         let resume_replay_pending_clone = resume_replay_pending.clone();
+        let memory_grant = Arc::new(StdMutex::new(memory_grant));
+        let memory_grant_registration =
+            LinearMemoryGrantRegistration::new(parent.clone(), memory_grant);
 
         let handle = tokio::task::spawn(async move {
             RunningWorker::invocation_loop(
@@ -3993,26 +4210,18 @@ impl RunningWorker {
                 worker_trace,
             )
             .await;
+            drop((memory_grant_registration, component_charge));
         });
 
         RunningWorker {
             handle: Some(handle),
             sender,
             queue,
-            memory_grant,
-            component_charge: Box::new(component_charge),
             filesystem_storage_permit: None,
             waiting_for_command,
             interrupt_signal,
             resume_replay_pending,
         }
-    }
-
-    /// Merge an additional memory grant (from a successful grow) into this
-    /// worker's grant, so its whole reservation is released together when the
-    /// worker unloads.
-    pub fn merge_extra_memory_grant(&mut self, extra: MemoryGrant) {
-        self.memory_grant.merge(extra);
     }
 
     /// Merge additional storage permits into this worker's storage permit. If
@@ -4105,6 +4314,10 @@ impl RunningWorker {
                 }
             }?
         };
+
+        if component_metadata.metadata.has_shared_linear_memory() {
+            return Err(shared_linear_memory_error(&parent));
+        }
 
         // Refresh the snapshot used by the read-only cache key. The component
         // metadata was already fetched above, so no extra fetch is incurred.
@@ -4290,6 +4503,7 @@ impl RunningWorker {
                     )
                 }
             })?;
+        Self::reconcile_linear_memories(&parent, &mut store).await?;
         let store = async_lock::Mutex::new(store);
         Ok((instance, store))
     }
@@ -4320,6 +4534,13 @@ impl RunningWorker {
         };
         invocation_loop.run().await;
     }
+}
+
+fn shared_linear_memory_error<Ctx: WorkerCtx>(parent: &Arc<Worker<Ctx>>) -> WorkerExecutorError {
+    WorkerExecutorError::worker_creation_failed(
+        parent.owned_agent_id.agent_id(),
+        SHARED_LINEAR_MEMORY_ERROR,
+    )
 }
 
 /// Classification of a loaded worker for eviction ordering.
@@ -4542,6 +4763,25 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn allocated_memory_sums_unique_untouched_backings() -> anyhow::Result<()> {
+        let engine = wasmtime::Engine::default();
+        let module = wasmtime::Module::new(
+            &engine,
+            r#"(module
+                (memory $aliased 2 3)
+                (export "a" (memory $aliased))
+                (export "b" (memory $aliased))
+                (memory 4 5)
+            )"#,
+        )?;
+        let mut store = Store::new(&engine, ());
+        wasmtime::Instance::new(&mut store, &module, &[])?;
+
+        assert_eq!(allocated_linear_memory_bytes(&store), Ok(6 * 65_536));
+        Ok(())
+    }
+
+    #[test]
     fn reconstructed_ephemeral_agent_is_terminal() {
         let instance = WorkerInstance::Unloaded {
             startup_failure: Some(inactive_ephemeral_agent_error()),
@@ -4709,8 +4949,16 @@ mod tests {
     #[test]
     fn classify_target_charge_charges_resolved_target() {
         assert_eq!(
-            classify_target_charge(&Ok(4096)),
-            TargetChargeAction::ChargeTarget { module_bytes: 4096 },
+            classify_target_charge(&Ok(ResolvedComponentCharge {
+                module_bytes: 4096,
+                initial_linear_memory_bytes: 8192,
+                reserved_linear_memory_bytes: 16384,
+            })),
+            TargetChargeAction::ChargeTarget(ResolvedComponentCharge {
+                module_bytes: 4096,
+                initial_linear_memory_bytes: 8192,
+                reserved_linear_memory_bytes: 16384,
+            }),
             "a resolved target is charged with its own module size"
         );
     }

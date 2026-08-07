@@ -474,6 +474,9 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         // any p3 async builtins fail to instantiate.
         config.wasm_component_model_async(true);
         config.wasm_component_model_error_context(true);
+        // Golem does not expose wasi-threads or a durable shared-memory runtime.
+        config.wasm_threads(false);
+        config.shared_memory(false);
         config.epoch_interruption(true);
         config.consume_fuel(true);
         config.wasm_backtrace_details(WasmBacktraceDetails::Enable);

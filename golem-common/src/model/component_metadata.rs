@@ -92,6 +92,18 @@ impl ComponentMetadata {
         &self.data.memories
     }
 
+    pub fn initial_linear_memory_bytes(&self) -> u64 {
+        self.data
+            .memories
+            .iter()
+            .map(|memory| memory.initial)
+            .fold(0, u64::saturating_add)
+    }
+
+    pub fn has_shared_linear_memory(&self) -> bool {
+        self.data.memories.iter().any(|memory| memory.shared)
+    }
+
     pub fn known_exports(&self) -> &KnownExports {
         &self.data.known_exports
     }
@@ -319,6 +331,7 @@ impl From<wasmparser::MemoryType> for LinearMemory {
         Self {
             initial: value.initial * LinearMemory::PAGE_SIZE,
             maximum: value.maximum.map(|m| m * LinearMemory::PAGE_SIZE),
+            shared: value.shared,
         }
     }
 }
@@ -611,6 +624,7 @@ mod protobuf {
             Self {
                 initial: value.initial,
                 maximum: value.maximum,
+                shared: value.shared,
             }
         }
     }
@@ -620,6 +634,7 @@ mod protobuf {
             Self {
                 initial: value.initial,
                 maximum: value.maximum,
+                shared: value.shared,
             }
         }
     }
@@ -950,5 +965,26 @@ mod tests {
             decoded.agent_type_initial_permission_card(&agent_type),
             Some(&card)
         );
+    }
+
+    #[test]
+    fn component_metadata_grpc_roundtrip_preserves_shared_memory_flag() {
+        let metadata = ComponentMetadata::from_parts(
+            KnownExports::default(),
+            vec![LinearMemory {
+                initial: LinearMemory::PAGE_SIZE,
+                maximum: Some(2 * LinearMemory::PAGE_SIZE),
+                shared: true,
+            }],
+            None,
+            None,
+            Vec::new(),
+            BTreeMap::new(),
+        );
+
+        let proto: golem_api_grpc::proto::golem::component::ComponentMetadata = metadata.into();
+        let decoded = ComponentMetadata::try_from(proto).unwrap();
+
+        assert!(decoded.memories()[0].shared);
     }
 }

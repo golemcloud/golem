@@ -150,6 +150,7 @@ pub struct ResourceLimits {
     pub available_rpc_calls: u64,
     pub max_concurrent_agents_per_executor: u64,
     pub oplog_writes_per_second: u64,
+    pub usage_update_applied: bool,
 }
 
 const UNLIMITED_CONCURRENT_AGENTS_PER_EXECUTOR: u64 = 1_000_000_000_000_000_000;
@@ -189,6 +190,7 @@ impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimi
             available_rpc_calls: value.available_rpc_calls,
             max_concurrent_agents_per_executor: value.max_concurrent_agents_per_executor,
             oplog_writes_per_second: value.oplog_writes_per_second,
+            usage_update_applied: value.usage_update_applied,
         }
     }
 }
@@ -212,6 +214,7 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
             oplog_writes_per_second: normalize_oplog_writes_per_second(
                 value.oplog_writes_per_second,
             ),
+            usage_update_applied: value.usage_update_applied,
         }
     }
 }
@@ -510,6 +513,7 @@ mod tests {
             available_rpc_calls: 0,
             max_concurrent_agents_per_executor: 0,
             oplog_writes_per_second: 0,
+            usage_update_applied: false,
         };
 
         let converted: super::ResourceLimits = proto.into();
@@ -534,6 +538,7 @@ mod tests {
             available_rpc_calls: 0,
             max_concurrent_agents_per_executor: 7,
             oplog_writes_per_second: 500,
+            usage_update_applied: true,
         };
 
         let converted: super::ResourceLimits = proto.into();

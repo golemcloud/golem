@@ -712,11 +712,12 @@ cargo-test-r run --package integration-tests --test integration ':tag:group12&db
 '''
 
 [tasks.integration-tests-group13]
-description = "Runs integration tests (group 13/13 - agent_config with sqlite)"
+description = "Runs integration tests (group 13/13 - agent_config with sqlite, memory billing)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
 cargo-test-r run --package integration-tests --test integration ':tag:group12&db_sqlite' -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test memory-billing -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.cli-integration-tests]

@@ -18,12 +18,16 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountResourceOverrideDimension {
     MaxDiskSpacePerWorker,
+    MaxMemoryPerWorker,
+    MonthlyMemoryGbSeconds,
 }
 
 impl AccountResourceOverrideDimension {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::MaxDiskSpacePerWorker => "max_disk_space_per_worker",
+            Self::MaxMemoryPerWorker => "max_memory_per_worker",
+            Self::MonthlyMemoryGbSeconds => "monthly_memory_gb_seconds",
         }
     }
 }

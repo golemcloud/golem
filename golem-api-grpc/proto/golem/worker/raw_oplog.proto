@@ -219,6 +219,7 @@ message RawSuccessfulUpdateParameters {
   uint64 target_revision = 1;
   uint64 new_component_size = 2;
   repeated golem.component.EnvironmentPluginGrantId new_active_plugins = 3;
+  optional uint64 new_total_linear_memory_size = 4;
 }
 
 message RawFailedUpdateParameters {

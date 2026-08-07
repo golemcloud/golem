@@ -18,7 +18,8 @@ use crate::model::text::fmt::*;
 use golem_client::model::{Account, PermissionShare};
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
-    StorageLimit, StorageUsage, StorageUsageHistory, StorageUsageMetrics, StorageUsagePeriod,
+    MemoryLimit, StorageLimit, StorageUsage, StorageUsageHistory, StorageUsageMetrics,
+    StorageUsagePeriod,
 };
 use golem_common::model::permission_share::{PermissionShareData, PermissionShareId};
 use serde::{Deserialize, Serialize};
@@ -115,6 +116,7 @@ impl StructuredOutput for AccountDeleteResult {
 #[serde(rename_all = "camelCase")]
 pub struct AccountUsageView {
     pub compute_gcu: f64,
+    pub memory_gb_seconds: u64,
     pub durable_storage_gb_month: f64,
     pub ephemeral_storage_gb_month: f64,
     pub period: StorageUsagePeriod,
@@ -139,6 +141,7 @@ impl From<StorageUsageMetrics> for AccountUsageView {
         Self {
             period: usage.period,
             compute_gcu: usage.compute_gcu,
+            memory_gb_seconds: usage.memory_gb_seconds,
             durable_storage_gb_month: usage.durable_storage_gb_month,
             ephemeral_storage_gb_month: usage.ephemeral_storage_gb_month,
         }
@@ -148,18 +151,24 @@ impl From<StorageUsageMetrics> for AccountUsageView {
 /// Column headings for the history table, which needs them even when there are no rows
 /// to take them from. Kept in step with [`AccountUsageView::rendered_fields`] by
 /// `account_usage_always_renders_the_same_labels_in_order`.
-const ACCOUNT_USAGE_LABELS: [&str; 4] =
-    ["Period", "Compute", "Durable storage", "Ephemeral storage"];
+const ACCOUNT_USAGE_LABELS: [&str; 5] = [
+    "Period",
+    "Compute",
+    "Memory",
+    "Durable storage",
+    "Ephemeral storage",
+];
 
 impl AccountUsageView {
     /// The single place usage values are turned into customer-visible strings. Both the
     /// detail view and the history table render through this, so the same usage can never
     /// be reported two different ways. Each label sits next to the value it names, so a
     /// figure cannot end up under the wrong heading.
-    fn rendered_fields(&self) -> [(&'static str, String); 4] {
+    fn rendered_fields(&self) -> [(&'static str, String); 5] {
         [
             ("Period", self.period.to_string()),
             ("Compute", format!("{} GCU", self.compute_gcu)),
+            ("Memory", format!("{} GB-seconds", self.memory_gb_seconds)),
             (
                 "Durable storage",
                 format!("{} GB-month", self.durable_storage_gb_month),
@@ -218,13 +227,27 @@ impl StructuredOutput for AccountUsageListView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AccountLimitsView(pub StorageLimit);
+#[serde(rename_all = "camelCase")]
+pub struct AccountLimitsView {
+    #[serde(flatten)]
+    pub max_storage_per_agent: StorageLimit,
+    pub max_memory_per_agent: MemoryLimit,
+    pub monthly_memory_gb_seconds: MemoryLimit,
+}
 
 impl Masked for AccountLimitsView {}
 
-impl From<StorageLimit> for AccountLimitsView {
-    fn from(limit: StorageLimit) -> Self {
-        Self(limit)
+impl AccountLimitsView {
+    pub fn new(
+        max_storage_per_agent: StorageLimit,
+        max_memory_per_agent: MemoryLimit,
+        monthly_memory_gb_seconds: MemoryLimit,
+    ) -> Self {
+        Self {
+            max_storage_per_agent,
+            max_memory_per_agent,
+            monthly_memory_gb_seconds,
+        }
     }
 }
 
@@ -234,7 +257,7 @@ impl MessageWithFields for AccountLimitsView {
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        let limit = &self.0;
+        let limit = &self.max_storage_per_agent;
         let mut fields = FieldsBuilder::new();
         fields
             .field(
@@ -251,8 +274,49 @@ impl MessageWithFields for AccountLimitsView {
             )
             .field("Ceiling", &format!("{} bytes", limit.ceiling))
             .field("User configurable", &limit.user_configurable);
+        add_memory_limit_fields(
+            &mut fields,
+            "Max memory per agent",
+            &self.max_memory_per_agent,
+            "bytes",
+        );
+        add_memory_limit_fields(
+            &mut fields,
+            "Monthly memory",
+            &self.monthly_memory_gb_seconds,
+            "GB-seconds",
+        );
         fields.build()
     }
+}
+
+fn add_memory_limit_fields(
+    fields: &mut FieldsBuilder,
+    label: &str,
+    limit: &MemoryLimit,
+    unit: &str,
+) {
+    fields
+        .field(label, &format!("{} {unit}", limit.effective_value))
+        .field(
+            &format!("{label} plan default"),
+            &format!("{} {unit}", limit.plan_default),
+        )
+        .field(
+            &format!("{label} override"),
+            &limit
+                .override_value
+                .map(|value| format!("{value} {unit}"))
+                .unwrap_or_else(|| "(none)".to_string()),
+        )
+        .field(
+            &format!("{label} ceiling"),
+            &format!("{} {unit}", limit.ceiling),
+        )
+        .field(
+            &format!("{label} user configurable"),
+            &limit.user_configurable,
+        );
 }
 
 impl StructuredOutput for AccountLimitsView {
@@ -444,14 +508,22 @@ mod tests {
     fn arb_usage() -> impl Strategy<Value = AccountUsageView> {
         (
             arb_usage_value(),
+            any::<u64>(),
             arb_usage_value(),
             arb_usage_value(),
             arb_period(),
         )
             .prop_map(
-                |(compute_gcu, durable_storage_gb_month, ephemeral_storage_gb_month, period)| {
+                |(
+                    compute_gcu,
+                    memory_gb_seconds,
+                    durable_storage_gb_month,
+                    ephemeral_storage_gb_month,
+                    period,
+                )| {
                     AccountUsageView {
                         compute_gcu,
+                        memory_gb_seconds,
                         durable_storage_gb_month,
                         ephemeral_storage_gb_month,
                         period,
@@ -463,6 +535,7 @@ mod tests {
     fn sample_usage() -> AccountUsageView {
         AccountUsageView {
             compute_gcu: 1.5,
+            memory_gb_seconds: 4,
             durable_storage_gb_month: 2.5,
             ephemeral_storage_gb_month: 3.5,
             period: StorageUsagePeriod {
@@ -481,6 +554,7 @@ mod tests {
             vec![
                 ("Period".to_string(), "2026-04".to_string()),
                 ("Compute".to_string(), "1.5 GCU".to_string()),
+                ("Memory".to_string(), "4 GB-seconds".to_string()),
                 ("Durable storage".to_string(), "2.5 GB-month".to_string()),
                 ("Ephemeral storage".to_string(), "3.5 GB-month".to_string()),
             ]

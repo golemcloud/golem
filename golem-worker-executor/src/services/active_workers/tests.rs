@@ -733,9 +733,7 @@ async fn scheduler_accounts_are_independent() {
 // ── Component module charge against the admission gate ───────────────────────
 
 mod component_module_charge {
-    use super::super::admission::{
-        AdmissionController, AdmissionPolicy, EvictionPriority, EvictionSource,
-    };
+    use super::super::admission::{AdmissionController, AdmissionPolicy, NoEvictionSource};
     use super::super::component_charge::ComponentChargeRegistry;
     use super::super::memory_probe::{MemoryProbe, MemorySnapshot};
     use super::super::{
@@ -760,17 +758,6 @@ mod component_module_charge {
                 limit_bytes: self.limit,
                 current_bytes: 0,
             }
-        }
-    }
-
-    /// An eviction source with nothing to evict: a request that does not fit is
-    /// cleanly rejected rather than making room.
-    struct NoEvictionSource;
-
-    #[async_trait::async_trait]
-    impl EvictionSource for NoEvictionSource {
-        async fn evict_at_most(&self, _priority: EvictionPriority, _needed_bytes: u64) -> u64 {
-            0
         }
     }
 
@@ -1409,7 +1396,7 @@ mod scheduler_liveness {
 // headroom reads the granted total directly.
 mod grant_guard_liveness {
     use super::super::admission::{
-        AdmissionController, AdmissionPolicy, EvictionPriority, EvictionSource, MemoryGrant,
+        AdmissionController, AdmissionPolicy, MemoryGrant, NoEvictionSource,
     };
     use crate::services::active_workers::memory_probe::{MemoryProbe, MemorySnapshot};
     use proptest::prelude::*;
@@ -1432,18 +1419,6 @@ mod grant_guard_liveness {
                 limit_bytes: self.limit,
                 current_bytes: 0,
             }
-        }
-    }
-
-    /// Nothing to evict: a rejected request stays rejected (the schedule keeps
-    /// total grants within the ceiling so admission only fails transiently, never
-    /// due to a leak the gate could not see).
-    struct NoEvictionSource;
-
-    #[async_trait::async_trait]
-    impl EvictionSource for NoEvictionSource {
-        async fn evict_at_most(&self, _priority: EvictionPriority, _needed_bytes: u64) -> u64 {
-            0
         }
     }
 

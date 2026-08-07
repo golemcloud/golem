@@ -207,7 +207,7 @@ fn controller_with_ratio(
         }),
         AdmissionPolicy { usable_ratio },
     );
-    controller.seed_granted(initial_granted);
+    controller.reserve(initial_granted);
     Arc::new(controller)
 }
 
@@ -272,14 +272,41 @@ impl MemoryProbe for ZeroUsageProbe {
     }
 }
 
-/// An eviction source with nothing to evict: a rejected request stays rejected.
-struct NoEvictionSource;
+#[test]
+async fn shrinking_a_reconciled_grant_returns_excess_headroom() {
+    let controller = Arc::new(AdmissionController::new(
+        Box::new(ZeroUsageProbe { limit: 1024 }),
+        AdmissionPolicy { usable_ratio: 1.0 },
+    ));
+    let mut grant = controller.admit(400, &NoEvictionSource).await.unwrap();
+    assert_eq!(controller.headroom_bytes(), 624);
 
-#[async_trait::async_trait]
-impl EvictionSource for NoEvictionSource {
-    async fn evict_at_most(&self, _priority: EvictionPriority, _needed_bytes: u64) -> u64 {
-        0
-    }
+    grant.shrink_to(100);
+
+    assert_eq!(grant.bytes(), 100);
+    assert_eq!(controller.headroom_bytes(), 924);
+}
+
+#[test]
+async fn inert_grant_adopts_a_tracked_reservation_on_merge() {
+    let controller = Arc::new(AdmissionController::new(
+        Box::new(ZeroUsageProbe { limit: 100 }),
+        AdmissionPolicy { usable_ratio: 1.0 },
+    ));
+    let tracked = controller.admit(20, &NoEvictionSource).await.unwrap();
+    let mut grant = MemoryGrant::inert(40);
+
+    grant.merge(tracked);
+
+    assert_eq!(grant.bytes(), 60);
+    assert!(grant.is_tracked());
+    assert_eq!(controller.headroom_bytes(), 80);
+    drop(grant);
+    assert_eq!(
+        controller.headroom_bytes(),
+        100,
+        "dropping the merged owner must return the absorbed tracked reservation"
+    );
 }
 
 /// Concurrent admissions must never grant more than the ceiling allows.
@@ -908,9 +935,10 @@ mod grow_lock_ordering {
     use super::super::{AdmissionController, AdmissionPolicy, EvictionPriority, EvictionSource};
     use crate::services::active_workers::memory_probe::{MemoryProbe, MemorySnapshot};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use test_r::test;
-    use tokio::sync::Mutex as AsyncMutex;
+    use tokio::sync::{Barrier, Mutex as AsyncMutex};
 
     /// Per-worker lock, standing in for `Worker::instance`.
     type WorkerLock = Arc<AsyncMutex<()>>;
@@ -950,11 +978,19 @@ mod grow_lock_ordering {
     /// briefly, faithfully — the deadlock comes from the ordering, not hold time.
     struct ScanningEvictionSource {
         workers: Vec<WorkerLock>,
+        scans: Arc<AtomicUsize>,
+        delay: bool,
     }
 
     #[async_trait::async_trait]
     impl EvictionSource for ScanningEvictionSource {
-        async fn evict_at_most(&self, _priority: EvictionPriority, _needed_bytes: u64) -> u64 {
+        async fn evict_at_most(&self, priority: EvictionPriority, _needed_bytes: u64) -> u64 {
+            if priority == EvictionPriority::Idle {
+                self.scans.fetch_add(1, Ordering::Relaxed);
+            }
+            if self.delay {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
             for worker in &self.workers {
                 let _guard = worker.lock().await;
             }
@@ -970,8 +1006,14 @@ mod grow_lock_ordering {
         controller: &AdmissionController,
         own: &WorkerLock,
         workers: Vec<WorkerLock>,
+        scans: Arc<AtomicUsize>,
+        delay: bool,
     ) {
-        let source = ScanningEvictionSource { workers };
+        let source = ScanningEvictionSource {
+            workers,
+            scans,
+            delay,
+        };
         controller.try_admit(1, &source).await;
         let _own_guard = own.lock().await;
     }
@@ -989,21 +1031,26 @@ mod grow_lock_ordering {
 
     /// Many workers growing concurrently under memory pressure (every grow takes
     /// the scanning slow path) must all complete without deadlocking.
-    #[test(flavor = "multi_thread", worker_threads = 4)]
+    #[test]
     async fn concurrent_grows_do_not_deadlock_under_pressure() {
         const WORKERS: usize = 32;
         const DEADLINE: Duration = Duration::from_secs(10);
 
         let workers = workers(WORKERS);
         let controller = controller(Box::new(SaturatedProbe));
+        let scans = Arc::new(AtomicUsize::new(0));
+        let start = Arc::new(Barrier::new(WORKERS));
 
         let mut grows = Vec::new();
         for i in 0..WORKERS {
             let controller = controller.clone();
             let all = workers.clone();
             let own = workers[i].clone();
+            let scans = scans.clone();
+            let start = start.clone();
             grows.push(tokio::spawn(async move {
-                grow_then_lock(&controller, &own, all).await;
+                start.wait().await;
+                grow_then_lock(&controller, &own, all, scans, true).await;
             }));
         }
 
@@ -1018,27 +1065,34 @@ mod grow_lock_ordering {
             result.is_ok(),
             "concurrent grows deadlocked: the scan must not run while a worker holds its own instance lock"
         );
+        assert_eq!(
+            scans.load(Ordering::Relaxed),
+            WORKERS,
+            "each pressured grow should scan independently without a global eviction lock"
+        );
     }
 
     /// With comfortable headroom the gate admits on the fast path without
     /// scanning, so no worker's instance lock is taken during admission and
     /// concurrent grows complete. Confirms the deadlock risk is specific to the
     /// scan-under-pressure path.
-    #[test(flavor = "multi_thread", worker_threads = 4)]
+    #[test]
     async fn no_deadlock_with_ample_headroom() {
         const WORKERS: usize = 32;
         const DEADLINE: Duration = Duration::from_secs(10);
 
         let workers = workers(WORKERS);
         let controller = controller(Box::new(AmpleHeadroomProbe));
+        let scans = Arc::new(AtomicUsize::new(0));
 
         let mut grows = Vec::new();
         for i in 0..WORKERS {
             let controller = controller.clone();
             let all = workers.clone();
             let own = workers[i].clone();
+            let scans = scans.clone();
             grows.push(tokio::spawn(async move {
-                grow_then_lock(&controller, &own, all).await;
+                grow_then_lock(&controller, &own, all, scans, false).await;
             }));
         }
 
