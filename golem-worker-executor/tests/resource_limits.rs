@@ -18,6 +18,7 @@ use axum::routing::get;
 use golem_common::model::{AgentStatus, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
+use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start_with_concurrent_agent_limit,
@@ -448,6 +449,7 @@ async fn live_memory_growth_cannot_bypass_executor_admission(
     #[tagged_as("large_dynamic_memory")] large_dynamic_memory: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     const EXECUTOR_MEMORY_BYTES: u64 = 32 * 1024 * 1024;
+    const GROWTH_MIB: u64 = 30;
 
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(
@@ -467,30 +469,53 @@ async fn live_memory_growth_cannot_bypass_executor_admission(
         .component_dep(&context.default_environment_id, large_dynamic_memory)
         .store()
         .await?;
-    let agent_id = agent_id!("LargeDynamicMemoryAgent", "executor-admission");
-    let worker_id = executor
-        .start_agent(&component.id, agent_id.clone())
+    let victim_agent = agent_id!("LargeDynamicMemoryAgent", "executor-admission-victim");
+    let victim_worker = executor
+        .start_agent(&component.id, victim_agent.clone())
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
-    let initial_bytes = executor.worker_memory_requirement(&owned_agent_id).await?;
+    let victim_owned = OwnedAgentId::new(context.default_environment_id, &victim_worker);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_eviction_class(&victim_owned).await != Some(EvictionClass::LoadedIdle)
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the co-resident worker must become idle and evictable");
+
+    let growing_agent = agent_id!("LargeDynamicMemoryAgent", "executor-admission-growing");
+    let growing_worker = executor
+        .start_agent(&component.id, growing_agent.clone())
+        .await?;
+    let growing_owned = OwnedAgentId::new(context.default_environment_id, &growing_worker);
+    let victim_bytes = executor.worker_memory_requirement(&victim_owned).await?;
+    let growing_bytes = executor.worker_memory_requirement(&growing_owned).await?;
+    let growth_bytes = GROWTH_MIB * 1024 * 1024;
     assert!(
-        initial_bytes < EXECUTOR_MEMORY_BYTES,
-        "fixture must fit before live growth: initial={initial_bytes}, pool={EXECUTOR_MEMORY_BYTES}"
+        victim_bytes + growing_bytes <= EXECUTOR_MEMORY_BYTES,
+        "both initial workers must fit before growth: victim={victim_bytes}, growing={growing_bytes}, pool={EXECUTOR_MEMORY_BYTES}"
+    );
+    assert!(
+        growing_bytes + growth_bytes <= EXECUTOR_MEMORY_BYTES,
+        "one worker plus its requested growth must fit after eviction: worker={growing_bytes}, growth={growth_bytes}, pool={EXECUTOR_MEMORY_BYTES}"
+    );
+    assert!(
+        victim_bytes + growing_bytes + growth_bytes > EXECUTOR_MEMORY_BYTES,
+        "the co-resident worker must make the requested growth exceed headroom: victim={victim_bytes}, growing={growing_bytes}, growth={growth_bytes}, pool={EXECUTOR_MEMORY_BYTES}"
     );
 
-    let result = tokio::time::timeout(
-        Duration::from_secs(5),
-        executor.invoke_and_await_agent(
+    let result = executor
+        .invoke_and_await_agent(
             &component,
-            &agent_id,
+            &growing_agent,
             "run_with_memory_and_work",
-            data_value!(64u64, 0u64),
-        ),
-    )
-    .await;
+            data_value!(GROWTH_MIB, 0u64),
+        )
+        .await?;
+    assert_eq!(result.into_typed::<u64>()?, 0);
     assert!(
-        result.is_err(),
-        "growth beyond executor headroom must remain pending while capacity is unavailable: {result:?}"
+        !executor.worker_is_loaded(&victim_owned).await,
+        "live growth must complete only after admission evicts the idle co-resident worker"
     );
 
     Ok(())

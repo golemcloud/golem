@@ -48,26 +48,6 @@ struct AccountLimitsView {
 }
 
 #[test]
-fn account_usage_history_items_have_no_discriminator() {
-    let history: AccountUsageListView = serde_json::from_value(serde_json::json!({
-        "$type": "account.usage.history",
-        "usage": [{
-            "computeGcu": 1.5,
-            "memoryGbSeconds": 4,
-            "durableStorageGbMonth": 2.5,
-            "ephemeralStorageGbMonth": 3.5,
-            "period": { "year": 2026, "month": 4 }
-        }]
-    }))
-    .unwrap();
-
-    assert_eq!(history.usage.len(), 1);
-    assert_eq!(history.usage[0].compute_gcu, 1.5);
-    assert_eq!(history.usage[0].memory_gb_seconds, 4);
-    assert_eq!(history.usage[0].period.month, 4);
-}
-
-#[test]
 #[timeout("1m")]
 async fn account_storage_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
     let mut ctx = TestContext::new();

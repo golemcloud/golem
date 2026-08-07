@@ -4732,13 +4732,22 @@ mod tests {
 
     #[test]
     fn aggregate_memory_growth_over_worker_limit_is_rejected() {
-        let second_memory_growth = UnsharedMemoryGrowth {
-            admission_delta: 60,
-            protected_total: 120,
-        };
+        let now = Instant::now();
+        let tracker = LinearMemoryTracker::new(
+            60,
+            60,
+            AgentMode::Durable,
+            false,
+            Arc::new(AtomicResourceEntry::new(0, 100, 0, 0, 0)),
+            Arc::new(Mutex::new(MemoryGrant::inert(60))),
+            now,
+        );
+        tracker.reconcile(60, now);
+
+        let second_memory_growth = tracker.prepare_unshared_growth(0, 60);
 
         assert_eq!(
-            validate_unshared_memory_growth(Some(second_memory_growth), 100, 60, Some(100)),
+            validate_unshared_memory_growth(second_memory_growth, 100, 60, Some(100)),
             None,
             "two individually valid 60-byte memories must not bypass the 100-byte aggregate cap"
         );

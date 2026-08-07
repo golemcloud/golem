@@ -281,6 +281,7 @@ impl AdmissionController {
             AdmissionDecision::Admit => Some(MemoryGrant {
                 controller: Some(self.clone()),
                 bytes: request_bytes,
+                reserved_bytes: request_bytes,
             }),
             AdmissionDecision::Reject => None,
         }
@@ -304,6 +305,7 @@ impl Drop for AdmissionController {
 pub(crate) struct MemoryGrant {
     controller: Option<Arc<AdmissionController>>,
     bytes: u64,
+    reserved_bytes: u64,
 }
 
 impl MemoryGrant {
@@ -318,10 +320,12 @@ impl MemoryGrant {
     pub(crate) fn shrink_to(&mut self, bytes: u64) {
         let released = self.bytes.saturating_sub(bytes);
         self.bytes -= released;
-        if released > 0
+        let released_reservation = released.min(self.reserved_bytes);
+        self.reserved_bytes -= released_reservation;
+        if released_reservation > 0
             && let Some(controller) = &self.controller
         {
-            controller.release(released);
+            controller.release(released_reservation);
         }
     }
 
@@ -331,6 +335,7 @@ impl MemoryGrant {
         Self {
             controller: None,
             bytes,
+            reserved_bytes: 0,
         }
     }
 
@@ -340,6 +345,7 @@ impl MemoryGrant {
     /// is released exactly once when this grant drops.
     pub(crate) fn merge(&mut self, mut other: MemoryGrant) {
         self.bytes += other.bytes;
+        self.reserved_bytes += other.reserved_bytes;
         if other.controller.is_some() {
             // Adopt the controller so a merged grant acquired while admission was
             // enabled still releases, even if `self` started inert.
@@ -350,6 +356,7 @@ impl MemoryGrant {
         // Neutralize the absorbed grant so its drop does not release the bytes
         // now owned by `self`.
         other.bytes = 0;
+        other.reserved_bytes = 0;
         other.controller = None;
     }
 }
@@ -365,7 +372,7 @@ impl std::fmt::Debug for MemoryGrant {
 impl Drop for MemoryGrant {
     fn drop(&mut self) {
         if let Some(controller) = &self.controller {
-            controller.release(self.bytes);
+            controller.release(self.reserved_bytes);
         }
     }
 }

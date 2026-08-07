@@ -469,24 +469,27 @@ mod tests {
 
     #[test]
     async fn cached_probe_retries_after_refresh_panics() {
-        let reads = Arc::new(AtomicU64::new(1));
-        let probe = stale_cached_probe(
-            Arc::new(PanickingProbe {
+        let reads = Arc::new(AtomicU64::new(0));
+        let refresh_interval = Duration::from_millis(10);
+        let probe = CachedMemoryProbe::new(
+            Box::new(PanickingProbe {
                 reads: reads.clone(),
             }),
-            MemorySnapshot {
-                limit_bytes: 100,
-                current_bytes: 1,
-            },
+            refresh_interval,
         );
 
+        tokio::time::sleep(refresh_interval).await;
         assert_eq!(probe.snapshot().current_bytes, 1);
-
         tokio::time::timeout(Duration::from_secs(1), async {
-            while probe.inner.refresh_in_progress.load(Ordering::Acquire) {
+            while reads.load(Ordering::Acquire) != 2 {
                 tokio::task::yield_now().await;
             }
-            probe.inner.last_refresh_nanos.store(0, Ordering::Release);
+        })
+        .await
+        .unwrap();
+
+        tokio::time::sleep(refresh_interval).await;
+        tokio::time::timeout(Duration::from_secs(1), async {
             while probe.snapshot().current_bytes != 42 {
                 tokio::task::yield_now().await;
             }

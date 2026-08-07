@@ -108,21 +108,23 @@ mod tests {
             "run_with_memory_and_work",
             data_value!(512u64, 5_000u64),
         );
-        let crash = async {
+        let recovery = async {
             user.wait_for_status(&worker, AgentStatus::Running, Duration::from_secs(10))
                 .await?;
             tokio::time::sleep(Duration::from_millis(500)).await;
-            user.simulated_crash(&worker).await
+            let before_replay = memory_gb_seconds(&deps, &user).await?;
+            user.simulated_crash(&worker).await?;
+            Ok::<u64, anyhow::Error>(before_replay)
         };
-        let (invocation_result, crash_result) = tokio::join!(invocation, crash);
-        crash_result?;
+        let (invocation_result, before_replay) = tokio::join!(invocation, recovery);
         invocation_result?;
+        let before_replay = before_replay?;
 
         tokio::time::sleep(Duration::from_secs(1)).await;
         let after_replay = memory_gb_seconds(&deps, &user).await?;
         assert!(
-            after_replay.saturating_sub(after_host_wait) >= 2,
-            "allocated memory must accrue during replay and non-durable guest work: before={after_host_wait}, after={after_replay}"
+            after_replay.saturating_sub(before_replay) >= 2,
+            "recovery of the interrupted 512 MiB workload must accrue memory after the pre-crash baseline: before={before_replay}, after={after_replay}"
         );
 
         user.wait_for_status(&worker, AgentStatus::Idle, Duration::from_secs(10))

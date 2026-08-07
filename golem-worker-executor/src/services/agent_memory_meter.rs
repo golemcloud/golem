@@ -250,6 +250,18 @@ mod tests {
     }
 
     #[test]
+    fn paused_warm_runnable_time_does_not_accrue() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let now = Instant::now();
+        let meter = AgentMemoryMeter::new(AgentMode::Durable, gib(1), true, entry.clone(), now);
+
+        meter.pause(now + Duration::from_secs(1));
+        meter.flush(now + Duration::from_secs(11));
+
+        assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 1);
+    }
+
+    #[test]
     fn growth_is_prospective() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();

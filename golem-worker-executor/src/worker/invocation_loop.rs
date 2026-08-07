@@ -697,11 +697,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// Release the concurrent-agent permit back to the semaphore pool.
     /// Called when the agent enters idle state. No-op if already released.
     fn release_concurrent_agent_permit(&mut self) {
-        if let Some(permit) = self.concurrent_agent_permit.take() {
+        pause_meter_and_release_permit(self.concurrent_agent_permit, || {
             self.linear_memory.pause(std::time::Instant::now());
             debug!(agent_id = %self.owned_agent_id.agent_id, "Releasing concurrent-agent permit (entering idle)");
-            drop(permit);
-        }
+        });
     }
 
     /// Re-acquire the concurrent-agent permit from the scheduler.
@@ -713,14 +712,16 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             let span = agent_phase_span!(self, "acquire_concurrent_agent_permit");
             let agent_id = self.owned_agent_id.agent_id();
             let registered_concurrent_account = self.parent.registered_concurrent_account.clone();
-            let permit = async {
-                debug!("Re-acquiring concurrent-agent permit (waking from idle)");
-                registered_concurrent_account.acquire(agent_id).await
-            }
-            .instrument(span)
+            acquire_permit_and_resume_meter(
+                self.concurrent_agent_permit,
+                async {
+                    debug!("Re-acquiring concurrent-agent permit (waking from idle)");
+                    registered_concurrent_account.acquire(agent_id).await
+                }
+                .instrument(span),
+                || self.linear_memory.resume(std::time::Instant::now()),
+            )
             .await;
-            *self.concurrent_agent_permit = Some(permit);
-            self.linear_memory.resume(std::time::Instant::now());
         }
     }
 
@@ -994,6 +995,23 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     async fn interrupt(&self, interrupt: PendingWorkerInterrupt) -> CommandOutcome {
         CommandOutcome::BreakInnerLoop(interrupt.retry_decision())
     }
+}
+
+fn pause_meter_and_release_permit<P>(permit: &mut Option<P>, pause_meter: impl FnOnce()) {
+    if let Some(permit) = permit.take() {
+        pause_meter();
+        drop(permit);
+    }
+}
+
+async fn acquire_permit_and_resume_meter<P>(
+    permit_slot: &mut Option<P>,
+    acquire_permit: impl std::future::Future<Output = P>,
+    resume_meter: impl FnOnce(),
+) {
+    let permit = acquire_permit.await;
+    *permit_slot = Some(permit);
+    resume_meter();
 }
 
 async fn take_pending_interrupt(
@@ -1825,7 +1843,8 @@ fn snapshot_action_at(
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandOutcome, PeriodicSnapshotAction, failed_agent_invocation_outcome,
+        CommandOutcome, PeriodicSnapshotAction, acquire_permit_and_resume_meter,
+        failed_agent_invocation_outcome, pause_meter_and_release_permit,
         periodic_snapshot_failure_outcome, snapshot_action_at, snapshot_baseline_timestamp,
         successful_agent_invocation_outcome,
     };
@@ -1836,8 +1855,46 @@ mod tests {
     use golem_common::model::oplog::AgentError;
     use golem_common::model::{OplogIndex, Timestamp};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use test_r::test;
+
+    struct ObservedPermit(Arc<Mutex<Vec<&'static str>>>);
+
+    impl Drop for ObservedPermit {
+        fn drop(&mut self) {
+            self.0.lock().unwrap().push("permit released");
+        }
+    }
+
+    #[test]
+    async fn meter_starts_and_stops_inside_the_permit_ownership_window() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut permit = None;
+
+        let acquisition_events = events.clone();
+        let permit_events = events.clone();
+        acquire_permit_and_resume_meter(
+            &mut permit,
+            async move {
+                acquisition_events.lock().unwrap().push("permit acquired");
+                ObservedPermit(permit_events)
+            },
+            || events.lock().unwrap().push("meter resumed"),
+        )
+        .await;
+        pause_meter_and_release_permit(&mut permit, || events.lock().unwrap().push("meter paused"));
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            [
+                "permit acquired",
+                "meter resumed",
+                "meter paused",
+                "permit released"
+            ]
+        );
+    }
 
     #[test]
     fn periodic_snapshot_uses_creation_time_until_the_first_snapshot() {

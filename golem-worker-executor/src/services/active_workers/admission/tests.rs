@@ -291,12 +291,25 @@ async fn shrinking_a_reconciled_grant_returns_excess_headroom() {
 }
 
 #[test]
-fn inert_grants_retain_accounting_bytes_without_global_reservations() {
+async fn inert_grant_adopts_a_tracked_reservation_on_merge() {
+    let controller = Arc::new(AdmissionController::new(
+        Box::new(ZeroUsageProbe { limit: 100 }),
+        AdmissionPolicy { usable_ratio: 1.0 },
+    ));
+    let tracked = controller.admit(20, &NoEvictionSource).await.unwrap();
     let mut grant = MemoryGrant::inert(40);
-    grant.merge(MemoryGrant::inert(20));
+
+    grant.merge(tracked);
 
     assert_eq!(grant.bytes(), 60);
-    assert!(!grant.is_tracked());
+    assert!(grant.is_tracked());
+    assert_eq!(controller.headroom_bytes(), 80);
+    drop(grant);
+    assert_eq!(
+        controller.headroom_bytes(),
+        100,
+        "dropping the merged owner must return the absorbed tracked reservation"
+    );
 }
 
 #[async_trait::async_trait]

@@ -279,6 +279,10 @@ pub fn desired_total_after_growth(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::active_workers::admission::{
+        AdmissionController, AdmissionPolicy, EvictionPriority, EvictionSource,
+    };
+    use crate::services::active_workers::memory_probe::FixedProbe;
     use crate::services::resource_limits::AtomicResourceEntry;
     use golem_common::model::agent::AgentMode;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -287,6 +291,15 @@ mod tests {
 
     fn grant() -> Arc<Mutex<MemoryGrant>> {
         Arc::new(Mutex::new(MemoryGrant::inert(0)))
+    }
+
+    struct NoEvictionSource;
+
+    #[async_trait::async_trait]
+    impl EvictionSource for NoEvictionSource {
+        async fn evict_at_most(&self, _priority: EvictionPriority, _needed_bytes: u64) -> u64 {
+            0
+        }
     }
 
     #[test]
@@ -417,6 +430,33 @@ mod tests {
     }
 
     #[test]
+    async fn live_reinstantiation_reuses_its_startup_grant_without_reporting_growth() {
+        let now = Instant::now();
+        let controller = Arc::new(AdmissionController::new(
+            Box::new(FixedProbe::new(100, 0)),
+            AdmissionPolicy { usable_ratio: 1.0 },
+        ));
+        let retained_grant = controller.admit(40, &NoEvictionSource).await.unwrap();
+        let tracker = LinearMemoryTracker::new(
+            40,
+            40,
+            AgentMode::Durable,
+            false,
+            Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
+            Arc::new(Mutex::new(retained_grant)),
+            now,
+        );
+        let headroom_before_instantiation = controller.headroom_bytes();
+
+        let growth = tracker.prepare_unshared_growth(0, 40).unwrap();
+        assert_eq!(growth.admission_delta, 0);
+        tracker.grow(40, now);
+
+        assert_eq!(tracker.reconcile(40, now), 0);
+        assert_eq!(controller.headroom_bytes(), headroom_before_instantiation);
+    }
+
+    #[test]
     fn live_instantiation_growth_is_reported_for_persistence() {
         let now = Instant::now();
         let tracker = LinearMemoryTracker::new(
@@ -472,8 +512,12 @@ mod tests {
     }
 
     #[test]
-    fn failed_zero_page_growth_releases_its_pending_grant() {
+    async fn failed_zero_page_growth_releases_its_pending_grant() {
         let now = Instant::now();
+        let controller = Arc::new(AdmissionController::new(
+            Box::new(FixedProbe::new(100, 0)),
+            AdmissionPolicy { usable_ratio: 1.0 },
+        ));
         let tracker = LinearMemoryTracker::new(
             0,
             0,
@@ -484,17 +528,15 @@ mod tests {
             now,
         );
         tracker.reconcile(0, now);
-        tracker.retain_growth_grant(MemoryGrant::inert(0));
+        let pending_grant = controller.admit(10, &NoEvictionSource).await.unwrap();
+        tracker.retain_growth_grant(pending_grant);
 
-        assert_eq!(tracker.inner.pending_growth_grants.lock().unwrap().len(), 1);
+        assert_eq!(controller.headroom_bytes(), 90);
         tracker.memory_grow_failed();
-        assert!(
-            tracker
-                .inner
-                .pending_growth_grants
-                .lock()
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            controller.headroom_bytes(),
+            100,
+            "a failed Wasmtime growth must return its pending admission reservation"
         );
     }
 
