@@ -2138,6 +2138,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .expect("linear memory grant requested while worker is not running")
     }
 
+    fn release_linear_memory_grant(&self) {
+        if let Some(grant) = self.linear_memory_grant.lock().unwrap().take() {
+            *grant.lock().unwrap() = MemoryGrant::inert(0);
+        }
+    }
+
     pub(crate) fn startup_linear_memory_bytes(&self) -> u64 {
         self.startup_linear_memory_bytes.load(Ordering::Acquire)
     }
@@ -3026,9 +3032,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // when stopping via the invocation loop we can stop immediately, no need to go via the stopping status
                 if called_from_invocation_loop {
                     crate::metrics::workers::dec_worker_memory_resident();
-                    // Dropping `running` at the end of this arm releases its
-                    // memory grant (and component/storage permits) back to the
-                    // gate.
+                    // The invocation-loop task retains the shared grant cell until it
+                    // exits. Release its reservation now so permit reacquisition can
+                    // register and admit the replacement generation without overlapping
+                    // the old generation's grant.
+                    self.release_linear_memory_grant();
                     **instance_guard = final_state.into_instance();
                     if let WorkerInstance::Unloaded { startup_failure } = &**instance_guard {
                         self.resolve_pending_readiness_awaiters_on_stop(startup_failure.as_ref())
