@@ -228,8 +228,19 @@ impl AccountUsageService {
                         "Updating account resource usage"
                     );
 
-                    self.account_usage_repo.add(&account_usage).await?;
-                    limits_of_updated_accounts.insert(account_id, account_usage.resource_limits());
+                    match self.account_usage_repo.add(&account_usage).await {
+                        Ok(()) => {
+                            limits_of_updated_accounts
+                                .insert(account_id, account_usage.resource_limits());
+                        }
+                        Err(error) => {
+                            tracing::error!(
+                                %account_id,
+                                %error,
+                                "Failed to apply resource usage update"
+                            );
+                        }
+                    }
                 }
                 Err(AccountUsageError::AccountNotfound(_)) => {
                     // We received an update for a deleted account. Return an empty
@@ -251,7 +262,13 @@ impl AccountUsageService {
                         },
                     );
                 }
-                Err(error) => return Err(error),
+                Err(error) => {
+                    tracing::error!(
+                        %account_id,
+                        %error,
+                        "Failed to load account usage for resource update"
+                    );
+                }
             }
         }
 

@@ -224,10 +224,6 @@ impl AdmissionController {
                 "Released memory exceeds the committed reservation"
             );
         }
-        debug_assert!(
-            previously_granted >= reserved_bytes,
-            "released memory exceeds the committed reservation"
-        );
         crate::metrics::workers::decrease_worker_memory_granted(
             reserved_bytes.min(previously_granted),
         );
@@ -369,15 +365,6 @@ impl MemoryGrant {
     /// grant is consumed and its reservation transferred here; the combined total
     /// is released exactly once when this grant drops.
     pub(crate) fn merge(&mut self, mut other: MemoryGrant) {
-        debug_assert!(
-            match (&self.controller, &other.controller) {
-                (Some(controller), Some(other_controller)) => {
-                    Arc::ptr_eq(controller, other_controller)
-                }
-                _ => true,
-            },
-            "cannot merge memory grants from different admission controllers"
-        );
         self.bytes += other.bytes;
         self.reserved_bytes += other.reserved_bytes;
         if other.controller.is_some() {

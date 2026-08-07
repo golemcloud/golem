@@ -394,7 +394,7 @@ pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
         current: usize,
         desired: usize,
         maximum: Option<usize>,
-    ) -> impl std::future::Future<Output = wasmtime::Result<bool>> + Send {
+    ) -> impl Future<Output = wasmtime::Result<bool>> + Send {
         self.durable_worker_ctx()
             .admit_unshared_memory_growth(current, desired, maximum)
     }

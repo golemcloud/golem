@@ -626,12 +626,12 @@ mod tests {
 
         assert_eq!(
             plan.max_memory_per_worker_ceiling,
-            super::default_unlimited()
+            1_000_000_000_000_000_000
         );
-        assert_eq!(plan.monthly_memory_gb_seconds, super::default_unlimited());
+        assert_eq!(plan.monthly_memory_gb_seconds, 1_000_000_000_000_000_000);
         assert_eq!(
             plan.monthly_memory_gb_seconds_ceiling,
-            super::default_unlimited()
+            1_000_000_000_000_000_000
         );
     }
 }
