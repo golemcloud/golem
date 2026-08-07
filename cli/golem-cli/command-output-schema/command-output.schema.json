@@ -61,6 +61,9 @@
       "$ref": "#/definitions/agent.delete"
     },
     {
+      "$ref": "#/definitions/agent.delete-all"
+    },
+    {
       "$ref": "#/definitions/agent.file-contents"
     },
     {
@@ -1304,7 +1307,7 @@
       "required": [
         "$type",
         "canceled",
-        "agent",
+        "agentId",
         "idempotencyKey"
       ],
       "properties": {
@@ -1314,7 +1317,7 @@
         "canceled": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         },
         "idempotencyKey": {
@@ -1331,7 +1334,7 @@
       "required": [
         "$type",
         "deleted",
-        "agent"
+        "agentId"
       ],
       "properties": {
         "$type": {
@@ -1340,8 +1343,34 @@
         "deleted": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.delete-all": {
+      "type": "object",
+      "description": "Single structured output document emitted by `golem deploy` when it deletes all existing agents (e.g. `--reset`).",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "deploy",
+      "required": [
+        "$type",
+        "deleted",
+        "agents"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.delete-all"
+        },
+        "deleted": {
+          "type": "boolean"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AgentDeletionMeta"
+          }
         }
       },
       "additionalProperties": false
@@ -1354,7 +1383,7 @@
       "required": [
         "$type",
         "saved",
-        "agent",
+        "agentId",
         "path",
         "outputPath",
         "bytes"
@@ -1366,7 +1395,7 @@
         "saved": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         },
         "path": {
@@ -1435,7 +1464,7 @@
       "required": [
         "$type",
         "interrupted",
-        "agent"
+        "agentId"
       ],
       "properties": {
         "$type": {
@@ -1444,7 +1473,7 @@
         "interrupted": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         }
       },
@@ -1520,7 +1549,8 @@
       "x-golem-command": "agent new",
       "required": [
         "$type",
-        "componentName"
+        "componentName",
+        "agentId"
       ],
       "properties": {
         "$type": {
@@ -1529,8 +1559,8 @@
         "componentName": {
           "type": "string"
         },
-        "agentName": {
-          "type": ["string", "null"]
+        "agentId": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -1567,7 +1597,7 @@
       "required": [
         "$type",
         "activated",
-        "agent",
+        "agentId",
         "plugin",
         "priority"
       ],
@@ -1578,7 +1608,7 @@
         "activated": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         },
         "plugin": {
@@ -1599,7 +1629,7 @@
       "required": [
         "$type",
         "redeployed",
-        "components"
+        "agents"
       ],
       "properties": {
         "$type": {
@@ -1608,10 +1638,10 @@
         "redeployed": {
           "type": "boolean"
         },
-        "components": {
+        "agents": {
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/AgentRedeploymentMeta"
           }
         }
       },
@@ -1625,7 +1655,7 @@
       "required": [
         "$type",
         "resumed",
-        "agent"
+        "agentId"
       ],
       "properties": {
         "$type": {
@@ -1634,7 +1664,7 @@
         "resumed": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         }
       },
@@ -1648,7 +1678,7 @@
       "required": [
         "$type",
         "reverted",
-        "agent"
+        "agentId"
       ],
       "properties": {
         "$type": {
@@ -1657,7 +1687,7 @@
         "reverted": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         },
         "lastOplogIndex": {
@@ -1679,7 +1709,7 @@
       "required": [
         "$type",
         "simulated",
-        "agent"
+        "agentId"
       ],
       "properties": {
         "$type": {
@@ -1688,7 +1718,7 @@
         "simulated": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         }
       },
@@ -1750,23 +1780,23 @@
       "x-golem-commands": ["agent update","update-agents","component update-agents"],
       "required": [
         "$type",
-        "triggered",
-        "failed"
+        "agents",
+        "errors"
       ],
       "properties": {
         "$type": {
           "const": "agent.update"
         },
-        "triggered": {
+        "agents": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/WorkerUpdateAttempt"
+            "$ref": "#/definitions/AgentUpdateMeta"
           }
         },
-        "failed": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/WorkerUpdateAttempt"
+        "errors": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
           }
         }
       },
@@ -1938,7 +1968,8 @@
         "$type",
         "deleted",
         "domain",
-        "id"
+        "id",
+        "environmentId"
       ],
       "properties": {
         "$type": {
@@ -1951,6 +1982,9 @@
           "type": "string"
         },
         "id": {
+          "type": "string"
+        },
+        "environmentId": {
           "type": "string"
         }
       },
@@ -2179,25 +2213,21 @@
       "x-golem-command": "api security-scheme delete",
       "required": [
         "$type",
+        "deleted",
         "id",
-        "revision",
         "name",
         "environmentId",
-        "providerType",
-        "clientId",
-        "redirectUrl",
-        "scopes"
+        "revision"
       ],
       "properties": {
         "$type": {
           "const": "api.security-scheme.delete"
         },
+        "deleted": {
+          "type": "boolean"
+        },
         "id": {
           "type": "string"
-        },
-        "revision": {
-          "type": "integer",
-          "minimum": 0
         },
         "name": {
           "type": "string"
@@ -2205,20 +2235,9 @@
         "environmentId": {
           "type": "string"
         },
-        "providerType": {
-          "$ref": "#/definitions/SecuritySchemeProvider"
-        },
-        "clientId": {
-          "type": "string"
-        },
-        "redirectUrl": {
-          "type": "string"
-        },
-        "scopes": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
+        "revision": {
+          "type": "integer",
+          "minimum": 0
         }
       },
       "additionalProperties": false
@@ -3725,7 +3744,7 @@
       "type": "object",
       "required": [
         "componentName",
-        "agentName",
+        "agentId",
         "createdBy",
         "environmentId",
         "env",
@@ -3744,7 +3763,7 @@
       ],
       "properties": {
         "componentName": { "type": "string" },
-        "agentName": { "type": "string" },
+        "agentId": { "type": "string" },
         "createdBy": { "type": "string" },
         "environmentId": { "type": "string" },
         "env": { "type": "object", "additionalProperties": { "type": "string" } },
@@ -4286,14 +4305,38 @@
         "missed-messages"
       ]
     },
-    "WorkerUpdateAttempt": {
+    "AgentDeletionMeta": {
       "type": "object",
-      "required": ["componentName", "targetRevision", "agentName"],
+      "required": ["componentName", "agentId"],
       "properties": {
         "componentName": { "type": "string" },
-        "targetRevision": { "type": "integer", "minimum": 0 },
-        "agentName": { "type": "string" },
-        "error": { "type": "string" }
+        "agentId": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "AgentUpdateMeta": {
+      "type": "object",
+      "required": ["componentName", "agentId", "fromRevision", "revision"],
+      "properties": {
+        "componentName": { "type": "string" },
+        "agentId": { "type": "string" },
+        "fromRevision": { "type": "integer", "minimum": 0 },
+        "revision": { "type": "integer", "minimum": 0 },
+        "fromVersion": { "type": "string" },
+        "version": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "AgentRedeploymentMeta": {
+      "type": "object",
+      "required": ["componentName", "agentId", "fromRevision", "revision"],
+      "properties": {
+        "componentName": { "type": "string" },
+        "agentId": { "type": "string" },
+        "fromRevision": { "type": "integer", "minimum": 0 },
+        "revision": { "type": "integer", "minimum": 0 },
+        "fromVersion": { "type": "string" },
+        "version": { "type": "string" }
       },
       "additionalProperties": false
     },
@@ -5490,27 +5533,21 @@
       "x-golem-command": "resource delete",
       "required": [
         "$type",
+        "deleted",
         "id",
         "revision",
         "environmentId",
-        "name",
-        "limit",
-        "enforcementAction",
-        "unit",
-        "units"
+        "name"
       ],
       "properties": {
         "$type": {
           "const": "resource.delete"
         },
+        "deleted": { "type": "boolean" },
         "id": { "type": "string" },
         "revision": { "type": "integer", "minimum": 0 },
         "environmentId": { "type": "string" },
-        "name": { "type": "string" },
-        "limit": { "$ref": "#/definitions/ResourceLimit" },
-        "enforcementAction": { "$ref": "#/definitions/EnforcementAction" },
-        "unit": { "type": "string" },
-        "units": { "type": "string" }
+        "name": { "type": "string" }
       },
       "additionalProperties": false
     },
@@ -5688,25 +5725,21 @@
       "x-golem-command": "retry-policy delete",
       "required": [
         "$type",
+        "deleted",
         "id",
         "environmentId",
         "name",
-        "revision",
-        "priority",
-        "predicate",
-        "policy"
+        "revision"
       ],
       "properties": {
         "$type": {
           "const": "retry-policy.delete"
         },
+        "deleted": { "type": "boolean" },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
         "name": { "type": "string" },
-        "revision": { "type": "integer", "minimum": 0 },
-        "priority": { "type": "integer", "minimum": 0 },
-        "predicate": { "$ref": "#/definitions/ApiPredicate" },
-        "policy": { "$ref": "#/definitions/ApiRetryPolicy" }
+        "revision": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": false
     },
@@ -6617,27 +6650,21 @@
       "x-golem-command": "secret delete",
       "required": [
         "$type",
+        "deleted",
         "id",
         "environmentId",
         "path",
-        "revision",
-        "secretType"
+        "revision"
       ],
       "properties": {
         "$type": {
           "const": "secret.delete"
         },
+        "deleted": { "type": "boolean" },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
         "path": { "type": "array", "items": { "type": "string" } },
-        "revision": { "type": "integer", "minimum": 0 },
-        "secretType": { "$ref": "#/definitions/SchemaGraph" },
-        "secretValue": {
-          "oneOf": [
-            { "$ref": "#/definitions/SchemaValue" },
-            { "type": "null" }
-          ]
-        }
+        "revision": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": false
     },
@@ -6765,7 +6792,7 @@
   "x-golem-cli-output-types": [
     {
       "type": "account.delete",
-      "rustType": "AccountDeleteResult"
+      "rustType": "AccountDeleteView"
     },
     {
       "type": "account.get",
@@ -6781,7 +6808,7 @@
     },
     {
       "type": "account.permission-share.delete",
-      "rustType": "PermissionShareDeleteResult"
+      "rustType": "PermissionShareDeleteView"
     },
     {
       "type": "account.permission-share.get",
@@ -6821,7 +6848,7 @@
     },
     {
       "type": "card.revoke",
-      "rustType": "CardRevokeResult"
+      "rustType": "CardRevokeView"
     },
     {
       "type": "agent-type.get",
@@ -6837,7 +6864,11 @@
     },
     {
       "type": "agent.delete",
-      "rustType": "AgentDeleteResult"
+      "rustType": "AgentDeleteView"
+    },
+    {
+      "type": "agent.delete-all",
+      "rustType": "AgentDeleteAllView"
     },
     {
       "type": "agent.file-contents",
@@ -6845,11 +6876,11 @@
     },
     {
       "type": "agent.files",
-      "rustType": "WorkerFilesView"
+      "rustType": "AgentFilesView"
     },
     {
       "type": "agent.get",
-      "rustType": "WorkerGetView"
+      "rustType": "AgentGetView"
     },
     {
       "type": "agent.interrupt",
@@ -6865,7 +6896,7 @@
     },
     {
       "type": "agent.new",
-      "rustType": "WorkerCreateView"
+      "rustType": "AgentCreateView"
     },
     {
       "type": "agent.oplog",
@@ -6897,11 +6928,11 @@
     },
     {
       "type": "agent.update",
-      "rustType": "TryUpdateAllWorkersResult"
+      "rustType": "TryUpdateAllWorkersView"
     },
     {
       "type": "api-token.delete",
-      "rustType": "TokenDeleteResult"
+      "rustType": "TokenDeleteView"
     },
     {
       "type": "api-token.list",
@@ -6921,7 +6952,7 @@
     },
     {
       "type": "api.domain.delete",
-      "rustType": "DomainRegistrationDeleteResult"
+      "rustType": "DomainRegistrationDeleteView"
     },
     {
       "type": "api.domain.list",
@@ -7029,7 +7060,7 @@
     },
     {
       "type": "plugin.unregister",
-      "rustType": "PluginUnregisterResult"
+      "rustType": "PluginUnregisterView"
     },
     {
       "type": "profile.config.set-format",
@@ -7037,7 +7068,7 @@
     },
     {
       "type": "profile.delete",
-      "rustType": "ProfileDeleteResult"
+      "rustType": "ProfileDeleteView"
     },
     {
       "type": "profile.get",

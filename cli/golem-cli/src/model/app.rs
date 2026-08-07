@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
+use super::http_api::HttpApiDeploymentDeployProperties;
+use super::mcp::McpDeploymentDeployProperties;
 use crate::bridge_gen::{
     BridgeMode, bridge_client_directory_name, tool_bridge_client_directory_name,
 };
 use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_application_preload};
+use crate::model::app_raw;
 use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::Property;
 use crate::model::cascade::property::json::JsonProperty;
@@ -26,9 +28,11 @@ use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
 use crate::model::cascade::property::optional::OptionalProperty;
 use crate::model::cascade::property::vec::{VecMergeMode, VecProperty};
 use crate::model::cascade::store::Store;
+use crate::model::cli_output::StructuredOutput;
+use crate::model::language::GuestLanguage;
 use crate::model::repl::ReplLanguage;
-use crate::model::template::Template;
-use crate::model::{GuestLanguage, app_raw};
+use crate::model::template_render::TemplateRender;
+use crate::model::text_format::{NoTextOutput, TextOutput};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::{Context, anyhow};
 use golem_common::model::agent::AgentTypeName;
@@ -47,7 +51,7 @@ use heck::{
 };
 use indexmap::IndexMap;
 use itertools::Itertools;
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Formatter;
@@ -725,7 +729,7 @@ impl Application {
         !self.components.is_empty()
     }
 
-    pub fn agent_names(&self) -> impl Iterator<Item = &AgentTypeName> {
+    pub fn agent_ids(&self) -> impl Iterator<Item = &AgentTypeName> {
         self.agents.keys()
     }
 
@@ -1827,18 +1831,12 @@ impl<'a> Component<'a> {
         self.component_name
     }
 
-    // TODO: FCL: cleanup this, and make lang ids reserved for template names
+    // Guesses the language from the applied language templates, which are named after the
+    // language id they provide (see `GuestLanguage::from_id_string`).
     pub fn guess_language(&self) -> Option<GuestLanguage> {
-        self.applied_layers().iter().find_map(|(id, _)| {
-            id.template_name()
-                .and_then(|template_name| match template_name {
-                    "ts" => Some(GuestLanguage::TypeScript),
-                    "rust" => Some(GuestLanguage::Rust),
-                    "scala" => Some(GuestLanguage::Scala),
-                    "moonbit" => Some(GuestLanguage::MoonBit),
-                    _ => None,
-                })
-        })
+        self.applied_layers()
+            .iter()
+            .find_map(|(id, _)| id.template_name().and_then(GuestLanguage::from_id_string))
     }
 
     pub fn source(&self) -> &Path {
@@ -2647,16 +2645,15 @@ mod app_builder {
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
-        Application, ApplicationPreload, BridgeSdkTargetKind, ComponentDependency, ComponentLayer,
-        ComponentLayerApplyContext, ComponentLayerId, ComponentLayerProperties,
-        ComponentLayerPropertiesKind, ComponentPresetName, ComponentPresetSelector,
+        APP_ENV_PRESET_PREFIX, Application, ApplicationPreload, BridgeSdkTargetKind,
+        ComponentDependency, ComponentLayer, ComponentLayerApplyContext, ComponentLayerId,
+        ComponentLayerProperties, ComponentLayerPropertiesKind, ComponentPresetSelector,
         ComponentProperties, PartitionedComponentPresets, TEMP_DIR, WithSource,
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
-    use crate::model::http_api::{
-        HttpApiDeploymentDeployProperties, McpDeploymentAgentOptions, McpDeploymentDeployProperties,
-    };
+    use crate::model::http_api::HttpApiDeploymentDeployProperties;
+    use crate::model::mcp::{McpDeploymentAgentOptions, McpDeploymentDeployProperties};
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use crate::{fs, fuzzy};
     use colored::Colorize;
@@ -2754,8 +2751,8 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Component(component_name) => {
                     component_name.as_str().log_color_highlight().to_string()
                 }
-                UniqueSourceCheckedEntityKey::Agent(agent_name) => {
-                    agent_name.0.log_color_highlight().to_string()
+                UniqueSourceCheckedEntityKey::Agent(agent_id) => {
+                    agent_id.0.log_color_highlight().to_string()
                 }
                 UniqueSourceCheckedEntityKey::Environment(environment_name) => {
                     environment_name.0.log_color_highlight().to_string()
@@ -2972,7 +2969,11 @@ mod app_builder {
 
         raw_component_names: HashSet<String>,
         component_names_to_source_and_dir: BTreeMap<ComponentName, (PathBuf, Option<PathBuf>)>,
-        component_custom_presets: BTreeSet<ComponentPresetName>,
+        // Every custom preset name defined by any component, component template,
+        // or agent (env-scoped `app-env:` presets excluded), so environment preset
+        // references can be validated. Populated as those parts are processed, via
+        // `record_selectable_presets`.
+        custom_preset_names: BTreeSet<String>,
         component_layer_store: Store<ComponentLayer>,
 
         components:
@@ -3049,8 +3050,8 @@ mod app_builder {
                 builder.add_raw_app(&mut validation, app);
             }
 
-            // TODO: atomic: validate presets used in envs and template references
-            //               before component resolve, and skip if they are not valid
+            builder.validate_environment_preset_references(&mut validation);
+            builder.validate_selected_preset_references(&mut validation, &component_presets);
             builder.resolve_and_validate_components(&mut validation, &component_presets);
             builder.validate_unique_sources(&mut validation);
             builder.validate_http_api_deployments(&mut validation, &environments);
@@ -3198,6 +3199,7 @@ mod app_builder {
                         // agent templates/presets and flattened component fallback layers.
                         let unique_key = UniqueSourceCheckedEntityKey::Agent(agent_type_name.clone());
                         if self.add_entity_source(unique_key, &app.source) {
+                            self.record_selectable_presets(agent_properties.presets.keys());
                             self.agents.insert(
                                 agent_type_name,
                                 WithSource::new(app.source.clone(), agent_properties),
@@ -3486,12 +3488,6 @@ mod app_builder {
 
                             self.environments
                                 .insert(environment_name.clone(), environment.clone());
-                            validation.with_context(
-                                vec![("environment", environment_name.0)],
-                                |_validation| {
-                                    // TODO: atomic: validate environment
-                                },
-                            );
                         }
                     }
 
@@ -3615,6 +3611,7 @@ mod app_builder {
                         validation.add_error(err.to_string())
                     }
 
+                    self.record_selectable_presets(template.presets.keys());
                     let presets = PartitionedComponentPresets::new(template.presets);
 
                     if let Some(err) = self
@@ -3690,12 +3687,8 @@ mod app_builder {
                         validation.add_error(err.to_string())
                     }
 
+                    self.record_selectable_presets(component.presets.keys());
                     let presets = PartitionedComponentPresets::new(component.presets);
-
-                    presets.custom_presets.keys().for_each(|preset_name| {
-                        self.component_custom_presets
-                            .insert(ComponentPresetName(preset_name.clone()));
-                    });
 
                     if let Some(err) = self
                         .component_layer_store
@@ -3765,6 +3758,91 @@ mod app_builder {
                             .join(", ")
                     ))
                 })
+        }
+
+        /// Records preset names (from a component, template, or agent) that an
+        /// environment can select into [`Self::custom_preset_names`]. Env-scoped
+        /// `app-env:` presets are applied automatically rather than selected by
+        /// name, so they are excluded.
+        fn record_selectable_presets<'a>(&mut self, names: impl Iterator<Item = &'a String>) {
+            for name in names {
+                if !name.starts_with(APP_ENV_PRESET_PREFIX) {
+                    self.custom_preset_names.insert(name.clone());
+                }
+            }
+        }
+
+        /// Validates that every preset an environment declares is defined somewhere.
+        /// Preset selection (see `ComponentLayer::apply`) silently drops names it
+        /// does not recognise, so without this an environment typo would apply no
+        /// preset with no warning. The `--preset` flag is checked separately, in
+        /// [`Self::validate_selected_preset_references`].
+        fn validate_environment_preset_references(&self, validation: &mut ValidationBuilder) {
+            for (environment_name, environment) in &self.environments {
+                let referenced = environment.component_presets.clone().into_vec();
+                if referenced.is_empty() {
+                    continue;
+                }
+                validation.with_context(
+                    vec![("environment", environment_name.0.clone())],
+                    |validation| {
+                        for preset in referenced {
+                            self.validate_preset_defined(validation, &preset, None);
+                        }
+                    },
+                );
+            }
+        }
+
+        /// Validates the presets actually selected for this run. Environment presets
+        /// are covered by [`Self::validate_environment_preset_references`]; this also
+        /// catches presets given with `--preset`, which replace the environment's
+        /// list and would otherwise be silently dropped.
+        fn validate_selected_preset_references(
+            &self,
+            validation: &mut ValidationBuilder,
+            selector: &ComponentPresetSelector,
+        ) {
+            let environment_refs = self
+                .environments
+                .get(&selector.environment)
+                .map(|environment| environment.component_presets.clone().into_set())
+                .unwrap_or_default();
+
+            for preset in &selector.presets {
+                // Skip presets that came from the environment; those are already
+                // reported by validate_environment_preset_references.
+                if environment_refs.contains(&preset.0) {
+                    continue;
+                }
+                self.validate_preset_defined(validation, &preset.0, Some("--preset"));
+            }
+        }
+
+        /// Adds an error if `preset` is not a defined selectable preset name.
+        /// `selected_with` names the flag it came from, when not an environment.
+        fn validate_preset_defined(
+            &self,
+            validation: &mut ValidationBuilder,
+            preset: &str,
+            selected_with: Option<&str>,
+        ) {
+            if self.custom_preset_names.contains(preset) {
+                return;
+            }
+            let source = selected_with
+                .map(|flag| format!(" selected with {flag}"))
+                .unwrap_or_default();
+            validation.add_error(format!(
+                "Unknown preset {}{source}.\n{}",
+                preset.log_color_error_highlight(),
+                self.available_options_help(
+                    "presets",
+                    "preset names",
+                    preset,
+                    self.custom_preset_names.iter().map(String::as_str),
+                ),
+            ));
         }
 
         fn resolve_and_validate_components(
@@ -3846,6 +3924,7 @@ mod app_builder {
                         component_dir,
                         &component_layer_properties,
                     );
+                    Self::validate_unique_file_targets(validation, &component_properties);
                     self.validate_component_dependencies(
                         validation,
                         &component_name,
@@ -3857,6 +3936,32 @@ mod app_builder {
                     );
                 }
                 Err(err) => validation.add_error(format!("Failed to resolve component: {err}")),
+            }
+        }
+
+        // Manifest-time check for duplicate IFS target paths. This catches obvious
+        // collisions between literal file entries early (before deploy). Directory sources
+        // are only expanded at build time, so `ifs::validate_unique_targets` remains the
+        // backstop for collisions that only appear after expansion.
+        fn validate_unique_file_targets(
+            validation: &mut ValidationBuilder,
+            component_properties: &ComponentProperties,
+        ) {
+            let duplicate_targets = component_properties
+                .files
+                .iter()
+                .map(|file| &file.target.path)
+                .counts()
+                .into_iter()
+                .filter(|&(_, count)| count > 1)
+                .map(|(path, _)| path.to_string())
+                .collect::<Vec<_>>();
+
+            if !duplicate_targets.is_empty() {
+                validation.add_error(format!(
+                    "Multiple initial component files map to the same target path: {}",
+                    duplicate_targets.into_iter().join(", ")
+                ));
             }
         }
 
@@ -3926,19 +4031,6 @@ mod app_builder {
             unknown: &str,
         ) -> String {
             self.available_options_help("profiles", "profile names", unknown, available_profiles)
-        }
-
-        // TODO: atomic
-        #[allow(unused)]
-        fn available_templates(&self, _unknown: &str) -> String {
-            // TODO: atomic
-            /*self.available_options_help(
-                "templates",
-                "template names",
-                unknown,
-                self.templates.keys().map(|name| name.as_str()),
-            )*/
-            todo!()
         }
 
         fn available_options_help<'a, I: IntoIterator<Item = &'a str>>(
@@ -4032,6 +4124,47 @@ mod app_builder {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanResult {
+    pub cleaned: bool,
+}
+
+impl NoTextOutput for CleanResult {}
+impl TextOutput for CleanResult {}
+
+impl StructuredOutput for CleanResult {
+    const KIND: &'static str = "clean";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildResult {
+    pub built: bool,
+}
+
+impl NoTextOutput for BuildResult {}
+impl TextOutput for BuildResult {}
+
+impl StructuredOutput for BuildResult {
+    const KIND: &'static str = "build";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewAppResult {
+    pub created: bool,
+    pub application_name: String,
+    pub application_dir: PathBuf,
+}
+
+impl NoTextOutput for NewAppResult {}
+impl TextOutput for NewAppResult {}
+
+impl StructuredOutput for NewAppResult {
+    const KIND: &'static str = "new";
+}
+
 #[cfg(test)]
 mod test {
     use crate::bridge_gen::{BridgeMode, bridge_client_directory_name};
@@ -4070,6 +4203,15 @@ mod test {
                 componentWasm: dummy-component.wasm
 
             components:
+              # Defines debug/release so they are known preset names; app:main
+              # below deliberately does not define them, to exercise the fallback.
+              app:other:
+                componentWasm: other.wasm
+                presets:
+                  debug:
+                    componentWasm: other-debug.wasm
+                  release:
+                    componentWasm: other-release.wasm
               app:main:
                 templates: malbogle
                 presets:
@@ -4402,7 +4544,7 @@ mod test {
         assert_eq!(
             app.bridge_sdk_dir(
                 &alpha_agent,
-                crate::model::GuestLanguage::Rust,
+                crate::model::language::GuestLanguage::Rust,
                 BridgeMode::External
             ),
             app_tmp_dir
@@ -4416,7 +4558,7 @@ mod test {
         assert_eq!(
             app.bridge_sdk_dir(
                 &beta_agent,
-                crate::model::GuestLanguage::Rust,
+                crate::model::language::GuestLanguage::Rust,
                 BridgeMode::External
             ),
             app_tmp_dir
@@ -4458,7 +4600,7 @@ mod test {
         assert_eq!(
             app.bridge_sdk_dir(
                 &alpha_agent,
-                crate::model::GuestLanguage::Rust,
+                crate::model::language::GuestLanguage::Rust,
                 BridgeMode::External
             ),
             app.temp_dir()
@@ -4472,7 +4614,7 @@ mod test {
         assert_eq!(
             app.bridge_sdk_dir(
                 &alpha_agent,
-                crate::model::GuestLanguage::Rust,
+                crate::model::language::GuestLanguage::Rust,
                 BridgeMode::Guest
             ),
             app.temp_dir()
@@ -4513,7 +4655,7 @@ mod test {
         assert_eq!(
             app.bridge_sdk_dir(
                 &alpha_agent,
-                crate::model::GuestLanguage::Rust,
+                crate::model::language::GuestLanguage::Rust,
                 BridgeMode::Guest
             ),
             app_tmp_dir
@@ -4550,7 +4692,7 @@ mod test {
         let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
 
         assert_eq!(
-            app.tool_bridge_sdk_dir("MyTool", crate::model::GuestLanguage::Rust),
+            app.tool_bridge_sdk_dir("MyTool", crate::model::language::GuestLanguage::Rust),
             app_tmp_dir.path().join("bridge-sdk/rust-guest").join(
                 crate::bridge_gen::tool_bridge_client_directory_name("MyTool")
             )
@@ -4558,7 +4700,7 @@ mod test {
 
         let used_modes = app.bridge_sdks().for_all_used_modes();
         assert_eq!(used_modes.len(), 1);
-        assert_eq!(used_modes[0].0, crate::model::GuestLanguage::Rust);
+        assert_eq!(used_modes[0].0, crate::model::language::GuestLanguage::Rust);
         assert_eq!(used_modes[0].1, BridgeMode::Guest);
     }
 
@@ -4586,7 +4728,7 @@ mod test {
         let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
 
         assert_eq!(
-            app.tool_bridge_sdk_dir("MyTool", crate::model::GuestLanguage::MoonBit),
+            app.tool_bridge_sdk_dir("MyTool", crate::model::language::GuestLanguage::MoonBit),
             app_tmp_dir.path().join("bridge-sdk/moonbit-guest").join(
                 crate::bridge_gen::tool_bridge_client_directory_name("MyTool")
             )
@@ -4594,7 +4736,10 @@ mod test {
 
         let used_modes = app.bridge_sdks().for_all_used_modes();
         assert_eq!(used_modes.len(), 1);
-        assert_eq!(used_modes[0].0, crate::model::GuestLanguage::MoonBit);
+        assert_eq!(
+            used_modes[0].0,
+            crate::model::language::GuestLanguage::MoonBit
+        );
         assert_eq!(used_modes[0].1, BridgeMode::Guest);
     }
 
@@ -4720,6 +4865,120 @@ mod test {
     }
 
     #[test]
+    fn component_files_reject_duplicate_target_paths() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                files:
+                  - sourcePath: a.txt
+                    targetPath: /data/shared.txt
+                  - sourcePath: b.txt
+                    targetPath: /data/shared.txt
+        "# });
+
+        assert_eq!(errors.len(), 1, "unexpected errors: {errors:?}");
+        assert!(
+            errors[0].contains("same target path") && errors[0].contains("/data/shared.txt"),
+            "unexpected error: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn environment_unknown_component_preset_is_rejected() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+                componentPresets: slow
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                presets:
+                  fast:
+                    env:
+                      MODE: fast
+        "# });
+
+        assert_eq!(errors.len(), 1, "unexpected errors: {errors:?}");
+        assert!(
+            errors[0].contains("Unknown preset") && errors[0].contains("slow"),
+            "unexpected error: {}",
+            errors[0]
+        );
+        // The available presets are listed so the user can find the right name.
+        assert!(
+            errors[0].contains("fast"),
+            "error should list available presets: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn environment_known_component_preset_is_accepted() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+                componentPresets: fast
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                presets:
+                  fast:
+                    env:
+                      MODE: fast
+        "# });
+
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    #[test]
+    fn unknown_preset_selected_with_flag_is_rejected() {
+        // A `--preset` value replaces the environment's list and would otherwise
+        // be silently dropped during selection.
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                presets:
+                  fast:
+                    env:
+                      MODE: fast
+        "# };
+
+        let errors = load_app_errors_with_selector(source, &selector("local", &["slow"]));
+
+        assert_eq!(errors.len(), 1, "unexpected errors: {errors:?}");
+        assert!(
+            errors[0].contains("Unknown preset")
+                && errors[0].contains("slow")
+                && errors[0].contains("--preset"),
+            "unexpected error: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
     fn typescript_guest_bridge_mode_is_accepted() {
         let source = indoc! { r#"
             app: hello-app
@@ -4796,7 +5055,7 @@ mod test {
         assert_eq!(
             app.bridge_sdk_dir(
                 &agent_type_name,
-                crate::model::GuestLanguage::Scala,
+                crate::model::language::GuestLanguage::Scala,
                 BridgeMode::Guest
             ),
             app_tmp_dir
@@ -5042,6 +5301,11 @@ mod test {
             components:
               app:main:
                 componentWasm: dummy-component.wasm
+                # 'missing' is a known preset name (so selecting it is valid), but
+                # test-agent below does not define it, exercising the fallback.
+                presets:
+                  missing:
+                    componentWasm: dummy-component.wasm
 
             agents:
               test-agent:
@@ -5813,6 +6077,13 @@ mod test {
     }
 
     fn load_app_errors(source: &str) -> Vec<String> {
+        load_app_errors_with_selector(source, &selector("local", &[]))
+    }
+
+    fn load_app_errors_with_selector(
+        source: &str,
+        selector: &ComponentPresetSelector,
+    ) -> Vec<String> {
         let tmp_dir = tempfile::tempdir().unwrap();
 
         let golem_yaml_path = tmp_dir.path().join("golem.yaml");
@@ -5840,7 +6111,7 @@ mod test {
             application_name,
             environments,
             local_server,
-            selector("local", &[]),
+            selector.clone(),
             raw_apps,
         )
         .into_product();

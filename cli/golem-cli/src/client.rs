@@ -19,7 +19,7 @@ use golem_client::api::{
     AccountClientLive, AccountSummaryClientLive, AgentClientLive, AgentSecretsClientLive,
     AgentTypesClientLive, ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive,
     ApplicationClientLive, CardClientLive, ComponentClientLive, DeploymentClientLive,
-    EnvironmentClientLive, HealthCheckClientLive, LoginClientLive, McpDeploymentClientLive,
+    EnvironmentClientLive, LoginClientLive, McpDeploymentClientLive,
     MeClientLive, PermissionSharesClientLive, PluginClientLive, ResourcesClientLive,
     RetryPoliciesClientLive, TokenClientLive, WorkerClientLive,
 };
@@ -265,7 +265,6 @@ pub struct GolemClients {
     pub application: ApplicationClientLive,
     pub card: CardClientLive,
     pub component: ComponentClientLive,
-    pub component_healthcheck: HealthCheckClientLive,
     pub deployment: DeploymentClientLive,
     pub environment: EnvironmentClientLive,
     pub login: LoginClientLive,
@@ -285,12 +284,9 @@ impl GolemClients {
         auth_config: &AuthenticationConfigWithSource,
         config_dir: &Path,
     ) -> anyhow::Result<Self> {
-        let without_retry = MiddlewareConfig::without_retry();
         let with_service_retry = MiddlewareConfig::with_service_retry();
         let with_invoke_retry = MiddlewareConfig::with_invoke_retry();
 
-        let healthcheck_http_client =
-            new_reqwest_client(&config.health_check_http_client_config, &without_retry)?;
         let service_http_client =
             new_reqwest_client(&config.service_http_client_config, &with_service_retry)?;
         let invoke_http_client =
@@ -316,11 +312,6 @@ impl GolemClients {
             security_token: security_token.clone(),
         };
 
-        let registry_healthcheck_context = || ClientContext {
-            client: healthcheck_http_client,
-            base_url: config.registry_url.clone(),
-            security_token: Security::Empty,
-        };
 
         let worker_context = || ClientContext {
             client: service_http_client.clone(),
@@ -380,9 +371,6 @@ impl GolemClients {
             },
             component: ComponentClientLive {
                 context: registry_context(),
-            },
-            component_healthcheck: HealthCheckClientLive {
-                context: registry_healthcheck_context(),
             },
             deployment: DeploymentClientLive {
                 context: registry_context(),

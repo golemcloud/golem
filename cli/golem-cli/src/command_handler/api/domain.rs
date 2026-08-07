@@ -15,8 +15,8 @@
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::MapServiceError;
-use crate::model::text::http_api_domain::{
-    DomainRegistrationDeleteResult, DomainRegistrationNewView, HttpApiDomainListView,
+use crate::model::http_api::domain::{
+    DomainRegistrationDeleteView, DomainRegistrationNewView, HttpApiDomainListView,
 };
 
 use crate::command::api::domain::ApiDomainSubcommand;
@@ -159,17 +159,13 @@ impl ApiDomainCommandHandler {
                 environment.text_format()
             ),
         );
-        log_action(
-            "Deleted",
-            format!("domain registration {}", domain.0.log_color_highlight()),
-        );
-
         self.ctx
             .log_handler()
-            .log_output(DomainRegistrationDeleteResult {
+            .log_output(DomainRegistrationDeleteView {
                 deleted: true,
                 domain,
                 id: domain_to_delete.id,
+                environment_id: domain_to_delete.environment_id,
             })?;
 
         Ok(())

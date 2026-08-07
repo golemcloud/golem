@@ -16,8 +16,7 @@ use crate::command::api_token::ApiTokenSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::MapServiceError;
-use crate::log::{LogColorize, log_warn_action};
-use crate::model::text::token::{TokenDeleteResult, TokenListView, TokenNewView};
+use crate::model::token::{TokenDeleteView, TokenListView, TokenNewView};
 use chrono::{DateTime, Utc};
 use golem_client::api::{AccountClient, TokenClient};
 use golem_client::model::TokenCreation;
@@ -80,12 +79,7 @@ impl ApiTokenCommandHandler {
             .await
             .map_service_error()?;
 
-        log_warn_action(
-            "Deleted",
-            format!("token {}", token_id.0.to_string().log_color_highlight()),
-        );
-
-        self.ctx.log_handler().log_output(TokenDeleteResult {
+        self.ctx.log_handler().log_output(TokenDeleteView {
             deleted: true,
             token_id,
         })?;

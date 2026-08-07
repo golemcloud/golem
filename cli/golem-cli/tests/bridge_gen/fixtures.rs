@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::workspace_path;
-use golem_cli::model::GuestLanguage;
+use golem_cli::model::language::GuestLanguage;
 use golem_common::model::Empty;
 use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, Snapshotting};
 use golem_common::schema::agent::AgentConfigDeclarationSchema;

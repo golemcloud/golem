@@ -1,0 +1,186 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::model::cli_output::StructuredOutput;
+use crate::model::masking::Masked;
+use crate::model::text_format::*;
+use golem_common::model::retry_policy::RetryPolicyDto;
+use serde_derive::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryPolicyCreateView(pub RetryPolicyDto);
+
+impl Masked for RetryPolicyCreateView {}
+
+impl MessageWithFields for RetryPolicyCreateView {
+    fn message(&self) -> String {
+        format!(
+            "Created retry policy {}",
+            format_message_highlight(&self.0.name),
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        retry_policy_view_fields(&self.0)
+    }
+}
+
+impl StructuredOutput for RetryPolicyCreateView {
+    const KIND: &'static str = "retry-policy.create";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryPolicyGetView(pub RetryPolicyDto);
+
+impl Masked for RetryPolicyGetView {}
+
+impl MessageWithFields for RetryPolicyGetView {
+    fn message(&self) -> String {
+        format!("Retry policy {}", format_message_highlight(&self.0.name),)
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        retry_policy_view_fields(&self.0)
+    }
+}
+
+impl StructuredOutput for RetryPolicyGetView {
+    const KIND: &'static str = "retry-policy.get";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryPolicyUpdateView(pub RetryPolicyDto);
+
+impl Masked for RetryPolicyUpdateView {}
+
+impl MessageWithFields for RetryPolicyUpdateView {
+    fn message(&self) -> String {
+        format!(
+            "Updated retry policy {}",
+            format_message_highlight(&self.0.name),
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        retry_policy_view_fields(&self.0)
+    }
+}
+
+impl StructuredOutput for RetryPolicyUpdateView {
+    const KIND: &'static str = "retry-policy.update";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryPolicyDeleteView {
+    pub deleted: bool,
+    pub id: golem_common::model::retry_policy::RetryPolicyId,
+    pub environment_id: golem_common::model::environment::EnvironmentId,
+    pub name: String,
+    pub revision: golem_common::model::retry_policy::RetryPolicyRevision,
+}
+
+impl From<RetryPolicyDto> for RetryPolicyDeleteView {
+    fn from(dto: RetryPolicyDto) -> Self {
+        Self {
+            deleted: true,
+            id: dto.id,
+            environment_id: dto.environment_id,
+            name: dto.name,
+            revision: dto.revision,
+        }
+    }
+}
+
+impl Masked for RetryPolicyDeleteView {}
+
+impl MessageWithFields for RetryPolicyDeleteView {
+    fn message(&self) -> String {
+        format!(
+            "Deleted retry policy {}",
+            format_message_highlight(&self.name)
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        let mut fields = FieldsBuilder::new();
+        fields
+            .fmt_field("Environment ID", &self.environment_id.0, format_main_id)
+            .fmt_field("Name", &self.name, format_main_id)
+            .fmt_field("ID", &self.id, format_id)
+            .fmt_field("Revision", &self.revision.get(), format_id);
+        fields.build()
+    }
+}
+
+impl StructuredOutput for RetryPolicyDeleteView {
+    const KIND: &'static str = "retry-policy.delete";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryPolicyListView {
+    pub retry_policies: Vec<RetryPolicyDto>,
+}
+
+impl StructuredOutput for RetryPolicyListView {
+    const KIND: &'static str = "retry-policy.list";
+}
+
+fn retry_policy_view_fields(view: &RetryPolicyDto) -> Vec<(String, String)> {
+    let mut fields = FieldsBuilder::new();
+
+    fields
+        .fmt_field("Environment ID", &view.environment_id.0, format_main_id)
+        .fmt_field("Name", &view.name, format_main_id)
+        .fmt_field("ID", &view.id, format_id)
+        .fmt_field("Revision", &view.revision.get(), format_id)
+        .fmt_field("Priority", &view.priority, ToString::to_string)
+        .fmt_field(
+            "Predicate",
+            &serde_json::to_string(&view.predicate).expect("Failed to serialize Retry predicate"),
+            ToString::to_string,
+        )
+        .fmt_field(
+            "Policy",
+            &serde_json::to_string(&view.policy).expect("Failed to serialize Retry policy"),
+            ToString::to_string,
+        );
+
+    fields.build()
+}
+
+impl TextOutput for RetryPolicyListView {
+    fn log(&self) {
+        let mut table = new_table_full_condensed(vec![
+            Column::new("Environment ID").fixed(),
+            Column::new("Name").fixed(),
+            Column::new("ID").fixed(),
+            Column::new("Revision").fixed_right(),
+            Column::new("Priority").fixed_right(),
+        ]);
+
+        for policy in &self.retry_policies {
+            table.add_row(vec![
+                policy.environment_id.0.to_string(),
+                policy.name.clone(),
+                policy.id.to_string(),
+                policy.revision.get().to_string(),
+                policy.priority.to_string(),
+            ]);
+        }
+
+        log_table(table)
+    }
+}

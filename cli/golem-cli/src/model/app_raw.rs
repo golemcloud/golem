@@ -14,10 +14,10 @@
 
 use crate::bridge_gen::BridgeMode;
 use crate::log::LogColorize;
-use crate::model::GuestLanguage;
 use crate::model::cascade::property::map::MapMergeMode;
 use crate::model::cascade::property::vec::VecMergeMode;
 use crate::model::format::Format;
+use crate::model::language::GuestLanguage;
 use crate::{APP_MANIFEST_JSON_SCHEMA, fs};
 use anyhow::{Context, anyhow};
 use golem_common::model::agent::AgentTypeName;
