@@ -1284,7 +1284,11 @@ impl AgentCommandHandler {
                 .component_handler()
                 .component_version_at(&component.id, from_revision)
                 .await,
-            version: component.metadata.root_package_version().clone(),
+            version: self
+                .ctx
+                .component_handler()
+                .component_version_at(&component.id, target_revision)
+                .await,
         };
 
         let mut update_results = TryUpdateAllWorkersView::default();
