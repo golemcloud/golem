@@ -77,7 +77,8 @@ use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
 pub use golem_test_framework::dsl::PrecompiledComponent;
 use golem_worker_executor::durable_host::{
-    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState, SnapshotBoundaryBlocker,
+    DurableResourceLimiter, DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
+    SnapshotBoundaryBlocker,
 };
 use golem_worker_executor::model::{
     AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType,
@@ -1687,8 +1688,7 @@ impl WorkerCtx for TestWorkerCtx {
     }
 }
 
-#[async_trait]
-impl golem_worker_executor::durable_host::DurableResourceLimiter<TestWorkerCtx> for TestWorkerCtx {
+impl DurableResourceLimiter<TestWorkerCtx> for TestWorkerCtx {
     fn durable_worker_ctx(&mut self) -> &mut DurableWorkerCtx<TestWorkerCtx> {
         &mut self.durable_ctx
     }
@@ -1709,22 +1709,15 @@ impl ResourceLimiterAsync for TestWorkerCtx {
             desired
         );
 
-        golem_worker_executor::durable_host::DurableResourceLimiter::durable_memory_growing(
-            self, current, desired, maximum,
-        )
-        .await
+        self.durable_memory_growing(current, desired, maximum).await
     }
 
     fn memory_grown(&mut self, current: usize, desired: usize) {
-        golem_worker_executor::durable_host::DurableResourceLimiter::durable_memory_grown(
-            self, current, desired,
-        );
+        self.durable_memory_grown(current, desired);
     }
 
     fn memory_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
-        golem_worker_executor::durable_host::DurableResourceLimiter::durable_memory_grow_failed(
-            self,
-        )
+        self.durable_memory_grow_failed()
     }
 
     async fn table_growing(

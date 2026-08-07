@@ -24,7 +24,6 @@ use crate::repo::model::account_usage::{
 use crate::repo::model::plan::PlanRecord;
 use crate::services::account_usage::error::AccountUsageError;
 use chrono::{TimeZone, Utc};
-use futures::StreamExt;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::account_usage::{
     StorageLimit, StorageUsage, StorageUsageHistory, StorageUsageMetrics, StorageUsagePeriod,
@@ -40,7 +39,6 @@ use golem_service_base::model::{AccountResourceLimits, ResourceLimits};
 use golem_service_base::repo::SqlDateTime;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Semaphore;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ResourceUsageUpdate {
@@ -55,7 +53,6 @@ pub struct ResourceUsageUpdate {
 pub struct AccountUsageService {
     account_usage_repo: Arc<dyn AccountUsageRepo>,
     account_service: Arc<AccountService>,
-    resource_usage_concurrency: Semaphore,
 }
 
 // TODO: do we want to add component max size limit?
@@ -68,7 +65,6 @@ impl AccountUsageService {
         Self {
             account_usage_repo,
             account_service,
-            resource_usage_concurrency: Semaphore::new(4),
         }
     }
 
@@ -190,68 +186,57 @@ impl AccountUsageService {
     ) -> Result<AccountResourceLimits, AccountUsageError> {
         auth.authorize_system_only("update account usage")?;
 
-        let limits = futures::stream::iter(updates)
-            .map(|(account_id, update)| async move {
-                let _permit = self
-                    .resource_usage_concurrency
-                    .acquire()
-                    .await
-                    .expect("resource usage concurrency semaphore must remain open");
-                // The stats query loads every usage row for the monthly key,
-                // including gas, HTTP, RPC, storage, and memory, without the
-                // full account inventory aggregation.
+        let mut limits_of_updated_accounts = HashMap::new();
+        for (account_id, update) in updates {
+            match self
+                .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
+                .await
+            {
+                Ok(mut account_usage) => {
+                    // Usage can slightly exceed the monthly limit. The worker executor
+                    // will suspend the worker at the next opportunity.
+                    account_usage.add_change(UsageType::MonthlyGasLimit, update.fuel_delta);
+                    account_usage.add_change(
+                        UsageType::MonthlyHttpCalls,
+                        i64::try_from(update.http_call_count_delta).unwrap_or(i64::MAX),
+                    );
+                    account_usage.add_change(
+                        UsageType::MonthlyRpcCalls,
+                        i64::try_from(update.rpc_call_count_delta).unwrap_or(i64::MAX),
+                    );
+                    account_usage.add_change(
+                        UsageType::MonthlyDurableAgentStorageByteSeconds,
+                        update.durable_storage_byte_seconds_delta,
+                    );
+                    account_usage.add_change(
+                        UsageType::MonthlyEphemeralStorageByteSeconds,
+                        update.ephemeral_storage_byte_seconds_delta,
+                    );
+                    account_usage.add_change(
+                        UsageType::MonthlyMemoryGbSeconds,
+                        update.memory_gb_seconds_delta,
+                    );
 
-                match self
-                    .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
-                    .await
-                {
-                    Ok(mut account_usage) => {
-                        // Usage can slightly exceed the monthly limit. The worker executor
-                        // will suspend the worker at the next opportunity.
-                        account_usage.add_change(UsageType::MonthlyGasLimit, update.fuel_delta);
-                        account_usage.add_change(
-                            UsageType::MonthlyHttpCalls,
-                            i64::try_from(update.http_call_count_delta).unwrap_or(i64::MAX),
-                        );
-                        account_usage.add_change(
-                            UsageType::MonthlyRpcCalls,
-                            i64::try_from(update.rpc_call_count_delta).unwrap_or(i64::MAX),
-                        );
-                        account_usage.add_change(
-                            UsageType::MonthlyDurableAgentStorageByteSeconds,
-                            update.durable_storage_byte_seconds_delta,
-                        );
-                        account_usage.add_change(
-                            UsageType::MonthlyEphemeralStorageByteSeconds,
-                            update.ephemeral_storage_byte_seconds_delta,
-                        );
-                        account_usage.add_change(
-                            UsageType::MonthlyMemoryGbSeconds,
-                            update.memory_gb_seconds_delta,
-                        );
+                    tracing::debug!(
+                        %account_id,
+                        fuel_delta = update.fuel_delta,
+                        memory_gb_seconds_delta = update.memory_gb_seconds_delta,
+                        durable_storage_byte_seconds_delta = update.durable_storage_byte_seconds_delta,
+                        ephemeral_storage_byte_seconds_delta = update.ephemeral_storage_byte_seconds_delta,
+                        http_call_count_delta = update.http_call_count_delta,
+                        rpc_call_count_delta = update.rpc_call_count_delta,
+                        "Updating account resource usage"
+                    );
 
-                        tracing::debug!(
-                            "Updating usage for account {account_id}: fuel_delta={}, memory_gb_seconds_delta={}, durable_storage_byte_seconds_delta={}, ephemeral_storage_byte_seconds_delta={}, http_call_count_delta={}, rpc_call_count_delta={}",
-                            update.fuel_delta,
-                            update.memory_gb_seconds_delta,
-                            update.durable_storage_byte_seconds_delta,
-                            update.ephemeral_storage_byte_seconds_delta,
-                            update.http_call_count_delta,
-                            update.rpc_call_count_delta,
-                        );
-
-                        match self.account_usage_repo.add(&account_usage).await {
-                            Ok(()) => Some((account_id, account_usage.resource_limits())),
-                            Err(error) => {
-                                tracing::error!(%account_id, %error, "Failed to apply resource usage update");
-                                None
-                            }
-                        }
-                    }
-                    Err(AccountUsageError::AccountNotfound(_)) => {
-                        // we received an update for a deleted account
-                        // return an empty set of limits to fence the executor more quickly
-                        Some((account_id, ResourceLimits {
+                    self.account_usage_repo.add(&account_usage).await?;
+                    limits_of_updated_accounts.insert(account_id, account_usage.resource_limits());
+                }
+                Err(AccountUsageError::AccountNotfound(_)) => {
+                    // We received an update for a deleted account. Return an empty
+                    // set of limits to fence the executor more quickly.
+                    limits_of_updated_accounts.insert(
+                        account_id,
+                        ResourceLimits {
                             available_fuel: 0,
                             max_memory_per_worker: 0,
                             max_table_elements_per_worker: 0,
@@ -263,20 +248,14 @@ impl AccountUsageService {
                             max_concurrent_agents_per_executor: 0,
                             oplog_writes_per_second: 0,
                             usage_update_applied: false,
-                        }))
-                    }
-                    Err(error) => {
-                        tracing::error!(%account_id, %error, "Failed to load account usage for resource update");
-                        None
-                    }
+                        },
+                    );
                 }
-            })
-            .buffer_unordered(4)
-            .filter_map(futures::future::ready)
-            .collect::<HashMap<_, _>>()
-            .await;
+                Err(error) => return Err(error),
+            }
+        }
 
-        Ok(AccountResourceLimits(limits))
+        Ok(AccountResourceLimits(limits_of_updated_accounts))
     }
 
     pub async fn get_resouce_limits(

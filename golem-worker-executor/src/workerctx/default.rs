@@ -463,7 +463,6 @@ impl InvocationHooks for Context {
     }
 }
 
-#[async_trait]
 impl DurableResourceLimiter<Context> for Context {
     fn durable_worker_ctx(&mut self) -> &mut DurableWorkerCtx<Context> {
         &mut self.durable_ctx
@@ -490,8 +489,7 @@ impl ResourceLimiterAsync for Context {
     }
 
     fn memory_grown(&mut self, current: usize, desired: usize) {
-        self.durable_memory_grown(current, desired);
-        if desired > current {
+        if self.durable_memory_grown(current, desired) {
             record_allocated_memory(self.durable_ctx.total_linear_memory_size() as usize);
         }
     }

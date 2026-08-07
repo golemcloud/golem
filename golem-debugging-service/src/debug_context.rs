@@ -354,7 +354,6 @@ impl FileSystemReading for DebugContext {
     }
 }
 
-#[async_trait]
 impl DurableResourceLimiter<DebugContext> for DebugContext {
     fn durable_worker_ctx(&mut self) -> &mut DurableWorkerCtx<DebugContext> {
         &mut self.durable_ctx

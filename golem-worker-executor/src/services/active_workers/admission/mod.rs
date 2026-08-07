@@ -84,6 +84,17 @@ pub(crate) trait EvictionSource: Send + Sync {
     async fn evict_at_most(&self, priority: EvictionPriority, needed_bytes: u64) -> u64;
 }
 
+#[cfg(test)]
+pub(crate) struct NoEvictionSource;
+
+#[cfg(test)]
+#[async_trait]
+impl EvictionSource for NoEvictionSource {
+    async fn evict_at_most(&self, _priority: EvictionPriority, _needed_bytes: u64) -> u64 {
+        0
+    }
+}
+
 /// The outcome of an admission attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AdmissionDecision {
@@ -200,17 +211,18 @@ impl AdmissionController {
     /// not releasing it would permanently shrink admissible headroom as workers
     /// come and go.
     pub(crate) fn release(&self, reserved_bytes: u64) {
-        let mut previously_granted = self.granted.load(Ordering::Acquire);
-        loop {
-            match self.granted.compare_exchange_weak(
-                previously_granted,
-                previously_granted.saturating_sub(reserved_bytes),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => break,
-                Err(current) => previously_granted = current,
-            }
+        let previously_granted = self
+            .granted
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |granted| {
+                Some(granted.saturating_sub(reserved_bytes))
+            })
+            .expect("memory reservation release must always produce a value");
+        if previously_granted < reserved_bytes {
+            tracing::error!(
+                granted_bytes = previously_granted,
+                released_bytes = reserved_bytes,
+                "Released memory exceeds the committed reservation"
+            );
         }
         debug_assert!(
             previously_granted >= reserved_bytes,
@@ -357,6 +369,15 @@ impl MemoryGrant {
     /// grant is consumed and its reservation transferred here; the combined total
     /// is released exactly once when this grant drops.
     pub(crate) fn merge(&mut self, mut other: MemoryGrant) {
+        debug_assert!(
+            match (&self.controller, &other.controller) {
+                (Some(controller), Some(other_controller)) => {
+                    Arc::ptr_eq(controller, other_controller)
+                }
+                _ => true,
+            },
+            "cannot merge memory grants from different admission controllers"
+        );
         self.bytes += other.bytes;
         self.reserved_bytes += other.reserved_bytes;
         if other.controller.is_some() {

@@ -386,25 +386,26 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     _store_alive_guard: StoreAliveGuard,
 }
 
-#[async_trait]
 pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
     fn durable_worker_ctx(&mut self) -> &mut DurableWorkerCtx<Ctx>;
 
-    async fn durable_memory_growing(
+    fn durable_memory_growing(
         &mut self,
         current: usize,
         desired: usize,
         maximum: Option<usize>,
-    ) -> wasmtime::Result<bool> {
+    ) -> impl std::future::Future<Output = wasmtime::Result<bool>> + Send {
         self.durable_worker_ctx()
             .admit_unshared_memory_growth(current, desired, maximum)
-            .await
     }
 
-    fn durable_memory_grown(&mut self, current: usize, desired: usize) {
+    fn durable_memory_grown(&mut self, current: usize, desired: usize) -> bool {
         let delta = desired.saturating_sub(current) as u64;
         if delta > 0 {
             self.durable_worker_ctx().increase_memory(delta);
+            true
+        } else {
+            false
         }
     }
 

@@ -280,7 +280,7 @@ pub fn desired_total_after_growth(
 mod tests {
     use super::*;
     use crate::services::active_workers::admission::{
-        AdmissionController, AdmissionPolicy, EvictionPriority, EvictionSource,
+        AdmissionController, AdmissionPolicy, NoEvictionSource,
     };
     use crate::services::active_workers::memory_probe::FixedProbe;
     use crate::services::resource_limits::AtomicResourceEntry;
@@ -291,15 +291,6 @@ mod tests {
 
     fn grant() -> Arc<Mutex<MemoryGrant>> {
         Arc::new(Mutex::new(MemoryGrant::inert(0)))
-    }
-
-    struct NoEvictionSource;
-
-    #[async_trait::async_trait]
-    impl EvictionSource for NoEvictionSource {
-        async fn evict_at_most(&self, _priority: EvictionPriority, _needed_bytes: u64) -> u64 {
-            0
-        }
     }
 
     #[test]

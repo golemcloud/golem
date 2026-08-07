@@ -272,9 +272,6 @@ impl MemoryProbe for ZeroUsageProbe {
     }
 }
 
-/// An eviction source with nothing to evict: a rejected request stays rejected.
-struct NoEvictionSource;
-
 #[test]
 async fn shrinking_a_reconciled_grant_returns_excess_headroom() {
     let controller = Arc::new(AdmissionController::new(
@@ -310,13 +307,6 @@ async fn inert_grant_adopts_a_tracked_reservation_on_merge() {
         100,
         "dropping the merged owner must return the absorbed tracked reservation"
     );
-}
-
-#[async_trait::async_trait]
-impl EvictionSource for NoEvictionSource {
-    async fn evict_at_most(&self, _priority: EvictionPriority, _needed_bytes: u64) -> u64 {
-        0
-    }
 }
 
 /// Concurrent admissions must never grant more than the ceiling allows.
