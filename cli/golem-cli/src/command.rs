@@ -298,15 +298,7 @@ impl GolemCliGlobalFlags {
         }
 
         if let Ok(interval) = std::env::var("GOLEM_AGENT_STREAM_PING_INTERVAL") {
-            self.agent_stream_ping_interval = Some(
-                iso8601::duration(&interval)
-                    .map_err(|err| {
-                        anyhow!(
-                            "Failed to parse GOLEM_AGENT_STREAM_PING_INTERVAL ({interval}): {err}"
-                        )
-                    })?
-                    .into(),
-            );
+            self.agent_stream_ping_interval = Some(parse_agent_stream_ping_interval(&interval)?);
         }
 
         if let Ok(auth_token) = std::env::var("GOLEM_AUTH_TOKEN") {
@@ -356,6 +348,23 @@ impl GolemCliGlobalFlags {
     pub fn verbosity(&self) -> clap_verbosity_flag::Verbosity {
         self.verbosity.as_clap_verbosity_flag()
     }
+}
+
+/// Parses `GOLEM_AGENT_STREAM_PING_INTERVAL` (an ISO-8601 duration) and rejects a
+/// non-positive value: streaming feeds this into `tokio::time::interval`, which panics
+/// on a zero duration, so a zero here must surface as a clean CLI configuration error.
+fn parse_agent_stream_ping_interval(value: &str) -> anyhow::Result<Duration> {
+    let duration: Duration = iso8601::duration(value)
+        .map_err(|err| {
+            anyhow!("Failed to parse GOLEM_AGENT_STREAM_PING_INTERVAL ({value}): {err}")
+        })?
+        .into();
+    if duration.is_zero() {
+        return Err(anyhow!(
+            "GOLEM_AGENT_STREAM_PING_INTERVAL must be a positive duration, got {value}"
+        ));
+    }
+    Ok(duration)
 }
 
 #[derive(Debug, Default, Parser)]
@@ -2634,7 +2643,7 @@ mod test {
     use crate::command::shared_args::PostDeployArgs;
     use crate::command::{
         GolemCliCommand, GolemCliSubcommand, builtin_exec_subcommands,
-        help_target_to_subcommand_names,
+        help_target_to_subcommand_names, parse_agent_stream_ping_interval,
     };
     use crate::error::ShowClapHelpTarget;
     use crate::model::agent::AgentUpdateMode;
@@ -2644,6 +2653,19 @@ mod test {
     use std::collections::{BTreeMap, BTreeSet};
     use strum::IntoEnumIterator;
     use test_r::test;
+
+    #[test]
+    fn agent_stream_ping_interval_rejects_zero_duration() {
+        // A syntactically valid ISO-8601 zero would panic `tokio::time::interval`; it must
+        // surface as a configuration error instead of crashing streaming.
+        assert!(parse_agent_stream_ping_interval("PT0S").is_err());
+        assert!(parse_agent_stream_ping_interval("PT0H0M0S").is_err());
+
+        let parsed = parse_agent_stream_ping_interval("PT2S").expect("PT2S is a valid interval");
+        assert_eq!(parsed, std::time::Duration::from_secs(2));
+
+        assert!(parse_agent_stream_ping_interval("not-a-duration").is_err());
+    }
 
     #[test]
     fn command_debug_assert() {
