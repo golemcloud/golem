@@ -3761,6 +3761,7 @@ dependencies = [
  "tree-sitter-typescript",
  "tree-sitter-yaml",
  "unicode-segmentation",
+ "unicode-width 0.2.2",
  "url",
  "uuid",
  "version-compare",

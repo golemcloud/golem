@@ -23,6 +23,7 @@
 
 use super::lexer::{Lexer, Token};
 use colored::Colorize;
+use unicode_width::UnicodeWidthStr;
 
 const INDENT: &str = "  ";
 const MIN_WIDTH: usize = 20;
@@ -185,7 +186,7 @@ fn layout(
         {
             let gap = &input[end..span.start];
             out.push_str(gap);
-            col += gap.chars().count();
+            col += gap.width();
         }
         at_line_start = false;
 
@@ -194,7 +195,7 @@ fn layout(
         match span.kind {
             Kind::Open => {
                 let fits = close_of[index]
-                    .map(|close| col + input[span.start..spans[close].end].chars().count() <= width)
+                    .map(|close| col + input[span.start..spans[close].end].width() <= width)
                     .unwrap_or(true);
                 push_token(&mut out, &mut col, text, span.kind, colorize);
                 expanded.push(!fits);
@@ -234,7 +235,7 @@ fn indent_level(expanded: &[bool]) -> usize {
 fn newline_indent(out: &mut String, col: &mut usize, level: usize) {
     out.push('\n');
     out.push_str(&INDENT.repeat(level));
-    *col = level * INDENT.chars().count();
+    *col = level * INDENT.width();
 }
 
 fn push_token(out: &mut String, col: &mut usize, text: &str, kind: Kind, colorize: bool) {
@@ -250,7 +251,7 @@ fn push_token(out: &mut String, col: &mut usize, text: &str, kind: Kind, coloriz
     } else {
         out.push_str(text);
     }
-    *col += text.chars().count();
+    *col += text.width();
 }
 
 #[cfg(test)]
@@ -307,6 +308,35 @@ mod tests {
         let formatted = format_agent_id_for_terminal(id, false, Some(80));
 
         assert_eq!(formatted, id);
+    }
+
+    /// Each CJK character occupies two terminal columns. This id is 26 scalar values
+    /// but 41 columns wide, so a scalar-count measure would wrongly keep it on one line
+    /// in a 30-column terminal; display-width measurement must break it.
+    #[test]
+    fn wide_glyphs_are_measured_in_terminal_columns() {
+        let id = "Counter(\"一二三四五六七八九十一二三四五\")";
+        let formatted = format_agent_id_for_terminal(id, false, Some(30));
+
+        assert!(
+            formatted.contains('\n'),
+            "wide-glyph id should break by column width, got:\n{formatted}"
+        );
+    }
+
+    /// Combining marks add scalar values but no columns: twenty "e + combining acute"
+    /// pairs are 40 scalars yet 20 columns. A scalar-count measure would wrongly break
+    /// this in a 30-column terminal; by display width it fits and stays inline.
+    #[test]
+    fn combining_marks_do_not_inflate_measured_width() {
+        let value = "e\u{0301}".repeat(20);
+        let id = format!("Note(\"{value}\")");
+        let formatted = format_agent_id_for_terminal(&id, false, Some(30));
+
+        assert!(
+            !formatted.contains('\n'),
+            "combining-mark id fits by column width and should stay inline, got:\n{formatted}"
+        );
     }
 
     #[test]

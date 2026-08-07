@@ -34,6 +34,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use synoptic::TokOpt;
+use unicode_width::UnicodeWidthStr;
 
 pub trait TextOutput {
     fn log(&self) {}
@@ -584,7 +585,7 @@ impl TableCell {
     }
 
     fn content_width(&self) -> usize {
-        self.text.chars().count()
+        self.text.width()
     }
 }
 
@@ -747,7 +748,7 @@ fn column_content_width(spec: &SelfFormattingTableSpec, index: usize) -> usize {
         .iter()
         .filter_map(|row| row.get(index))
         .map(TableCell::content_width)
-        .chain(std::iter::once(spec.headers[index].title.chars().count()))
+        .chain(std::iter::once(spec.headers[index].title.width()))
         .max()
         .unwrap_or(0)
 }
@@ -970,7 +971,7 @@ mod tests {
                 &["comp:one", "comp:two"],
                 &[long, "Counter(\"x\")"]
             )),
-            Some(long.chars().count())
+            Some(long.width())
         );
     }
 
