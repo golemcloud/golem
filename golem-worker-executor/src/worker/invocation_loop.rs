@@ -199,12 +199,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             }
 
             if final_decision.is_none() {
-                let linear_memory = store
-                    .lock()
-                    .await
-                    .data()
-                    .durable_ctx()
-                    .linear_memory_tracker();
+                let (linear_memory, storage_meter) = {
+                    let store = store.lock().await;
+                    let durable_ctx = store.data().durable_ctx();
+                    (
+                        durable_ctx.linear_memory_tracker(),
+                        durable_ctx.storage_meter(),
+                    )
+                };
                 let mut inner_loop = InnerInvocationLoop {
                     receiver: &mut self.receiver,
                     active: self.active.clone(),
@@ -215,6 +217,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     instance: &instance,
                     store: &store,
                     linear_memory,
+                    storage_meter,
                     invocations_since_snapshot: 0,
                     idle_snapshot_task: None,
                     concurrent_agent_permit: &mut self.concurrent_agent_permit,
@@ -537,6 +540,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     instance: &'a Instance,
     store: &'a Mutex<Store<Ctx>>,
     linear_memory: LinearMemoryTracker,
+    storage_meter: crate::services::agent_storage_meter::AgentStorageMeter,
     invocations_since_snapshot: u64,
     idle_snapshot_task: Option<JoinHandle<()>>,
     /// Mutable reference to the concurrent-agent permit held by the outer
@@ -698,7 +702,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// Called when the agent enters idle state. No-op if already released.
     fn release_concurrent_agent_permit(&mut self) {
         if let Some(permit) = self.concurrent_agent_permit.take() {
-            self.linear_memory.pause(std::time::Instant::now());
+            let now = std::time::Instant::now();
+            self.linear_memory.pause(now);
+            self.storage_meter.pause(now);
             debug!(agent_id = %self.owned_agent_id.agent_id, "Releasing concurrent-agent permit (entering idle)");
             drop(permit);
         }
@@ -720,7 +726,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             .instrument(span)
             .await;
             *self.concurrent_agent_permit = Some(permit);
-            self.linear_memory.resume(std::time::Instant::now());
+            let now = std::time::Instant::now();
+            self.linear_memory.resume(now);
+            self.storage_meter.resume(now);
         }
     }
 

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::FilesystemStorageReservation;
 
 pub(super) fn ambient_trap_context<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
@@ -3122,6 +3123,58 @@ where
     };
 
     let mut files = take_initial_files_access(store, get_ctx)?;
+    let storage_meter = store.with(|mut access| get_ctx(access.data_mut()).storage_meter());
+    let mut storage_guard = Some(storage_meter.lock_reservation().await);
+    let storage_growth = match super::super::filesystem_update_storage_growth(
+        &files,
+        &inputs.worker_dir,
+        provision_config
+            .as_ref()
+            .map(|c| c.files.as_slice())
+            .unwrap_or_default(),
+    )
+    .await
+    {
+        Ok(storage_growth) => storage_growth,
+        Err(error) => {
+            restore_initial_files_access(store, get_ctx, files)?;
+            return Err(error);
+        }
+    };
+    let mut storage_reservation = if storage_growth == 0 {
+        None
+    } else {
+        let prepared = match store.with(|mut access| {
+            get_ctx(access.data_mut()).prepare_filesystem_storage_reservation(
+                storage_growth,
+                storage_guard
+                    .take()
+                    .expect("storage guard must be available"),
+            )
+        }) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                restore_initial_files_access(store, get_ctx, files)?;
+                return Err(WorkerExecutorError::runtime(error.to_string()));
+            }
+        };
+        if let Some((worker, mut reservation)) = prepared {
+            let permit = match worker
+                .acquire_filesystem_storage_space(reservation.host_bytes())
+                .await
+            {
+                Ok(permit) => permit,
+                Err(error) => {
+                    restore_initial_files_access(store, get_ctx, files)?;
+                    return Err(WorkerExecutorError::runtime(error.to_string()));
+                }
+            };
+            reservation.set_permit(permit);
+            Some(reservation)
+        } else {
+            None
+        }
+    };
     let update_result = super::super::update_filesystem(
         &mut files,
         &inputs.file_loader,
@@ -3134,16 +3187,66 @@ where
     )
     .await;
 
-    if let Err(error) = update_result {
+    let (committed_growth, update_error) = match update_result {
+        Ok(committed_growth) => (committed_growth, None),
+        Err(update_error) => (update_error.committed_growth, Some(update_error.error)),
+    };
+
+    if let Some(error) = update_error {
         restore_initial_files_access(store, get_ctx, files)?;
+        commit_revision_update_storage_access(
+            store,
+            get_ctx,
+            storage_reservation.take(),
+            committed_growth,
+        )
+        .await;
         return Err(error);
     }
+
+    commit_revision_update_storage_access(
+        store,
+        get_ctx,
+        storage_reservation.take(),
+        committed_growth,
+    )
+    .await;
 
     Ok(AccessRevisionUpdate {
         metadata,
         agent_state,
         files,
     })
+}
+
+async fn commit_revision_update_storage_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    reservation: Option<FilesystemStorageReservation>,
+    committed_growth: u64,
+) where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    if let Some(mut reservation) = reservation
+        && let Some((worker, committed_bytes, committed_host_bytes)) = store.with(|mut access| {
+            get_ctx(access.data_mut())
+                .prepare_filesystem_storage_reservation_commit(&reservation, committed_growth)
+        })
+    {
+        worker
+            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
+                committed_bytes as i64,
+            ))
+            .await;
+        worker
+            .commit_filesystem_storage_space(reservation.take_permit(), committed_host_bytes)
+            .await;
+        store.with(|mut access| {
+            get_ctx(access.data_mut()).finish_filesystem_storage_reservation(committed_bytes);
+        });
+    }
 }
 
 fn take_initial_files_access<T, D, Ctx>(

@@ -36,6 +36,26 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tracing::debug;
 
+pub(crate) fn initial_filesystem_storage_usage(
+    metadata: &golem_common::model::component_metadata::ComponentMetadata,
+    agent_type_name: Option<&golem_common::model::agent::AgentTypeName>,
+) -> u64 {
+    agent_type_name
+        .and_then(|agent_type_name| metadata.agent_type_provision_configs().get(agent_type_name))
+        .map(|config| {
+            config
+                .files
+                .iter()
+                .filter(|file| {
+                    file.permissions
+                        == golem_common::model::component::AgentFilePermissions::ReadWrite
+                })
+                .map(|file| file.size)
+                .fold(0u64, u64::saturating_add)
+        })
+        .unwrap_or(0)
+}
+
 /// Hash field holding the bounded part of the cached `AgentStatusRecord` (everything except the
 /// unbounded fields that are stored separately). Always present for a cached status; its absence is
 /// treated as a cache miss.
@@ -699,6 +719,10 @@ impl WorkerService for DefaultWorkerService {
                     .unwrap_or_else(|err| {
                         panic!("failed enriching local agent config for {owned_agent_id}: {err}")
                     });
+                let initial_filesystem_storage_usage = initial_filesystem_storage_usage(
+                    &component_metadata.metadata,
+                    agent_type_name.as_ref(),
+                );
 
                 let initial_worker_metadata = AgentMetadata {
                     agent_id,
@@ -714,8 +738,10 @@ impl WorkerService for DefaultWorkerService {
                         component_revision_for_replay: component_revision,
                         component_size,
                         total_linear_memory_size: initial_total_linear_memory_size,
+                        current_filesystem_storage_usage: initial_filesystem_storage_usage,
                         active_plugins: initial_active_plugins,
                         agent_mode,
+                        oplog_idx: OplogIndex::INITIAL,
                         ..AgentStatusRecord::default()
                     },
                     original_phantom_id,
@@ -740,7 +766,7 @@ impl WorkerService for DefaultWorkerService {
                             self,
                             owned_agent_id,
                             agent_mode,
-                            None,
+                            Some(initial_worker_metadata.last_known_status.clone()),
                             || self.read_status_checkpoint(owned_agent_id, agent_mode),
                         )
                         .await

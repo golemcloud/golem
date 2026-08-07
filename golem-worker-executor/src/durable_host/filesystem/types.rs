@@ -138,6 +138,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
     async fn set_size(&mut self, fd: Resource<Descriptor>, size: Filesize) -> Result<(), FsError> {
         self.fail_if_read_only(&fd)?;
+        let mut storage_guard = Some(self.storage_meter().lock_reservation().await);
 
         // Determine whether this is a growth and charge the delta.
         // We borrow fd to stat before consuming it in set_size.
@@ -150,12 +151,19 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             }
         };
 
-        if size > current_size {
+        let reservation = if size > current_size {
             let delta = size - current_size;
-            self.reserve_filesystem_storage(delta)
-                .await
-                .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
-        }
+            self.reserve_filesystem_storage_with_guard(
+                delta,
+                storage_guard
+                    .take()
+                    .expect("storage guard must be available"),
+            )
+            .await
+            .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?
+        } else {
+            None
+        };
         // size == current_size: no-op
 
         self.observe_function_call("filesystem::types::descriptor", "set_size");
@@ -165,16 +173,24 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             HostDescriptor::set_size(&mut view.filesystem(), fd, size).await
         };
 
-        if size > current_size {
-            // Growth path: release permits if the operation failed.
+        if let Some(reservation) = reservation {
             let delta = size - current_size;
-            if result.is_err() {
-                self.release_filesystem_storage_space(delta).await;
+            if result.is_ok() {
+                self.commit_filesystem_storage_reservation(reservation, delta)
+                    .await;
+            } else {
+                self.rollback_filesystem_storage_reservation(reservation)
+                    .await;
             }
         } else if result.is_ok() && size < current_size {
             // Shrink path: release permits for the freed space on success.
-            self.release_filesystem_storage_space(current_size - size)
-                .await;
+            self.release_filesystem_storage_space_with_guard(
+                current_size - size,
+                storage_guard
+                    .take()
+                    .expect("storage guard must be available"),
+            )
+            .await;
         }
 
         result
@@ -218,6 +234,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         offset: Filesize,
     ) -> Result<Filesize, FsError> {
         self.fail_if_read_only(&fd)?;
+        let mut storage_guard = Some(self.storage_meter().lock_reservation().await);
 
         let current_size = {
             let fd_borrow = Resource::new_borrow(fd.rep());
@@ -230,11 +247,18 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         let requested_end = offset.saturating_add(buffer.len() as u64);
         let requested_growth = requested_end.saturating_sub(current_size);
-        if requested_growth > 0 {
-            self.reserve_filesystem_storage(requested_growth)
-                .await
-                .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
-        }
+        let reservation = if requested_growth > 0 {
+            self.reserve_filesystem_storage_with_guard(
+                requested_growth,
+                storage_guard
+                    .take()
+                    .expect("storage guard must be available"),
+            )
+            .await
+            .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?
+        } else {
+            None
+        };
 
         self.observe_function_call("filesystem::types::descriptor", "write");
         let result = {
@@ -242,19 +266,17 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             HostDescriptor::write(&mut view.filesystem(), fd, buffer, offset).await
         };
 
-        if requested_growth > 0 {
+        if let Some(reservation) = reservation {
             match result {
                 Ok(written) => {
                     let actual_end = offset.saturating_add(written);
                     let actual_growth = actual_end.saturating_sub(current_size);
-                    let over_reserved = requested_growth.saturating_sub(actual_growth);
-                    if over_reserved > 0 {
-                        self.release_filesystem_storage_space(over_reserved).await;
-                    }
+                    self.commit_filesystem_storage_reservation(reservation, actual_growth)
+                        .await;
                     Ok(written)
                 }
                 Err(err) => {
-                    self.release_filesystem_storage_space(requested_growth)
+                    self.rollback_filesystem_storage_reservation(reservation)
                         .await;
                     Err(err)
                 }
@@ -509,6 +531,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         open_flags: OpenFlags,
         flags: DescriptorFlags,
     ) -> Result<Resource<Descriptor>, FsError> {
+        let mut storage_guard = if open_flags.contains(OpenFlags::TRUNCATE) {
+            Some(self.storage_meter().lock_reservation().await)
+        } else {
+            None
+        };
         let truncated_size = if open_flags.contains(OpenFlags::TRUNCATE) {
             let fd_borrow = Resource::new_borrow(self_.rep());
             let mut view = self.as_wasi_view();
@@ -542,7 +569,13 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         };
 
         if result.is_ok() && truncated_size > 0 {
-            self.release_filesystem_storage_space(truncated_size).await;
+            self.release_filesystem_storage_space_with_guard(
+                truncated_size,
+                storage_guard
+                    .take()
+                    .expect("storage guard must be available"),
+            )
+            .await;
         }
 
         result
@@ -609,6 +642,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<(), FsError> {
         self.fail_if_read_only(&fd)?;
+        let storage_guard = self.storage_meter().lock_reservation().await;
 
         // Stat the target file before unlinking to know how many bytes to release.
         // Use the upstream (non-durable) stat_at to avoid oplog side effects.
@@ -636,7 +670,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         // Only release permits if the unlink actually succeeded.
         if result.is_ok() {
-            self.release_filesystem_storage_space(file_size).await;
+            self.release_filesystem_storage_space_with_guard(file_size, storage_guard)
+                .await;
         }
 
         result

@@ -77,6 +77,7 @@ pub trait FileSystem {
     /// Read from `src_path` and splice into a new file at `dst_path` using
     /// the non-blocking `output-stream.splice`.
     fn splice(&self, src_path: String, dst_path: String) -> Result<u64, String>;
+    fn sleep_for(&self, seconds: f64);
 }
 
 pub struct FileSystemImpl {
@@ -166,6 +167,10 @@ impl FileSystem for FileSystemImpl {
 
     fn delete_file(&self, path: String) -> Result<(), String> {
         remove_file(path).map_err(|e| e.to_string())
+    }
+
+    fn sleep_for(&self, seconds: f64) {
+        std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
     }
 
     fn write_file_direct(&self, name: String, contents: String) -> Result<(), String> {

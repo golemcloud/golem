@@ -64,9 +64,11 @@ mod tests {
                 ),
                 (
                     "GOLEM__FILESYSTEM_STORAGE__TOTAL_WORKER_FILESYSTEM_STORAGE_BYTES".to_string(),
-                    // The eviction test writes 8-byte files. An 8-byte pool forces the first
-                    // agent out before the second agent's filesystem can be loaded.
-                    "8".to_string(),
+                    (2 * 1024 * 1024).to_string(),
+                ),
+                (
+                    "GOLEM__SUSPEND__SUSPEND_AFTER".to_string(),
+                    "1s".to_string(),
                 ),
             ])
             .await;
@@ -144,20 +146,18 @@ mod tests {
 
         let agent = agent_id!("FileReadWrite", "provisioned-storage-billing");
         let worker = user.start_agent(&component.id, agent.clone()).await?;
-        let before = durable_byte_seconds(&deps, &user).await?;
+        let before = wait_for_durable_billing_to_settle(&deps, &user, None).await?;
         tokio::time::sleep(Duration::from_secs(2)).await;
         user.delete_worker(&worker).await?;
-        let after = wait_for_durable_billing_to_settle(&deps, &user, Some(before)).await?;
+        let after = wait_for_durable_billing_to_settle(&deps, &user, None).await?;
 
-        // Deleting the idle worker flushes its meter before the final snapshot. Four bytes over
-        // two seconds should produce about eight byte-seconds without permitting overbilling.
-        assert_billing_window(after - before, 4.0, 12.0, "provisioned-file metering");
+        assert_billing_window(after - before, 0.0, 1.0, "loaded-idle provisioned file");
         Ok(())
     }
 
     #[test]
     #[timeout("2m")]
-    async fn evicted_agent_stops_metering_until_reload() -> anyhow::Result<()> {
+    async fn permit_ownership_defines_storage_billing_window() -> anyhow::Result<()> {
         let deps = create_deps().await;
         let user = deps.user().await?;
         let (_, env) = user.app_and_env().await?;
@@ -165,77 +165,49 @@ mod tests {
             .component(&env.id, "golem_it_host_api_tests_release")
             .store()
             .await?;
-        let agent_a = agent_id!("FileSystem", "storage-billing-a");
-        let agent_b = agent_id!("FileSystem", "storage-billing-b");
-
-        let worker_a = user.start_agent(&component.id, agent_a.clone()).await?;
+        let agent = agent_id!("FileSystem", "storage-billing-window");
+        let worker = user.start_agent(&component.id, agent.clone()).await?;
+        let contents = "x".repeat(1024 * 1024);
         user.invoke_and_await_agent(
             &component,
-            &agent_a,
+            &agent,
             "write_file",
-            data_value!("/metered.txt", "12345678"),
+            data_value!("/metered.txt", contents),
         )
         .await?;
-        let active_start = durable_byte_seconds(&deps, &user).await?;
+
+        let idle_start = wait_for_durable_billing_to_settle(&deps, &user, None).await?;
         tokio::time::sleep(Duration::from_secs(2)).await;
-        let active_end = durable_byte_seconds(&deps, &user).await?;
+        let idle_end = durable_byte_seconds(&deps, &user).await?;
+        assert_billing_window(idle_end - idle_start, 0.0, 1.0, "loaded-idle interval");
 
-        let worker_b = user.start_agent(&component.id, agent_b.clone()).await?;
-        user.invoke_and_await_agent(
-            &component,
-            &agent_b,
-            "write_file",
-            data_value!("/temporary.txt", "abcdefgh"),
-        )
-        .await?;
-        user.invoke_and_await_agent(
-            &component,
-            &agent_b,
-            "delete_file",
-            data_value!("/temporary.txt"),
-        )
-        .await?;
-
-        // The successful 8-byte write proves the full pool forced agent A out. Wait until any
-        // final meter/drop batch arrives before opening the interval that must remain quiescent.
-        let evicted_start = wait_for_durable_billing_to_settle(&deps, &user, None).await?;
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        let evicted_end = durable_byte_seconds(&deps, &user).await?;
-
-        user.invoke_and_await_agent(
-            &component,
-            &agent_a,
-            "read_file",
-            data_value!("/metered.txt"),
-        )
-        .await?;
-        let reloaded_start = durable_byte_seconds(&deps, &user).await?;
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        user.delete_worker(&worker_a).await?;
-        let reloaded_end =
-            wait_for_durable_billing_to_settle(&deps, &user, Some(reloaded_start)).await?;
-        user.delete_worker(&worker_b).await?;
-
-        // Eight bytes over two seconds should produce about sixteen byte-seconds. The window
-        // covers asynchronous flush and batching latency while still rejecting overbilling.
+        let active_start = idle_end;
+        user.invoke_and_await_agent(&component, &agent, "sleep_for", data_value!(0.5f64))
+            .await?;
+        let active_end =
+            wait_for_durable_billing_to_settle(&deps, &user, Some(active_start + 256.0 * 1024.0))
+                .await?;
         assert_billing_window(
             active_end - active_start,
-            10.0,
-            24.0,
-            "pre-eviction metering",
+            256.0 * 1024.0,
+            1024.0 * 1024.0,
+            "permit-retaining host sleep",
         );
-        // An evicted agent must stop accruing. The bound is 6.0 rather than something
-        // tighter because eviction settling is asynchronous: at 8 bytes, 2.0 byte-seconds
-        // is only a quarter-second of headroom, which a loaded CI runner can exceed
-        // without anything being wrong. 6.0 still sits clearly below the 10.0 floor the
-        // active windows assert, so an agent that kept billing after eviction fails.
-        assert_billing_window(evicted_end - evicted_start, 0.0, 6.0, "evicted interval");
+
+        let suspended_start = active_end;
+        user.invoke_and_await_agent(&component, &agent, "sleep_for", data_value!(3.0f64))
+            .await?;
+        let suspended_end = wait_for_durable_billing_to_settle(&deps, &user, None).await?;
+        // The one-second suspend threshold remains permit-owning; the remaining sleep is
+        // suspended. Billing the full three seconds would exceed this bound by roughly 2x.
         assert_billing_window(
-            reloaded_end - reloaded_start,
-            10.0,
-            24.0,
-            "post-reload metering",
+            suspended_end - suspended_start,
+            0.0,
+            1.5 * 1024.0 * 1024.0,
+            "durable suspended interval",
         );
+
+        user.delete_worker(&worker).await?;
 
         Ok(())
     }

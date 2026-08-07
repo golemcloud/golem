@@ -15,6 +15,9 @@
 //! Per-agent byte-second metering. Clones share one meter; dropping the last clone records any
 //! whole byte-seconds accumulated since the previous flush.
 
+use crate::services::active_workers::{
+    bytes_to_filesystem_storage_permits, filesystem_storage_permits_to_bytes,
+};
 use crate::services::resource_limits::AtomicResourceEntry;
 use golem_common::model::agent::AgentMode;
 use std::sync::{Arc, Mutex, Weak};
@@ -41,28 +44,58 @@ struct Inner {
     mode: AgentMode,
     entry: Weak<AtomicResourceEntry>,
     state: Mutex<State>,
+    reservation_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Debug)]
 struct State {
     bytes: u64,
+    active: bool,
+    stopped: bool,
     last_sample: Instant,
     pending_byte_nanoseconds: u128,
 }
 
 impl AgentStorageMeter {
-    pub fn new(mode: AgentMode, bytes: u64, entry: Arc<AtomicResourceEntry>, now: Instant) -> Self {
+    pub fn new(
+        mode: AgentMode,
+        bytes: u64,
+        active: bool,
+        entry: Arc<AtomicResourceEntry>,
+        now: Instant,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 mode,
                 entry: Arc::downgrade(&entry),
+                reservation_lock: Arc::new(tokio::sync::Mutex::new(())),
                 state: Mutex::new(State {
                     bytes,
+                    active,
+                    stopped: false,
                     last_sample: now,
                     pending_byte_nanoseconds: 0,
                 }),
             }),
         }
+    }
+
+    pub fn current_bytes(&self) -> u64 {
+        self.inner.state.lock().unwrap().bytes
+    }
+
+    pub fn host_capacity_for_growth(&self, bytes: u64) -> u64 {
+        let current = self.current_bytes();
+        host_capacity_delta(current, current.saturating_add(bytes))
+    }
+
+    pub fn host_capacity_for_release(&self, bytes: u64) -> u64 {
+        let current = self.current_bytes();
+        host_capacity_delta(current.saturating_sub(bytes), current)
+    }
+
+    pub async fn lock_reservation(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.inner.reservation_lock.clone().lock_owned().await
     }
 
     pub fn on_acquire(&self, bytes: u64, now: Instant) {
@@ -73,24 +106,61 @@ impl AgentStorageMeter {
         self.inner.update_bytes(bytes, false, now);
     }
 
+    pub fn resume(&self, now: Instant) {
+        self.inner.transition(now, |state| {
+            if !state.stopped {
+                state.active = true;
+            }
+        });
+    }
+
+    pub fn pause(&self, now: Instant) {
+        self.inner.transition(now, |state| state.active = false);
+    }
+
+    pub fn stop(&self, now: Instant) {
+        let byte_seconds = {
+            let mut state = self.inner.state.lock().unwrap();
+            let byte_seconds = state.take_whole_byte_seconds(now);
+            state.active = false;
+            state.stopped = true;
+            byte_seconds
+        };
+        self.inner.record(byte_seconds);
+    }
+
     pub fn flush(&self, now: Instant) {
         self.inner.integrate(now);
     }
 }
 
+pub(crate) fn host_capacity_delta(smaller: u64, larger: u64) -> u64 {
+    let smaller = bytes_to_filesystem_storage_permits(smaller);
+    let larger = bytes_to_filesystem_storage_permits(larger);
+    filesystem_storage_permits_to_bytes(larger.saturating_sub(smaller))
+}
+
 impl Inner {
+    fn transition<R>(&self, now: Instant, update: impl FnOnce(&mut State) -> R) -> R {
+        let mut state = self.state.lock().unwrap();
+        let byte_seconds = state.take_whole_byte_seconds(now);
+        let result = update(&mut state);
+        drop(state);
+        self.record(byte_seconds);
+        result
+    }
+
     fn update_bytes(&self, bytes: u64, acquire: bool, now: Instant) {
-        let byte_seconds = {
-            let mut state = self.state.lock().unwrap();
-            let byte_seconds = state.take_whole_byte_seconds(now);
+        self.transition(now, |state| {
+            if state.stopped {
+                return;
+            }
             state.bytes = if acquire {
                 state.bytes.saturating_add(bytes)
             } else {
                 state.bytes.saturating_sub(bytes)
             };
-            byte_seconds
-        };
-        self.record(byte_seconds);
+        });
     }
 
     fn integrate(&self, now: Instant) {
@@ -116,7 +186,7 @@ impl State {
 
         let elapsed_nanoseconds = now.saturating_duration_since(self.last_sample).as_nanos();
         self.last_sample = now;
-        if self.bytes == 0 {
+        if !self.active || self.stopped || self.bytes == 0 {
             return 0;
         }
         self.pending_byte_nanoseconds = self
@@ -149,7 +219,7 @@ mod tests {
     fn integrates_acquire_release_and_flush() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, true, entry.clone(), now);
 
         meter.on_acquire(5, now + Duration::from_secs(2));
         meter.on_release(3, now + Duration::from_secs(4));
@@ -162,7 +232,7 @@ mod tests {
     fn meters_ephemeral_storage_separately() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Ephemeral, 10, entry.clone(), now);
+        let meter = AgentStorageMeter::new(AgentMode::Ephemeral, 10, true, entry.clone(), now);
 
         meter.flush(now + Duration::from_secs(3));
 
@@ -174,7 +244,7 @@ mod tests {
     fn ignores_a_stale_flush_timestamp() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, true, entry.clone(), now);
 
         meter.on_acquire(5, now + Duration::from_secs(2));
         meter.flush(now + Duration::from_secs(1));
@@ -187,7 +257,7 @@ mod tests {
     fn retains_sub_byte_second_remainder_without_division() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 1024, entry.clone(), now);
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 1024, true, entry.clone(), now);
 
         meter.flush(now + Duration::from_micros(1));
         assert_eq!(entry.durable_byte_seconds_delta(), 0);
@@ -200,13 +270,60 @@ mod tests {
     fn cloned_meter_flushes_shared_state() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 0, entry.clone(), now);
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 0, true, entry.clone(), now);
         let flusher = meter.clone();
 
         meter.on_acquire(10, now + Duration::from_secs(1));
         flusher.flush(now + Duration::from_secs(3));
 
         assert_eq!(entry.durable_byte_seconds_delta(), 20);
+    }
+
+    #[test]
+    fn pause_resume_and_stop_are_idempotent() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let now = Instant::now();
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, true, entry.clone(), now);
+
+        meter.pause(now + Duration::from_secs(2));
+        meter.pause(now + Duration::from_secs(3));
+        meter.resume(now + Duration::from_secs(4));
+        meter.resume(now + Duration::from_secs(5));
+        meter.stop(now + Duration::from_secs(7));
+        meter.stop(now + Duration::from_secs(8));
+        meter.resume(now + Duration::from_secs(9));
+        meter.flush(now + Duration::from_secs(10));
+
+        assert_eq!(entry.durable_byte_seconds_delta(), 50);
+    }
+
+    #[test]
+    fn paused_storage_changes_are_prospective() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let now = Instant::now();
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, true, entry.clone(), now);
+
+        meter.pause(now + Duration::from_secs(1));
+        meter.on_acquire(10, now + Duration::from_secs(5));
+        meter.resume(now + Duration::from_secs(10));
+        meter.flush(now + Duration::from_secs(12));
+
+        assert_eq!(meter.current_bytes(), 20);
+        assert_eq!(entry.durable_byte_seconds_delta(), 50);
+    }
+
+    #[test]
+    fn host_capacity_is_derived_from_canonical_total() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let now = Instant::now();
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 500, true, entry, now);
+
+        assert_eq!(meter.host_capacity_for_growth(500), 0);
+        assert_eq!(meter.host_capacity_for_growth(600), 1024);
+
+        meter.on_acquire(600, now);
+        assert_eq!(meter.host_capacity_for_release(100), 1024);
+        assert_eq!(meter.host_capacity_for_release(50), 0);
     }
 
     proptest! {
@@ -216,7 +333,7 @@ mod tests {
         ) {
             let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
             let mut now = Instant::now();
-            let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
+            let meter = AgentStorageMeter::new(AgentMode::Durable, 10, true, entry.clone(), now);
             let mut bytes = 10u64;
             let mut expected = 0u64;
 

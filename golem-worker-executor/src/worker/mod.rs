@@ -26,7 +26,6 @@ use self::agent_config::{
     ensure_required_agent_secrets_are_configured, parse_worker_creation_agent_config,
 };
 use crate::durable_host::{agent_effective_surface_from_component_metadata, recover_stderr_logs};
-use crate::metrics::storage::record_filesystem_pool_released;
 use crate::metrics::workers::AdmissionPhase;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::active_workers::{
@@ -2170,33 +2169,30 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let n = permits_to_release as usize;
             let actual_n = n.min(permit.num_permits());
             let to_drop = permit.split(actual_n);
-            let released_bytes =
-                crate::services::active_workers::filesystem_storage_permits_to_bytes(
-                    actual_n as u32,
-                );
-            record_filesystem_pool_released(released_bytes);
             drop(to_drop); // returns permits to the semaphore
         }
     }
 
-    /// Acquire storage semaphore permits for a write operation.
-    /// Called from `DurableWorkerCtx::acquire_filesystem_space` in live mode only.
+    /// Reserve storage semaphore permits for a write operation.
+    /// The returned permit releases itself unless a successful filesystem mutation commits it.
     /// Returns `NodeOutOfFilesystemStorage` if the executor pool is exhausted.
     ///
     /// Should only be called from the invocation loop.
-    pub async fn acquire_filesystem_storage_space(&self, new_bytes: u64) -> anyhow::Result<()> {
+    pub async fn acquire_filesystem_storage_space(
+        &self,
+        new_bytes: u64,
+    ) -> anyhow::Result<Option<FilesystemStoragePermit>> {
         match &mut *self.instance.lock().await {
-            WorkerInstance::Running(running) => {
+            WorkerInstance::Running(_) => {
                 if let Some(permit) = self
                     .active_workers()
                     .try_acquire_filesystem_storage(new_bytes)
                     .await
                 {
-                    running.merge_extra_filesystem_storage_permits(permit);
                     // Success — clear any pending desired_extra_filesystem_storage.
                     self.desired_extra_filesystem_storage
                         .store(0, Ordering::Relaxed);
-                    Ok(())
+                    Ok(Some(permit))
                 } else {
                     // Record the requested size so WaitingWorker can evict enough
                     // idle workers to satisfy this write on the next restart.
@@ -2205,15 +2201,42 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     Err(anyhow!(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage))
                 }
             }
-            // Worker is stopping/unloaded — no-op; the current invocation will
-            // fail anyway and permits will be re-acquired on restart.
-            _ => Ok(()),
+            _ => Err(anyhow!(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage)),
+        }
+    }
+
+    pub async fn commit_filesystem_storage_space(
+        &self,
+        mut permit: Option<FilesystemStoragePermit>,
+        committed_host_bytes: u64,
+    ) {
+        let Some(mut permit) = permit.take() else {
+            return;
+        };
+        let committed_permits = crate::services::active_workers::bytes_to_filesystem_storage_permits(
+            committed_host_bytes,
+        ) as usize;
+        let excess_permits = permit.num_permits().saturating_sub(committed_permits);
+        if let Some(excess) = permit.split(excess_permits) {
+            drop(excess);
+        }
+        if permit.num_permits() == 0 {
+            return;
+        }
+        if let WorkerInstance::Running(running) = &mut *self.instance.lock().await {
+            running.merge_extra_filesystem_storage_permits(permit);
+        }
+    }
+
+    pub fn rollback_filesystem_storage_space(&self, permit: Option<FilesystemStoragePermit>) {
+        if let Some(permit) = permit {
+            drop(permit);
         }
     }
 
     /// Acquire storage semaphore permits for the total size of all initial
-    /// component files. Called once from `DurableWorkerCtx::create` after
-    /// `prepare_filesystem` has loaded the files. Merges the acquired permits
+    /// component files. Called once from `DurableWorkerCtx::create` before
+    /// `prepare_filesystem` loads the files. Merges the acquired permits
     /// into the running worker's `filesystem_storage_permit` so they are released
     /// automatically when the worker stops.
     ///
@@ -3411,6 +3434,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // at runtime in get_environment
                 let worker_env: Vec<(String, String)> = worker_env.unwrap_or_default();
                 let created_at = Timestamp::now_utc();
+                let initial_filesystem_storage_usage =
+                    crate::services::worker::initial_filesystem_storage_usage(
+                        &component.metadata,
+                        agent_id.as_ref().map(|agent_id| &agent_id.agent_type),
+                    );
 
                 // Note: Keep this in sync with the logic in crate::services::worker::WorkerService::get
                 let initial_status = AgentStatusRecord {
@@ -3418,6 +3446,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     component_revision_for_replay: component.revision,
                     component_size: component.component_size,
                     total_linear_memory_size: component.metadata.initial_linear_memory_bytes(),
+                    current_filesystem_storage_usage: initial_filesystem_storage_usage,
                     active_plugins: agent_id
                         .as_ref()
                         .and_then(|agent_id| {
@@ -4070,19 +4099,6 @@ impl<Ctx: WorkerCtx> Drop for LinearMemoryGrantRegistration<Ctx> {
             .is_some_and(|grant| Arc::ptr_eq(grant, &self.grant))
         {
             registered.take();
-        }
-    }
-}
-
-impl Drop for RunningWorker {
-    fn drop(&mut self) {
-        if let Some(ref permit) = self.filesystem_storage_permit {
-            let bytes = crate::services::active_workers::filesystem_storage_permits_to_bytes(
-                permit.num_permits() as u32,
-            );
-            if bytes > 0 {
-                record_filesystem_pool_released(bytes);
-            }
         }
     }
 }

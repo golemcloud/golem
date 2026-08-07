@@ -21,7 +21,7 @@ use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::{
     DurabilityHost, DurableWorkerCtx, HttpOutputStreamState, HttpRequestCloseOwner,
-    PendingFilesystemReservation,
+    PendingFilesystemReservation, PendingFilesystemReservationState,
 };
 use crate::model::event::InternalWorkerEvent;
 use crate::workerctx::WorkerCtx;
@@ -640,6 +640,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 match result {
                     Ok(()) => {
                         mark_filesystem_stream_write_enqueued(self, stream_rep, write_len);
+                        commit_pending_filesystem_stream_reservation(self, stream_rep).await;
                         Ok(())
                     }
                     Err(err) => {
@@ -954,6 +955,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 return match result {
                     Ok(()) => {
                         mark_filesystem_stream_write_enqueued(self, stream_rep, len);
+                        commit_pending_filesystem_stream_reservation(self, stream_rep).await;
                         Ok(())
                     }
                     Err(err) => {
@@ -1549,48 +1551,51 @@ async fn reserve_filesystem_stream_growth<Ctx: WorkerCtx>(
     write_len: u64,
 ) -> Result<(), StreamError> {
     let Some(stream_state) = ctx.state.open_filesystem_output_streams.get(&stream_rep) else {
-        if write_len > 0 {
-            ctx.reserve_filesystem_storage(write_len)
-                .await
-                .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
-        }
         return Ok(());
     };
+
+    if ctx.state.is_replay() {
+        return Ok(());
+    }
 
     if stream_state.pending_reservation.is_some() {
         return Ok(());
     }
 
-    let stream_state = stream_state.clone();
+    let descriptor_rep = stream_state.descriptor_rep;
+    let position = stream_state.position;
+    let storage_guard = ctx.storage_meter().lock_reservation().await;
 
     let current_size = {
-        let fd_borrow = Resource::<FsDescriptor>::new_borrow(stream_state.descriptor_rep);
+        let fd_borrow = Resource::<FsDescriptor>::new_borrow(descriptor_rep);
         let mut view = ctx.as_wasi_view();
         match FsHostDescriptor::stat(&mut view.filesystem(), fd_borrow).await {
             Ok(stat) => stat.size,
-            Err(_) => {
-                if write_len > 0 {
-                    ctx.reserve_filesystem_storage(write_len)
-                        .await
-                        .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
-                }
-                return Ok(());
-            }
+            Err(_) => 0,
         }
     };
 
-    let requested_end = match stream_state.position {
+    let requested_end = match position {
         Some(position) => position.saturating_add(write_len),
         None => current_size.saturating_add(write_len),
     };
 
     let requested_growth = requested_end.saturating_sub(current_size);
 
-    if requested_growth > 0 {
-        ctx.reserve_filesystem_storage(requested_growth)
+    let reservation_state = if requested_growth == 0 {
+        PendingFilesystemReservationState::Unchanged {
+            _guard: storage_guard,
+        }
+    } else {
+        let Some(reservation) = ctx
+            .reserve_filesystem_storage_with_guard(requested_growth, storage_guard)
             .await
-            .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
-    }
+            .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?
+        else {
+            return Ok(());
+        };
+        PendingFilesystemReservationState::Reserved(reservation)
+    };
 
     if let Some(state) = ctx
         .state
@@ -1599,7 +1604,7 @@ async fn reserve_filesystem_stream_growth<Ctx: WorkerCtx>(
     {
         state.pending_reservation = Some(PendingFilesystemReservation {
             base_size: current_size,
-            reserved_growth: requested_growth,
+            state: reservation_state,
         });
     }
 
@@ -1625,16 +1630,51 @@ async fn rollback_pending_filesystem_stream_reservation<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     stream_rep: u32,
 ) {
-    let reserved_growth = ctx
+    let reservation = ctx
         .state
         .open_filesystem_output_streams
         .get_mut(&stream_rep)
         .and_then(|state| state.pending_reservation.take())
-        .map(|pending| pending.reserved_growth)
-        .unwrap_or(0);
+        .and_then(|pending| match pending.state {
+            PendingFilesystemReservationState::Reserved(reservation) => Some(reservation),
+            PendingFilesystemReservationState::Committed(_)
+            | PendingFilesystemReservationState::Unchanged { .. } => None,
+        });
 
-    if reserved_growth > 0 {
-        ctx.release_filesystem_storage_space(reserved_growth).await;
+    if let Some(reservation) = reservation {
+        ctx.rollback_filesystem_storage_reservation(reservation)
+            .await;
+    }
+}
+
+async fn commit_pending_filesystem_stream_reservation<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    stream_rep: u32,
+) {
+    let pending = ctx
+        .state
+        .open_filesystem_output_streams
+        .get_mut(&stream_rep)
+        .and_then(|state| state.pending_reservation.take());
+    let Some(pending) = pending else {
+        return;
+    };
+    let PendingFilesystemReservationState::Reserved(reservation) = pending.state else {
+        return;
+    };
+    let base_size = pending.base_size;
+    let committed_growth = reservation.logical_bytes();
+    ctx.commit_filesystem_storage_reservation(reservation, committed_growth)
+        .await;
+    if let Some(state) = ctx
+        .state
+        .open_filesystem_output_streams
+        .get_mut(&stream_rep)
+    {
+        state.pending_reservation = Some(PendingFilesystemReservation {
+            base_size,
+            state: PendingFilesystemReservationState::Committed(committed_growth),
+        });
     }
 }
 
@@ -1656,21 +1696,28 @@ async fn reconcile_pending_filesystem_stream_reservation<Ctx: WorkerCtx>(
         return;
     };
 
-    if pending.reserved_growth == 0 {
-        return;
-    }
+    let committed_growth = match pending.state {
+        PendingFilesystemReservationState::Reserved(reservation) => {
+            let committed_growth = reservation.logical_bytes();
+            ctx.commit_filesystem_storage_reservation(reservation, committed_growth)
+                .await;
+            committed_growth
+        }
+        PendingFilesystemReservationState::Committed(committed_growth) => committed_growth,
+        PendingFilesystemReservationState::Unchanged { .. } => 0,
+    };
 
     let actual_growth = {
         let fd_borrow = Resource::<FsDescriptor>::new_borrow(descriptor_rep);
         let mut view = ctx.as_wasi_view();
         match FsHostDescriptor::stat(&mut view.filesystem(), fd_borrow).await {
             Ok(stat) => stat.size.saturating_sub(pending.base_size),
-            Err(_) => pending.reserved_growth,
+            Err(_) => committed_growth,
         }
     };
 
-    let over_reserved = pending.reserved_growth.saturating_sub(actual_growth);
-    if over_reserved > 0 {
-        ctx.release_filesystem_storage_space(over_reserved).await;
+    let over_committed = committed_growth.saturating_sub(actual_growth);
+    if over_committed > 0 {
+        ctx.release_filesystem_storage_space(over_committed).await;
     }
 }

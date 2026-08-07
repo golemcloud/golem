@@ -21,6 +21,7 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::task::{Context, Poll};
 
+use crate::durable_host::FilesystemStorageReservation;
 use crate::durable_host::filesystem::types::calculate_metadata_hash_parts;
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
@@ -516,10 +517,10 @@ async fn wait_filesystem_task_result(
         .unwrap_or_else(|_| Err(wasmtime::Error::msg("filesystem stream task dropped")))
 }
 
-#[derive(Clone, Copy)]
-struct FilesystemStorageReservation {
+struct FilesystemWriteStorageReservation {
     base_size: Option<u64>,
-    reserved_growth: u64,
+    reservation: Option<FilesystemStorageReservation>,
+    _guard: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
 
 async fn filesystem_file_size(file: &File) -> Option<u64> {
@@ -532,11 +533,14 @@ async fn reserve_filesystem_write_storage<Ctx, U>(
     file: &File,
     mode: FilesystemWriteMode,
     write_len: u64,
-) -> wasmtime::Result<FilesystemStorageReservation>
+) -> wasmtime::Result<FilesystemWriteStorageReservation>
 where
     Ctx: WorkerCtx,
     U: 'static,
 {
+    let storage_meter =
+        accessor.with(|mut access| durable_worker_ctx::<Ctx, U>(access.data_mut()).storage_meter());
+    let guard = storage_meter.lock_reservation().await;
     let base_size = filesystem_file_size(file).await;
     let reserved_growth = match (base_size, mode) {
         (Some(current_size), FilesystemWriteMode::At(offset)) => offset
@@ -548,75 +552,122 @@ where
         (None, _) => write_len,
     };
 
-    reserve_filesystem_storage_bytes::<Ctx, U>(accessor, reserved_growth).await?;
+    let (reservation, guard) = if reserved_growth == 0 {
+        (None, Some(guard))
+    } else {
+        (
+            reserve_filesystem_storage_bytes::<Ctx, U>(accessor, reserved_growth, guard).await?,
+            None,
+        )
+    };
 
-    Ok(FilesystemStorageReservation {
+    Ok(FilesystemWriteStorageReservation {
         base_size,
-        reserved_growth,
+        reservation,
+        _guard: guard,
     })
 }
 
-/// Reserve `bytes` of filesystem storage quota: check the per-agent limit,
-/// acquire executor-wide permits, and record the growth in the oplog. No-op for
-/// `bytes == 0` and during replay (the helpers short-circuit). On acquisition
-/// failure the optimistic reservation is rolled back and the error is returned.
+/// Reserve `bytes` of filesystem storage quota and executor-wide capacity.
+/// Logical usage is committed only after the filesystem mutation succeeds.
 async fn reserve_filesystem_storage_bytes<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     bytes: u64,
-) -> wasmtime::Result<()>
+    guard: tokio::sync::OwnedMutexGuard<()>,
+) -> wasmtime::Result<Option<FilesystemStorageReservation>>
 where
     Ctx: WorkerCtx,
     U: 'static,
 {
     if bytes == 0 {
-        return Ok(());
+        return Ok(None);
     }
 
-    if let Some(worker) = accessor
+    if let Some((worker, mut reservation)) = accessor
         .with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut())
-                .prepare_filesystem_storage_reservation(bytes)
+                .prepare_filesystem_storage_reservation(bytes, guard)
         })
         .map_err(wasmtime::Error::from_anyhow)?
     {
-        if let Err(error) = worker.acquire_filesystem_storage_space(bytes).await {
-            accessor.with(|mut access| {
-                durable_worker_ctx::<Ctx, U>(access.data_mut())
-                    .rollback_filesystem_storage_reservation(bytes);
-            });
-            return Err(wasmtime::Error::from_anyhow(error));
-        }
-        worker
-            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(bytes as i64))
-            .await;
-        accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut())
-                .finish_filesystem_storage_reservation(bytes);
-        });
+        let permit = worker
+            .acquire_filesystem_storage_space(reservation.host_bytes())
+            .await
+            .map_err(wasmtime::Error::from_anyhow)?;
+        reservation.set_permit(permit);
+        Ok(Some(reservation))
+    } else {
+        Ok(None)
     }
-
-    Ok(())
 }
 
-async fn release_filesystem_write_storage<Ctx, U>(
+async fn commit_filesystem_write_storage<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
-    bytes: u64,
+    mut reservation: FilesystemStorageReservation,
+    committed_bytes: u64,
 ) -> wasmtime::Result<()>
 where
     Ctx: WorkerCtx,
     U: 'static,
 {
-    if bytes == 0 {
-        return Ok(());
-    }
-
-    if let Some((worker, bytes)) = accessor.with(|mut access| {
-        durable_worker_ctx::<Ctx, U>(access.data_mut()).prepare_filesystem_storage_release(bytes)
+    if let Some((worker, committed_bytes, committed_host_bytes)) = accessor.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut())
+            .prepare_filesystem_storage_reservation_commit(&reservation, committed_bytes)
     }) {
+        if committed_bytes > 0 {
+            worker
+                .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
+                    committed_bytes as i64,
+                ))
+                .await;
+        }
+        worker
+            .commit_filesystem_storage_space(reservation.take_permit(), committed_host_bytes)
+            .await;
+        accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .finish_filesystem_storage_reservation(committed_bytes);
+        });
+    }
+    Ok(())
+}
+
+async fn rollback_filesystem_write_storage<Ctx, U>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+    mut reservation: FilesystemStorageReservation,
+) -> wasmtime::Result<()>
+where
+    Ctx: WorkerCtx,
+    U: 'static,
+{
+    if let Some(worker) = accessor.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_storage_worker()
+    }) {
+        worker.rollback_filesystem_storage_space(reservation.take_permit());
+    }
+    Ok(())
+}
+
+async fn release_filesystem_write_storage_with_guard<Ctx, U>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+    bytes: u64,
+    guard: tokio::sync::OwnedMutexGuard<()>,
+) -> wasmtime::Result<()>
+where
+    Ctx: WorkerCtx,
+    U: 'static,
+{
+    if let Some((worker, reservation)) = accessor.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut())
+            .prepare_filesystem_storage_release(bytes, guard)
+    }) {
+        let bytes = reservation.logical_bytes();
         worker
             .add_to_oplog(OplogEntry::filesystem_storage_usage_update(-(bytes as i64)))
             .await;
-        worker.release_filesystem_storage_space(bytes).await;
+        worker
+            .release_filesystem_storage_space(reservation.host_bytes())
+            .await;
         accessor.with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut())
                 .finish_filesystem_storage_release(bytes);
@@ -629,32 +680,30 @@ where
 async fn reconcile_filesystem_write_storage<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     file: &File,
-    reservation: FilesystemStorageReservation,
+    reservation: FilesystemWriteStorageReservation,
     write_result: &Result<(), types::ErrorCode>,
 ) -> wasmtime::Result<()>
 where
     Ctx: WorkerCtx,
     U: 'static,
 {
-    if reservation.reserved_growth == 0 {
+    let Some(storage_reservation) = reservation.reservation else {
         return Ok(());
-    }
+    };
 
     if write_result.is_err() {
-        return release_filesystem_write_storage::<Ctx, U>(accessor, reservation.reserved_growth)
-            .await;
+        return rollback_filesystem_write_storage::<Ctx, U>(accessor, storage_reservation).await;
     }
 
-    let Some(base_size) = reservation.base_size else {
-        return Ok(());
+    let actual_growth = if let Some(base_size) = reservation.base_size {
+        filesystem_file_size(file)
+            .await
+            .map(|actual_end| actual_end.saturating_sub(base_size))
+            .unwrap_or(storage_reservation.logical_bytes())
+    } else {
+        storage_reservation.logical_bytes()
     };
-    let Some(actual_end) = filesystem_file_size(file).await else {
-        return Ok(());
-    };
-
-    let actual_growth = actual_end.saturating_sub(base_size);
-    let over_reserved = reservation.reserved_growth.saturating_sub(actual_growth);
-    release_filesystem_write_storage::<Ctx, U>(accessor, over_reserved).await
+    commit_filesystem_write_storage::<Ctx, U>(accessor, storage_reservation, actual_growth).await
 }
 
 // Drains and writes the guest's data stream to the worker filesystem chunk by
@@ -1034,30 +1083,43 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         // Charge growth before resizing and credit shrink afterwards, matching
         // the WASI P2 storage-quota accounting. The quota helpers are no-ops
         // during replay, so the storage usage is rebuilt purely from the oplog.
+        let storage_meter = accessor
+            .with(|mut access| durable_worker_ctx::<Ctx, U>(access.data_mut()).storage_meter());
+        let mut guard = Some(storage_meter.lock_reservation().await);
         let current_size =
             descriptor_size::<Ctx, U>(accessor, Resource::new_borrow(fd.rep())).await;
         let growth = size.saturating_sub(current_size);
-        if growth > 0 {
-            reserve_filesystem_storage_bytes::<Ctx, U>(accessor, growth)
+        let reservation = if growth > 0 {
+            reserve_filesystem_storage_bytes::<Ctx, U>(accessor, growth, guard.take().unwrap())
                 .await
-                .map_err(FilesystemError::trap)?;
-        }
+                .map_err(FilesystemError::trap)?
+        } else {
+            None
+        };
 
         let result = {
             let store = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
             <WasiFilesystem as types::HostDescriptorWithStore<U>>::set_size(&store, fd, size).await
         };
 
-        if growth > 0 {
-            if result.is_err() {
-                release_filesystem_write_storage::<Ctx, U>(accessor, growth)
+        if let Some(reservation) = reservation {
+            if result.is_ok() {
+                commit_filesystem_write_storage::<Ctx, U>(accessor, reservation, growth)
+                    .await
+                    .map_err(FilesystemError::trap)?;
+            } else {
+                rollback_filesystem_write_storage::<Ctx, U>(accessor, reservation)
                     .await
                     .map_err(FilesystemError::trap)?;
             }
         } else if result.is_ok() && size < current_size {
-            release_filesystem_write_storage::<Ctx, U>(accessor, current_size - size)
-                .await
-                .map_err(FilesystemError::trap)?;
+            release_filesystem_write_storage_with_guard::<Ctx, U>(
+                accessor,
+                current_size - size,
+                guard.take().unwrap(),
+            )
+            .await
+            .map_err(FilesystemError::trap)?;
         }
 
         result
@@ -1328,7 +1390,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         // Opening with TRUNCATE discards the existing file contents, so credit
         // the freed bytes back to the storage quota on success, matching WASI
         // P2. The release helper is a no-op during replay.
-        let truncated_size = if open_flags.contains(types::OpenFlags::TRUNCATE) {
+        let mut guard = if open_flags.contains(types::OpenFlags::TRUNCATE) {
+            let storage_meter = accessor
+                .with(|mut access| durable_worker_ctx::<Ctx, U>(access.data_mut()).storage_meter());
+            Some(storage_meter.lock_reservation().await)
+        } else {
+            None
+        };
+        let truncated_size = if guard.is_some() {
             descriptor_size_at::<Ctx, U>(
                 accessor,
                 Resource::new_borrow(fd.rep()),
@@ -1349,9 +1418,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         };
 
         if result.is_ok() && truncated_size > 0 {
-            release_filesystem_write_storage::<Ctx, U>(accessor, truncated_size)
-                .await
-                .map_err(FilesystemError::trap)?;
+            release_filesystem_write_storage_with_guard::<Ctx, U>(
+                accessor,
+                truncated_size,
+                guard.take().unwrap(),
+            )
+            .await
+            .map_err(FilesystemError::trap)?;
         }
 
         result
@@ -1443,6 +1516,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         // Stat the file before unlinking so the freed bytes can be credited back
         // to the storage quota on success, matching WASI P2. The release helper
         // is a no-op during replay.
+        let storage_meter = accessor
+            .with(|mut access| durable_worker_ctx::<Ctx, U>(access.data_mut()).storage_meter());
+        let guard = storage_meter.lock_reservation().await;
         let file_size = descriptor_size_at::<Ctx, U>(
             accessor,
             Resource::new_borrow(fd.rep()),
@@ -1465,7 +1541,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         };
 
         if result.is_ok() && file_size > 0 {
-            release_filesystem_write_storage::<Ctx, U>(accessor, file_size)
+            release_filesystem_write_storage_with_guard::<Ctx, U>(accessor, file_size, guard)
                 .await
                 .map_err(FilesystemError::trap)?;
         }

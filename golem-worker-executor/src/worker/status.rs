@@ -2,7 +2,7 @@ use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorker
 use golem_common::base_model::OplogIndex;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::AgentInvocationPayload;
-use golem_common::model::agent::AgentMode;
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{
     AgentError, AgentResourceId, OplogEntry, OplogPayload, UpdateDescription,
@@ -140,17 +140,67 @@ where
     }
 
     // 3. Fall back to a full recompute from the start of the oplog.
-    let status = try_fold_status_from(
-        this,
-        owned_agent_id,
-        agent_mode,
-        AgentStatusRecord::default(),
-    )
-    .await;
+    let baseline = initial_status_baseline(this, owned_agent_id, agent_mode).await;
+    let status = try_fold_status_from(this, owned_agent_id, agent_mode, baseline).await;
     if status.is_some() {
         crate::metrics::workers::record_agent_status_recompute("full");
     }
     status
+}
+
+async fn initial_status_baseline<T>(
+    this: &T,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+) -> AgentStatusRecord
+where
+    T: HasOplogService + HasComponentService + Sync,
+{
+    let entries = this
+        .oplog_service()
+        .read_range(
+            owned_agent_id,
+            agent_mode,
+            OplogIndex::INITIAL,
+            OplogIndex::INITIAL,
+        )
+        .await;
+    let Some(OplogEntry::Create {
+        agent_id,
+        component_revision,
+        component_size,
+        initial_total_linear_memory_size,
+        initial_active_plugins,
+        ..
+    }) = entries.get(&OplogIndex::INITIAL)
+    else {
+        return AgentStatusRecord::default();
+    };
+    let Ok(agent_type_name) = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id) else {
+        return AgentStatusRecord::default();
+    };
+    let Ok(component) = this
+        .component_service()
+        .get_metadata(agent_id.component_id, Some(*component_revision))
+        .await
+    else {
+        return AgentStatusRecord::default();
+    };
+
+    AgentStatusRecord {
+        component_revision: *component_revision,
+        component_revision_for_replay: *component_revision,
+        component_size: *component_size,
+        total_linear_memory_size: *initial_total_linear_memory_size,
+        current_filesystem_storage_usage: crate::services::worker::initial_filesystem_storage_usage(
+            &component.metadata,
+            Some(&agent_type_name),
+        ),
+        active_plugins: initial_active_plugins.clone(),
+        agent_mode,
+        oplog_idx: OplogIndex::INITIAL,
+        ..AgentStatusRecord::default()
+    }
 }
 
 /// Folds the oplog entries after `baseline.oplog_idx` onto `baseline`.
