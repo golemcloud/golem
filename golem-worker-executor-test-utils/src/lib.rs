@@ -675,6 +675,20 @@ impl TestWorkerExecutor {
         Ok(worker.memory_requirement().await?)
     }
 
+    /// Returns the canonical linear-memory baseline used to seed the next
+    /// instance created by the currently resident worker shell.
+    pub async fn worker_startup_linear_memory_bytes(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<u64> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveWorkers"))?;
+        Ok(worker.startup_linear_memory_bytes())
+    }
+
     pub async fn get_running_workers_metadata(
         &self,
         component_id: &ComponentId,
@@ -1693,7 +1707,7 @@ impl ResourceLimiterAsync for TestWorkerCtx {
         &mut self,
         current: usize,
         desired: usize,
-        _maximum: Option<usize>,
+        maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
         debug!(
             "Memory growing for {}: current: {}, desired: {}",
@@ -1701,7 +1715,10 @@ impl ResourceLimiterAsync for TestWorkerCtx {
             current,
             desired
         );
-        Ok(true)
+
+        self.durable_ctx
+            .admit_unshared_memory_growth(current, desired, maximum)
+            .await
     }
 
     fn memory_grown(&mut self, current: usize, desired: usize) {
@@ -1709,6 +1726,11 @@ impl ResourceLimiterAsync for TestWorkerCtx {
         if delta > 0 {
             self.durable_ctx.increase_memory(delta);
         }
+    }
+
+    fn memory_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
+        self.durable_ctx.unshared_memory_growth_failed();
+        Ok(())
     }
 
     async fn table_growing(

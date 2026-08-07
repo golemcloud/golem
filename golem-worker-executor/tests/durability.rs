@@ -20,7 +20,7 @@ use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::oplog::{
     MultipartPartData, OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex, PublicSnapshotData,
 };
-use golem_common::model::{AgentEvent, AgentStatus};
+use golem_common::model::{AgentEvent, AgentStatus, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
@@ -182,6 +182,15 @@ async fn immediate_recovery_does_not_duplicate_instantiation_memory_growth(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let startup_bytes = executor
+        .worker_startup_linear_memory_bytes(&owned_agent_id)
+        .await?;
+    assert_eq!(
+        startup_bytes,
+        executor.worker_memory_requirement(&owned_agent_id).await?,
+        "live instantiation growth must become the initial startup baseline"
+    );
 
     executor
         .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
@@ -191,6 +200,11 @@ async fn immediate_recovery_does_not_duplicate_instantiation_memory_growth(
     assert!(
         growth_before > 0,
         "fixture must produce instantiation-time memory growth"
+    );
+    let canonical_bytes = executor.worker_memory_requirement(&owned_agent_id).await?;
+    assert!(
+        canonical_bytes > startup_bytes,
+        "fixture must grow linear memory after instantiation: startup={startup_bytes}, canonical={canonical_bytes}"
     );
 
     let executor_clone = executor.clone();
@@ -235,6 +249,13 @@ async fn immediate_recovery_does_not_duplicate_instantiation_memory_growth(
     assert_eq!(
         growth_after, growth_before,
         "immediate recovery must not persist instantiation growth again"
+    );
+    assert_eq!(
+        executor
+            .worker_startup_linear_memory_bytes(&owned_agent_id)
+            .await?,
+        canonical_bytes,
+        "re-instantiation must preserve the canonical startup baseline"
     );
 
     Ok(())

@@ -439,11 +439,6 @@ pub mod workers {
         WORKER_MEMORY_POOL_TOTAL_BYTES_GAUGE.set(bytes as f64);
     }
 
-    /// Resets the gauge of total memory granted to live workers.
-    pub fn reset_worker_memory_granted() {
-        WORKER_MEMORY_POOL_USED_BYTES_GAUGE.set(0.0);
-    }
-
     pub fn increase_worker_memory_granted(bytes: u64) {
         WORKER_MEMORY_POOL_USED_BYTES_GAUGE.add(bytes as f64);
     }

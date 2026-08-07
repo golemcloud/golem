@@ -17,6 +17,7 @@ test_r::enable!();
 #[test_r::sequential]
 mod tests {
     use golem_client::api::RegistryServiceClient;
+    use golem_common::model::AgentStatus;
     use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
     use golem_common::{agent_id, data_value};
     use golem_test_framework::config::{
@@ -77,29 +78,9 @@ mod tests {
         Ok(usage.usage.memory_gb_seconds)
     }
 
-    async fn wait_for_memory_billing(
-        deps: &EnvBasedTestDependencies,
-        user: &golem_test_framework::config::dsl_impl::TestUserContext<EnvBasedTestDependencies>,
-        must_exceed: u64,
-    ) -> anyhow::Result<u64> {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        loop {
-            let current = memory_gb_seconds(deps, user).await?;
-            if current > must_exceed {
-                return Ok(current);
-            }
-            if tokio::time::Instant::now() >= deadline {
-                anyhow::bail!(
-                    "linear memory billing remained at {current} GB-seconds; expected more than {must_exceed}"
-                );
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
-    }
-
     #[test]
     #[timeout("2m")]
-    async fn allocated_linear_memory_reaches_account_usage() -> anyhow::Result<()> {
+    async fn permit_ownership_defines_allocated_memory_billing_window() -> anyhow::Result<()> {
         let deps = create_deps().await;
         let user = deps.user().await?;
         let (_, env) = user.app_and_env().await?;
@@ -112,19 +93,47 @@ mod tests {
         let worker = user.start_agent(&component.id, agent.clone()).await?;
         let before = memory_gb_seconds(&deps, &user).await?;
 
-        user.invoke_and_await_agent(
+        user.invoke_and_await_agent(&component, &agent, "run_with_delay", data_value!(3_000u64))
+            .await?;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let after_host_wait = memory_gb_seconds(&deps, &user).await?;
+        assert!(
+            after_host_wait.saturating_sub(before) >= 1,
+            "allocated memory must accrue while a permit-owning invocation waits in a host sleep: before={before}, after={after_host_wait}"
+        );
+
+        let invocation = user.invoke_and_await_agent(
             &component,
             &agent,
             "run_with_memory_and_work",
-            data_value!(128u64, 10_000u64),
-        )
-        .await?;
-
-        let after = wait_for_memory_billing(&deps, &user, before).await?;
-        assert!(
-            after > before,
-            "real agent allocation should increase account memory usage"
+            data_value!(512u64, 5_000u64),
         );
+        let crash = async {
+            user.wait_for_status(&worker, AgentStatus::Running, Duration::from_secs(10))
+                .await?;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            user.simulated_crash(&worker).await
+        };
+        let (invocation_result, crash_result) = tokio::join!(invocation, crash);
+        crash_result?;
+        invocation_result?;
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let after_replay = memory_gb_seconds(&deps, &user).await?;
+        assert!(
+            after_replay.saturating_sub(after_host_wait) >= 2,
+            "allocated memory must accrue during replay and non-durable guest work: before={after_host_wait}, after={after_replay}"
+        );
+
+        user.wait_for_status(&worker, AgentStatus::Idle, Duration::from_secs(10))
+            .await?;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let after_idle = memory_gb_seconds(&deps, &user).await?;
+        assert_eq!(
+            after_idle, after_replay,
+            "loaded-idle time after permit release must not accrue memory usage"
+        );
+
         user.delete_worker(&worker).await?;
 
         Ok(())

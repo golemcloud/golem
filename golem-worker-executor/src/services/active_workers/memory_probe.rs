@@ -92,10 +92,17 @@ struct CachedMemoryProbeInner {
 
 struct RefreshGuard {
     inner: Arc<CachedMemoryProbeInner>,
+    completed: bool,
 }
 
 impl Drop for RefreshGuard {
     fn drop(&mut self) {
+        if !self.completed {
+            self.inner.last_refresh_nanos.store(
+                CachedMemoryProbe::elapsed_nanos(&self.inner),
+                Ordering::Release,
+            );
+        }
         self.inner
             .refresh_in_progress
             .store(false, Ordering::Release);
@@ -122,13 +129,14 @@ impl CachedMemoryProbe {
         inner.started_at.elapsed().as_nanos().min(u64::MAX as u128) as u64
     }
 
-    fn refresh(guard: RefreshGuard) {
+    fn refresh(mut guard: RefreshGuard) {
         let inner = &guard.inner;
         let snapshot = inner.source.snapshot();
         inner.snapshot.store(Arc::new(snapshot));
         inner
             .last_refresh_nanos
             .store(Self::elapsed_nanos(&inner), Ordering::Release);
+        guard.completed = true;
     }
 
     fn refresh_if_stale(&self) {
@@ -146,6 +154,7 @@ impl CachedMemoryProbe {
 
         let guard = RefreshGuard {
             inner: self.inner.clone(),
+            completed: false,
         };
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn_blocking(move || Self::refresh(guard));
@@ -383,20 +392,40 @@ mod tests {
         }
     }
 
+    fn stale_cached_probe(
+        source: Arc<dyn MemoryProbe>,
+        snapshot: MemorySnapshot,
+    ) -> CachedMemoryProbe {
+        let refresh_interval = Duration::from_secs(60);
+        CachedMemoryProbe {
+            inner: Arc::new(CachedMemoryProbeInner {
+                source,
+                started_at: Instant::now() - refresh_interval - Duration::from_secs(1),
+                refresh_interval_nanos: refresh_interval.as_nanos() as u64,
+                last_refresh_nanos: AtomicU64::new(0),
+                snapshot: arc_swap::ArcSwap::new(Arc::new(snapshot)),
+                refresh_in_progress: AtomicBool::new(false),
+            }),
+        }
+    }
+
     #[test]
     async fn cached_probe_coalesces_reads_and_refreshes_off_thread() {
-        let reads = Arc::new(AtomicU64::new(0));
+        let reads = Arc::new(AtomicU64::new(1));
         let limit_bytes = Arc::new(AtomicU64::new(100));
         let current_bytes = Arc::new(AtomicU64::new(1));
         let refresh_gate = Arc::new((Mutex::new(false), Condvar::new()));
-        let probe = CachedMemoryProbe::new(
-            Box::new(CountingProbe {
+        let probe = stale_cached_probe(
+            Arc::new(CountingProbe {
                 reads: reads.clone(),
                 limit_bytes: limit_bytes.clone(),
                 current_bytes: current_bytes.clone(),
                 refresh_gate: refresh_gate.clone(),
             }),
-            Duration::ZERO,
+            MemorySnapshot {
+                limit_bytes: 100,
+                current_bytes: 1,
+            },
         );
 
         limit_bytes.store(50, Ordering::Relaxed);
@@ -440,12 +469,15 @@ mod tests {
 
     #[test]
     async fn cached_probe_retries_after_refresh_panics() {
-        let reads = Arc::new(AtomicU64::new(0));
-        let probe = CachedMemoryProbe::new(
-            Box::new(PanickingProbe {
+        let reads = Arc::new(AtomicU64::new(1));
+        let probe = stale_cached_probe(
+            Arc::new(PanickingProbe {
                 reads: reads.clone(),
             }),
-            Duration::ZERO,
+            MemorySnapshot {
+                limit_bytes: 100,
+                current_bytes: 1,
+            },
         );
 
         assert_eq!(probe.snapshot().current_bytes, 1);
@@ -454,6 +486,7 @@ mod tests {
             while probe.inner.refresh_in_progress.load(Ordering::Acquire) {
                 tokio::task::yield_now().await;
             }
+            probe.inner.last_refresh_nanos.store(0, Ordering::Release);
             while probe.snapshot().current_bytes != 42 {
                 tokio::task::yield_now().await;
             }
@@ -462,5 +495,37 @@ mod tests {
         .unwrap();
 
         assert_eq!(reads.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    async fn cached_probe_backs_off_after_refresh_panics() {
+        let reads = Arc::new(AtomicU64::new(1));
+        let probe = stale_cached_probe(
+            Arc::new(PanickingProbe {
+                reads: reads.clone(),
+            }),
+            MemorySnapshot {
+                limit_bytes: 100,
+                current_bytes: 1,
+            },
+        );
+
+        assert_eq!(probe.snapshot().current_bytes, 1);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while probe.inner.refresh_in_progress.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        for _ in 0..100 {
+            assert_eq!(probe.snapshot().current_bytes, 1);
+        }
+        assert_eq!(
+            reads.load(Ordering::Relaxed),
+            2,
+            "a failed refresh must not be retried before the refresh interval elapses"
+        );
     }
 }

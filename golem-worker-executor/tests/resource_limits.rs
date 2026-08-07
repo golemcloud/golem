@@ -15,14 +15,16 @@
 use crate::Tracing;
 use axum::Router;
 use axum::routing::get;
-use golem_common::model::AgentStatus;
+use golem_common::model::{AgentStatus, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
-    start_with_concurrent_agent_limit, start_with_invocation_limits, start_with_table_limit,
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    WorkerExecutorTestDependencies, start_with_concurrent_agent_limit,
+    start_with_invocation_limits, start_with_overrides, start_with_table_limit,
 };
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 
@@ -39,6 +41,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("agent_rpc_rust")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("large_dynamic_memory")]
     PrecompiledComponent
 );
 
@@ -429,6 +435,64 @@ async fn concurrent_agent_idle_releases_permit(
         .await?;
 
     http_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn live_memory_growth_cannot_bypass_executor_admission(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("large_dynamic_memory")] large_dynamic_memory: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    const EXECUTOR_MEMORY_BYTES: u64 = 32 * 1024 * 1024;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.memory.system_memory_override = Some(EXECUTOR_MEMORY_BYTES);
+                config.memory.worker_memory_ratio = 1.0;
+                config.memory.component_size_coefficient = 0.0;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, large_dynamic_memory)
+        .store()
+        .await?;
+    let agent_id = agent_id!("LargeDynamicMemoryAgent", "executor-admission");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let initial_bytes = executor.worker_memory_requirement(&owned_agent_id).await?;
+    assert!(
+        initial_bytes < EXECUTOR_MEMORY_BYTES,
+        "fixture must fit before live growth: initial={initial_bytes}, pool={EXECUTOR_MEMORY_BYTES}"
+    );
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "run_with_memory_and_work",
+            data_value!(64u64, 0u64),
+        ),
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "growth beyond executor headroom must remain pending while capacity is unavailable: {result:?}"
+    );
+
     Ok(())
 }
 

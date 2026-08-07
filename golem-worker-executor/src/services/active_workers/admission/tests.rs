@@ -207,7 +207,7 @@ fn controller_with_ratio(
         }),
         AdmissionPolicy { usable_ratio },
     );
-    controller.seed_granted(initial_granted);
+    controller.reserve(initial_granted);
     Arc::new(controller)
 }
 

@@ -129,7 +129,6 @@ impl AdmissionController {
             policy,
             granted: AtomicU64::new(0),
         };
-        crate::metrics::workers::reset_worker_memory_granted();
         controller
     }
 
@@ -201,21 +200,12 @@ impl AdmissionController {
     /// not releasing it would permanently shrink admissible headroom as workers
     /// come and go.
     pub(crate) fn release(&self, reserved_bytes: u64) {
-        let previous = self
-            .granted
+        self.granted
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |granted| {
-                Some(granted.saturating_sub(reserved_bytes))
+                granted.checked_sub(reserved_bytes)
             })
-            .unwrap();
-        crate::metrics::workers::decrease_worker_memory_granted(previous.min(reserved_bytes));
-    }
-
-    /// Pre-register grant bytes for workers that were already live when the
-    /// controller was created. Test-only: production registers every worker's
-    /// grant through admission.
-    #[cfg(test)]
-    pub fn seed_granted(&self, bytes: u64) {
-        self.reserve(bytes);
+            .expect("released memory exceeds the committed reservation");
+        crate::metrics::workers::decrease_worker_memory_granted(reserved_bytes);
     }
 
     /// Decide whether `request_bytes` can be admitted, evicting from `source` if
@@ -294,6 +284,13 @@ impl AdmissionController {
             }),
             AdmissionDecision::Reject => None,
         }
+    }
+}
+
+impl Drop for AdmissionController {
+    fn drop(&mut self) {
+        let granted = self.granted.swap(0, Ordering::AcqRel);
+        crate::metrics::workers::decrease_worker_memory_granted(granted);
     }
 }
 
