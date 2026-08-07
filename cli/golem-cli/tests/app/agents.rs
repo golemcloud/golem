@@ -2435,7 +2435,7 @@ async fn list_agent_names(ctx: &TestContext, mode: &str) -> Vec<String> {
         .into_iter()
         .next()
         .unwrap_or_else(|| panic!("`agent list --mode {mode}` produced no JSON output"));
-    response.agents.into_iter().map(|a| a.agent_name).collect()
+    response.agents.into_iter().map(|a| a.agent_id).collect()
 }
 
 // Scaffolds a fresh Rust app with two agent types: `DurableListAgent` (durable
@@ -2759,7 +2759,7 @@ async fn test_agent_list_mode_filter_in_ts_repl() {
 }
 
 // JSON view of the `agent list` structured output. We only need the `agents`
-// array and the rendered `agentName` field; serde ignores the `outputType`
+// array and the rendered `agentId` field; serde ignores the `outputType`
 // discriminator injected by the CLI's structured-output wrapper.
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -2770,7 +2770,7 @@ struct AgentListResponseView {
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentListView {
-    agent_name: String,
+    agent_id: String,
 }
 
 // Use UPDATE_GOLDENFILES=1 or `cargo make cli-integration-tests-update-golden-files` to update files
