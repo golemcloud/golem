@@ -2763,16 +2763,20 @@ fn arb_agent_update_result() -> OutputDocumentStrategy {
     )
 }
 
-/// Shared field generator for the two identical revision-transition metas
+/// The field tuple shared by the two identical revision-transition metas
 /// (`AgentUpdateMeta` / `AgentRedeploymentMeta`).
-fn arb_agent_transition_fields() -> BoxedStrategy<(
+type AgentTransitionFields = (
     golem_common::model::component::ComponentName,
     crate::model::agent::RawAgentId,
     golem_common::model::component::ComponentRevision,
     golem_common::model::component::ComponentRevision,
     Option<String>,
     Option<String>,
-)> {
+);
+
+/// Shared field generator for the two identical revision-transition metas
+/// (`AgentUpdateMeta` / `AgentRedeploymentMeta`).
+fn arb_agent_transition_fields() -> BoxedStrategy<AgentTransitionFields> {
     (
         arb_small_string(),
         arb_small_string(),

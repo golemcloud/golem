@@ -139,10 +139,16 @@ pub fn parse_cursor(cursor: &str) -> anyhow::Result<ScanCursor> {
 
     Ok(ScanCursor {
         layer: parts[0].parse().with_context(|| {
-            format!("Invalid scan cursor layer {:?}, expected a non-negative integer", parts[0])
+            format!(
+                "Invalid scan cursor layer {:?}, expected a non-negative integer",
+                parts[0]
+            )
         })?,
         cursor: parts[1].parse().with_context(|| {
-            format!("Invalid scan cursor position {:?}, expected a non-negative integer", parts[1])
+            format!(
+                "Invalid scan cursor position {:?}, expected a non-negative integer",
+                parts[1]
+            )
         })?,
     })
 }

@@ -19,9 +19,9 @@ use golem_client::api::{
     AccountClientLive, AccountSummaryClientLive, AgentClientLive, AgentSecretsClientLive,
     AgentTypesClientLive, ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive,
     ApplicationClientLive, CardClientLive, ComponentClientLive, DeploymentClientLive,
-    EnvironmentClientLive, LoginClientLive, McpDeploymentClientLive,
-    MeClientLive, PermissionSharesClientLive, PluginClientLive, ResourcesClientLive,
-    RetryPoliciesClientLive, TokenClientLive, WorkerClientLive,
+    EnvironmentClientLive, LoginClientLive, McpDeploymentClientLive, MeClientLive,
+    PermissionSharesClientLive, PluginClientLive, ResourcesClientLive, RetryPoliciesClientLive,
+    TokenClientLive, WorkerClientLive,
 };
 use golem_client::{Context as ClientContext, Security};
 use golem_common::base_model::api;
@@ -311,7 +311,6 @@ impl GolemClients {
             base_url: config.registry_url.clone(),
             security_token: security_token.clone(),
         };
-
 
         let worker_context = || ClientContext {
             client: service_http_client.clone(),
