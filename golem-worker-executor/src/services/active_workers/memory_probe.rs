@@ -144,7 +144,7 @@ impl CachedMemoryProbe {
         inner.snapshot.store(Arc::new(snapshot));
         inner
             .last_refresh_nanos
-            .store(Self::elapsed_nanos(&inner), Ordering::Release);
+            .store(Self::elapsed_nanos(inner), Ordering::Release);
         guard.completed = true;
     }
 

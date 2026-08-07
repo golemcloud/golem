@@ -135,12 +135,12 @@ impl AdmissionController {
         let snapshot = probe.snapshot();
         let ceiling = snapshot.usable_limit_bytes(policy.usable_ratio);
         crate::metrics::workers::record_worker_memory_ceiling(ceiling);
-        let controller = Self {
+
+        Self {
             probe,
             policy,
             granted: AtomicU64::new(0),
-        };
-        controller
+        }
     }
 
     /// Atomically admits `request_bytes` if the headroom computed against the
