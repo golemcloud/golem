@@ -36,7 +36,8 @@ use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorEr
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::component::Component;
 use golem_worker_executor::durable_host::{
-    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState, SnapshotBoundaryBlocker,
+    DurableResourceLimiter, DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
+    SnapshotBoundaryBlocker,
 };
 use golem_worker_executor::model::{
     AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType,
@@ -354,6 +355,13 @@ impl FileSystemReading for DebugContext {
 }
 
 #[async_trait]
+impl DurableResourceLimiter<DebugContext> for DebugContext {
+    fn durable_worker_ctx(&mut self) -> &mut DurableWorkerCtx<DebugContext> {
+        &mut self.durable_ctx
+    }
+}
+
+#[async_trait]
 impl ResourceLimiterAsync for DebugContext {
     async fn memory_growing(
         &mut self,
@@ -361,21 +369,15 @@ impl ResourceLimiterAsync for DebugContext {
         desired: usize,
         maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
-        self.durable_ctx
-            .admit_unshared_memory_growth(current, desired, maximum)
-            .await
+        self.durable_memory_growing(current, desired, maximum).await
     }
 
     fn memory_grown(&mut self, current: usize, desired: usize) {
-        let delta = desired.saturating_sub(current) as u64;
-        if delta > 0 {
-            self.durable_ctx.increase_memory(delta);
-        }
+        self.durable_memory_grown(current, desired);
     }
 
     fn memory_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
-        self.durable_ctx.unshared_memory_growth_failed();
-        Ok(())
+        self.durable_memory_grow_failed()
     }
 
     async fn table_growing(

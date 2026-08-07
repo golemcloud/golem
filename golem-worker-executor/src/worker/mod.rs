@@ -2138,8 +2138,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .expect("linear memory grant requested while worker is not running")
     }
 
-    #[doc(hidden)]
-    pub fn startup_linear_memory_bytes(&self) -> u64 {
+    pub(crate) fn startup_linear_memory_bytes(&self) -> u64 {
         self.startup_linear_memory_bytes.load(Ordering::Acquire)
     }
 
@@ -4151,9 +4150,8 @@ impl RunningWorker {
             tracker.reconcile(allocated_bytes, std::time::Instant::now());
         crate::metrics::wasm::record_worker_allocated_linear_memory(allocated_bytes);
         if live_instantiation_growth > 0 {
-            // This commit deliberately remains on the cold-start path: publishing the
-            // instance before its canonical growth is durable can make a process crash
-            // replay and persist the same instantiation growth again.
+            // Commit the growth oplog entry before publishing the instance. Otherwise a
+            // process crash can replay and persist the same instantiation growth again.
             parent
                 .add_and_commit_oplog(OplogEntry::grow_memory(live_instantiation_growth))
                 .await;

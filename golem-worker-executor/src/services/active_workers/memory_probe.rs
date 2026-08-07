@@ -113,10 +113,19 @@ impl CachedMemoryProbe {
     fn new(source: Box<dyn MemoryProbe>, refresh_interval: Duration) -> Self {
         let source = Arc::<dyn MemoryProbe>::from(source);
         let snapshot = source.snapshot();
+        Self::with_snapshot(source, snapshot, refresh_interval, Instant::now())
+    }
+
+    fn with_snapshot(
+        source: Arc<dyn MemoryProbe>,
+        snapshot: MemorySnapshot,
+        refresh_interval: Duration,
+        started_at: Instant,
+    ) -> Self {
         Self {
             inner: Arc::new(CachedMemoryProbeInner {
                 source,
-                started_at: Instant::now(),
+                started_at,
                 refresh_interval_nanos: refresh_interval.as_nanos().min(u64::MAX as u128) as u64,
                 last_refresh_nanos: AtomicU64::new(0),
                 snapshot: arc_swap::ArcSwap::new(Arc::new(snapshot)),
@@ -397,16 +406,12 @@ mod tests {
         snapshot: MemorySnapshot,
     ) -> CachedMemoryProbe {
         let refresh_interval = Duration::from_secs(60);
-        CachedMemoryProbe {
-            inner: Arc::new(CachedMemoryProbeInner {
-                source,
-                started_at: Instant::now() - refresh_interval - Duration::from_secs(1),
-                refresh_interval_nanos: refresh_interval.as_nanos() as u64,
-                last_refresh_nanos: AtomicU64::new(0),
-                snapshot: arc_swap::ArcSwap::new(Arc::new(snapshot)),
-                refresh_in_progress: AtomicBool::new(false),
-            }),
-        }
+        CachedMemoryProbe::with_snapshot(
+            source,
+            snapshot,
+            refresh_interval,
+            Instant::now() - refresh_interval - Duration::from_secs(1),
+        )
     }
 
     #[test]

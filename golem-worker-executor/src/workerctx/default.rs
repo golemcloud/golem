@@ -15,7 +15,8 @@
 use super::LogEventEmitBehaviour;
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::durable_host::{
-    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState, SnapshotBoundaryBlocker,
+    DurableResourceLimiter, DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
+    SnapshotBoundaryBlocker,
 };
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
@@ -463,6 +464,13 @@ impl InvocationHooks for Context {
 }
 
 #[async_trait]
+impl DurableResourceLimiter<Context> for Context {
+    fn durable_worker_ctx(&mut self) -> &mut DurableWorkerCtx<Context> {
+        &mut self.durable_ctx
+    }
+}
+
+#[async_trait]
 impl ResourceLimiterAsync for Context {
     async fn memory_growing(
         &mut self,
@@ -478,22 +486,18 @@ impl ResourceLimiterAsync for Context {
             self.get_max_memory()
         );
 
-        self.durable_ctx
-            .admit_unshared_memory_growth(current, desired, maximum)
-            .await
+        self.durable_memory_growing(current, desired, maximum).await
     }
 
     fn memory_grown(&mut self, current: usize, desired: usize) {
-        let delta = desired.saturating_sub(current) as u64;
-        if delta > 0 {
-            self.durable_ctx.increase_memory(delta);
+        self.durable_memory_grown(current, desired);
+        if desired > current {
             record_allocated_memory(self.durable_ctx.total_linear_memory_size() as usize);
         }
     }
 
     fn memory_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
-        self.durable_ctx.unshared_memory_growth_failed();
-        Ok(())
+        self.durable_memory_grow_failed()
     }
 
     async fn table_growing(

@@ -200,12 +200,25 @@ impl AdmissionController {
     /// not releasing it would permanently shrink admissible headroom as workers
     /// come and go.
     pub(crate) fn release(&self, reserved_bytes: u64) {
-        self.granted
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |granted| {
-                granted.checked_sub(reserved_bytes)
-            })
-            .expect("released memory exceeds the committed reservation");
-        crate::metrics::workers::decrease_worker_memory_granted(reserved_bytes);
+        let mut previously_granted = self.granted.load(Ordering::Acquire);
+        loop {
+            match self.granted.compare_exchange_weak(
+                previously_granted,
+                previously_granted.saturating_sub(reserved_bytes),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(current) => previously_granted = current,
+            }
+        }
+        debug_assert!(
+            previously_granted >= reserved_bytes,
+            "released memory exceeds the committed reservation"
+        );
+        crate::metrics::workers::decrease_worker_memory_granted(
+            reserved_bytes.min(previously_granted),
+        );
     }
 
     /// Decide whether `request_bytes` can be admitted, evicting from `source` if

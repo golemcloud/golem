@@ -386,6 +386,34 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     _store_alive_guard: StoreAliveGuard,
 }
 
+#[async_trait]
+pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
+    fn durable_worker_ctx(&mut self) -> &mut DurableWorkerCtx<Ctx>;
+
+    async fn durable_memory_growing(
+        &mut self,
+        current: usize,
+        desired: usize,
+        maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        self.durable_worker_ctx()
+            .admit_unshared_memory_growth(current, desired, maximum)
+            .await
+    }
+
+    fn durable_memory_grown(&mut self, current: usize, desired: usize) {
+        let delta = desired.saturating_sub(current) as u64;
+        if delta > 0 {
+            self.durable_worker_ctx().increase_memory(delta);
+        }
+    }
+
+    fn durable_memory_grow_failed(&mut self) -> wasmtime::Result<()> {
+        self.durable_worker_ctx().unshared_memory_growth_failed();
+        Ok(())
+    }
+}
+
 impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
     fn drop(&mut self) {
         self.linear_memory.stop(Instant::now());

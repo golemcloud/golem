@@ -675,20 +675,6 @@ impl TestWorkerExecutor {
         Ok(worker.memory_requirement().await?)
     }
 
-    /// Returns the canonical linear-memory baseline used to seed the next
-    /// instance created by the currently resident worker shell.
-    pub async fn worker_startup_linear_memory_bytes(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-    ) -> anyhow::Result<u64> {
-        let worker = self
-            .additional_test_deps
-            .try_get_worker(owned_agent_id)
-            .await
-            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveWorkers"))?;
-        Ok(worker.startup_linear_memory_bytes())
-    }
-
     pub async fn get_running_workers_metadata(
         &self,
         component_id: &ComponentId,
@@ -1702,6 +1688,13 @@ impl WorkerCtx for TestWorkerCtx {
 }
 
 #[async_trait]
+impl golem_worker_executor::durable_host::DurableResourceLimiter<TestWorkerCtx> for TestWorkerCtx {
+    fn durable_worker_ctx(&mut self) -> &mut DurableWorkerCtx<TestWorkerCtx> {
+        &mut self.durable_ctx
+    }
+}
+
+#[async_trait]
 impl ResourceLimiterAsync for TestWorkerCtx {
     async fn memory_growing(
         &mut self,
@@ -1716,21 +1709,22 @@ impl ResourceLimiterAsync for TestWorkerCtx {
             desired
         );
 
-        self.durable_ctx
-            .admit_unshared_memory_growth(current, desired, maximum)
-            .await
+        golem_worker_executor::durable_host::DurableResourceLimiter::durable_memory_growing(
+            self, current, desired, maximum,
+        )
+        .await
     }
 
     fn memory_grown(&mut self, current: usize, desired: usize) {
-        let delta = desired.saturating_sub(current) as u64;
-        if delta > 0 {
-            self.durable_ctx.increase_memory(delta);
-        }
+        golem_worker_executor::durable_host::DurableResourceLimiter::durable_memory_grown(
+            self, current, desired,
+        );
     }
 
     fn memory_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
-        self.durable_ctx.unshared_memory_growth_failed();
-        Ok(())
+        golem_worker_executor::durable_host::DurableResourceLimiter::durable_memory_grow_failed(
+            self,
+        )
     }
 
     async fn table_growing(
