@@ -36,26 +36,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tracing::debug;
 
-pub(crate) fn initial_filesystem_storage_usage(
-    metadata: &golem_common::model::component_metadata::ComponentMetadata,
-    agent_type_name: Option<&golem_common::model::agent::AgentTypeName>,
-) -> u64 {
-    agent_type_name
-        .and_then(|agent_type_name| metadata.agent_type_provision_configs().get(agent_type_name))
-        .map(|config| {
-            config
-                .files
-                .iter()
-                .filter(|file| {
-                    file.permissions
-                        == golem_common::model::component::AgentFilePermissions::ReadWrite
-                })
-                .map(|file| file.size)
-                .fold(0u64, u64::saturating_add)
-        })
-        .unwrap_or(0)
-}
-
 /// Hash field holding the bounded part of the cached `AgentStatusRecord` (everything except the
 /// unbounded fields that are stored separately). Always present for a cached status; its absence is
 /// treated as a cache miss.

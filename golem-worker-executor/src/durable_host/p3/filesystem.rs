@@ -26,6 +26,7 @@ use crate::durable_host::p3::{
 };
 use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{FilesystemStorageReservation, filesystem_mutation_lock};
+use crate::services::agent_storage_meter::StorageAccountingGuard;
 use crate::workerctx::WorkerCtx;
 use cap_std::fs::FileExt;
 use golem_common::model::oplog::host_functions::{
@@ -523,7 +524,7 @@ async fn filesystem_file_size(file: &File) -> Option<u64> {
 async fn reserve_filesystem_storage_bytes<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     bytes: u64,
-    guard: tokio::sync::OwnedMutexGuard<()>,
+    guard: StorageAccountingGuard,
 ) -> wasmtime::Result<Option<FilesystemStorageReservation>>
 where
     Ctx: WorkerCtx,
@@ -612,7 +613,7 @@ async fn shrink_filesystem_storage_reservation<Ctx, U>(
         accessor.with(|mut access| durable_worker_ctx::<Ctx, U>(access.data_mut()).storage_meter());
     let _guard = storage_meter.lock_reservation().await;
     if let Some(worker) = accessor.with(|mut access| {
-        durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_storage_worker()
+        durable_worker_ctx::<Ctx, U>(access.data_mut()).live_filesystem_storage_worker()
     }) {
         reservation.shrink(&worker, bytes).await;
     }
@@ -627,54 +628,11 @@ where
     Ctx: WorkerCtx,
     U: 'static,
 {
-    if let Some((
-        worker,
-        storage_meter,
-        committed_bytes,
-        committed_host_bytes,
-        account_id,
-        environment_id,
-    )) = accessor.with(|mut access| {
-        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        ctx.prepare_filesystem_storage_reservation_commit(&reservation, committed_bytes)
-            .map(|(worker, committed_bytes, committed_host_bytes)| {
-                (
-                    worker,
-                    ctx.storage_meter(),
-                    committed_bytes,
-                    committed_host_bytes,
-                    ctx.created_by().to_string(),
-                    ctx.state.owned_agent_id.environment_id().to_string(),
-                )
-            })
+    if let Some(commit) = accessor.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut())
+            .prepare_filesystem_storage_reservation_commit(&reservation, committed_bytes)
     }) {
-        reservation
-            .commit(
-                worker,
-                storage_meter,
-                None,
-                committed_bytes,
-                committed_host_bytes,
-                account_id,
-                environment_id,
-            )
-            .await;
-    }
-    Ok(())
-}
-
-async fn rollback_filesystem_write_storage<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    mut reservation: FilesystemStorageReservation,
-) -> wasmtime::Result<()>
-where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    if let Some(worker) = accessor.with(|mut access| {
-        durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_storage_worker()
-    }) {
-        worker.rollback_filesystem_storage_space(reservation.take_permit());
+        commit.apply(reservation, None).await;
     }
     Ok(())
 }
@@ -1226,9 +1184,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                     .await
                     .map_err(FilesystemError::trap)?;
             } else {
-                rollback_filesystem_write_storage::<Ctx, U>(accessor, reservation)
-                    .await
-                    .map_err(FilesystemError::trap)?;
+                drop(reservation);
             }
         } else if result.is_ok() && size < current_size {
             release_filesystem_write_storage::<Ctx, U>(accessor, current_size - size)

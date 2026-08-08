@@ -199,8 +199,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
                 self.commit_filesystem_storage_reservation(reservation, delta)
                     .await;
             } else {
-                self.rollback_filesystem_storage_reservation(reservation)
-                    .await;
+                drop(reservation);
             }
         } else if result.is_ok() && size < current_size {
             // Shrink path: release permits for the freed space on success.
@@ -299,8 +298,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
                     Ok(written)
                 }
                 Err(err) => {
-                    self.rollback_filesystem_storage_reservation(reservation)
-                        .await;
+                    drop(reservation);
                     Err(err)
                 }
             }

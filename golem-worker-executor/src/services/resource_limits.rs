@@ -1024,8 +1024,8 @@ mod tests {
             },
         );
         let now = Instant::now();
-        let old = AgentStorageMeter::new(AgentMode::Durable, 1, true, entry.clone(), now);
-        let reloaded = AgentStorageMeter::new(AgentMode::Durable, 1, true, entry.clone(), now);
+        let old = AgentStorageMeter::new(AgentMode::Durable, 1, entry.clone(), now);
+        let reloaded = AgentStorageMeter::new(AgentMode::Durable, 1, entry.clone(), now);
 
         entry.register_storage_meter(owned_agent_id.clone(), old.clone());
         entry.register_storage_meter(owned_agent_id.clone(), reloaded.clone());
@@ -1046,7 +1046,7 @@ mod tests {
             },
         );
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, true, entry.clone(), now);
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
         entry.register_storage_meter(owned_agent_id, meter);
 
         entry.flush_storage_meters(now + Duration::from_secs(3));
@@ -1068,7 +1068,7 @@ mod tests {
             },
         );
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, true, entry.clone(), now);
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
         entry.register_storage_meter(owned_agent_id, meter);
 
         // A tick that ships integrates the first second.

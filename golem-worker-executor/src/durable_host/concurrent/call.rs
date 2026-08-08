@@ -3226,39 +3226,12 @@ async fn commit_revision_update_storage_access<T, D, Ctx>(
     Ctx: WorkerCtx,
 {
     if let Some(reservation) = reservation
-        && let Some((
-            worker,
-            storage_meter,
-            committed_bytes,
-            committed_host_bytes,
-            account_id,
-            environment_id,
-        )) = store.with(|mut access| {
-            let ctx = get_ctx(access.data_mut());
-            ctx.prepare_filesystem_storage_reservation_commit(&reservation, committed_growth)
-                .map(|(worker, committed_bytes, committed_host_bytes)| {
-                    (
-                        worker,
-                        ctx.storage_meter(),
-                        committed_bytes,
-                        committed_host_bytes,
-                        ctx.created_by().to_string(),
-                        ctx.state.owned_agent_id.environment_id().to_string(),
-                    )
-                })
+        && let Some(commit) = store.with(|mut access| {
+            get_ctx(access.data_mut())
+                .prepare_filesystem_storage_reservation_commit(&reservation, committed_growth)
         })
     {
-        reservation
-            .commit(
-                worker,
-                storage_meter,
-                None,
-                committed_bytes,
-                committed_host_bytes,
-                account_id,
-                environment_id,
-            )
-            .await;
+        commit.apply(reservation, None).await;
     }
 }
 

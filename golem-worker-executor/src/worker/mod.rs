@@ -2228,12 +2228,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub fn rollback_filesystem_storage_space(&self, permit: Option<FilesystemStoragePermit>) {
-        if let Some(permit) = permit {
-            drop(permit);
-        }
-    }
-
     /// Bumps the read-only cache epoch, lazily invalidating all cached entries
     /// (the epoch is part of the cache key). Called from
     /// `DurableWorkerCtx::on_agent_invocation_success` immediately after a
@@ -3397,8 +3391,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let worker_env: Vec<(String, String)> = worker_env.unwrap_or_default();
                 let created_at = Timestamp::now_utc();
                 let initial_filesystem_storage_usage =
-                    crate::services::worker::initial_filesystem_storage_usage(
-                        &component.metadata,
+                    component.metadata.initial_filesystem_storage_usage(
                         agent_id.as_ref().map(|agent_id| &agent_id.agent_type),
                     );
 

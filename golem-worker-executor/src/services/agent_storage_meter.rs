@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Per-agent byte-second metering. Clones share one meter; dropping the last clone records any
-//! whole byte-seconds accumulated since the previous flush.
+//! Canonical per-agent filesystem storage accounting. Clones share committed and reserved byte
+//! counts, executor-capacity rounding, mutation serialization, and byte-second metering.
 
 use crate::services::active_workers::{
     bytes_to_filesystem_storage_permits, filesystem_storage_permits_to_bytes,
@@ -26,6 +26,11 @@ use std::time::Instant;
 #[derive(Clone, Debug)]
 pub struct AgentStorageMeter {
     inner: Arc<Inner>,
+}
+
+#[derive(Debug)]
+pub struct StorageAccountingGuard {
+    _guard: tokio::sync::OwnedMutexGuard<()>,
 }
 
 impl AgentStorageMeter {
@@ -58,13 +63,7 @@ struct State {
 }
 
 impl AgentStorageMeter {
-    pub fn new(
-        mode: AgentMode,
-        bytes: u64,
-        active: bool,
-        entry: Arc<AtomicResourceEntry>,
-        now: Instant,
-    ) -> Self {
+    pub fn new(mode: AgentMode, bytes: u64, entry: Arc<AtomicResourceEntry>, now: Instant) -> Self {
         Self {
             inner: Arc::new(Inner {
                 mode,
@@ -73,7 +72,7 @@ impl AgentStorageMeter {
                 state: Mutex::new(State {
                     bytes,
                     reserved_bytes: 0,
-                    active,
+                    active: true,
                     stopped: false,
                     last_sample: now,
                     pending_byte_nanoseconds: 0,
@@ -169,8 +168,10 @@ impl AgentStorageMeter {
         host_capacity_delta(after, before)
     }
 
-    pub async fn lock_reservation(&self) -> tokio::sync::OwnedMutexGuard<()> {
-        self.inner.reservation_lock.clone().lock_owned().await
+    pub async fn lock_reservation(&self) -> StorageAccountingGuard {
+        StorageAccountingGuard {
+            _guard: self.inner.reservation_lock.clone().lock_owned().await,
+        }
     }
 
     pub fn on_acquire(&self, bytes: u64, now: Instant) {
@@ -294,7 +295,7 @@ mod tests {
     fn integrates_acquire_release_and_flush() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, true, entry.clone(), now);
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
 
         meter.on_acquire(5, now + Duration::from_secs(2));
         meter.on_release(3, now + Duration::from_secs(4));
@@ -307,7 +308,7 @@ mod tests {
     fn meters_ephemeral_storage_separately() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Ephemeral, 10, true, entry.clone(), now);
+        let meter = AgentStorageMeter::new(AgentMode::Ephemeral, 10, entry.clone(), now);
 
         meter.flush(now + Duration::from_secs(3));
 
@@ -319,7 +320,7 @@ mod tests {
     fn ignores_a_stale_flush_timestamp() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, true, entry.clone(), now);
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
 
         meter.on_acquire(5, now + Duration::from_secs(2));
         meter.flush(now + Duration::from_secs(1));
@@ -332,7 +333,7 @@ mod tests {
     fn retains_sub_byte_second_remainder_without_division() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 1024, true, entry.clone(), now);
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 1024, entry.clone(), now);
 
         meter.flush(now + Duration::from_micros(1));
         assert_eq!(entry.durable_byte_seconds_delta(), 0);
@@ -345,7 +346,7 @@ mod tests {
     fn cloned_meter_flushes_shared_state() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 0, true, entry.clone(), now);
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 0, entry.clone(), now);
         let flusher = meter.clone();
 
         meter.on_acquire(10, now + Duration::from_secs(1));
@@ -358,7 +359,7 @@ mod tests {
     fn pause_resume_and_stop_are_idempotent() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, true, entry.clone(), now);
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
 
         meter.pause(now + Duration::from_secs(2));
         meter.pause(now + Duration::from_secs(3));
@@ -376,7 +377,7 @@ mod tests {
     fn paused_storage_changes_are_prospective() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, true, entry.clone(), now);
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
 
         meter.pause(now + Duration::from_secs(1));
         meter.on_acquire(10, now + Duration::from_secs(5));
@@ -391,7 +392,7 @@ mod tests {
     fn host_capacity_is_derived_from_canonical_total() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 500, true, entry, now);
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 500, entry, now);
 
         assert_eq!(meter.host_capacity_for_growth(500), 0);
         assert_eq!(meter.host_capacity_for_growth(600), 1024);
@@ -405,7 +406,7 @@ mod tests {
     fn outstanding_reservations_count_toward_quota_without_being_billed() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 4, true, entry.clone(), now);
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 4, entry.clone(), now);
 
         assert_eq!(meter.reserve(4, 10), Some(0));
         assert_eq!(meter.reserve(3, 10), None);
@@ -428,7 +429,7 @@ mod tests {
     fn extending_one_reservation_only_acquires_new_rounding_boundaries() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 0, true, entry, now);
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 0, entry, now);
 
         assert_eq!(meter.reserve(4, 2048), Some(1024));
         assert_eq!(meter.extend_reservation(4, 4, 2048), Some(0));
@@ -440,7 +441,7 @@ mod tests {
     fn overlapping_reservations_own_independent_host_capacity() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 500, true, entry, now);
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 500, entry, now);
 
         assert_eq!(meter.reserve(600, 4096), Some(1024));
         assert_eq!(meter.reserve(600, 4096), Some(1024));
@@ -453,7 +454,7 @@ mod tests {
     fn release_preserves_capacity_used_by_an_outstanding_reservation() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 1025, true, entry, now);
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 1025, entry, now);
 
         assert_eq!(meter.reserve(1023, 4096), Some(0));
         assert_eq!(meter.host_capacity_for_release(1025), 1024);
@@ -466,7 +467,7 @@ mod tests {
     fn shrinking_a_reservation_releases_newly_excess_capacity() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 1025, true, entry, now);
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 1025, entry, now);
 
         assert_eq!(meter.reserve(1023, 4096), Some(0));
         assert_eq!(meter.host_capacity_for_release(1025), 1024);
@@ -478,7 +479,7 @@ mod tests {
     fn shrinking_defers_capacity_release_while_other_reservations_exist() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 1025, true, entry, now);
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 1025, entry, now);
 
         assert_eq!(meter.reserve(1023, 4096), Some(0));
         assert_eq!(meter.reserve(1, 4096), Some(1024));
@@ -492,7 +493,7 @@ mod tests {
         ) {
             let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
             let mut now = Instant::now();
-            let meter = AgentStorageMeter::new(AgentMode::Durable, 10, true, entry.clone(), now);
+            let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
             let mut bytes = 10u64;
             let mut expected = 0u64;
 
