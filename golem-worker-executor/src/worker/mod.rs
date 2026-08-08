@@ -2201,7 +2201,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     Err(anyhow!(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage))
                 }
             }
-            _ => Err(anyhow!(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage)),
+            _ => Ok(None),
         }
     }
 
@@ -2231,44 +2231,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub fn rollback_filesystem_storage_space(&self, permit: Option<FilesystemStoragePermit>) {
         if let Some(permit) = permit {
             drop(permit);
-        }
-    }
-
-    /// Acquire storage semaphore permits for the total size of all initial
-    /// component files. Called once from `DurableWorkerCtx::create` before
-    /// `prepare_filesystem` loads the files. Merges the acquired permits
-    /// into the running worker's `filesystem_storage_permit` so they are released
-    /// automatically when the worker stops.
-    ///
-    /// Uses the non-blocking priority path (`try_acquire_storage`). If the
-    /// semaphore pool is full, idle workers are evicted by the semaphore's own
-    /// logic; the permit is returned as `None` and the caller should propagate
-    /// a retriable `NodeOutOfFilesystemStorage` error.
-    ///
-    /// Should only be called from the invocation loop.
-    pub async fn acquire_initial_filesystem_storage(
-        &self,
-        total_bytes: u64,
-    ) -> Result<(), GolemSpecificWasmTrap> {
-        if total_bytes == 0 {
-            return Ok(());
-        }
-        match &mut *self.instance.lock().await {
-            WorkerInstance::Running(running) => {
-                if let Some(permit) = self
-                    .active_workers()
-                    .try_acquire_filesystem_storage(total_bytes)
-                    .await
-                {
-                    running.merge_extra_filesystem_storage_permits(permit);
-                    Ok(())
-                } else {
-                    Err(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage)
-                }
-            }
-            // Worker stopped between create and acquire — no-op, permits will be
-            // re-acquired on next startup from AgentStatusRecord.
-            _ => Ok(()),
         }
     }
 
@@ -3509,6 +3471,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     initial_worker_metadata
                         .last_known_status
                         .total_linear_memory_size,
+                    initial_worker_metadata
+                        .last_known_status
+                        .current_filesystem_storage_usage,
                     initial_worker_metadata
                         .last_known_status
                         .active_plugins

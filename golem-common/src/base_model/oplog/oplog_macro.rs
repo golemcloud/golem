@@ -29,6 +29,7 @@ macro_rules! oplog_entry {
     ) => {
         #[cfg(feature = "full")]
         #[derive(Clone, Debug, PartialEq, desert_rust::BinaryCodec)]
+        #[desert(evolution())]
         pub enum OplogEntry {
             $($(#[$casemeta])*    $case {
                 /// Timestamp of when the oplog entry has been created

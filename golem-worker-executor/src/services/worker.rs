@@ -686,6 +686,7 @@ impl WorkerService for DefaultWorkerService {
                     parent,
                     component_size,
                     initial_total_linear_memory_size,
+                    initial_filesystem_storage_usage,
                     initial_active_plugins,
                     local_agent_config,
                     original_phantom_id,
@@ -719,11 +720,6 @@ impl WorkerService for DefaultWorkerService {
                     .unwrap_or_else(|err| {
                         panic!("failed enriching local agent config for {owned_agent_id}: {err}")
                     });
-                let initial_filesystem_storage_usage = initial_filesystem_storage_usage(
-                    &component_metadata.metadata,
-                    agent_type_name.as_ref(),
-                );
-
                 let initial_worker_metadata = AgentMetadata {
                     agent_id,
                     env,
@@ -741,7 +737,6 @@ impl WorkerService for DefaultWorkerService {
                         current_filesystem_storage_usage: initial_filesystem_storage_usage,
                         active_plugins: initial_active_plugins,
                         agent_mode,
-                        oplog_idx: OplogIndex::INITIAL,
                         ..AgentStatusRecord::default()
                     },
                     original_phantom_id,
@@ -766,7 +761,7 @@ impl WorkerService for DefaultWorkerService {
                             self,
                             owned_agent_id,
                             agent_mode,
-                            Some(initial_worker_metadata.last_known_status.clone()),
+                            None,
                             || self.read_status_checkpoint(owned_agent_id, agent_mode),
                         )
                         .await

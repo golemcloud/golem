@@ -3229,19 +3229,14 @@ async fn commit_revision_update_storage_access<T, D, Ctx>(
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    if let Some(mut reservation) = reservation
+    if let Some(reservation) = reservation
         && let Some((worker, committed_bytes, committed_host_bytes)) = store.with(|mut access| {
             get_ctx(access.data_mut())
                 .prepare_filesystem_storage_reservation_commit(&reservation, committed_growth)
         })
     {
-        worker
-            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
-                committed_bytes as i64,
-            ))
-            .await;
-        worker
-            .commit_filesystem_storage_space(reservation.take_permit(), committed_host_bytes)
+        reservation
+            .commit(&worker, committed_bytes, committed_host_bytes)
             .await;
         store.with(|mut access| {
             get_ctx(access.data_mut()).finish_filesystem_storage_reservation(committed_bytes);

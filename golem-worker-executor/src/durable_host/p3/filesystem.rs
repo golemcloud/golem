@@ -603,7 +603,7 @@ where
 
 async fn commit_filesystem_write_storage<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
-    mut reservation: FilesystemStorageReservation,
+    reservation: FilesystemStorageReservation,
     committed_bytes: u64,
 ) -> wasmtime::Result<()>
 where
@@ -614,15 +614,8 @@ where
         durable_worker_ctx::<Ctx, U>(access.data_mut())
             .prepare_filesystem_storage_reservation_commit(&reservation, committed_bytes)
     }) {
-        if committed_bytes > 0 {
-            worker
-                .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
-                    committed_bytes as i64,
-                ))
-                .await;
-        }
-        worker
-            .commit_filesystem_storage_space(reservation.take_permit(), committed_host_bytes)
+        reservation
+            .commit(&worker, committed_bytes, committed_host_bytes)
             .await;
         accessor.with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut())

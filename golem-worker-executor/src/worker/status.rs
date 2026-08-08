@@ -2,7 +2,7 @@ use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorker
 use golem_common::base_model::OplogIndex;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::AgentInvocationPayload;
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{
     AgentError, AgentResourceId, OplogEntry, OplogPayload, UpdateDescription,
@@ -140,67 +140,17 @@ where
     }
 
     // 3. Fall back to a full recompute from the start of the oplog.
-    let baseline = initial_status_baseline(this, owned_agent_id, agent_mode).await;
-    let status = try_fold_status_from(this, owned_agent_id, agent_mode, baseline).await;
+    let status = try_fold_status_from(
+        this,
+        owned_agent_id,
+        agent_mode,
+        AgentStatusRecord::default(),
+    )
+    .await;
     if status.is_some() {
         crate::metrics::workers::record_agent_status_recompute("full");
     }
     status
-}
-
-async fn initial_status_baseline<T>(
-    this: &T,
-    owned_agent_id: &OwnedAgentId,
-    agent_mode: AgentMode,
-) -> AgentStatusRecord
-where
-    T: HasOplogService + HasComponentService + Sync,
-{
-    let entries = this
-        .oplog_service()
-        .read_range(
-            owned_agent_id,
-            agent_mode,
-            OplogIndex::INITIAL,
-            OplogIndex::INITIAL,
-        )
-        .await;
-    let Some(OplogEntry::Create {
-        agent_id,
-        component_revision,
-        component_size,
-        initial_total_linear_memory_size,
-        initial_active_plugins,
-        ..
-    }) = entries.get(&OplogIndex::INITIAL)
-    else {
-        return AgentStatusRecord::default();
-    };
-    let Ok(agent_type_name) = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id) else {
-        return AgentStatusRecord::default();
-    };
-    let Ok(component) = this
-        .component_service()
-        .get_metadata(agent_id.component_id, Some(*component_revision))
-        .await
-    else {
-        return AgentStatusRecord::default();
-    };
-
-    AgentStatusRecord {
-        component_revision: *component_revision,
-        component_revision_for_replay: *component_revision,
-        component_size: *component_size,
-        total_linear_memory_size: *initial_total_linear_memory_size,
-        current_filesystem_storage_usage: crate::services::worker::initial_filesystem_storage_usage(
-            &component.metadata,
-            Some(&agent_type_name),
-        ),
-        active_plugins: initial_active_plugins.clone(),
-        agent_mode,
-        oplog_idx: OplogIndex::INITIAL,
-        ..AgentStatusRecord::default()
-    }
 }
 
 /// Folds the oplog entries after `baseline.oplog_idx` onto `baseline`.
@@ -1039,30 +989,37 @@ fn calculate_total_linear_memory_size(
 /// when a worker restarts.
 ///
 /// Mirrors `calculate_total_linear_memory_size`: entries in skipped regions
-/// are excluded, and `Create` resets the counter to zero (a newly created worker
-/// has no written files yet).
+/// are excluded, and `Create` resets the counter to the provisioned-filesystem
+/// baseline persisted with the worker.
 fn calculate_current_filesystem_storage_usage(
     current: u64,
     skipped_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> u64 {
-    let mut result = current as i64;
+    let mut result = current;
     for (idx, entry) in entries {
         if skipped_regions.is_in_deleted_region(*idx) {
             continue;
         }
 
         match entry {
-            OplogEntry::Create { .. } => {
-                result = 0;
+            OplogEntry::Create {
+                initial_filesystem_storage_usage,
+                ..
+            } => {
+                result = *initial_filesystem_storage_usage;
             }
             OplogEntry::FilesystemStorageUsageUpdate { delta, .. } => {
-                result = result.saturating_add(*delta);
+                if *delta >= 0 {
+                    result = result.saturating_add(*delta as u64);
+                } else {
+                    result = result.saturating_sub(delta.unsigned_abs());
+                }
             }
             _ => {}
         }
     }
-    result.max(0) as u64
+    result
 }
 
 fn collect_resources(
@@ -2149,6 +2106,7 @@ mod test {
                         None,
                         100,
                         200,
+                        0,
                         HashSet::new(),
                         Vec::new(),
                         None,
@@ -3190,7 +3148,10 @@ mod test {
         )
     }
 
-    fn make_create_entry(idx: u64) -> (OplogIndex, OplogEntry) {
+    fn make_create_entry(
+        idx: u64,
+        initial_filesystem_storage_usage: u64,
+    ) -> (OplogIndex, OplogEntry) {
         use golem_common::base_model::account::AccountId;
         use golem_common::base_model::component::{ComponentId, ComponentRevision};
         use golem_common::base_model::environment::EnvironmentId;
@@ -3211,12 +3172,31 @@ mod test {
                 None,
                 0,
                 0,
+                initial_filesystem_storage_usage,
                 Default::default(),
                 vec![],
                 None,
                 Uuid::now_v7(),
             ),
         )
+    }
+
+    #[test]
+    fn filesystem_storage_usage_create_baseline_plus_deltas_recomputes_exactly() {
+        let entries = BTreeMap::from([
+            make_create_entry(1, 4096),
+            make_fs_entry(2, 1024),
+            make_fs_entry(3, -512),
+        ]);
+
+        assert_eq!(
+            super::calculate_current_filesystem_storage_usage(
+                0,
+                &DeletedRegions::default(),
+                &entries,
+            ),
+            4608
+        );
     }
 
     /// `FilesystemStorageUsageUpdate` entries inside a deleted (skipped) region
@@ -3245,23 +3225,23 @@ mod test {
         );
     }
 
-    /// A `Create` entry mid-oplog resets `current_filesystem_storage_usage` to zero,
-    /// discarding usage accumulated before it (including the seed).
+    /// A `Create` entry mid-oplog resets `current_filesystem_storage_usage` to its
+    /// persisted baseline, discarding usage accumulated before it (including the seed).
     #[test]
-    fn filesystem_storage_usage_reset_to_zero_on_create() {
+    fn filesystem_storage_usage_reset_to_create_baseline() {
         let deleted = DeletedRegions::default();
 
         let entries: BTreeMap<OplogIndex, OplogEntry> = BTreeMap::from([
-            make_fs_entry(1, 1024), // before Create → should be wiped
-            make_create_entry(2),   // resets counter to 0
-            make_fs_entry(3, 512),  // after Create → counts
+            make_fs_entry(1, 1024),     // before Create → should be wiped
+            make_create_entry(2, 2048), // resets counter to the persisted baseline
+            make_fs_entry(3, 512),      // after Create → counts
         ]);
 
         // Seed with prior usage to confirm Create overrides the seed too.
         let result = super::calculate_current_filesystem_storage_usage(999, &deleted, &entries);
         assert_eq!(
-            result, 512,
-            "Create must reset usage to 0 before accumulating post-Create deltas"
+            result, 2560,
+            "Create must restore its baseline before accumulating post-Create deltas"
         );
     }
 

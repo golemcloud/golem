@@ -70,6 +70,7 @@ use raw_imports::*;
 // - public: fields of the PublicOplogEntry case
 oplog_entry! {
     /// The first entry of every oplog
+    #[desert(evolution(FieldAdded("initial_filesystem_storage_usage", 0)))]
     Create {
         hint: false
         wit_raw_type: "raw-create-parameters"
@@ -84,6 +85,7 @@ oplog_entry! {
             parent: Option<AgentId>,
             component_size: u64,
             initial_total_linear_memory_size: u64,
+            initial_filesystem_storage_usage: u64,
             initial_active_plugins: HashSet<EnvironmentPluginGrantId>,
             local_agent_config: Vec<UntypedAgentConfigEntry>,
             original_phantom_id: Option<Uuid>,
@@ -100,6 +102,8 @@ oplog_entry! {
             parent: Option<AgentId>,
             component_size: u64,
             initial_total_linear_memory_size: u64,
+            #[serde(default)]
+            initial_filesystem_storage_usage: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
             local_agent_config: Vec<PublicTypedAgentConfigEntry>,
             original_phantom_id: Option<Uuid>,

@@ -13,15 +13,22 @@
 // limitations under the License.
 
 use crate::Tracing;
+use golem_common::base_model::component::ComponentDto;
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::model::IFSEntry;
+use golem_worker_executor::metrics::storage::{
+    STORAGE_BYTES_WRITTEN_TOTAL, STORAGE_TYPE_FILESYSTEM,
+};
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
-    start_with_agent_storage_quota, start_with_executor_storage_pool,
+    LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, start_with_agent_storage_quota,
+    start_with_executor_storage_pool,
 };
 use std::path::PathBuf;
 use test_r::{inherit_test_dep, test, timeout};
@@ -31,6 +38,28 @@ inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 inherit_test_dep!(
     #[tagged_as("host_api_tests")]
+    PrecompiledComponent
+);
+
+fn filesystem_storage_deltas(entries: &[PublicOplogEntryWithIndex]) -> Vec<i64> {
+    entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::FilesystemStorageUsageUpdate(params) => Some(params.delta),
+            _ => None,
+        })
+        .collect()
+}
+
+fn initial_filesystem_storage_usage(entries: &[PublicOplogEntryWithIndex]) -> Option<u64> {
+    entries.iter().find_map(|entry| match &entry.entry {
+        PublicOplogEntry::Create(params) => Some(params.initial_filesystem_storage_usage),
+        _ => None,
+    })
+}
+
+inherit_test_dep!(
+    #[tagged_as("initial_file_system")]
     PrecompiledComponent
 );
 
@@ -55,7 +84,6 @@ async fn agent_quota_write_within_limit_succeeds(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
-
     executor
         .invoke_and_await_agent(
             &component,
@@ -92,6 +120,11 @@ async fn agent_quota_write_exceeding_limit_fails(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
+    let account_id = context.account_id.to_string();
+    let environment_id = context.default_environment_id.to_string();
+    let written_before = STORAGE_BYTES_WRITTEN_TOTAL
+        .with_label_values(&[STORAGE_TYPE_FILESYSTEM, &account_id, &environment_id])
+        .get();
 
     let result = executor
         .invoke_and_await_agent(
@@ -110,6 +143,19 @@ async fn agent_quota_write_exceeding_limit_fails(
     assert!(
         err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
         "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&oplog),
+        Vec::<i64>::new(),
+        "failed quota reservation must not persist any storage update"
+    );
+    let written_after = STORAGE_BYTES_WRITTEN_TOTAL
+        .with_label_values(&[STORAGE_TYPE_FILESYSTEM, &account_id, &environment_id])
+        .get();
+    assert_eq!(
+        written_after, written_before,
+        "failed quota reservation must not record written-byte metrics"
     );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -426,6 +472,14 @@ async fn executor_pool_stream_write_failed_attempt_does_not_leak_pool_permits(
         )
         .await;
     assert!(failed.is_err(), "expected oversized stream_to_file to fail");
+    let failed_oplog = executor
+        .get_oplog(&failing_worker_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        filesystem_storage_deltas(&failed_oplog),
+        Vec::<i64>::new(),
+        "failed stream mutation must not persist any storage update"
+    );
 
     // A second worker should still be able to allocate and write if the first
     // worker's failed attempt released pool permits.
@@ -625,6 +679,49 @@ async fn agent_quota_blocking_stream_and_flush_within_limit_succeeds(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn agent_quota_consecutive_blocking_stream_writes_are_cumulative(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 12).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("FileSystem", "consecutive-blocking-stream-writes");
+    let worker = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "consecutive_blocking_stream_writes",
+            data_value!("/stream.bin", 8u64, 8u64),
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "the second write must fail when cumulative stream growth exceeds quota"
+    );
+    let error = format!("{result:?}");
+    assert!(
+        error.contains("AgentExceededFilesystemStorageLimit"),
+        "expected cumulative quota failure, got: {error}"
+    );
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(filesystem_storage_deltas(&oplog), vec![8]);
     Ok(())
 }
 
@@ -1963,4 +2060,251 @@ async fn provisioned_read_write_file_counts_toward_agent_quota(
         "unexpected worker creation error: {message}"
     );
     Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn provisioned_read_write_baseline_survives_restart_without_duplication(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 8).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .with_files(
+            "FileSystem",
+            &[IFSEntry {
+                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadWrite,
+            }],
+        )
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "provisioned-file-restart");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "pwrite_file",
+            data_value!("/bar/baz.txt", 4u64, "5678"),
+        )
+        .await?;
+    let before_restart = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(initial_filesystem_storage_usage(&before_restart), Some(4));
+    assert_eq!(
+        filesystem_storage_deltas(&before_restart),
+        vec![4],
+        "oplog must contain exactly the committed growth after the provisioned baseline"
+    );
+    executor.interrupt(&worker).await?;
+
+    let len = executor
+        .invoke_and_await_agent(&component, &agent, "file_len", data_value!("/bar/baz.txt"))
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected file_len return value"))?;
+    assert_eq!(
+        len,
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::U64(8)))
+        })
+    );
+    let after_restart = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(initial_filesystem_storage_usage(&after_restart), Some(4));
+    assert_eq!(
+        filesystem_storage_deltas(&after_restart),
+        vec![4],
+        "restart must not emit a duplicate provisioned-file seed"
+    );
+
+    let over_quota = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "pwrite_file",
+            data_value!("/bar/baz.txt", 8u64, "x"),
+        )
+        .await;
+    assert!(
+        over_quota.is_err(),
+        "restart must recover the 4-byte provisioned seed plus 4-byte growth exactly once"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn p2_filesystem_mutations_use_exact_canonical_quota_accounting(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 10).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "p2-quota-mutations");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    let path = "/quota-mutations.bin";
+
+    executor
+        .invoke_and_await_agent(&component, &agent, "write_file", data_value!(path, "1234"))
+        .await?;
+    assert_file_len(&executor, &component, &agent, path, 4).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "append_file", data_value!(path, "567"))
+        .await?;
+    assert_file_len(&executor, &component, &agent, path, 7).await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "set_file_size",
+            data_value!(path, 10u64),
+        )
+        .await?;
+    assert_file_len(&executor, &component, &agent, path, 10).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "set_file_size", data_value!(path, 6u64))
+        .await?;
+    assert_file_len(&executor, &component, &agent, path, 6).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "truncate_file", data_value!(path))
+        .await?;
+    assert_file_len(&executor, &component, &agent, path, 0).await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "append_file",
+            data_value!(path, "0123456789"),
+        )
+        .await?;
+    assert_file_len(&executor, &component, &agent, path, 10).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "delete_file", data_value!(path))
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/replacement.bin", "abcdefghij"),
+        )
+        .await?;
+    assert_file_len(&executor, &component, &agent, "/replacement.bin", 10).await?;
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&oplog),
+        vec![4, 3, 3, -4, -6, 10, -10, 10],
+        "P2 committed deltas must match each observed file-size transition"
+    );
+    let over_quota = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "pwrite_file",
+            data_value!("/replacement.bin", 10u64, "x"),
+        )
+        .await;
+    assert_specific_storage_quota_failure(&over_quota, "P2 one-byte growth");
+    Ok(())
+}
+
+async fn assert_file_len(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    agent: &ParsedAgentId,
+    path: &str,
+    expected: u64,
+) -> anyhow::Result<()> {
+    let result = executor
+        .invoke_and_await_agent(component, agent, "file_len", data_value!(path))
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected file_len return value"))?;
+    assert_eq!(
+        result,
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::U64(expected)))
+        })
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn p3_filesystem_mutations_use_exact_canonical_quota_accounting(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 10).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let agent_id = agent_id!("P3FileSystem", "p3-quota-mutations");
+    let worker = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "mutation_sizes", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected mutation_sizes return value"))?;
+
+    assert_eq!(
+        result,
+        SchemaValue::List {
+            elements: vec![4, 7, 10, 6, 0, 10, 0, 10]
+                .into_iter()
+                .map(SchemaValue::U64)
+                .collect()
+        }
+    );
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&oplog),
+        vec![4, 3, 3, -4, -6, 10, -10, 10],
+        "P3 committed deltas must match each observed file-size transition"
+    );
+    let over_quota = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "grow_replacement_beyond_quota",
+            data_value!(),
+        )
+        .await;
+    assert_specific_storage_quota_failure(&over_quota, "P3 one-byte growth");
+
+    Ok(())
+}
+
+fn assert_specific_storage_quota_failure<T: std::fmt::Debug>(
+    result: &anyhow::Result<T>,
+    operation: &str,
+) {
+    assert!(result.is_err(), "{operation} must exceed the exact quota");
+    let error = format!("{result:?}");
+    assert!(
+        error.contains("AgentExceededFilesystemStorageLimit"),
+        "expected storage quota failure for {operation}, got: {error}"
+    );
 }

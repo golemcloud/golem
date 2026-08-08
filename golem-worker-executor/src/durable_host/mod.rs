@@ -455,6 +455,26 @@ impl FilesystemStorageReservation {
     ) -> Option<crate::services::active_workers::FilesystemStoragePermit> {
         self.permit.take()
     }
+
+    pub(crate) async fn commit<Ctx: WorkerCtx>(
+        mut self,
+        worker: &Arc<Worker<Ctx>>,
+        committed_bytes: u64,
+        committed_host_bytes: u64,
+    ) {
+        if committed_bytes == 0 {
+            worker.rollback_filesystem_storage_space(self.take_permit());
+            return;
+        }
+        worker
+            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
+                committed_bytes as i64,
+            ))
+            .await;
+        worker
+            .commit_filesystem_storage_space(self.take_permit(), committed_host_bytes)
+            .await;
+    }
 }
 
 /// Increments the live-`Store` gauge on construction and decrements it on drop.
@@ -1416,21 +1436,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub(crate) async fn commit_filesystem_storage_reservation(
         &mut self,
-        mut reservation: FilesystemStorageReservation,
+        reservation: FilesystemStorageReservation,
         committed_bytes: u64,
     ) {
         let committed_bytes = committed_bytes.min(reservation.logical_bytes);
         let committed_host_bytes = self.storage_meter.host_capacity_for_growth(committed_bytes);
-        self.public_state
-            .worker()
-            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
-                committed_bytes as i64,
-            ))
+        reservation
+            .commit(
+                &self.public_state.worker(),
+                committed_bytes,
+                committed_host_bytes,
+            )
             .await;
-        self.public_state
-            .worker()
-            .commit_filesystem_storage_space(reservation.take_permit(), committed_host_bytes)
-            .await;
+        if committed_bytes == 0 {
+            return;
+        }
         self.storage_meter
             .on_acquire(committed_bytes, Instant::now());
         let account_id = self.created_by().to_string();
