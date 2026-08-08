@@ -1,5 +1,6 @@
 use golem_rust::wasip3::filesystem::preopens as p3_preopens;
 use golem_rust::wasip3::filesystem::types as p3_types;
+use golem_rust::wasip3::wit_stream;
 use golem_rust::{agent_definition, agent_implementation};
 use wasi::filesystem::preopens as p2_preopens;
 use wasi::filesystem::types as p2_types;
@@ -11,6 +12,11 @@ pub trait P3FileSystem {
     /// against a read-only and a read-write initial file, and reports `name=value` entries
     /// so the host-side test can assert P2/P3 parity.
     async fn run(&self) -> Vec<String>;
+    async fn mutation_sizes(&self) -> Vec<u64>;
+    async fn grow_replacement_beyond_quota(&self);
+    async fn write_bytes(&self, path: String, len: u64);
+    async fn write_chunks(&self, path: String, chunk_len: u64, chunk_count: u64) -> u64;
+    async fn sleep_for(&self, seconds: f64);
 }
 
 struct P3FileSystemImpl {
@@ -109,7 +115,8 @@ impl P3FileSystem for P3FileSystemImpl {
             .expect("P3 metadata_hash (2nd) failed");
         results.push(format!(
             "ro_hash_p3_deterministic={}",
-            ro_hash_p3.lower == ro_hash_p3_again.lower && ro_hash_p3.upper == ro_hash_p3_again.upper
+            ro_hash_p3.lower == ro_hash_p3_again.lower
+                && ro_hash_p3.upper == ro_hash_p3_again.upper
         ));
 
         let ro_hash_at_p2 = root_p2
@@ -121,7 +128,8 @@ impl P3FileSystem for P3FileSystemImpl {
             .expect("P3 metadata_hash_at failed");
         results.push(format!(
             "ro_hash_at_parity={}",
-            ro_hash_at_p2.lower == ro_hash_at_p3.lower && ro_hash_at_p2.upper == ro_hash_at_p3.upper
+            ro_hash_at_p2.lower == ro_hash_at_p3.lower
+                && ro_hash_at_p2.upper == ro_hash_at_p3.upper
         ));
 
         // mutations through a read-only file descriptor must be rejected identically
@@ -242,5 +250,178 @@ impl P3FileSystem for P3FileSystemImpl {
         ));
 
         results
+    }
+
+    async fn mutation_sizes(&self) -> Vec<u64> {
+        let (root, _) = p3_preopens::get_directories()
+            .into_iter()
+            .next()
+            .expect("no P3 preopened directory");
+        let path = "quota-mutations.bin";
+        let file = root
+            .open_at(
+                p3_types::PathFlags::empty(),
+                path.to_string(),
+                p3_types::OpenFlags::CREATE,
+                p3_types::DescriptorFlags::READ | p3_types::DescriptorFlags::WRITE,
+            )
+            .await
+            .expect("P3 create failed");
+        let mut sizes = Vec::new();
+
+        let (mut writer, reader) = wit_stream::new::<u8>();
+        let write = file.write_via_stream(reader, 0);
+        assert!(writer.write_all(vec![1; 4]).await.is_empty());
+        drop(writer);
+        write.await.expect("P3 write failed");
+        sizes.push(file.stat().await.expect("P3 stat after write failed").size);
+
+        let (mut writer, reader) = wit_stream::new::<u8>();
+        let append = file.append_via_stream(reader);
+        assert!(writer.write_all(vec![2; 3]).await.is_empty());
+        drop(writer);
+        append.await.expect("P3 append failed");
+        sizes.push(file.stat().await.expect("P3 stat after append failed").size);
+
+        file.set_size(10).await.expect("P3 set_size grow failed");
+        sizes.push(file.stat().await.expect("P3 stat after grow failed").size);
+
+        file.set_size(6).await.expect("P3 set_size shrink failed");
+        sizes.push(file.stat().await.expect("P3 stat after shrink failed").size);
+
+        drop(file);
+        let file = root
+            .open_at(
+                p3_types::PathFlags::empty(),
+                path.to_string(),
+                p3_types::OpenFlags::TRUNCATE,
+                p3_types::DescriptorFlags::READ | p3_types::DescriptorFlags::WRITE,
+            )
+            .await
+            .expect("P3 truncate open failed");
+        sizes.push(
+            file.stat()
+                .await
+                .expect("P3 stat after truncate failed")
+                .size,
+        );
+
+        let (mut writer, reader) = wit_stream::new::<u8>();
+        let append = file.append_via_stream(reader);
+        assert!(writer.write_all(vec![3; 10]).await.is_empty());
+        drop(writer);
+        append.await.expect("P3 append after truncate failed");
+        sizes.push(file.stat().await.expect("P3 stat after refill failed").size);
+
+        drop(file);
+        root.unlink_file_at(path.to_string())
+            .await
+            .expect("P3 unlink failed");
+        assert!(
+            root.stat_at(p3_types::PathFlags::empty(), path.to_string())
+                .await
+                .is_err(),
+            "P3 unlinked file still exists"
+        );
+        sizes.push(0);
+
+        let replacement_path = "quota-after-unlink.bin";
+        let replacement = root
+            .open_at(
+                p3_types::PathFlags::empty(),
+                replacement_path.to_string(),
+                p3_types::OpenFlags::CREATE,
+                p3_types::DescriptorFlags::READ | p3_types::DescriptorFlags::WRITE,
+            )
+            .await
+            .expect("P3 replacement create failed");
+        let (mut writer, reader) = wit_stream::new::<u8>();
+        let write = replacement.write_via_stream(reader, 0);
+        assert!(writer.write_all(vec![4; 10]).await.is_empty());
+        drop(writer);
+        write.await.expect("P3 write after unlink failed");
+        sizes.push(
+            replacement
+                .stat()
+                .await
+                .expect("P3 stat after unlink reuse failed")
+                .size,
+        );
+
+        sizes
+    }
+
+    async fn grow_replacement_beyond_quota(&self) {
+        let (root, _) = p3_preopens::get_directories()
+            .into_iter()
+            .next()
+            .expect("no P3 preopened directory");
+        let replacement = root
+            .open_at(
+                p3_types::PathFlags::empty(),
+                "quota-after-unlink.bin".to_string(),
+                p3_types::OpenFlags::empty(),
+                p3_types::DescriptorFlags::WRITE,
+            )
+            .await
+            .expect("P3 replacement open failed");
+        replacement
+            .set_size(11)
+            .await
+            .expect("P3 growth beyond quota must fail");
+    }
+
+    async fn write_bytes(&self, path: String, len: u64) {
+        let (root, _) = p3_preopens::get_directories()
+            .into_iter()
+            .next()
+            .expect("no P3 preopened directory");
+        let file = root
+            .open_at(
+                p3_types::PathFlags::empty(),
+                path,
+                p3_types::OpenFlags::CREATE,
+                p3_types::DescriptorFlags::WRITE,
+            )
+            .await
+            .expect("P3 create failed");
+        let (mut writer, reader) = wit_stream::new::<u8>();
+        let write = file.write_via_stream(reader, 0);
+        assert!(writer.write_all(vec![0; len as usize]).await.is_empty());
+        drop(writer);
+        write.await.expect("P3 write failed");
+    }
+
+    async fn write_chunks(&self, path: String, chunk_len: u64, chunk_count: u64) -> u64 {
+        let (root, _) = p3_preopens::get_directories()
+            .into_iter()
+            .next()
+            .expect("no P3 preopened directory");
+        let file = root
+            .open_at(
+                p3_types::PathFlags::empty(),
+                path,
+                p3_types::OpenFlags::CREATE,
+                p3_types::DescriptorFlags::READ | p3_types::DescriptorFlags::WRITE,
+            )
+            .await
+            .expect("P3 create failed");
+        let (mut writer, reader) = wit_stream::new::<u8>();
+        let write = file.write_via_stream(reader, 0);
+        for value in 0..chunk_count {
+            assert!(
+                writer
+                    .write_all(vec![value as u8; chunk_len as usize])
+                    .await
+                    .is_empty()
+            );
+        }
+        drop(writer);
+        write.await.expect("P3 chunked write failed");
+        file.stat().await.expect("P3 chunked stat failed").size
+    }
+
+    async fn sleep_for(&self, seconds: f64) {
+        std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
     }
 }

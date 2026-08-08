@@ -125,6 +125,7 @@ message CreateParameters {
   optional golem.common.UUID original_phantom_id = 13;
   golem.common.UUID instance_id = 14;
   golem.component.AgentMode agent_mode = 15;
+  uint64 initial_filesystem_storage_usage = 16;
 }
 
 message StartParameters {

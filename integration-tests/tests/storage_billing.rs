@@ -41,7 +41,7 @@ mod tests {
         });
     }
 
-    async fn create_deps() -> EnvBasedTestDependencies {
+    async fn create_deps(pool_bytes: u64, suspend_after: Duration) -> EnvBasedTestDependencies {
         init_tracing();
         let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
             worker_executor_cluster_size: 1,
@@ -64,9 +64,11 @@ mod tests {
                 ),
                 (
                     "GOLEM__FILESYSTEM_STORAGE__TOTAL_WORKER_FILESYSTEM_STORAGE_BYTES".to_string(),
-                    // The eviction test writes 8-byte files. An 8-byte pool forces the first
-                    // agent out before the second agent's filesystem can be loaded.
-                    "8".to_string(),
+                    pool_bytes.to_string(),
+                ),
+                (
+                    "GOLEM__SUSPEND__SUSPEND_AFTER".to_string(),
+                    format!("{}ms", suspend_after.as_millis()),
                 ),
             ])
             .await;
@@ -90,7 +92,6 @@ mod tests {
     async fn wait_for_durable_billing_to_settle(
         deps: &EnvBasedTestDependencies,
         user: &golem_test_framework::config::dsl_impl::TestUserContext<EnvBasedTestDependencies>,
-        must_exceed: Option<f64>,
     ) -> anyhow::Result<f64> {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         let mut last = durable_byte_seconds(deps, user).await?;
@@ -103,13 +104,38 @@ mod tests {
                 last = current;
                 unchanged_since = tokio::time::Instant::now();
             }
-            if unchanged_since.elapsed() >= Duration::from_secs(1)
-                && must_exceed.is_none_or(|minimum| current > minimum)
-            {
+            if unchanged_since.elapsed() >= Duration::from_secs(2) {
                 return Ok(current);
             }
             if tokio::time::Instant::now() >= deadline {
                 anyhow::bail!("durable storage billing did not settle before timeout");
+            }
+        }
+    }
+
+    async fn wait_for_durable_billing_increase_to_settle(
+        deps: &EnvBasedTestDependencies,
+        user: &golem_test_framework::config::dsl_impl::TestUserContext<EnvBasedTestDependencies>,
+        baseline: f64,
+    ) -> anyhow::Result<f64> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let mut last = durable_byte_seconds(deps, user).await?;
+        let mut unchanged_since = tokio::time::Instant::now();
+
+        loop {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let current = durable_byte_seconds(deps, user).await?;
+            if current != last {
+                last = current;
+                unchanged_since = tokio::time::Instant::now();
+            }
+            if current > baseline && unchanged_since.elapsed() >= Duration::from_secs(2) {
+                return Ok(current);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                anyhow::bail!(
+                    "durable storage billing did not increase and settle: baseline={baseline}, current={current}"
+                );
             }
         }
     }
@@ -123,16 +149,15 @@ mod tests {
 
     #[test]
     #[timeout("2m")]
-    async fn provisioned_read_write_file_is_metered() -> anyhow::Result<()> {
-        let deps = create_deps().await;
+    async fn provisioned_read_write_file_tracks_permit_window() -> anyhow::Result<()> {
+        let deps = create_deps(1024, Duration::from_secs(5)).await;
         let user = deps.user().await?;
         let (_, env) = user.app_and_env().await?;
         let component = user
-            .component(&env.id, "it_initial_file_system_release")
-            .name("golem-it:initial-file-system")
+            .component(&env.id, "golem_it_host_api_tests_release")
             .unique()
             .with_files(
-                "FileReadWrite",
+                "FileSystem",
                 &[IFSEntry {
                     source_path: PathBuf::from("initial-file-system/files/baz.txt"),
                     target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
@@ -142,50 +167,72 @@ mod tests {
             .store()
             .await?;
 
-        let agent = agent_id!("FileReadWrite", "provisioned-storage-billing");
+        let agent = agent_id!("FileSystem", "provisioned-storage-billing");
         let worker = user.start_agent(&component.id, agent.clone()).await?;
-        let before = durable_byte_seconds(&deps, &user).await?;
+        let idle_start = wait_for_durable_billing_to_settle(&deps, &user).await?;
         tokio::time::sleep(Duration::from_secs(2)).await;
-        user.delete_worker(&worker).await?;
-        let after = wait_for_durable_billing_to_settle(&deps, &user, Some(before)).await?;
+        let idle_end = wait_for_durable_billing_to_settle(&deps, &user).await?;
+        assert_billing_window(
+            idle_end - idle_start,
+            0.0,
+            1.0,
+            "loaded-idle provisioned file",
+        );
 
-        // Deleting the idle worker flushes its meter before the final snapshot. Four bytes over
-        // two seconds should produce about eight byte-seconds without permitting overbilling.
-        assert_billing_window(after - before, 4.0, 12.0, "provisioned-file metering");
+        user.invoke_and_await_agent(&component, &agent, "sleep_for", data_value!(2.0f64))
+            .await?;
+        let active_end =
+            wait_for_durable_billing_increase_to_settle(&deps, &user, idle_end).await?;
+        assert_billing_window(
+            active_end - idle_end,
+            4.0,
+            12.0,
+            "permit-retaining provisioned file",
+        );
+        user.delete_worker(&worker).await?;
         Ok(())
     }
 
     #[test]
     #[timeout("2m")]
     async fn evicted_agent_stops_metering_until_reload() -> anyhow::Result<()> {
-        let deps = create_deps().await;
+        const FILE_BYTES: usize = 1024 * 1024;
+        let deps = create_deps(FILE_BYTES as u64, Duration::from_secs(5)).await;
         let user = deps.user().await?;
         let (_, env) = user.app_and_env().await?;
         let component = user
             .component(&env.id, "golem_it_host_api_tests_release")
             .store()
             .await?;
-        let agent_a = agent_id!("FileSystem", "storage-billing-a");
-        let agent_b = agent_id!("FileSystem", "storage-billing-b");
-
+        let agent_a = agent_id!("FileSystem", "storage-billing-eviction-a");
+        let agent_b = agent_id!("FileSystem", "storage-billing-eviction-b");
         let worker_a = user.start_agent(&component.id, agent_a.clone()).await?;
         user.invoke_and_await_agent(
             &component,
             &agent_a,
             "write_file",
-            data_value!("/metered.txt", "12345678"),
+            data_value!("/metered.txt", "a".repeat(FILE_BYTES)),
         )
         .await?;
-        let active_start = durable_byte_seconds(&deps, &user).await?;
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        let active_end = durable_byte_seconds(&deps, &user).await?;
+
+        let active_start = wait_for_durable_billing_to_settle(&deps, &user).await?;
+        user.invoke_and_await_agent(&component, &agent_a, "sleep_for", data_value!(0.75f64))
+            .await?;
+        let active_end =
+            wait_for_durable_billing_increase_to_settle(&deps, &user, active_start).await?;
+        assert_billing_window(
+            active_end - active_start,
+            512.0 * 1024.0,
+            1.5 * 1024.0 * 1024.0,
+            "pre-eviction permit window",
+        );
 
         let worker_b = user.start_agent(&component.id, agent_b.clone()).await?;
         user.invoke_and_await_agent(
             &component,
             &agent_b,
             "write_file",
-            data_value!("/temporary.txt", "abcdefgh"),
+            data_value!("/temporary.txt", "b".repeat(FILE_BYTES)),
         )
         .await?;
         user.invoke_and_await_agent(
@@ -195,12 +242,10 @@ mod tests {
             data_value!("/temporary.txt"),
         )
         .await?;
-
-        // The successful 8-byte write proves the full pool forced agent A out. Wait until any
-        // final meter/drop batch arrives before opening the interval that must remain quiescent.
-        let evicted_start = wait_for_durable_billing_to_settle(&deps, &user, None).await?;
+        let evicted_start = wait_for_durable_billing_to_settle(&deps, &user).await?;
         tokio::time::sleep(Duration::from_secs(2)).await;
-        let evicted_end = durable_byte_seconds(&deps, &user).await?;
+        let evicted_end = wait_for_durable_billing_to_settle(&deps, &user).await?;
+        assert_billing_window(evicted_end - evicted_start, 0.0, 1.0, "evicted interval");
 
         user.invoke_and_await_agent(
             &component,
@@ -209,34 +254,137 @@ mod tests {
             data_value!("/metered.txt"),
         )
         .await?;
-        let reloaded_start = durable_byte_seconds(&deps, &user).await?;
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        user.delete_worker(&worker_a).await?;
+        let reloaded_start = wait_for_durable_billing_to_settle(&deps, &user).await?;
+        user.invoke_and_await_agent(&component, &agent_a, "sleep_for", data_value!(0.75f64))
+            .await?;
         let reloaded_end =
-            wait_for_durable_billing_to_settle(&deps, &user, Some(reloaded_start)).await?;
-        user.delete_worker(&worker_b).await?;
-
-        // Eight bytes over two seconds should produce about sixteen byte-seconds. The window
-        // covers asynchronous flush and batching latency while still rejecting overbilling.
-        assert_billing_window(
-            active_end - active_start,
-            10.0,
-            24.0,
-            "pre-eviction metering",
-        );
-        // An evicted agent must stop accruing. The bound is 6.0 rather than something
-        // tighter because eviction settling is asynchronous: at 8 bytes, 2.0 byte-seconds
-        // is only a quarter-second of headroom, which a loaded CI runner can exceed
-        // without anything being wrong. 6.0 still sits clearly below the 10.0 floor the
-        // active windows assert, so an agent that kept billing after eviction fails.
-        assert_billing_window(evicted_end - evicted_start, 0.0, 6.0, "evicted interval");
+            wait_for_durable_billing_increase_to_settle(&deps, &user, reloaded_start).await?;
         assert_billing_window(
             reloaded_end - reloaded_start,
-            10.0,
-            24.0,
-            "post-reload metering",
+            512.0 * 1024.0,
+            1.5 * 1024.0 * 1024.0,
+            "post-reload permit window",
         );
 
+        user.delete_worker(&worker_a).await?;
+        user.delete_worker(&worker_b).await?;
+
+        Ok(())
+    }
+
+    #[test]
+    #[timeout("2m")]
+    async fn durable_suspension_pauses_storage_billing() -> anyhow::Result<()> {
+        const FILE_BYTES: usize = 1024 * 1024;
+        let deps = create_deps(2 * FILE_BYTES as u64, Duration::from_secs(1)).await;
+        let user = deps.user().await?;
+        let (_, env) = user.app_and_env().await?;
+        let component = user
+            .component(&env.id, "golem_it_host_api_tests_release")
+            .store()
+            .await?;
+        let agent = agent_id!("FileSystem", "storage-billing-suspension");
+        let worker = user.start_agent(&component.id, agent.clone()).await?;
+        user.invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/metered.txt", "x".repeat(FILE_BYTES)),
+        )
+        .await?;
+
+        let active_start = wait_for_durable_billing_to_settle(&deps, &user).await?;
+        user.invoke_and_await_agent(&component, &agent, "sleep_for", data_value!(0.5f64))
+            .await?;
+        let active_end =
+            wait_for_durable_billing_increase_to_settle(&deps, &user, active_start).await?;
+        assert_billing_window(
+            active_end - active_start,
+            256.0 * 1024.0,
+            1024.0 * 1024.0,
+            "permit-retaining host wait",
+        );
+
+        let suspended_start = active_end;
+        user.invoke_and_await_agent(&component, &agent, "sleep_for", data_value!(3.0f64))
+            .await?;
+        let suspended_end =
+            wait_for_durable_billing_increase_to_settle(&deps, &user, suspended_start).await?;
+        assert_billing_window(
+            suspended_end - suspended_start,
+            512.0 * 1024.0,
+            1.75 * 1024.0 * 1024.0,
+            "durable suspension",
+        );
+
+        user.delete_worker(&worker).await?;
+
+        Ok(())
+    }
+
+    #[test]
+    #[timeout("2m")]
+    async fn p2_and_p3_mutations_produce_matching_billing() -> anyhow::Result<()> {
+        const FILE_BYTES: usize = 1024 * 1024;
+        let deps = create_deps(2 * FILE_BYTES as u64, Duration::from_secs(5)).await;
+        let user = deps.user().await?;
+        let (_, env) = user.app_and_env().await?;
+        let p2_component = user
+            .component(&env.id, "golem_it_host_api_tests_release")
+            .store()
+            .await?;
+        let p3_component = user
+            .component(&env.id, "it_initial_file_system_release")
+            .name("golem-it:initial-file-system")
+            .unique()
+            .store()
+            .await?;
+
+        let p2_agent = agent_id!("FileSystem", "p2-storage-billing");
+        user.invoke_and_await_agent(
+            &p2_component,
+            &p2_agent,
+            "write_file",
+            data_value!("/metered.txt", "x".repeat(FILE_BYTES)),
+        )
+        .await?;
+        let p2_start = wait_for_durable_billing_to_settle(&deps, &user).await?;
+        user.invoke_and_await_agent(&p2_component, &p2_agent, "sleep_for", data_value!(0.5f64))
+            .await?;
+        let p2_end = wait_for_durable_billing_increase_to_settle(&deps, &user, p2_start).await?;
+        let p2_billing = p2_end - p2_start;
+
+        let p3_agent = agent_id!("P3FileSystem", "p3-storage-billing");
+        user.invoke_and_await_agent(
+            &p3_component,
+            &p3_agent,
+            "write_bytes",
+            data_value!("p3-metered.txt", FILE_BYTES as u64),
+        )
+        .await?;
+        let p3_start = wait_for_durable_billing_to_settle(&deps, &user).await?;
+        user.invoke_and_await_agent(&p3_component, &p3_agent, "sleep_for", data_value!(0.5f64))
+            .await?;
+        let p3_end = wait_for_durable_billing_increase_to_settle(&deps, &user, p3_start).await?;
+        let p3_billing = p3_end - p3_start;
+
+        assert_billing_window(
+            p2_billing,
+            256.0 * 1024.0,
+            1024.0 * 1024.0,
+            "P2 mutation billing",
+        );
+        assert_billing_window(
+            p3_billing,
+            256.0 * 1024.0,
+            1024.0 * 1024.0,
+            "P3 mutation billing",
+        );
+        let ratio = p2_billing / p3_billing;
+        assert!(
+            (0.75..=1.333_334).contains(&ratio),
+            "P2/P3 billing should match for equal bytes and permit windows: P2={p2_billing}, P3={p3_billing}"
+        );
         Ok(())
     }
 }

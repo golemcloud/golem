@@ -562,6 +562,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 },
                 component_size: create.component_size,
                 initial_total_linear_memory_size: create.initial_total_linear_memory_size,
+                initial_filesystem_storage_usage: create.initial_filesystem_storage_usage,
                 initial_active_plugins: BTreeSet::from_iter(
                     create
                         .initial_active_plugins
@@ -1070,6 +1071,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         parent: create.parent.map(Into::into),
                         component_size: create.component_size,
                         initial_total_linear_memory_size: create.initial_total_linear_memory_size,
+                        initial_filesystem_storage_usage: create.initial_filesystem_storage_usage,
                         initial_active_plugins: create
                             .initial_active_plugins
                             .into_iter()
@@ -2490,6 +2492,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 parent: create.parent,
                 component_size: create.component_size,
                 initial_total_linear_memory_size: create.initial_total_linear_memory_size,
+                initial_filesystem_storage_usage: create.initial_filesystem_storage_usage,
                 initial_active_plugins: create
                     .initial_active_plugins
                     .into_iter()
@@ -3236,6 +3239,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 parent,
                 component_size,
                 initial_total_linear_memory_size,
+                initial_filesystem_storage_usage,
                 initial_active_plugins,
                 local_agent_config,
                 original_phantom_id,
@@ -3255,6 +3259,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 parent: parent.map(Into::into),
                 component_size,
                 initial_total_linear_memory_size,
+                initial_filesystem_storage_usage,
                 initial_active_plugins: initial_active_plugins
                     .into_iter()
                     .map(Into::into)
@@ -3692,6 +3697,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     parent,
                     component_size: p.component_size,
                     initial_total_linear_memory_size: p.initial_total_linear_memory_size,
+                    initial_filesystem_storage_usage: p.initial_filesystem_storage_usage,
                     initial_active_plugins,
                     local_agent_config,
                     original_phantom_id,

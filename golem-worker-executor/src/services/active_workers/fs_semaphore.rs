@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::metrics::storage::{record_filesystem_pool_acquired, record_filesystem_pool_total};
+use crate::metrics::storage::{
+    record_filesystem_pool_acquired, record_filesystem_pool_released, record_filesystem_pool_total,
+};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
@@ -74,6 +76,7 @@ impl FilesystemStoragePermit {
 impl Drop for FilesystemStoragePermit {
     fn drop(&mut self) {
         let permits = self.num_permits() as u32;
+        record_filesystem_pool_released(filesystem_storage_permits_to_bytes(permits));
         crate::metrics::workers::inc_filesystem_semaphore_available(
             filesystem_storage_permits_to_bytes(permits),
         );

@@ -124,6 +124,7 @@ fn create_serialization_poem_serde_equivalence() {
         }),
         component_size: 100_000_000,
         initial_total_linear_memory_size: 200_000_000,
+        initial_filesystem_storage_usage: 300_000_000,
         initial_active_plugins: BTreeSet::from_iter(vec![PluginInstallationDescription {
             environment_plugin_grant_id: EnvironmentPluginGrantId::new(),
             plugin_priority: PluginPriority(0),
@@ -137,6 +138,44 @@ fn create_serialization_poem_serde_equivalence() {
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn raw_create_default_filesystem_baseline_is_zero() {
+    use crate::model::agent::AgentMode;
+    use crate::model::component::ComponentRevision;
+    use crate::model::environment::EnvironmentId;
+    use golem_api_grpc::proto::golem::worker::RawOplogEntry;
+
+    let entry = OplogEntry::create(
+        AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "legacy".to_string(),
+        },
+        AgentMode::Durable,
+        ComponentRevision::INITIAL,
+        vec![],
+        EnvironmentId::new(),
+        AccountId::new(),
+        None,
+        0,
+        0,
+        0,
+        Default::default(),
+        vec![],
+        None,
+        Uuid::new_v4(),
+    );
+    let proto = RawOplogEntry::try_from(entry).unwrap();
+    let decoded = OplogEntry::try_from(proto).unwrap();
+
+    assert!(matches!(
+        decoded,
+        OplogEntry::Create {
+            initial_filesystem_storage_usage: 0,
+            ..
+        }
+    ));
 }
 
 #[test]

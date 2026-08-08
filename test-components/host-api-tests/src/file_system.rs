@@ -4,6 +4,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::fs::{File, create_dir_all, read_dir, read_to_string, remove_file, write};
 use std::hash::{Hash, Hasher};
+use std::io::Write;
 use wasi::filesystem::types::{Descriptor, DescriptorFlags, OpenFlags, PathFlags};
 use wasi::io::streams::OutputStream;
 
@@ -51,6 +52,9 @@ pub trait FileSystem {
     fn read_file(&self, path: String) -> Result<String, String>;
     fn write_file(&self, path: String, contents: String) -> Result<(), String>;
     fn delete_file(&self, path: String) -> Result<(), String>;
+    fn file_len(&self, path: String) -> Result<u64, String>;
+    fn append_file(&self, path: String, contents: String) -> Result<(), String>;
+    fn truncate_file(&self, path: String) -> Result<(), String>;
     fn write_file_direct(&self, name: String, contents: String) -> Result<(), String>;
     fn get_file_info(&self, path: String) -> Result<FileTimestamps, String>;
     fn get_info(&self, path: String) -> Result<FileTimestamps, String>;
@@ -64,6 +68,12 @@ pub trait FileSystem {
     fn stream_to_file(&self, path: String, len: u64) -> Result<(), String>;
     fn stream_to_stdout(&self, len: u64) -> Result<(), String>;
     fn blocking_stream_and_flush_to_file(&self, path: String, len: u64) -> Result<(), String>;
+    fn consecutive_blocking_stream_writes(
+        &self,
+        path: String,
+        first_len: u64,
+        second_len: u64,
+    ) -> Result<(), String>;
     /// Set the size of a file using `descriptor::set_size` (the WASI pwrite-truncate path).
     /// If `new_size` is larger than the current file size the file is grown (zero-filled).
     /// If smaller, the file is truncated.  This exercises the quota grow/shrink paths.
@@ -77,6 +87,7 @@ pub trait FileSystem {
     /// Read from `src_path` and splice into a new file at `dst_path` using
     /// the non-blocking `output-stream.splice`.
     fn splice(&self, src_path: String, dst_path: String) -> Result<u64, String>;
+    fn sleep_for(&self, seconds: f64);
 }
 
 pub struct FileSystemImpl {
@@ -166,6 +177,34 @@ impl FileSystem for FileSystemImpl {
 
     fn delete_file(&self, path: String) -> Result<(), String> {
         remove_file(path).map_err(|e| e.to_string())
+    }
+
+    fn file_len(&self, path: String) -> Result<u64, String> {
+        fs::metadata(path)
+            .map(|metadata| metadata.len())
+            .map_err(|e| e.to_string())
+    }
+
+    fn append_file(&self, path: String, contents: String) -> Result<(), String> {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|e| e.to_string())?;
+        file.write_all(contents.as_bytes()).map_err(|e| e.to_string())
+    }
+
+    fn truncate_file(&self, path: String) -> Result<(), String> {
+        fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(path)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    fn sleep_for(&self, seconds: f64) {
+        std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
     }
 
     fn write_file_direct(&self, name: String, contents: String) -> Result<(), String> {
@@ -282,6 +321,31 @@ impl FileSystem for FileSystemImpl {
         let stream: OutputStream = fd.write_via_stream(0).map_err(|e| format!("{e:?}"))?;
         stream
             .blocking_write_zeroes_and_flush(len)
+            .map_err(|e| format!("{e:?}"))
+    }
+
+    fn consecutive_blocking_stream_writes(
+        &self,
+        path: String,
+        first_len: u64,
+        second_len: u64,
+    ) -> Result<(), String> {
+        let dirs = wasi::filesystem::preopens::get_directories();
+        let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
+        let fd = root
+            .open_at(
+                PathFlags::empty(),
+                path.trim_start_matches('/'),
+                OpenFlags::CREATE,
+                DescriptorFlags::WRITE,
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        let stream = fd.write_via_stream(0).map_err(|e| format!("{e:?}"))?;
+        stream
+            .blocking_write_zeroes_and_flush(first_len)
+            .map_err(|e| format!("{e:?}"))?;
+        stream
+            .blocking_write_zeroes_and_flush(second_len)
             .map_err(|e| format!("{e:?}"))
     }
 

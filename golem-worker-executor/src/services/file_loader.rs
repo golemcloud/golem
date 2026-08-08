@@ -28,7 +28,6 @@ use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tracing::debug;
 
-use crate::metrics::storage::record_filesystem_pool_released;
 use crate::services::active_workers::{FilesystemStoragePermit, FilesystemStorageSemaphore};
 
 // Opaque token for read-only files. This is used to ensure that the file is not deleted while it is in use.
@@ -274,16 +273,6 @@ impl FileLoader {
                         // we successfully downloaded the file and set it to read-only, set the cache entry to the file
                         *prelocked_entry = Ok(InitializedCacheEntry {
                             path: path.clone(),
-                            filesystem_storage_permit_bytes: if filesystem_storage_permit.is_some()
-                            {
-                                // Round up to permit granularity (1 permit = 1 KB) so the
-                                // released byte count matches what was actually acquired.
-                                crate::services::active_workers::filesystem_storage_bytes_rounded_up(
-                                    file_size,
-                                )
-                            } else {
-                                0
-                            },
                             filesystem_storage_permit,
                         });
                     }
@@ -368,21 +357,14 @@ struct InitializedCacheEntry {
     /// configured. Only returned to the executor pool if the file is
     /// successfully deleted
     filesystem_storage_permit: Option<FilesystemStoragePermit>,
-    /// Byte count corresponding to `filesystem_storage_permit`, for metrics.
-    filesystem_storage_permit_bytes: u64,
 }
 
 impl InitializedCacheEntry {
     #[cfg(test)]
-    fn new_for_test(
-        path: PathBuf,
-        permit: Option<FilesystemStoragePermit>,
-        permit_bytes: u64,
-    ) -> Self {
+    fn new_for_test(path: PathBuf, permit: Option<FilesystemStoragePermit>) -> Self {
         Self {
             path,
             filesystem_storage_permit: permit,
-            filesystem_storage_permit_bytes: permit_bytes,
         }
     }
 }
@@ -393,9 +375,6 @@ impl Drop for InitializedCacheEntry {
         std::fs::remove_file(&self.path).expect("Failed to remove cached component file — executor filesystem is in an inconsistent state");
         // File deleted successfully — disk space is freed, return permits to the pool.
         let permit = self.filesystem_storage_permit.take();
-        if permit.is_some() && self.filesystem_storage_permit_bytes > 0 {
-            record_filesystem_pool_released(self.filesystem_storage_permit_bytes);
-        }
         drop(permit);
     }
 }
@@ -563,7 +542,7 @@ mod tests {
         let result = std::panic::catch_unwind(|| {
             let nonexistent =
                 std::path::PathBuf::from("/tmp/golem-test-nonexistent-file-12345.wasm");
-            let entry = InitializedCacheEntry::new_for_test(nonexistent, None, 0);
+            let entry = InitializedCacheEntry::new_for_test(nonexistent, None);
             drop(entry);
         });
         assert!(
