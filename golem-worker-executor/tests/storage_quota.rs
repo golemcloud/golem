@@ -17,6 +17,7 @@ use golem_common::base_model::component::ComponentDto;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
+use golem_common::model::worker::{RevertToOplogIndex, RevertWorkerTarget};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::{agent_id, data_value};
@@ -504,6 +505,42 @@ async fn executor_pool_stream_write_failed_attempt_does_not_leak_pool_permits(
         .check_oplog_is_queryable(&succeeding_worker_id)
         .await?;
 
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn executor_pool_reuses_existing_rounding_capacity_for_same_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_executor_storage_pool(deps, &context, 1024).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "same-agent-rounded-capacity");
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/first.bin", "1234"),
+        )
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/second.bin", "5678"),
+        )
+        .await?;
     Ok(())
 }
 
@@ -2142,6 +2179,83 @@ async fn provisioned_read_write_baseline_survives_restart_without_duplication(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+async fn replayed_file_release_does_not_duplicate_storage_accounting(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 8).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "release-replay-accounting");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/retained.bin", "1234"),
+        )
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/released.bin", "5678"),
+        )
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "delete_file",
+            data_value!("/released.bin"),
+        )
+        .await?;
+    let before_replay = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(filesystem_storage_deltas(&before_replay), vec![4, 4, -4]);
+    let after_delete = before_replay
+        .last()
+        .expect("worker oplog must not be empty")
+        .oplog_index;
+    let _ = executor
+        .invoke_and_await_agent(&component, &agent, "file_len", data_value!("/released.bin"))
+        .await?;
+    executor
+        .revert(
+            &worker,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: after_delete,
+            }),
+        )
+        .await?;
+    let over_quota = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/after-replay.bin", "abcde"),
+        )
+        .await;
+    assert_specific_storage_quota_failure(&over_quota, "post-replay five-byte growth");
+
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![4, 4, -4],
+        "replay must not append or apply the historical release a second time"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
 async fn p2_filesystem_mutations_use_exact_canonical_quota_accounting(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2294,6 +2408,78 @@ async fn p3_filesystem_mutations_use_exact_canonical_quota_accounting(
         .await;
     assert_specific_storage_quota_failure(&over_quota, "P3 one-byte growth");
 
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn p3_chunked_stream_commits_one_storage_transition(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 16).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let agent = agent_id!("P3FileSystem", "p3-chunked-storage-accounting");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_chunks",
+            data_value!("chunked.bin", 4u64, 4u64),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected write_chunks return value"))?;
+    assert_eq!(result, SchemaValue::U64(16));
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![16],
+        "one P3 filesystem stream must commit one canonical storage transition"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn p3_chunked_stream_commits_written_prefix_when_later_chunk_exceeds_quota(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 6).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let agent = agent_id!("P3FileSystem", "p3-partial-chunk-accounting");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_chunks",
+            data_value!("partial.bin", 4u64, 2u64),
+        )
+        .await;
+    assert_specific_storage_quota_failure(&result, "P3 second stream chunk");
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![4],
+        "the written prefix must remain accounted when a later chunk is rejected"
+    );
     Ok(())
 }
 

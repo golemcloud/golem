@@ -65,13 +65,19 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.fail_if_read_only(&fd)?;
         self.observe_function_call("filesystem::types::descriptor", "write_via_stream");
         let descriptor_rep = fd.rep();
+        let mutation_path = match self.table().get(&fd)? {
+            Descriptor::File(file) => file.path.clone(),
+            Descriptor::Dir(dir) => dir.path.clone(),
+        };
         let stream =
             HostDescriptor::write_via_stream(&mut self.as_wasi_view().filesystem(), fd, offset)?;
         self.state.open_filesystem_output_streams.insert(
             stream.rep(),
             FilesystemOutputStreamState {
                 descriptor_rep,
+                mutation_path,
                 position: Some(offset),
+                pending_write: false,
                 pending_reservation: None,
             },
         );
@@ -85,13 +91,19 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.fail_if_read_only(&self_)?;
         self.observe_function_call("filesystem::types::descriptor", "append_via_stream");
         let descriptor_rep = self_.rep();
+        let mutation_path = match self.table().get(&self_)? {
+            Descriptor::File(file) => file.path.clone(),
+            Descriptor::Dir(dir) => dir.path.clone(),
+        };
         let stream =
             HostDescriptor::append_via_stream(&mut self.as_wasi_view().filesystem(), self_)?;
         self.state.open_filesystem_output_streams.insert(
             stream.rep(),
             FilesystemOutputStreamState {
                 descriptor_rep,
+                mutation_path,
                 position: None,
+                pending_write: false,
                 pending_reservation: None,
             },
         );
@@ -138,11 +150,23 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
     async fn set_size(&mut self, fd: Resource<Descriptor>, size: Filesize) -> Result<(), FsError> {
         self.fail_if_read_only(&fd)?;
-        let mut storage_guard = Some(self.storage_meter().lock_reservation().await);
+        let mutation_path = match self.table().get(&fd)? {
+            Descriptor::File(file) => file.path.clone(),
+            Descriptor::Dir(dir) => dir.path.clone(),
+        };
+        let mutation_lock = crate::durable_host::filesystem_mutation_lock(&mutation_path);
+        let _mutation_guard = mutation_lock.lock().await;
+        if crate::durable_host::filesystem_mutation_is_pending(&mutation_path) {
+            return Err(FsError::trap(wasmtime::Error::msg(
+                "filesystem mutation is still pending",
+            )));
+        }
 
         // Determine whether this is a growth and charge the delta.
         // We borrow fd to stat before consuming it in set_size.
-        let current_size = {
+        let current_size = if self.state.is_replay() {
+            size
+        } else {
             let fd_borrow = Resource::new_borrow(fd.rep());
             let mut view = self.as_wasi_view();
             match HostDescriptor::stat(&mut view.filesystem(), fd_borrow).await {
@@ -153,14 +177,10 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         let reservation = if size > current_size {
             let delta = size - current_size;
-            self.reserve_filesystem_storage_with_guard(
-                delta,
-                storage_guard
-                    .take()
-                    .expect("storage guard must be available"),
-            )
-            .await
-            .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?
+            let guard = self.storage_meter().lock_reservation().await;
+            self.reserve_filesystem_storage_with_guard(delta, guard)
+                .await
+                .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?
         } else {
             None
         };
@@ -184,13 +204,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             }
         } else if result.is_ok() && size < current_size {
             // Shrink path: release permits for the freed space on success.
-            self.release_filesystem_storage_space_with_guard(
-                current_size - size,
-                storage_guard
-                    .take()
-                    .expect("storage guard must be available"),
-            )
-            .await;
+            self.release_filesystem_storage_space(current_size - size)
+                .await;
         }
 
         result
@@ -234,9 +249,21 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         offset: Filesize,
     ) -> Result<Filesize, FsError> {
         self.fail_if_read_only(&fd)?;
-        let mut storage_guard = Some(self.storage_meter().lock_reservation().await);
+        let mutation_path = match self.table().get(&fd)? {
+            Descriptor::File(file) => file.path.clone(),
+            Descriptor::Dir(dir) => dir.path.clone(),
+        };
+        let mutation_lock = crate::durable_host::filesystem_mutation_lock(&mutation_path);
+        let _mutation_guard = mutation_lock.lock().await;
+        if crate::durable_host::filesystem_mutation_is_pending(&mutation_path) {
+            return Err(FsError::trap(wasmtime::Error::msg(
+                "filesystem mutation is still pending",
+            )));
+        }
 
-        let current_size = {
+        let current_size = if self.state.is_replay() {
+            offset.saturating_add(buffer.len() as u64)
+        } else {
             let fd_borrow = Resource::new_borrow(fd.rep());
             let mut view = self.as_wasi_view();
             match HostDescriptor::stat(&mut view.filesystem(), fd_borrow).await {
@@ -248,14 +275,10 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let requested_end = offset.saturating_add(buffer.len() as u64);
         let requested_growth = requested_end.saturating_sub(current_size);
         let reservation = if requested_growth > 0 {
-            self.reserve_filesystem_storage_with_guard(
-                requested_growth,
-                storage_guard
-                    .take()
-                    .expect("storage guard must be available"),
-            )
-            .await
-            .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?
+            let guard = self.storage_meter().lock_reservation().await;
+            self.reserve_filesystem_storage_with_guard(requested_growth, guard)
+                .await
+                .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?
         } else {
             None
         };
@@ -531,12 +554,31 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         open_flags: OpenFlags,
         flags: DescriptorFlags,
     ) -> Result<Resource<Descriptor>, FsError> {
-        let mut storage_guard = if open_flags.contains(OpenFlags::TRUNCATE) {
-            Some(self.storage_meter().lock_reservation().await)
+        let mutation_path = if open_flags.contains(OpenFlags::TRUNCATE) {
+            Some(match self.table().get(&self_)? {
+                Descriptor::File(file) => file.path.join(&path),
+                Descriptor::Dir(dir) => dir.path.join(&path),
+            })
         } else {
             None
         };
-        let truncated_size = if open_flags.contains(OpenFlags::TRUNCATE) {
+        let mutation_lock = mutation_path
+            .as_ref()
+            .map(|path| crate::durable_host::filesystem_mutation_lock(path));
+        let _mutation_guard = match &mutation_lock {
+            Some(lock) => Some(lock.lock().await),
+            None => None,
+        };
+        if mutation_path
+            .as_ref()
+            .is_some_and(|path| crate::durable_host::filesystem_mutation_is_pending(path))
+        {
+            return Err(FsError::trap(wasmtime::Error::msg(
+                "filesystem mutation is still pending",
+            )));
+        }
+        let truncated_size = if open_flags.contains(OpenFlags::TRUNCATE) && !self.state.is_replay()
+        {
             let fd_borrow = Resource::new_borrow(self_.rep());
             let mut view = self.as_wasi_view();
             match HostDescriptor::stat_at(
@@ -569,13 +611,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         };
 
         if result.is_ok() && truncated_size > 0 {
-            self.release_filesystem_storage_space_with_guard(
-                truncated_size,
-                storage_guard
-                    .take()
-                    .expect("storage guard must be available"),
-            )
-            .await;
+            self.release_filesystem_storage_space(truncated_size).await;
         }
 
         result
@@ -642,11 +678,23 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<(), FsError> {
         self.fail_if_read_only(&fd)?;
-        let storage_guard = self.storage_meter().lock_reservation().await;
+        let mutation_path = match self.table().get(&fd)? {
+            Descriptor::File(file) => file.path.join(&path),
+            Descriptor::Dir(dir) => dir.path.join(&path),
+        };
+        let mutation_lock = crate::durable_host::filesystem_mutation_lock(&mutation_path);
+        let _mutation_guard = mutation_lock.lock().await;
+        if crate::durable_host::filesystem_mutation_is_pending(&mutation_path) {
+            return Err(FsError::trap(wasmtime::Error::msg(
+                "filesystem mutation is still pending",
+            )));
+        }
 
         // Stat the target file before unlinking to know how many bytes to release.
         // Use the upstream (non-durable) stat_at to avoid oplog side effects.
-        let file_size = {
+        let file_size = if self.state.is_replay() {
+            0
+        } else {
             let fd_borrow = Resource::new_borrow(fd.rep());
             let mut view = self.as_wasi_view();
             match HostDescriptor::stat_at(
@@ -670,8 +718,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         // Only release permits if the unlink actually succeeded.
         if result.is_ok() {
-            self.release_filesystem_storage_space_with_guard(file_size, storage_guard)
-                .await;
+            self.release_filesystem_storage_space(file_size).await;
         }
 
         result

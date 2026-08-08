@@ -15,6 +15,7 @@ pub trait P3FileSystem {
     async fn mutation_sizes(&self) -> Vec<u64>;
     async fn grow_replacement_beyond_quota(&self);
     async fn write_bytes(&self, path: String, len: u64);
+    async fn write_chunks(&self, path: String, chunk_len: u64, chunk_count: u64) -> u64;
     async fn sleep_for(&self, seconds: f64);
 }
 
@@ -389,6 +390,35 @@ impl P3FileSystem for P3FileSystemImpl {
         assert!(writer.write_all(vec![0; len as usize]).await.is_empty());
         drop(writer);
         write.await.expect("P3 write failed");
+    }
+
+    async fn write_chunks(&self, path: String, chunk_len: u64, chunk_count: u64) -> u64 {
+        let (root, _) = p3_preopens::get_directories()
+            .into_iter()
+            .next()
+            .expect("no P3 preopened directory");
+        let file = root
+            .open_at(
+                p3_types::PathFlags::empty(),
+                path,
+                p3_types::OpenFlags::CREATE,
+                p3_types::DescriptorFlags::READ | p3_types::DescriptorFlags::WRITE,
+            )
+            .await
+            .expect("P3 create failed");
+        let (mut writer, reader) = wit_stream::new::<u8>();
+        let write = file.write_via_stream(reader, 0);
+        for value in 0..chunk_count {
+            assert!(
+                writer
+                    .write_all(vec![value as u8; chunk_len as usize])
+                    .await
+                    .is_empty()
+            );
+        }
+        drop(writer);
+        write.await.expect("P3 chunked write failed");
+        file.stat().await.expect("P3 chunked stat failed").size
     }
 
     async fn sleep_for(&self, seconds: f64) {

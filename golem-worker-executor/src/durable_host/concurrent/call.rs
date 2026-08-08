@@ -3123,8 +3123,6 @@ where
     };
 
     let mut files = take_initial_files_access(store, get_ctx)?;
-    let storage_meter = store.with(|mut access| get_ctx(access.data_mut()).storage_meter());
-    let mut storage_guard = Some(storage_meter.lock_reservation().await);
     let storage_growth = match super::super::filesystem_update_storage_growth(
         &files,
         &inputs.worker_dir,
@@ -3144,13 +3142,11 @@ where
     let mut storage_reservation = if storage_growth == 0 {
         None
     } else {
+        let storage_meter = store.with(|mut access| get_ctx(access.data_mut()).storage_meter());
+        let storage_guard = storage_meter.lock_reservation().await;
         let prepared = match store.with(|mut access| {
-            get_ctx(access.data_mut()).prepare_filesystem_storage_reservation(
-                storage_growth,
-                storage_guard
-                    .take()
-                    .expect("storage guard must be available"),
-            )
+            get_ctx(access.data_mut())
+                .prepare_filesystem_storage_reservation(storage_growth, storage_guard)
         }) {
             Ok(prepared) => prepared,
             Err(error) => {
@@ -3230,17 +3226,39 @@ async fn commit_revision_update_storage_access<T, D, Ctx>(
     Ctx: WorkerCtx,
 {
     if let Some(reservation) = reservation
-        && let Some((worker, committed_bytes, committed_host_bytes)) = store.with(|mut access| {
-            get_ctx(access.data_mut())
-                .prepare_filesystem_storage_reservation_commit(&reservation, committed_growth)
+        && let Some((
+            worker,
+            storage_meter,
+            committed_bytes,
+            committed_host_bytes,
+            account_id,
+            environment_id,
+        )) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            ctx.prepare_filesystem_storage_reservation_commit(&reservation, committed_growth)
+                .map(|(worker, committed_bytes, committed_host_bytes)| {
+                    (
+                        worker,
+                        ctx.storage_meter(),
+                        committed_bytes,
+                        committed_host_bytes,
+                        ctx.created_by().to_string(),
+                        ctx.state.owned_agent_id.environment_id().to_string(),
+                    )
+                })
         })
     {
         reservation
-            .commit(&worker, committed_bytes, committed_host_bytes)
+            .commit(
+                worker,
+                storage_meter,
+                None,
+                committed_bytes,
+                committed_host_bytes,
+                account_id,
+                environment_id,
+            )
             .await;
-        store.with(|mut access| {
-            get_ctx(access.data_mut()).finish_filesystem_storage_reservation(committed_bytes);
-        });
     }
 }
 

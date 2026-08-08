@@ -150,7 +150,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, RwLock, Weak};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
 use std::vec;
 use tempfile::TempDir;
@@ -165,6 +165,48 @@ enum WorkerDir {
     Temp(TempDir),
     /// Deterministic directory. Deleted explicitly on drop.
     Deterministic(PathBuf),
+}
+
+static FILESYSTEM_MUTATION_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>>> =
+    OnceLock::new();
+static PENDING_FILESYSTEM_MUTATIONS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+
+pub(crate) fn filesystem_mutation_lock(path: &Path) -> Arc<tokio::sync::Mutex<()>> {
+    let mut locks = FILESYSTEM_MUTATION_LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    if let Some(lock) = locks.get(path).and_then(Weak::upgrade) {
+        lock
+    } else {
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        locks.insert(path.to_path_buf(), Arc::downgrade(&lock));
+        lock
+    }
+}
+
+pub(crate) fn mark_filesystem_mutation_pending(path: &Path) {
+    PENDING_FILESYSTEM_MUTATIONS
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .unwrap()
+        .insert(path.to_path_buf());
+}
+
+pub(crate) fn clear_filesystem_mutation_pending(path: &Path) {
+    PENDING_FILESYSTEM_MUTATIONS
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .unwrap()
+        .remove(path);
+}
+
+pub(crate) fn filesystem_mutation_is_pending(path: &Path) -> bool {
+    PENDING_FILESYSTEM_MUTATIONS
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .unwrap()
+        .contains(path)
 }
 
 impl WorkerDir {
@@ -417,6 +459,11 @@ pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
 
 impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
     fn drop(&mut self) {
+        for stream in self.state.open_filesystem_output_streams.values() {
+            if stream.pending_write {
+                clear_filesystem_mutation_pending(&stream.mutation_path);
+            }
+        }
         self.linear_memory.stop(Instant::now());
         self.resource_limits
             .unregister_memory_meter(&self.owned_agent_id, self.linear_memory.meter());
@@ -431,7 +478,8 @@ pub(crate) struct FilesystemStorageReservation {
     logical_bytes: u64,
     host_bytes: u64,
     permit: Option<crate::services::active_workers::FilesystemStoragePermit>,
-    _guard: tokio::sync::OwnedMutexGuard<()>,
+    storage_meter: Option<AgentStorageMeter>,
+    finalized: bool,
 }
 
 impl FilesystemStorageReservation {
@@ -450,30 +498,153 @@ impl FilesystemStorageReservation {
         self.permit = permit;
     }
 
+    pub(crate) fn merge(&mut self, mut other: FilesystemStorageReservation) {
+        self.logical_bytes = self.logical_bytes.saturating_add(other.logical_bytes);
+        self.host_bytes = self.host_bytes.saturating_add(other.host_bytes);
+        if let Some(other_permit) = other.permit.take() {
+            if let Some(permit) = &mut self.permit {
+                permit.merge(other_permit);
+            } else {
+                self.permit = Some(other_permit);
+            }
+        }
+        other.finalized = true;
+    }
+
     pub(crate) fn take_permit(
         &mut self,
     ) -> Option<crate::services::active_workers::FilesystemStoragePermit> {
         self.permit.take()
     }
 
-    pub(crate) async fn commit<Ctx: WorkerCtx>(
-        mut self,
-        worker: &Arc<Worker<Ctx>>,
-        committed_bytes: u64,
-        committed_host_bytes: u64,
-    ) {
-        if committed_bytes == 0 {
-            worker.rollback_filesystem_storage_space(self.take_permit());
+    pub(crate) async fn shrink<Ctx: WorkerCtx>(&mut self, worker: &Arc<Worker<Ctx>>, bytes: u64) {
+        let bytes = bytes.min(self.logical_bytes);
+        if bytes == 0 {
             return;
         }
-        worker
-            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
-                committed_bytes as i64,
-            ))
-            .await;
-        worker
-            .commit_filesystem_storage_space(self.take_permit(), committed_host_bytes)
-            .await;
+        let host_bytes = self
+            .storage_meter
+            .as_ref()
+            .map_or(0, |meter| meter.shrink_reservation(bytes));
+        self.logical_bytes = self.logical_bytes.saturating_sub(bytes);
+
+        let permits_to_release =
+            crate::services::active_workers::bytes_to_filesystem_storage_permits(host_bytes)
+                as usize;
+        let owned_permits = self
+            .permit
+            .as_ref()
+            .map_or(0, |permit| permit.num_permits());
+        let owned_to_release = permits_to_release.min(owned_permits);
+        if owned_to_release > 0
+            && let Some(permit) = &mut self.permit
+        {
+            drop(permit.split(owned_to_release));
+        }
+        let worker_permits_to_release = permits_to_release.saturating_sub(owned_to_release) as u32;
+        if worker_permits_to_release > 0 {
+            worker
+                .release_filesystem_storage_space(
+                    crate::services::active_workers::filesystem_storage_permits_to_bytes(
+                        worker_permits_to_release,
+                    ),
+                )
+                .await;
+        }
+    }
+
+    pub(crate) async fn commit<Ctx: WorkerCtx>(
+        mut self,
+        worker: Arc<Worker<Ctx>>,
+        storage_meter: AgentStorageMeter,
+        guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+        committed_bytes: u64,
+        _committed_host_bytes: u64,
+        account_id: String,
+        environment_id: String,
+    ) {
+        let task = tokio::spawn(async move {
+            let _guard = match guard {
+                Some(guard) => guard,
+                None => storage_meter.lock_reservation().await,
+            };
+            if committed_bytes == 0 {
+                worker.rollback_filesystem_storage_space(self.take_permit());
+                if let Some(meter) = self.storage_meter.take() {
+                    meter.commit_reservation(self.logical_bytes, 0, Instant::now());
+                }
+                return;
+            }
+            worker
+                .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
+                    committed_bytes as i64,
+                ))
+                .await;
+            let committed_host_bytes = storage_meter.host_capacity_for_growth(committed_bytes);
+            worker
+                .commit_filesystem_storage_space(self.take_permit(), committed_host_bytes)
+                .await;
+            if let Some(meter) = self.storage_meter.take() {
+                meter.commit_reservation(self.logical_bytes, committed_bytes, Instant::now());
+            } else {
+                storage_meter.on_acquire(committed_bytes, Instant::now());
+            }
+            record_storage_bytes_written(
+                STORAGE_TYPE_FILESYSTEM,
+                &account_id,
+                &environment_id,
+                committed_bytes,
+            );
+        });
+        task.await
+            .expect("filesystem storage commit task must complete");
+    }
+
+    pub(crate) async fn release<Ctx: WorkerCtx>(
+        self,
+        worker: Arc<Worker<Ctx>>,
+        storage_meter: AgentStorageMeter,
+        guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+        account_id: String,
+        environment_id: String,
+    ) {
+        let requested_bytes = self.logical_bytes;
+        let task = tokio::spawn(async move {
+            let _guard = match guard {
+                Some(guard) => guard,
+                None => storage_meter.lock_reservation().await,
+            };
+            let freed_bytes = requested_bytes.min(storage_meter.current_bytes());
+            if freed_bytes == 0 {
+                return;
+            }
+            let host_bytes = storage_meter.host_capacity_for_release(freed_bytes);
+            worker
+                .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
+                    -(freed_bytes as i64),
+                ))
+                .await;
+            worker.release_filesystem_storage_space(host_bytes).await;
+            storage_meter.on_release(freed_bytes, Instant::now());
+            record_storage_bytes_deleted(
+                STORAGE_TYPE_FILESYSTEM,
+                &account_id,
+                &environment_id,
+                freed_bytes,
+            );
+        });
+        task.await
+            .expect("filesystem storage release task must complete");
+    }
+}
+
+impl Drop for FilesystemStorageReservation {
+    fn drop(&mut self) {
+        if !self.finalized
+            && let Some(storage_meter) = self.storage_meter.take()
+        {
+            storage_meter.rollback_reservation(self.logical_bytes);
+        }
     }
 }
 
@@ -1414,74 +1585,67 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.resource_limits.max_disk_space_limit()
     }
 
-    /// Check whether acquiring `new_bytes` would breach the per-plan storage
-    /// limit. Returns `WorkerAgentExceededFilesystemStorageLimit` (permanent) if so.
-    /// Does NOT check the executor semaphore pool — that is done by
-    /// `acquire_filesystem_space`.
-    ///
-    /// No-op during replay.
-    pub fn check_filesystem_storage_quota(&self, new_bytes: u64) -> anyhow::Result<()> {
-        if self.state.is_replay() {
-            return Ok(());
-        }
-        let after = self.storage_meter.current_bytes().saturating_add(new_bytes);
-        if after > self.resource_limits.max_disk_space_limit() {
-            Err(anyhow!(
-                GolemSpecificWasmTrap::WorkerAgentExceededFilesystemStorageLimit
-            ))
-        } else {
-            Ok(())
-        }
-    }
-
     pub(crate) async fn commit_filesystem_storage_reservation(
         &mut self,
         reservation: FilesystemStorageReservation,
         committed_bytes: u64,
     ) {
+        self.commit_filesystem_storage_reservation_with_guard(reservation, committed_bytes, None)
+            .await;
+    }
+
+    pub(crate) async fn commit_filesystem_storage_reservation_with_guard(
+        &mut self,
+        reservation: FilesystemStorageReservation,
+        committed_bytes: u64,
+        guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+    ) {
         let committed_bytes = committed_bytes.min(reservation.logical_bytes);
         let committed_host_bytes = self.storage_meter.host_capacity_for_growth(committed_bytes);
         reservation
             .commit(
-                &self.public_state.worker(),
+                self.public_state.worker(),
+                self.storage_meter.clone(),
+                guard,
                 committed_bytes,
                 committed_host_bytes,
+                self.created_by().to_string(),
+                self.state.owned_agent_id.environment_id().to_string(),
             )
             .await;
-        if committed_bytes == 0 {
-            return;
-        }
-        self.storage_meter
-            .on_acquire(committed_bytes, Instant::now());
-        let account_id = self.created_by().to_string();
-        let environment_id = self.state.owned_agent_id.environment_id().to_string();
-        record_storage_bytes_written(
-            STORAGE_TYPE_FILESYSTEM,
-            &account_id,
-            &environment_id,
-            committed_bytes,
-        );
     }
 
     pub(crate) async fn rollback_filesystem_storage_reservation(
         &mut self,
         mut reservation: FilesystemStorageReservation,
     ) {
-        self.public_state
-            .worker()
-            .rollback_filesystem_storage_space(reservation.take_permit());
+        if let Some(worker) = self.filesystem_storage_worker() {
+            worker.rollback_filesystem_storage_space(reservation.take_permit());
+        }
     }
 
     /// Release `freed_bytes` back to the executor semaphore pool.
     /// Called when files are deleted or truncated.
     /// During replay this is a no-op.
     pub async fn release_filesystem_storage_space(&mut self, freed_bytes: u64) {
-        if self.state.is_replay() {
+        if freed_bytes == 0 || self.state.is_replay() {
             return;
         }
-        let guard = self.storage_meter.lock_reservation().await;
-        self.release_filesystem_storage_space_with_guard(freed_bytes, guard)
-            .await;
+        FilesystemStorageReservation {
+            logical_bytes: freed_bytes,
+            host_bytes: 0,
+            permit: None,
+            storage_meter: None,
+            finalized: false,
+        }
+        .release(
+            self.public_state.worker(),
+            self.storage_meter.clone(),
+            None,
+            self.created_by().to_string(),
+            self.state.owned_agent_id.environment_id().to_string(),
+        )
+        .await;
     }
 
     pub(crate) async fn release_filesystem_storage_space_with_guard(
@@ -1489,30 +1653,29 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         freed_bytes: u64,
         _guard: tokio::sync::OwnedMutexGuard<()>,
     ) {
+        if self.state.is_replay() {
+            return;
+        }
         let freed_bytes = freed_bytes.min(self.storage_meter.current_bytes());
         if freed_bytes == 0 {
             return;
         }
         let host_bytes = self.storage_meter.host_capacity_for_release(freed_bytes);
-        self.public_state
-            .worker()
-            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
-                -(freed_bytes as i64),
-            ))
-            .await;
-        self.public_state
-            .worker()
-            .release_filesystem_storage_space(host_bytes)
-            .await;
-        self.storage_meter.on_release(freed_bytes, Instant::now());
-        let account_id = self.created_by().to_string();
-        let environment_id = self.state.owned_agent_id.environment_id().to_string();
-        record_storage_bytes_deleted(
-            STORAGE_TYPE_FILESYSTEM,
-            &account_id,
-            &environment_id,
-            freed_bytes,
-        );
+        FilesystemStorageReservation {
+            logical_bytes: freed_bytes,
+            host_bytes,
+            permit: None,
+            storage_meter: None,
+            finalized: false,
+        }
+        .release(
+            self.public_state.worker(),
+            self.storage_meter.clone(),
+            Some(_guard),
+            self.created_by().to_string(),
+            self.state.owned_agent_id.environment_id().to_string(),
+        )
+        .await;
     }
 
     pub(crate) async fn reserve_filesystem_storage_with_guard(
@@ -1536,19 +1699,57 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) fn prepare_filesystem_storage_reservation(
         &mut self,
         new_bytes: u64,
-        guard: tokio::sync::OwnedMutexGuard<()>,
+        _guard: tokio::sync::OwnedMutexGuard<()>,
     ) -> anyhow::Result<Option<(Arc<Worker<Ctx>>, FilesystemStorageReservation)>> {
         if new_bytes == 0 || self.state.is_replay() {
             return Ok(None);
         }
-        self.check_filesystem_storage_quota(new_bytes)?;
+        let Some(host_bytes) = self
+            .storage_meter
+            .reserve(new_bytes, self.resource_limits.max_disk_space_limit())
+        else {
+            return Err(anyhow!(
+                GolemSpecificWasmTrap::WorkerAgentExceededFilesystemStorageLimit
+            ));
+        };
         Ok(Some((
             self.public_state.worker(),
             FilesystemStorageReservation {
                 logical_bytes: new_bytes,
-                host_bytes: self.storage_meter.host_capacity_for_growth(new_bytes),
+                host_bytes,
                 permit: None,
-                _guard: guard,
+                storage_meter: Some(self.storage_meter.clone()),
+                finalized: false,
+            },
+        )))
+    }
+
+    pub(crate) fn prepare_filesystem_storage_reservation_extension(
+        &mut self,
+        reservation_bytes: u64,
+        additional_bytes: u64,
+        _guard: tokio::sync::OwnedMutexGuard<()>,
+    ) -> anyhow::Result<Option<(Arc<Worker<Ctx>>, FilesystemStorageReservation)>> {
+        if additional_bytes == 0 || self.state.is_replay() {
+            return Ok(None);
+        }
+        let Some(host_bytes) = self.storage_meter.extend_reservation(
+            reservation_bytes,
+            additional_bytes,
+            self.resource_limits.max_disk_space_limit(),
+        ) else {
+            return Err(anyhow!(
+                GolemSpecificWasmTrap::WorkerAgentExceededFilesystemStorageLimit
+            ));
+        };
+        Ok(Some((
+            self.public_state.worker(),
+            FilesystemStorageReservation {
+                logical_bytes: additional_bytes,
+                host_bytes,
+                permit: None,
+                storage_meter: Some(self.storage_meter.clone()),
+                finalized: false,
             },
         )))
     }
@@ -1570,59 +1771,23 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         ))
     }
 
-    pub(crate) fn finish_filesystem_storage_reservation(&mut self, new_bytes: u64) {
-        if new_bytes == 0 || self.state.is_replay() {
-            return;
-        }
-        self.storage_meter.on_acquire(new_bytes, Instant::now());
-        let account_id = self.created_by().to_string();
-        let environment_id = self.state.owned_agent_id.environment_id().to_string();
-        record_storage_bytes_written(
-            STORAGE_TYPE_FILESYSTEM,
-            &account_id,
-            &environment_id,
-            new_bytes,
-        );
-    }
-
     pub(crate) fn prepare_filesystem_storage_release(
         &mut self,
         freed_bytes: u64,
-        guard: tokio::sync::OwnedMutexGuard<()>,
     ) -> Option<(Arc<Worker<Ctx>>, FilesystemStorageReservation)> {
         if freed_bytes == 0 || self.state.is_replay() {
             return None;
         }
-        let freed_bytes = freed_bytes.min(self.storage_meter.current_bytes());
-        if freed_bytes == 0 {
-            None
-        } else {
-            let host_bytes = self.storage_meter.host_capacity_for_release(freed_bytes);
-            Some((
-                self.public_state.worker(),
-                FilesystemStorageReservation {
-                    logical_bytes: freed_bytes,
-                    host_bytes,
-                    permit: None,
-                    _guard: guard,
-                },
-            ))
-        }
-    }
-
-    pub(crate) fn finish_filesystem_storage_release(&mut self, freed_bytes: u64) {
-        if freed_bytes == 0 || self.state.is_replay() {
-            return;
-        }
-        self.storage_meter.on_release(freed_bytes, Instant::now());
-        let account_id = self.created_by().to_string();
-        let environment_id = self.state.owned_agent_id.environment_id().to_string();
-        record_storage_bytes_deleted(
-            STORAGE_TYPE_FILESYSTEM,
-            &account_id,
-            &environment_id,
-            freed_bytes,
-        );
+        Some((
+            self.public_state.worker(),
+            FilesystemStorageReservation {
+                logical_bytes: freed_bytes,
+                host_bytes: 0,
+                permit: None,
+                storage_meter: None,
+                finalized: false,
+            },
+        ))
     }
 
     pub fn increase_memory(&mut self, delta: u64) {
@@ -3537,7 +3702,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
 
         {
-            let mut storage_guard = Some(self.storage_meter.lock_reservation().await);
             let storage_growth = {
                 let current_files = self.state.files.read().await;
                 filesystem_update_storage_growth(
@@ -3553,13 +3717,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let reservation = if storage_growth == 0 {
                 None
             } else {
-                self.reserve_filesystem_storage_with_guard(
-                    storage_growth,
-                    storage_guard
-                        .take()
-                        .expect("storage guard must be available"),
-                )
-                .await?
+                let storage_guard = self.storage_meter.lock_reservation().await;
+                self.reserve_filesystem_storage_with_guard(storage_growth, storage_guard)
+                    .await?
             };
             let update_result = {
                 let mut current_files = self.state.files.write().await;
@@ -6313,7 +6473,9 @@ struct ActiveDurableScope {
 #[derive(Debug)]
 pub(crate) struct FilesystemOutputStreamState {
     pub descriptor_rep: u32,
+    pub mutation_path: PathBuf,
     pub position: Option<u64>,
+    pub pending_write: bool,
     pub pending_reservation: Option<PendingFilesystemReservation>,
 }
 
@@ -6327,9 +6489,7 @@ pub(crate) struct PendingFilesystemReservation {
 pub(crate) enum PendingFilesystemReservationState {
     Reserved(FilesystemStorageReservation),
     Committed(u64),
-    Unchanged {
-        _guard: tokio::sync::OwnedMutexGuard<()>,
-    },
+    Unchanged,
 }
 
 /// Direction of a P3 TCP one-shot stream acquisition (`send` vs `receive`).

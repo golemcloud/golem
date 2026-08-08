@@ -50,6 +50,7 @@ struct Inner {
 #[derive(Debug)]
 struct State {
     bytes: u64,
+    reserved_bytes: u64,
     active: bool,
     stopped: bool,
     last_sample: Instant,
@@ -71,6 +72,7 @@ impl AgentStorageMeter {
                 reservation_lock: Arc::new(tokio::sync::Mutex::new(())),
                 state: Mutex::new(State {
                     bytes,
+                    reserved_bytes: 0,
                     active,
                     stopped: false,
                     last_sample: now,
@@ -84,14 +86,87 @@ impl AgentStorageMeter {
         self.inner.state.lock().unwrap().bytes
     }
 
+    pub fn reserve(&self, bytes: u64, limit: u64) -> Option<u64> {
+        let mut state = self.inner.state.lock().unwrap();
+        let before = state.bytes.saturating_add(state.reserved_bytes);
+        let after = before.saturating_add(bytes);
+        if after > limit {
+            return None;
+        }
+        let host_bytes = if state.reserved_bytes == 0 {
+            host_capacity_delta(before, after)
+        } else {
+            host_capacity_delta(0, bytes)
+        };
+        state.reserved_bytes = state.reserved_bytes.saturating_add(bytes);
+        Some(host_bytes)
+    }
+
+    pub fn extend_reservation(
+        &self,
+        reservation_bytes: u64,
+        additional_bytes: u64,
+        limit: u64,
+    ) -> Option<u64> {
+        let mut state = self.inner.state.lock().unwrap();
+        let before = state.bytes.saturating_add(state.reserved_bytes);
+        let after = before.saturating_add(additional_bytes);
+        if after > limit {
+            return None;
+        }
+        let other_reserved_bytes = state.reserved_bytes.saturating_sub(reservation_bytes);
+        let host_bytes = if other_reserved_bytes == 0 {
+            host_capacity_delta(before, after)
+        } else {
+            host_capacity_delta(
+                reservation_bytes,
+                reservation_bytes.saturating_add(additional_bytes),
+            )
+        };
+        state.reserved_bytes = state.reserved_bytes.saturating_add(additional_bytes);
+        Some(host_bytes)
+    }
+
+    pub fn commit_reservation(&self, reserved_bytes: u64, committed_bytes: u64, now: Instant) {
+        self.inner.transition(now, |state| {
+            state.reserved_bytes = state.reserved_bytes.saturating_sub(reserved_bytes);
+            state.bytes = state
+                .bytes
+                .saturating_add(committed_bytes.min(reserved_bytes));
+        });
+    }
+
+    pub fn rollback_reservation(&self, reserved_bytes: u64) {
+        let mut state = self.inner.state.lock().unwrap();
+        state.reserved_bytes = state.reserved_bytes.saturating_sub(reserved_bytes);
+    }
+
+    pub fn shrink_reservation(&self, reserved_bytes: u64) -> u64 {
+        let mut state = self.inner.state.lock().unwrap();
+        let reserved_bytes = reserved_bytes.min(state.reserved_bytes);
+        let before = state.bytes.saturating_add(state.reserved_bytes);
+        state.reserved_bytes = state.reserved_bytes.saturating_sub(reserved_bytes);
+        let after = state.bytes.saturating_add(state.reserved_bytes);
+        if state.reserved_bytes == 0 {
+            host_capacity_delta(after, before)
+        } else {
+            0
+        }
+    }
+
     pub fn host_capacity_for_growth(&self, bytes: u64) -> u64 {
         let current = self.current_bytes();
         host_capacity_delta(current, current.saturating_add(bytes))
     }
 
     pub fn host_capacity_for_release(&self, bytes: u64) -> u64 {
-        let current = self.current_bytes();
-        host_capacity_delta(current.saturating_sub(bytes), current)
+        let state = self.inner.state.lock().unwrap();
+        let before = state.bytes.saturating_add(state.reserved_bytes);
+        let after = state
+            .bytes
+            .saturating_sub(bytes)
+            .saturating_add(state.reserved_bytes);
+        host_capacity_delta(after, before)
     }
 
     pub async fn lock_reservation(&self) -> tokio::sync::OwnedMutexGuard<()> {
@@ -324,6 +399,90 @@ mod tests {
         meter.on_acquire(600, now);
         assert_eq!(meter.host_capacity_for_release(100), 1024);
         assert_eq!(meter.host_capacity_for_release(50), 0);
+    }
+
+    #[test]
+    fn outstanding_reservations_count_toward_quota_without_being_billed() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let now = Instant::now();
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 4, true, entry.clone(), now);
+
+        assert_eq!(meter.reserve(4, 10), Some(0));
+        assert_eq!(meter.reserve(3, 10), None);
+        assert_eq!(meter.current_bytes(), 4);
+        meter.flush(now + Duration::from_secs(2));
+        assert_eq!(entry.durable_byte_seconds_delta(), 8);
+
+        meter.commit_reservation(4, 3, now + Duration::from_secs(2));
+        assert_eq!(meter.current_bytes(), 7);
+        assert_eq!(meter.reserve(3, 10), Some(0));
+        meter.flush(now + Duration::from_secs(4));
+        assert_eq!(entry.durable_byte_seconds_delta(), 22);
+        meter.rollback_reservation(3);
+        meter.flush(now + Duration::from_secs(5));
+        assert_eq!(meter.current_bytes(), 7);
+        assert_eq!(entry.durable_byte_seconds_delta(), 29);
+    }
+
+    #[test]
+    fn extending_one_reservation_only_acquires_new_rounding_boundaries() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let now = Instant::now();
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 0, true, entry, now);
+
+        assert_eq!(meter.reserve(4, 2048), Some(1024));
+        assert_eq!(meter.extend_reservation(4, 4, 2048), Some(0));
+        assert_eq!(meter.extend_reservation(8, 1020, 2048), Some(1024));
+        assert_eq!(meter.extend_reservation(1028, 1021, 2048), None);
+    }
+
+    #[test]
+    fn overlapping_reservations_own_independent_host_capacity() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let now = Instant::now();
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 500, true, entry, now);
+
+        assert_eq!(meter.reserve(600, 4096), Some(1024));
+        assert_eq!(meter.reserve(600, 4096), Some(1024));
+        meter.rollback_reservation(600);
+        meter.commit_reservation(600, 600, now);
+        assert_eq!(meter.current_bytes(), 1100);
+    }
+
+    #[test]
+    fn release_preserves_capacity_used_by_an_outstanding_reservation() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let now = Instant::now();
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 1025, true, entry, now);
+
+        assert_eq!(meter.reserve(1023, 4096), Some(0));
+        assert_eq!(meter.host_capacity_for_release(1025), 1024);
+        meter.on_release(1025, now);
+        meter.commit_reservation(1023, 1023, now);
+        assert_eq!(meter.current_bytes(), 1023);
+    }
+
+    #[test]
+    fn shrinking_a_reservation_releases_newly_excess_capacity() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let now = Instant::now();
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 1025, true, entry, now);
+
+        assert_eq!(meter.reserve(1023, 4096), Some(0));
+        assert_eq!(meter.host_capacity_for_release(1025), 1024);
+        meter.on_release(1025, now);
+        assert_eq!(meter.shrink_reservation(1023), 1024);
+    }
+
+    #[test]
+    fn shrinking_defers_capacity_release_while_other_reservations_exist() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let now = Instant::now();
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 1025, true, entry, now);
+
+        assert_eq!(meter.reserve(1023, 4096), Some(0));
+        assert_eq!(meter.reserve(1, 4096), Some(1024));
+        assert_eq!(meter.shrink_reservation(1023), 0);
     }
 
     proptest! {
