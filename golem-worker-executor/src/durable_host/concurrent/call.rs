@@ -2892,24 +2892,153 @@ where
                 );
                 update_state_to_new_component_revision_access(store, get_ctx, new_revision).await?;
             }
-            crate::durable_host::replay_state::ReplayEvent::CardInstalled { card } => {
-                store.with(|mut access| {
+            crate::durable_host::replay_state::ReplayEvent::InvocationWalletPinned {
+                wallet_pin,
+            } => {
+                store.with(|mut access| -> Result<(), WorkerExecutorError> {
+                    let ctx = get_ctx(access.data_mut());
+                    if crate::durable_host::apply_invocation_wallet_pin(
+                        &mut ctx.state.agent_wallet_cards,
+                        ctx.state.wallet_id_hash,
+                        &mut ctx.state.wallet_generation,
+                        wallet_pin,
+                    )? {
+                        ctx.rederive_agent_effective_surface_from_wallet();
+                    }
+                    Ok(())
+                })?;
+            }
+            crate::durable_host::replay_state::ReplayEvent::CardInstalled {
+                card,
+                wallet_generation,
+            } => {
+                store.with(|mut access| -> Result<(), WorkerExecutorError> {
                     let ctx = get_ctx(access.data_mut());
                     let card_id = card.card_id();
                     tracing::debug!(card_id = %card_id, "Applying replayed card installation");
-                    ctx.state.agent_wallet_cards.insert(card_id, card);
-                    ctx.rederive_agent_effective_surface_from_wallet();
-                });
-            }
-            crate::durable_host::replay_state::ReplayEvent::CardRevoked { card_id }
-            | crate::durable_host::replay_state::ReplayEvent::CardExpired { card_id } => {
-                store.with(|mut access| {
-                    let ctx = get_ctx(access.data_mut());
-                    tracing::debug!(card_id = %card_id, "Applying replayed card removal");
-                    if ctx.state.agent_wallet_cards.remove(&card_id).is_some() {
+                    if crate::durable_host::add_wallet_card(
+                        &mut ctx.state.agent_wallet_cards,
+                        &mut ctx.state.wallet_generation,
+                        card,
+                    )? {
                         ctx.rederive_agent_effective_surface_from_wallet();
                     }
-                });
+                    crate::durable_host::adopt_recorded_wallet_generation(
+                        &mut ctx.state.wallet_generation,
+                        wallet_generation,
+                    )
+                })?;
+            }
+            crate::durable_host::replay_state::ReplayEvent::CardDerived {
+                wallet_generation,
+                ..
+            } => {
+                store.with(|mut access| {
+                    let ctx = get_ctx(access.data_mut());
+                    crate::durable_host::adopt_recorded_wallet_generation(
+                        &mut ctx.state.wallet_generation,
+                        wallet_generation,
+                    )
+                })?;
+            }
+            crate::durable_host::replay_state::ReplayEvent::CardTransferStarted {
+                card_id,
+                source_holder,
+                source_wallet_generation,
+                ..
+            } => {
+                store.with(|mut access| -> Result<(), WorkerExecutorError> {
+                    let ctx = get_ctx(access.data_mut());
+                    if source_holder.as_ref().is_none_or(|source_holder| {
+                        crate::durable_host::card_holder_is_agent(
+                            source_holder,
+                            &ctx.owned_agent_id.agent_id,
+                        )
+                    }) && crate::durable_host::transfer_started_removes_source_membership(
+                        ctx.state.agent_wallet_cards.get(&card_id),
+                        &source_holder,
+                        &ctx.owned_agent_id.agent_id,
+                    ) && crate::durable_host::remove_wallet_card(
+                        &mut ctx.state.agent_wallet_cards,
+                        &mut ctx.state.wallet_generation,
+                        card_id,
+                    )? {
+                        ctx.rederive_agent_effective_surface_from_wallet();
+                    }
+                    crate::durable_host::adopt_recorded_wallet_generation(
+                        &mut ctx.state.wallet_generation,
+                        source_wallet_generation,
+                    )
+                })?;
+            }
+            crate::durable_host::replay_state::ReplayEvent::CardTransferred {
+                target_holder,
+                card,
+                target_wallet_generation,
+                ..
+            } => {
+                store.with(|mut access| -> Result<(), WorkerExecutorError> {
+                    let ctx = get_ctx(access.data_mut());
+                    if crate::durable_host::card_holder_is_agent(
+                        &target_holder,
+                        &ctx.owned_agent_id.agent_id,
+                    ) && crate::durable_host::add_wallet_card(
+                        &mut ctx.state.agent_wallet_cards,
+                        &mut ctx.state.wallet_generation,
+                        card,
+                    )? {
+                        ctx.rederive_agent_effective_surface_from_wallet();
+                    }
+                    crate::durable_host::adopt_recorded_wallet_generation(
+                        &mut ctx.state.wallet_generation,
+                        target_wallet_generation,
+                    )
+                })?;
+            }
+            crate::durable_host::replay_state::ReplayEvent::CardTransferConfirmed { .. } => {}
+            crate::durable_host::replay_state::ReplayEvent::CardRevokedCascade {
+                card_ids,
+                local_wallet_generation,
+            } => {
+                store.with(|mut access| -> Result<(), WorkerExecutorError> {
+                    let ctx = get_ctx(access.data_mut());
+                    let wallet_changed = crate::durable_host::remove_wallet_cards(
+                        &mut ctx.state.agent_wallet_cards,
+                        &mut ctx.state.wallet_generation,
+                        &card_ids,
+                    )?;
+                    let scope_changed = ctx.clear_invocation_scope_if_roots_include(&card_ids);
+                    if wallet_changed || scope_changed {
+                        ctx.rederive_agent_effective_surface_from_wallet();
+                    }
+                    crate::durable_host::adopt_recorded_wallet_generation(
+                        &mut ctx.state.wallet_generation,
+                        local_wallet_generation,
+                    )
+                })?;
+            }
+            crate::durable_host::replay_state::ReplayEvent::CardRevoked {
+                card_id,
+                wallet_generation,
+            }
+            | crate::durable_host::replay_state::ReplayEvent::CardExpired {
+                card_id,
+                wallet_generation,
+            } => {
+                store.with(|mut access| -> Result<(), WorkerExecutorError> {
+                    let ctx = get_ctx(access.data_mut());
+                    if crate::durable_host::remove_wallet_card(
+                        &mut ctx.state.agent_wallet_cards,
+                        &mut ctx.state.wallet_generation,
+                        card_id,
+                    )? {
+                        ctx.rederive_agent_effective_surface_from_wallet();
+                    }
+                    crate::durable_host::adopt_recorded_wallet_generation(
+                        &mut ctx.state.wallet_generation,
+                        wallet_generation,
+                    )
+                })?;
             }
             crate::durable_host::replay_state::ReplayEvent::ReplayFinished => {
                 tracing::debug!("Replaying oplog finished");

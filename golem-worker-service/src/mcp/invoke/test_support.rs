@@ -511,10 +511,23 @@ impl WorkerClient for RecordingWorkerClient {
         _: AccountId,
         _: AuthCtx,
         _: golem_api_grpc::proto::golem::component::Principal,
+        _: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
     ) -> WorkerResult<AgentInvocationOutput> {
         self.agent_ids.lock().unwrap().push(agent_id.clone());
         self.method_params.lock().unwrap().push(method_params);
         Ok(self.invocation_output.clone())
+    }
+
+    async fn deliver_card_transfer(
+        &self,
+        _: &AgentId,
+        _: EnvironmentId,
+        _: uuid::Uuid,
+        _: golem_common::model::card::CardId,
+        _: golem_common::model::card::StoredCard,
+        _: AuthCtx,
+    ) -> WorkerResult<()> {
+        unimplemented!()
     }
 
     async fn process_oplog_entries(

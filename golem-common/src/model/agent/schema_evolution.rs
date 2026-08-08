@@ -154,6 +154,7 @@ fn discriminant_name(typ: &SchemaType) -> &'static str {
         SchemaType::Union { .. } => "Union",
         SchemaType::Secret { .. } => "Secret",
         SchemaType::QuotaToken { .. } => "QuotaToken",
+        SchemaType::PermissionCard { .. } => "PermissionCard",
         SchemaType::Future { .. } => "Future",
         SchemaType::Stream { .. } => "Stream",
     }

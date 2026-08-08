@@ -28,6 +28,7 @@ pub mod io;
 pub mod keyvalue;
 mod logging;
 pub mod p3;
+mod permissions;
 pub mod quota;
 mod random;
 pub mod rdbms;
@@ -109,7 +110,10 @@ use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
 use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
-use golem_common::model::card::{CardId, StoredCard};
+use golem_common::model::card::{
+    AgentCardHolder, CardHolder, CardId, InvocationWalletPin, ScopeCard, StoredCard,
+    WalletVersionToken,
+};
 use golem_common::model::component::{
     AgentFilePermissions, CanonicalFilePath, ComponentId, ComponentRevision, InitialAgentFile,
 };
@@ -134,6 +138,7 @@ use golem_common::model::{
 use golem_common::model::{PredicateValue, RetryPolicyState, RetryProperties};
 use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
+use golem_schema::schema::wit::PermissionCardHandleRep;
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
@@ -144,7 +149,7 @@ use golem_service_base::model::{
 use http_body_util::BodyExt;
 use http_body_util::combinators::UnsyncBoxBody;
 use replay_state::ReplayEvent;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
@@ -326,7 +331,7 @@ pub(crate) fn agent_effective_surface_from_component_metadata(
     Ok(golem_common::model::card::agent_effective_surface_from_wallet(&context, [&card]))
 }
 
-fn agent_monomorphization_context(
+pub(crate) fn agent_monomorphization_context(
     component: &Component,
     owned_agent_id: &OwnedAgentId,
     agent_id: &ParsedAgentId,
@@ -446,6 +451,52 @@ impl Drop for StoreAliveGuard {
     }
 }
 
+const DERIVED_CARD_ID_CONTEXT: &str = "golem:permissions:derived-card-id:v1";
+const TRANSFER_ID_CONTEXT: &str = "golem:permissions:transfer-id:v1";
+const INSTALLED_CHILD_CARD_ID_CONTEXT: &str = "golem:permissions:installed-child-card-id:v1";
+const SCOPE_CARD_ID_CONTEXT: &str = "golem:permissions:scope-card-id:v1";
+const UUID_V7_MAX_TIMESTAMP: u64 = (1_u64 << 48) - 1;
+
+fn derive_permission_uuid(
+    context: &'static str,
+    owned_agent_id: &OwnedAgentId,
+    invocation_key: &IdempotencyKey,
+    oplog_index: OplogIndex,
+) -> Uuid {
+    derive_permission_uuid_for_sequence(
+        context,
+        owned_agent_id,
+        invocation_key,
+        oplog_index.as_u64(),
+    )
+}
+
+fn derive_permission_uuid_for_sequence(
+    context: &'static str,
+    owned_agent_id: &OwnedAgentId,
+    invocation_key: &IdempotencyKey,
+    sequence: u64,
+) -> Uuid {
+    let agent_name = owned_agent_id.agent_id.agent_id.as_bytes();
+    let invocation_key = invocation_key.value.as_bytes();
+    let mut hasher = blake3::Hasher::new_derive_key(context);
+    hasher.update(owned_agent_id.environment_id.0.as_bytes());
+    hasher.update(owned_agent_id.agent_id.component_id.0.as_bytes());
+    hasher.update(&(agent_name.len() as u64).to_be_bytes());
+    hasher.update(agent_name);
+    hasher.update(&(invocation_key.len() as u64).to_be_bytes());
+    hasher.update(invocation_key);
+    hasher.update(&sequence.to_be_bytes());
+
+    let mut bytes = [0_u8; 16];
+    let timestamp = sequence.min(UUID_V7_MAX_TIMESTAMP);
+    bytes[..6].copy_from_slice(&timestamp.to_be_bytes()[2..]);
+    bytes[6..].copy_from_slice(&hasher.finalize().as_bytes()[..10]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x70;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
+}
+
 /// Guard for the per-invocation wall-clock deadline; see
 /// [`DurableWorkerCtx::arm_invocation_deadline`]. Holds the shared latch and the timer task;
 /// dropping it aborts the timer and clears the latch so the deadline never outlives its
@@ -518,6 +569,58 @@ fn validate_unshared_memory_growth(
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    pub(crate) fn derive_card_id(
+        &self,
+        invocation_key: &IdempotencyKey,
+        oplog_index: OplogIndex,
+    ) -> CardId {
+        CardId(derive_permission_uuid(
+            DERIVED_CARD_ID_CONTEXT,
+            &self.owned_agent_id,
+            invocation_key,
+            oplog_index,
+        ))
+    }
+
+    pub(crate) fn derive_transfer_id(
+        &self,
+        invocation_key: &IdempotencyKey,
+        oplog_index: OplogIndex,
+    ) -> Uuid {
+        derive_permission_uuid(
+            TRANSFER_ID_CONTEXT,
+            &self.owned_agent_id,
+            invocation_key,
+            oplog_index,
+        )
+    }
+
+    pub(crate) fn derive_installed_child_card_id(
+        &self,
+        invocation_key: &IdempotencyKey,
+        oplog_index: OplogIndex,
+    ) -> CardId {
+        CardId(derive_permission_uuid(
+            INSTALLED_CHILD_CARD_ID_CONTEXT,
+            &self.owned_agent_id,
+            invocation_key,
+            oplog_index,
+        ))
+    }
+
+    pub(crate) fn derive_scope_card_id(
+        &self,
+        invocation_key: &IdempotencyKey,
+        ordinal: u64,
+    ) -> CardId {
+        CardId(derive_permission_uuid_for_sequence(
+            SCOPE_CARD_ID_CONTEXT,
+            &self.owned_agent_id,
+            invocation_key,
+            ordinal,
+        ))
+    }
+
     pub(crate) fn derive_idempotency_key(&mut self, oplog_index: OplogIndex) -> IdempotencyKey {
         let current_idempotency_key = self
             .state
@@ -971,15 +1074,38 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn agent_auth_ctx(&self) -> AuthCtx {
-        AuthCtx::agent_with_effective_surface(
+        let delegation_surface = if let Some(agent_id) = self.state.agent_id.as_ref() {
+            let context = agent_monomorphization_context(
+                &self.state.component_metadata,
+                &self.owned_agent_id,
+                agent_id,
+            );
+            golem_common::model::card::agent_delegation_surface_from_wallet(
+                &context,
+                self.state.agent_wallet_cards.values(),
+            )
+        } else {
+            golem_common::model::card::DelegationSurface::default()
+        };
+
+        AuthCtx::agent_with_permission_surfaces(
             self.created_by(),
             self.created_by_email().clone(),
             self.agent_effective_surface(),
+            delegation_surface,
         )
     }
 
     pub(crate) fn agent_wallet_cards_snapshot(&self) -> Vec<StoredCard> {
         self.state.agent_wallet_cards.values().cloned().collect()
+    }
+
+    pub(crate) fn wallet_id_hash(&self) -> [u8; 32] {
+        self.state.wallet_id_hash
+    }
+
+    pub(crate) fn wallet_generation(&self) -> u64 {
+        self.state.wallet_generation
     }
 
     pub(crate) async fn active_agent_wallet_cards_snapshot(
@@ -995,7 +1121,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .into_iter()
             .filter_map(|pending_event| match pending_event.event {
                 QueuedCardEvent::Revoke(event) => Some(event.card_id),
-                QueuedCardEvent::Install(_) => None,
+                QueuedCardEvent::Install(_)
+                | QueuedCardEvent::TransferStarted(_)
+                | QueuedCardEvent::TransferReceived(_) => None,
             })
             .collect::<HashSet<_>>();
         let wallet = self
@@ -1026,13 +1154,79 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 &self.owned_agent_id,
                 agent_id,
             );
-            golem_common::model::card::agent_effective_surface_from_wallet(
+            golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
                 &context,
                 self.state.agent_wallet_cards.values(),
+                self.state.invocation_scope_card.as_ref(),
             )
         } else {
             golem_common::model::card::EffectiveSurface::default()
         };
+    }
+
+    fn interested_card_ids(&self) -> Vec<CardId> {
+        let mut card_ids = self
+            .state
+            .agent_wallet_cards
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        if let Some(scope_card) = &self.state.invocation_scope_card {
+            card_ids.extend(scope_card.root_card_ids.iter().copied());
+        }
+        card_ids.into_iter().collect()
+    }
+
+    async fn refresh_card_interest(&self) {
+        self.state
+            .card_interest_index
+            .set_card_interest(self.owned_agent_id.clone(), &self.interested_card_ids())
+            .await;
+    }
+
+    async fn install_invocation_scope_card(&mut self, scope_card: Option<ScopeCard>) {
+        let (_, handles) = clear_invocation_scope_state(
+            &mut self.state.invocation_scope_card,
+            &mut self.state.invocation_scope_handles,
+        );
+        for rep in handles {
+            let _ = self
+                .table()
+                .delete(Resource::<PermissionCardHandleRep>::new_own(rep));
+        }
+        self.state.invocation_scope_card = scope_card;
+        self.rederive_agent_effective_surface_from_wallet();
+        self.refresh_card_interest().await;
+    }
+
+    async fn clear_invocation_scope_card(&mut self) {
+        let (scope_changed, handles) = clear_invocation_scope_state(
+            &mut self.state.invocation_scope_card,
+            &mut self.state.invocation_scope_handles,
+        );
+        for rep in handles {
+            let _ = self
+                .table()
+                .delete(Resource::<PermissionCardHandleRep>::new_own(rep));
+        }
+        if scope_changed {
+            self.rederive_agent_effective_surface_from_wallet();
+        }
+        self.refresh_card_interest().await;
+    }
+
+    fn clear_invocation_scope_if_roots_include(&mut self, card_ids: &[CardId]) -> bool {
+        let (scope_changed, handles) = remove_invocation_scope_for_revoked_roots(
+            &mut self.state.invocation_scope_card,
+            &mut self.state.invocation_scope_handles,
+            card_ids,
+        );
+        for rep in handles {
+            let _ = self
+                .table()
+                .delete(Resource::<PermissionCardHandleRep>::new_own(rep));
+        }
+        scope_changed
     }
 
     async fn drain_card_events_at_boundary(&mut self) -> Result<(), WorkerExecutorError> {
@@ -1040,12 +1234,24 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return Ok(());
         }
 
-        while let Some(pending_event) = self.pending_card_events_at_boundary().await?.first() {
+        loop {
+            let pending_events =
+                next_drainable_card_events(self.pending_card_events_at_boundary().await?);
+            let Some(pending_event) = pending_events.first() else {
+                break;
+            };
             match &pending_event.event {
-                QueuedCardEvent::Revoke(event) => {
-                    let card_id = event.card_id;
-                    self.apply_card_revoked(card_id, pending_event.oplog_index, true)
-                        .await?;
+                QueuedCardEvent::Revoke(_) => {
+                    let card_ids = pending_events
+                        .into_iter()
+                        .filter_map(|pending_event| match pending_event.event {
+                            QueuedCardEvent::Revoke(event) => Some(event.card_id),
+                            QueuedCardEvent::Install(_)
+                            | QueuedCardEvent::TransferStarted(_)
+                            | QueuedCardEvent::TransferReceived(_) => None,
+                        })
+                        .collect::<Vec<_>>();
+                    self.apply_card_revoked_cascade(&card_ids, true).await?;
                 }
                 QueuedCardEvent::Install(event) => {
                     let Some(card) = event.card.clone() else {
@@ -1057,10 +1263,58 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .apply_card_install(Some(pending_event.oplog_index), card)
                         .await?;
                 }
+                QueuedCardEvent::TransferReceived(event) => {
+                    let Some(card) = event.card.clone() else {
+                        return Err(WorkerExecutorError::runtime(
+                            "received card transfer is missing card payload",
+                        ));
+                    };
+                    let _ = self
+                        .apply_received_card_transfer(
+                            pending_event.oplog_index,
+                            event.transfer_id,
+                            event.source_card_id,
+                            card,
+                        )
+                        .await?;
+                }
+                QueuedCardEvent::TransferStarted(_) => {
+                    unreachable!("filtered above")
+                }
             }
         }
 
-        self.remove_expired_cards().await;
+        self.remove_expired_cards().await?;
+        self.revalidate_invocation_scope_roots().await?;
+        Ok(())
+    }
+
+    async fn revalidate_invocation_scope_roots(&mut self) -> Result<(), WorkerExecutorError> {
+        let Some(scope_card) = self.state.invocation_scope_card.as_ref() else {
+            return Ok(());
+        };
+        let root_card_ids = scope_card.root_card_ids.clone();
+        let states = self
+            .state
+            .card_service
+            .check_cards(root_card_ids.clone())
+            .await?;
+        let mut revoked_root_ids = Vec::new();
+        for card_id in root_card_ids {
+            match states.get(&card_id) {
+                Some(CardState::Live(card)) if card.card_id() == card_id => {}
+                Some(CardState::Revoked) => revoked_root_ids.push(card_id),
+                Some(CardState::Live(_)) | Some(CardState::Unknown) | None => {
+                    return Err(WorkerExecutorError::runtime(format!(
+                        "scope-card root {card_id} could not be re-validated at the durable boundary"
+                    )));
+                }
+            }
+        }
+        if !revoked_root_ids.is_empty() {
+            self.apply_card_revoked_cascade(&revoked_root_ids, true)
+                .await?;
+        }
         Ok(())
     }
 
@@ -1111,18 +1365,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .clone())
     }
 
-    pub(crate) async fn apply_card_install(
+    async fn admit_card_to_wallet(
         &mut self,
-        queued_event_index: Option<OplogIndex>,
-        card: StoredCard,
+        card: &StoredCard,
     ) -> Result<Result<(), CardInstallFailure>, WorkerExecutorError> {
         let card_id = card.card_id();
-        let mut candidate_wallet_card_ids = self
-            .state
-            .agent_wallet_cards
-            .keys()
-            .copied()
-            .collect::<Vec<_>>();
+        let mut candidate_wallet_card_ids = self.interested_card_ids();
         if !candidate_wallet_card_ids.contains(&card_id) {
             candidate_wallet_card_ids.push(card_id);
         }
@@ -1138,23 +1386,36 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await?
             .remove(&card_id);
 
-        if !matches!(card_state, Some(CardState::Live(_))) {
-            let wallet_card_ids = self
-                .state
-                .agent_wallet_cards
-                .keys()
-                .copied()
-                .collect::<Vec<_>>();
-            self.state
-                .card_interest_index
-                .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
-                .await;
+        let failure = match card_state {
+            Some(CardState::Live(registered_card)) if registered_card.as_ref() == card => None,
+            Some(CardState::Live(_)) => Some(CardInstallFailure::NotPermitted),
+            Some(CardState::Revoked) => Some(CardInstallFailure::CardRevoked),
+            Some(CardState::Unknown) | None => Some(CardInstallFailure::NotFound),
+        };
+        if let Some(failure) = failure {
+            self.refresh_card_interest().await;
+            return Ok(Err(failure));
+        }
 
-            let reason = match card_state {
-                Some(CardState::Revoked) => CardInstallFailure::CardRevoked,
-                _ => CardInstallFailure::NotFound,
-            };
+        if add_wallet_card(
+            &mut self.state.agent_wallet_cards,
+            &mut self.state.wallet_generation,
+            card.clone(),
+        )? {
+            self.rederive_agent_effective_surface_from_wallet();
+        }
+        self.refresh_card_interest().await;
 
+        Ok(Ok(()))
+    }
+
+    pub(crate) async fn apply_card_install(
+        &mut self,
+        queued_event_index: Option<OplogIndex>,
+        card: StoredCard,
+    ) -> Result<Result<(), CardInstallFailure>, WorkerExecutorError> {
+        let card_id = card.card_id();
+        if let Err(reason) = self.admit_card_to_wallet(&card).await? {
             if let Some(queued_event_index) = queued_event_index {
                 self.public_state
                     .worker()
@@ -1167,25 +1428,52 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
             Ok(Err(reason))
         } else {
-            self.state.agent_wallet_cards.insert(card_id, card.clone());
-            self.rederive_agent_effective_surface_from_wallet();
-            let wallet_card_ids = self
-                .state
-                .agent_wallet_cards
-                .keys()
-                .copied()
-                .collect::<Vec<_>>();
-            self.state
-                .card_interest_index
-                .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
-                .await;
-
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::card_installed(queued_event_index, card))
+                .add_and_commit_oplog(OplogEntry::card_installed(
+                    queued_event_index,
+                    card,
+                    Some(self.state.wallet_generation),
+                ))
                 .await;
             Ok(Ok(()))
         }
+    }
+
+    async fn apply_received_card_transfer(
+        &mut self,
+        queued_event_index: OplogIndex,
+        transfer_id: uuid::Uuid,
+        source_card_id: Option<CardId>,
+        card: StoredCard,
+    ) -> Result<Result<(), CardInstallFailure>, WorkerExecutorError> {
+        let card_id = card.card_id();
+        if let Err(reason) = self.admit_card_to_wallet(&card).await? {
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::card_install_failed(
+                    queued_event_index,
+                    card_id,
+                    reason,
+                ))
+                .await;
+            return Ok(Err(reason));
+        }
+
+        self.public_state
+            .worker()
+            .add_and_commit_oplog(OplogEntry::card_transferred(
+                transfer_id,
+                source_card_id,
+                card_id,
+                CardHolder::Agent(AgentCardHolder {
+                    agent_id: self.owned_agent_id.agent_id.clone(),
+                }),
+                card,
+                Some(self.state.wallet_generation),
+            ))
+            .await;
+        Ok(Ok(()))
     }
 
     async fn apply_card_revoked(
@@ -1194,73 +1482,111 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         queued_event_index: OplogIndex,
         is_live: bool,
     ) -> Result<(), WorkerExecutorError> {
-        let was_in_wallet = self.state.agent_wallet_cards.remove(&card_id).is_some();
+        let was_in_wallet = remove_wallet_card(
+            &mut self.state.agent_wallet_cards,
+            &mut self.state.wallet_generation,
+            card_id,
+        )?;
 
-        if was_in_wallet {
+        let scope_changed = self.clear_invocation_scope_if_roots_include(&[card_id]);
+        if was_in_wallet || scope_changed {
             self.rederive_agent_effective_surface_from_wallet();
         }
 
         if is_live {
-            let wallet_card_ids = self
-                .state
-                .agent_wallet_cards
-                .keys()
-                .copied()
-                .collect::<Vec<_>>();
-            self.state
-                .card_interest_index
-                .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
-                .await;
+            self.refresh_card_interest().await;
 
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::card_revoked(queued_event_index, card_id))
+                .add_and_commit_oplog(OplogEntry::card_revoked(
+                    queued_event_index,
+                    card_id,
+                    Some(self.state.wallet_generation),
+                ))
                 .await;
         }
 
         Ok(())
     }
 
-    pub(crate) async fn remove_expired_cards(&mut self) {
-        let now = Utc::now();
-        let cards_to_expire = self
-            .state
-            .agent_wallet_cards
-            .iter()
-            .filter_map(|(card_id, card)| {
-                card.expires_at()
-                    .filter(|expires_at| *expires_at <= now)
-                    .map(|_| *card_id)
-            })
-            .collect::<Vec<_>>();
+    pub(crate) async fn apply_card_revoked_cascade(
+        &mut self,
+        card_ids: &[CardId],
+        commit_immediately: bool,
+    ) -> Result<(), WorkerExecutorError> {
+        let mut card_ids = card_ids.to_vec();
+        card_ids.sort_unstable();
+        card_ids.dedup();
+        if card_ids.is_empty() {
+            return Ok(());
+        }
+
+        let wallet_changed = remove_wallet_cards(
+            &mut self.state.agent_wallet_cards,
+            &mut self.state.wallet_generation,
+            &card_ids,
+        )?;
+        let scope_changed = self.clear_invocation_scope_if_roots_include(&card_ids);
+        if wallet_changed || scope_changed {
+            self.rederive_agent_effective_surface_from_wallet();
+        }
+
+        self.refresh_card_interest().await;
+
+        let affected_wallets = if wallet_changed {
+            vec![CardHolder::Agent(AgentCardHolder {
+                agent_id: self.owned_agent_id.agent_id.clone(),
+            })]
+        } else {
+            Vec::new()
+        };
+        let entry = OplogEntry::CardRevokedCascade {
+            timestamp: Timestamp::now_utc(),
+            revoked_card_ids: card_ids,
+            affected_wallets,
+            local_wallet_generation: Some(self.state.wallet_generation),
+        };
+        if commit_immediately {
+            self.public_state.worker().add_and_commit_oplog(entry).await;
+        } else {
+            self.public_state.worker().add_to_oplog(entry).await;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) async fn remove_expired_cards(&mut self) -> Result<(), WorkerExecutorError> {
+        let cards_to_expire =
+            expired_wallet_card_ids_at(&self.state.agent_wallet_cards, Utc::now());
 
         if cards_to_expire.is_empty() {
-            return;
+            return Ok(());
         }
 
-        for card_id in &cards_to_expire {
-            self.state.agent_wallet_cards.remove(card_id);
-        }
-
-        self.rederive_agent_effective_surface_from_wallet();
-
-        let wallet_card_ids = self
-            .state
-            .agent_wallet_cards
-            .keys()
-            .copied()
-            .collect::<Vec<_>>();
-        self.state
-            .card_interest_index
-            .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
-            .await;
-
+        let mut expired_card_generations = Vec::with_capacity(cards_to_expire.len());
         for card_id in cards_to_expire {
+            if remove_wallet_card(
+                &mut self.state.agent_wallet_cards,
+                &mut self.state.wallet_generation,
+                card_id,
+            )? {
+                expired_card_generations.push((card_id, self.state.wallet_generation));
+            }
+        }
+
+        if !expired_card_generations.is_empty() {
+            self.rederive_agent_effective_surface_from_wallet();
+        }
+
+        self.refresh_card_interest().await;
+
+        for (card_id, wallet_generation) in expired_card_generations {
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::card_expired(card_id))
+                .add_and_commit_oplog(OplogEntry::card_expired(card_id, Some(wallet_generation)))
                 .await;
         }
+        Ok(())
     }
 
     pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
@@ -2916,9 +3242,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .as_context_mut()
                     .data_mut()
                     .durable_ctx_mut()
-                    .state
-                    .replay_state
-                    .drop_override_and_restart()
+                    .restart_replay_without_snapshot()
                     .await
                 {
                     warn!("Failed to restart replay state after invalid snapshot entry: {err}");
@@ -2947,9 +3271,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .as_context_mut()
                     .data_mut()
                     .durable_ctx_mut()
-                    .state
-                    .replay_state
-                    .drop_override_and_restart()
+                    .restart_replay_without_snapshot()
                     .await
                 {
                     warn!("Failed to restart replay state after snapshot download failure: {err}");
@@ -3108,6 +3430,25 @@ enum SnapshotRecoveryResult {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    async fn restart_replay_without_snapshot(&mut self) -> Result<(), WorkerExecutorError> {
+        self.state.replay_state.drop_override_and_restart().await?;
+
+        self.state.agent_wallet_cards = match self.state.agent_id.as_ref() {
+            Some(agent_id) => {
+                let card = agent_initial_card_from_component_metadata(
+                    &self.state.component_metadata,
+                    agent_id,
+                )?;
+                BTreeMap::from([(card.card_id(), card)])
+            }
+            None => BTreeMap::new(),
+        };
+        self.state.wallet_generation = 0;
+        self.rederive_agent_effective_surface_from_wallet();
+
+        Ok(())
+    }
+
     /// Activity tracker for Golem-spawned store background tasks; see
     /// [`tail_work::TailWorkTracker`].
     pub fn tail_work_tracker(&self) -> tail_work::TailWorkTracker {
@@ -3287,21 +3628,149 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     debug!("Updating the replay's current phantom id to {new_phantom_id}");
                     self.update_state_to_new_phantom_id(new_phantom_id).await?;
                 }
-                ReplayEvent::CardInstalled { card } => {
+                ReplayEvent::InvocationWalletPinned { wallet_pin } => {
+                    debug!(
+                        generation = wallet_pin.wallet_token.generation,
+                        card_count = wallet_pin.pinned_card_ids.len(),
+                        "Restoring the replayed invocation wallet pin"
+                    );
+                    if apply_invocation_wallet_pin(
+                        &mut self.state.agent_wallet_cards,
+                        self.state.wallet_id_hash,
+                        &mut self.state.wallet_generation,
+                        wallet_pin,
+                    )? {
+                        self.rederive_agent_effective_surface_from_wallet();
+                    }
+                }
+                ReplayEvent::CardInstalled {
+                    card,
+                    wallet_generation,
+                } => {
                     let card_id = card.card_id();
                     debug!(card_id = %card_id, "Applying replayed card installation");
-                    self.state.agent_wallet_cards.insert(card_id, card);
-                    self.rederive_agent_effective_surface_from_wallet();
+                    if add_wallet_card(
+                        &mut self.state.agent_wallet_cards,
+                        &mut self.state.wallet_generation,
+                        card,
+                    )? {
+                        self.rederive_agent_effective_surface_from_wallet();
+                    }
+                    adopt_recorded_wallet_generation(
+                        &mut self.state.wallet_generation,
+                        wallet_generation,
+                    )?;
                 }
-                ReplayEvent::CardRevoked { card_id } => {
+                ReplayEvent::CardDerived {
+                    card,
+                    wallet_generation,
+                } => {
+                    let card_id = card.card_id();
+                    debug!(card_id = %card_id, "Applying replayed card derivation");
+                    adopt_recorded_wallet_generation(
+                        &mut self.state.wallet_generation,
+                        wallet_generation,
+                    )?;
+                }
+                ReplayEvent::CardTransferStarted {
+                    card_id,
+                    source_holder,
+                    source_wallet_generation,
+                    ..
+                } => {
+                    if source_holder.as_ref().is_none_or(|source_holder| {
+                        card_holder_is_agent(source_holder, &self.owned_agent_id.agent_id)
+                    }) {
+                        if transfer_started_removes_source_membership(
+                            self.state.agent_wallet_cards.get(&card_id),
+                            &source_holder,
+                            &self.owned_agent_id.agent_id,
+                        ) {
+                            debug!(card_id = %card_id, "Applying replayed card transfer start");
+                            if remove_wallet_card(
+                                &mut self.state.agent_wallet_cards,
+                                &mut self.state.wallet_generation,
+                                card_id,
+                            )? {
+                                self.rederive_agent_effective_surface_from_wallet();
+                            }
+                        }
+                        adopt_recorded_wallet_generation(
+                            &mut self.state.wallet_generation,
+                            source_wallet_generation,
+                        )?;
+                    }
+                }
+                ReplayEvent::CardTransferred {
+                    target_holder,
+                    card,
+                    target_wallet_generation,
+                    ..
+                } => {
+                    if card_holder_is_agent(&target_holder, &self.owned_agent_id.agent_id) {
+                        let card_id = card.card_id();
+                        debug!(card_id = %card_id, "Applying replayed card transfer completion");
+                        if add_wallet_card(
+                            &mut self.state.agent_wallet_cards,
+                            &mut self.state.wallet_generation,
+                            card,
+                        )? {
+                            self.rederive_agent_effective_surface_from_wallet();
+                        }
+                        adopt_recorded_wallet_generation(
+                            &mut self.state.wallet_generation,
+                            target_wallet_generation,
+                        )?;
+                    }
+                }
+                ReplayEvent::CardTransferConfirmed { transfer_id, .. } => {
+                    debug!(%transfer_id, "Applying replayed card transfer receipt");
+                }
+                ReplayEvent::CardRevokedCascade {
+                    card_ids,
+                    local_wallet_generation,
+                } => {
+                    debug!(
+                        count = card_ids.len(),
+                        "Applying replayed card revocation cascade"
+                    );
+                    let wallet_changed = remove_wallet_cards(
+                        &mut self.state.agent_wallet_cards,
+                        &mut self.state.wallet_generation,
+                        &card_ids,
+                    )?;
+                    let scope_changed = self.clear_invocation_scope_if_roots_include(&card_ids);
+                    if wallet_changed || scope_changed {
+                        self.rederive_agent_effective_surface_from_wallet();
+                    }
+                    adopt_recorded_wallet_generation(
+                        &mut self.state.wallet_generation,
+                        local_wallet_generation,
+                    )?;
+                }
+                ReplayEvent::CardRevoked {
+                    card_id,
+                    wallet_generation,
+                } => {
                     debug!(card_id = %card_id, "Applying replayed card revocation");
                     self.apply_card_revoked(card_id, OplogIndex::NONE, false)
                         .await?;
+                    adopt_recorded_wallet_generation(
+                        &mut self.state.wallet_generation,
+                        wallet_generation,
+                    )?;
                 }
-                ReplayEvent::CardExpired { card_id } => {
+                ReplayEvent::CardExpired {
+                    card_id,
+                    wallet_generation,
+                } => {
                     debug!(card_id = %card_id, "Applying replayed card expiry");
                     self.apply_card_revoked(card_id, OplogIndex::NONE, false)
                         .await?;
+                    adopt_recorded_wallet_generation(
+                        &mut self.state.wallet_generation,
+                        wallet_generation,
+                    )?;
                 }
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");
@@ -3356,6 +3825,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     }
 
                     self.check_post_replay_wallet_liveness().await?;
+                    permissions::retry_pending_source_card_transfers(self).await?;
                 }
             }
         }
@@ -3370,10 +3840,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .keys()
             .copied()
             .collect::<Vec<_>>();
-        self.state
-            .card_interest_index
-            .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
-            .await;
+        self.refresh_card_interest().await;
 
         if wallet_card_ids.is_empty() {
             return Ok(());
@@ -3489,8 +3956,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         {
             self.state.agent_config = updated_agent_config;
             self.state.cached_agent_config_retry_policies = None;
+            replace_wallet_cards(
+                &mut self.state.agent_wallet_cards,
+                &mut self.state.wallet_generation,
+                initial_wallet_cards,
+            )?;
             self.state.agent_effective_surface = agent_effective_surface;
-            self.state.agent_wallet_cards = initial_wallet_cards;
         };
 
         self.state.component_metadata = new_metadata;
@@ -3636,6 +4107,19 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         if self.state.snapshotting_mode.is_none() {
             let stack = self.get_current_invocation_context().await;
 
+            let scope_card = match &invocation {
+                AgentInvocation::AgentMethod { scope_card, .. } => scope_card.clone(),
+                _ => None,
+            };
+            if let Some(scope_card) = &scope_card {
+                crate::services::card::validate_scope_card(
+                    self.state.card_service.as_ref(),
+                    scope_card,
+                )
+                .await?;
+            }
+            self.install_invocation_scope_card(scope_card.clone()).await;
+
             match &mut invocation {
                 AgentInvocation::AgentInitialization {
                     invocation_context, ..
@@ -3653,7 +4137,17 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             self.public_state
                 .worker()
                 .oplog()
-                .add_agent_invocation_started(invocation)
+                .add_agent_invocation_started(
+                    invocation,
+                    InvocationWalletPin {
+                        wallet_token: WalletVersionToken {
+                            wallet_id_hash: self.state.wallet_id_hash,
+                            generation: self.state.wallet_generation,
+                        },
+                        pinned_card_ids: self.state.agent_wallet_cards.keys().copied().collect(),
+                        scope_card_id: scope_card.map(|card| card.scope_card_id),
+                    },
+                )
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
@@ -3668,6 +4162,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .await;
         }
         Ok(())
+    }
+
+    async fn on_agent_invocation_finished(&mut self) {
+        self.clear_invocation_scope_card().await;
     }
 
     async fn on_invocation_failure(
@@ -4341,12 +4839,28 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         idempotency_key,
                         invocation_payload,
                         invocation_context,
+                        wallet_pin,
                     })) => {
                         let agent_invocation = AgentInvocation::from_parts(
                             idempotency_key.clone(),
                             invocation_payload,
                             invocation_context.clone(),
                         );
+                        let scope_card = match &agent_invocation {
+                            AgentInvocation::AgentMethod { scope_card, .. } => scope_card.clone(),
+                            _ => None,
+                        };
+                        let recorded_scope_card_id = wallet_pin.and_then(|pin| pin.scope_card_id);
+                        let payload_scope_card_id =
+                            scope_card.as_ref().map(|card| card.scope_card_id);
+                        if payload_scope_card_id != recorded_scope_card_id {
+                            break Err(WorkerExecutorError::unexpected_oplog_entry(
+                                "matching invocation scope-card payload and wallet pin",
+                                format!(
+                                    "payload scope-card ID {payload_scope_card_id:?}, recorded scope-card ID {recorded_scope_card_id:?}"
+                                ),
+                            ));
+                        }
 
                         let component_metadata = store
                             .as_context()
@@ -4363,12 +4877,13 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         )?;
                         let full_function_name = lowered.display_name.clone();
 
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .durable_ctx_mut()
-                            .process_pending_replay_events()
-                            .await?;
+                        let mut store_context = store.as_context_mut();
+                        let durable_ctx = store_context.data_mut().durable_ctx_mut();
+                        durable_ctx.install_invocation_scope_card(scope_card).await;
+                        if let Err(error) = durable_ctx.process_pending_replay_events().await {
+                            durable_ctx.clear_invocation_scope_card().await;
+                            break Err(error);
+                        }
 
                         debug!("Replaying function {}", &full_function_name);
                         debug!(
@@ -4740,6 +5255,265 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
     }
 }
 
+fn card_holder_is_agent(holder: &CardHolder, agent_id: &AgentId) -> bool {
+    matches!(holder, CardHolder::Agent(holder) if holder.agent_id == *agent_id)
+}
+
+fn clear_invocation_scope_state(
+    scope_card: &mut Option<ScopeCard>,
+    scope_handles: &mut HashMap<u32, Vec<CardId>>,
+) -> (bool, HashSet<u32>) {
+    let scope_changed = scope_card.take().is_some();
+    let handles = std::mem::take(scope_handles).into_keys().collect();
+    (scope_changed, handles)
+}
+
+fn remove_invocation_scope_for_revoked_roots(
+    scope_card: &mut Option<ScopeCard>,
+    scope_handles: &mut HashMap<u32, Vec<CardId>>,
+    revoked_card_ids: &[CardId],
+) -> (bool, HashSet<u32>) {
+    let affected = scope_card.as_ref().is_some_and(|scope_card| {
+        scope_card
+            .root_card_ids
+            .iter()
+            .any(|root_id| revoked_card_ids.contains(root_id))
+    });
+    if affected {
+        *scope_card = None;
+    }
+    let handles = scope_handles
+        .iter()
+        .filter_map(|(rep, root_card_ids)| {
+            root_card_ids
+                .iter()
+                .any(|root_id| revoked_card_ids.contains(root_id))
+                .then_some(*rep)
+        })
+        .collect::<HashSet<_>>();
+    for rep in &handles {
+        scope_handles.remove(rep);
+    }
+    (affected, handles)
+}
+
+fn transfer_started_removes_source_membership(
+    source_card: Option<&StoredCard>,
+    source_holder: &Option<CardHolder>,
+    agent_id: &AgentId,
+) -> bool {
+    matches!(source_card, Some(StoredCard::Concrete(_)))
+        && source_holder
+            .as_ref()
+            .is_none_or(|holder| card_holder_is_agent(holder, agent_id))
+}
+
+fn next_drainable_card_events(
+    pending_events: Vec<PendingCardEventRef>,
+) -> Vec<PendingCardEventRef> {
+    let mut result = Vec::new();
+    let mut collecting_revocations = false;
+
+    for event in pending_events {
+        match &event.event {
+            QueuedCardEvent::TransferStarted(_) => continue,
+            QueuedCardEvent::Install(_) | QueuedCardEvent::TransferReceived(_) => {
+                if result.is_empty() {
+                    result.push(event);
+                }
+                break;
+            }
+            QueuedCardEvent::Revoke(_) => {
+                if result.is_empty() {
+                    collecting_revocations = true;
+                }
+                if collecting_revocations {
+                    result.push(event);
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    result
+}
+
+fn add_wallet_card(
+    wallet: &mut BTreeMap<CardId, StoredCard>,
+    generation: &mut u64,
+    card: StoredCard,
+) -> Result<bool, WorkerExecutorError> {
+    let card_id = card.card_id();
+    if let Some(existing) = wallet.get(&card_id) {
+        return if existing == &card {
+            Ok(false)
+        } else {
+            Err(WorkerExecutorError::runtime(format!(
+                "wallet card {card_id} conflicts with its existing payload"
+            )))
+        };
+    }
+    *generation = generation
+        .checked_add(1)
+        .ok_or_else(|| WorkerExecutorError::runtime("wallet generation exhausted"))?;
+    wallet.insert(card_id, card);
+    Ok(true)
+}
+
+fn remove_wallet_card(
+    wallet: &mut BTreeMap<CardId, StoredCard>,
+    generation: &mut u64,
+    card_id: CardId,
+) -> Result<bool, WorkerExecutorError> {
+    if !wallet.contains_key(&card_id) {
+        return Ok(false);
+    }
+    *generation = generation
+        .checked_add(1)
+        .ok_or_else(|| WorkerExecutorError::runtime("wallet generation exhausted"))?;
+    wallet.remove(&card_id);
+    Ok(true)
+}
+
+fn remove_wallet_cards(
+    wallet: &mut BTreeMap<CardId, StoredCard>,
+    generation: &mut u64,
+    card_ids: &[CardId],
+) -> Result<bool, WorkerExecutorError> {
+    if !card_ids.iter().any(|card_id| wallet.contains_key(card_id)) {
+        return Ok(false);
+    }
+    let next_generation = generation
+        .checked_add(1)
+        .ok_or_else(|| WorkerExecutorError::runtime("wallet generation exhausted"))?;
+
+    for card_id in card_ids {
+        wallet.remove(card_id);
+    }
+    *generation = next_generation;
+    Ok(true)
+}
+
+fn expired_wallet_card_ids_at(
+    wallet: &BTreeMap<CardId, StoredCard>,
+    now: DateTime<Utc>,
+) -> Vec<CardId> {
+    wallet
+        .iter()
+        .filter_map(|(card_id, card)| {
+            card.expires_at()
+                .filter(|expires_at| *expires_at <= now)
+                .map(|_| *card_id)
+        })
+        .collect()
+}
+
+fn apply_invocation_wallet_pin(
+    wallet: &mut BTreeMap<CardId, StoredCard>,
+    wallet_id_hash: [u8; 32],
+    generation: &mut u64,
+    wallet_pin: InvocationWalletPin,
+) -> Result<bool, WorkerExecutorError> {
+    if wallet_pin.wallet_token.wallet_id_hash != wallet_id_hash {
+        return Err(WorkerExecutorError::unexpected_oplog_entry(
+            "invocation wallet pin for the local wallet",
+            "wallet identity hash does not match the replaying agent",
+        ));
+    }
+    if wallet_pin
+        .pinned_card_ids
+        .windows(2)
+        .any(|card_ids| card_ids[0] >= card_ids[1])
+    {
+        return Err(WorkerExecutorError::unexpected_oplog_entry(
+            "canonically ordered invocation wallet pin",
+            "pinned card ids are not strictly increasing",
+        ));
+    }
+    if wallet_pin.wallet_token.generation < *generation {
+        return Err(WorkerExecutorError::unexpected_oplog_entry(
+            "non-decreasing invocation wallet generation",
+            format!(
+                "pinned generation {} is behind replayed generation {}",
+                wallet_pin.wallet_token.generation, *generation
+            ),
+        ));
+    }
+
+    let mut pinned_wallet = BTreeMap::new();
+    for card_id in wallet_pin.pinned_card_ids {
+        let card = wallet.get(&card_id).cloned().ok_or_else(|| {
+            WorkerExecutorError::unexpected_oplog_entry(
+                "invocation wallet pin backed by replayed card definitions",
+                format!("pinned card {card_id} is missing from the replayed wallet"),
+            )
+        })?;
+        pinned_wallet.insert(card_id, card);
+    }
+
+    let membership_changed = wallet.keys().ne(pinned_wallet.keys());
+    *wallet = pinned_wallet;
+    *generation = wallet_pin.wallet_token.generation;
+    Ok(membership_changed)
+}
+
+fn adopt_recorded_wallet_generation(
+    generation: &mut u64,
+    recorded_generation: Option<u64>,
+) -> Result<(), WorkerExecutorError> {
+    if let Some(recorded_generation) = recorded_generation {
+        if recorded_generation < *generation {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "non-decreasing wallet generation",
+                format!(
+                    "recorded generation {recorded_generation} is behind replayed generation {}",
+                    *generation
+                ),
+            ));
+        }
+        *generation = recorded_generation;
+    }
+    Ok(())
+}
+
+fn replace_wallet_cards(
+    wallet: &mut BTreeMap<CardId, StoredCard>,
+    generation: &mut u64,
+    replacement: BTreeMap<CardId, StoredCard>,
+) -> Result<bool, WorkerExecutorError> {
+    let removed_ids = wallet
+        .keys()
+        .filter(|card_id| !replacement.contains_key(card_id))
+        .copied()
+        .collect::<Vec<_>>();
+    let added = replacement
+        .values()
+        .filter(|card| !wallet.contains_key(&card.card_id()))
+        .count();
+    let change_count = removed_ids
+        .len()
+        .checked_add(added)
+        .and_then(|count| u64::try_from(count).ok())
+        .ok_or_else(|| WorkerExecutorError::runtime("wallet generation exhausted"))?;
+    if change_count == 0 {
+        return Ok(false);
+    }
+    let next_generation = generation
+        .checked_add(change_count)
+        .ok_or_else(|| WorkerExecutorError::runtime("wallet generation exhausted"))?;
+
+    for card_id in removed_ids {
+        wallet.remove(&card_id);
+    }
+    for card in replacement.into_values() {
+        let card_id = card.card_id();
+        wallet.entry(card_id).or_insert(card);
+    }
+    *generation = next_generation;
+    Ok(true)
+}
+
 fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> bool {
     matches!(
         status.status,
@@ -4751,8 +5525,20 @@ fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> b
 mod tests {
     use super::*;
     use bytes::Bytes;
+    use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::application::ApplicationName;
+    use golem_common::model::card::owner::AgentOwnerPattern;
+    use golem_common::model::card::recipient::RecipientPattern;
+    use golem_common::model::card::{
+        AgentCardHolder, AgentClass, AgentPermissionMonomorphizationContext, AgentResourcePattern,
+        AgentVerb, Card, ClassPermissionPattern, ClassPermissionTarget, PermissionPattern,
+        PermissionTarget, PolymorphicCard,
+    };
+    use golem_common::model::component::ComponentName;
+    use golem_common::model::environment::EnvironmentName;
     use golem_common::model::{PendingInvocationRef, PendingUpdateKind, PendingUpdateRef};
     use http_body::Frame;
+    use std::collections::HashSet;
     use std::pin::Pin;
     use std::task::{Context, Poll, Waker};
     use test_r::test;
@@ -4967,6 +5753,949 @@ mod tests {
         }
     }
 
+    fn permission_id_test_inputs() -> (OwnedAgentId, IdempotencyKey) {
+        (
+            OwnedAgentId {
+                environment_id: EnvironmentId(
+                    Uuid::parse_str("00112233-4455-6677-8899-aabbccddeeff").unwrap(),
+                ),
+                agent_id: AgentId {
+                    component_id: ComponentId(
+                        Uuid::parse_str("ffeeddcc-bbaa-9988-7766-554433221100").unwrap(),
+                    ),
+                    agent_id: "cart/primary".to_string(),
+                },
+            },
+            IdempotencyKey::new("checkout-invocation".to_string()),
+        )
+    }
+
+    fn invocation_scope_card(root_card_ids: Vec<CardId>) -> ScopeCard {
+        ScopeCard {
+            scope_card_id: CardId(Uuid::from_u128(100)),
+            root_card_ids,
+            lower_positive: Vec::new(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn unrelated_revocation_preserves_invocation_scope_and_handles() {
+        let scope_root = CardId(Uuid::from_u128(1));
+        let unrelated = CardId(Uuid::from_u128(2));
+        let mut scope_card = Some(invocation_scope_card(vec![scope_root]));
+        let mut handles = HashMap::from([(7, vec![scope_root])]);
+
+        assert_eq!(
+            remove_invocation_scope_for_revoked_roots(&mut scope_card, &mut handles, &[unrelated],),
+            (false, HashSet::new())
+        );
+        assert!(scope_card.is_some());
+        assert_eq!(handles, HashMap::from([(7, vec![scope_root])]));
+    }
+
+    #[test]
+    fn matching_revocation_removes_scope_and_dependent_handles_only() {
+        let revoked_root = CardId(Uuid::from_u128(1));
+        let unrelated_root = CardId(Uuid::from_u128(2));
+        let mut scope_card = Some(invocation_scope_card(vec![revoked_root]));
+        let mut handles = HashMap::from([
+            (7, vec![revoked_root]),
+            (11, vec![unrelated_root]),
+            (13, vec![revoked_root, unrelated_root]),
+        ]);
+
+        assert_eq!(
+            remove_invocation_scope_for_revoked_roots(
+                &mut scope_card,
+                &mut handles,
+                &[revoked_root],
+            ),
+            (true, HashSet::from([7, 13]))
+        );
+        assert!(scope_card.is_none());
+        assert_eq!(handles, HashMap::from([(11, vec![unrelated_root])]));
+    }
+
+    #[test]
+    fn invocation_end_clears_scope_card_and_all_invocation_handles() {
+        let mut scope_card = Some(invocation_scope_card(vec![CardId(Uuid::from_u128(1))]));
+        let mut handles = HashMap::from([
+            (7, vec![CardId(Uuid::from_u128(1))]),
+            (11, vec![CardId(Uuid::from_u128(2))]),
+        ]);
+
+        let (scope_changed, removed_handles) =
+            clear_invocation_scope_state(&mut scope_card, &mut handles);
+
+        assert!(scope_changed);
+        assert!(scope_card.is_none());
+        assert!(handles.is_empty());
+        assert_eq!(removed_handles, HashSet::from([7, 11]));
+    }
+
+    #[test]
+    fn permission_id_derivation_has_golden_vectors() {
+        let (owned_agent_id, invocation_key) = permission_id_test_inputs();
+        let oplog_index = OplogIndex::from_u64(42);
+
+        let card_id = derive_permission_uuid(
+            DERIVED_CARD_ID_CONTEXT,
+            &owned_agent_id,
+            &invocation_key,
+            oplog_index,
+        );
+        let transfer_id = derive_permission_uuid(
+            TRANSFER_ID_CONTEXT,
+            &owned_agent_id,
+            &invocation_key,
+            oplog_index,
+        );
+        let installed_child_id = derive_permission_uuid(
+            INSTALLED_CHILD_CARD_ID_CONTEXT,
+            &owned_agent_id,
+            &invocation_key,
+            oplog_index,
+        );
+        let scope_card_id = derive_permission_uuid_for_sequence(
+            SCOPE_CARD_ID_CONTEXT,
+            &owned_agent_id,
+            &invocation_key,
+            42,
+        );
+
+        assert_eq!(
+            card_id,
+            Uuid::parse_str("00000000-002a-7cdd-b83d-c9e9f32d880c").unwrap()
+        );
+        assert_eq!(
+            transfer_id,
+            Uuid::parse_str("00000000-002a-7646-b8aa-b84e348196f6").unwrap()
+        );
+        assert_eq!(
+            installed_child_id,
+            Uuid::parse_str("00000000-002a-7607-aaa4-0b04c840169d").unwrap()
+        );
+        assert_eq!(
+            scope_card_id,
+            Uuid::parse_str("00000000-002a-7680-bbdb-7f78bd28fc43").unwrap()
+        );
+        assert_eq!(card_id.as_bytes()[6] >> 4, 7);
+        assert_eq!(card_id.as_bytes()[8] >> 6, 2);
+        assert_eq!(scope_card_id.as_bytes()[6] >> 4, 7);
+        assert_eq!(scope_card_id.as_bytes()[8] >> 6, 2);
+    }
+
+    #[test]
+    fn permission_card_ids_follow_oplog_order() {
+        let (owned_agent_id, invocation_key) = permission_id_test_inputs();
+        let derive = |index| {
+            derive_permission_uuid(
+                DERIVED_CARD_ID_CONTEXT,
+                &owned_agent_id,
+                &invocation_key,
+                OplogIndex::from_u64(index),
+            )
+        };
+
+        assert!(derive(41) < derive(42));
+        assert!(derive(42) < derive(43));
+    }
+
+    #[test]
+    fn scope_card_ids_follow_the_invocation_local_ordinal() {
+        let (owned_agent_id, invocation_key) = permission_id_test_inputs();
+        let derive = |ordinal| {
+            derive_permission_uuid_for_sequence(
+                SCOPE_CARD_ID_CONTEXT,
+                &owned_agent_id,
+                &invocation_key,
+                ordinal,
+            )
+        };
+
+        assert!(derive(0) < derive(1));
+        assert!(derive(1) < derive(2));
+        assert_ne!(derive(0), derive(1));
+    }
+
+    #[test]
+    fn permission_id_derivation_accepts_the_full_oplog_index_domain() {
+        let (owned_agent_id, invocation_key) = permission_id_test_inputs();
+
+        derive_permission_uuid(
+            DERIVED_CARD_ID_CONTEXT,
+            &owned_agent_id,
+            &invocation_key,
+            OplogIndex::from_u64(1_u64 << 48),
+        );
+    }
+
+    #[test]
+    fn permission_ids_remain_distinct_after_timestamp_saturation() {
+        let (owned_agent_id, invocation_key) = permission_id_test_inputs();
+        let ids = [UUID_V7_MAX_TIMESTAMP, 1_u64 << 48, u64::MAX].map(|index| {
+            derive_permission_uuid(
+                DERIVED_CARD_ID_CONTEXT,
+                &owned_agent_id,
+                &invocation_key,
+                OplogIndex::from_u64(index),
+            )
+        });
+
+        assert_eq!(ids.into_iter().collect::<HashSet<_>>().len(), 3);
+    }
+
+    #[test]
+    fn permission_id_domains_are_distinct() {
+        let (owned_agent_id, invocation_key) = permission_id_test_inputs();
+        let oplog_index = OplogIndex::from_u64(42);
+        let ids = [
+            derive_permission_uuid(
+                DERIVED_CARD_ID_CONTEXT,
+                &owned_agent_id,
+                &invocation_key,
+                oplog_index,
+            ),
+            derive_permission_uuid(
+                TRANSFER_ID_CONTEXT,
+                &owned_agent_id,
+                &invocation_key,
+                oplog_index,
+            ),
+            derive_permission_uuid(
+                INSTALLED_CHILD_CARD_ID_CONTEXT,
+                &owned_agent_id,
+                &invocation_key,
+                oplog_index,
+            ),
+            derive_permission_uuid_for_sequence(
+                SCOPE_CARD_ID_CONTEXT,
+                &owned_agent_id,
+                &invocation_key,
+                oplog_index.as_u64(),
+            ),
+        ];
+
+        assert_eq!(ids.into_iter().collect::<HashSet<_>>().len(), 4);
+    }
+
+    #[test]
+    fn permission_ids_do_not_collide_across_workers() {
+        let (base_agent, invocation_key) = permission_id_test_inputs();
+        let different_environment = OwnedAgentId {
+            environment_id: EnvironmentId(
+                Uuid::parse_str("10112233-4455-6677-8899-aabbccddeeff").unwrap(),
+            ),
+            ..base_agent.clone()
+        };
+        let different_component = OwnedAgentId {
+            agent_id: AgentId {
+                component_id: ComponentId(
+                    Uuid::parse_str("efeeddcc-bbaa-9988-7766-554433221100").unwrap(),
+                ),
+                ..base_agent.agent_id.clone()
+            },
+            ..base_agent.clone()
+        };
+        let different_name = OwnedAgentId {
+            agent_id: AgentId {
+                agent_id: "cart/secondary".to_string(),
+                ..base_agent.agent_id.clone()
+            },
+            ..base_agent.clone()
+        };
+        let oplog_index = OplogIndex::from_u64(42);
+        let ids = [
+            base_agent,
+            different_environment,
+            different_component,
+            different_name,
+        ]
+        .map(|owned_agent_id| {
+            derive_permission_uuid(
+                DERIVED_CARD_ID_CONTEXT,
+                &owned_agent_id,
+                &invocation_key,
+                oplog_index,
+            )
+        });
+
+        assert_eq!(ids.into_iter().collect::<HashSet<_>>().len(), 4);
+    }
+
+    fn concrete_card(card_id: CardId) -> StoredCard {
+        Card {
+            card_id,
+            parent_ids: Vec::new(),
+            lower_positive: Vec::new(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: Utc::now(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        }
+        .into()
+    }
+
+    fn concrete_card_expiring_at(card_id: CardId, expires_at: Option<DateTime<Utc>>) -> StoredCard {
+        let mut card = concrete_card(card_id);
+        match &mut card {
+            StoredCard::Concrete(card) => card.expires_at = expires_at,
+            StoredCard::Polymorphic(_) => unreachable!(),
+        }
+        card
+    }
+
+    fn agent_permission_pattern(
+        owner: &str,
+        recipient: &str,
+        verb: Option<AgentVerb>,
+    ) -> PermissionPattern {
+        PermissionPattern::Agent(ClassPermissionPattern::<AgentClass> {
+            verb,
+            owner: AgentOwnerPattern::parse(owner).unwrap(),
+            recipient: RecipientPattern::parse(recipient).unwrap(),
+            resource: AgentResourcePattern::Any,
+        })
+    }
+
+    fn agent_permission_card(
+        card_id: CardId,
+        owner: &str,
+        recipient: &str,
+        lower_verbs: Vec<Option<AgentVerb>>,
+        upper_verbs: Vec<Option<AgentVerb>>,
+    ) -> StoredCard {
+        Card {
+            card_id,
+            parent_ids: Vec::new(),
+            lower_positive: lower_verbs
+                .into_iter()
+                .map(|verb| agent_permission_pattern(owner, recipient, verb))
+                .collect(),
+            lower_negative: Vec::new(),
+            upper_positive: upper_verbs
+                .into_iter()
+                .map(|verb| agent_permission_pattern(owner, recipient, verb))
+                .collect(),
+            upper_negative: Vec::new(),
+            created_at: Utc::now(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        }
+        .into()
+    }
+
+    fn agent_permission_test_context() -> AgentPermissionMonomorphizationContext {
+        AgentPermissionMonomorphizationContext {
+            account: AccountEmail::from("owner@example.com"),
+            application: ApplicationName::try_from("shop").unwrap(),
+            environment: EnvironmentName::try_from("prod").unwrap(),
+            component: ComponentName("cart-svc".to_string()),
+            agent_name: "Cart(alice)".to_string(),
+            agent_type: AgentTypeName("Cart".to_string()),
+        }
+    }
+
+    fn agent_permission_target(holder: &str, verb: AgentVerb) -> PermissionTarget {
+        PermissionTarget::Agent(ClassPermissionTarget::<AgentClass> {
+            verb: Some(verb),
+            owner: AgentOwnerPattern::parse(holder).unwrap(),
+            resource: AgentResourcePattern::Any,
+        })
+    }
+
+    #[test]
+    fn wallet_membership_helpers_bump_once_per_effective_change() {
+        let card_id = CardId::new();
+        let card = concrete_card(card_id);
+        let mut wallet = BTreeMap::new();
+        let mut generation = 10;
+
+        assert!(add_wallet_card(&mut wallet, &mut generation, card.clone()).unwrap());
+        assert_eq!(generation, 11);
+        assert!(!add_wallet_card(&mut wallet, &mut generation, card.clone()).unwrap());
+        assert_eq!(generation, 11);
+
+        let mut replacement = card.clone();
+        match &mut replacement {
+            StoredCard::Concrete(card) => card.system_card = true,
+            StoredCard::Polymorphic(_) => unreachable!(),
+        }
+        assert!(add_wallet_card(&mut wallet, &mut generation, replacement).is_err());
+        assert_eq!(generation, 11);
+
+        assert!(!remove_wallet_card(&mut wallet, &mut generation, CardId::new()).unwrap());
+        assert_eq!(generation, 11);
+        assert!(remove_wallet_card(&mut wallet, &mut generation, card_id).unwrap());
+        assert_eq!(generation, 12);
+    }
+
+    #[test]
+    fn wallet_cascade_removal_bumps_once_for_all_effective_removals() {
+        let first = concrete_card(CardId::new());
+        let second = concrete_card(CardId::new());
+        let retained = concrete_card(CardId::new());
+        let mut wallet = BTreeMap::from([
+            (first.card_id(), first.clone()),
+            (second.card_id(), second.clone()),
+            (retained.card_id(), retained.clone()),
+        ]);
+        let mut generation = 10;
+
+        assert!(
+            remove_wallet_cards(
+                &mut wallet,
+                &mut generation,
+                &[first.card_id(), second.card_id(), CardId::new()],
+            )
+            .unwrap()
+        );
+        assert_eq!(generation, 11);
+        assert_eq!(wallet, BTreeMap::from([(retained.card_id(), retained)]));
+
+        assert!(
+            !remove_wallet_cards(
+                &mut wallet,
+                &mut generation,
+                &[first.card_id(), second.card_id()],
+            )
+            .unwrap()
+        );
+        assert_eq!(generation, 11);
+    }
+
+    #[test]
+    fn wallet_cascade_removal_is_atomic_when_generation_is_exhausted() {
+        let card = concrete_card(CardId::new());
+        let original_wallet = BTreeMap::from([(card.card_id(), card.clone())]);
+        let mut wallet = original_wallet.clone();
+        let mut generation = u64::MAX;
+
+        assert!(remove_wallet_cards(&mut wallet, &mut generation, &[card.card_id()]).is_err());
+        assert_eq!(wallet, original_wallet);
+        assert_eq!(generation, u64::MAX);
+    }
+
+    #[test]
+    fn wallet_cascade_preserves_independent_floor_releases_ceiling_and_replays_identically() {
+        let holder = "owner@example.com/shop/prod/cart-svc/Cart(alice)";
+        let recipient = "owner@example.com/shop/prod/cart-svc/Cart";
+        let context = agent_permission_test_context();
+        let view = agent_permission_target(holder, AgentVerb::View);
+        let invoke = agent_permission_target(holder, AgentVerb::Invoke);
+        let broad_floor =
+            agent_permission_card(CardId::new(), holder, recipient, vec![None], Vec::new());
+        let independent_view_floor = agent_permission_card(
+            CardId::new(),
+            holder,
+            recipient,
+            vec![Some(AgentVerb::View)],
+            Vec::new(),
+        );
+        let view_ceiling = agent_permission_card(
+            CardId::new(),
+            holder,
+            recipient,
+            Vec::new(),
+            vec![Some(AgentVerb::View)],
+        );
+        let original_wallet = BTreeMap::from([
+            (broad_floor.card_id(), broad_floor.clone()),
+            (
+                independent_view_floor.card_id(),
+                independent_view_floor.clone(),
+            ),
+            (view_ceiling.card_id(), view_ceiling.clone()),
+        ]);
+        let original_surface = golem_common::model::card::agent_effective_surface_from_wallet(
+            &context,
+            original_wallet.values(),
+        );
+        assert!(original_surface.authorize(&view).unwrap());
+        assert!(!original_surface.authorize(&invoke).unwrap());
+
+        let mut live_wallet = original_wallet.clone();
+        let mut live_generation = 12;
+        assert!(
+            remove_wallet_cards(
+                &mut live_wallet,
+                &mut live_generation,
+                &[broad_floor.card_id()],
+            )
+            .unwrap()
+        );
+        let live_surface = golem_common::model::card::agent_effective_surface_from_wallet(
+            &context,
+            live_wallet.values(),
+        );
+        assert_eq!(live_generation, 13);
+        assert!(live_surface.authorize(&view).unwrap());
+        assert!(!live_surface.authorize(&invoke).unwrap());
+
+        let mut replayed_wallet = original_wallet.clone();
+        let mut replayed_generation = 12;
+        assert!(
+            remove_wallet_cards(
+                &mut replayed_wallet,
+                &mut replayed_generation,
+                &[broad_floor.card_id()],
+            )
+            .unwrap()
+        );
+        adopt_recorded_wallet_generation(&mut replayed_generation, Some(live_generation)).unwrap();
+        let replayed_surface = golem_common::model::card::agent_effective_surface_from_wallet(
+            &context,
+            replayed_wallet.values(),
+        );
+        assert_eq!(replayed_wallet, live_wallet);
+        assert_eq!(replayed_generation, live_generation);
+        assert_eq!(
+            replayed_surface.source_card_ids,
+            live_surface.source_card_ids
+        );
+        assert_eq!(
+            replayed_surface.authorize(&view).unwrap(),
+            live_surface.authorize(&view).unwrap()
+        );
+        assert_eq!(
+            replayed_surface.authorize(&invoke).unwrap(),
+            live_surface.authorize(&invoke).unwrap()
+        );
+
+        let mut released_wallet = original_wallet;
+        let mut released_generation = 12;
+        assert!(
+            remove_wallet_cards(
+                &mut released_wallet,
+                &mut released_generation,
+                &[view_ceiling.card_id()],
+            )
+            .unwrap()
+        );
+        let released_surface = golem_common::model::card::agent_effective_surface_from_wallet(
+            &context,
+            released_wallet.values(),
+        );
+        assert_eq!(released_generation, 13);
+        assert!(released_surface.authorize(&view).unwrap());
+        assert!(released_surface.authorize(&invoke).unwrap());
+    }
+
+    #[test]
+    fn wallet_generation_distinguishes_aba_membership_cycles() {
+        let card = concrete_card(CardId::new());
+        let mut wallet = BTreeMap::new();
+        let mut generation = 0;
+
+        assert!(add_wallet_card(&mut wallet, &mut generation, card.clone()).unwrap());
+        let first_contents = wallet.clone();
+        let first_generation = generation;
+
+        assert!(remove_wallet_card(&mut wallet, &mut generation, card.card_id()).unwrap());
+        assert!(add_wallet_card(&mut wallet, &mut generation, card).unwrap());
+
+        assert_eq!(wallet, first_contents);
+        assert_eq!(first_generation, 1);
+        assert_eq!(generation, 3);
+    }
+
+    #[test]
+    fn duplicate_wallet_delivery_does_not_bump_generation() {
+        let card = concrete_card(CardId::new());
+        let mut wallet = BTreeMap::new();
+        let mut generation = 40;
+
+        assert!(add_wallet_card(&mut wallet, &mut generation, card.clone()).unwrap());
+        assert!(!add_wallet_card(&mut wallet, &mut generation, card).unwrap());
+
+        assert_eq!(wallet.len(), 1);
+        assert_eq!(generation, 41);
+    }
+
+    #[test]
+    fn expiry_generation_outcome_is_stable_when_replayed() {
+        let card = concrete_card(CardId::new());
+        let card_id = card.card_id();
+        let mut wallet = BTreeMap::from([(card_id, card)]);
+        let mut generation = 7;
+
+        assert!(remove_wallet_card(&mut wallet, &mut generation, card_id).unwrap());
+        let recorded_expiry_generation = generation;
+
+        assert!(!remove_wallet_card(&mut wallet, &mut generation, card_id).unwrap());
+        adopt_recorded_wallet_generation(&mut generation, Some(recorded_expiry_generation))
+            .unwrap();
+
+        assert!(wallet.is_empty());
+        assert_eq!(generation, 8);
+    }
+
+    #[test]
+    fn expiry_boundary_is_inclusive_and_preserves_later_cards() {
+        let boundary = DateTime::from_timestamp(1_700_000_000, 123).unwrap();
+        let elapsed = concrete_card_expiring_at(
+            CardId::new(),
+            Some(boundary - chrono::Duration::nanoseconds(1)),
+        );
+        let at_boundary = concrete_card_expiring_at(CardId::new(), Some(boundary));
+        let later = concrete_card_expiring_at(
+            CardId::new(),
+            Some(boundary + chrono::Duration::nanoseconds(1)),
+        );
+        let indefinite = concrete_card(CardId::new());
+        let wallet = BTreeMap::from([
+            (elapsed.card_id(), elapsed.clone()),
+            (at_boundary.card_id(), at_boundary.clone()),
+            (later.card_id(), later),
+            (indefinite.card_id(), indefinite),
+        ]);
+
+        assert_eq!(
+            expired_wallet_card_ids_at(&wallet, boundary)
+                .into_iter()
+                .collect::<HashSet<_>>(),
+            HashSet::from([elapsed.card_id(), at_boundary.card_id()])
+        );
+    }
+
+    #[test]
+    fn recorded_expiry_events_replay_identically_with_an_earlier_clock() {
+        let boundary = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let replay_clock = boundary - chrono::Duration::hours(1);
+        let elapsed = concrete_card_expiring_at(
+            CardId::new(),
+            Some(boundary - chrono::Duration::nanoseconds(1)),
+        );
+        let at_boundary = concrete_card_expiring_at(CardId::new(), Some(boundary));
+        let later =
+            concrete_card_expiring_at(CardId::new(), Some(boundary + chrono::Duration::hours(1)));
+        let original_wallet = BTreeMap::from([
+            (elapsed.card_id(), elapsed),
+            (at_boundary.card_id(), at_boundary),
+            (later.card_id(), later),
+        ]);
+
+        let mut live_wallet = original_wallet.clone();
+        let mut live_generation = 7;
+        let mut recorded_expiries = Vec::new();
+        for card_id in expired_wallet_card_ids_at(&live_wallet, boundary) {
+            assert!(remove_wallet_card(&mut live_wallet, &mut live_generation, card_id).unwrap());
+            recorded_expiries.push((card_id, live_generation));
+        }
+
+        let mut replayed_wallet = original_wallet;
+        let mut replayed_generation = 7;
+        assert!(expired_wallet_card_ids_at(&replayed_wallet, replay_clock).is_empty());
+        for (card_id, recorded_generation) in recorded_expiries {
+            assert!(
+                remove_wallet_card(&mut replayed_wallet, &mut replayed_generation, card_id)
+                    .unwrap()
+            );
+            adopt_recorded_wallet_generation(&mut replayed_generation, Some(recorded_generation))
+                .unwrap();
+        }
+
+        assert_eq!(replayed_wallet, live_wallet);
+        assert_eq!(replayed_generation, live_generation);
+        assert_eq!(live_wallet.len(), 1);
+        assert_eq!(live_generation, 9);
+    }
+
+    #[test]
+    fn conflicting_payload_for_existing_card_id_is_rejected_without_generation_change() {
+        let card_id = CardId::new();
+        let card = concrete_card(card_id);
+        let mut conflicting_payload = card.clone();
+        match &mut conflicting_payload {
+            StoredCard::Concrete(card) => card.system_card = true,
+            StoredCard::Polymorphic(_) => unreachable!(),
+        }
+        let mut wallet = BTreeMap::from([(card_id, card.clone())]);
+        let mut generation = 10;
+
+        assert!(add_wallet_card(&mut wallet, &mut generation, conflicting_payload).is_err());
+
+        assert_eq!(generation, 10);
+        assert_eq!(wallet.get(&card_id), Some(&card));
+    }
+
+    #[test]
+    fn wallet_replacement_bumps_for_each_membership_delta() {
+        let retained = concrete_card(CardId::new());
+        let mut conflicting_retained = retained.clone();
+        match &mut conflicting_retained {
+            StoredCard::Concrete(card) => card.system_card = true,
+            StoredCard::Polymorphic(_) => unreachable!(),
+        }
+        let removed = concrete_card(CardId::new());
+        let added = concrete_card(CardId::new());
+        let mut wallet = BTreeMap::from([
+            (retained.card_id(), retained.clone()),
+            (removed.card_id(), removed),
+        ]);
+        let replacement = BTreeMap::from([
+            (conflicting_retained.card_id(), conflicting_retained),
+            (added.card_id(), added),
+        ]);
+        let mut generation = 20;
+
+        assert!(replace_wallet_cards(&mut wallet, &mut generation, replacement).unwrap());
+        assert_eq!(generation, 22);
+        assert_eq!(wallet.len(), 2);
+        assert_eq!(wallet.get(&retained.card_id()), Some(&retained));
+    }
+
+    #[test]
+    fn wallet_replacement_is_atomic_when_generation_would_overflow() {
+        let removed = concrete_card(CardId::new());
+        let added = concrete_card(CardId::new());
+        let mut wallet = BTreeMap::from([(removed.card_id(), removed)]);
+        let original_wallet = wallet.clone();
+        let replacement = BTreeMap::from([(added.card_id(), added)]);
+        let mut generation = u64::MAX - 1;
+
+        assert!(replace_wallet_cards(&mut wallet, &mut generation, replacement).is_err());
+        assert_eq!((wallet, generation), (original_wallet, u64::MAX - 1));
+    }
+
+    #[test]
+    fn replay_adopts_recorded_wallet_generation_and_defaults_legacy_entries() {
+        let mut generation = 10;
+
+        adopt_recorded_wallet_generation(&mut generation, None).unwrap();
+        assert_eq!(generation, 10);
+
+        adopt_recorded_wallet_generation(&mut generation, Some(10)).unwrap();
+        assert_eq!(generation, 10);
+
+        adopt_recorded_wallet_generation(&mut generation, Some(12)).unwrap();
+        assert_eq!(generation, 12);
+    }
+
+    #[test]
+    fn replay_rejects_decreasing_recorded_wallet_generation() {
+        let mut generation = 10;
+
+        assert!(adopt_recorded_wallet_generation(&mut generation, Some(9)).is_err());
+        assert_eq!(generation, 10);
+    }
+
+    #[test]
+    fn invocation_wallet_pin_establishes_base_before_ordered_mutations() {
+        let wallet_id_hash = [0x42; 32];
+        let base_card = concrete_card(CardId::new());
+        let stale_card = concrete_card(CardId::new());
+        let derived_card = concrete_card(CardId::new());
+        let mut wallet = BTreeMap::from([
+            (base_card.card_id(), base_card.clone()),
+            (stale_card.card_id(), stale_card),
+        ]);
+        let mut generation = 1;
+
+        assert!(
+            apply_invocation_wallet_pin(
+                &mut wallet,
+                wallet_id_hash,
+                &mut generation,
+                InvocationWalletPin {
+                    wallet_token: WalletVersionToken {
+                        wallet_id_hash,
+                        generation: 1,
+                    },
+                    pinned_card_ids: vec![base_card.card_id()],
+                    scope_card_id: Some(CardId::new()),
+                },
+            )
+            .unwrap()
+        );
+        assert_eq!(wallet.len(), 1);
+        assert_eq!(wallet.get(&base_card.card_id()), Some(&base_card));
+        assert_eq!(generation, 1);
+        assert!(!wallet.contains_key(&derived_card.card_id()));
+
+        assert!(add_wallet_card(&mut wallet, &mut generation, derived_card.clone()).unwrap());
+        adopt_recorded_wallet_generation(&mut generation, Some(2)).unwrap();
+        assert_eq!(wallet.len(), 2);
+        assert_eq!(wallet.get(&base_card.card_id()), Some(&base_card));
+        assert_eq!(wallet.get(&derived_card.card_id()), Some(&derived_card));
+        assert_eq!(generation, 2);
+    }
+
+    fn polymorphic_card(card_id: CardId) -> StoredCard {
+        StoredCard::Polymorphic(PolymorphicCard {
+            card_id,
+            parent_ids: Vec::new(),
+            lower_positive: Vec::new(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: Utc::now(),
+            expires_at: None,
+            system_card: false,
+        })
+    }
+
+    #[test]
+    fn transfer_start_removes_only_concrete_card_from_matching_source_agent() {
+        let agent_id = AgentId {
+            component_id: ComponentId(Uuid::new_v4()),
+            agent_id: "source-agent".to_string(),
+        };
+        let source_holder = Some(CardHolder::Agent(AgentCardHolder {
+            agent_id: agent_id.clone(),
+        }));
+        let concrete = concrete_card(CardId::new());
+        let polymorphic = polymorphic_card(CardId::new());
+
+        assert!(transfer_started_removes_source_membership(
+            Some(&concrete),
+            &source_holder,
+            &agent_id,
+        ));
+        assert!(!transfer_started_removes_source_membership(
+            Some(&polymorphic),
+            &source_holder,
+            &agent_id,
+        ));
+        assert!(transfer_started_removes_source_membership(
+            Some(&concrete),
+            &None,
+            &agent_id,
+        ));
+
+        let different_source = Some(CardHolder::Agent(AgentCardHolder {
+            agent_id: AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: agent_id.agent_id.clone(),
+            },
+        }));
+        assert!(!transfer_started_removes_source_membership(
+            Some(&concrete),
+            &different_source,
+            &agent_id,
+        ));
+    }
+
+    #[test]
+    fn legacy_transfer_start_removes_concrete_source_membership() {
+        let agent_id = AgentId {
+            component_id: ComponentId(Uuid::new_v4()),
+            agent_id: "legacy-source-agent".to_string(),
+        };
+        let concrete = concrete_card(CardId::new());
+
+        assert!(transfer_started_removes_source_membership(
+            Some(&concrete),
+            &None,
+            &agent_id,
+        ));
+    }
+
+    #[test]
+    fn pending_transfer_does_not_block_later_local_card_event() {
+        let target_holder = CardHolder::Agent(AgentCardHolder {
+            agent_id: AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "target-agent".to_string(),
+            },
+        });
+        let transfer_card = concrete_card(CardId::new());
+        let revoked_card_id = CardId::new();
+        let pending_transfer = PendingCardEventRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::from_u64(1),
+            event: QueuedCardEvent::transfer_started(Uuid::new_v4(), transfer_card, target_holder),
+        };
+        assert!(next_drainable_card_events(vec![pending_transfer.clone()]).is_empty());
+
+        let pending_events = vec![
+            pending_transfer,
+            PendingCardEventRef {
+                timestamp: Timestamp::now_utc(),
+                oplog_index: OplogIndex::from_u64(2),
+                event: QueuedCardEvent::revoke(revoked_card_id),
+            },
+        ];
+
+        let next = next_drainable_card_events(pending_events);
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].oplog_index, OplogIndex::from_u64(2));
+        assert!(matches!(
+            &next[0].event,
+            QueuedCardEvent::Revoke(event) if event.card_id == revoked_card_id
+        ));
+    }
+
+    #[test]
+    fn received_transfer_is_drained_as_a_target_wallet_event() {
+        let source_card_id = CardId::new();
+        let card = concrete_card(CardId::new());
+        let receipt = PendingCardEventRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::from_u64(1),
+            event: QueuedCardEvent::transfer_received(Uuid::new_v4(), source_card_id, card.clone()),
+        };
+
+        let next = next_drainable_card_events(vec![receipt.clone()]);
+
+        assert_eq!(next, vec![receipt]);
+        assert!(matches!(
+            &next[0].event,
+            QueuedCardEvent::TransferReceived(event)
+                if event.source_card_id == Some(source_card_id)
+                    && event.card_id == card.card_id()
+                    && event.card.as_ref() == Some(&card)
+        ));
+    }
+
+    #[test]
+    fn pending_revocations_are_batched_without_crossing_an_install() {
+        let first = CardId::new();
+        let second = CardId::new();
+        let after_install = CardId::new();
+        let install = concrete_card(CardId::new());
+        let pending_events = vec![
+            PendingCardEventRef {
+                timestamp: Timestamp::now_utc(),
+                oplog_index: OplogIndex::from_u64(1),
+                event: QueuedCardEvent::revoke(first),
+            },
+            PendingCardEventRef {
+                timestamp: Timestamp::now_utc(),
+                oplog_index: OplogIndex::from_u64(2),
+                event: QueuedCardEvent::revoke(second),
+            },
+            PendingCardEventRef {
+                timestamp: Timestamp::now_utc(),
+                oplog_index: OplogIndex::from_u64(3),
+                event: QueuedCardEvent::install(install),
+            },
+            PendingCardEventRef {
+                timestamp: Timestamp::now_utc(),
+                oplog_index: OplogIndex::from_u64(4),
+                event: QueuedCardEvent::revoke(after_install),
+            },
+        ];
+
+        let next = next_drainable_card_events(pending_events);
+        assert_eq!(next.len(), 2);
+        assert!(matches!(
+            &next[0].event,
+            QueuedCardEvent::Revoke(event) if event.card_id == first
+        ));
+        assert!(matches!(
+            &next[1].event,
+            QueuedCardEvent::Revoke(event) if event.card_id == second
+        ));
+    }
+
     #[test]
     fn card_event_boundary_scan_reads_each_entry_once() {
         let initial_idx = OplogIndex::from_u64(10);
@@ -5012,7 +6741,10 @@ mod tests {
 
         scan.fold_through(
             terminal_idx,
-            &BTreeMap::from([(terminal_idx, OplogEntry::card_revoked(queued_idx, card_id))]),
+            &BTreeMap::from([(
+                terminal_idx,
+                OplogEntry::card_revoked(queued_idx, card_id, None),
+            )]),
         );
 
         assert!(scan.pending.is_empty());
@@ -6387,6 +8119,10 @@ struct PrivateDurableWorkerState {
     component_metadata: Component,
     agent_effective_surface: golem_common::model::card::EffectiveSurface,
     agent_wallet_cards: BTreeMap<CardId, StoredCard>,
+    invocation_scope_card: Option<ScopeCard>,
+    invocation_scope_handles: HashMap<u32, Vec<CardId>>,
+    wallet_id_hash: [u8; 32],
+    wallet_generation: u64,
     card_event_boundary_scan: Option<CardEventBoundaryScan>,
 
     /// Running total of storage bytes acquired from the executor semaphore pool
@@ -6532,6 +8268,9 @@ struct PrivateDurableWorkerState {
     /// Per-invocation RPC call limit from the account's Plan.
     per_invocation_rpc_call_limit: u64,
 
+    /// Zero-based ordinal of the next successfully derived invocation-local scope card.
+    scope_card_mint_ordinal: u64,
+
     /// Shared per-account resource limit entry. Used to record monthly HTTP/RPC call consumption
     /// and to check remaining budgets from the epoch callback.
     resource_limit_entry: Arc<AtomicResourceEntry>,
@@ -6633,8 +8372,13 @@ impl PrivateDurableWorkerState {
         } else {
             deleted_regions
         };
-        let replay_state =
-            ReplayState::new(owned_agent_id.clone(), oplog.clone(), deleted_regions).await?;
+        let replay_state = ReplayState::new(
+            owned_agent_id.clone(),
+            oplog.clone(),
+            deleted_regions,
+            last_snapshot_index,
+        )
+        .await?;
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
         let dropped_call_events = tokio::sync::mpsc::unbounded_channel();
@@ -6651,17 +8395,29 @@ impl PrivateDurableWorkerState {
                     None => Ok(BTreeMap::new()),
                 }
             };
-        let agent_wallet_cards = if let Some(snapshot_idx) = last_snapshot_index {
-            match oplog.read(snapshot_idx).await {
-                OplogEntry::Snapshot { active_cards, .. } => active_cards
-                    .into_iter()
-                    .map(|card| (card.card_id(), card))
-                    .collect(),
-                _ => initial_agent_wallet_cards()?,
-            }
-        } else {
-            initial_agent_wallet_cards()?
-        };
+        let (agent_wallet_cards, wallet_generation) =
+            if let Some(snapshot_idx) = last_snapshot_index {
+                match oplog.read(snapshot_idx).await {
+                    OplogEntry::Snapshot {
+                        active_cards,
+                        wallet_generation,
+                        ..
+                    } => (
+                        active_cards
+                            .into_iter()
+                            .map(|card| (card.card_id(), card))
+                            .collect(),
+                        wallet_generation,
+                    ),
+                    _ => (initial_agent_wallet_cards()?, 0),
+                }
+            } else {
+                (initial_agent_wallet_cards()?, 0)
+            };
+        let wallet_id_hash = CardHolder::Agent(golem_common::model::card::AgentCardHolder {
+            agent_id: owned_agent_id.agent_id.clone(),
+        })
+        .wallet_id_hash();
         let agent_effective_surface = if let Some(agent_id) = agent_id.as_ref() {
             let context =
                 agent_monomorphization_context(&component_metadata, &owned_agent_id, agent_id);
@@ -6680,6 +8436,7 @@ impl PrivateDurableWorkerState {
             per_invocation_http_call_limit,
             rpc_call_count: 0,
             per_invocation_rpc_call_limit,
+            scope_card_mint_ordinal: 0,
             promise_service,
             scheduler_service,
             worker_service,
@@ -6720,6 +8477,10 @@ impl PrivateDurableWorkerState {
             component_metadata,
             agent_effective_surface,
             agent_wallet_cards,
+            invocation_scope_card: None,
+            invocation_scope_handles: HashMap::new(),
+            wallet_id_hash,
+            wallet_generation,
             card_event_boundary_scan: None,
             current_filesystem_storage_usage,
             replay_state,
@@ -7208,6 +8969,7 @@ impl PrivateDurableWorkerState {
     pub fn reset_invocation_call_counts(&mut self) {
         self.http_call_count = 0;
         self.rpc_call_count = 0;
+        self.scope_card_mint_ordinal = 0;
         // The `get_oplog_index` marker watermark is per-invocation: a marker captured in a previous
         // invocation only costs a graceful checkpoint fallback if jumped to, never correctness.
         self.min_exposed_marker = None;

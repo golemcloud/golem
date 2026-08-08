@@ -1158,6 +1158,7 @@ pub fn is_worker_execution_error(
 pub fn worker_error_message(error: &WorkerExecutorError) -> String {
     match error {
         WorkerExecutorError::InvalidRequest { details } => details.clone(),
+        WorkerExecutorError::PermissionDenied { details } => details.clone(),
         WorkerExecutorError::AgentAlreadyExists { agent_id } => {
             format!("Worker already exists: {:?}", agent_id)
         }

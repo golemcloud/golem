@@ -61,29 +61,29 @@ declare module 'golem:agent/host@2.0.0' {
      * `none` for a `unit` output and `some(value)` for a `single` output.
      * @throws RpcError
      */
-    invokeAndAwait(methodName: string, input: SchemaValueTree): InvocationResultWithMetadata;
+    invokeAndAwait(methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): InvocationResultWithMetadata;
     /**
      * Triggers the invocation of a remote method with the given parameters,
      * and returns its final identity immediately.
      * @throws RpcError
      */
-    invoke(methodName: string, input: SchemaValueTree): InvocationMetadata;
+    invoke(methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): InvocationMetadata;
     /**
      * Invokes a remote method with the given parameters, and returns a `future-invoke-result` value which can
      * be polled for the result together with the final invocation identity.
      * With this function it is possible to call multiple (different) agents simultaneously.
      */
-    asyncInvokeAndAwait(methodName: string, input: SchemaValueTree): AsyncInvocationWithMetadata;
+    asyncInvokeAndAwait(methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): AsyncInvocationWithMetadata;
     /**
      * Schedules an invocation for later and returns its final identity.
      */
-    scheduleInvocation(scheduledTime: Datetime, methodName: string, input: SchemaValueTree): ScheduledInvocationReceipt;
+    scheduleInvocation(scheduledTime: Datetime, methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): ScheduledInvocationReceipt;
     /**
      * Schedules an invocation for later and returns its final identity and
      * cancellation capability. Call cancel on the returned resource to
      * cancel the invocation before the scheduled time.
      */
-    scheduleCancelableInvocation(scheduledTime: Datetime, methodName: string, input: SchemaValueTree): CancelableScheduledInvocationReceipt;
+    scheduleCancelableInvocation(scheduledTime: Datetime, methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): CancelableScheduledInvocationReceipt;
   }
   export class FutureInvokeResult {
     /**
@@ -109,6 +109,7 @@ declare module 'golem:agent/host@2.0.0' {
   export type SchemaGraph = golemCore200Types.SchemaGraph;
   export type SchemaValueTree = golemCore200Types.SchemaValueTree;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
+  export type PermissionCard = golemCore200Types.PermissionCard;
   export type Datetime = wasiClocks030SystemClock.Instant;
   export type AgentError = golemAgent200Common.AgentError;
   export type AgentType = golemAgent200Common.AgentType;

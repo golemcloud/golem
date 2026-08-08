@@ -19,12 +19,12 @@ use crate::schema::render::error::RenderError;
 use crate::schema::render::json_value::{from_json_value, to_json_value, to_json_value_redacted};
 use crate::schema::render::tests::paired_strategy::paired_strategy;
 use crate::schema::schema_type::{
-    DiscriminatorRule, FieldDiscriminator, NamedFieldType, QuotaTokenSpec, ResultSpec, SchemaType,
-    SecretSpec, TextRestrictions, UnionBranch, UnionSpec, VariantCaseType,
+    DiscriminatorRule, FieldDiscriminator, NamedFieldType, PermissionCardSpec, QuotaTokenSpec,
+    ResultSpec, SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec, VariantCaseType,
 };
 use crate::schema::schema_value::{
-    QuotaTokenValuePayload, SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload,
-    VariantValuePayload,
+    PermissionCardValuePayload, QuotaTokenValuePayload, SchemaValue, SecretValuePayload,
+    TextValuePayload, UnionValuePayload, VariantValuePayload,
 };
 use chrono::{TimeZone, Utc};
 use proptest::prelude::*;
@@ -738,6 +738,33 @@ fn to_json_value_redacted_replaces_quota_token_with_placeholder() {
     let graph = SchemaGraph::anonymous(ty.clone());
     let json = to_json_value_redacted(&graph, &ty, &quota_token_value()).expect("redacted encode");
     assert_eq!(json, json!("<redacted: quota-token>"));
+}
+
+#[test]
+fn permission_card_json_round_trip_matches_schema_and_redacts() {
+    let ty = SchemaType::permission_card(PermissionCardSpec { polymorphic: true });
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let value = SchemaValue::PermissionCard(PermissionCardValuePayload {
+        card_id: uuid::Uuid::from_u128(1),
+        parent_ids: vec![uuid::Uuid::from_u128(2)],
+        expires_at: Some(Utc.timestamp_opt(1_700_000_000, 0).unwrap()),
+        polymorphic: true,
+    });
+
+    let json = to_json_value(&graph, &ty, &value).expect("encode permission-card");
+    let decoded = from_json_value(&graph, &ty, &json).expect("decode permission-card");
+    assert_eq!(decoded, value);
+
+    let schema = crate::schema::render::json_schema::to_json_schema(&graph, &ty);
+    let compiled = jsonschema::draft202012::new(&schema).expect("compile permission-card schema");
+    assert!(
+        compiled.is_valid(&json),
+        "permission-card JSON did not match rendered schema: {schema}"
+    );
+
+    let redacted =
+        to_json_value_redacted(&graph, &ty, &value).expect("redact permission-card JSON value");
+    assert_eq!(redacted, json!("<redacted: permission-card>"));
 }
 
 /// Redaction recurses through every container kind the walker descends into,

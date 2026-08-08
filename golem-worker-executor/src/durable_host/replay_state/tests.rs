@@ -1,8 +1,12 @@
 use super::*;
 use crate::services::oplog::{CommitLevel, OrderedOplogStart, PendingUpload};
 use async_trait::async_trait;
+use golem_common::model::card::{
+    AgentCardHolder, Card, CardHolder, CardId, InvocationWalletPin, StoredCard, WalletVersionToken,
+};
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::payload::types::{
     SerializableP3HttpBodyChunk, SerializableP3HttpConsumeBodyResult,
 };
@@ -11,7 +15,8 @@ use golem_common::model::oplog::{
     HostResponseMonotonicClockTimestamp, HostResponseP3HttpClientConsumeBodyChunk,
     HostResponseP3HttpClientConsumeBodyResult, OplogPayload, PayloadId, RawOplogPayload,
 };
-use golem_common::model::{AgentId, Timestamp};
+use golem_common::model::regions::OplogRegion;
+use golem_common::model::{AgentId, AgentInvocationPayload, IdempotencyKey, Timestamp};
 use std::collections::BTreeMap;
 use std::time::Duration;
 use test_r::test;
@@ -163,6 +168,33 @@ fn noop() -> OplogEntry {
     }
 }
 
+fn stored_test_card(card_id: CardId) -> StoredCard {
+    StoredCard::Concrete(Card {
+        card_id,
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: chrono::Utc::now(),
+        expires_at: None,
+        system_card: false,
+        managed_by: None,
+    })
+}
+
+fn invocation_started(wallet_pin: InvocationWalletPin) -> OplogEntry {
+    OplogEntry::AgentInvocationStarted {
+        timestamp: Timestamp::now_utc(),
+        idempotency_key: IdempotencyKey::new("wallet-pin-replay".to_string()),
+        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+        trace_id: TraceId::generate(),
+        trace_states: Vec::new(),
+        invocation_context: Vec::new(),
+        wallet_pin: Some(wallet_pin),
+    }
+}
+
 fn start_now() -> OplogEntry {
     OplogEntry::Start {
         timestamp: Timestamp::now_utc(),
@@ -213,9 +245,139 @@ async fn replay_state_over(entries: Vec<OplogEntry>) -> ReplayState {
         oplog.add(entry).await;
     }
     let oplog: Arc<dyn Oplog> = oplog;
-    ReplayState::new(test_agent_id(), oplog, DeletedRegions::default())
+    ReplayState::new(test_agent_id(), oplog, DeletedRegions::default(), None)
         .await
         .expect("failed to build replay state")
+}
+
+#[test]
+async fn permission_events_replay_after_invocation_wallet_pin() {
+    let owned_agent_id = test_agent_id();
+    let derived_card = stored_test_card(CardId::new());
+    let wallet_pin = InvocationWalletPin {
+        wallet_token: WalletVersionToken {
+            wallet_id_hash: CardHolder::Agent(AgentCardHolder {
+                agent_id: owned_agent_id.agent_id.clone(),
+            })
+            .wallet_id_hash(),
+            generation: 0,
+        },
+        pinned_card_ids: Vec::new(),
+        scope_card_id: Some(CardId::new()),
+    };
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in [
+        noop(),
+        invocation_started(wallet_pin.clone()),
+        OplogEntry::CardDerived {
+            timestamp: Timestamp::now_utc(),
+            card: derived_card.clone(),
+            wallet_generation: Some(0),
+        },
+        start_now(),
+    ] {
+        oplog.add(entry).await;
+    }
+    let oplog: Arc<dyn Oplog> = oplog;
+    let replay_state = ReplayState::new(owned_agent_id, oplog, DeletedRegions::default(), None)
+        .await
+        .expect("failed to build replay state");
+
+    let invocation = replay_state
+        .get_oplog_entry_agent_invocation_started()
+        .await
+        .expect("failed to replay invocation start")
+        .expect("expected invocation start");
+    assert_eq!(invocation.wallet_pin, Some(wallet_pin.clone()));
+    assert_eq!(
+        replay_state
+            .pending_card_derivation(derived_card.card_id())
+            .await,
+        Some((derived_card.clone(), Some(0)))
+    );
+    assert_eq!(
+        replay_state.take_new_replay_events(),
+        vec![
+            ReplayEvent::InvocationWalletPinned { wallet_pin },
+            ReplayEvent::CardDerived {
+                card: derived_card,
+                wallet_generation: Some(0),
+            },
+        ]
+    );
+}
+
+#[test]
+async fn permission_events_are_recovered_from_skipped_regions() {
+    let transfer_id = Uuid::new_v4();
+    let source_card_id = CardId::new();
+    let card = stored_test_card(CardId::new());
+    let target_holder = CardHolder::Agent(AgentCardHolder {
+        agent_id: test_agent_id().agent_id,
+    });
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in [
+        noop(),
+        OplogEntry::CardTransferred {
+            timestamp: Timestamp::now_utc(),
+            transfer_id,
+            source_card_id: Some(source_card_id),
+            installed_card_id: card.card_id(),
+            target_holder: target_holder.clone(),
+            card: card.clone(),
+            target_wallet_generation: Some(1),
+        },
+        start_now(),
+    ] {
+        oplog.add(entry).await;
+    }
+    let oplog: Arc<dyn Oplog> = oplog;
+    let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
+    let replay_state = ReplayState::new(test_agent_id(), oplog, skipped, None)
+        .await
+        .expect("failed to build replay state");
+
+    assert_eq!(
+        replay_state.take_new_replay_events(),
+        vec![ReplayEvent::CardTransferred {
+            transfer_id,
+            source_card_id: Some(source_card_id),
+            installed_card_id: card.card_id(),
+            target_holder,
+            card,
+            target_wallet_generation: Some(1),
+        }]
+    );
+}
+
+#[test]
+async fn snapshot_prefix_suppresses_replayed_permission_events() {
+    let card = stored_test_card(CardId::new());
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in [
+        noop(),
+        OplogEntry::CardInstalled {
+            timestamp: Timestamp::now_utc(),
+            queued_event_index: None,
+            card,
+            wallet_generation: Some(1),
+        },
+        start_now(),
+    ] {
+        oplog.add(entry).await;
+    }
+    let oplog: Arc<dyn Oplog> = oplog;
+    let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
+    let replay_state = ReplayState::new(
+        test_agent_id(),
+        oplog,
+        skipped,
+        Some(OplogIndex::from_u64(2)),
+    )
+    .await
+    .expect("failed to build replay state");
+
+    assert!(replay_state.take_new_replay_events().is_empty());
 }
 
 fn stdout_log(message: &str) -> OplogEntry {
@@ -311,7 +473,7 @@ async fn request_matching_downloads_uncached_external_payloads() {
     }
 
     let oplog: Arc<dyn Oplog> = oplog;
-    let rs = ReplayState::new(test_agent_id(), oplog, DeletedRegions::default())
+    let rs = ReplayState::new(test_agent_id(), oplog, DeletedRegions::default(), None)
         .await
         .unwrap();
 
@@ -1251,7 +1413,7 @@ async fn marker_in_deleted_region_delivers_end_normally() {
             end: OplogIndex::from_u64(4),
         }])
         .build();
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
     let handle = rs
@@ -1287,7 +1449,7 @@ async fn duplicate_completion_discarded_markers_fail_construction() {
         oplog.add(entry).await;
     }
     let oplog: Arc<dyn Oplog> = oplog;
-    let err = ReplayState::new(test_agent_id(), oplog, DeletedRegions::default())
+    let err = ReplayState::new(test_agent_id(), oplog, DeletedRegions::default(), None)
         .await
         .expect_err("duplicate markers must fail replay state construction");
     assert!(
@@ -1308,9 +1470,14 @@ async fn marker_recorded_at_runtime_is_visible_to_replay() {
         oplog.add(entry).await;
     }
     let oplog: Arc<dyn Oplog> = oplog;
-    let rs = ReplayState::new(test_agent_id(), oplog.clone(), DeletedRegions::default())
-        .await
-        .expect("failed to build replay state");
+    let rs = ReplayState::new(
+        test_agent_id(),
+        oplog.clone(),
+        DeletedRegions::default(),
+        None,
+    )
+    .await
+    .expect("failed to build replay state");
     let marker_idx = oplog.add(discarded_for(2)).await;
     rs.record_discarded_completion(OplogIndex::from_u64(2), marker_idx);
     rs.set_replay_target(marker_idx)
@@ -1822,7 +1989,7 @@ async fn replay_finished_emitted_when_skipped_region_reaches_target() {
         start: OplogIndex::from_u64(3),
         end: OplogIndex::from_u64(4),
     }]);
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
 
@@ -2384,7 +2551,7 @@ async fn orphan_end_with_deleted_start_is_skipped() {
         start: OplogIndex::from_u64(2),
         end: OplogIndex::from_u64(2),
     }]);
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
 
@@ -2423,7 +2590,7 @@ async fn orphan_cancelled_with_deleted_start_is_skipped() {
         start: OplogIndex::from_u64(2),
         end: OplogIndex::from_u64(2),
     }]);
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
 
@@ -2450,7 +2617,7 @@ async fn positional_reader_skips_orphan_terminal() {
         start: OplogIndex::from_u64(2),
         end: OplogIndex::from_u64(2),
     }]);
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
 
@@ -2474,7 +2641,7 @@ async fn deleted_terminal_reports_incomplete() {
         start: OplogIndex::from_u64(3),
         end: OplogIndex::from_u64(3),
     }]);
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
 
@@ -2603,7 +2770,7 @@ async fn replay_skips_deleted_regions_fuzz() {
             start: OplogIndex::from_u64(s),
             end: OplogIndex::from_u64(e),
         }));
-        let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+        let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
             .await
             .expect("failed to build replay state");
 

@@ -14,7 +14,10 @@
 
 use super::*;
 use crate::model::auth::TokenId;
-use crate::model::card::owner::{AgentOwnerPattern, EmptyOwnerPattern, OwnerPattern};
+use crate::model::card::owner::{
+    AccountOwnerPattern, AgentOwnerPattern, ApplicationOwnerPattern, ComponentOwnerPattern,
+    EmptyOwnerPattern, EnvironmentOwnerPattern, OwnerPattern, ToolOwnerPattern,
+};
 use crate::model::card::recipient::RecipientPattern;
 use RecipientPattern as AccountRecipientPattern;
 use RecipientPattern as AgentRecipientPattern;
@@ -805,8 +808,6 @@ fn subsumption_requires_same_permission_class() {
 
 #[test]
 fn derivation_must_be_subsumed_by_parent_union() {
-    let holder = "acme/shop/prod/cart/agent";
-    let recipient = RecipientPattern::parse(holder).unwrap();
     let parent_grant = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
@@ -824,24 +825,21 @@ fn derivation_must_be_subsumed_by_parent_union() {
     );
 
     let parent = card(vec![parent_grant], Vec::new());
-    let parent_surface =
-        EffectiveSurface::from_cards(std::slice::from_ref(&parent), &recipient).unwrap();
+    let parent_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent));
 
     assert!(
         parent_surface
-            .validates_derivation(std::slice::from_ref(&child_grant), &[])
+            .validate_attenuation(std::slice::from_ref(&child_grant), &[], &[], &[],)
             .is_ok()
     );
     assert_matches!(
-        parent_surface.validates_derivation(std::slice::from_ref(&denied_child), &[]),
-        Err(CardAlgebraError::DerivationNotSubsumed { .. })
+        parent_surface.validate_attenuation(std::slice::from_ref(&denied_child), &[], &[], &[],),
+        Err(CardAlgebraError::LowerBoundTooBroad { .. })
     );
 }
 
 #[test]
 fn derivation_checks_upper_bounds_against_parent_upper_surface() {
-    let holder = "acme/shop/prod/cart/agent";
-    let recipient = RecipientPattern::parse(holder).unwrap();
     let parent_upper = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
@@ -858,17 +856,1035 @@ fn derivation_checks_upper_bounds_against_parent_upper_surface() {
         fs_path(vec![fs_lit("other"), fs_lit("file.txt")]),
     );
     let parent = card(Vec::new(), vec![parent_upper]);
-    let parent_surface =
-        EffectiveSurface::from_cards(std::slice::from_ref(&parent), &recipient).unwrap();
+    let parent_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent));
 
     assert!(
         parent_surface
-            .validates_derivation(&[], std::slice::from_ref(&child_upper))
+            .validate_attenuation(&[], &[], std::slice::from_ref(&child_upper), &[],)
             .is_ok()
     );
     assert_matches!(
-        parent_surface.validates_derivation(&[], std::slice::from_ref(&too_broad_child_upper)),
-        Err(CardAlgebraError::DerivationNotSubsumed { .. })
+        parent_surface.validate_attenuation(
+            &[],
+            &[],
+            std::slice::from_ref(&too_broad_child_upper),
+            &[],
+        ),
+        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+    );
+    assert_matches!(
+        parent_surface.validate_attenuation(&[], &[], &[], &[]),
+        Err(CardAlgebraError::UpperBoundTooBroad { grant: None })
+    );
+}
+
+#[test]
+fn attenuation_rejects_upper_positive_for_disjoint_recipient() {
+    let holder = "acme/shop/prod/cart/agent";
+    let parent_upper = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+    );
+    let child_upper = fs(
+        holder,
+        "acme/shop/prod/cart/child",
+        fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
+    );
+    let parent = card(Vec::new(), vec![parent_upper]);
+    let parent_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent));
+
+    assert_matches!(
+        parent_surface.validate_attenuation(&[], &[], std::slice::from_ref(&child_upper), &[],),
+        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+    );
+}
+
+#[test]
+fn attenuation_rejects_narrowing_upper_positive_recipient() {
+    let holder = "acme/shop/prod/cart/agent";
+    let other_recipient = "acme/shop/prod/cart/other";
+    let parent_upper = fs(
+        holder,
+        "*",
+        fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
+    );
+    let child_upper = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
+    );
+    let lower_grant = fs(
+        holder,
+        other_recipient,
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+    );
+    let parent_ceiling = card(Vec::new(), vec![parent_upper]);
+    let companion = card(vec![lower_grant], Vec::new());
+    let child_ceiling = card(Vec::new(), vec![child_upper.clone()]);
+    let recipient = RecipientPattern::parse(other_recipient).unwrap();
+    let parent_surface =
+        EffectiveSurface::from_cards(&[parent_ceiling.clone(), companion.clone()], &recipient)
+            .unwrap();
+    let child_surface =
+        EffectiveSurface::from_cards(&[child_ceiling, companion], &recipient).unwrap();
+    let secret = fs_target(holder, fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]));
+
+    assert!(!parent_surface.authorize(&secret).unwrap());
+    assert!(child_surface.authorize(&secret).unwrap());
+
+    let delegation_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent_ceiling));
+    assert_matches!(
+        delegation_surface.validate_attenuation(&[], &[], std::slice::from_ref(&child_upper), &[],),
+        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+    );
+}
+
+#[test]
+fn attenuation_accepts_equivalent_disjoint_recipient_ceilings() {
+    let holder = "acme/shop/prod/cart/agent";
+    let upper_a = fs(
+        holder,
+        "acme/shop/prod/cart/a",
+        fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
+    );
+    let upper_b = fs(
+        holder,
+        "acme/shop/prod/cart/b",
+        fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
+    );
+    let parent_a = card(Vec::new(), vec![upper_a.clone()]);
+    let parent_b = card(Vec::new(), vec![upper_b.clone()]);
+    let parent_surface = DelegationSurface::from_cards(&[parent_a, parent_b]);
+
+    let result = parent_surface.validate_attenuation(&[], &[], &[upper_a, upper_b], &[]);
+
+    assert!(
+        result.is_ok(),
+        "retaining the same holder-local ceilings must be accepted: {result:?}"
+    );
+}
+
+#[test]
+fn attenuation_accepts_lower_grant_where_retained_ceiling_is_locally_top() {
+    let holder = "acme/shop/prod/cart/agent";
+    let recipient_a = "acme/shop/prod/cart/a";
+    let recipient_b = "acme/shop/prod/cart/b";
+    let parent_lower = fs(
+        holder,
+        "*",
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+    );
+    let child_lower = fs(
+        holder,
+        recipient_b,
+        fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
+    );
+    let retained_upper = fs(
+        holder,
+        recipient_a,
+        fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
+    );
+    let parent = card(vec![parent_lower], vec![retained_upper.clone()]);
+    let parent_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent));
+
+    let result = parent_surface.validate_attenuation(
+        std::slice::from_ref(&child_lower),
+        &[],
+        std::slice::from_ref(&retained_upper),
+        &[],
+    );
+
+    assert!(
+        result.is_ok(),
+        "the unchanged ceiling is implicit top for the lower grant's disjoint recipient: {result:?}"
+    );
+}
+
+#[test]
+fn attenuation_rejects_dropped_positive_ceiling_when_child_has_lower_grant() {
+    let holder = "acme/shop/prod/cart/agent";
+    let recipient = RecipientPattern::parse(holder).unwrap();
+    let read_public = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
+    );
+    let read_secret = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+    );
+    let bounded_parent = card(vec![read_public.clone()], vec![read_public.clone()]);
+    let companion = card(vec![read_secret], Vec::new());
+    let parent_cards = [bounded_parent, companion.clone()];
+    let parent_surface = EffectiveSurface::from_cards(&parent_cards, &recipient).unwrap();
+    let parent_delegation_surface = DelegationSurface::from_cards(&parent_cards);
+
+    let child = card(vec![read_public.clone()], Vec::new());
+    let child_surface = EffectiveSurface::from_cards(&[child, companion], &recipient).unwrap();
+    let secret_target = fs_target(holder, fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]));
+
+    assert!(!parent_surface.authorize(&secret_target).unwrap());
+    assert!(child_surface.authorize(&secret_target).unwrap());
+    assert_matches!(
+        parent_delegation_surface.validate_attenuation(
+            std::slice::from_ref(&read_public),
+            &[],
+            &[],
+            &[],
+        ),
+        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+    );
+}
+
+#[test]
+fn attenuation_preserves_parent_denials_and_accepts_additions_on_both_bounds() {
+    let holder = "acme/shop/prod/cart/agent";
+    let parent_grant = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+    );
+    let child_grant = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
+    );
+    let added_negative = fs(
+        holder,
+        holder,
+        fs_path(vec![
+            fs_lit("other"),
+            FilesystemPathSegmentPattern::GlobStar,
+        ]),
+    );
+    let inherited_negative = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+    );
+    let mut parent = card(vec![parent_grant.clone()], vec![parent_grant]);
+    parent.lower_negative = vec![inherited_negative.clone()];
+    parent.upper_negative = vec![inherited_negative.clone()];
+    let parent_id = parent.card_id;
+    let parent_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent));
+    let resulting_negative = vec![inherited_negative, added_negative];
+
+    assert_matches!(
+        parent_surface.validate_attenuation(
+            std::slice::from_ref(&child_grant),
+            std::slice::from_ref(&resulting_negative[1]),
+            &[],
+            &[],
+        ),
+        Err(CardAlgebraError::LowerBoundTooBroad { .. })
+    );
+    assert_matches!(
+        parent_surface.validate_attenuation(
+            &[],
+            &resulting_negative,
+            std::slice::from_ref(&child_grant),
+            std::slice::from_ref(&resulting_negative[1]),
+        ),
+        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+    );
+
+    let witness = parent_surface
+        .validate_attenuation(
+            std::slice::from_ref(&child_grant),
+            &resulting_negative,
+            std::slice::from_ref(&child_grant),
+            &resulting_negative,
+        )
+        .unwrap();
+
+    assert_eq!(witness, vec![parent_id]);
+}
+
+#[test]
+fn attenuation_witness_excludes_grantless_lower_denial_parent() {
+    let holder = "acme/shop/prod/cart/agent";
+    let parent_grant = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+    );
+    let child_grant = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
+    );
+    let inherited_negative = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+    );
+    let granting_parent = card(vec![parent_grant], Vec::new());
+    let granting_parent_id = granting_parent.card_id;
+    let mut denial_parent = card(Vec::new(), Vec::new());
+    denial_parent.lower_negative = vec![inherited_negative.clone()];
+    let parent_surface = DelegationSurface::from_cards(&[granting_parent, denial_parent]);
+
+    let witness = parent_surface
+        .validate_attenuation(std::slice::from_ref(&child_grant), &[], &[], &[])
+        .unwrap();
+
+    assert_eq!(witness, vec![granting_parent_id]);
+}
+
+#[test]
+fn attenuation_does_not_preserve_a_parent_denial_with_an_unrelated_recipient() {
+    let holder = "acme/shop/prod/cart/agent";
+    let recipient = RecipientPattern::parse(holder).unwrap();
+    let parent_grant = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+    );
+    let child_grant = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+    );
+    let inherited_negative = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+    );
+    let unrelated_recipient_negative = fs(
+        holder,
+        "other/shop/prod/cart/agent",
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+    );
+    let mut parent = card(vec![parent_grant.clone()], vec![parent_grant]);
+    parent.lower_negative = vec![inherited_negative.clone()];
+    parent.upper_negative = vec![inherited_negative.clone()];
+    let parent_delegation_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent));
+    let parent_surface =
+        EffectiveSurface::from_cards(std::slice::from_ref(&parent), &recipient).unwrap();
+    let mut child = card(vec![child_grant.clone()], vec![child_grant.clone()]);
+    child.lower_negative = vec![unrelated_recipient_negative.clone()];
+    child.upper_negative = vec![unrelated_recipient_negative.clone()];
+    let child_surface =
+        EffectiveSurface::from_cards(std::slice::from_ref(&child), &recipient).unwrap();
+    let denied_target = fs_target(holder, fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]));
+
+    assert!(!parent_surface.authorize(&denied_target).unwrap());
+    assert!(child_surface.authorize(&denied_target).unwrap());
+
+    assert_matches!(
+        parent_delegation_surface.validate_attenuation(
+            std::slice::from_ref(&child_grant),
+            std::slice::from_ref(&unrelated_recipient_negative),
+            &[],
+            &[],
+        ),
+        Err(CardAlgebraError::LowerBoundTooBroad { .. })
+    );
+    assert_matches!(
+        parent_delegation_surface.validate_attenuation(
+            &[],
+            std::slice::from_ref(&inherited_negative),
+            std::slice::from_ref(&child_grant),
+            std::slice::from_ref(&unrelated_recipient_negative),
+        ),
+        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+    );
+}
+
+#[test]
+fn attenuation_keeps_inherited_denials_scoped_to_the_parent_recipient() {
+    let holder = "acme/shop/prod/cart/agent";
+    let child_recipient = "acme/shop/prod/cart/child";
+    let parent_grant = fs(
+        holder,
+        "*",
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+    );
+    let child_grant = fs(
+        holder,
+        child_recipient,
+        fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
+    );
+    let inherited_negative = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+    );
+    let mut parent = card(vec![parent_grant], Vec::new());
+    parent.lower_negative = vec![inherited_negative.clone()];
+    parent.upper_negative = vec![inherited_negative.clone()];
+    let parent_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent));
+
+    let lower_result = parent_surface.validate_attenuation(
+        std::slice::from_ref(&child_grant),
+        std::slice::from_ref(&inherited_negative),
+        &[],
+        std::slice::from_ref(&inherited_negative),
+    );
+    let upper_result = parent_surface.validate_attenuation(
+        &[],
+        std::slice::from_ref(&inherited_negative),
+        std::slice::from_ref(&child_grant),
+        std::slice::from_ref(&inherited_negative),
+    );
+
+    assert!(
+        lower_result.is_ok() && upper_result.is_ok(),
+        "lower: {lower_result:?}, upper: {upper_result:?}"
+    );
+}
+
+#[test]
+fn attenuation_rejects_narrowing_an_inherited_upper_denial_recipient() {
+    let holder = "acme/shop/prod/cart/agent";
+    let parent_grant = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+    );
+    let inherited_negative = fs(
+        holder,
+        "*",
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+    );
+    let narrowed_negative = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+    );
+    let mut parent = card(Vec::new(), vec![parent_grant.clone()]);
+    parent.upper_negative = vec![inherited_negative];
+    let parent_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent));
+
+    assert_matches!(
+        parent_surface.validate_attenuation(
+            &[],
+            &[],
+            std::slice::from_ref(&parent_grant),
+            std::slice::from_ref(&narrowed_negative),
+        ),
+        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+    );
+}
+
+#[test]
+fn attenuation_rejects_omitting_selected_parent_denials_for_other_recipients() {
+    let holder = "acme/shop/prod/cart/agent";
+    let other_recipient = "acme/shop/prod/cart/other";
+    let parent_grant = fs(
+        holder,
+        "*",
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+    );
+    let inherited_negative = fs(
+        holder,
+        other_recipient,
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+    );
+    let mut parent = card(vec![parent_grant.clone()], Vec::new());
+    parent.lower_negative = vec![inherited_negative];
+    let parent_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent));
+
+    assert_matches!(
+        parent_surface.validate_attenuation(std::slice::from_ref(&parent_grant), &[], &[], &[],),
+        Err(CardAlgebraError::LowerBoundTooBroad { .. })
+    );
+}
+
+#[test]
+fn attenuation_rejects_upper_denial_scoped_away_from_lower_recipient() {
+    let holder = "acme/shop/prod/cart/agent";
+    let lower_recipient = "acme/shop/prod/cart/child";
+    let unrelated_upper_recipient = "acme/shop/prod/cart/other";
+    let parent_grant = fs(
+        holder,
+        "*",
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+    );
+    let inherited_negative = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+    );
+    let mut parent = card(vec![parent_grant], Vec::new());
+    parent.upper_negative = vec![inherited_negative];
+    let parent_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent));
+    let parent_effective_surface = EffectiveSurface::from_cards(
+        std::slice::from_ref(&parent),
+        &RecipientPattern::parse(holder).unwrap(),
+    )
+    .unwrap();
+
+    let child_lower = fs(
+        holder,
+        lower_recipient,
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+    );
+    let child_upper = fs(
+        holder,
+        unrelated_upper_recipient,
+        fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
+    );
+    let child_negative = fs(
+        holder,
+        unrelated_upper_recipient,
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+    );
+    let mut child = card(vec![child_lower.clone()], vec![child_upper.clone()]);
+    child.upper_negative = vec![child_negative.clone()];
+    let child_surface = EffectiveSurface::from_cards(
+        std::slice::from_ref(&child),
+        &RecipientPattern::parse(lower_recipient).unwrap(),
+    )
+    .unwrap();
+    let secret = fs_target(holder, fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]));
+
+    assert!(!parent_effective_surface.authorize(&secret).unwrap());
+    assert!(child_surface.authorize(&secret).unwrap());
+    assert_matches!(
+        parent_surface.validate_attenuation(
+            std::slice::from_ref(&child_lower),
+            &[],
+            std::slice::from_ref(&child_upper),
+            std::slice::from_ref(&child_negative),
+        ),
+        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+    );
+}
+
+#[test]
+fn attenuation_accepts_retained_negative_only_ceiling_without_lower_grants() {
+    let holder = "acme/shop/prod/cart/agent";
+    let inherited_negative = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+    );
+    let retained_negative = fs(
+        holder,
+        "*",
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+    );
+    let mut parent = card(Vec::new(), Vec::new());
+    parent.upper_negative = vec![inherited_negative];
+    let parent_id = parent.card_id;
+    let parent_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent));
+
+    let witness = parent_surface
+        .validate_attenuation(&[], &[], &[], std::slice::from_ref(&retained_negative))
+        .unwrap();
+
+    assert_eq!(witness, vec![parent_id]);
+}
+
+#[test]
+fn attenuation_rejects_negative_only_child_ceiling_that_drops_parent_positive_ceiling() {
+    let holder = "acme/shop/prod/cart/agent";
+    let recipient = RecipientPattern::parse(holder).unwrap();
+    let parent_upper = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+    );
+    let deny_parent_upper = fs(holder, holder, FilesystemResourcePattern::any());
+    let network_grant = network(holder, NetworkResourcePattern::Any);
+    let network_target = network_grant.to_target();
+    let parent = card(Vec::new(), vec![parent_upper]);
+    let parent_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent));
+    let companion = card(vec![network_grant], Vec::new());
+    let parent_effective_surface =
+        EffectiveSurface::from_cards(&[parent, companion.clone()], &recipient).unwrap();
+    let mut child_ceiling = card(Vec::new(), Vec::new());
+    child_ceiling.upper_negative = vec![deny_parent_upper.clone()];
+    let child_effective_surface =
+        EffectiveSurface::from_cards(&[child_ceiling, companion], &recipient).unwrap();
+
+    assert!(!parent_effective_surface.authorize(&network_target).unwrap());
+    assert!(child_effective_surface.authorize(&network_target).unwrap());
+
+    assert_matches!(
+        parent_surface.validate_attenuation(
+            &[],
+            &[],
+            &[],
+            std::slice::from_ref(&deny_parent_upper),
+        ),
+        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+    );
+}
+
+#[test]
+fn attenuation_requires_retaining_positive_ceiling_even_when_negative_denies_it() {
+    let holder = "acme/shop/prod/cart/agent";
+    let parent_grant = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+    );
+    let child_grant = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
+    );
+    let deny_everything = fs(holder, holder, FilesystemResourcePattern::any());
+    let parent = card(vec![parent_grant.clone()], vec![parent_grant.clone()]);
+    let parent_id = parent.card_id;
+    let parent_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent));
+
+    assert_matches!(
+        parent_surface.validate_attenuation(
+            std::slice::from_ref(&child_grant),
+            &[],
+            &[],
+            std::slice::from_ref(&deny_everything),
+        ),
+        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+    );
+
+    let witness = parent_surface
+        .validate_attenuation(
+            std::slice::from_ref(&child_grant),
+            &[],
+            std::slice::from_ref(&parent_grant),
+            std::slice::from_ref(&deny_everything),
+        )
+        .unwrap();
+
+    assert_eq!(witness, vec![parent_id]);
+}
+
+#[test]
+fn attenuation_accepts_identical_fully_denied_parent_ceiling() {
+    let holder = "acme/shop/prod/cart/agent";
+    let retained_positive = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+    );
+    let mut parent = card(Vec::new(), vec![retained_positive.clone()]);
+    parent.upper_negative = vec![retained_positive.clone()];
+    let parent_id = parent.card_id;
+    let parent_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent));
+
+    let witness = parent_surface
+        .validate_attenuation(
+            &[],
+            &[],
+            std::slice::from_ref(&retained_positive),
+            std::slice::from_ref(&retained_positive),
+        )
+        .unwrap();
+
+    assert_eq!(witness, vec![parent_id]);
+}
+
+#[test]
+fn attenuation_accepts_identical_fully_denied_parent_lower_bound() {
+    let holder = "acme/shop/prod/cart/agent";
+    let retained_positive = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+    );
+    let mut parent = card(vec![retained_positive.clone()], Vec::new());
+    parent.lower_negative = vec![retained_positive.clone()];
+    let parent_id = parent.card_id;
+    let parent_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent));
+
+    let witness = parent_surface
+        .validate_attenuation(
+            std::slice::from_ref(&retained_positive),
+            std::slice::from_ref(&retained_positive),
+            &[],
+            &[],
+        )
+        .unwrap();
+
+    assert_eq!(witness, vec![parent_id]);
+}
+
+#[test]
+fn attenuation_accepts_fully_denied_ceiling_against_implicit_and_explicit_top() {
+    macro_rules! grant {
+        ($variant:ident, $owner:expr, $resource:expr) => {
+            PermissionPattern::$variant(ClassPermissionPattern {
+                verb: None,
+                owner: $owner,
+                recipient: RecipientPattern::Any,
+                resource: $resource,
+            })
+        };
+    }
+
+    let universal = vec![
+        grant!(
+            Filesystem,
+            AgentOwnerPattern::AnyAgents,
+            FilesystemResourcePattern::any()
+        ),
+        grant!(Network, EmptyOwnerPattern, NetworkResourcePattern::Any),
+        grant!(Env, AgentOwnerPattern::AnyAgents, EnvResourcePattern::Any),
+        grant!(
+            Oplog,
+            AgentOwnerPattern::AnyAgents,
+            OplogResourcePattern::Any
+        ),
+        grant!(
+            Config,
+            AgentOwnerPattern::AnyAgents,
+            ConfigResourcePattern::Any
+        ),
+        grant!(
+            Secret,
+            EnvironmentOwnerPattern::AnyEnvironments,
+            SecretResourcePattern::Any
+        ),
+        grant!(
+            Agent,
+            AgentOwnerPattern::AnyAgents,
+            AgentResourcePattern::Any
+        ),
+        grant!(Tool, ToolOwnerPattern::AnyTools, ToolResourcePattern::any()),
+        grant!(
+            Kv,
+            EnvironmentOwnerPattern::AnyEnvironments,
+            KvResourcePattern::any()
+        ),
+        grant!(
+            Blob,
+            EnvironmentOwnerPattern::AnyEnvironments,
+            BlobResourcePattern::any()
+        ),
+        grant!(
+            Rdbms,
+            EnvironmentOwnerPattern::AnyEnvironments,
+            RdbmsResourcePattern::any()
+        ),
+        grant!(Card, AccountOwnerPattern::Any, CardResourcePattern::Any),
+        grant!(System, EmptyOwnerPattern, SystemResourcePattern),
+        grant!(Plan, EmptyOwnerPattern, PlanResourcePattern::Any),
+        grant!(Account, AccountOwnerPattern::Any, AccountResourcePattern),
+        grant!(
+            AccountUsage,
+            AccountOwnerPattern::Any,
+            AccountUsageResourcePattern
+        ),
+        grant!(
+            AccountToken,
+            AccountOwnerPattern::Any,
+            AccountTokenResourcePattern::Any
+        ),
+        grant!(
+            AccountPlugin,
+            AccountOwnerPattern::Any,
+            AccountPluginResourcePattern::Any
+        ),
+        grant!(
+            Application,
+            ApplicationOwnerPattern::AnyApplications,
+            ApplicationResourcePattern
+        ),
+        grant!(
+            Environment,
+            EnvironmentOwnerPattern::AnyEnvironments,
+            EnvironmentResourcePattern::Any
+        ),
+        grant!(
+            EnvironmentPluginGrant,
+            EnvironmentOwnerPattern::AnyEnvironments,
+            EnvironmentPluginGrantResourcePattern::Any
+        ),
+        grant!(
+            EnvironmentDomainRegistration,
+            EnvironmentOwnerPattern::AnyEnvironments,
+            EnvironmentDomainRegistrationResourcePattern::Any
+        ),
+        grant!(
+            EnvironmentSecurityScheme,
+            EnvironmentOwnerPattern::AnyEnvironments,
+            EnvironmentSecuritySchemeResourcePattern::Any
+        ),
+        grant!(
+            EnvironmentHttpApiDeployment,
+            EnvironmentOwnerPattern::AnyEnvironments,
+            EnvironmentHttpApiDeploymentResourcePattern::Any
+        ),
+        grant!(
+            EnvironmentMcpDeployment,
+            EnvironmentOwnerPattern::AnyEnvironments,
+            EnvironmentMcpDeploymentResourcePattern::Any
+        ),
+        grant!(
+            EnvironmentAgentSecret,
+            EnvironmentOwnerPattern::AnyEnvironments,
+            EnvironmentAgentSecretResourcePattern::Any
+        ),
+        grant!(
+            EnvironmentResourceDefinition,
+            EnvironmentOwnerPattern::AnyEnvironments,
+            EnvironmentResourceDefinitionResourcePattern::Any
+        ),
+        grant!(
+            EnvironmentRetryPolicy,
+            EnvironmentOwnerPattern::AnyEnvironments,
+            EnvironmentRetryPolicyResourcePattern::Any
+        ),
+        grant!(
+            Component,
+            ComponentOwnerPattern::AnyComponents,
+            ComponentResourcePattern::Any
+        ),
+        grant!(
+            AccountOauth2Identity,
+            AccountOwnerPattern::Any,
+            AccountOauth2IdentityResourcePattern::Any
+        ),
+        grant!(
+            EnvironmentInitialFiles,
+            ComponentOwnerPattern::AnyComponents,
+            EnvironmentInitialFilesResourcePattern::any()
+        ),
+        grant!(
+            EnvironmentKvBucket,
+            EnvironmentOwnerPattern::AnyEnvironments,
+            EnvironmentKvBucketResourcePattern::Any
+        ),
+        grant!(
+            EnvironmentBlobBucket,
+            EnvironmentOwnerPattern::AnyEnvironments,
+            EnvironmentBlobBucketResourcePattern::Any
+        ),
+        grant!(
+            AccountPermissionShare,
+            AccountOwnerPattern::Any,
+            AccountPermissionShareResourcePattern::Any
+        ),
+    ];
+    assert_eq!(universal.len(), 34);
+
+    let implicit_top = card(Vec::new(), Vec::new());
+    let implicit_top_surface = DelegationSurface::from_cards(std::slice::from_ref(&implicit_top));
+    assert!(
+        implicit_top_surface
+            .validate_attenuation(&[], &[], &[], &universal)
+            .is_ok(),
+        "the implicit top representation accepts the same empty child ceiling"
+    );
+
+    let explicit_top = card(Vec::new(), universal.clone());
+    let surface = DelegationSurface::from_cards(std::slice::from_ref(&explicit_top));
+
+    let result = surface.validate_attenuation(&[], &[], &universal, &universal);
+
+    assert!(
+        result.is_ok(),
+        "a retained child ceiling denying every permission is a subset of an explicit top ceiling: {result:?}"
+    );
+}
+
+#[test]
+fn attenuation_accepts_exactly_retained_negative_only_ceiling() {
+    let holder = "acme/shop/prod/cart/agent";
+    let inherited_negative = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+    );
+    let mut parent = card(Vec::new(), Vec::new());
+    parent.upper_negative = vec![inherited_negative.clone()];
+    let parent_id = parent.card_id;
+    let parent_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent));
+
+    let witness = parent_surface
+        .validate_attenuation(&[], &[], &[], std::slice::from_ref(&inherited_negative))
+        .unwrap();
+
+    assert_eq!(witness, vec![parent_id]);
+}
+
+#[test]
+fn attenuation_rejects_negative_only_ceiling_retained_for_another_recipient() {
+    let holder = "acme/shop/prod/cart/agent";
+    let other_recipient = "acme/shop/prod/cart/other";
+    let inherited_negative = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+    );
+    let mismatched_negative = fs(
+        holder,
+        other_recipient,
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+    );
+    let lower_grant = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+    );
+
+    let mut parent_ceiling = card(Vec::new(), Vec::new());
+    parent_ceiling.upper_negative = vec![inherited_negative];
+    let companion = card(vec![lower_grant], Vec::new());
+    let recipient = RecipientPattern::parse(holder).unwrap();
+    let parent_surface =
+        EffectiveSurface::from_cards(&[parent_ceiling.clone(), companion.clone()], &recipient)
+            .unwrap();
+
+    let mut child_ceiling = card(Vec::new(), Vec::new());
+    child_ceiling.upper_negative = vec![mismatched_negative.clone()];
+    let child_surface =
+        EffectiveSurface::from_cards(&[child_ceiling, companion], &recipient).unwrap();
+    let secret = fs_target(holder, fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]));
+
+    assert!(!parent_surface.authorize(&secret).unwrap());
+    assert!(child_surface.authorize(&secret).unwrap());
+
+    let parent_ceiling_surface =
+        DelegationSurface::from_cards(std::slice::from_ref(&parent_ceiling));
+    assert_matches!(
+        parent_ceiling_surface.validate_attenuation(
+            &[],
+            &[],
+            &[],
+            std::slice::from_ref(&mismatched_negative),
+        ),
+        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+    );
+}
+
+#[test]
+fn wallet_derivation_parent_selection_chooses_highest_qualifying_card_id() {
+    let holder = "acme/shop/prod/cart/agent";
+    let parent_grant = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+    );
+    let child_grant = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
+    );
+    let lower_id = CardId(Uuid::from_u128(1));
+    let higher_id = CardId(Uuid::from_u128(2));
+    let mut lower = card(vec![parent_grant.clone()], Vec::new());
+    lower.card_id = lower_id;
+    let mut higher = card(vec![parent_grant], Vec::new());
+    higher.card_id = higher_id;
+
+    for cards in [
+        vec![lower.clone(), higher.clone()],
+        vec![higher.clone(), lower.clone()],
+    ] {
+        assert_eq!(
+            DelegationSurface::from_cards(&cards)
+                .select_wallet_derivation_parent(std::slice::from_ref(&child_grant), &[], &[], &[],)
+                .unwrap(),
+            WalletDerivationParent::Single(higher_id)
+        );
+    }
+}
+
+#[test]
+fn wallet_derivation_parent_selection_detects_multi_source_lower_union() {
+    let holder = "acme/shop/prod/cart/agent";
+    let first_grant = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("first.txt")]),
+    );
+    let second_grant = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("second.txt")]),
+    );
+    let parents = [
+        card(vec![first_grant.clone()], Vec::new()),
+        card(vec![second_grant.clone()], Vec::new()),
+    ];
+
+    assert_eq!(
+        DelegationSurface::from_cards(&parents)
+            .select_wallet_derivation_parent(&[first_grant, second_grant], &[], &[], &[],)
+            .unwrap(),
+        WalletDerivationParent::MultipleRequired
+    );
+}
+
+#[test]
+fn wallet_derivation_parent_selection_rejects_empty_wallet() {
+    assert_eq!(
+        DelegationSurface::default()
+            .select_wallet_derivation_parent(&[], &[], &[], &[])
+            .unwrap(),
+        WalletDerivationParent::NotPermitted
+    );
+}
+
+#[test]
+fn wallet_derivation_parent_selection_preserves_combined_attenuation_failure() {
+    let holder = "acme/shop/prod/cart/agent";
+    let available_grant = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("available.txt")]),
+    );
+    let unavailable_grant = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("unavailable.txt")]),
+    );
+    let surface = DelegationSurface::from_cards(&[card(vec![available_grant], Vec::new())]);
+
+    assert_matches!(
+        surface.select_wallet_derivation_parent(
+            std::slice::from_ref(&unavailable_grant),
+            &[],
+            &[],
+            &[],
+        ),
+        Err(CardAlgebraError::LowerBoundTooBroad { grant }) if *grant == unavailable_grant
+    );
+}
+
+#[test]
+fn wallet_derivation_parent_selection_applies_upper_intersection_after_lower_union() {
+    let holder = "acme/shop/prod/cart/agent";
+    let first_lower = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("first.txt")]),
+    );
+    let second_lower = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("second.txt")]),
+    );
+    let broad_upper = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+    );
+    let narrow_upper = fs(
+        holder,
+        holder,
+        fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
+    );
+    let parents = [
+        card(vec![first_lower.clone()], vec![broad_upper.clone()]),
+        card(vec![second_lower.clone()], vec![narrow_upper]),
+    ];
+
+    assert_matches!(
+        DelegationSurface::from_cards(&parents).select_wallet_derivation_parent(
+            &[first_lower, second_lower],
+            &[],
+            std::slice::from_ref(&broad_upper),
+            &[],
+        ),
+        Err(CardAlgebraError::UpperBoundTooBroad { .. })
     );
 }
 

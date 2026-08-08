@@ -19,6 +19,7 @@ mod agents;
 mod app;
 
 mod build_and_deploy_all;
+mod cards;
 mod directory_source_ifs;
 mod plugins;
 

@@ -14,8 +14,15 @@
 
 use test_r::test;
 
+use super::HostRequestGolemRpcInvoke;
 use crate::model::Timestamp;
+use crate::model::card::{CardId, ScopeCard};
+use crate::model::component::ComponentId;
 use crate::model::invocation_context::{AttributeValue, SpanId};
+use crate::model::oplog::host_functions::{
+    GolemPermissionsDerivePersist, GolemPermissionsInstallChildPersist,
+    GolemPermissionsInstallTransfer, HostFunctionName,
+};
 use crate::model::oplog::raw_types::SpanData;
 use crate::model::oplog::types::{
     SerializableDateTime, SerializableFileTimes, SerializableHttpErrorCode, SerializableHttpMethod,
@@ -43,6 +50,8 @@ use crate::model::oplog::{
     HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseRandomBytes,
     HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock, host_functions,
 };
+use crate::model::{AgentId, IdempotencyKey};
+use crate::schema::SchemaValue;
 use http::Version;
 use iso8601_timestamp as iso_ts;
 use proptest::collection::vec;
@@ -58,6 +67,79 @@ use wasmtime_wasi::p2::bindings::sockets::network::IpAddress;
 use wasmtime_wasi_http::p2::bindings::http::types::{
     DnsErrorPayload, ErrorCode, FieldSizePayload, TlsAlertReceivedPayload,
 };
+
+#[test]
+fn installed_child_persistence_has_a_distinct_host_function_name() {
+    let function_name = HostFunctionName::GolemPermissionsInstallChildPersist;
+    assert_eq!(
+        GolemPermissionsInstallChildPersist::FQFN,
+        "golem::permissions::wallet::persist-installed-child-card"
+    );
+    assert_ne!(
+        GolemPermissionsInstallChildPersist::FQFN,
+        GolemPermissionsDerivePersist::FQFN
+    );
+    assert_eq!(
+        HostFunctionName::from(GolemPermissionsInstallChildPersist::FQFN),
+        function_name
+    );
+    let bytes = desert_rust::serialize_to_byte_vec(&function_name).unwrap();
+    let decoded: HostFunctionName = desert_rust::deserialize(&bytes).unwrap();
+    assert_eq!(decoded, function_name);
+}
+
+#[test]
+fn card_transfer_has_a_distinct_host_function_name() {
+    let function_name = HostFunctionName::GolemPermissionsInstallTransfer;
+    assert_eq!(
+        GolemPermissionsInstallTransfer::FQFN,
+        "golem::permissions::wallet::install-card-transfer"
+    );
+    assert_ne!(
+        GolemPermissionsInstallTransfer::FQFN,
+        GolemPermissionsInstallChildPersist::FQFN
+    );
+    assert_eq!(
+        HostFunctionName::from(GolemPermissionsInstallTransfer::FQFN),
+        function_name
+    );
+    let bytes = desert_rust::serialize_to_byte_vec(&function_name).unwrap();
+    let decoded: HostFunctionName = desert_rust::deserialize(&bytes).unwrap();
+    assert_eq!(decoded, function_name);
+}
+
+#[test]
+fn rpc_durable_request_captures_scope_card_payload_deterministically() {
+    let scope_card = ScopeCard {
+        scope_card_id: CardId(uuid::Uuid::from_u128(1)),
+        root_card_ids: vec![CardId(uuid::Uuid::from_u128(2))],
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+    };
+    let request = HostRequestGolemRpcInvoke {
+        remote_agent_id: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "target".to_string(),
+        },
+        idempotency_key: IdempotencyKey::new("scope-card-call".to_string()),
+        method_name: "run".to_string(),
+        input: SchemaValue::Tuple {
+            elements: Vec::new(),
+        },
+        remote_agent_type: None,
+        remote_agent_parameters: None,
+        scope_card: Some(scope_card),
+    };
+
+    let first = desert_rust::serialize_to_byte_vec(&request).unwrap();
+    let second = desert_rust::serialize_to_byte_vec(&request).unwrap();
+    let decoded: HostRequestGolemRpcInvoke = desert_rust::deserialize(&first).unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(decoded, request);
+}
 
 fn datetime_strat()
 -> impl Strategy<Value = wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> {

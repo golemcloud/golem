@@ -66,7 +66,7 @@ use crate::base_model::agent::Principal;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::account::{AccountEmail, AccountId};
 use crate::model::agent::{AgentTypeSchemaResolver, ParsedAgentId};
-use crate::model::card::CardId;
+use crate::model::card::{CardId, ScopeCard};
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::types::AgentMetadataForGuests;
 use crate::model::oplog::{AgentResourceId, OplogEntry, RawSnapshotData};
@@ -821,6 +821,7 @@ pub enum AgentInvocation {
         input: SchemaValue,
         invocation_context: InvocationContextStack,
         principal: Principal,
+        scope_card: Option<ScopeCard>,
     },
     LoadSnapshot {
         idempotency_key: IdempotencyKey,
@@ -854,6 +855,7 @@ pub enum AgentInvocationPayload {
         method_name: String,
         input: SchemaValue,
         principal: Principal,
+        scope_card: Option<ScopeCard>,
     },
     LoadSnapshot {
         snapshot: RawSnapshotData,
@@ -1034,12 +1036,14 @@ impl AgentInvocation {
                 method_name,
                 input,
                 principal,
+                scope_card,
             } => Self::AgentMethod {
                 idempotency_key,
                 method_name,
                 input,
                 invocation_context,
                 principal,
+                scope_card,
             },
             AgentInvocationPayload::LoadSnapshot { snapshot } => Self::LoadSnapshot {
                 idempotency_key,
@@ -1092,12 +1096,14 @@ impl AgentInvocation {
                 input,
                 invocation_context,
                 principal,
+                scope_card,
             } => (
                 idempotency_key,
                 AgentInvocationPayload::AgentMethod {
                     method_name,
                     input,
                     principal,
+                    scope_card,
                 },
                 invocation_context,
             ),

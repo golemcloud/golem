@@ -47,12 +47,23 @@ pub enum ComponentRepoError {
     #[error("Version already exists: {version}")]
     VersionAlreadyExists { version: String },
     #[error(transparent)]
-    CardRepoError(#[from] CardRepoError),
+    CardRepoError(CardRepoError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
 
 error_forwarding!(ComponentRepoError, RepoError);
+
+impl From<CardRepoError> for ComponentRepoError {
+    fn from(value: CardRepoError) -> Self {
+        match value {
+            CardRepoError::CardTreeChangedDuringDelete | CardRepoError::ConcurrentModification => {
+                Self::ConcurrentModification
+            }
+            other => Self::CardRepoError(other),
+        }
+    }
+}
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct ComponentRecord {

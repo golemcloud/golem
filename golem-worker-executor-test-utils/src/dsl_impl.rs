@@ -465,6 +465,7 @@ impl TestDsl for TestWorkerExecutor {
                 freshness_disposition: workerexecutor::v1::InvocationFreshnessDisposition::MayExist
                     as i32,
                 config: Vec::new(),
+                scope_card: None,
             })
             .await;
 
@@ -519,6 +520,7 @@ impl TestDsl for TestWorkerExecutor {
                 freshness_disposition: workerexecutor::v1::InvocationFreshnessDisposition::MayExist
                     as i32,
                 config: Vec::new(),
+                scope_card: None,
             })
             .await;
 

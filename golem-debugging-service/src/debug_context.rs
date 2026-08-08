@@ -240,6 +240,10 @@ impl InvocationHooks for DebugContext {
             .await
     }
 
+    async fn on_agent_invocation_finished(&mut self) {
+        self.durable_ctx.on_agent_invocation_finished().await
+    }
+
     async fn on_invocation_failure(
         &mut self,
         full_function_name: &str,
@@ -409,9 +413,10 @@ impl HostWasmRpc for DebugContext {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
     ) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
         self.durable_ctx
-            .invoke_and_await(self_, method_name, input)
+            .invoke_and_await(self_, method_name, input, scope_card)
             .await
     }
 
@@ -420,8 +425,11 @@ impl HostWasmRpc for DebugContext {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
     ) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
-        self.durable_ctx.invoke(self_, method_name, input).await
+        self.durable_ctx
+            .invoke(self_, method_name, input, scope_card)
+            .await
     }
 
     async fn async_invoke_and_await(
@@ -429,9 +437,10 @@ impl HostWasmRpc for DebugContext {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
     ) -> anyhow::Result<AsyncInvocationWithMetadata> {
         self.durable_ctx
-            .async_invoke_and_await(self_, method_name, input)
+            .async_invoke_and_await(self_, method_name, input, scope_card)
             .await
     }
 
@@ -441,9 +450,10 @@ impl HostWasmRpc for DebugContext {
         scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
     ) -> anyhow::Result<ScheduledInvocationReceipt> {
         self.durable_ctx
-            .schedule_invocation(self_, scheduled_time, method_name, input)
+            .schedule_invocation(self_, scheduled_time, method_name, input, scope_card)
             .await
     }
 
@@ -453,9 +463,10 @@ impl HostWasmRpc for DebugContext {
         scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
     ) -> anyhow::Result<CancelableScheduledInvocationReceipt> {
         self.durable_ctx
-            .schedule_cancelable_invocation(self_, scheduled_time, method_name, input)
+            .schedule_cancelable_invocation(self_, scheduled_time, method_name, input, scope_card)
             .await
     }
 

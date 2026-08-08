@@ -109,6 +109,7 @@ pub async fn invoke_resource(
             auth_ctx,
             proto_principal,
             None,
+            None,
         )
         .await
         .map_err(|e| {

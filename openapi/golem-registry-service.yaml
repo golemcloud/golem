@@ -9087,6 +9087,18 @@ components:
       properties:
         required:
           type: boolean
+    AgentId:
+      type: object
+      title: AgentId
+      required:
+      - componentId
+      - agentId
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        agentId:
+          type: string
     AgentMethodSchema:
       type: object
       required:
@@ -10165,6 +10177,7 @@ components:
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByEnvironmentDefault'
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByPermissionShare'
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByAgentInitial'
+      - $ref: '#/components/schemas/CardManagedBy_CardManagedByRuntimeDerived'
       discriminator:
         propertyName: type
         mapping:
@@ -10172,6 +10185,7 @@ components:
           EnvironmentDefault: '#/components/schemas/CardManagedBy_CardManagedByEnvironmentDefault'
           PermissionShare: '#/components/schemas/CardManagedBy_CardManagedByPermissionShare'
           AgentInitial: '#/components/schemas/CardManagedBy_CardManagedByAgentInitial'
+          RuntimeDerived: '#/components/schemas/CardManagedBy_CardManagedByRuntimeDerived'
     CardManagedByAccountRoot:
       type: object
       title: CardManagedByAccountRoot
@@ -10215,6 +10229,25 @@ components:
         permissionShareId:
           type: string
           format: uuid
+    CardManagedByRuntimeDerived:
+      type: object
+      title: CardManagedByRuntimeDerived
+      required:
+      - environmentId
+      - agentId
+      - invocationKey
+      - oplogIndex
+      properties:
+        environmentId:
+          type: string
+          format: uuid
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        invocationKey:
+          type: string
+        oplogIndex:
+          type: integer
+          format: uint64
     CardManagedBy_CardManagedByAccountRoot:
       allOf:
       - type: object
@@ -10263,6 +10296,18 @@ components:
             - PermissionShare
             example: PermissionShare
       - $ref: '#/components/schemas/CardManagedByPermissionShare'
+    CardManagedBy_CardManagedByRuntimeDerived:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - RuntimeDerived
+            example: RuntimeDerived
+      - $ref: '#/components/schemas/CardManagedByRuntimeDerived'
     ComponentCreation:
       type: object
       title: ComponentCreation
@@ -12129,6 +12174,33 @@ components:
       properties:
         variableName:
           type: string
+    PermissionCardSpec:
+      type: object
+      required:
+      - polymorphic
+      properties:
+        polymorphic:
+          type: boolean
+    PermissionCardValuePayload:
+      type: object
+      required:
+      - cardId
+      - polymorphic
+      properties:
+        cardId:
+          type: string
+          format: uuid
+        parentIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        polymorphic:
+          type: boolean
     PermissionShare:
       type: object
       title: PermissionShare
@@ -13661,6 +13733,24 @@ components:
           kind:
             type: string
             enum:
+            - permission-card
+          value:
+            type: object
+            required:
+            - spec
+            properties:
+              spec:
+                $ref: '#/components/schemas/PermissionCardSpec'
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
             - future
           value:
             type: object
@@ -14154,6 +14244,17 @@ components:
             - quota-token
           value:
             $ref: '#/components/schemas/QuotaTokenValuePayload'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - permission-card
+          value:
+            $ref: '#/components/schemas/PermissionCardValuePayload'
     SecretSpec:
       type: object
       properties:

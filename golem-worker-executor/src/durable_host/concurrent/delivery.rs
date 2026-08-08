@@ -360,6 +360,7 @@ impl CompletionDelivery {
             },
             oplog.clone(),
             golem_common::model::regions::DeletedRegions::default(),
+            None,
         )
         .await?;
         Ok(Self {

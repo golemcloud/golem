@@ -103,13 +103,37 @@ pub fn parse_permission(value: &str) -> Result<PermissionPattern, CardParseError
     let parts = permission_parts(value).map_err(CardParseError::Malformed)?;
     reject_slot_variables(&parts)?;
 
-    dispatch_permission_class!(
-        parse_permission_case,
+    parse_permission_fields(
         parts.class.as_str(),
         &parts.owner,
         &parts.recipient,
         &parts.verb,
-        &parts.resource
+        &parts.resource,
+    )
+}
+
+pub fn parse_permission_fields(
+    class: &str,
+    owner: &str,
+    recipient: &str,
+    verb: &str,
+    resource: &str,
+) -> Result<PermissionPattern, CardParseError> {
+    for value in [owner, recipient, resource] {
+        if contains_slot_reference(value) {
+            return Err(CardParseError::SlotVariableInConcreteGrant(
+                value.to_string(),
+            ));
+        }
+    }
+
+    dispatch_permission_class!(
+        parse_permission_case,
+        class,
+        owner,
+        recipient,
+        verb,
+        resource
     )
 }
 

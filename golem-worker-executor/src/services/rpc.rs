@@ -42,7 +42,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentInvocationMode, AgentPrincipal, InvocationFreshnessDisposition, Principal,
 };
-use golem_common::model::card::{AgentMethodName, AgentResourcePattern, AgentVerb};
+use golem_common::model::card::{AgentMethodName, AgentResourcePattern, AgentVerb, ScopeCard};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::model::worker::AgentConfigEntryDto;
@@ -85,6 +85,7 @@ pub trait Rpc: Send + Sync {
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
+        scope_card: Option<ScopeCard>,
     ) -> Result<SchemaValue, RpcError>;
 
     async fn invoke(
@@ -183,6 +184,7 @@ impl From<WorkerExecutorError> for RpcError {
             WorkerExecutorError::InvalidAccount => RpcError::Denied {
                 details: "Invalid account".to_string(),
             },
+            WorkerExecutorError::PermissionDenied { details } => RpcError::Denied { details },
             WorkerExecutorError::InvalidRequest { details } => RpcError::ProtocolError { details },
             _ => RpcError::RemoteInternalError {
                 details: value.to_string(),
@@ -343,6 +345,7 @@ impl Rpc for RemoteInvocationRpc {
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
+        scope_card: Option<ScopeCard>,
     ) -> Result<SchemaValue, RpcError> {
         let principal = caller_agent_principal(self_agent_id);
 
@@ -363,6 +366,7 @@ impl Rpc for RemoteInvocationRpc {
                 principal,
                 owned_agent_id.environment_id,
                 auth_ctx,
+                scope_card,
             )
             .await?;
 
@@ -408,6 +412,7 @@ impl Rpc for RemoteInvocationRpc {
                 principal,
                 owned_agent_id.environment_id,
                 auth_ctx,
+                None,
             )
             .await?;
 
@@ -890,6 +895,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
+        scope_card: Option<ScopeCard>,
     ) -> Result<SchemaValue, RpcError> {
         let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
 
@@ -946,6 +952,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 input: method_parameters,
                 invocation_context: self_stack,
                 principal,
+                scope_card,
             };
 
             let output = worker.invoke_and_await(invocation).await?;
@@ -972,6 +979,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_stack,
                     config,
                     auth_ctx,
+                    scope_card,
                 )
                 .await
         }
@@ -1046,6 +1054,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 input: method_parameters,
                 invocation_context: self_stack,
                 principal,
+                scope_card: None,
             };
 
             match worker.clone().invoke(invocation).await? {

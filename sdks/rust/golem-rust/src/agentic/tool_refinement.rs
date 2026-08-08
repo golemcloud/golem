@@ -226,6 +226,7 @@ fn schema_kind_name(ty: &SchemaType) -> &'static str {
         SchemaType::Union { .. } => "union",
         SchemaType::Secret { .. } => "secret",
         SchemaType::QuotaToken { .. } => "quota-token",
+        SchemaType::PermissionCard { .. } => "permission-card",
         SchemaType::Future { .. } => "future",
         SchemaType::Stream { .. } => "stream",
     }

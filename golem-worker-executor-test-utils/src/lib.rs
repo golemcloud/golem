@@ -35,7 +35,9 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
-use golem_common::model::card::{Card, CardId, StoredCard};
+use golem_common::model::card::{
+    Card, CardId, CardManagedByRuntimeDerived, StoredCard, parse_permission_fields,
+};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{CanonicalFilePath, ComponentId};
 use golem_common::model::environment::EnvironmentId;
@@ -133,7 +135,7 @@ use golem_worker_executor::services::worker::WorkerService;
 use golem_worker_executor::services::worker_enumeration::WorkerEnumerationService;
 use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::worker_fork::WorkerForkService;
-use golem_worker_executor::services::worker_proxy::WorkerProxy;
+use golem_worker_executor::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use golem_worker_executor::services::{HasAll, NoAdditionalDeps, rdbms};
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
 use golem_worker_executor::worker::{RetryDecision, Worker};
@@ -585,7 +587,25 @@ impl TestWorkerExecutor {
                 lower: Vec::new(),
                 upper: Vec::new(),
             },
+            delegation_surface: None,
         })
+    }
+
+    pub async fn commit_oplog_entry_bypassing_worker_status(
+        &self,
+        agent_id: &AgentId,
+        entry: OplogEntry,
+    ) -> anyhow::Result<OplogIndex> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
+        let oplog = golem_worker_executor::services::HasOplog::oplog(worker.as_ref());
+        let oplog_index = oplog.add(entry).await;
+        oplog.commit(CommitLevel::Always).await;
+        Ok(oplog_index)
     }
 
     pub async fn store_component_with_id(
@@ -976,6 +996,8 @@ type WrapKeyValueServiceFn =
 type WrapBlobStoreServiceFn =
     dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
 type WrapRpcFn = dyn Fn(Arc<dyn Rpc>) -> Arc<dyn Rpc> + Send + Sync;
+type WrapWorkerProxyFn = dyn Fn(Arc<dyn WorkerProxy>) -> Arc<dyn WorkerProxy> + Send + Sync;
+type CreateCardServiceFn = dyn Fn() -> Arc<dyn CardService> + Send + Sync;
 type CreateDirectInvocationAuthFn = dyn Fn() -> Arc<dyn DirectInvocationAuthService> + Send + Sync;
 
 #[derive(Clone, Default)]
@@ -984,6 +1006,8 @@ pub struct TestExecutorOverrides {
     pub wrap_key_value_service: Option<Arc<WrapKeyValueServiceFn>>,
     pub wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
     pub wrap_rpc: Option<Arc<WrapRpcFn>>,
+    pub wrap_worker_proxy: Option<Arc<WrapWorkerProxyFn>>,
+    pub create_card_service: Option<Arc<CreateCardServiceFn>>,
     pub create_direct_invocation_auth: Option<Arc<CreateDirectInvocationAuthFn>>,
     /// Named retry policies that the executor's `EnvironmentStateService`
     /// should expose to running agents (mirrors `retryPolicyDefaults` in
@@ -1400,6 +1424,10 @@ impl InvocationHooks for TestWorkerCtx {
             .await
     }
 
+    async fn on_agent_invocation_finished(&mut self) {
+        self.durable_ctx.on_agent_invocation_finished().await
+    }
+
     async fn on_invocation_failure(
         &mut self,
         full_function_name: &str,
@@ -1773,9 +1801,10 @@ impl HostWasmRpc for TestWorkerCtx {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
     ) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
         self.durable_ctx
-            .invoke_and_await(self_, method_name, input)
+            .invoke_and_await(self_, method_name, input, scope_card)
             .await
     }
 
@@ -1784,8 +1813,11 @@ impl HostWasmRpc for TestWorkerCtx {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
     ) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
-        self.durable_ctx.invoke(self_, method_name, input).await
+        self.durable_ctx
+            .invoke(self_, method_name, input, scope_card)
+            .await
     }
 
     async fn async_invoke_and_await(
@@ -1793,9 +1825,10 @@ impl HostWasmRpc for TestWorkerCtx {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
     ) -> anyhow::Result<AsyncInvocationWithMetadata> {
         self.durable_ctx
-            .async_invoke_and_await(self_, method_name, input)
+            .async_invoke_and_await(self_, method_name, input, scope_card)
             .await
     }
 
@@ -1805,9 +1838,10 @@ impl HostWasmRpc for TestWorkerCtx {
         scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
     ) -> anyhow::Result<ScheduledInvocationReceipt> {
         self.durable_ctx
-            .schedule_invocation(self_, scheduled_time, method_name, input)
+            .schedule_invocation(self_, scheduled_time, method_name, input, scope_card)
             .await
     }
 
@@ -1817,9 +1851,10 @@ impl HostWasmRpc for TestWorkerCtx {
         scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
     ) -> anyhow::Result<CancelableScheduledInvocationReceipt> {
         self.durable_ctx
-            .schedule_cancelable_invocation(self_, scheduled_time, method_name, input)
+            .schedule_cancelable_invocation(self_, scheduled_time, method_name, input, scope_card)
             .await
     }
 
@@ -1928,6 +1963,15 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         Arc::new(golem_worker_executor::services::quota::UnlimitedQuotaService)
     }
 
+    fn create_worker_proxy(&self, golem_config: &GolemConfig) -> Arc<dyn WorkerProxy> {
+        let worker_proxy = Arc::new(RemoteWorkerProxy::new(&golem_config.public_worker_api));
+        if let Some(wrap) = &self.overrides.wrap_worker_proxy {
+            wrap(worker_proxy)
+        } else {
+            worker_proxy
+        }
+    }
+
     fn create_environment_state_service(
         &self,
         _config: &EnvironmentStateServiceConfig,
@@ -1959,7 +2003,11 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         &self,
         _registry_service: Arc<dyn RegistryService>,
     ) -> Arc<dyn CardService> {
-        Arc::new(TestCardService)
+        if let Some(create) = &self.overrides.create_card_service {
+            create()
+        } else {
+            Arc::new(TestCardService)
+        }
     }
 
     fn create_additional_deps(
@@ -2149,6 +2197,48 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
             <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
         golem_worker_executor::preview2::golem::tool::host::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Context>>,
+        >(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_worker_executor::preview2::golem::permissions::types::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Context>>,
+        >(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_worker_executor::preview2::golem::permissions::inspect::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Context>>,
+        >(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_worker_executor::preview2::golem::permissions::derive::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Context>>,
+        >(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_worker_executor::preview2::golem::permissions::revoke::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Context>>,
+        >(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_worker_executor::preview2::golem::permissions::wallet::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Context>>,
+        >(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_worker_executor::preview2::golem::permissions::kernel_introspection::add_to_linker::<
             _,
             HasSelf<DurableWorkerCtx<Context>>,
         >(
@@ -3546,6 +3636,7 @@ impl Rpc for FailingRpc {
         self_stack: InvocationContextStack,
         config: Vec<golem_common::model::worker::AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
+        scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<SchemaValue, ServiceRpcError> {
         if self
             .remaining_failures
@@ -3569,6 +3660,7 @@ impl Rpc for FailingRpc {
                     self_stack,
                     config,
                     auth_ctx,
+                    scope_card,
                 )
                 .await
         }
@@ -3608,11 +3700,34 @@ impl Rpc for FailingRpc {
 
 pub const TEST_CARD_ID: CardId = CardId(uuid!("b7f515b3-eabb-4a39-8d94-fe6078ed441e"));
 
+pub fn registry_test_card() -> StoredCard {
+    StoredCard::Concrete(Card {
+        card_id: TEST_CARD_ID,
+        parent_ids: Vec::new(),
+        lower_positive: vec![parse_permission_fields("card", "*", "*", "inspect", "*").unwrap()],
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: DateTime::from_timestamp_nanos(0),
+        expires_at: None,
+        system_card: false,
+        managed_by: None,
+    })
+}
+
 pub struct TestCardService;
 
 #[async_trait]
 impl CardService for TestCardService {
     async fn record_revoked_cards(&self, _card_ids: &[CardId]) {}
+
+    async fn create_runtime_card(
+        &self,
+        card: StoredCard,
+        _provenance: CardManagedByRuntimeDerived,
+    ) -> Result<StoredCard, WorkerExecutorError> {
+        Ok(card)
+    }
 
     async fn check_cards(
         &self,
@@ -3622,18 +3737,7 @@ impl CardService for TestCardService {
 
         for card_id in card_ids {
             let card_state = if card_id == TEST_CARD_ID {
-                CardState::Live(Box::new(StoredCard::Concrete(Card {
-                    card_id: TEST_CARD_ID,
-                    parent_ids: Vec::new(),
-                    lower_positive: Vec::new(),
-                    lower_negative: Vec::new(),
-                    upper_positive: Vec::new(),
-                    upper_negative: Vec::new(),
-                    created_at: DateTime::from_timestamp_nanos(0),
-                    expires_at: None,
-                    system_card: false,
-                    managed_by: None,
-                })))
+                CardState::Live(Box::new(registry_test_card()))
             } else {
                 CardState::Unknown
             };

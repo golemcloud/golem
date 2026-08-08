@@ -371,6 +371,7 @@ async fn live_delivery_token(
         },
         seed_oplog_dyn,
         golem_common::model::regions::DeletedRegions::default(),
+        None,
     )
     .await
     .expect("failed to build replay state");
@@ -854,6 +855,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
         },
         persist_oplog.clone(),
         golem_common::model::regions::DeletedRegions::default(),
+        None,
     )
     .await
     .expect("failed to build replay state");

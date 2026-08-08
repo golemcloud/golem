@@ -43,6 +43,7 @@ impl AuthService for TestAuthService {
                 }],
                 upper: Vec::new(),
             },
+            delegation_surface: None,
         }))
     }
 }

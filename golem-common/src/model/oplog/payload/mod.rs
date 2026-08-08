@@ -18,15 +18,14 @@ pub mod types;
 mod tests;
 
 use crate::model::agent::AgentTypeName;
+use crate::model::card::ScopeCard;
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
-use crate::model::oplog::CardInstallFailure;
-use crate::model::oplog::PayloadId;
 use crate::model::oplog::payload::types::{
-    FileSystemError, ObjectMetadata, SecretRevealAudit, SecretRevealError, SerializableDateTime,
-    SerializableFileTimes, SerializableP3FileSystemError, SerializableP3IpSocketAddress,
-    SerializableP3SocketErrorCode, SerializableP3UdpDatagram, SerializableSocketError,
-    SerializableWebsocketError, SerializableWebsocketMessage,
+    FileSystemError, ObjectMetadata, PermissionCardRevokeError, SecretRevealAudit,
+    SecretRevealError, SerializableDateTime, SerializableFileTimes, SerializableP3FileSystemError,
+    SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3UdpDatagram,
+    SerializableSocketError, SerializableWebsocketError, SerializableWebsocketMessage,
 };
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
@@ -38,6 +37,7 @@ use crate::model::oplog::types::{
     SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleId,
     SerializableStreamError,
 };
+use crate::model::oplog::{CardInstallFailure, PayloadId};
 use crate::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryPolicy};
 use crate::model::worker::RevertWorkerTarget;
 use crate::model::{
@@ -146,6 +146,8 @@ oplog_payload! {
             #[transient(None::<TypedSchemaValue>)]
             #[schema(skip)]
             remote_agent_parameters: Option<TypedSchemaValue>, // enriched field, only filled when exposed as public oplog entry
+            #[schema(skip)]
+            scope_card: Option<ScopeCard>,
         },
         GolemRpcScheduledInvocation {
             remote_agent_id: AgentId,
@@ -224,6 +226,20 @@ oplog_payload! {
         },
         QuotaCommitRequest {
             used: u64,
+        },
+        PermissionCardDerive {
+            card: Vec<u8>,
+            provenance: Vec<u8>,
+        },
+        PermissionCardRevoke {
+            card_id: Uuid,
+        },
+        PermissionCardTransfer {
+            transfer_id: Uuid,
+            source_card: Vec<u8>,
+            installed_card: Vec<u8>,
+            installed_card_provenance: Option<Vec<u8>>,
+            target_agent_id: AgentId,
         },
         GolemRetryPolicyByName {
             name: String
@@ -476,6 +492,13 @@ oplog_payload! {
             /// Unix timestamp in milliseconds when credit_after was recorded.
             credit_after_at_ms: i64,
         },
+        PermissionCardDerived {
+            card: Vec<u8>,
+        },
+        PermissionCardsRevoked {
+            result: Result<Vec<Uuid>, PermissionCardRevokeError>,
+        },
+        PermissionCardTransferComplete {},
         GolemRetryPolicies {
             policies: Vec<NamedRetryPolicy>
         },
@@ -706,7 +729,11 @@ pub mod host_functions {
         (GolemApiInstallCard => "golem::api", "install-card", GolemApiCard, GolemApiInstallCard),
         (FilesystemInputStreamRead => "filesystem::input_stream", "read", NoInput, StreamSkip),
         (FilesystemInputStreamSkip => "filesystem::input_stream", "skip", NoInput, StreamSkip),
-        (FilesystemOutputStreamCheckWrite => "filesystem::output_stream", "check_write", NoInput, StreamCheckWrite)
+        (FilesystemOutputStreamCheckWrite => "filesystem::output_stream", "check_write", NoInput, StreamCheckWrite),
+        (GolemPermissionsDerivePersist => "golem::permissions::derive", "persist-derived-card", PermissionCardDerive, PermissionCardDerived),
+        (GolemPermissionsRevokePersist => "golem::permissions::revoke", "persist-revoked-cards", PermissionCardRevoke, PermissionCardsRevoked),
+        (GolemPermissionsInstallChildPersist => "golem::permissions::wallet", "persist-installed-child-card", PermissionCardDerive, PermissionCardDerived),
+        (GolemPermissionsInstallTransfer => "golem::permissions::wallet", "install-card-transfer", PermissionCardTransfer, PermissionCardTransferComplete)
     }
 }
 

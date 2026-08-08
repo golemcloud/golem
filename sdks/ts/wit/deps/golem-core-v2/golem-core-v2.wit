@@ -125,6 +125,17 @@ interface types {
     /// and reveal it only through capability-gated host interfaces.
     resource secret;
 
+    /// An unforgeable handle to a permission card held by the runtime. The
+    /// handle is opaque to guests: components can hold, pass, derive, install,
+    /// and revoke cards only through the `golem:permissions` interfaces. When
+    /// carried in a `schema-value-tree` (see
+    /// `schema-value-node::permission-card-handle`) the handle is transferred
+    /// by ownership; the host converts it to/from its internal trusted
+    /// card-store representation at the boundary. The wire form is the card-id
+    /// (UUID) alone — no grants, parents, or metadata cross the wire as
+    /// authority.
+    resource permission-card;
+
     // ============================================================
     // Schema graph (self-contained type carrier)
     // ============================================================
@@ -266,6 +277,7 @@ interface types {
         // --- Capability nodes ---
         secret-type(secret-spec),
         quota-token-type(quota-token-spec),
+        permission-card-type(permission-card-spec),
 
         // --- WASI P3 stubs (parseable only; no semantics yet) ---
         future-type(option<type-node-index>),
@@ -462,6 +474,13 @@ interface types {
         resource-name: option<string>,
     }
 
+    record permission-card-spec {
+        /// `true` = polymorphic (carries slot variables in owner / resource-id),
+        /// `false` = monomorphic. Structural metadata only; authority lives in
+        /// the card store, not in the schema spec.
+        polymorphic: bool,
+    }
+
     // ============================================================
     // Schema value (always paired with a schema-graph)
     // ============================================================
@@ -524,6 +543,7 @@ interface types {
         // Capability nodes
         secret-value(own<secret>),
         quota-token-handle(own<quota-token>),
+        permission-card-handle(own<permission-card>),
 
         // WASI P3 stubs (parseable only in the schema; no constructible values).
     }
