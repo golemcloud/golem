@@ -5,3 +5,7 @@ version = 4
 [[package]]
 name = "dir-mirror"
 version = "0.0.0"
+
+[[package]]
+name = "go-bindgen-fixup"
+version = "0.0.0"

@@ -881,6 +881,12 @@ async fn gen_bridge_sdk_target(
                                 MoonBitBridgeMode::GuestWasmRpc,
                             )?)
                         }
+                        // Go has no bridge generator yet; see
+                        // BridgeSdkTargetKind::supports.
+                        (GuestLanguage::Go, _) => bail!(
+                            "bridge generation is not supported for {} yet",
+                            GuestLanguage::Go.to_string().log_color_highlight()
+                        ),
                     };
 
                         fs::remove(&output_dir)?;

@@ -820,6 +820,38 @@ impl TemplateHandler {
                     },
                 });
             }
+            GuestLanguage::Go => {
+                let target_root = application_path.join(new_component_dir);
+
+                // Each Go component is its own module, so the whole module moves
+                // with the component: go.mod/go.sum plus every root .go file.
+                // (componentize-go only resolves the SDK's WIT when it runs from
+                // a module root, which is why the module cannot stay behind.)
+                for name in ["go.mod", "go.sum"] {
+                    let source = application_path.join(name);
+                    if source.exists() {
+                        upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
+                            source,
+                            target: target_root.join(name),
+                        });
+                    }
+                }
+
+                for entry in std::fs::read_dir(application_path)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("go") {
+                        let file_name = entry.file_name();
+                        upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
+                            source: path.clone(),
+                            target: target_root.join(&file_name),
+                        });
+                    }
+                }
+
+                // golem-temp deliberately NOT moved: Go build output goes to the
+                // app-root golem-temp (like TS and Scala), so it stays put.
+            }
             GuestLanguage::MoonBit => {
                 let target_root = application_path.join(new_component_dir);
 

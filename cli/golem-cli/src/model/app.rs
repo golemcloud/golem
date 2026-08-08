@@ -411,6 +411,9 @@ impl BridgeSdkTargetKind {
                 | GuestLanguage::Scala
                 | GuestLanguage::MoonBit,
             ) => false,
+            // No bridge generation for Go yet (no src/bridge_gen/go); cross-component
+            // clients for Go are written by hand against the SDK until it lands.
+            (_, _, GuestLanguage::Go) => false,
         }
     }
 
@@ -1836,6 +1839,7 @@ impl<'a> Component<'a> {
                     "rust" => Some(GuestLanguage::Rust),
                     "scala" => Some(GuestLanguage::Scala),
                     "moonbit" => Some(GuestLanguage::MoonBit),
+                    "go" => Some(GuestLanguage::Go),
                     _ => None,
                 })
         })

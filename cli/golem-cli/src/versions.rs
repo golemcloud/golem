@@ -17,6 +17,7 @@ pub mod sdk {
     pub const TS: &str = "1.1.1";
     pub const SCALA: &str = "1.5.1";
     pub const MOONBIT: &str = "0.5.2";
+    pub const GO: &str = "0.1.0";
     pub const MANIFEST: &str = "1.6.0";
 
     #[macro_export]
@@ -36,6 +37,16 @@ pub mod build_tool {
     pub const MOON_MIN: &str = "0.1.20260409";
     pub const JAVA_MIN: &str = "17.0.0";
     pub const WASM_TOOLS_MIN: &str = "1.227.1";
+    pub const GO_MIN: &str = "1.25.5";
+}
+
+// Keep this aligned with the Go component template's `tool` directive.
+//
+// componentize-go must be pinned to a concrete version, never `latest`: below
+// v0.4.0 the Go wrapper resolves its Rust binary from a *canary* channel and
+// silently ignores the pin.
+pub mod go_dep {
+    pub const COMPONENTIZE_GO: &str = "v0.4.0";
 }
 
 // Keep this aligned with the TS component template

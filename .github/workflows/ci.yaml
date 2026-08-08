@@ -351,6 +351,28 @@ jobs:
         working-directory: sdks/moonbit/golem_sdk_tools
         run: moon update
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          # Stock Go, tracking the version pinned in the module; componentize-go
+          # is a pinned `go tool` (go.mod) that fetches its own toolchain, so the
+          # Go SDK's CLI integration test (test_go_counter) needs only this.
+          go-version-file: sdks/go/golem/go.mod
+          cache-dependency-path: sdks/go/golem/go.sum
+
+      - name: Cache componentize-go toolchain
+        uses: actions/cache@v5
+        with:
+          # On first `golem build` of a Go component, componentize-go downloads a
+          # full patched Go toolchain into this dir (the "will use downloaded
+          # version" build-log line) — hundreds of MB. Cache it so the Go SDK's
+          # CLI integration test doesn't re-fetch it each run. Keyed on the SDK
+          # go.sum, which tracks the pinned componentize-go version.
+          path: ~/.cache/componentize-go
+          key: componentize-go-${{ runner.os }}-${{ hashFiles('sdks/go/golem/go.sum') }}
+          restore-keys: |
+            componentize-go-${{ runner.os }}-
+
       - name: Sync WIT dependencies
         run: cargo make wit
 
@@ -620,6 +642,66 @@ jobs:
       - name: Tests
         run: cargo test --all-features
         working-directory: sdks/rust
+
+  build-golem-go:
+    runs-on: blacksmith
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          # Tracks the version pinned in the module (currently go 1.25.5); stock
+          # Go only — the SDK deliberately does not use TinyGo.
+          go-version-file: sdks/go/golem/go.mod
+          cache-dependency-path: sdks/go/golem/go.sum
+
+      # cargo-make drives the WIT dep sync and the go-bindgen-fixup step that the
+      # bindings regeneration runs. componentize-go itself is a pinned `go tool`
+      # (go.mod), so no wasm-tools / WASI SDK are needed here.
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          install-cargo-make: 'true'
+
+      # Regenerate the committed WIT bindings (syncs wit/deps first via the task's
+      # `wit` dependency) and fail if they drift from what's checked in — mirrors
+      # the "types are committed" gate the TS and Scala SDKs use.
+      - name: Regenerate Go WIT bindings
+        run: cargo make generate-sdk-go-bindings
+
+      - name: Verify Go WIT bindings are committed
+        run: |
+          if ! git diff --exit-code sdks/go/golem/internal/wit; then
+            echo "❌ sdks/go/golem/internal/wit differs from the committed version."
+            echo "Please run 'cargo make generate-sdk-go-bindings' and commit the result."
+            exit 1
+          fi
+
+      # Lint the hand-written package with golangci-lint (the standard Go
+      # meta-linter: govet, errcheck, ineffassign, staticcheck, unused + the
+      # doc-comment-form checks). Config + generated-code exclusions live in
+      # sdks/go/golem/.golangci.yml. The official action fetches a pinned binary
+      # and caches analysis — this replaces the host `go vet` step too, since its
+      # govet covers it (and the .golangci.yml exclusions handle the generated
+      # internal/wit bindings that forced the old vet flag workaround).
+      - name: Lint (golangci-lint)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12
+          working-directory: sdks/go/golem
+
+      - name: Vet (wasip1)
+        working-directory: sdks/go/golem
+        run: GOOS=wasip1 GOARCH=wasm go vet -unsafeptr=false -composites=false .
+
+      - name: Build for wasip1
+        working-directory: sdks/go/golem
+        run: GOOS=wasip1 GOARCH=wasm go build ./...
+
+      - name: Run tests
+        working-directory: sdks/go/golem
+        run: go test ./...
 
   build-golem-ts:
     runs-on: blacksmith

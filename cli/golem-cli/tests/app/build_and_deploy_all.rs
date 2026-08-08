@@ -241,6 +241,23 @@ fn assert_multi_component_layout(app_root: &std::path::Path, language: GuestLang
                 "expected multi-component MoonBit layout: moon.mod.json should remain at the app root"
             );
         }
+        GuestLanguage::Go => {
+            // Unlike Scala/MoonBit, NOTHING stays behind: each Go component is
+            // its own module, and componentize-go only resolves the SDK's WIT
+            // when it runs from a module root.
+            assert!(
+                !app_root.join("go.mod").exists(),
+                "expected multi-component Go layout: go.mod should no longer be at the app root"
+            );
+            let has_go_at_root = std::fs::read_dir(app_root)
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .any(|e| e.path().extension().and_then(|x| x.to_str()) == Some("go"));
+            assert!(
+                !has_go_at_root,
+                "expected multi-component Go layout: no *.go files should remain at the app root"
+            );
+        }
         _ => {}
     }
 }

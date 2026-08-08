@@ -76,6 +76,95 @@ async fn test_rust_counter() {
     }
 }
 
+/// End-to-end test for the Go SDK: creates a Go app from the composable counter
+/// template, adds a second agent package via the snapshotting template (proving
+/// the merged main.go barrel deploys and runs, not just compiles), then deploys
+/// and invokes methods on both agents against a live local server. This is the
+/// CLI-driven integration layer for the Go SDK — the wasi-touching RPC/host path
+/// only links and runs on wasm, so it is covered here rather than by `go test`.
+///
+/// Requires the Go toolchain + componentize-go on the PATH.
+#[test]
+#[timeout("15 minutes")]
+async fn test_go_counter() {
+    let mut ctx = TestContext::new();
+    let app_name = "counter";
+    let component_name = "counter:svc";
+
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            app_name,
+            flag::COMPONENT_NAME,
+            component_name,
+            flag::TEMPLATE,
+            "go",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    // Compose a second agent (its own package) into the same component, so the
+    // merged main.go barrel is exercised at runtime.
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::COMPONENT_NAME,
+            component_name,
+            flag::TEMPLATE,
+            "go/snapshotting",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    // CounterAgent: increment -> 1, add 5 -> 6, value -> 6.
+    let counter = format!("CounterAgent(\"{}\")", Uuid::new_v4());
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &counter, "increment"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(!outputs.stderr_contains("error"));
+    assert!(outputs.stdout_contains_ordered(["Invocation result", "1"]));
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &counter, "add", "5"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains_ordered(["Invocation result", "6"]));
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &counter, "value"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains_ordered(["Invocation result", "6"]));
+
+    // SessionAgent (from the snapshotting template): spend 10 -> 10, total -> 10.
+    // Invoking it at all proves the composed second package registered and runs.
+    let session = format!("SessionAgent(\"{}\")", Uuid::new_v4());
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &session, "spend", "10"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains_ordered(["Invocation result", "10"]));
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &session, "total"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains_ordered(["Invocation result", "10"]));
+}
+
 /// End-to-end test for the Scala bridge generator: deploys the Rust counter
 /// agent, generates a Scala bridge SDK for it, then compiles and runs a small
 /// Scala program that invokes the live agent through the generated, future-based
