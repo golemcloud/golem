@@ -102,8 +102,6 @@ oplog_entry! {
             parent: Option<AgentId>,
             component_size: u64,
             initial_total_linear_memory_size: u64,
-            #[serde(default)]
-            initial_filesystem_storage_usage: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
             local_agent_config: Vec<PublicTypedAgentConfigEntry>,
             original_phantom_id: Option<Uuid>,

@@ -202,7 +202,6 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 parent,
                 component_size,
                 initial_total_linear_memory_size,
-                initial_filesystem_storage_usage,
                 initial_active_plugins,
                 local_agent_config,
                 original_phantom_id,
@@ -221,7 +220,6 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 parent: parent.map(|id| id.into()),
                 component_size,
                 initial_total_linear_memory_size,
-                initial_filesystem_storage_usage,
                 initial_active_plugins: initial_active_plugins
                     .into_iter()
                     .map(|pr| pr.into())
@@ -1071,7 +1069,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 parent: params.parent.map(golem_common::model::AgentId::from),
                 component_size: params.component_size,
                 initial_total_linear_memory_size: params.initial_total_linear_memory_size,
-                initial_filesystem_storage_usage: params.initial_filesystem_storage_usage,
+                initial_filesystem_storage_usage: 0,
                 initial_active_plugins: params
                     .initial_active_plugins
                     .into_iter()
@@ -1772,7 +1770,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 parent,
                 component_size,
                 initial_total_linear_memory_size,
-                initial_filesystem_storage_usage,
+                initial_filesystem_storage_usage: _,
                 initial_active_plugins,
                 local_agent_config,
                 original_phantom_id,
@@ -1791,7 +1789,6 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 parent: parent.map(|id| id.into()),
                 component_size,
                 initial_total_linear_memory_size,
-                initial_filesystem_storage_usage,
                 initial_active_plugins: initial_active_plugins
                     .into_iter()
                     .map(|g| g.into())

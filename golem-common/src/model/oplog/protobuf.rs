@@ -562,7 +562,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 },
                 component_size: create.component_size,
                 initial_total_linear_memory_size: create.initial_total_linear_memory_size,
-                initial_filesystem_storage_usage: create.initial_filesystem_storage_usage,
                 initial_active_plugins: BTreeSet::from_iter(
                     create
                         .initial_active_plugins
@@ -1071,7 +1070,6 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         parent: create.parent.map(Into::into),
                         component_size: create.component_size,
                         initial_total_linear_memory_size: create.initial_total_linear_memory_size,
-                        initial_filesystem_storage_usage: create.initial_filesystem_storage_usage,
                         initial_active_plugins: create
                             .initial_active_plugins
                             .into_iter()
@@ -2492,7 +2490,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 parent: create.parent,
                 component_size: create.component_size,
                 initial_total_linear_memory_size: create.initial_total_linear_memory_size,
-                initial_filesystem_storage_usage: create.initial_filesystem_storage_usage,
+                initial_filesystem_storage_usage: 0,
                 initial_active_plugins: create
                     .initial_active_plugins
                     .into_iter()

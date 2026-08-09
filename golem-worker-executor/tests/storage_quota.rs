@@ -52,13 +52,6 @@ fn filesystem_storage_deltas(entries: &[PublicOplogEntryWithIndex]) -> Vec<i64> 
         .collect()
 }
 
-fn initial_filesystem_storage_usage(entries: &[PublicOplogEntryWithIndex]) -> Option<u64> {
-    entries.iter().find_map(|entry| match &entry.entry {
-        PublicOplogEntry::Create(params) => Some(params.initial_filesystem_storage_usage),
-        _ => None,
-    })
-}
-
 inherit_test_dep!(
     #[tagged_as("initial_file_system")]
     PrecompiledComponent
@@ -2134,7 +2127,6 @@ async fn provisioned_read_write_baseline_survives_restart_without_duplication(
         )
         .await?;
     let before_restart = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-    assert_eq!(initial_filesystem_storage_usage(&before_restart), Some(4));
     assert_eq!(
         filesystem_storage_deltas(&before_restart),
         vec![4],
@@ -2154,7 +2146,6 @@ async fn provisioned_read_write_baseline_survives_restart_without_duplication(
         })
     );
     let after_restart = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-    assert_eq!(initial_filesystem_storage_usage(&after_restart), Some(4));
     assert_eq!(
         filesystem_storage_deltas(&after_restart),
         vec![4],

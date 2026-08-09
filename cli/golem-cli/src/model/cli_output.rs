@@ -2040,7 +2040,6 @@ mod tests {
                 parent: Some(agent_id("parent-agent")),
                 component_size: 10,
                 initial_total_linear_memory_size: 20,
-                initial_filesystem_storage_usage: 30,
                 initial_active_plugins: BTreeSet::from_iter([plugin(0)]),
                 original_phantom_id: Some(
                     Uuid::parse_str("23a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap(),

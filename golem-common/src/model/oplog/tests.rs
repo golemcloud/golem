@@ -124,7 +124,6 @@ fn create_serialization_poem_serde_equivalence() {
         }),
         component_size: 100_000_000,
         initial_total_linear_memory_size: 200_000_000,
-        initial_filesystem_storage_usage: 300_000_000,
         initial_active_plugins: BTreeSet::from_iter(vec![PluginInstallationDescription {
             environment_plugin_grant_id: EnvironmentPluginGrantId::new(),
             plugin_priority: PluginPriority(0),
@@ -141,7 +140,7 @@ fn create_serialization_poem_serde_equivalence() {
 }
 
 #[test]
-fn raw_create_default_filesystem_baseline_is_zero() {
+fn raw_create_filesystem_baseline_roundtrips() {
     use crate::model::agent::AgentMode;
     use crate::model::component::ComponentRevision;
     use crate::model::environment::EnvironmentId;
@@ -160,7 +159,7 @@ fn raw_create_default_filesystem_baseline_is_zero() {
         None,
         0,
         0,
-        0,
+        123,
         Default::default(),
         vec![],
         None,
@@ -172,7 +171,7 @@ fn raw_create_default_filesystem_baseline_is_zero() {
     assert!(matches!(
         decoded,
         OplogEntry::Create {
-            initial_filesystem_storage_usage: 0,
+            initial_filesystem_storage_usage: 123,
             ..
         }
     ));
