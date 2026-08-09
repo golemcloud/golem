@@ -19,13 +19,13 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
+use crate::durable_host::FilesystemStorageReservation;
 use crate::durable_host::filesystem::types::calculate_metadata_hash_parts;
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
     observe_function_call_store, run_read_access, wasi_filesystem_view,
 };
 use crate::durable_host::tail_work::TailActivity;
-use crate::durable_host::{FilesystemStorageReservation, filesystem_mutation_lock};
 use crate::services::agent_storage_meter::StorageAccountingGuard;
 use crate::workerctx::WorkerCtx;
 use cap_std::fs::FileExt;
@@ -632,7 +632,7 @@ where
         durable_worker_ctx::<Ctx, U>(access.data_mut())
             .prepare_filesystem_storage_reservation_commit(&reservation, committed_bytes)
     }) {
-        commit.apply(reservation, None).await;
+        commit.apply(reservation).await;
     }
     Ok(())
 }
@@ -696,7 +696,9 @@ where
     U: 'static,
 {
     let mut result = Ok(());
-    let mutation_lock = filesystem_mutation_lock(&file.path);
+    let mutation_lock = accessor.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_mutation_lock(&file.path)
+    });
     let mut storage_reservation = None;
     let mut committed_growth = 0u64;
     let mut last_observed_size: Option<u64> = None;
@@ -714,7 +716,10 @@ where
             };
             let write_len = chunk.contents.len() as u64;
             let _mutation_guard = mutation_lock.lock().await;
-            if crate::durable_host::filesystem_mutation_is_pending(&file.path) {
+            if accessor.with(|mut access| {
+                durable_worker_ctx::<Ctx, U>(access.data_mut())
+                    .filesystem_mutation_is_pending(&file.path)
+            }) {
                 finalize_streaming_filesystem_storage::<Ctx, U>(
                     accessor,
                     storage_reservation.take(),
@@ -1141,9 +1146,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
         let path = descriptor_path_from_accessor::<Ctx, U>(accessor, &fd)
             .map_err(FilesystemError::trap)?;
-        let mutation_lock = filesystem_mutation_lock(&path);
+        let mutation_lock = accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_mutation_lock(&path)
+        });
         let _mutation_guard = mutation_lock.lock().await;
-        if crate::durable_host::filesystem_mutation_is_pending(&path) {
+        if accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_mutation_is_pending(&path)
+        }) {
             return Err(FilesystemError::trap(wasmtime::Error::msg(
                 "filesystem mutation is still pending",
             )));
@@ -1460,9 +1469,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let target_path = descriptor_path_from_accessor::<Ctx, U>(accessor, &fd)
             .map_err(FilesystemError::trap)?
             .join(&path);
-        let mutation_lock = filesystem_mutation_lock(&target_path);
+        let mutation_lock = accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_mutation_lock(&target_path)
+        });
         let _mutation_guard = mutation_lock.lock().await;
-        if crate::durable_host::filesystem_mutation_is_pending(&target_path) {
+        if accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .filesystem_mutation_is_pending(&target_path)
+        }) {
             return Err(FilesystemError::trap(wasmtime::Error::msg(
                 "filesystem mutation is still pending",
             )));
@@ -1590,9 +1604,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let target_path = descriptor_path_from_accessor::<Ctx, U>(accessor, &fd)
             .map_err(FilesystemError::trap)?
             .join(&path);
-        let mutation_lock = filesystem_mutation_lock(&target_path);
+        let mutation_lock = accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_mutation_lock(&target_path)
+        });
         let _mutation_guard = mutation_lock.lock().await;
-        if crate::durable_host::filesystem_mutation_is_pending(&target_path) {
+        if accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .filesystem_mutation_is_pending(&target_path)
+        }) {
             return Err(FilesystemError::trap(wasmtime::Error::msg(
                 "filesystem mutation is still pending",
             )));

@@ -14,6 +14,7 @@
 
 use crate::Tracing;
 use golem_common::base_model::component::ComponentDto;
+use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
@@ -26,6 +27,7 @@ use golem_test_framework::model::IFSEntry;
 use golem_worker_executor::metrics::storage::{
     STORAGE_BYTES_WRITTEN_TOTAL, STORAGE_TYPE_FILESYSTEM,
 };
+use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start_with_agent_storage_quota,
@@ -129,15 +131,7 @@ async fn agent_quota_write_exceeding_limit_fails(
         )
         .await;
 
-    assert!(
-        result.is_err(),
-        "expected write to fail when agent quota is exceeded"
-    );
-    let err_str = format!("{result:?}");
-    assert!(
-        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
-        "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
-    );
+    assert_specific_storage_quota_failure(&result, "write_file");
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert_eq!(
         filesystem_storage_deltas(&oplog),
@@ -187,10 +181,7 @@ async fn agent_quota_exceeded_limit_is_not_retried(
             data_value!("/testfile.txt", "hello world"),
         )
         .await;
-    assert!(
-        first.is_err(),
-        "expected first write to fail with AgentExceededFilesystemStorageLimit"
-    );
+    assert_specific_storage_quota_failure(&first, "first permanent quota failure");
 
     let second = executor
         .invoke_and_await_agent(
@@ -200,19 +191,9 @@ async fn agent_quota_exceeded_limit_is_not_retried(
             data_value!("/testfile2.txt", "hello world 2"),
         )
         .await;
-    assert!(
-        second.is_err(),
-        "expected second write to also fail — agent quota is permanent"
-    );
-
-    let err_str = format!("{second:?}");
-    assert!(
-        err_str.contains("AgentExceededFilesystemStorageLimit")
-            || err_str.contains("storage")
-            || err_str.contains("already exists")
-            || err_str.contains("AlreadyExists"),
-        "expected a relevant error on second attempt, got: {err_str}"
-    );
+    assert_specific_storage_quota_failure(&second, "second permanent quota failure");
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(filesystem_storage_deltas(&oplog).is_empty());
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -378,15 +359,7 @@ async fn agent_quota_stream_write_exceeding_limit_fails(
         )
         .await;
 
-    assert!(
-        result.is_err(),
-        "expected stream_to_file to fail when quota exceeded"
-    );
-    let err_str = format!("{result:?}");
-    assert!(
-        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
-        "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
-    );
+    assert_specific_storage_quota_failure(&result, "stream_to_file");
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -659,15 +632,7 @@ async fn agent_quota_blocking_stream_and_flush_exceeding_limit_fails(
         )
         .await;
 
-    assert!(
-        result.is_err(),
-        "expected blocking_stream_and_flush_to_file to fail when quota exceeded"
-    );
-    let err_str = format!("{result:?}");
-    assert!(
-        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
-        "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
-    );
+    assert_specific_storage_quota_failure(&result, "blocking stream and flush");
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -802,15 +767,7 @@ async fn agent_quota_set_size_grow_beyond_limit_fails(
             data_value!("/file.txt", 12u64),
         )
         .await;
-    assert!(
-        result.is_err(),
-        "expected set_size grow to fail: quota exhausted"
-    );
-    let err_str = format!("{result:?}");
-    assert!(
-        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
-        "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
-    );
+    assert_specific_storage_quota_failure(&result, "set_size growth");
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -911,12 +868,7 @@ async fn agent_quota_pwrite_beyond_limit_fails(
             data_value!("/file.txt", 0u64, "hello world"),
         )
         .await;
-    assert!(result.is_err(), "expected pwrite to fail: quota exceeded");
-    let err_str = format!("{result:?}");
-    assert!(
-        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
-        "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
-    );
+    assert_specific_storage_quota_failure(&result, "positioned write");
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1069,15 +1021,7 @@ async fn agent_quota_cumulative_across_write_paths(
         )
         .await;
 
-    assert!(
-        result.is_err(),
-        "expected stream_to_file to fail: combined writes exceed quota"
-    );
-    let err_str = format!("{result:?}");
-    assert!(
-        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
-        "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
-    );
+    assert_specific_storage_quota_failure(&result, "stream growth after direct write");
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1184,14 +1128,9 @@ async fn agent_quota_storage_usage_survives_restart(
             data_value!("/file-4.txt", "hello world"),
         )
         .await;
-    assert!(
-        result.is_err(),
-        "expected write to fail: quota exhausted (file-2 + file-3 = 22 bytes)"
-    );
-    let err_str = format!("{result:?}");
-    assert!(
-        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
-        "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
+    assert_specific_storage_quota_failure(
+        &result,
+        "11-byte write after restart with 27 of 32 bytes already used",
     );
 
     executor.check_oplog_is_queryable(&worker).await?;
@@ -1426,14 +1365,11 @@ async fn executor_pool_failed_acquire_leaves_no_phantom_oplog_entry(
 /// storage via the blocking path which evicts the oldest idle worker, freeing
 /// its permits so the restarting worker can proceed.
 ///
-/// Flow (1 KB pool, each 11-byte write rounds up to 1 KB = 1 permit):
-/// 1. Worker A writes 1 KB, then is interrupted → permit released.
-/// 2. Worker B writes 1 KB (pool free after A's interrupt), then is interrupted.
-/// 3. Worker A re-invoked → restarts with filesystem_storage_requirement = 1 KB
-///    → blocking acquire_storage succeeds → A holds the 1 KB permit, now idle.
-/// 4. Worker B re-invoked → restarts with filesystem_storage_requirement = 1 KB
-///    → pool is 0 (A holds it) → blocking acquire_storage calls
-///    try_free_up_storage → evicts idle Worker A → 1 KB freed
+/// Flow (2 KB pool, each worker has a 2 KB file):
+/// 1. Worker A writes 2 KB, then is interrupted, releasing its permits.
+/// 2. Worker B writes 2 KB, then is interrupted.
+/// 3. Worker A restarts and holds the full pool while idle.
+/// 4. Worker B restarts, forcing eviction of Worker A before it can acquire 2 KB.
 ///    → Worker B acquires the permit and its invocation succeeds.
 #[test]
 #[tracing::instrument]
@@ -1445,10 +1381,7 @@ async fn executor_pool_idle_worker_evicted_when_pool_full(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    // 4 KB pool = 4 permits. Each worker writes a 2 KB file (2 permits).
-    // Using >1 KB content exercises multi-permit eviction — verifies that
-    // try_free_up_storage frees enough bytes (not just 1 permit minimum).
-    let executor = start_with_executor_storage_pool(deps, &context, 4 * 1024).await?;
+    let executor = start_with_executor_storage_pool(deps, &context, 2 * 1024).await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
@@ -1488,7 +1421,7 @@ async fn executor_pool_idle_worker_evicted_when_pool_full(
     executor.interrupt(&worker_b).await?;
 
     // Step 3: Re-invoke Worker A. Restarts with filesystem_storage_requirement = 2 KB.
-    // Pool has 4 KB free → blocking acquire_storage acquires 2 permits.
+    // Pool has 2 KB free → blocking acquire_storage acquires 2 permits.
     // Worker A reads file and becomes idle, holding 2 permits.
     let read_a = executor
         .invoke_and_await_agent(
@@ -1508,7 +1441,7 @@ async fn executor_pool_idle_worker_evicted_when_pool_full(
     );
 
     // Step 4: Re-invoke Worker B. Restarts with filesystem_storage_requirement = 2 KB.
-    // Pool has 2 KB free (Worker A holds 2) — not enough for B's 2 KB requirement.
+    // Pool is empty (Worker A holds 2 KB) — not enough for B's 2 KB requirement.
     // Blocking acquire_storage calls try_free_up_storage → evicts idle Worker A
     // (freeing 2 permits) → Worker B acquires its 2 permits and reads successfully.
     let read_b = executor
@@ -1526,6 +1459,17 @@ async fn executor_pool_idle_worker_evicted_when_pool_full(
         SchemaValue::Result(ResultValuePayload::Ok {
             value: Some(Box::new(SchemaValue::String(content_b.clone())))
         })
+    );
+
+    assert_ne!(
+        executor
+            .worker_eviction_class(&OwnedAgentId::new(
+                context.default_environment_id,
+                &worker_a,
+            ))
+            .await,
+        Some(EvictionClass::LoadedIdle),
+        "Worker A must no longer be resident after freeing the full pool for Worker B"
     );
 
     executor.check_oplog_is_queryable(&worker_a).await?;
@@ -1976,18 +1920,62 @@ async fn agent_quota_blocking_splice_exceeding_limit_fails(
         )
         .await;
 
-    assert!(
-        result.is_err(),
-        "expected blocking_splice to fail when total bytes exceed agent quota"
-    );
-    let err_str = format!("{result:?}");
-    assert!(
-        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
-        "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
-    );
+    assert_specific_storage_quota_failure(&result, "blocking_splice");
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
+    Ok(())
+}
+
+/// A successful file-backed `blocking_splice` must complete without re-entering
+/// the path mutation lock and must commit exactly the observed destination growth.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn agent_quota_blocking_splice_within_limit_completes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 22).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("FileSystem", "blocking-splice-within-limit");
+    let worker = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_file",
+            data_value!("/src.txt", "hello world"),
+        )
+        .await?;
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "blocking_splice",
+            data_value!("/src.txt", "/dst.txt"),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected blocking_splice return value"))?;
+
+    assert_eq!(
+        result,
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::U64(11)))
+        })
+    );
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(filesystem_storage_deltas(&oplog), vec![11, 11]);
     Ok(())
 }
 
@@ -2033,15 +2021,7 @@ async fn agent_quota_splice_exceeding_limit_fails(
         )
         .await;
 
-    assert!(
-        result.is_err(),
-        "expected splice to fail when total bytes exceed agent quota"
-    );
-    let err_str = format!("{result:?}");
-    assert!(
-        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
-        "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
-    );
+    assert_specific_storage_quota_failure(&result, "splice");
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -2088,6 +2068,66 @@ async fn provisioned_read_write_file_counts_toward_agent_quota(
             "Provisioned read-write files require 4 bytes, exceeding the per-agent disk limit of 3 bytes"
         ),
         "unexpected worker creation error: {message}"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn executor_pool_shares_read_only_initial_file_across_agents(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_executor_storage_pool(deps, &context, 1024).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .with_files(
+            "FileSystem",
+            &[IFSEntry {
+                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                target_path: CanonicalFilePath::from_abs_str("/shared.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadOnly,
+            }],
+        )
+        .store()
+        .await?;
+    let agent_a = agent_id!("FileSystem", "shared-read-only-a");
+    let agent_b = agent_id!("FileSystem", "shared-read-only-b");
+    let worker_a = executor.start_agent(&component.id, agent_a.clone()).await?;
+    let _worker_b = executor.start_agent(&component.id, agent_b.clone()).await?;
+
+    for agent_id in [&agent_a, &agent_b] {
+        let result = executor
+            .invoke_and_await_agent(
+                &component,
+                agent_id,
+                "read_file",
+                data_value!("/shared.txt"),
+            )
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow::anyhow!("expected read_file return value"))?;
+        assert_eq!(
+            result,
+            SchemaValue::Result(ResultValuePayload::Ok {
+                value: Some(Box::new(SchemaValue::String("baz\n".to_string())))
+            })
+        );
+    }
+
+    assert_eq!(
+        executor
+            .worker_eviction_class(&OwnedAgentId::new(
+                context.default_environment_id,
+                &worker_a,
+            ))
+            .await,
+        Some(EvictionClass::LoadedIdle),
+        "the second agent must share the cached backing rather than evicting the first"
     );
     Ok(())
 }

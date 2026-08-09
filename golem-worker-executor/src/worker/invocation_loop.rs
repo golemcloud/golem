@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::{ReadFileResult, TrapType};
+use crate::services::agent_storage_meter::AgentStorageMeter;
 use crate::services::events::Event;
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::linear_memory::LinearMemoryTracker;
@@ -54,7 +55,7 @@ use std::collections::VecDeque;
 use std::ops::DerefMut;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
@@ -540,7 +541,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     instance: &'a Instance,
     store: &'a Mutex<Store<Ctx>>,
     linear_memory: LinearMemoryTracker,
-    storage_meter: crate::services::agent_storage_meter::AgentStorageMeter,
+    storage_meter: AgentStorageMeter,
     invocations_since_snapshot: u64,
     idle_snapshot_task: Option<JoinHandle<()>>,
     /// Mutable reference to the concurrent-agent permit held by the outer
@@ -702,7 +703,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// Called when the agent enters idle state. No-op if already released.
     fn release_concurrent_agent_permit(&mut self) {
         if let Some(permit) = self.concurrent_agent_permit.take() {
-            let now = std::time::Instant::now();
+            let now = Instant::now();
             self.linear_memory.pause(now);
             self.storage_meter.pause(now);
             debug!(agent_id = %self.owned_agent_id.agent_id, "Releasing concurrent-agent permit (entering idle)");
@@ -726,7 +727,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             .instrument(span)
             .await;
             *self.concurrent_agent_permit = Some(permit);
-            let now = std::time::Instant::now();
+            let now = Instant::now();
             self.linear_memory.resume(now);
             self.storage_meter.resume(now);
         }

@@ -494,6 +494,31 @@ mod tests {
         );
     }
 
+    #[test]
+    async fn concurrent_ro_first_loads_share_one_cache_permit() {
+        let content = b"hello world";
+        let pool_bytes = 1024;
+        let (loader, semaphore, hash, env_id) = setup(pool_bytes, content).await;
+        let dir = tempfile::tempdir().unwrap();
+        let first_path = dir.path().join("first.txt");
+        let second_path = dir.path().join("second.txt");
+
+        let (first, second) = tokio::join!(
+            loader.get_read_only_to(env_id, hash, &first_path, content.len() as u64),
+            loader.get_read_only_to(env_id, hash, &second_path, content.len() as u64),
+        );
+        let first = first.unwrap();
+        let second = second.unwrap();
+
+        assert_eq!(semaphore.available_bytes(), 0);
+        assert_eq!(tokio::fs::read(&first_path).await.unwrap(), content);
+        assert_eq!(tokio::fs::read(&second_path).await.unwrap(), content);
+        drop(first);
+        assert_eq!(semaphore.available_bytes(), 0);
+        drop(second);
+        assert_eq!(semaphore.available_bytes(), pool_bytes as u64);
+    }
+
     /// When all `FileUseToken`s for a cached entry are dropped, the semaphore
     /// permits are returned to the pool.
     #[test]
@@ -557,24 +582,33 @@ mod tests {
     #[test]
     async fn ro_load_fails_and_cleans_up_when_pool_exhausted() {
         let content = b"hello world";
-        let pool_bytes = 0; // 0 bytes → 0 permits → all acquires fail immediately
+        let pool_bytes = 1024;
         let (loader, semaphore, hash, env_id) = setup(pool_bytes, content).await;
-
         let dir = tempfile::tempdir().unwrap();
+        let blocking_permit = semaphore
+            .try_acquire(content.len() as u64)
+            .await
+            .expect("test must acquire the only storage permit");
 
-        // Load must fail because the pool is empty.
         let result = loader
             .get_read_only_to(
                 env_id,
                 hash,
-                &dir.path().join("f.txt"),
+                &dir.path().join("failed.txt"),
                 content.len() as u64,
             )
             .await;
         assert!(result.is_err(), "expected failure when pool is exhausted");
 
-        // The failed load must have cleaned up the stale cache entry so the
-        // pool is still at 0 permits (no leak).
+        drop(blocking_permit);
+        let retry_path = dir.path().join("retry.txt");
+        let token = loader
+            .get_read_only_to(env_id, hash, &retry_path, content.len() as u64)
+            .await
+            .expect("retry after freeing the pool must download a fresh cache entry");
+        assert_eq!(tokio::fs::read(retry_path).await.unwrap(), content);
         assert_eq!(semaphore.available_bytes(), 0);
+        drop(token);
+        assert_eq!(semaphore.available_bytes(), pool_bytes as u64);
     }
 }

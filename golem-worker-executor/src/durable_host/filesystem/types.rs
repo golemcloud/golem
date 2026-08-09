@@ -42,6 +42,13 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostRequestFileSystemPath, HostResponseFileSystemStat,
 };
 
+fn descriptor_path(descriptor: &Descriptor) -> &std::path::Path {
+    match descriptor {
+        Descriptor::File(file) => &file.path,
+        Descriptor::Dir(dir) => &dir.path,
+    }
+}
+
 impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     fn read_via_stream(
         &mut self,
@@ -65,10 +72,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.fail_if_read_only(&fd)?;
         self.observe_function_call("filesystem::types::descriptor", "write_via_stream");
         let descriptor_rep = fd.rep();
-        let mutation_path = match self.table().get(&fd)? {
-            Descriptor::File(file) => file.path.clone(),
-            Descriptor::Dir(dir) => dir.path.clone(),
-        };
+        let mutation_path = descriptor_path(self.table().get(&fd)?).to_path_buf();
         let stream =
             HostDescriptor::write_via_stream(&mut self.as_wasi_view().filesystem(), fd, offset)?;
         self.state.open_filesystem_output_streams.insert(
@@ -91,10 +95,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.fail_if_read_only(&self_)?;
         self.observe_function_call("filesystem::types::descriptor", "append_via_stream");
         let descriptor_rep = self_.rep();
-        let mutation_path = match self.table().get(&self_)? {
-            Descriptor::File(file) => file.path.clone(),
-            Descriptor::Dir(dir) => dir.path.clone(),
-        };
+        let mutation_path = descriptor_path(self.table().get(&self_)?).to_path_buf();
         let stream =
             HostDescriptor::append_via_stream(&mut self.as_wasi_view().filesystem(), self_)?;
         self.state.open_filesystem_output_streams.insert(
@@ -150,13 +151,10 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
     async fn set_size(&mut self, fd: Resource<Descriptor>, size: Filesize) -> Result<(), FsError> {
         self.fail_if_read_only(&fd)?;
-        let mutation_path = match self.table().get(&fd)? {
-            Descriptor::File(file) => file.path.clone(),
-            Descriptor::Dir(dir) => dir.path.clone(),
-        };
-        let mutation_lock = crate::durable_host::filesystem_mutation_lock(&mutation_path);
+        let mutation_path = descriptor_path(self.table().get(&fd)?).to_path_buf();
+        let mutation_lock = self.filesystem_mutation_lock(&mutation_path);
         let _mutation_guard = mutation_lock.lock().await;
-        if crate::durable_host::filesystem_mutation_is_pending(&mutation_path) {
+        if self.filesystem_mutation_is_pending(&mutation_path) {
             return Err(FsError::trap(wasmtime::Error::msg(
                 "filesystem mutation is still pending",
             )));
@@ -248,13 +246,10 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         offset: Filesize,
     ) -> Result<Filesize, FsError> {
         self.fail_if_read_only(&fd)?;
-        let mutation_path = match self.table().get(&fd)? {
-            Descriptor::File(file) => file.path.clone(),
-            Descriptor::Dir(dir) => dir.path.clone(),
-        };
-        let mutation_lock = crate::durable_host::filesystem_mutation_lock(&mutation_path);
+        let mutation_path = descriptor_path(self.table().get(&fd)?).to_path_buf();
+        let mutation_lock = self.filesystem_mutation_lock(&mutation_path);
         let _mutation_guard = mutation_lock.lock().await;
-        if crate::durable_host::filesystem_mutation_is_pending(&mutation_path) {
+        if self.filesystem_mutation_is_pending(&mutation_path) {
             return Err(FsError::trap(wasmtime::Error::msg(
                 "filesystem mutation is still pending",
             )));
@@ -553,23 +548,20 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         flags: DescriptorFlags,
     ) -> Result<Resource<Descriptor>, FsError> {
         let mutation_path = if open_flags.contains(OpenFlags::TRUNCATE) {
-            Some(match self.table().get(&self_)? {
-                Descriptor::File(file) => file.path.join(&path),
-                Descriptor::Dir(dir) => dir.path.join(&path),
-            })
+            Some(descriptor_path(self.table().get(&self_)?).join(&path))
         } else {
             None
         };
         let mutation_lock = mutation_path
             .as_ref()
-            .map(|path| crate::durable_host::filesystem_mutation_lock(path));
+            .map(|path| self.filesystem_mutation_lock(path));
         let _mutation_guard = match &mutation_lock {
             Some(lock) => Some(lock.lock().await),
             None => None,
         };
         if mutation_path
             .as_ref()
-            .is_some_and(|path| crate::durable_host::filesystem_mutation_is_pending(path))
+            .is_some_and(|path| self.filesystem_mutation_is_pending(path))
         {
             return Err(FsError::trap(wasmtime::Error::msg(
                 "filesystem mutation is still pending",
@@ -676,13 +668,10 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<(), FsError> {
         self.fail_if_read_only(&fd)?;
-        let mutation_path = match self.table().get(&fd)? {
-            Descriptor::File(file) => file.path.join(&path),
-            Descriptor::Dir(dir) => dir.path.join(&path),
-        };
-        let mutation_lock = crate::durable_host::filesystem_mutation_lock(&mutation_path);
+        let mutation_path = descriptor_path(self.table().get(&fd)?).join(&path);
+        let mutation_lock = self.filesystem_mutation_lock(&mutation_path);
         let _mutation_guard = mutation_lock.lock().await;
-        if crate::durable_host::filesystem_mutation_is_pending(&mutation_path) {
+        if self.filesystem_mutation_is_pending(&mutation_path) {
             return Err(FsError::trap(wasmtime::Error::msg(
                 "filesystem mutation is still pending",
             )));

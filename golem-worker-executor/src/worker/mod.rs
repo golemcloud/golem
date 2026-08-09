@@ -30,6 +30,7 @@ use crate::metrics::workers::AdmissionPhase;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::active_workers::{
     FilesystemStoragePermit, MemoryGrant, RegisteredConcurrentAccount, WorkerComponentCharge,
+    bytes_to_filesystem_storage_permits,
 };
 use crate::services::card_interest::CardInterestIndex;
 use crate::services::events::{Event, EventsSubscription};
@@ -2155,8 +2156,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// and dropping the split portion. This correctly reduces the permit count held
     /// by the `RunningWorker`, preventing double-return when it later drops.
     pub async fn release_filesystem_storage_space(&self, freed_bytes: u64) {
-        let permits_to_release =
-            crate::services::active_workers::bytes_to_filesystem_storage_permits(freed_bytes);
+        let permits_to_release = bytes_to_filesystem_storage_permits(freed_bytes);
         if permits_to_release == 0 {
             return;
         }
@@ -2213,9 +2213,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let Some(mut permit) = permit.take() else {
             return;
         };
-        let committed_permits = crate::services::active_workers::bytes_to_filesystem_storage_permits(
-            committed_host_bytes,
-        ) as usize;
+        let committed_permits = bytes_to_filesystem_storage_permits(committed_host_bytes) as usize;
         let excess_permits = permit.num_permits().saturating_sub(committed_permits);
         if let Some(excess) = permit.split(excess_permits) {
             drop(excess);
@@ -3883,10 +3881,7 @@ impl WaitingWorker {
                 );
                 // Release the `desired_extra` portion back to the pool.
                 if desired_extra > 0 {
-                    let extra_permits =
-                        crate::services::active_workers::bytes_to_filesystem_storage_permits(
-                            desired_extra,
-                        ) as usize;
+                    let extra_permits = bytes_to_filesystem_storage_permits(desired_extra) as usize;
                     if let Some(extra) = permit.split(extra_permits) {
                         drop(extra); // returns to semaphore
                     }

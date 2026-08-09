@@ -317,13 +317,11 @@ impl P3FileSystem for P3FileSystemImpl {
         root.unlink_file_at(path.to_string())
             .await
             .expect("P3 unlink failed");
-        assert!(
-            root.stat_at(p3_types::PathFlags::empty(), path.to_string())
-                .await
-                .is_err(),
-            "P3 unlinked file still exists"
-        );
-        sizes.push(0);
+        let removed = root
+            .stat_at(p3_types::PathFlags::empty(), path.to_string())
+            .await;
+        assert!(removed.is_err(), "P3 unlinked file still exists");
+        sizes.push(removed.ok().map_or(0, |stat| stat.size));
 
         let replacement_path = "quota-after-unlink.bin";
         let replacement = root
@@ -368,7 +366,7 @@ impl P3FileSystem for P3FileSystemImpl {
         replacement
             .set_size(11)
             .await
-            .expect("P3 growth beyond quota must fail");
+            .expect("P3 replacement growth failed");
     }
 
     async fn write_bytes(&self, path: String, len: u64) {
@@ -422,6 +420,9 @@ impl P3FileSystem for P3FileSystemImpl {
     }
 
     async fn sleep_for(&self, seconds: f64) {
-        std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
+        let nanoseconds = std::time::Duration::from_secs_f64(seconds)
+            .as_nanos()
+            .min(u64::MAX as u128) as u64;
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(nanoseconds).await;
     }
 }

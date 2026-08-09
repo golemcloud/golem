@@ -3231,7 +3231,7 @@ async fn commit_revision_update_storage_access<T, D, Ctx>(
                 .prepare_filesystem_storage_reservation_commit(&reservation, committed_growth)
         })
     {
-        commit.apply(reservation, None).await;
+        commit.apply(reservation).await;
     }
 }
 

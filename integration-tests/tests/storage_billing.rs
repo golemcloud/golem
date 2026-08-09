@@ -197,7 +197,7 @@ mod tests {
     #[timeout("2m")]
     async fn evicted_agent_stops_metering_until_reload() -> anyhow::Result<()> {
         const FILE_BYTES: usize = 1024 * 1024;
-        let deps = create_deps(FILE_BYTES as u64, Duration::from_secs(5)).await;
+        let deps = create_deps(FILE_BYTES as u64, Duration::from_secs(60)).await;
         let user = deps.user().await?;
         let (_, env) = user.app_and_env().await?;
         let component = user
@@ -305,17 +305,20 @@ mod tests {
             "permit-retaining host wait",
         );
 
-        let suspended_start = active_end;
-        user.invoke_and_await_agent(&component, &agent, "sleep_for", data_value!(3.0f64))
+        user.invoke_agent(&component, &agent, "sleep_for", data_value!(10.0f64))
             .await?;
-        let suspended_end =
-            wait_for_durable_billing_increase_to_settle(&deps, &user, suspended_start).await?;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let suspended_start = wait_for_durable_billing_to_settle(&deps, &user).await?;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let suspended_end = wait_for_durable_billing_to_settle(&deps, &user).await?;
         assert_billing_window(
             suspended_end - suspended_start,
-            512.0 * 1024.0,
-            1.75 * 1024.0 * 1024.0,
-            "durable suspension",
+            0.0,
+            1.0,
+            "fully suspended durable wait",
         );
+        user.invoke_and_await_agent(&component, &agent, "read_file", data_value!("/metered.txt"))
+            .await?;
 
         user.delete_worker(&worker).await?;
 

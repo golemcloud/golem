@@ -153,7 +153,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
 use std::vec;
 use tempfile::TempDir;
@@ -170,46 +170,52 @@ enum WorkerDir {
     Deterministic(PathBuf),
 }
 
-static FILESYSTEM_MUTATION_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>>> =
-    OnceLock::new();
-static PENDING_FILESYSTEM_MUTATIONS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+#[derive(Default)]
+struct FilesystemMutationRegistry {
+    state: Mutex<FilesystemMutationRegistryState>,
+}
 
-pub(crate) fn filesystem_mutation_lock(path: &Path) -> Arc<tokio::sync::Mutex<()>> {
-    let mut locks = FILESYSTEM_MUTATION_LOCKS
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap();
-    if let Some(lock) = locks.get(path).and_then(Weak::upgrade) {
-        lock
-    } else {
+#[derive(Default)]
+struct FilesystemMutationRegistryState {
+    locks: HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>,
+    pending: HashSet<PathBuf>,
+}
+
+impl FilesystemMutationRegistry {
+    fn lock(&self, path: &Path) -> Arc<tokio::sync::Mutex<()>> {
+        let mut state = self.state.lock().unwrap();
+        if let Some(lock) = state.locks.get(path).and_then(Weak::upgrade) {
+            return lock;
+        }
+
+        state.locks.retain(|_, lock| lock.strong_count() > 0);
         let lock = Arc::new(tokio::sync::Mutex::new(()));
-        locks.insert(path.to_path_buf(), Arc::downgrade(&lock));
+        state
+            .locks
+            .insert(path.to_path_buf(), Arc::downgrade(&lock));
         lock
     }
-}
 
-pub(crate) fn mark_filesystem_mutation_pending(path: &Path) {
-    PENDING_FILESYSTEM_MUTATIONS
-        .get_or_init(|| Mutex::new(HashSet::new()))
-        .lock()
-        .unwrap()
-        .insert(path.to_path_buf());
-}
+    fn mark_pending(&self, path: &Path) {
+        self.state
+            .lock()
+            .unwrap()
+            .pending
+            .insert(path.to_path_buf());
+    }
 
-pub(crate) fn clear_filesystem_mutation_pending(path: &Path) {
-    PENDING_FILESYSTEM_MUTATIONS
-        .get_or_init(|| Mutex::new(HashSet::new()))
-        .lock()
-        .unwrap()
-        .remove(path);
-}
+    fn clear_pending(&self, path: &Path) {
+        self.state.lock().unwrap().pending.remove(path);
+    }
 
-pub(crate) fn filesystem_mutation_is_pending(path: &Path) -> bool {
-    PENDING_FILESYSTEM_MUTATIONS
-        .get_or_init(|| Mutex::new(HashSet::new()))
-        .lock()
-        .unwrap()
-        .contains(path)
+    fn is_pending(&self, path: &Path) -> bool {
+        self.state.lock().unwrap().pending.contains(path)
+    }
+
+    #[cfg(test)]
+    fn lock_count(&self) -> usize {
+        self.state.lock().unwrap().locks.len()
+    }
 }
 
 impl WorkerDir {
@@ -425,6 +431,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     resource_limits: Arc<AtomicResourceEntry>,
     linear_memory: LinearMemoryTracker,
     storage_meter: AgentStorageMeter,
+    filesystem_mutations: FilesystemMutationRegistry,
     /// Per-instance cache of resolved typed guest export handles, populated
     /// lazily on first use during invocation dispatch.
     agent_export_funcs: AgentExportFuncs,
@@ -462,15 +469,21 @@ pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
 
 impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
     fn drop(&mut self) {
-        for stream in self.state.open_filesystem_output_streams.values() {
-            if stream.pending_write {
-                clear_filesystem_mutation_pending(&stream.mutation_path);
-            }
+        let pending_paths = self
+            .state
+            .open_filesystem_output_streams
+            .values()
+            .filter(|stream| stream.pending_write)
+            .map(|stream| stream.mutation_path.clone())
+            .collect::<Vec<_>>();
+        for path in pending_paths {
+            self.clear_filesystem_mutation_pending(&path);
         }
-        self.linear_memory.stop(Instant::now());
+        let now = Instant::now();
+        self.linear_memory.stop(now);
         self.resource_limits
             .unregister_memory_meter(&self.owned_agent_id, self.linear_memory.meter());
-        self.storage_meter.stop(Instant::now());
+        self.storage_meter.stop(now);
         self.resource_limits
             .unregister_storage_meter(&self.owned_agent_id, &self.storage_meter);
     }
@@ -551,46 +564,38 @@ impl FilesystemStorageReservation {
         mut self,
         worker: Arc<Worker<Ctx>>,
         storage_meter: AgentStorageMeter,
-        guard: Option<StorageAccountingGuard>,
         committed_bytes: u64,
         account_id: String,
         environment_id: String,
     ) {
-        let task = tokio::spawn(async move {
-            let _guard = match guard {
-                Some(guard) => guard,
-                None => storage_meter.lock_reservation().await,
-            };
-            if committed_bytes == 0 {
-                drop(self.take_permit());
-                if let Some(meter) = self.storage_meter.take() {
-                    meter.commit_reservation(self.logical_bytes, 0, Instant::now());
-                }
-                return;
-            }
-            worker
-                .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
-                    committed_bytes as i64,
-                ))
-                .await;
-            let committed_host_bytes = storage_meter.host_capacity_for_growth(committed_bytes);
-            worker
-                .commit_filesystem_storage_space(self.take_permit(), committed_host_bytes)
-                .await;
+        let _guard = storage_meter.lock_reservation().await;
+        if committed_bytes == 0 {
+            drop(self.take_permit());
             if let Some(meter) = self.storage_meter.take() {
-                meter.commit_reservation(self.logical_bytes, committed_bytes, Instant::now());
-            } else {
-                storage_meter.on_acquire(committed_bytes, Instant::now());
+                meter.commit_reservation(self.logical_bytes, 0, Instant::now());
             }
-            record_storage_bytes_written(
-                STORAGE_TYPE_FILESYSTEM,
-                &account_id,
-                &environment_id,
-                committed_bytes,
-            );
-        });
-        task.await
-            .expect("filesystem storage commit task must complete");
+            return;
+        }
+        worker
+            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
+                committed_bytes as i64,
+            ))
+            .await;
+        let committed_host_bytes = storage_meter.host_capacity_for_growth(committed_bytes);
+        worker
+            .commit_filesystem_storage_space(self.take_permit(), committed_host_bytes)
+            .await;
+        if let Some(meter) = self.storage_meter.take() {
+            meter.commit_reservation(self.logical_bytes, committed_bytes, Instant::now());
+        } else {
+            storage_meter.on_acquire(committed_bytes, Instant::now());
+        }
+        record_storage_bytes_written(
+            STORAGE_TYPE_FILESYSTEM,
+            &account_id,
+            &environment_id,
+            committed_bytes,
+        );
     }
 
     pub(crate) async fn release<Ctx: WorkerCtx>(
@@ -602,32 +607,28 @@ impl FilesystemStorageReservation {
         environment_id: String,
     ) {
         let requested_bytes = self.logical_bytes;
-        let task = tokio::spawn(async move {
-            let _guard = match guard {
-                Some(guard) => guard,
-                None => storage_meter.lock_reservation().await,
-            };
-            let freed_bytes = requested_bytes.min(storage_meter.current_bytes());
-            if freed_bytes == 0 {
-                return;
-            }
-            let host_bytes = storage_meter.host_capacity_for_release(freed_bytes);
-            worker
-                .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
-                    -(freed_bytes as i64),
-                ))
-                .await;
-            worker.release_filesystem_storage_space(host_bytes).await;
-            storage_meter.on_release(freed_bytes, Instant::now());
-            record_storage_bytes_deleted(
-                STORAGE_TYPE_FILESYSTEM,
-                &account_id,
-                &environment_id,
-                freed_bytes,
-            );
-        });
-        task.await
-            .expect("filesystem storage release task must complete");
+        let _guard = match guard {
+            Some(guard) => guard,
+            None => storage_meter.lock_reservation().await,
+        };
+        let freed_bytes = requested_bytes.min(storage_meter.current_bytes());
+        if freed_bytes == 0 {
+            return;
+        }
+        let host_bytes = storage_meter.host_capacity_for_release(freed_bytes);
+        worker
+            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
+                -(freed_bytes as i64),
+            ))
+            .await;
+        worker.release_filesystem_storage_space(host_bytes).await;
+        storage_meter.on_release(freed_bytes, Instant::now());
+        record_storage_bytes_deleted(
+            STORAGE_TYPE_FILESYSTEM,
+            &account_id,
+            &environment_id,
+            freed_bytes,
+        );
     }
 }
 
@@ -650,16 +651,11 @@ pub(crate) struct FilesystemStorageCommit<Ctx: WorkerCtx> {
 }
 
 impl<Ctx: WorkerCtx> FilesystemStorageCommit<Ctx> {
-    pub(crate) async fn apply(
-        self,
-        reservation: FilesystemStorageReservation,
-        guard: Option<StorageAccountingGuard>,
-    ) {
+    pub(crate) async fn apply(self, reservation: FilesystemStorageReservation) {
         reservation
             .commit(
                 self.worker,
                 self.storage_meter,
-                guard,
                 self.committed_bytes,
                 self.account_id,
                 self.environment_id,
@@ -1041,6 +1037,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             resource_limits,
             linear_memory,
             storage_meter,
+            filesystem_mutations: FilesystemMutationRegistry::default(),
             agent_export_funcs: AgentExportFuncs::default(),
             _store_alive_guard: StoreAliveGuard::new(),
         })
@@ -1587,6 +1584,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.storage_meter.clone()
     }
 
+    pub(crate) fn filesystem_mutation_lock(&self, path: &Path) -> Arc<tokio::sync::Mutex<()>> {
+        self.filesystem_mutations.lock(path)
+    }
+
+    pub(crate) fn mark_filesystem_mutation_pending(&self, path: &Path) {
+        self.filesystem_mutations.mark_pending(path);
+    }
+
+    pub(crate) fn clear_filesystem_mutation_pending(&self, path: &Path) {
+        self.filesystem_mutations.clear_pending(path);
+    }
+
+    pub(crate) fn filesystem_mutation_is_pending(&self, path: &Path) -> bool {
+        self.filesystem_mutations.is_pending(path)
+    }
+
     pub(crate) fn live_filesystem_storage_worker(&self) -> Option<Arc<Worker<Ctx>>> {
         (!self.state.is_replay()).then(|| self.public_state.worker())
     }
@@ -1609,20 +1622,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         reservation: FilesystemStorageReservation,
         committed_bytes: u64,
     ) {
-        self.commit_filesystem_storage_reservation_with_guard(reservation, committed_bytes, None)
-            .await;
-    }
-
-    pub(crate) async fn commit_filesystem_storage_reservation_with_guard(
-        &mut self,
-        reservation: FilesystemStorageReservation,
-        committed_bytes: u64,
-        guard: Option<StorageAccountingGuard>,
-    ) {
         if let Some(commit) =
             self.prepare_filesystem_storage_reservation_commit(&reservation, committed_bytes)
         {
-            commit.apply(reservation, guard).await;
+            commit.apply(reservation).await;
         }
     }
 
@@ -1644,36 +1647,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.public_state.worker(),
             self.storage_meter.clone(),
             None,
-            self.created_by().to_string(),
-            self.state.owned_agent_id.environment_id().to_string(),
-        )
-        .await;
-    }
-
-    pub(crate) async fn release_filesystem_storage_space_with_guard(
-        &mut self,
-        freed_bytes: u64,
-        guard: StorageAccountingGuard,
-    ) {
-        if self.state.is_replay() {
-            return;
-        }
-        let freed_bytes = freed_bytes.min(self.storage_meter.current_bytes());
-        if freed_bytes == 0 {
-            return;
-        }
-        let host_bytes = self.storage_meter.host_capacity_for_release(freed_bytes);
-        FilesystemStorageReservation {
-            logical_bytes: freed_bytes,
-            host_bytes,
-            permit: None,
-            storage_meter: None,
-            finalized: false,
-        }
-        .release(
-            self.public_state.worker(),
-            self.storage_meter.clone(),
-            Some(guard),
             self.created_by().to_string(),
             self.state.owned_agent_id.environment_id().to_string(),
         )
@@ -5039,6 +5012,38 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
+    fn filesystem_mutation_registry_reuses_live_path_lock() {
+        let registry = FilesystemMutationRegistry::default();
+        let first = registry.lock(Path::new("same"));
+        let second = registry.lock(Path::new("same"));
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(registry.lock_count(), 1);
+    }
+
+    #[test]
+    fn filesystem_mutation_registry_prunes_expired_path_locks() {
+        let registry = FilesystemMutationRegistry::default();
+        drop(registry.lock(Path::new("expired")));
+        let _live = registry.lock(Path::new("live"));
+
+        assert_eq!(registry.lock_count(), 1);
+    }
+
+    #[test]
+    fn filesystem_mutation_registry_pending_state_is_instance_local() {
+        let first = FilesystemMutationRegistry::default();
+        let second = FilesystemMutationRegistry::default();
+        let path = Path::new("pending");
+
+        first.mark_pending(path);
+        assert!(first.is_pending(path));
+        assert!(!second.is_pending(path));
+        first.clear_pending(path);
+        assert!(!first.is_pending(path));
+    }
+
+    #[test]
     fn aggregate_memory_growth_over_worker_limit_is_rejected() {
         let now = Instant::now();
         let tracker = LinearMemoryTracker::new(
@@ -6491,7 +6496,6 @@ pub(crate) struct PendingFilesystemReservation {
 #[derive(Debug)]
 pub(crate) enum PendingFilesystemReservationState {
     Reserved(FilesystemStorageReservation),
-    Committed(u64),
     Unchanged,
 }
 
