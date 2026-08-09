@@ -195,6 +195,38 @@ mod tests {
 
     #[test]
     #[timeout("2m")]
+    async fn provisioned_read_only_file_is_not_durably_billed() -> anyhow::Result<()> {
+        let deps = create_deps(1024, Duration::from_secs(5)).await;
+        let user = deps.user().await?;
+        let (_, env) = user.app_and_env().await?;
+        let component = user
+            .component(&env.id, "golem_it_host_api_tests_release")
+            .unique()
+            .with_files(
+                "FileSystem",
+                &[IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/shared.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                }],
+            )
+            .store()
+            .await?;
+        let agent = agent_id!("FileSystem", "read-only-storage-billing");
+        let worker = user.start_agent(&component.id, agent.clone()).await?;
+
+        let before = wait_for_durable_billing_to_settle(&deps, &user).await?;
+        user.invoke_and_await_agent(&component, &agent, "sleep_for", data_value!(2.0f64))
+            .await?;
+        let after = wait_for_durable_billing_to_settle(&deps, &user).await?;
+        assert_billing_window(after - before, 0.0, 1.0, "shared read-only initial file");
+
+        user.delete_worker(&worker).await?;
+        Ok(())
+    }
+
+    #[test]
+    #[timeout("2m")]
     async fn evicted_agent_stops_metering_until_reload() -> anyhow::Result<()> {
         const FILE_BYTES: usize = 1024 * 1024;
         let deps = create_deps(FILE_BYTES as u64, Duration::from_secs(60)).await;

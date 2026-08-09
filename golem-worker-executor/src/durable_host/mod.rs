@@ -53,10 +53,7 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::{
     AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
 };
-use crate::services::active_workers::{
-    FilesystemStoragePermit, MemoryGrant, bytes_to_filesystem_storage_permits,
-    filesystem_storage_permits_to_bytes,
-};
+use crate::services::active_workers::MemoryGrant;
 use crate::services::agent_storage_meter::{AgentStorageMeter, StorageAccountingGuard};
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
@@ -492,8 +489,6 @@ impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
 #[derive(Debug)]
 pub(crate) struct FilesystemStorageReservation {
     logical_bytes: u64,
-    host_bytes: u64,
-    permit: Option<FilesystemStoragePermit>,
     storage_meter: Option<AgentStorageMeter>,
     finalized: bool,
 }
@@ -503,61 +498,50 @@ impl FilesystemStorageReservation {
         self.logical_bytes
     }
 
-    pub(crate) fn host_bytes(&self) -> u64 {
-        self.host_bytes
-    }
-
-    fn set_permit(&mut self, permit: Option<FilesystemStoragePermit>) {
-        self.permit = permit;
+    pub(crate) async fn acquire_capacity<Ctx: WorkerCtx>(
+        &self,
+        worker: &Arc<Worker<Ctx>>,
+    ) -> anyhow::Result<()> {
+        let Some(storage_meter) = &self.storage_meter else {
+            return Ok(());
+        };
+        let mut requested = storage_meter.capacity_shortfall();
+        loop {
+            if requested == 0 {
+                return Ok(());
+            }
+            match worker.acquire_filesystem_storage_space(requested).await {
+                Ok(Some(permit)) => {
+                    storage_meter.merge_capacity(Some(permit));
+                    return Ok(());
+                }
+                Ok(None) => return Ok(()),
+                Err(error) => {
+                    let latest = storage_meter.capacity_shortfall();
+                    if latest < requested {
+                        requested = latest;
+                    } else {
+                        return Err(error);
+                    }
+                }
+            }
+        }
     }
 
     pub(crate) fn merge(&mut self, mut other: FilesystemStorageReservation) {
         self.logical_bytes = self.logical_bytes.saturating_add(other.logical_bytes);
-        self.host_bytes = self.host_bytes.saturating_add(other.host_bytes);
-        if let Some(other_permit) = other.permit.take() {
-            if let Some(permit) = &mut self.permit {
-                permit.merge(other_permit);
-            } else {
-                self.permit = Some(other_permit);
-            }
-        }
         other.finalized = true;
     }
 
-    pub(crate) fn take_permit(&mut self) -> Option<FilesystemStoragePermit> {
-        self.permit.take()
-    }
-
-    pub(crate) async fn shrink<Ctx: WorkerCtx>(&mut self, worker: &Arc<Worker<Ctx>>, bytes: u64) {
+    pub(crate) fn shrink(&mut self, bytes: u64) {
         let bytes = bytes.min(self.logical_bytes);
         if bytes == 0 {
             return;
         }
-        let host_bytes = self
-            .storage_meter
-            .as_ref()
-            .map_or(0, |meter| meter.shrink_reservation(bytes));
+        if let Some(storage_meter) = &self.storage_meter {
+            storage_meter.shrink_reservation(bytes);
+        }
         self.logical_bytes = self.logical_bytes.saturating_sub(bytes);
-
-        let permits_to_release = bytes_to_filesystem_storage_permits(host_bytes) as usize;
-        let owned_permits = self
-            .permit
-            .as_ref()
-            .map_or(0, |permit| permit.num_permits());
-        let owned_to_release = permits_to_release.min(owned_permits);
-        if owned_to_release > 0
-            && let Some(permit) = &mut self.permit
-        {
-            drop(permit.split(owned_to_release));
-        }
-        let worker_permits_to_release = permits_to_release.saturating_sub(owned_to_release) as u32;
-        if worker_permits_to_release > 0 {
-            worker
-                .release_filesystem_storage_space(filesystem_storage_permits_to_bytes(
-                    worker_permits_to_release,
-                ))
-                .await;
-        }
     }
 
     pub(crate) async fn commit<Ctx: WorkerCtx>(
@@ -570,7 +554,6 @@ impl FilesystemStorageReservation {
     ) {
         let _guard = storage_meter.lock_reservation().await;
         if committed_bytes == 0 {
-            drop(self.take_permit());
             if let Some(meter) = self.storage_meter.take() {
                 meter.commit_reservation(self.logical_bytes, 0, Instant::now());
             }
@@ -580,10 +563,6 @@ impl FilesystemStorageReservation {
             .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
                 committed_bytes as i64,
             ))
-            .await;
-        let committed_host_bytes = storage_meter.host_capacity_for_growth(committed_bytes);
-        worker
-            .commit_filesystem_storage_space(self.take_permit(), committed_host_bytes)
             .await;
         if let Some(meter) = self.storage_meter.take() {
             meter.commit_reservation(self.logical_bytes, committed_bytes, Instant::now());
@@ -615,13 +594,11 @@ impl FilesystemStorageReservation {
         if freed_bytes == 0 {
             return;
         }
-        let host_bytes = storage_meter.host_capacity_for_release(freed_bytes);
         worker
             .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
                 -(freed_bytes as i64),
             ))
             .await;
-        worker.release_filesystem_storage_space(host_bytes).await;
         storage_meter.on_release(freed_bytes, Instant::now());
         record_storage_bytes_deleted(
             STORAGE_TYPE_FILESYSTEM,
@@ -939,16 +916,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             is_replay: Arc::new(AtomicBool::new(false)),
         };
         let resource_metering_started_at = Instant::now();
-        let storage_meter = AgentStorageMeter::new(
+        let worker = invocation_queue
+            .upgrade()
+            .expect("worker must remain alive while creating its context");
+        let storage_meter = AgentStorageMeter::new_with_capacity_bank(
             execution_status.read().unwrap().agent_mode(),
             worker_config.current_filesystem_storage_usage,
             resource_limits.clone(),
             resource_metering_started_at,
+            worker.filesystem_storage_permit_bank(),
         );
         resource_limits.register_storage_meter(owned_agent_id.clone(), storage_meter.clone());
-        let worker = invocation_queue
-            .upgrade()
-            .expect("worker must remain alive while creating its context");
         let retained_memory_grant = worker.linear_memory_grant();
         let canonical_startup_bytes = worker.startup_linear_memory_bytes();
         let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
@@ -1600,10 +1578,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.filesystem_mutations.is_pending(path)
     }
 
-    pub(crate) fn live_filesystem_storage_worker(&self) -> Option<Arc<Worker<Ctx>>> {
-        (!self.state.is_replay()).then(|| self.public_state.worker())
-    }
-
     async fn switch_to_live(&self) {
         self.state.replay_state.switch_to_live().await;
         self.linear_memory.switch_to_live();
@@ -1638,8 +1612,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
         FilesystemStorageReservation {
             logical_bytes: freed_bytes,
-            host_bytes: 0,
-            permit: None,
             storage_meter: None,
             finalized: false,
         }
@@ -1661,25 +1633,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if new_bytes == 0 || self.state.is_replay() {
             return Ok(None);
         }
-        let (worker, mut reservation) = self
-            .prepare_filesystem_storage_reservation(new_bytes, guard)?
+        let (worker, reservation) = self
+            .prepare_filesystem_storage_reservation(new_bytes, &guard)?
             .expect("live non-zero reservation must be prepared");
-        let permit = worker
-            .acquire_filesystem_storage_space(reservation.host_bytes)
-            .await?;
-        reservation.set_permit(permit);
+        reservation.acquire_capacity(&worker).await?;
         Ok(Some(reservation))
     }
 
     pub(crate) fn prepare_filesystem_storage_reservation(
         &mut self,
         new_bytes: u64,
-        _guard: StorageAccountingGuard,
+        _guard: &StorageAccountingGuard,
     ) -> anyhow::Result<Option<(Arc<Worker<Ctx>>, FilesystemStorageReservation)>> {
         if new_bytes == 0 || self.state.is_replay() {
             return Ok(None);
         }
-        let Some(host_bytes) = self
+        let Some(_host_bytes) = self
             .storage_meter
             .reserve(new_bytes, self.resource_limits.max_disk_space_limit())
         else {
@@ -1691,8 +1660,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.public_state.worker(),
             FilesystemStorageReservation {
                 logical_bytes: new_bytes,
-                host_bytes,
-                permit: None,
                 storage_meter: Some(self.storage_meter.clone()),
                 finalized: false,
             },
@@ -1703,12 +1670,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         reservation_bytes: u64,
         additional_bytes: u64,
-        _guard: StorageAccountingGuard,
+        _guard: &StorageAccountingGuard,
     ) -> anyhow::Result<Option<(Arc<Worker<Ctx>>, FilesystemStorageReservation)>> {
         if additional_bytes == 0 || self.state.is_replay() {
             return Ok(None);
         }
-        let Some(host_bytes) = self.storage_meter.extend_reservation(
+        let Some(_host_bytes) = self.storage_meter.extend_reservation(
             reservation_bytes,
             additional_bytes,
             self.resource_limits.max_disk_space_limit(),
@@ -1721,8 +1688,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.public_state.worker(),
             FilesystemStorageReservation {
                 logical_bytes: additional_bytes,
-                host_bytes,
-                permit: None,
                 storage_meter: Some(self.storage_meter.clone()),
                 finalized: false,
             },
@@ -1758,8 +1723,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.public_state.worker(),
             FilesystemStorageReservation {
                 logical_bytes: freed_bytes,
-                host_bytes: 0,
-                permit: None,
                 storage_meter: None,
                 finalized: false,
             },

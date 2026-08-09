@@ -159,7 +159,7 @@ async fn acquire_succeeds_immediately_when_space_available() {
     let filesystem_storage_semaphore = filesystem_storage_semaphore(4 * 1024);
     // pool has space so it succeeds on the first try without invoking free_up
     let permit = filesystem_storage_semaphore
-        .acquire(2 * 1024, || async { false })
+        .acquire(2 * 1024, |_| async { false })
         .await;
     assert_eq!(permit.num_permits(), 2); // 2 KB = 2 permits
     assert_eq!(filesystem_storage_semaphore.available_bytes(), 2 * 1024);
@@ -178,7 +178,7 @@ async fn acquire_succeeds_after_free_up_releases_space() {
     let sem_arc = filesystem_storage_semaphore.inner_semaphore().clone();
     let released = std::sync::atomic::AtomicBool::new(false);
     let permit = filesystem_storage_semaphore
-        .acquire(2 * 1024, || {
+        .acquire(2 * 1024, |_| {
             let sem = sem_arc.clone();
             let already = released.fetch_or(true, std::sync::atomic::Ordering::SeqCst);
             async move {
@@ -192,6 +192,34 @@ async fn acquire_succeeds_after_free_up_releases_space() {
         })
         .await;
     assert_eq!(permit.num_permits(), 2);
+}
+
+#[test]
+async fn acquire_only_requests_eviction_for_the_shortfall() {
+    let filesystem_storage_semaphore = filesystem_storage_semaphore(6 * 1024);
+    let _held = filesystem_storage_semaphore
+        .try_acquire(3 * 1024)
+        .await
+        .unwrap();
+
+    let sem_arc = filesystem_storage_semaphore.inner_semaphore().clone();
+    let requested = std::sync::atomic::AtomicU64::new(0);
+    let permit = filesystem_storage_semaphore
+        .acquire(5 * 1024, |shortfall| {
+            requested.store(shortfall, std::sync::atomic::Ordering::SeqCst);
+            let sem = sem_arc.clone();
+            async move {
+                sem.add_permits(bytes_to_filesystem_storage_permits(shortfall) as usize);
+                true
+            }
+        })
+        .await;
+
+    assert_eq!(
+        requested.load(std::sync::atomic::Ordering::SeqCst),
+        2 * 1024
+    );
+    assert_eq!(permit.num_permits(), 5);
 }
 
 // ---------------------------------------------------------------------------

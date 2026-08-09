@@ -219,6 +219,17 @@ where
     })
 }
 
+fn is_replay_from_accessor<Ctx: WorkerCtx, U>(accessor: &Accessor<U, DurableP3<Ctx>>) -> bool
+where
+    U: 'static,
+{
+    accessor.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut())
+            .state
+            .is_replay()
+    })
+}
+
 fn descriptor_path_at_from_accessor<Ctx: WorkerCtx, U>(
     store: &Accessor<U, DurableP3<Ctx>>,
     fd: &Resource<Descriptor>,
@@ -534,18 +545,17 @@ where
         return Ok(None);
     }
 
-    if let Some((worker, mut reservation)) = accessor
+    if let Some((worker, reservation)) = accessor
         .with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut())
-                .prepare_filesystem_storage_reservation(bytes, guard)
+                .prepare_filesystem_storage_reservation(bytes, &guard)
         })
         .map_err(wasmtime::Error::from_anyhow)?
     {
-        let permit = worker
-            .acquire_filesystem_storage_space(reservation.host_bytes())
+        reservation
+            .acquire_capacity(&worker)
             .await
             .map_err(wasmtime::Error::from_anyhow)?;
-        reservation.set_permit(permit);
         Ok(Some(reservation))
     } else {
         Ok(None)
@@ -570,26 +580,23 @@ where
     let storage_meter =
         accessor.with(|mut access| durable_worker_ctx::<Ctx, U>(access.data_mut()).storage_meter());
     let guard = storage_meter.lock_reservation().await;
-    let Some((worker, mut extension)) = accessor
+    let Some((worker, extension)) = accessor
         .with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut())
                 .prepare_filesystem_storage_reservation_extension(
                     reservation_bytes,
                     additional_bytes,
-                    guard,
+                    &guard,
                 )
         })
         .map_err(wasmtime::Error::from_anyhow)?
     else {
         return Ok(());
     };
-    if extension.host_bytes() > 0 {
-        let permit = worker
-            .acquire_filesystem_storage_space(extension.host_bytes())
-            .await
-            .map_err(wasmtime::Error::from_anyhow)?;
-        extension.set_permit(permit);
-    }
+    extension
+        .acquire_capacity(&worker)
+        .await
+        .map_err(wasmtime::Error::from_anyhow)?;
     if let Some(reservation) = reservation {
         reservation.merge(extension);
     } else {
@@ -612,11 +619,7 @@ async fn shrink_filesystem_storage_reservation<Ctx, U>(
     let storage_meter =
         accessor.with(|mut access| durable_worker_ctx::<Ctx, U>(access.data_mut()).storage_meter());
     let _guard = storage_meter.lock_reservation().await;
-    if let Some(worker) = accessor.with(|mut access| {
-        durable_worker_ctx::<Ctx, U>(access.data_mut()).live_filesystem_storage_worker()
-    }) {
-        reservation.shrink(&worker, bytes).await;
-    }
+    reservation.shrink(bytes);
 }
 
 async fn commit_filesystem_write_storage<Ctx, U>(
@@ -728,11 +731,7 @@ where
                 .await?;
                 return Err(wasmtime::Error::msg("filesystem mutation is still pending"));
             }
-            let is_replay = accessor.with(|mut access| {
-                durable_worker_ctx::<Ctx, U>(access.data_mut())
-                    .state
-                    .is_replay()
-            });
+            let is_replay = is_replay_from_accessor::<Ctx, U>(accessor);
             let current_size = if is_replay {
                 0
             } else {
@@ -1160,11 +1159,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         // Charge growth before resizing and credit shrink afterwards, matching
         // the WASI P2 storage-quota accounting. The quota helpers are no-ops
         // during replay, so the storage usage is rebuilt purely from the oplog.
-        let is_replay = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut())
-                .state
-                .is_replay()
-        });
+        let is_replay = is_replay_from_accessor::<Ctx, U>(accessor);
         let current_size = if is_replay {
             size
         } else {
@@ -1484,11 +1479,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         // Opening with TRUNCATE discards the existing file contents, so credit
         // the freed bytes back to the storage quota on success, matching WASI
         // P2. The release helper is a no-op during replay.
-        let is_replay = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut())
-                .state
-                .is_replay()
-        });
+        let is_replay = is_replay_from_accessor::<Ctx, U>(accessor);
         let truncated_size = if open_flags.contains(types::OpenFlags::TRUNCATE) && !is_replay {
             descriptor_size_at::<Ctx, U>(
                 accessor,
@@ -1619,11 +1610,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         // Stat the file before unlinking so the freed bytes can be credited back
         // to the storage quota on success, matching WASI P2. The release helper
         // is a no-op during replay.
-        let is_replay = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut())
-                .state
-                .is_replay()
-        });
+        let is_replay = is_replay_from_accessor::<Ctx, U>(accessor);
         let file_size = if is_replay {
             0
         } else {

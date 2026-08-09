@@ -415,9 +415,9 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     pub async fn acquire_filesystem_storage(&self, storage_bytes: u64) -> FilesystemStoragePermit {
         let workers = self.workers.clone();
         self.worker_filesystem_storage
-            .acquire(storage_bytes, || {
+            .acquire(storage_bytes, |shortfall| {
                 let workers = workers.clone();
-                async move { Self::try_free_up_filesystem_storage(&workers, storage_bytes).await }
+                async move { Self::try_free_up_filesystem_storage(&workers, shortfall).await }
             })
             .await
     }
@@ -468,11 +468,9 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
         debug!("Collecting storage eviction candidates");
         for (agent_id, worker) in workers.iter().await {
-            if let Some(class) = worker.eviction_class().await
-                && let Ok(storage) = worker.filesystem_storage_requirement().await
-            {
+            if let Some(class) = worker.eviction_class().await {
                 let last_changed = worker.last_execution_state_change();
-                let entry = (agent_id, worker, storage, last_changed);
+                let entry = (agent_id, worker, last_changed);
                 match class {
                     crate::worker::EvictionClass::LoadedIdle => idle_candidates.push(entry),
                     crate::worker::EvictionClass::WarmRunnable => warm_candidates.push(entry),
@@ -481,18 +479,18 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         }
 
         // Sort each bucket — newest first so we pop oldest
-        idle_candidates.sort_by_key(|(_, _, _, ts)| ts.to_millis());
+        idle_candidates.sort_by_key(|(_, _, ts)| ts.to_millis());
         idle_candidates.reverse();
-        warm_candidates.sort_by_key(|(_, _, _, ts)| ts.to_millis());
+        warm_candidates.sort_by_key(|(_, _, ts)| ts.to_millis());
         warm_candidates.reverse();
 
         let mut freed: u64 = 0;
 
         // First evict LoadedIdle workers
         while freed < storage_bytes && !idle_candidates.is_empty() {
-            let (agent_id, worker, storage, _) = idle_candidates.pop().unwrap();
+            let (agent_id, worker, _) = idle_candidates.pop().unwrap();
             debug!("Trying to stop idle {agent_id} to free up storage");
-            if worker
+            if let Some(storage) = worker
                 .stop_if_evictable(crate::worker::EvictionClass::LoadedIdle)
                 .await
             {
@@ -504,9 +502,9 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
         // Then evict WarmRunnable workers if still under pressure
         while freed < storage_bytes && !warm_candidates.is_empty() {
-            let (agent_id, worker, storage, _) = warm_candidates.pop().unwrap();
+            let (agent_id, worker, _) = warm_candidates.pop().unwrap();
             debug!("Trying to stop warm-runnable {agent_id} to free up storage");
-            if worker
+            if let Some(storage) = worker
                 .stop_if_evictable(crate::worker::EvictionClass::WarmRunnable)
                 .await
             {
@@ -687,7 +685,7 @@ async fn evict_at_most_memory<Ctx: WorkerCtx>(
         candidates.into_iter().take(planned_stops)
     {
         debug!("Trying to stop {target_class:?} {agent_id} to free up memory");
-        if worker.stop_if_evictable(target_class).await {
+        if worker.stop_if_evictable(target_class).await.is_some() {
             debug!("Stopped {target_class:?} {agent_id} to free up {mem} memory");
             crate::metrics::workers::record_worker_eviction(match priority {
                 EvictionPriority::Idle => "LoadedIdle",

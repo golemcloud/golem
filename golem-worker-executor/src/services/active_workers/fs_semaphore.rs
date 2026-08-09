@@ -118,7 +118,7 @@ impl FilesystemStorageSemaphore {
         try_free_up: F,
     ) -> FilesystemStoragePermit
     where
-        F: Fn() -> Fut,
+        F: Fn(u64) -> Fut,
         Fut: std::future::Future<Output = bool>,
     {
         let permits = bytes_to_filesystem_storage_permits(storage_bytes);
@@ -143,12 +143,13 @@ impl FilesystemStorageSemaphore {
                 }
                 Err(TryAcquireError::Closed) => panic!("worker storage semaphore has been closed"),
                 Err(TryAcquireError::NoPermits) => {
+                    let available = self.semaphore.available_permits() as u32;
+                    let shortfall = permits.saturating_sub(available);
                     debug!(
-                        "Not enough storage to allocate {} permits (available: {}), trying to free some up",
-                        permits,
-                        self.semaphore.available_permits()
+                        "Not enough storage to allocate {} permits (available: {}), trying to free {} permits",
+                        permits, available, shortfall
                     );
-                    if try_free_up().await {
+                    if try_free_up(filesystem_storage_permits_to_bytes(shortfall)).await {
                         debug!("Freed up some storage, retrying");
                         continue;
                     } else {

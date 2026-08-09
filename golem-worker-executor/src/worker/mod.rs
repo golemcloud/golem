@@ -32,6 +32,9 @@ use crate::services::active_workers::{
     FilesystemStoragePermit, MemoryGrant, RegisteredConcurrentAccount, WorkerComponentCharge,
     bytes_to_filesystem_storage_permits,
 };
+use crate::services::agent_storage_meter::{
+    FilesystemStoragePermitBank, FilesystemStoragePermitRegistration,
+};
 use crate::services::card_interest::CardInterestIndex;
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
@@ -326,6 +329,7 @@ pub struct Worker<Ctx: WorkerCtx> {
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
     instance: Arc<Mutex<WorkerInstance>>,
     linear_memory_grant: StdMutex<Option<Arc<StdMutex<MemoryGrant>>>>,
+    filesystem_storage_permits: Arc<FilesystemStoragePermitBank>,
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
     /// until the worker stops so permit reacquisition cannot lose it between `RunningWorker`s.
     interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
@@ -749,6 +753,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }),
             instance,
             linear_memory_grant: StdMutex::new(None),
+            filesystem_storage_permits: Arc::new(FilesystemStoragePermitBank::default()),
             interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
             execution_status,
             initial_worker_metadata,
@@ -1995,8 +2000,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Stop this worker if it matches the given eviction class.
     ///
     /// Re-checks the eviction classification under the instance lock to avoid
-    /// races. Returns `true` if the worker was actually stopped.
-    pub async fn stop_if_evictable(&self, target_class: EvictionClass) -> bool {
+    /// races. Returns the filesystem capacity released if the worker was stopped.
+    pub async fn stop_if_evictable(&self, target_class: EvictionClass) -> Option<u64> {
         let mut instance_guard = self.lock_non_stopping_worker().await;
         let should_stop = match &*instance_guard {
             WorkerInstance::Running(running) => {
@@ -2025,6 +2030,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
 
         if should_stop {
+            let filesystem_storage_capacity = self.filesystem_storage_permits.held_bytes();
             let stop_result = self
                 .stop_internal_locked(
                     &mut instance_guard,
@@ -2037,10 +2043,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
             drop(instance_guard);
             self.handle_stop_result(stop_result).await;
-            true
+            Some(filesystem_storage_capacity)
         } else {
             drop(instance_guard);
-            false
+            None
         }
     }
 
@@ -2148,29 +2154,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.startup_linear_memory_bytes.load(Ordering::Acquire)
     }
 
-    /// Return `freed_bytes` to the storage semaphore pool.
-    /// Called from `DurableWorkerCtx::release_filesystem_space` when a file is
-    /// deleted or truncated. Should only be called from the invocation loop.
-    ///
-    /// The permits are returned by splitting them off `RunningWorker.filesystem_storage_permit`
-    /// and dropping the split portion. This correctly reduces the permit count held
-    /// by the `RunningWorker`, preventing double-return when it later drops.
-    pub async fn release_filesystem_storage_space(&self, freed_bytes: u64) {
-        let permits_to_release = bytes_to_filesystem_storage_permits(freed_bytes);
-        if permits_to_release == 0 {
-            return;
-        }
-        if let WorkerInstance::Running(running) = &mut *self.instance.lock().await
-            && let Some(ref mut permit) = running.filesystem_storage_permit
-        {
-            // Split off `permits_to_release` permits and drop them.
-            // Dropping the split permit returns its permits to the semaphore
-            // automatically — no separate add_permits needed.
-            let n = permits_to_release as usize;
-            let actual_n = n.min(permit.num_permits());
-            let to_drop = permit.split(actual_n);
-            drop(to_drop); // returns permits to the semaphore
-        }
+    pub(crate) fn filesystem_storage_permit_bank(&self) -> Arc<FilesystemStoragePermitBank> {
+        self.filesystem_storage_permits.clone()
     }
 
     /// Reserve storage semaphore permits for a write operation.
@@ -2189,40 +2174,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .try_acquire_filesystem_storage(new_bytes)
                     .await
                 {
-                    // Success — clear any pending desired_extra_filesystem_storage.
-                    self.desired_extra_filesystem_storage
-                        .store(0, Ordering::Relaxed);
                     Ok(Some(permit))
                 } else {
-                    // Record the requested size so WaitingWorker can evict enough
-                    // idle workers to satisfy this write on the next restart.
+                    // Preserve the largest concurrent shortfall so the replacement
+                    // generation admits enough capacity for every pending write.
                     self.desired_extra_filesystem_storage
-                        .store(new_bytes, Ordering::Relaxed);
+                        .fetch_max(new_bytes, Ordering::Relaxed);
                     Err(anyhow!(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage))
                 }
             }
             _ => Ok(None),
-        }
-    }
-
-    pub async fn commit_filesystem_storage_space(
-        &self,
-        mut permit: Option<FilesystemStoragePermit>,
-        committed_host_bytes: u64,
-    ) {
-        let Some(mut permit) = permit.take() else {
-            return;
-        };
-        let committed_permits = bytes_to_filesystem_storage_permits(committed_host_bytes) as usize;
-        let excess_permits = permit.num_permits().saturating_sub(committed_permits);
-        if let Some(excess) = permit.split(excess_permits) {
-            drop(excess);
-        }
-        if permit.num_permits() == 0 {
-            return;
-        }
-        if let WorkerInstance::Running(running) = &mut *self.instance.lock().await {
-            running.merge_extra_filesystem_storage_permits(permit);
         }
     }
 
@@ -3014,6 +2975,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     // register and admit the replacement generation without overlapping
                     // the old generation's grant.
                     self.release_linear_memory_grant();
+                    self.filesystem_storage_permits.clear();
                     **instance_guard = final_state.into_instance();
                     if let WorkerInstance::Unloaded { startup_failure } = &**instance_guard {
                         self.resolve_pending_readiness_awaiters_on_stop(startup_failure.as_ref())
@@ -3542,13 +3504,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         oom_retry_count: u32,
         start_attempt: Uuid,
         worker_trace: WorkerTrace,
+        desired_extra_filesystem_storage: u64,
     ) {
         let mut instance_guard = this.instance.lock().await;
         match &*instance_guard {
             WorkerInstance::WaitingForPermit(waiting_worker)
                 if waiting_worker.start_attempt == start_attempt =>
             {
-                let mut running = RunningWorker::new(
+                let filesystem_storage_permit_registration = this
+                    .filesystem_storage_permits
+                    .install(filesystem_storage_permit);
+                let running = RunningWorker::new(
                     this.owned_agent_id.clone(),
                     this.queue.clone(),
                     this.clone(),
@@ -3557,13 +3523,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     concurrent_agent_permit,
                     oom_retry_count,
                     worker_trace,
+                    filesystem_storage_permit_registration,
                 )
                 .await;
-                if let Some(sp) = filesystem_storage_permit {
-                    running.merge_extra_filesystem_storage_permits(sp);
-                }
                 crate::metrics::workers::dec_worker_waiting_for_memory();
                 crate::metrics::workers::inc_worker_memory_resident();
+                let _ = this.desired_extra_filesystem_storage.compare_exchange(
+                    desired_extra_filesystem_storage,
+                    0,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                );
                 *instance_guard = WorkerInstance::Running(running);
             }
             _ => {
@@ -3904,6 +3874,7 @@ impl WaitingWorker {
                 oom_retry_count,
                 start_attempt,
                 worker_trace,
+                desired_extra,
             )
             .await;
             // If we do not start the worker here we will drop the permits here, which will release them to the host.
@@ -4012,11 +3983,6 @@ struct RunningWorker {
     handle: Option<JoinHandle<()>>,
     sender: UnboundedSender<WorkerCommand>,
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
-    /// Storage semaphore permits held by this worker. `None` until storage
-    /// space is first acquired (at startup or on first write). Dropped
-    /// automatically when `RunningWorker` is dropped, returning storage
-    /// permits to the pool.
-    filesystem_storage_permit: Option<FilesystemStoragePermit>,
     waiting_for_command: Arc<AtomicBool>,
     interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
     /// `ResumeReplay` is signalled directly through the command channel rather
@@ -4149,6 +4115,7 @@ impl RunningWorker {
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
         worker_trace: WorkerTrace,
+        filesystem_storage_permit_registration: FilesystemStoragePermitRegistration,
     ) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         sender.send(WorkerCommand::WorkAvailable).unwrap();
@@ -4164,7 +4131,6 @@ impl RunningWorker {
         let memory_grant = Arc::new(StdMutex::new(memory_grant));
         let memory_grant_registration =
             LinearMemoryGrantRegistration::new(parent.clone(), memory_grant);
-
         let handle = tokio::task::spawn(async move {
             RunningWorker::invocation_loop(
                 receiver,
@@ -4179,30 +4145,20 @@ impl RunningWorker {
                 worker_trace,
             )
             .await;
-            drop((memory_grant_registration, component_charge));
+            drop((
+                memory_grant_registration,
+                filesystem_storage_permit_registration,
+                component_charge,
+            ));
         });
 
         RunningWorker {
             handle: Some(handle),
             sender,
             queue,
-            filesystem_storage_permit: None,
             waiting_for_command,
             interrupt_signal,
             resume_replay_pending,
-        }
-    }
-
-    /// Merge additional storage permits into this worker's storage permit. If
-    /// the worker does not yet hold a storage permit, the given permit becomes
-    /// the initial one. Additional calls merge into that initial permit.
-    pub fn merge_extra_filesystem_storage_permits(
-        &mut self,
-        extra_permit: FilesystemStoragePermit,
-    ) {
-        match &mut self.filesystem_storage_permit {
-            Some(existing) => existing.merge(extra_permit),
-            None => self.filesystem_storage_permit = Some(extra_permit),
         }
     }
 

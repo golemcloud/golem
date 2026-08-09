@@ -16,6 +16,12 @@ pub trait P3FileSystem {
     async fn grow_replacement_beyond_quota(&self);
     async fn write_bytes(&self, path: String, len: u64);
     async fn write_chunks(&self, path: String, chunk_len: u64, chunk_count: u64) -> u64;
+    async fn overlapping_stream_writes(
+        &self,
+        first_path: String,
+        second_path: String,
+        len: u64,
+    ) -> Vec<u64>;
     async fn sleep_for(&self, seconds: f64);
 }
 
@@ -417,6 +423,52 @@ impl P3FileSystem for P3FileSystemImpl {
         drop(writer);
         write.await.expect("P3 chunked write failed");
         file.stat().await.expect("P3 chunked stat failed").size
+    }
+
+    async fn overlapping_stream_writes(
+        &self,
+        first_path: String,
+        second_path: String,
+        len: u64,
+    ) -> Vec<u64> {
+        let (root, _) = p3_preopens::get_directories()
+            .into_iter()
+            .next()
+            .expect("no P3 preopened directory");
+        let first = root
+            .open_at(
+                p3_types::PathFlags::empty(),
+                first_path,
+                p3_types::OpenFlags::CREATE,
+                p3_types::DescriptorFlags::READ | p3_types::DescriptorFlags::WRITE,
+            )
+            .await
+            .expect("P3 first create failed");
+        let second = root
+            .open_at(
+                p3_types::PathFlags::empty(),
+                second_path,
+                p3_types::OpenFlags::CREATE,
+                p3_types::DescriptorFlags::READ | p3_types::DescriptorFlags::WRITE,
+            )
+            .await
+            .expect("P3 second create failed");
+        let (mut first_writer, first_reader) = wit_stream::new::<u8>();
+        let (mut second_writer, second_reader) = wit_stream::new::<u8>();
+        let first_write = first.write_via_stream(first_reader, 0);
+        let second_write = second.write_via_stream(second_reader, 0);
+
+        assert!(first_writer.write_all(vec![1; len as usize]).await.is_empty());
+        assert!(second_writer.write_all(vec![2; len as usize]).await.is_empty());
+        drop(second_writer);
+        second_write.await.expect("P3 second write failed");
+        drop(first_writer);
+        first_write.await.expect("P3 first write failed");
+
+        vec![
+            first.stat().await.expect("P3 first stat failed").size,
+            second.stat().await.expect("P3 second stat failed").size,
+        ]
     }
 
     async fn sleep_for(&self, seconds: f64) {

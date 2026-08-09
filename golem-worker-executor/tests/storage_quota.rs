@@ -43,6 +43,10 @@ inherit_test_dep!(
     #[tagged_as("host_api_tests")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("initial_file_system")]
+    PrecompiledComponent
+);
 
 fn filesystem_storage_deltas(entries: &[PublicOplogEntryWithIndex]) -> Vec<i64> {
     entries
@@ -53,11 +57,6 @@ fn filesystem_storage_deltas(entries: &[PublicOplogEntryWithIndex]) -> Vec<i64> 
         })
         .collect()
 }
-
-inherit_test_dep!(
-    #[tagged_as("initial_file_system")]
-    PrecompiledComponent
-);
 
 #[test]
 #[tracing::instrument]
@@ -89,7 +88,10 @@ async fn agent_quota_write_within_limit_succeeds(
         )
         .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?),
+        vec![11]
+    );
 
     Ok(())
 }
@@ -146,8 +148,6 @@ async fn agent_quota_write_exceeding_limit_fails(
         "failed quota reservation must not record written-byte metrics"
     );
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
     Ok(())
 }
 
@@ -194,8 +194,6 @@ async fn agent_quota_exceeded_limit_is_not_retried(
     assert_specific_storage_quota_failure(&second, "second permanent quota failure");
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert!(filesystem_storage_deltas(&oplog).is_empty());
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }
@@ -270,17 +268,20 @@ async fn agent_quota_freed_after_file_deletion(
         })
     );
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?),
+        vec![11, -11, 10]
+    );
 
     Ok(())
 }
 
-/// Rewriting the same file with the same content via `write_file` should not
-/// consume additional quota, because the resulting file size does not grow.
+/// `std::fs::write` truncates before rewriting. Both physical transitions must
+/// be recorded while the final canonical total remains unchanged.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn agent_quota_overwrite_same_file_should_not_double_charge(
+async fn agent_quota_truncate_and_rewrite_has_no_net_double_charge(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -319,7 +320,10 @@ async fn agent_quota_overwrite_same_file_should_not_double_charge(
         )
         .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?),
+        vec![11, -11, 11]
+    );
 
     Ok(())
 }
@@ -552,7 +556,10 @@ async fn agent_quota_stream_overwrite_same_file_should_not_double_charge(
         )
         .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?),
+        vec![1024]
+    );
 
     Ok(())
 }
@@ -969,7 +976,10 @@ async fn agent_quota_pwrite_overwrite_same_range_should_not_double_charge(
         )
         .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?),
+        vec![11]
+    );
 
     Ok(())
 }
@@ -1570,7 +1580,7 @@ async fn executor_pool_idle_worker_evicted_on_first_write_node_out_of_filesystem
 /// not the full amount.
 ///
 /// Pool = 6 KB. Setup:
-///   Worker A writes 2 KB → pool: 4 KB free.
+///   Worker A writes 1025 bytes → 2 permits → pool: 4 KB free.
 ///   Worker B writes 1 KB → pool: 3 KB free.
 ///   Worker C writes 3 KB → pool: 0 KB free. C goes idle.
 ///
@@ -1579,7 +1589,7 @@ async fn executor_pool_idle_worker_evicted_on_first_write_node_out_of_filesystem
 ///   - Old C RunningWorker drops → 3 KB returned to pool (pool: 3 KB free).
 ///   - `acquire_bytes = filesystem_storage_requirement(3KB) + desired_extra(2KB) = 5 KB`.
 ///   - Pool has 3 KB → gap = 2 KB → eviction targets 2 KB → evicts idle Worker A
-///     (holding 2 KB) → pool: 3 + 2 = 5 KB free.
+///     (holding 2 permits) → pool: 3 + 2 = 5 KB free.
 ///   - Acquires 5 KB, releases 2 KB (desired_extra) → pool: 2 KB free.
 ///   - C holds 3 KB as filesystem_storage_permit (its existing files).
 ///   - C's pending 2 KB write re-acquires → succeeds.
@@ -1609,12 +1619,12 @@ async fn executor_pool_only_gap_evicted_not_full_amount(
     let agent_c = agent_id!("FileSystem", "gap-evict-c-1");
 
     // Content strings sized to consume specific permit counts.
-    let content_a = "A".repeat(2 * 1024); // 2 KB → 2 permits
+    let content_a = "A".repeat(1025); // 1025 bytes → 2 permits
     let content_b = "B".repeat(1024); // 1 KB → 1 permit
     let content_c1 = "C".repeat(3 * 1024); // 3 KB → 3 permits
     let content_c2 = "D".repeat(2 * 1024); // 2 KB → the extra write that fails
 
-    // Worker A: write 2 KB → pool: 4 KB free.
+    // Worker A: write 1025 bytes → 2 permits → pool: 4 KB free.
     let worker_a = executor.start_agent(&component.id, agent_a.clone()).await?;
     executor
         .invoke_and_await_agent(
@@ -1650,7 +1660,7 @@ async fn executor_pool_only_gap_evicted_not_full_amount(
     // Worker C tries to write 2 KB more. Pool is exhausted →
     // NodeOutOfFilesystemStorage → desired_extra_filesystem_storage = 2 KB → ReacquirePermits.
     // C's old RunningWorker drops returning 3 KB → pool: 3 KB.
-    // acquire_bytes = 3+2 = 5 KB → gap = 2 KB → evicts idle Worker A (2 KB).
+    // acquire_bytes = 3+2 = 5 KB → gap = 2 KB → evicts idle Worker A (2 permits).
     // Pool after eviction: 5 KB → acquire 5 KB → release 2 KB → pool: 2 KB free.
     // C's pending 2 KB write re-acquires → succeeds.
     // Worker B (1 KB) must NOT be evicted.
@@ -1663,15 +1673,17 @@ async fn executor_pool_only_gap_evicted_not_full_amount(
         )
         .await?;
 
-    // Verify Worker B was NOT evicted — it should still be idle in memory.
-    // We check its status is Idle (loaded, not suspended/failed) before reading,
-    // proving eviction stopped after freeing only the gap (2 KB from A),
-    // not B's 1 KB as well.
-    let metadata_b = executor.get_worker_metadata(&worker_b).await?;
+    // Verify Worker B was NOT evicted, proving eviction stopped after freeing
+    // only the 2 KB gap from A rather than evicting B's 1 KB as well.
     assert_eq!(
-        metadata_b.status,
-        golem_common::model::AgentStatus::Idle,
-        "Worker B must remain Idle (not evicted) — only Worker A's 2 KB should have been evicted"
+        executor
+            .worker_eviction_class(&OwnedAgentId::new(
+                context.default_environment_id,
+                &worker_b,
+            ))
+            .await,
+        Some(EvictionClass::LoadedIdle),
+        "Worker B must remain resident after only Worker A's 2 permits are evicted"
     );
 
     // Verify Worker B's file content is intact.
@@ -1976,6 +1988,50 @@ async fn agent_quota_blocking_splice_within_limit_completes(
     );
     let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
     assert_eq!(filesystem_storage_deltas(&oplog), vec![11, 11]);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn executor_pool_overlapping_p2_streams_use_aggregate_rounding(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_executor_storage_pool(deps, &context, 2 * 1024).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "overlapping-p2-streams");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/base.bin", "x".repeat(500)),
+        )
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "overlapping_stream_writes",
+            data_value!("/first.bin", "/second.bin", 600u64),
+        )
+        .await?;
+
+    assert_file_len(&executor, &component, &agent, "/first.bin", 600).await?;
+    assert_file_len(&executor, &component, &agent, "/second.bin", 600).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![500, 600, 600]
+    );
     Ok(())
 }
 
@@ -2475,6 +2531,56 @@ async fn p3_chunked_stream_commits_one_storage_transition(
         filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
         vec![16],
         "one P3 filesystem stream must commit one canonical storage transition"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn executor_pool_overlapping_p3_streams_use_aggregate_rounding(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_executor_storage_pool(deps, &context, 2 * 1024).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let agent = agent_id!("P3FileSystem", "overlapping-p3-streams");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_bytes",
+            data_value!("base.bin", 500u64),
+        )
+        .await?;
+    let sizes = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "overlapping_stream_writes",
+            data_value!("first.bin", "second.bin", 600u64),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected overlapping_stream_writes return value"))?;
+
+    assert_eq!(
+        sizes,
+        SchemaValue::List {
+            elements: vec![SchemaValue::U64(600), SchemaValue::U64(600)]
+        }
+    );
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![500, 600, 600]
     );
     Ok(())
 }

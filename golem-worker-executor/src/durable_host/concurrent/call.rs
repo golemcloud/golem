@@ -3146,7 +3146,7 @@ where
         let storage_guard = storage_meter.lock_reservation().await;
         let prepared = match store.with(|mut access| {
             get_ctx(access.data_mut())
-                .prepare_filesystem_storage_reservation(storage_growth, storage_guard)
+                .prepare_filesystem_storage_reservation(storage_growth, &storage_guard)
         }) {
             Ok(prepared) => prepared,
             Err(error) => {
@@ -3154,18 +3154,14 @@ where
                 return Err(WorkerExecutorError::runtime(error.to_string()));
             }
         };
-        if let Some((worker, mut reservation)) = prepared {
-            let permit = match worker
-                .acquire_filesystem_storage_space(reservation.host_bytes())
-                .await
-            {
-                Ok(permit) => permit,
+        if let Some((worker, reservation)) = prepared {
+            match reservation.acquire_capacity(&worker).await {
+                Ok(()) => {}
                 Err(error) => {
                     restore_initial_files_access(store, get_ctx, files)?;
                     return Err(WorkerExecutorError::runtime(error.to_string()));
                 }
-            };
-            reservation.set_permit(permit);
+            }
             Some(reservation)
         } else {
             None

@@ -74,6 +74,12 @@ pub trait FileSystem {
         first_len: u64,
         second_len: u64,
     ) -> Result<(), String>;
+    fn overlapping_stream_writes(
+        &self,
+        first_path: String,
+        second_path: String,
+        len: u64,
+    ) -> Result<(), String>;
     /// Set the size of a file using `descriptor::set_size` (the WASI pwrite-truncate path).
     /// If `new_size` is larger than the current file size the file is grown (zero-filled).
     /// If smaller, the file is truncated.  This exercises the quota grow/shrink paths.
@@ -346,6 +352,47 @@ impl FileSystem for FileSystemImpl {
             .map_err(|e| format!("{e:?}"))?;
         stream
             .blocking_write_zeroes_and_flush(second_len)
+            .map_err(|e| format!("{e:?}"))
+    }
+
+    fn overlapping_stream_writes(
+        &self,
+        first_path: String,
+        second_path: String,
+        len: u64,
+    ) -> Result<(), String> {
+        let dirs = wasi::filesystem::preopens::get_directories();
+        let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
+        let first = root
+            .open_at(
+                PathFlags::empty(),
+                first_path.trim_start_matches('/'),
+                OpenFlags::CREATE,
+                DescriptorFlags::WRITE,
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        let second = root
+            .open_at(
+                PathFlags::empty(),
+                second_path.trim_start_matches('/'),
+                OpenFlags::CREATE,
+                DescriptorFlags::WRITE,
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        let first_stream = first.write_via_stream(0).map_err(|e| format!("{e:?}"))?;
+        let second_stream = second.write_via_stream(0).map_err(|e| format!("{e:?}"))?;
+
+        first_stream
+            .write_zeroes(len)
+            .map_err(|e| format!("{e:?}"))?;
+        second_stream
+            .write_zeroes(len)
+            .map_err(|e| format!("{e:?}"))?;
+        first_stream
+            .blocking_flush()
+            .map_err(|e| format!("{e:?}"))?;
+        second_stream
+            .blocking_flush()
             .map_err(|e| format!("{e:?}"))
     }
 
