@@ -88,7 +88,7 @@ impl FileLoader {
         &self,
         environment_id: EnvironmentId,
         key: AgentFileContentHash,
-        target: &PathBuf,
+        target: &Path,
         file_size: u64,
     ) -> Result<FileUseToken, WorkerExecutorError> {
         self.get_read_only_to_impl(environment_id, key, target, file_size)
@@ -106,7 +106,7 @@ impl FileLoader {
         &self,
         environment_id: EnvironmentId,
         key: AgentFileContentHash,
-        target: &PathBuf,
+        target: &Path,
     ) -> Result<(), WorkerExecutorError> {
         self.get_read_write_to_impl(environment_id, key, target)
             .await
@@ -122,7 +122,7 @@ impl FileLoader {
         &self,
         environment_id: EnvironmentId,
         key: AgentFileContentHash,
-        target: &PathBuf,
+        target: &Path,
         file_size: u64,
     ) -> Result<FileUseToken, anyhow::Error> {
         if let Some(parent) = target.parent() {
@@ -160,7 +160,7 @@ impl FileLoader {
         &self,
         environment_id: EnvironmentId,
         key: AgentFileContentHash,
-        target: &PathBuf,
+        target: &Path,
     ) -> Result<(), anyhow::Error> {
         if let Some(parent) = target.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -192,7 +192,7 @@ impl FileLoader {
                     cache_entry_path.display(),
                     target.display()
                 );
-                tokio::fs::copy(&cache_entry_path, target).await?;
+                copy_file_atomically(&cache_entry_path, target).await?;
                 return Ok(());
             }
         }
@@ -318,15 +318,7 @@ impl FileLoader {
             .map_err(|e| anyhow!(e))?
             .ok_or_else(|| anyhow!("File not found"))?;
 
-        let file = tokio::fs::File::create(path).await?;
-        let mut writer = tokio::io::BufWriter::new(file);
-
-        while let Some(chunk) = data.try_next().await.map_err(|e| anyhow!(e))? {
-            writer.write_all(&chunk).await?;
-        }
-
-        writer.flush().await?;
-        Ok(())
+        write_stream_atomically(path, &mut data).await
     }
 
     async fn set_path_read_only(&self, path: &Path) -> Result<(), anyhow::Error> {
@@ -335,6 +327,68 @@ impl FileLoader {
         tokio::fs::set_permissions(path, perms).await?;
         Ok(())
     }
+}
+
+async fn write_stream_atomically<S, B, E>(path: &Path, data: &mut S) -> Result<(), anyhow::Error>
+where
+    S: futures::TryStream<Ok = B, Error = E> + Unpin,
+    B: AsRef<[u8]>,
+    E: std::fmt::Display,
+{
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("Initial file target has no parent directory"))?;
+    let temporary = temporary_file_in(parent).await?;
+    let file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(&temporary)
+        .await?;
+    let mut writer = tokio::io::BufWriter::new(file);
+
+    while let Some(chunk) = data
+        .try_next()
+        .await
+        .map_err(|error| anyhow!(error.to_string()))?
+    {
+        writer.write_all(chunk.as_ref()).await?;
+    }
+
+    writer.flush().await?;
+    writer.into_inner().sync_all().await?;
+    persist_temporary_file(temporary, path).await?;
+    Ok(())
+}
+
+async fn copy_file_atomically(source: &Path, target: &Path) -> Result<(), anyhow::Error> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| anyhow!("Initial file target has no parent directory"))?;
+    let temporary = temporary_file_in(parent).await?;
+    tokio::fs::copy(source, &temporary).await?;
+    persist_temporary_file(temporary, target).await?;
+    Ok(())
+}
+
+async fn temporary_file_in(parent: &Path) -> Result<tempfile::TempPath, anyhow::Error> {
+    let parent = parent.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        tempfile::NamedTempFile::new_in(parent).map(tempfile::NamedTempFile::into_temp_path)
+    })
+    .await
+    .map_err(std::io::Error::other)?
+    .map_err(Into::into)
+}
+
+async fn persist_temporary_file(
+    temporary: tempfile::TempPath,
+    target: &Path,
+) -> Result<(), anyhow::Error> {
+    let target = target.to_path_buf();
+    tokio::task::spawn_blocking(move || temporary.persist(target).map(|_| ()))
+        .await
+        .map_err(std::io::Error::other)?
+        .map_err(|error| error.error.into())
 }
 
 // Scary type, let's break it down:
@@ -610,5 +664,34 @@ mod tests {
         assert_eq!(semaphore.available_bytes(), 0);
         drop(token);
         assert_eq!(semaphore.available_bytes(), pool_bytes as u64);
+    }
+
+    #[test]
+    async fn failed_download_does_not_publish_partial_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target.bin");
+        tokio::fs::write(&target, b"original").await.unwrap();
+        let mut chunks = futures::stream::iter([
+            Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"partial")),
+            Err(std::io::Error::other("download failed")),
+        ]);
+
+        let result = write_stream_atomically(&target, &mut chunks).await;
+
+        assert_eq!(result.unwrap_err().to_string(), "download failed");
+        assert_eq!(tokio::fs::read(target).await.unwrap(), b"original");
+    }
+
+    #[test]
+    async fn cached_copy_atomically_replaces_the_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.bin");
+        let target = directory.path().join("target.bin");
+        tokio::fs::write(&source, b"complete").await.unwrap();
+        tokio::fs::write(&target, b"old").await.unwrap();
+
+        copy_file_atomically(&source, &target).await.unwrap();
+
+        assert_eq!(tokio::fs::read(target).await.unwrap(), b"complete");
     }
 }

@@ -47,6 +47,7 @@ pub struct AtomicResourceEntry {
     in_flight_delta: AtomicI64,
     durable_byte_seconds_delta: AtomicI64,
     ephemeral_byte_seconds_delta: AtomicI64,
+    storage_remainder: Mutex<u128>,
     storage_meters: Arc<scc::HashMap<OwnedAgentId, AgentStorageMeter>>,
     memory_gb_seconds_delta: AtomicI64,
     in_flight_memory_gb_seconds_delta: AtomicI64,
@@ -179,6 +180,7 @@ impl AtomicResourceEntry {
             in_flight_delta: AtomicI64::new(0),
             durable_byte_seconds_delta: AtomicI64::new(0),
             ephemeral_byte_seconds_delta: AtomicI64::new(0),
+            storage_remainder: Mutex::new(0),
             storage_meters: Arc::new(scc::HashMap::new()),
             memory_gb_seconds_delta: AtomicI64::new(0),
             in_flight_memory_gb_seconds_delta: AtomicI64::new(0),
@@ -331,6 +333,20 @@ impl AtomicResourceEntry {
             AgentMode::Ephemeral => &self.ephemeral_byte_seconds_delta,
         };
         delta.fetch_add(amount, Ordering::Relaxed);
+    }
+
+    pub fn record_storage_remainder(&self, mode: AgentMode, remainder: u128) {
+        if remainder == 0 {
+            return;
+        }
+        let units = {
+            let mut account_remainder = self.storage_remainder.lock().unwrap();
+            *account_remainder = account_remainder.saturating_add(remainder);
+            let units = *account_remainder / 1_000_000_000;
+            *account_remainder %= 1_000_000_000;
+            units.min(i64::MAX as u128) as i64
+        };
+        self.record_storage_byte_seconds(mode, units);
     }
 
     pub(crate) fn register_memory_meter(

@@ -3154,8 +3154,8 @@ where
             }
         };
         drop(storage_guard);
-        if let Some((worker, reservation)) = prepared {
-            match reservation.acquire_capacity(&worker).await {
+        if let Some((accounting, reservation)) = prepared {
+            match reservation.acquire_capacity(accounting.worker()).await {
                 Ok(()) => {}
                 Err(error) => {
                     restore_initial_files_access(store, get_ctx, files)?;
@@ -3222,12 +3222,10 @@ async fn commit_revision_update_storage_reservation<T, D, Ctx>(
     Ctx: WorkerCtx,
 {
     if let Some(reservation) = reservation
-        && let Some(commit) = store.with(|mut access| {
-            get_ctx(access.data_mut())
-                .prepare_filesystem_storage_reservation_commit(&reservation, committed_growth)
-        })
+        && let Some(accounting) =
+            store.with(|mut access| get_ctx(access.data_mut()).filesystem_storage_accounting())
     {
-        commit.apply(reservation).await;
+        accounting.commit(reservation, committed_growth).await;
     }
 }
 

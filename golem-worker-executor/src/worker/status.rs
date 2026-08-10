@@ -990,7 +990,9 @@ fn calculate_total_linear_memory_size(
 ///
 /// Mirrors `calculate_total_linear_memory_size`: entries in skipped regions
 /// are excluded, and `Create` resets the counter to the provisioned-filesystem
-/// baseline persisted with the worker.
+/// baseline persisted with the worker. Legacy `Create` entries decode the added
+/// baseline field as zero, so a nonzero baseline re-derived from component metadata
+/// remains authoritative when folding those entries.
 fn calculate_current_filesystem_storage_usage(
     current: u64,
     skipped_regions: &DeletedRegions,
@@ -1007,7 +1009,9 @@ fn calculate_current_filesystem_storage_usage(
                 initial_filesystem_storage_usage,
                 ..
             } => {
-                result = *initial_filesystem_storage_usage;
+                if *initial_filesystem_storage_usage != 0 || result == 0 {
+                    result = *initial_filesystem_storage_usage;
+                }
             }
             OplogEntry::FilesystemStorageUsageUpdate { delta, .. } => {
                 if *delta >= 0 {
@@ -3255,6 +3259,19 @@ mod test {
 
         let result = super::calculate_current_filesystem_storage_usage(1024, &deleted, &entries);
         assert_eq!(result, 1536, "seed + delta");
+    }
+
+    #[test]
+    fn filesystem_storage_usage_preserves_rederived_legacy_baseline() {
+        let entries = BTreeMap::from([make_create_entry(1, 0), make_fs_entry(2, 512)]);
+
+        let result = super::calculate_current_filesystem_storage_usage(
+            4096,
+            &DeletedRegions::default(),
+            &entries,
+        );
+
+        assert_eq!(result, 4608);
     }
 
     #[test]

@@ -44,7 +44,7 @@ use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::durability::collect_named_retry_policies;
 use crate::durable_host::filesystem::durable::DurableFilesystem;
 pub(crate) use crate::durable_host::filesystem::durable::{
-    FilesystemStorageCommit, FilesystemStorageReservation,
+    FilesystemStorageAccounting, FilesystemStorageReservation, PendingFilesystemReservation,
 };
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
@@ -1349,17 +1349,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.filesystem.storage_meter()
     }
 
-    pub(crate) fn filesystem_mutation_lock(&self, path: &Path) -> Arc<tokio::sync::Mutex<()>> {
-        self.filesystem.mutation_lock(path)
-    }
-
-    pub(crate) fn ordered_filesystem_mutation_locks(
-        &self,
-        first_path: &Path,
-        second_path: &Path,
-    ) -> Vec<Arc<tokio::sync::Mutex<()>>> {
-        self.filesystem
-            .ordered_mutation_locks(first_path, second_path)
+    pub(crate) fn filesystem_mutation_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
+        self.filesystem.mutation_lock()
     }
 
     pub(crate) fn rename_open_filesystem_stream_paths(&mut self, old_path: &Path, new_path: &Path) {
@@ -1388,10 +1379,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         reservation: FilesystemStorageReservation,
         committed_bytes: u64,
     ) {
-        if let Some(commit) =
-            self.prepare_filesystem_storage_reservation_commit(&reservation, committed_bytes)
-        {
-            commit.apply(reservation).await;
+        if let Some(accounting) = self.filesystem_storage_accounting() {
+            accounting.commit(reservation, committed_bytes).await;
         }
     }
 
@@ -1399,16 +1388,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Called when files are deleted or truncated.
     /// During replay this is a no-op.
     pub async fn release_filesystem_storage_space(&mut self, freed_bytes: u64) {
-        if let Some((worker, reservation)) = self.prepare_filesystem_storage_release(freed_bytes) {
-            reservation
-                .release(
-                    worker,
-                    self.filesystem.storage_meter(),
-                    None,
-                    self.created_by(),
-                    self.state.owned_agent_id.environment_id,
-                )
-                .await;
+        if freed_bytes > 0
+            && let Some(accounting) = self.filesystem_storage_accounting()
+        {
+            accounting.release(freed_bytes, None).await;
         }
     }
 
@@ -1421,18 +1404,23 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
         let storage_meter = self.filesystem.storage_meter();
         let guard = storage_meter.lock_reservation().await;
-        let (worker, reservation) = self
+        let (accounting, reservation) = self
             .prepare_filesystem_storage_reservation(new_bytes)?
             .expect("live non-zero reservation must be prepared");
         drop(guard);
-        reservation.acquire_capacity(&worker).await?;
+        reservation.acquire_capacity(accounting.worker()).await?;
         Ok(Some(reservation))
     }
 
     pub(crate) fn prepare_filesystem_storage_reservation(
         &mut self,
         new_bytes: u64,
-    ) -> anyhow::Result<Option<(Arc<Worker<Ctx>>, FilesystemStorageReservation)>> {
+    ) -> anyhow::Result<
+        Option<(
+            FilesystemStorageAccounting<Ctx>,
+            FilesystemStorageReservation,
+        )>,
+    > {
         if new_bytes == 0 || self.state.is_replay() {
             return Ok(None);
         }
@@ -1445,47 +1433,24 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             ));
         };
         Ok(Some((
-            self.public_state.worker(),
+            self.filesystem_storage_accounting()
+                .expect("live filesystem reservation must have accounting context"),
             FilesystemStorageReservation {
                 logical_bytes: new_bytes,
-                storage_meter: Some(storage_meter),
-                finalized: false,
+                storage_meter,
             },
         )))
     }
 
-    pub(crate) fn prepare_filesystem_storage_reservation_commit(
-        &self,
-        reservation: &FilesystemStorageReservation,
-        committed_bytes: u64,
-    ) -> Option<FilesystemStorageCommit<Ctx>> {
+    pub(crate) fn filesystem_storage_accounting(&self) -> Option<FilesystemStorageAccounting<Ctx>> {
         if self.state.is_replay() {
             return None;
         }
-        let committed_bytes = committed_bytes.min(reservation.logical_bytes);
-        Some(FilesystemStorageCommit {
-            worker: self.public_state.worker(),
-            storage_meter: self.filesystem.storage_meter(),
-            committed_bytes,
-            account_id: self.created_by(),
-            environment_id: self.state.owned_agent_id.environment_id,
-        })
-    }
-
-    pub(crate) fn prepare_filesystem_storage_release(
-        &mut self,
-        freed_bytes: u64,
-    ) -> Option<(Arc<Worker<Ctx>>, FilesystemStorageReservation)> {
-        if freed_bytes == 0 || self.state.is_replay() {
-            return None;
-        }
-        Some((
+        Some(FilesystemStorageAccounting::new(
             self.public_state.worker(),
-            FilesystemStorageReservation {
-                logical_bytes: freed_bytes,
-                storage_meter: None,
-                finalized: false,
-            },
+            self.filesystem.storage_meter(),
+            self.created_by(),
+            self.state.owned_agent_id.environment_id,
         ))
     }
 
@@ -4741,70 +4706,6 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
-    fn durable_filesystem_serializes_all_worker_mutations() {
-        let filesystem = DurableFilesystem::default();
-        let first = filesystem.mutation_lock(Path::new("first"));
-        let second = filesystem.mutation_lock(Path::new("second"));
-
-        assert!(Arc::ptr_eq(&first, &second));
-    }
-
-    #[test]
-    fn durable_filesystem_reuses_lexical_alias_lock() {
-        let filesystem = DurableFilesystem::default();
-        let direct = filesystem.mutation_lock(Path::new("dir/file"));
-        let alias = filesystem.mutation_lock(Path::new("dir/./nested/../file"));
-
-        assert!(Arc::ptr_eq(&direct, &alias));
-    }
-
-    #[test]
-    fn durable_filesystem_mutation_lock_is_instance_local() {
-        let first = DurableFilesystem::default();
-        let second = DurableFilesystem::default();
-
-        assert!(!Arc::ptr_eq(
-            &first.mutation_lock(Path::new("path")),
-            &second.mutation_lock(Path::new("path"))
-        ));
-    }
-
-    #[test]
-    fn durable_filesystem_pending_state_is_instance_local() {
-        let first = DurableFilesystem::default();
-        let second = DurableFilesystem::default();
-        let path = Path::new("pending");
-
-        first.mark_path_pending(path);
-        assert!(first.is_mutation_pending(path));
-        assert!(!second.is_mutation_pending(path));
-        first.clear_path_pending(path);
-        assert!(!first.is_mutation_pending(path));
-    }
-
-    #[test]
-    fn durable_filesystem_pending_state_matches_lexical_aliases() {
-        let filesystem = DurableFilesystem::default();
-
-        filesystem.mark_path_pending(Path::new("dir/file"));
-        assert!(filesystem.is_mutation_pending(Path::new("dir/./file")));
-        filesystem.clear_path_pending(Path::new("dir/nested/../file"));
-        assert!(!filesystem.is_mutation_pending(Path::new("dir/file")));
-    }
-
-    #[test]
-    fn durable_filesystem_keeps_pending_state_through_rename() {
-        let filesystem = DurableFilesystem::default();
-
-        filesystem.mark_path_pending(Path::new("old/file"));
-        filesystem.alias_paths(Path::new("old/file"), Path::new("new/file"));
-
-        assert!(filesystem.is_mutation_pending(Path::new("new/file")));
-        filesystem.clear_path_pending(Path::new("new/file"));
-        assert!(!filesystem.is_mutation_pending(Path::new("new/file")));
-    }
-
-    #[test]
     fn aggregate_memory_growth_over_worker_limit_is_rejected() {
         let now = Instant::now();
         let tracker = LinearMemoryTracker::new(
@@ -6245,18 +6146,6 @@ pub(crate) struct FilesystemInputStreamState {
     pub position: u64,
 }
 
-#[derive(Debug)]
-pub(crate) struct PendingFilesystemReservation {
-    pub base_size: u64,
-    pub state: PendingFilesystemReservationState,
-}
-
-#[derive(Debug)]
-pub(crate) enum PendingFilesystemReservationState {
-    Reserved(FilesystemStorageReservation),
-    Unchanged,
-}
-
 /// Direction of a P3 TCP one-shot stream acquisition (`send` vs `receive`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TcpSocketStreamDirection {
@@ -6390,8 +6279,6 @@ struct PrivateDurableWorkerState {
     /// [`Self::file_stream_pollables`] to identify pollables whose backing operation re-executes
     /// during replay.
     open_filesystem_input_streams: HashMap<u32, FilesystemInputStreamState>,
-    open_p2_filesystem_descriptors: HashSet<u32>,
-    open_p3_filesystem_descriptors: HashSet<u32>,
 
     /// Reps of pollables subscribed to file-backed input/output streams. Reads/writes on file
     /// streams are not persisted — they re-execute against the restored filesystem during replay —
@@ -6753,8 +6640,6 @@ impl PrivateDurableWorkerState {
             pending_http_outgoing_body_stream: HashMap::new(),
             pending_http_retry_eligibility: HashMap::new(),
             open_filesystem_input_streams: HashMap::new(),
-            open_p2_filesystem_descriptors: HashSet::new(),
-            open_p3_filesystem_descriptors: HashSet::new(),
             file_stream_pollables: HashSet::new(),
             tcp_taken_streams: HashMap::new(),
             snapshotting_mode: None,
@@ -7770,17 +7655,16 @@ async fn update_filesystem(
                             }
                         )?;
 
-                        if metadata.is_file() {
-                            return Ok(UpdateFileSystemResult::NoChanges);
+                        if !metadata.is_file() {
+                            // Try removing it if it's an empty directory, this will fail otherwise,
+                            // and we can report the error.
+                            tokio::fs::remove_dir(&path).await.map_err(|e|
+                                WorkerExecutorError::FileSystemError {
+                                    path: file.path.to_rel_string(),
+                                    reason: format!("Tried replacing an existing non-empty path with rw file during update: {e}"),
+                                }
+                            )?;
                         }
-
-                        // Try removing it if it's an empty directory, this will fail otherwise, and we can report the error.
-                        tokio::fs::remove_dir(&path).await.map_err(|e|
-                            WorkerExecutorError::FileSystemError {
-                                path: file.path.to_rel_string(),
-                                reason: format!("Tried replacing an existing non-empty path with rw file during update: {e}"),
-                            }
-                        )?;
                     }
 
                     file_loader
@@ -7869,23 +7753,9 @@ async fn filesystem_update_storage_growth(
         match current_state.get(&path) {
             Some(IFSWorkerFile::Rw) => {}
             Some(IFSWorkerFile::Ro { .. }) => growth = growth.saturating_add(file.size),
-            None => {
-                let existing_file = match tokio::fs::metadata(&path).await {
-                    Ok(metadata) => metadata.is_file(),
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-                    Err(error) => {
-                        return Err(WorkerExecutorError::FileSystemError {
-                            path: file.path.to_rel_string(),
-                            reason: format!(
-                                "Failed getting metadata of path during update: {error}"
-                            ),
-                        });
-                    }
-                };
-                if !existing_file {
-                    growth = growth.saturating_add(file.size);
-                }
-            }
+            // An untracked path can be a partial file left by an interrupted older provisioner.
+            // Replace it atomically and account the declared file size instead of trusting it.
+            None => growth = growth.saturating_add(file.size),
         }
     }
     Ok(growth)

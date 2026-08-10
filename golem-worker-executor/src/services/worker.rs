@@ -666,7 +666,7 @@ impl WorkerService for DefaultWorkerService {
                     parent,
                     component_size,
                     initial_total_linear_memory_size,
-                    initial_filesystem_storage_usage,
+                    initial_filesystem_storage_usage: persisted_filesystem_storage_usage,
                     initial_active_plugins,
                     local_agent_config,
                     original_phantom_id,
@@ -700,6 +700,11 @@ impl WorkerService for DefaultWorkerService {
                     .unwrap_or_else(|err| {
                         panic!("failed enriching local agent config for {owned_agent_id}: {err}")
                     });
+                let initial_filesystem_storage_usage = component_metadata
+                    .metadata
+                    .initial_filesystem_storage_usage(agent_type_name.as_ref());
+                let needs_legacy_filesystem_baseline_repair =
+                    persisted_filesystem_storage_usage == 0 && initial_filesystem_storage_usage > 0;
                 let initial_worker_metadata = AgentMetadata {
                     agent_id,
                     env,
@@ -725,7 +730,7 @@ impl WorkerService for DefaultWorkerService {
                 };
 
                 let last_known_status = match self.read_cached_status(owned_agent_id).await {
-                    Some(mut status) => {
+                    Some(mut status) if !needs_legacy_filesystem_baseline_repair => {
                         // `agent_mode` is `#[transient]` and therefore not part of the status
                         // blob; restore it from the authoritative value resolved above so the
                         // returned record carries the correct mode instead of the `Durable`
@@ -736,13 +741,20 @@ impl WorkerService for DefaultWorkerService {
                     // No cached status (cache miss, missing for ephemeral workers, or stale
                     // format) -> recompute from oplog, preferring to fold forward from the clean
                     // checkpoint (if any) over a full re-read.
-                    None => {
+                    None | Some(_) => {
                         let last_known_status = calculate_last_known_status_with_checkpoint_reader(
                             self,
                             owned_agent_id,
                             agent_mode,
-                            None,
-                            || self.read_status_checkpoint(owned_agent_id, agent_mode),
+                            Some(initial_worker_metadata.last_known_status.clone()),
+                            || async {
+                                if needs_legacy_filesystem_baseline_repair {
+                                    None
+                                } else {
+                                    self.read_status_checkpoint(owned_agent_id, agent_mode)
+                                        .await
+                                }
+                            },
                         )
                         .await
                         .expect("Failed to recompute worker status for existing worker");

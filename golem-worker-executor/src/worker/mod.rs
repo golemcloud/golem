@@ -2015,21 +2015,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
                 let has_interrupt = running.interrupt_signal.lock().await.has_interrupt();
 
-                // Non-evictable if actively executing or has non-durable in-memory work
-                if !waiting_for_command
-                    || has_queued_internal_work
-                    || has_resume_replay
-                    || has_interrupt
-                {
-                    return None;
-                }
-
                 let has_pending_invocations = !self.pending_invocations().await.is_empty();
-                if has_pending_invocations {
-                    Some(EvictionClass::WarmRunnable)
-                } else {
-                    Some(EvictionClass::LoadedIdle)
-                }
+                classify_worker_for_eviction(
+                    waiting_for_command,
+                    has_queued_internal_work,
+                    has_resume_replay,
+                    has_interrupt,
+                    has_pending_invocations,
+                )
             }
             _ => None,
         }
@@ -2048,21 +2041,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
                 let has_interrupt = running.interrupt_signal.lock().await.has_interrupt();
 
-                if !waiting_for_command
-                    || has_queued_internal_work
-                    || has_resume_replay
-                    || has_interrupt
-                {
-                    false
-                } else {
-                    let has_pending_invocations = !self.pending_invocations().await.is_empty();
-                    let current_class = if has_pending_invocations {
-                        EvictionClass::WarmRunnable
-                    } else {
-                        EvictionClass::LoadedIdle
-                    };
+                let has_pending_invocations = !self.pending_invocations().await.is_empty();
+                classify_worker_for_eviction(
+                    waiting_for_command,
+                    has_queued_internal_work,
+                    has_resume_replay,
+                    has_interrupt,
+                    has_pending_invocations,
+                )
+                .is_some_and(|current_class| {
                     current_class.eviction_priority() <= target_class.eviction_priority()
-                }
+                })
             }
             _ => false,
         };
@@ -3659,6 +3648,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 }
 
+fn classify_worker_for_eviction(
+    waiting_for_command: bool,
+    has_queued_internal_work: bool,
+    has_resume_replay: bool,
+    has_interrupt: bool,
+    has_pending_invocations: bool,
+) -> Option<EvictionClass> {
+    if !waiting_for_command || has_queued_internal_work || has_resume_replay || has_interrupt {
+        None
+    } else if has_pending_invocations {
+        Some(EvictionClass::WarmRunnable)
+    } else {
+        Some(EvictionClass::LoadedIdle)
+    }
+}
+
 #[derive(Debug)]
 struct WorkerStatusMetric {
     status: StdMutex<AgentStatus>,
@@ -4737,6 +4742,29 @@ mod tests {
     use super::*;
     use golem_common::model::oplog::AgentError;
     use test_r::test;
+
+    #[test]
+    fn eviction_classification_covers_idle_warm_and_non_evictable_states() {
+        assert_eq!(
+            classify_worker_for_eviction(true, false, false, false, false),
+            Some(EvictionClass::LoadedIdle)
+        );
+        assert_eq!(
+            classify_worker_for_eviction(true, false, false, false, true),
+            Some(EvictionClass::WarmRunnable)
+        );
+        for state in [
+            (false, false, false, false),
+            (true, true, false, false),
+            (true, false, true, false),
+            (true, false, false, true),
+        ] {
+            assert_eq!(
+                classify_worker_for_eviction(state.0, state.1, state.2, state.3, false),
+                None
+            );
+        }
+    }
 
     #[test]
     fn terminal_interrupt_rejects_late_filesystem_storage_retry_demand() {

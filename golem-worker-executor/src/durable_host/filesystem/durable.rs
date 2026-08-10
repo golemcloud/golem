@@ -15,17 +15,17 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use bytes::Bytes;
 use cap_std::fs::FileExt;
+use futures::FutureExt;
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogEntry;
 use wasmtime_wasi::p2::{DynOutputStream, OutputStream, Pollable};
 use wasmtime_wasi::{StreamError, StreamResult};
 
-use crate::durable_host::{PendingFilesystemReservation, PendingFilesystemReservationState};
 use crate::metrics::storage::{
     STORAGE_TYPE_FILESYSTEM, record_storage_bytes_deleted, record_storage_bytes_written,
 };
@@ -35,18 +35,39 @@ use crate::workerctx::WorkerCtx;
 
 const FILE_WRITE_CAPACITY: usize = 1024 * 1024;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct DurableFilesystem {
     state: Arc<Mutex<DurableFilesystemState>>,
+    // Namespace mutations and file-size accounting form one transaction domain. Path-keyed
+    // locks are not sufficient because hard links and open descriptors alias filesystem objects.
     mutation_lock: Arc<tokio::sync::Mutex<()>>,
-    storage_meter: Option<AgentStorageMeter>,
+    storage_meter: AgentStorageMeter,
 }
 
 #[derive(Default)]
 struct DurableFilesystemState {
-    pending_paths: HashSet<PathBuf>,
-    unlinked_objects: HashSet<(u64, u64)>,
+    tracked_objects: HashMap<(u64, u64), TrackedFilesystemObject>,
     output_streams: HashMap<u32, FilesystemOutputStreamState>,
+    p2_descriptors: HashSet<u32>,
+    p3_descriptors: HashSet<u32>,
+}
+
+#[derive(Default)]
+struct TrackedFilesystemObject {
+    handles: Vec<Weak<cap_std::fs::File>>,
+    unlinked: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum FilesystemPreview {
+    P2,
+    P3,
+}
+
+#[derive(Debug)]
+pub(crate) struct PendingFilesystemReservation {
+    pub base_size: u64,
+    pub reservation: Option<FilesystemStorageReservation>,
 }
 
 #[derive(Debug)]
@@ -99,20 +120,34 @@ impl FilesystemSizeChange {
     }
 }
 
+pub(crate) struct FilesystemEntryStorage {
+    pub identity: Option<(u64, u64)>,
+    pub size: u64,
+    pub is_regular_file: bool,
+    pub link_count: u64,
+}
+
+impl FilesystemEntryStorage {
+    pub(crate) fn released_by_unlink(self) -> (u64, Option<(u64, u64)>) {
+        if self.identity.is_some() && self.is_regular_file && self.link_count == 1 {
+            (self.size, self.identity)
+        } else {
+            (0, None)
+        }
+    }
+}
+
 pub(crate) fn replaced_file_storage(
     source_identity: Option<(u64, u64)>,
-    destination_identity: Option<(u64, u64)>,
-    destination_size: u64,
-    destination_is_regular_file: bool,
-    destination_link_count: u64,
+    destination: FilesystemEntryStorage,
 ) -> (u64, Option<(u64, u64)>) {
-    match (source_identity, destination_identity) {
-        (Some(source), Some(destination))
-            if source != destination
-                && destination_is_regular_file
-                && destination_link_count == 1 =>
+    match (source_identity, destination.identity) {
+        (Some(source), Some(destination_identity))
+            if source != destination_identity
+                && destination.is_regular_file
+                && destination.link_count == 1 =>
         {
-            (destination_size, Some(destination))
+            (destination.size, Some(destination_identity))
         }
         _ => (0, None),
     }
@@ -155,8 +190,7 @@ fn metadata_object_identity(_metadata: &cap_std::fs::Metadata) -> Option<(u64, u
 #[derive(Debug)]
 pub(crate) struct FilesystemStorageReservation {
     pub(crate) logical_bytes: u64,
-    pub(crate) storage_meter: Option<AgentStorageMeter>,
-    pub(crate) finalized: bool,
+    pub(crate) storage_meter: AgentStorageMeter,
 }
 
 impl FilesystemStorageReservation {
@@ -168,9 +202,7 @@ impl FilesystemStorageReservation {
         &self,
         worker: &Arc<Worker<Ctx>>,
     ) -> anyhow::Result<()> {
-        let Some(storage_meter) = &self.storage_meter else {
-            return Ok(());
-        };
+        let storage_meter = &self.storage_meter;
         let _capacity_guard = storage_meter.lock_capacity_acquisition().await;
         let mut requested = storage_meter.capacity_shortfall();
         loop {
@@ -201,128 +233,148 @@ impl FilesystemStorageReservation {
         if bytes == 0 {
             return;
         }
-        if let Some(storage_meter) = &self.storage_meter {
-            storage_meter.shrink_reservation(bytes);
-        }
+        self.storage_meter.shrink_reservation(bytes);
         self.logical_bytes = self.logical_bytes.saturating_sub(bytes);
     }
 
     pub(crate) fn shrink_to(&mut self, bytes: u64) {
         self.shrink(self.logical_bytes.saturating_sub(bytes));
     }
-
-    pub(crate) async fn commit<Ctx: WorkerCtx>(
-        mut self,
-        worker: Arc<Worker<Ctx>>,
-        storage_meter: AgentStorageMeter,
-        committed_bytes: u64,
-        account_id: AccountId,
-        environment_id: EnvironmentId,
-    ) {
-        let _guard = storage_meter.lock_reservation().await;
-        if committed_bytes == 0 {
-            if let Some(meter) = self.storage_meter.take() {
-                meter.commit_reservation(self.logical_bytes, 0, std::time::Instant::now());
-            }
-            return;
-        }
-        worker
-            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
-                committed_bytes as i64,
-            ))
-            .await;
-        if let Some(meter) = self.storage_meter.take() {
-            meter.commit_reservation(
-                self.logical_bytes,
-                committed_bytes,
-                std::time::Instant::now(),
-            );
-        } else {
-            storage_meter.on_acquire(committed_bytes, std::time::Instant::now());
-        }
-        record_storage_bytes_written(
-            STORAGE_TYPE_FILESYSTEM,
-            &account_id.to_string(),
-            &environment_id.to_string(),
-            committed_bytes,
-        );
-    }
-
-    pub(crate) async fn release<Ctx: WorkerCtx>(
-        self,
-        worker: Arc<Worker<Ctx>>,
-        storage_meter: AgentStorageMeter,
-        guard: Option<StorageAccountingGuard>,
-        account_id: AccountId,
-        environment_id: EnvironmentId,
-    ) {
-        let requested_bytes = self.logical_bytes;
-        let _guard = match guard {
-            Some(guard) => guard,
-            None => storage_meter.lock_reservation().await,
-        };
-        let freed_bytes = requested_bytes.min(storage_meter.current_bytes());
-        if freed_bytes == 0 {
-            return;
-        }
-        worker
-            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
-                -(freed_bytes as i64),
-            ))
-            .await;
-        storage_meter.on_release(freed_bytes, std::time::Instant::now());
-        record_storage_bytes_deleted(
-            STORAGE_TYPE_FILESYSTEM,
-            &account_id.to_string(),
-            &environment_id.to_string(),
-            freed_bytes,
-        );
-    }
 }
 
 impl Drop for FilesystemStorageReservation {
     fn drop(&mut self) {
-        if !self.finalized
-            && let Some(storage_meter) = self.storage_meter.take()
-        {
-            storage_meter.rollback_reservation(self.logical_bytes);
+        if self.logical_bytes > 0 {
+            self.storage_meter.rollback_reservation(self.logical_bytes);
         }
     }
 }
 
-pub(crate) struct FilesystemStorageCommit<Ctx: WorkerCtx> {
-    pub(crate) worker: Arc<Worker<Ctx>>,
-    pub(crate) storage_meter: AgentStorageMeter,
-    pub(crate) committed_bytes: u64,
-    pub(crate) account_id: AccountId,
-    pub(crate) environment_id: EnvironmentId,
+#[derive(Clone)]
+pub(crate) struct FilesystemStorageAccounting<Ctx: WorkerCtx> {
+    worker: Arc<Worker<Ctx>>,
+    storage_meter: AgentStorageMeter,
+    account_id: AccountId,
+    environment_id: EnvironmentId,
 }
 
-impl<Ctx: WorkerCtx> FilesystemStorageCommit<Ctx> {
-    pub(crate) async fn apply(self, reservation: FilesystemStorageReservation) {
-        reservation
-            .commit(
-                self.worker,
-                self.storage_meter,
-                self.committed_bytes,
-                self.account_id,
-                self.environment_id,
-            )
-            .await;
+impl<Ctx: WorkerCtx> FilesystemStorageAccounting<Ctx> {
+    pub(crate) fn new(
+        worker: Arc<Worker<Ctx>>,
+        storage_meter: AgentStorageMeter,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
+    ) -> Self {
+        Self {
+            worker,
+            storage_meter,
+            account_id,
+            environment_id,
+        }
+    }
+
+    pub(crate) fn worker(&self) -> &Arc<Worker<Ctx>> {
+        &self.worker
+    }
+
+    pub(crate) async fn commit(
+        &self,
+        mut reservation: FilesystemStorageReservation,
+        committed_bytes: u64,
+    ) {
+        let _guard = self.storage_meter.lock_reservation().await;
+        let committed_bytes = committed_bytes.min(reservation.logical_bytes);
+        if committed_bytes == 0 {
+            reservation.storage_meter.commit_reservation(
+                reservation.logical_bytes,
+                0,
+                std::time::Instant::now(),
+            );
+            reservation.logical_bytes = 0;
+            return;
+        }
+        self.persist_bytes(committed_bytes, true).await;
+        reservation.storage_meter.commit_reservation(
+            reservation.logical_bytes,
+            committed_bytes,
+            std::time::Instant::now(),
+        );
+        reservation.logical_bytes = 0;
+    }
+
+    pub(crate) async fn release(
+        &self,
+        requested_bytes: u64,
+        guard: Option<StorageAccountingGuard>,
+    ) {
+        let _guard = match guard {
+            Some(guard) => guard,
+            None => self.storage_meter.lock_reservation().await,
+        };
+        let freed_bytes = requested_bytes.min(self.storage_meter.current_bytes());
+        if freed_bytes == 0 {
+            return;
+        }
+        self.persist_bytes(freed_bytes, false).await;
+        self.storage_meter
+            .on_release(freed_bytes, std::time::Instant::now());
+    }
+
+    async fn persist_bytes(&self, bytes: u64, acquire: bool) {
+        let mut remaining = bytes;
+        while remaining > 0 {
+            let chunk = remaining.min(i64::MAX as u64);
+            let delta = if acquire {
+                chunk as i64
+            } else {
+                -(chunk as i64)
+            };
+            self.worker
+                .add_to_oplog(OplogEntry::filesystem_storage_usage_update(delta))
+                .await;
+            remaining -= chunk;
+        }
+        if acquire {
+            record_storage_bytes_written(
+                STORAGE_TYPE_FILESYSTEM,
+                &self.account_id.to_string(),
+                &self.environment_id.to_string(),
+                bytes,
+            );
+        } else {
+            record_storage_bytes_deleted(
+                STORAGE_TYPE_FILESYSTEM,
+                &self.account_id.to_string(),
+                &self.environment_id.to_string(),
+                bytes,
+            );
+        }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct FilesystemWriteCompletion {
-    outcome: tokio::sync::watch::Receiver<Option<FilesystemWriteOutcome>>,
-    cancellation: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    outcome: futures::future::Shared<futures::future::BoxFuture<'static, FilesystemWriteTerminal>>,
     writer_abort: tokio::task::AbortHandle,
+}
+
+#[derive(Clone, Debug)]
+enum FilesystemWriteTerminal {
+    Completed(FilesystemWriteOutcome),
+    Cancelled,
 }
 
 #[derive(Clone, Debug)]
 struct FilesystemWriteOutcome {
     written: u64,
-    error: Option<(std::io::ErrorKind, Option<i32>, Arc<str>)>,
+    file_size: Option<u64>,
+    error: Option<FilesystemWriteError>,
+}
+
+#[derive(Clone, Debug)]
+struct FilesystemWriteError {
+    kind: std::io::ErrorKind,
+    message: Arc<str>,
 }
 
 impl FilesystemWriteOutcome {
@@ -330,81 +382,79 @@ impl FilesystemWriteOutcome {
         match result {
             Ok(()) => Self {
                 written,
+                file_size: None,
                 error: None,
             },
             Err(error) => Self {
                 written,
-                error: Some((
-                    error.kind(),
-                    error.raw_os_error(),
-                    Arc::from(error.to_string()),
-                )),
+                file_size: None,
+                error: Some(FilesystemWriteError {
+                    kind: error.kind(),
+                    message: Arc::from(error.to_string()),
+                }),
             },
         }
     }
 
     fn result(&self) -> std::io::Result<u64> {
         match &self.error {
-            Some((_, Some(raw_os_error), _)) => {
-                Err(std::io::Error::from_raw_os_error(*raw_os_error))
-            }
-            Some((kind, None, message)) => Err(std::io::Error::new(*kind, message.to_string())),
+            Some(error) => Err(std::io::Error::new(error.kind, error.message.to_string())),
             None => Ok(self.written),
         }
+    }
+
+    fn with_file_size(mut self, file: &cap_std::fs::File) -> Self {
+        self.file_size = file.metadata().ok().map(|metadata| metadata.len());
+        self
+    }
+}
+
+impl std::fmt::Debug for FilesystemWriteCompletion {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FilesystemWriteCompletion")
+            .finish_non_exhaustive()
     }
 }
 
 impl FilesystemWriteCompletion {
-    fn monitor(
-        writer_task: tokio::task::JoinHandle<FilesystemWriteOutcome>,
-    ) -> (Self, tokio::task::JoinHandle<()>) {
+    fn from_writer_task(writer_task: tokio::task::JoinHandle<FilesystemWriteOutcome>) -> Self {
         let writer_abort = writer_task.abort_handle();
-        let (outcome_sender, outcome) = tokio::sync::watch::channel(None);
-        let (cancellation_sender, cancellation) = tokio::sync::oneshot::channel();
-        let monitor = tokio::spawn(async move {
-            let outcome = tokio::select! {
-                biased;
-                _ = cancellation => FilesystemWriteOutcome::from_result(0, Ok(())),
-                result = writer_task => match result {
-                    Ok(outcome) => outcome,
-                    Err(error) => FilesystemWriteOutcome::from_result(
+        let outcome = async move {
+            match writer_task.await {
+                Ok(outcome) => FilesystemWriteTerminal::Completed(outcome),
+                Err(error) if error.is_cancelled() => FilesystemWriteTerminal::Cancelled,
+                Err(error) => {
+                    FilesystemWriteTerminal::Completed(FilesystemWriteOutcome::from_result(
                         0,
                         Err(std::io::Error::other(format!(
                             "filesystem write task ended without a result: {error}"
                         ))),
-                    ),
-                },
-            };
-            outcome_sender.send_replace(Some(outcome));
-        });
-        (
-            Self {
-                outcome,
-                cancellation: Arc::new(Mutex::new(Some(cancellation_sender))),
-                writer_abort,
-            },
-            monitor,
-        )
-    }
-
-    async fn wait(mut self) -> std::io::Result<u64> {
-        loop {
-            if let Some(outcome) = self.outcome.borrow_and_update().clone() {
-                return outcome.result();
+                    ))
+                }
             }
-            self.outcome.changed().await.map_err(|_| {
-                std::io::Error::other("filesystem write task ended without a result")
-            })?;
+        }
+        .boxed()
+        .shared();
+        Self {
+            outcome,
+            writer_abort,
         }
     }
 
-    fn complete_cancelled(&self) {
-        if self.outcome.borrow().is_none()
-            && let Some(cancellation) = self.cancellation.lock().unwrap().take()
-        {
-            let _ = cancellation.send(());
-            self.writer_abort.abort();
+    async fn wait(self) -> std::io::Result<u64> {
+        match self.resolve().await {
+            FilesystemWriteTerminal::Completed(outcome) => outcome.result(),
+            FilesystemWriteTerminal::Cancelled => Ok(0),
         }
+    }
+
+    async fn resolve(self) -> FilesystemWriteTerminal {
+        self.outcome.await
+    }
+
+    fn request_cancel(&self) {
+        self.writer_abort.abort();
     }
 }
 
@@ -419,41 +469,71 @@ impl DurableFilesystem {
         Self {
             state: Arc::new(Mutex::new(DurableFilesystemState::default())),
             mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
-            storage_meter: Some(storage_meter),
+            storage_meter,
         }
     }
 
     pub(crate) fn storage_meter(&self) -> AgentStorageMeter {
-        self.storage_meter
-            .clone()
-            .expect("worker filesystem must have a storage meter")
+        self.storage_meter.clone()
     }
 
     pub(crate) fn mark_object_unlinked(&self, identity: Option<(u64, u64)>) {
         if let Some(identity) = identity {
-            self.state.lock().unwrap().unlinked_objects.insert(identity);
+            let mut state = self.state.lock().unwrap();
+            prune_tracked_objects(&mut state);
+            if let Some(object) = state.tracked_objects.get_mut(&identity) {
+                object.unlinked = true;
+            }
         }
     }
 
     pub(crate) async fn mark_file_linked(&self, file: Arc<cap_std::fs::File>) {
-        if let Some(identity) = file_object_identity(file).await {
-            self.state
-                .lock()
-                .unwrap()
-                .unlinked_objects
-                .remove(&identity);
+        if let Some(identity) = file_object_identity(file.clone()).await {
+            let mut state = self.state.lock().unwrap();
+            prune_tracked_objects(&mut state);
+            let object = state.tracked_objects.entry(identity).or_default();
+            object.unlinked = false;
+            let handle = Arc::downgrade(&file);
+            if !object
+                .handles
+                .iter()
+                .any(|existing| existing.ptr_eq(&handle))
+            {
+                object.handles.push(handle);
+            }
         }
     }
 
     pub(crate) async fn is_file_unlinked(&self, file: Arc<cap_std::fs::File>) -> bool {
-        let identity = file_object_identity(file).await;
-        identity.is_some_and(|identity| {
-            self.state
-                .lock()
-                .unwrap()
-                .unlinked_objects
-                .contains(&identity)
+        self.file_accounting_snapshot(file)
+            .await
+            .is_ok_and(|snapshot| snapshot.0)
+    }
+
+    pub(crate) async fn file_accounting_snapshot(
+        &self,
+        file: Arc<cap_std::fs::File>,
+    ) -> std::io::Result<(bool, u64)> {
+        let handle = Arc::downgrade(&file);
+        let snapshot = tokio::task::spawn_blocking(move || {
+            file.metadata()
+                .map(|metadata| (metadata_object_identity(&metadata), metadata.len()))
         })
+        .await
+        .map_err(std::io::Error::other)??;
+        let (identity, size) = snapshot;
+        let unlinked = identity.is_some_and(|identity| {
+            let mut state = self.state.lock().unwrap();
+            prune_tracked_objects(&mut state);
+            state.tracked_objects.get(&identity).is_some_and(|object| {
+                object.unlinked
+                    && object
+                        .handles
+                        .iter()
+                        .any(|existing| existing.ptr_eq(&handle))
+            })
+        });
+        Ok((unlinked, size))
     }
 
     pub(crate) fn normalized_path(path: &Path) -> PathBuf {
@@ -478,21 +558,18 @@ impl DurableFilesystem {
         normalized
     }
 
-    pub(crate) fn mutation_lock(&self, _path: &Path) -> Arc<tokio::sync::Mutex<()>> {
+    pub(crate) fn mutation_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
         self.mutation_lock.clone()
     }
 
-    pub(crate) fn ordered_mutation_locks(
-        &self,
-        first_path: &Path,
-        second_path: &Path,
-    ) -> Vec<Arc<tokio::sync::Mutex<()>>> {
-        let _ = (first_path, second_path);
-        vec![self.mutation_lock.clone()]
-    }
-
-    pub(crate) fn is_mutation_pending(&self, _path: &Path) -> bool {
-        !self.state.lock().unwrap().pending_paths.is_empty()
+    pub(crate) fn is_mutation_pending(&self, path: &Path) -> bool {
+        let path = Self::normalized_path(path);
+        self.state
+            .lock()
+            .unwrap()
+            .output_streams
+            .values()
+            .any(|stream| stream.pending_write && stream.mutation_path == path)
     }
 
     pub(crate) fn register_output_stream(
@@ -516,6 +593,35 @@ impl DurableFilesystem {
             .contains_key(&stream_rep)
     }
 
+    pub(crate) fn register_descriptor(&self, preview: FilesystemPreview, descriptor_rep: u32) {
+        let mut state = self.state.lock().unwrap();
+        match preview {
+            FilesystemPreview::P2 => &mut state.p2_descriptors,
+            FilesystemPreview::P3 => &mut state.p3_descriptors,
+        }
+        .insert(descriptor_rep);
+    }
+
+    pub(crate) fn unregister_descriptor(&self, preview: FilesystemPreview, descriptor_rep: u32) {
+        let mut state = self.state.lock().unwrap();
+        match preview {
+            FilesystemPreview::P2 => &mut state.p2_descriptors,
+            FilesystemPreview::P3 => &mut state.p3_descriptors,
+        }
+        .remove(&descriptor_rep);
+    }
+
+    pub(crate) fn descriptor_reps(&self, preview: FilesystemPreview) -> Vec<u32> {
+        let state = self.state.lock().unwrap();
+        match preview {
+            FilesystemPreview::P2 => &state.p2_descriptors,
+            FilesystemPreview::P3 => &state.p3_descriptors,
+        }
+        .iter()
+        .copied()
+        .collect()
+    }
+
     pub(crate) fn output_stream_snapshot(
         &self,
         stream_rep: u32,
@@ -530,7 +636,7 @@ impl DurableFilesystem {
                     stream.mutation_path.clone(),
                     stream.file.clone(),
                     stream.position,
-                    stream.pending_write,
+                    stream.pending_write || stream.pending_reservation.is_some(),
                 )
             })
     }
@@ -583,7 +689,7 @@ impl DurableFilesystem {
             return;
         };
         let actual_growth = requested_end.saturating_sub(pending.base_size);
-        if let PendingFilesystemReservationState::Reserved(reservation) = &mut pending.state {
+        if let Some(reservation) = &mut pending.reservation {
             reservation.shrink_to(actual_growth);
         }
     }
@@ -595,18 +701,12 @@ impl DurableFilesystem {
         completion: FilesystemWriteCompletion,
     ) {
         let mut state = self.state.lock().unwrap();
-        let mutation_path = if let Some(stream) = state.output_streams.get_mut(&stream_rep) {
+        if let Some(stream) = state.output_streams.get_mut(&stream_rep) {
             stream.pending_write = true;
             stream.completion = Some(completion);
             if let Some(position) = &mut stream.position {
                 *position = position.saturating_add(write_len);
             }
-            Some(stream.mutation_path.clone())
-        } else {
-            None
-        };
-        if let Some(path) = mutation_path {
-            state.pending_paths.insert(Self::normalized_path(&path));
         }
     }
 
@@ -634,47 +734,64 @@ impl DurableFilesystem {
         drop(pending);
     }
 
-    pub(crate) fn finish_pending_write<Ctx: WorkerCtx>(
+    pub(crate) fn finish_pending_write(
         &self,
         stream_rep: u32,
         actual_growth: Option<u64>,
-        prepare_commit: impl FnOnce(
-            &FilesystemStorageReservation,
-            u64,
-        ) -> Option<FilesystemStorageCommit<Ctx>>,
-    ) -> Option<(FilesystemStorageCommit<Ctx>, FilesystemStorageReservation)> {
-        let mut state = self.state.lock().unwrap();
-        let (mutation_path, pending) = state.output_streams.get_mut(&stream_rep).map(|stream| {
-            stream.pending_write = false;
-            stream.completion = None;
-            (
-                stream.mutation_path.clone(),
-                stream.pending_reservation.take(),
-            )
-        })?;
-        state.pending_paths.remove(&mutation_path);
-        let pending = pending?;
+    ) -> Option<(FilesystemStorageReservation, u64)> {
+        let pending = self
+            .state
+            .lock()
+            .unwrap()
+            .output_streams
+            .get_mut(&stream_rep)
+            .map(|stream| {
+                stream.pending_write = false;
+                stream.completion = None;
+                stream.pending_reservation.take()
+            })??;
 
-        match pending.state {
-            PendingFilesystemReservationState::Reserved(reservation) => {
-                let committed_growth = actual_growth.unwrap_or(0).min(reservation.logical_bytes());
-                prepare_commit(&reservation, committed_growth).map(|commit| (commit, reservation))
-            }
-            PendingFilesystemReservationState::Unchanged => None,
-        }
+        pending.reservation.map(|reservation| {
+            let committed_growth = actual_growth.unwrap_or(0).min(reservation.logical_bytes());
+            (reservation, committed_growth)
+        })
     }
 
     pub(crate) async fn settle_pending_writes(
         &self,
         mutation_path: &Path,
     ) -> Vec<SettledFilesystemWrite> {
-        let _ = mutation_path;
+        let mutation_path = Self::normalized_path(mutation_path);
+        self.settle_pending_writes_matching(|stream_path| stream_path == mutation_path)
+            .await
+    }
+
+    pub(crate) async fn settle_pending_writes_for_rename(
+        &self,
+        old_path: &Path,
+        new_path: &Path,
+    ) -> Vec<SettledFilesystemWrite> {
+        let old_path = Self::normalized_path(old_path);
+        let new_path = Self::normalized_path(new_path);
+        self.settle_pending_writes_matching(|stream_path| {
+            stream_path.starts_with(&old_path) || stream_path.starts_with(&new_path)
+        })
+        .await
+    }
+
+    async fn settle_pending_writes_matching(
+        &self,
+        matches: impl Fn(&Path) -> bool,
+    ) -> Vec<SettledFilesystemWrite> {
         let pending = {
             let state = self.state.lock().unwrap();
-            state
+            let mut pending = state
                 .output_streams
                 .iter()
-                .filter(|(_, stream)| stream.pending_write)
+                .filter(|(_, stream)| {
+                    (stream.pending_write || stream.pending_reservation.is_some())
+                        && matches(&stream.mutation_path)
+                })
                 .map(|(stream_rep, stream)| {
                     (
                         *stream_rep,
@@ -683,24 +800,39 @@ impl DurableFilesystem {
                             .pending_reservation
                             .as_ref()
                             .map(|pending| pending.base_size),
+                        stream.pending_write,
                         stream.completion.clone(),
                     )
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            pending.sort_by_key(|(stream_rep, ..)| *stream_rep);
+            pending
         };
 
         let mut settled = Vec::with_capacity(pending.len());
-        for (stream_rep, file, base_size, completion) in pending {
-            let write_result = match completion {
-                Some(completion) => completion.wait().await.map(|_| ()),
-                None => Err(std::io::Error::other(
-                    "pending filesystem write has no completion",
-                )),
+        for (stream_rep, file, base_size, pending_write, completion) in pending {
+            let (write_result, completed_size) = match completion {
+                Some(completion) => match completion.resolve().await {
+                    FilesystemWriteTerminal::Completed(outcome) => {
+                        (outcome.result().map(|_| ()), outcome.file_size)
+                    }
+                    FilesystemWriteTerminal::Cancelled => (Ok(()), None),
+                },
+                None if pending_write => (
+                    Err(std::io::Error::other(
+                        "pending filesystem write has no completion",
+                    )),
+                    None,
+                ),
+                None => (Ok(()), None),
             };
             let measurement = match base_size {
-                Some(base_size) => filesystem_file_size(file)
-                    .await
-                    .map(|size| Some(size.saturating_sub(base_size))),
+                Some(base_size) => match completed_size {
+                    Some(size) => Ok(Some(size.saturating_sub(base_size))),
+                    None => filesystem_file_size(file)
+                        .await
+                        .map(|size| Some(size.saturating_sub(base_size))),
+                },
                 None => Ok(None),
             };
             let actual_growth = measurement.as_ref().ok().copied().flatten();
@@ -715,13 +847,16 @@ impl DurableFilesystem {
     }
 
     pub(crate) fn pending_stream_reps(&self) -> Vec<u32> {
-        self.state
+        let mut pending = self
+            .state
             .lock()
             .unwrap()
             .output_streams
             .iter()
             .filter_map(|(stream_rep, stream)| stream.pending_write.then_some(*stream_rep))
-            .collect()
+            .collect::<Vec<_>>();
+        pending.sort_unstable();
+        pending
     }
 
     pub(crate) fn remove_output_stream(
@@ -730,9 +865,6 @@ impl DurableFilesystem {
     ) -> Option<FilesystemOutputStreamState> {
         let mut state = self.state.lock().unwrap();
         let stream = state.output_streams.remove(&stream_rep)?;
-        if stream.pending_write {
-            state.pending_paths.remove(&stream.mutation_path);
-        }
         Some(stream)
     }
 
@@ -741,56 +873,19 @@ impl DurableFilesystem {
         let new_path = Self::normalized_path(new_path);
         let mut state = self.state.lock().unwrap();
 
-        let aliases = state
-            .output_streams
-            .values()
-            .filter_map(|stream| {
-                stream
-                    .mutation_path
-                    .strip_prefix(&old_path)
-                    .ok()
-                    .map(|remainder| (stream.mutation_path.clone(), new_path.join(remainder)))
-            })
-            .collect::<Vec<_>>();
-        for (old_stream_path, new_stream_path) in &aliases {
-            if state.pending_paths.remove(old_stream_path) {
-                state.pending_paths.insert(new_stream_path.clone());
-            }
-        }
         for stream in state.output_streams.values_mut() {
             if let Ok(remainder) = stream.mutation_path.strip_prefix(&old_path) {
                 stream.mutation_path = new_path.join(remainder);
             }
         }
     }
+}
 
-    #[cfg(test)]
-    pub(crate) fn mark_path_pending(&self, path: &Path) {
-        self.state
-            .lock()
-            .unwrap()
-            .pending_paths
-            .insert(Self::normalized_path(path));
-    }
-
-    #[cfg(test)]
-    pub(crate) fn clear_path_pending(&self, path: &Path) {
-        self.state
-            .lock()
-            .unwrap()
-            .pending_paths
-            .remove(&Self::normalized_path(path));
-    }
-
-    #[cfg(test)]
-    pub(crate) fn alias_paths(&self, old_path: &Path, new_path: &Path) {
-        let old_path = Self::normalized_path(old_path);
-        let new_path = Self::normalized_path(new_path);
-        let mut state = self.state.lock().unwrap();
-        if state.pending_paths.remove(&old_path) {
-            state.pending_paths.insert(new_path);
-        }
-    }
+fn prune_tracked_objects(state: &mut DurableFilesystemState) {
+    state.tracked_objects.retain(|_, object| {
+        object.handles.retain(|handle| handle.strong_count() > 0);
+        !object.handles.is_empty()
+    });
 }
 
 async fn file_object_identity(file: Arc<cap_std::fs::File>) -> Option<(u64, u64)> {
@@ -812,10 +907,7 @@ pub(crate) struct DurableFileOutputStream {
 
 enum FileOutputState {
     Ready,
-    Waiting {
-        completion: FilesystemWriteCompletion,
-        task: tokio::task::JoinHandle<()>,
-    },
+    Waiting(FilesystemWriteCompletion),
     Error(std::io::Error),
     Closed,
 }
@@ -835,20 +927,18 @@ impl DurableFileOutputStream {
 
     pub(crate) fn current_completion(&self) -> Option<FilesystemWriteCompletion> {
         match &self.state {
-            FileOutputState::Waiting { completion, .. } => Some(completion.clone()),
+            FileOutputState::Waiting(completion) => Some(completion.clone()),
             _ => None,
         }
     }
 
     async fn wait_ready(&mut self) {
-        let FileOutputState::Waiting {
-            completion, task, ..
-        } = std::mem::replace(&mut self.state, FileOutputState::Closed)
+        let FileOutputState::Waiting(completion) =
+            std::mem::replace(&mut self.state, FileOutputState::Closed)
         else {
             return;
         };
         let result = completion.wait().await;
-        drop(task);
         match result {
             Ok(written) => {
                 if let FilesystemWriteMode::At(position) = &mut self.mode {
@@ -867,7 +957,7 @@ impl OutputStream for DurableFileOutputStream {
         match self.state {
             FileOutputState::Ready => {}
             FileOutputState::Closed => return Err(StreamError::Closed),
-            FileOutputState::Waiting { .. } | FileOutputState::Error(_) => {
+            FileOutputState::Waiting(_) | FileOutputState::Error(_) => {
                 return Err(StreamError::Trap(wasmtime::Error::msg(
                     "write not permitted: check_write not called first",
                 )));
@@ -879,16 +969,16 @@ impl OutputStream for DurableFileOutputStream {
         let writer_task = tokio::task::spawn_blocking(move || {
             let (written, result) = write_file_blocking(&file, mode, &bytes);
             let written = u64::try_from(written).unwrap_or(u64::MAX);
-            FilesystemWriteOutcome::from_result(written, result)
+            FilesystemWriteOutcome::from_result(written, result).with_file_size(&file)
         });
-        let (completion, task) = FilesystemWriteCompletion::monitor(writer_task);
-        self.state = FileOutputState::Waiting { completion, task };
+        let completion = FilesystemWriteCompletion::from_writer_task(writer_task);
+        self.state = FileOutputState::Waiting(completion);
         Ok(())
     }
 
     fn flush(&mut self) -> StreamResult<()> {
         match self.state {
-            FileOutputState::Ready | FileOutputState::Waiting { .. } => Ok(()),
+            FileOutputState::Ready | FileOutputState::Waiting(_) => Ok(()),
             FileOutputState::Closed => Err(StreamError::Closed),
             FileOutputState::Error(_) => {
                 match std::mem::replace(&mut self.state, FileOutputState::Closed) {
@@ -904,7 +994,7 @@ impl OutputStream for DurableFileOutputStream {
     fn check_write(&mut self) -> StreamResult<usize> {
         match self.state {
             FileOutputState::Ready => Ok(FILE_WRITE_CAPACITY),
-            FileOutputState::Waiting { .. } => Ok(0),
+            FileOutputState::Waiting(_) => Ok(0),
             FileOutputState::Closed => Err(StreamError::Closed),
             FileOutputState::Error(_) => {
                 match std::mem::replace(&mut self.state, FileOutputState::Closed) {
@@ -918,11 +1008,10 @@ impl OutputStream for DurableFileOutputStream {
     }
 
     async fn cancel(&mut self) {
-        if let FileOutputState::Waiting { completion, task } =
+        if let FileOutputState::Waiting(completion) =
             std::mem::replace(&mut self.state, FileOutputState::Closed)
         {
-            completion.complete_cancelled();
-            let _ = task.await;
+            completion.request_cancel();
             let _ = completion.wait().await;
         }
         self.state = FileOutputState::Closed;
@@ -936,7 +1025,7 @@ impl OutputStream for DurableFileOutputStream {
 #[async_trait::async_trait]
 impl Pollable for DurableFileOutputStream {
     async fn ready(&mut self) {
-        if matches!(self.state, FileOutputState::Waiting { .. }) {
+        if matches!(self.state, FileOutputState::Waiting(_)) {
             self.wait_ready().await;
         }
     }
@@ -1027,7 +1116,30 @@ async fn filesystem_file_size(file: Arc<cap_std::fs::File>) -> std::io::Result<u
 #[cfg(test)]
 mod tests {
     use super::*;
-    use test_r::test;
+    use crate::services::resource_limits::AtomicResourceEntry;
+    use golem_common::model::agent::AgentMode;
+    use test_r::{test, timeout};
+
+    fn test_filesystem() -> DurableFilesystem {
+        DurableFilesystem::new(AgentStorageMeter::new(
+            AgentMode::Durable,
+            0,
+            Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
+            std::time::Instant::now(),
+        ))
+    }
+
+    fn test_file(path: &Path) -> Arc<cap_std::fs::File> {
+        Arc::new(cap_std::fs::File::from_std(
+            std::fs::File::create(path).unwrap(),
+        ))
+    }
+
+    fn completed_write(written: u64) -> FilesystemWriteCompletion {
+        FilesystemWriteCompletion::from_writer_task(tokio::spawn(async move {
+            FilesystemWriteOutcome::from_result(written, Ok(()))
+        }))
+    }
 
     #[test]
     fn size_change_preserves_exact_delta() {
@@ -1048,19 +1160,51 @@ mod tests {
     #[test]
     fn replacing_same_object_does_not_release_storage() {
         assert_eq!(
-            replaced_file_storage(Some((1, 2)), Some((1, 2)), 8, true, 1),
+            replaced_file_storage(
+                Some((1, 2)),
+                FilesystemEntryStorage {
+                    identity: Some((1, 2)),
+                    size: 8,
+                    is_regular_file: true,
+                    link_count: 1,
+                }
+            ),
             (0, None)
         );
         assert_eq!(
-            replaced_file_storage(Some((1, 2)), Some((3, 4)), 8, true, 1),
+            replaced_file_storage(
+                Some((1, 2)),
+                FilesystemEntryStorage {
+                    identity: Some((3, 4)),
+                    size: 8,
+                    is_regular_file: true,
+                    link_count: 1,
+                }
+            ),
             (8, Some((3, 4)))
         );
         assert_eq!(
-            replaced_file_storage(Some((1, 2)), Some((3, 4)), 0, true, 1),
+            replaced_file_storage(
+                Some((1, 2)),
+                FilesystemEntryStorage {
+                    identity: Some((3, 4)),
+                    size: 0,
+                    is_regular_file: true,
+                    link_count: 1,
+                }
+            ),
             (0, Some((3, 4)))
         );
         assert_eq!(
-            replaced_file_storage(None, Some((3, 4)), 8, true, 1),
+            replaced_file_storage(
+                None,
+                FilesystemEntryStorage {
+                    identity: Some((3, 4)),
+                    size: 8,
+                    is_regular_file: true,
+                    link_count: 1,
+                }
+            ),
             (0, None)
         );
     }
@@ -1135,31 +1279,248 @@ mod tests {
     }
 
     #[test]
+    #[timeout("30s")]
     async fn write_completion_reports_failed_writer_task() {
         let writer_task = tokio::task::spawn_blocking(move || {
             panic!("simulated filesystem writer failure");
         });
-        let (completion, monitor) = FilesystemWriteCompletion::monitor(writer_task);
+        let completion = FilesystemWriteCompletion::from_writer_task(writer_task);
 
-        let result = tokio::time::timeout(std::time::Duration::from_secs(1), completion.wait())
-            .await
-            .expect("write completion remained pending after its writer task failed");
-        assert!(result.is_err());
-        monitor.await.unwrap();
+        let result = completion.wait().await;
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert!(
+            error
+                .to_string()
+                .contains("simulated filesystem writer failure")
+        );
     }
 
     #[test]
-    async fn cancelling_write_completion_finishes_the_monitor() {
-        let writer_task =
-            tokio::spawn(async { std::future::pending::<FilesystemWriteOutcome>().await });
-        let (completion, monitor) = FilesystemWriteCompletion::monitor(writer_task);
+    #[timeout("10s")]
+    async fn cancelling_started_writer_waits_for_its_real_outcome() {
+        let (started_sender, started_receiver) = tokio::sync::oneshot::channel();
+        let (release_sender, release_receiver) = std::sync::mpsc::channel();
+        let writer_task = tokio::task::spawn_blocking(move || {
+            let _ = started_sender.send(());
+            release_receiver.recv().unwrap();
+            FilesystemWriteOutcome::from_result(7, Ok(()))
+        });
+        let completion = FilesystemWriteCompletion::from_writer_task(writer_task);
+        let observed_completion = completion.clone();
+        started_receiver.await.unwrap();
 
-        completion.complete_cancelled();
-        let result = tokio::time::timeout(std::time::Duration::from_secs(1), completion.wait())
-            .await
-            .expect("cancelled write completion remained pending")
+        let directory = tempfile::tempdir().unwrap();
+        let stream = DurableFileOutputStream {
+            file: test_file(&directory.path().join("started.bin")),
+            mode: FilesystemWriteMode::At(0),
+            state: FileOutputState::Waiting(completion),
+        };
+        let cancel = tokio::spawn(async move {
+            let mut stream = stream;
+            stream.cancel().await;
+        });
+        tokio::task::yield_now().await;
+        assert!(!cancel.is_finished());
+
+        release_sender.send(()).unwrap();
+        cancel.await.unwrap();
+        assert_eq!(observed_completion.wait().await.unwrap(), 7);
+    }
+
+    #[test]
+    fn cancelling_queued_writer_prevents_it_from_starting() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
             .unwrap();
-        assert_eq!(result, 0);
-        monitor.await.unwrap();
+        runtime.block_on(async {
+            let (blocker_started_sender, blocker_started_receiver) =
+                tokio::sync::oneshot::channel();
+            let (release_blocker_sender, release_blocker_receiver) = std::sync::mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                let _ = blocker_started_sender.send(());
+                release_blocker_receiver.recv().unwrap();
+            });
+            blocker_started_receiver.await.unwrap();
+
+            let writer_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let writer_started_in_task = writer_started.clone();
+            let writer_task = tokio::task::spawn_blocking(move || {
+                writer_started_in_task.store(true, std::sync::atomic::Ordering::Release);
+                FilesystemWriteOutcome::from_result(9, Ok(()))
+            });
+            let completion = FilesystemWriteCompletion::from_writer_task(writer_task);
+            let observed_completion = completion.clone();
+            let directory = tempfile::tempdir().unwrap();
+            let mut stream = DurableFileOutputStream {
+                file: test_file(&directory.path().join("queued.bin")),
+                mode: FilesystemWriteMode::At(0),
+                state: FileOutputState::Waiting(completion),
+            };
+
+            let cancellation = tokio::spawn(async move { stream.cancel().await });
+            // The current-thread runtime polls the spawned cancellation to its first await.
+            tokio::task::yield_now().await;
+            release_blocker_sender.send(()).unwrap();
+            blocker.await.unwrap();
+            cancellation.await.unwrap();
+
+            assert_eq!(observed_completion.wait().await.unwrap(), 0);
+            assert!(!writer_started.load(std::sync::atomic::Ordering::Acquire));
+        });
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn completed_write_remains_authoritative_when_cancelled() {
+        let (completed_sender, completed_receiver) = tokio::sync::oneshot::channel();
+        let writer_task = tokio::task::spawn_blocking(move || {
+            let outcome = FilesystemWriteOutcome::from_result(5, Ok(()));
+            let _ = completed_sender.send(());
+            outcome
+        });
+        let completion = FilesystemWriteCompletion::from_writer_task(writer_task);
+        let observed_completion = completion.clone();
+        completed_receiver.await.unwrap();
+        observed_completion.clone().wait().await.unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let mut stream = DurableFileOutputStream {
+            file: test_file(&directory.path().join("completed.bin")),
+            mode: FilesystemWriteMode::At(0),
+            state: FileOutputState::Waiting(completion),
+        };
+
+        stream.cancel().await;
+
+        assert_eq!(observed_completion.wait().await.unwrap(), 5);
+    }
+
+    #[test]
+    async fn cancelling_output_stream_leaves_no_detached_write() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cancelled-stream.bin");
+        let file = Arc::new(cap_std::fs::File::from_std(
+            std::fs::File::create(&path).unwrap(),
+        ));
+        let mut stream = DurableFileOutputStream::new(file, FilesystemWriteMode::At(0));
+        let contents = Bytes::from(vec![1; FILE_WRITE_CAPACITY]);
+
+        stream.write(contents).unwrap();
+        stream.cancel().await;
+        let length_after_cancel = std::fs::metadata(&path).unwrap().len();
+        tokio::task::yield_now().await;
+
+        assert_eq!(std::fs::metadata(path).unwrap().len(), length_after_cancel);
+        assert!(length_after_cancel == 0 || length_after_cancel == FILE_WRITE_CAPACITY as u64);
+    }
+
+    #[test]
+    async fn pending_state_is_derived_from_every_stream_on_the_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let filesystem = test_filesystem();
+        let path = PathBuf::from("dir/file.bin");
+        filesystem.register_output_stream(
+            1,
+            FilesystemOutputStreamState::new(
+                path.clone(),
+                test_file(&directory.path().join("first.bin")),
+                Some(0),
+            ),
+        );
+        filesystem.register_output_stream(
+            2,
+            FilesystemOutputStreamState::new(
+                path,
+                test_file(&directory.path().join("second.bin")),
+                Some(0),
+            ),
+        );
+        filesystem.mark_write_enqueued(1, 1, completed_write(1));
+        filesystem.mark_write_enqueued(2, 1, completed_write(1));
+
+        assert!(filesystem.is_mutation_pending(Path::new("dir/./file.bin")));
+        filesystem.finish_pending_write(1, None);
+        assert!(filesystem.is_mutation_pending(Path::new("dir/file.bin")));
+        filesystem.finish_pending_write(2, None);
+        assert!(!filesystem.is_mutation_pending(Path::new("dir/file.bin")));
+    }
+
+    #[test]
+    async fn rename_rewrites_real_pending_stream_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let filesystem = test_filesystem();
+        filesystem.register_output_stream(
+            1,
+            FilesystemOutputStreamState::new(
+                PathBuf::from("old/dir/file.bin"),
+                test_file(&directory.path().join("file.bin")),
+                Some(0),
+            ),
+        );
+        filesystem.mark_write_enqueued(1, 1, completed_write(1));
+
+        filesystem.rename_stream_paths(Path::new("old/./dir"), Path::new("new/dir"));
+
+        assert!(!filesystem.is_mutation_pending(Path::new("old/dir/file.bin")));
+        assert!(filesystem.is_mutation_pending(Path::new("new/dir/file.bin")));
+        assert_eq!(
+            filesystem.output_stream_snapshot(1).unwrap().0,
+            PathBuf::from("new/dir/file.bin")
+        );
+    }
+
+    #[test]
+    async fn settling_one_path_does_not_wait_for_another_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let filesystem = test_filesystem();
+        filesystem.register_output_stream(
+            1,
+            FilesystemOutputStreamState::new(
+                PathBuf::from("ready.bin"),
+                test_file(&directory.path().join("ready.bin")),
+                Some(0),
+            ),
+        );
+        filesystem.register_output_stream(
+            2,
+            FilesystemOutputStreamState::new(
+                PathBuf::from("blocked.bin"),
+                test_file(&directory.path().join("blocked.bin")),
+                Some(0),
+            ),
+        );
+        filesystem.mark_write_enqueued(1, 0, completed_write(0));
+        let blocked = FilesystemWriteCompletion::from_writer_task(tokio::spawn(async {
+            std::future::pending::<FilesystemWriteOutcome>().await
+        }));
+        filesystem.mark_write_enqueued(2, 0, blocked);
+
+        let settled = filesystem
+            .settle_pending_writes(Path::new("ready.bin"))
+            .await;
+
+        assert_eq!(settled.len(), 1);
+        assert_eq!(settled[0].stream_rep, 1);
+    }
+
+    #[test]
+    async fn unlinked_tracking_is_scoped_to_live_registered_handles() {
+        let directory = tempfile::tempdir().unwrap();
+        let filesystem = test_filesystem();
+        let first = test_file(&directory.path().join("first.bin"));
+        filesystem.mark_file_linked(first.clone()).await;
+        let first_identity = file_object_identity(first.clone()).await;
+        filesystem.mark_object_unlinked(first_identity);
+        assert!(filesystem.is_file_unlinked(first.clone()).await);
+
+        drop(first);
+        let second = test_file(&directory.path().join("second.bin"));
+        filesystem.mark_file_linked(second.clone()).await;
+
+        let state = filesystem.state.lock().unwrap();
+        assert_eq!(state.tracked_objects.len(), 1);
+        assert!(!state.tracked_objects.values().next().unwrap().unlinked);
     }
 }

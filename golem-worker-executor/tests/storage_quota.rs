@@ -381,8 +381,8 @@ async fn agent_quota_stream_write_within_limit_succeeds(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    // 1 MB quota — writing 1024 bytes via stream is within it.
-    let executor = start_with_agent_storage_quota(deps, &context, 1024 * 1024).await?;
+    // The stream write exactly fills the quota.
+    let executor = start_with_agent_storage_quota(deps, &context, 1024).await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
@@ -403,6 +403,21 @@ async fn agent_quota_stream_write_within_limit_succeeds(
         )
         .await?;
 
+    assert_file_len(&executor, &component, &agent_id, "/stream.bin", 1024).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?),
+        vec![1024]
+    );
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "append_file",
+            data_value!("/stream.bin", "x"),
+        )
+        .await;
+    assert_specific_storage_quota_failure(&result, "append_file");
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
@@ -442,7 +457,14 @@ async fn executor_pool_stream_write_failed_attempt_does_not_leak_pool_permits(
             data_value!("/big.bin", 2 * 1024 * 1024u64),
         )
         .await;
-    assert!(failed.is_err(), "expected oversized stream_to_file to fail");
+    let failure = format!(
+        "{:?}",
+        failed.expect_err("oversized stream write must fail")
+    );
+    assert!(
+        failure.contains("write not permitted") || failure.contains("check_write"),
+        "expected stream-capacity failure, got: {failure}"
+    );
     let failed_oplog = executor
         .get_oplog(&failing_worker_id, OplogIndex::INITIAL)
         .await?;
@@ -459,14 +481,30 @@ async fn executor_pool_stream_write_failed_attempt_does_not_leak_pool_permits(
         .start_agent(&component.id, succeeding_agent_id.clone())
         .await?;
 
+    let probe_len = 3 * 1024 * 1024 / 2;
     executor
         .invoke_and_await_agent(
             &component,
             &succeeding_agent_id,
-            "stream_to_file",
-            data_value!("/small.bin", 1024u64),
+            "write_file",
+            data_value!("/probe.bin", "x".repeat(probe_len)),
         )
         .await?;
+    assert_file_len(
+        &executor,
+        &component,
+        &succeeding_agent_id,
+        "/probe.bin",
+        probe_len as u64,
+    )
+    .await?;
+    let probe_deltas = filesystem_storage_deltas(
+        &executor
+            .get_oplog(&succeeding_worker_id, OplogIndex::INITIAL)
+            .await?,
+    );
+    assert!(probe_deltas.iter().all(|delta| *delta > 0));
+    assert_eq!(probe_deltas.iter().sum::<i64>(), probe_len as i64);
 
     executor
         .check_oplog_is_queryable(&failing_worker_id)
@@ -714,7 +752,7 @@ async fn renamed_open_stream_uses_the_destination_mutation_lock(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn renamed_descriptor_keeps_its_file_lock_after_old_path_reuse(
+async fn renamed_descriptor_normalizes_alias_before_old_path_reuse(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -726,7 +764,7 @@ async fn renamed_descriptor_keeps_its_file_lock_after_old_path_reuse(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent = agent_id!("FileSystem", "renamed-descriptor-path-reuse");
+    let agent = agent_id!("FileSystem", "renamed-descriptor-alias-path-reuse");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
 
     executor
@@ -734,7 +772,7 @@ async fn renamed_descriptor_keeps_its_file_lock_after_old_path_reuse(
             &component,
             &agent,
             "stream_after_rename_path_reuse",
-            data_value!("/a.bin", "/b.bin", "/c.bin", 8u64, 4u64),
+            data_value!("/./a.bin", "/b.bin", "/c.bin", 8u64, 4u64),
         )
         .await?;
 

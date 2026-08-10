@@ -55,15 +55,20 @@ pub struct FilesystemStoragePermitRegistration {
 
 impl Drop for FilesystemStoragePermitRegistration {
     fn drop(&mut self) {
-        let mut state = self.bank.state.lock().unwrap();
-        if state
-            .generation
-            .as_ref()
-            .is_some_and(|generation| Arc::ptr_eq(generation, &self.generation))
-        {
-            state.generation.take();
-            state.permit.take();
-        }
+        let permit = {
+            let mut state = self.bank.state.lock().unwrap();
+            if state
+                .generation
+                .as_ref()
+                .is_some_and(|generation| Arc::ptr_eq(generation, &self.generation))
+            {
+                state.generation.take();
+                state.permit.take()
+            } else {
+                None
+            }
+        };
+        drop(permit);
     }
 }
 
@@ -137,24 +142,30 @@ impl FilesystemStoragePermitBank {
             .as_ref()
             .map_or(0, FilesystemStoragePermit::num_permits);
         let excess = held.saturating_sub(target);
-        if excess > 0
-            && let Some(permit) = state.permit.as_mut()
-        {
-            drop(permit.split(excess));
-        }
-        if state
+        let released = (excess > 0)
+            .then(|| state.permit.as_mut().map(|permit| permit.split(excess)))
+            .flatten();
+        let empty = if state
             .permit
             .as_ref()
             .is_some_and(|permit| permit.num_permits() == 0)
         {
-            state.permit.take();
-        }
+            state.permit.take()
+        } else {
+            None
+        };
+        drop(state);
+        drop(released);
+        drop(empty);
     }
 
     pub fn clear(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.generation.take();
-        state.permit.take();
+        let permit = {
+            let mut state = self.state.lock().unwrap();
+            state.generation.take();
+            state.permit.take()
+        };
+        drop(permit);
     }
 
     fn held_bytes_for(
@@ -368,20 +379,19 @@ impl AgentStorageMeter {
         self.inner.transition(now, |state| state.active = false);
     }
 
-    #[cfg(test)]
-    pub(crate) fn last_sample(&self) -> Instant {
-        self.inner.state.lock().unwrap().last_sample
-    }
-
     pub fn stop(&self, now: Instant) {
-        let byte_seconds = {
+        let (byte_seconds, remainder) = {
             let mut state = self.inner.state.lock().unwrap();
             let byte_seconds = state.take_whole_byte_seconds(now);
+            let remainder = std::mem::take(&mut state.pending_byte_nanoseconds);
             state.active = false;
             state.stopped = true;
-            byte_seconds
+            (byte_seconds, remainder)
         };
         self.inner.record(byte_seconds);
+        if let Some(entry) = self.inner.entry.upgrade() {
+            entry.record_storage_remainder(self.inner.mode, remainder);
+        }
     }
 
     pub fn flush(&self, now: Instant) {
@@ -467,6 +477,7 @@ impl Drop for Inner {
 mod tests {
     use super::*;
     use crate::services::active_workers::FilesystemStorageSemaphore;
+    use proptest::prelude::*;
     use std::time::Duration;
     use test_r::test;
 
@@ -565,6 +576,38 @@ mod tests {
 
         assert_eq!(meter.current_bytes(), 20);
         assert_eq!(entry.durable_byte_seconds_delta(), 50);
+    }
+
+    proptest! {
+        #[test]
+        fn integrates_arbitrary_monotonic_storage_changes(
+            operations in prop::collection::vec((0u8..3, 0u64..1024, 1u64..5), 1..100),
+        ) {
+            let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+            let mut now = Instant::now();
+            let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
+            let mut bytes = 10u64;
+            let mut expected = 0u64;
+
+            for (operation, amount, elapsed_seconds) in operations {
+                now += Duration::from_secs(elapsed_seconds);
+                expected = expected.saturating_add(bytes.saturating_mul(elapsed_seconds));
+
+                match operation {
+                    0 => {
+                        meter.on_acquire(amount, now);
+                        bytes = bytes.saturating_add(amount);
+                    }
+                    1 => {
+                        meter.on_release(amount, now);
+                        bytes = bytes.saturating_sub(amount);
+                    }
+                    _ => meter.flush(now),
+                }
+            }
+
+            prop_assert_eq!(entry.durable_byte_seconds_delta(), expected as i64);
+        }
     }
 
     #[test]
@@ -809,5 +852,19 @@ mod tests {
         meter.resume(now + Duration::from_millis(1250));
         meter.flush(now + Duration::from_millis(1750));
         assert_eq!(entry.durable_byte_seconds_delta(), 4);
+    }
+
+    #[test]
+    fn stopped_meter_remainders_accumulate_at_account_scope() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let now = Instant::now();
+        let first = AgentStorageMeter::new(AgentMode::Durable, 1, entry.clone(), now);
+        first.stop(now + Duration::from_millis(600));
+        assert_eq!(entry.durable_byte_seconds_delta(), 0);
+
+        let second = AgentStorageMeter::new(AgentMode::Durable, 1, entry.clone(), now);
+        second.stop(now + Duration::from_millis(600));
+
+        assert_eq!(entry.durable_byte_seconds_delta(), 1);
     }
 }
