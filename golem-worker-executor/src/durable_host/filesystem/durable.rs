@@ -315,7 +315,8 @@ impl<Ctx: WorkerCtx> FilesystemStorageCommit<Ctx> {
 #[derive(Clone, Debug)]
 pub(crate) struct FilesystemWriteCompletion {
     outcome: tokio::sync::watch::Receiver<Option<FilesystemWriteOutcome>>,
-    outcome_sender: tokio::sync::watch::Sender<Option<FilesystemWriteOutcome>>,
+    cancellation: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    writer_abort: tokio::task::AbortHandle,
 }
 
 #[derive(Clone, Debug)]
@@ -354,6 +355,38 @@ impl FilesystemWriteOutcome {
 }
 
 impl FilesystemWriteCompletion {
+    fn monitor(
+        writer_task: tokio::task::JoinHandle<FilesystemWriteOutcome>,
+    ) -> (Self, tokio::task::JoinHandle<()>) {
+        let writer_abort = writer_task.abort_handle();
+        let (outcome_sender, outcome) = tokio::sync::watch::channel(None);
+        let (cancellation_sender, cancellation) = tokio::sync::oneshot::channel();
+        let monitor = tokio::spawn(async move {
+            let outcome = tokio::select! {
+                biased;
+                _ = cancellation => FilesystemWriteOutcome::from_result(0, Ok(())),
+                result = writer_task => match result {
+                    Ok(outcome) => outcome,
+                    Err(error) => FilesystemWriteOutcome::from_result(
+                        0,
+                        Err(std::io::Error::other(format!(
+                            "filesystem write task ended without a result: {error}"
+                        ))),
+                    ),
+                },
+            };
+            outcome_sender.send_replace(Some(outcome));
+        });
+        (
+            Self {
+                outcome,
+                cancellation: Arc::new(Mutex::new(Some(cancellation_sender))),
+                writer_abort,
+            },
+            monitor,
+        )
+    }
+
     async fn wait(mut self) -> std::io::Result<u64> {
         loop {
             if let Some(outcome) = self.outcome.borrow_and_update().clone() {
@@ -366,9 +399,11 @@ impl FilesystemWriteCompletion {
     }
 
     fn complete_cancelled(&self) {
-        if self.outcome.borrow().is_none() {
-            self.outcome_sender
-                .send_replace(Some(FilesystemWriteOutcome::from_result(0, Ok(()))));
+        if self.outcome.borrow().is_none()
+            && let Some(cancellation) = self.cancellation.lock().unwrap().take()
+        {
+            let _ = cancellation.send(());
+            self.writer_abort.abort();
         }
     }
 }
@@ -841,21 +876,13 @@ impl OutputStream for DurableFileOutputStream {
 
         let file = self.file.clone();
         let mode = self.mode;
-        let (outcome_sender, outcome_rx) = tokio::sync::watch::channel(None);
-        let task_outcome_sender = outcome_sender.clone();
-        let task = tokio::task::spawn_blocking(move || {
+        let writer_task = tokio::task::spawn_blocking(move || {
             let (written, result) = write_file_blocking(&file, mode, &bytes);
             let written = u64::try_from(written).unwrap_or(u64::MAX);
-            task_outcome_sender
-                .send_replace(Some(FilesystemWriteOutcome::from_result(written, result)));
+            FilesystemWriteOutcome::from_result(written, result)
         });
-        self.state = FileOutputState::Waiting {
-            completion: FilesystemWriteCompletion {
-                outcome: outcome_rx,
-                outcome_sender,
-            },
-            task,
-        };
+        let (completion, task) = FilesystemWriteCompletion::monitor(writer_task);
+        self.state = FileOutputState::Waiting { completion, task };
         Ok(())
     }
 
@@ -894,10 +921,8 @@ impl OutputStream for DurableFileOutputStream {
         if let FileOutputState::Waiting { completion, task } =
             std::mem::replace(&mut self.state, FileOutputState::Closed)
         {
-            task.abort();
-            if task.await.is_err() {
-                completion.complete_cancelled();
-            }
+            completion.complete_cancelled();
+            let _ = task.await;
             let _ = completion.wait().await;
         }
         self.state = FileOutputState::Closed;
@@ -1107,5 +1132,34 @@ mod tests {
             .unwrap();
 
         assert_eq!(std::fs::read(path).unwrap(), b"abcd");
+    }
+
+    #[test]
+    async fn write_completion_reports_failed_writer_task() {
+        let writer_task = tokio::task::spawn_blocking(move || {
+            panic!("simulated filesystem writer failure");
+        });
+        let (completion, monitor) = FilesystemWriteCompletion::monitor(writer_task);
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), completion.wait())
+            .await
+            .expect("write completion remained pending after its writer task failed");
+        assert!(result.is_err());
+        monitor.await.unwrap();
+    }
+
+    #[test]
+    async fn cancelling_write_completion_finishes_the_monitor() {
+        let writer_task =
+            tokio::spawn(async { std::future::pending::<FilesystemWriteOutcome>().await });
+        let (completion, monitor) = FilesystemWriteCompletion::monitor(writer_task);
+
+        completion.complete_cancelled();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), completion.wait())
+            .await
+            .expect("cancelled write completion remained pending")
+            .unwrap();
+        assert_eq!(result, 0);
+        monitor.await.unwrap();
     }
 }
