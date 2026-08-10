@@ -251,6 +251,44 @@ func Implement[Id any, S any, Cfg any, In any, Out any](
 	implementInto[Id, S, Cfg, In, Out](defs, a, m, h)
 }
 
+// Method declares a typed method and binds its handler in one call — the usual
+// way to define an agent method. In and Out are inferred from the handler and Id
+// from the agent, so no type arguments are needed, and the returned descriptor
+// drives type-safe RPC exactly like one from [DefineMethod]:
+//
+//	var Add = golem.Method(Counter, "add", func(ctx *golem.Context[CounterState], in AddIn) int64 {
+//		ctx.State.Total += in.Amount
+//		return ctx.State.Total
+//	})
+//	// elsewhere: Add.Call(counter, AddIn{Amount: 5})
+//
+// Assigning the result to a package-level var registers the handler when the
+// package is imported; the agent must be defined first, which var-init ordering
+// guarantees when the initializer references it. Use the separate [DefineMethod]
+// + [Implement] pair when the descriptor and the handler live apart — e.g. a
+// descriptor in a shared package whose handler is implemented only in the server.
+func Method[Id any, S any, Cfg any, In any, Out any](
+	a *Agent[Id, S, Cfg],
+	name string,
+	h func(*Context[S], In) Out,
+	opts ...MethodOpt,
+) MethodDef[Id, In, Out] {
+	return methodInto[Id, S, Cfg, In, Out](defs, a, name, h, opts...)
+}
+
+// methodInto is the instance-scoped implementation behind Method.
+func methodInto[Id any, S any, Cfg any, In any, Out any](
+	d *definitions,
+	a *Agent[Id, S, Cfg],
+	name string,
+	h func(*Context[S], In) Out,
+	opts ...MethodOpt,
+) MethodDef[Id, In, Out] {
+	m := DefineMethod[Id, In, Out](name, opts...)
+	implementInto[Id, S, Cfg, In, Out](d, a, m, h)
+	return m
+}
+
 // implementInto is the instance-scoped implementation behind Implement.
 func implementInto[Id any, S any, Cfg any, In any, Out any](
 	d *definitions,

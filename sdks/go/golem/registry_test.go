@@ -59,6 +59,46 @@ func TestStructFieldsAndLowerFirst(t *testing.T) {
 	}
 }
 
+func TestMethodCombinator(t *testing.T) {
+	type Id struct{ Name string }
+	type St struct{ n int64 }
+	withDefs(t, func(d *definitions) {
+		a := defineAgentInto[Id, St](d, Spec{Name: "Counter"}, func(Id) *St { return &St{} })
+
+		// One call declares the method, binds the handler, and returns the
+		// descriptor for RPC — In/Out inferred from the handler, Id from the agent.
+		add := methodInto[Id, St, NoConfig, int64, int64](d, a, "add",
+			func(ctx *Context[St], in int64) int64 { ctx.State.n += in; return ctx.State.n },
+			Desc("adds to the counter"))
+		if add.name != "add" || add.desc != "adds to the counter" {
+			t.Fatalf("returned descriptor = %+v", add)
+		}
+
+		// Composes with a Bind adapter, same as Implement.
+		methodInto[Id, St, NoConfig, Unit, int64](d, a, "get",
+			Bind0(func(s *St) int64 { return s.n }))
+
+		// Both handlers are registered under the agent, and discovery is clean.
+		e := d.agents["Counter"]
+		if e == nil || e.methods["add"] == nil || e.methods["get"] == nil {
+			t.Fatal("Method did not register the handlers under the agent")
+		}
+		noDefErrs(t, d)
+	})
+}
+
+func TestMethodCombinatorRejectsDuplicate(t *testing.T) {
+	type Id struct{ Name string }
+	type St struct{}
+	withDefs(t, func(d *definitions) {
+		a := defineAgentInto[Id, St](d, Spec{Name: "A"}, func(Id) *St { return &St{} })
+		h := func(*Context[St], Unit) Unit { return Unit{} }
+		methodInto[Id, St, NoConfig, Unit, Unit](d, a, "m", h)
+		methodInto[Id, St, NoConfig, Unit, Unit](d, a, "m", h)
+		mustDefErr(t, d, "method already implemented")
+	})
+}
+
 func TestRegistrationErrorsAreRecorded(t *testing.T) {
 	type Id struct{ Name string }
 	type St struct{}
