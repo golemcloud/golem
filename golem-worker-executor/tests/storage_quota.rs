@@ -854,6 +854,73 @@ async fn rename_does_not_release_a_replaced_hardlink_target(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+async fn p2_unlinking_a_hardlink_does_not_release_file_storage(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 8).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "unlink-hardlink-p2");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/source.bin", "12345678"),
+        )
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "create_link",
+            data_value!("/source.bin", "/alias.bin"),
+        )
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "remove_file", data_value!("/alias.bin"))
+        .await?;
+
+    assert_file_len(&executor, &component, &agent, "/source.bin", 8).await?;
+    let surviving_file_growth = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "pwrite_file",
+            data_value!("/source.bin", 8u64, "x"),
+        )
+        .await;
+    assert_specific_storage_quota_failure(
+        &surviving_file_growth,
+        "P2 growth through surviving hard link",
+    );
+    let over_quota = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/additional.bin", "x"),
+        )
+        .await;
+    assert_specific_storage_quota_failure(&over_quota, "P2 growth after hard-link unlink");
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![8]
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
 async fn pending_stream_is_reconciled_before_invocation_completion(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1209,7 +1276,11 @@ async fn agent_quota_set_size_shrink_releases_quota(
         )
         .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?),
+        vec![11, -6, 6],
+        "set_size must release only the six-byte shrink before the replacement write"
+    );
 
     Ok(())
 }
@@ -1416,16 +1487,16 @@ async fn agent_quota_cumulative_across_write_paths(
 /// the per-agent plan limit. Verifies that `current_filesystem_storage_usage` stays
 /// accurate at the account-quota layer across the suspend/restart cycle.
 ///
-/// Quota = 22 bytes. Each 11-byte "hello world" write is counted exactly.
+/// Quota = 32 bytes. Each 16-byte write is counted exactly.
 ///
-/// 1. Write file-1 (11 bytes) → usage: 11, remaining: 11.
-/// 2. Write file-2 (11 bytes) → quota exhausted: usage: 22, remaining: 0.
-/// 3. Delete file-1 → usage: 11, remaining: 11.
+/// 1. Write file-1 (16 bytes) → usage: 16, remaining: 16.
+/// 2. Write file-2 (16 bytes) → quota exhausted: usage: 32, remaining: 0.
+/// 3. Delete file-1 → usage: 16, remaining: 16.
 /// 4. Interrupt → worker unloaded from memory.
-/// 5. Re-invoke → restart reconstructs current_filesystem_storage_usage = 11 bytes.
-/// 6. Write file-3 (11 bytes) → succeeds (11 bytes remaining in quota).
-/// 7. Write file-4 (11 bytes) → fails with `AgentExceededFilesystemStorageLimit`
-///    (quota exhausted: file-2 + file-3 = 22 bytes).
+/// 5. Re-invoke → restart reconstructs current_filesystem_storage_usage = 16 bytes.
+/// 6. Write file-3 (16 bytes) → succeeds (16 bytes remaining in quota).
+/// 7. Write file-4 (16 bytes) → fails with `AgentExceededFilesystemStorageLimit`
+///    (quota exhausted: file-2 + file-3 = 32 bytes).
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -2851,9 +2922,9 @@ async fn provisioned_read_write_baseline_survives_restart_without_duplication(
             data_value!("/bar/baz.txt", 8u64, "x"),
         )
         .await;
-    assert!(
-        over_quota.is_err(),
-        "restart must recover the 4-byte provisioned seed plus 4-byte growth exactly once"
+    assert_specific_storage_quota_failure(
+        &over_quota,
+        "growth after recovering provisioned storage",
     );
     Ok(())
 }
@@ -3203,7 +3274,105 @@ async fn p3_rename_releases_replaced_file_storage(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn p3_chunked_stream_commits_one_storage_transition(
+async fn p3_unlinking_a_hardlink_does_not_release_file_storage(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 8).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let agent = agent_id!("P3FileSystem", "unlink-hardlink-p3");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    let size = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "hardlink_then_unlink_alias",
+            data_value!("source.bin", "alias.bin", 8u64),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected source size"))?;
+    assert_eq!(size, SchemaValue::U64(8));
+    let surviving_file_growth = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_bytes",
+            data_value!("source.bin", 9u64),
+        )
+        .await;
+    assert_specific_storage_quota_failure(
+        &surviving_file_growth,
+        "P3 growth through surviving hard link",
+    );
+    let over_quota = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_bytes",
+            data_value!("additional.bin", 1u64),
+        )
+        .await;
+    assert_specific_storage_quota_failure(&over_quota, "P3 growth after hard-link unlink");
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![8]
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn p3_growth_through_unlinked_open_descriptor_is_not_accounted(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 8).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let agent = agent_id!("P3FileSystem", "p3-unlinked-open-file");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "grow_unlinked_open_file_then_replace",
+            data_value!("unlinked.bin", "replacement.bin"),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected file sizes"))?;
+    assert_eq!(
+        result,
+        SchemaValue::List {
+            elements: vec![SchemaValue::U64(8), SchemaValue::U64(8)]
+        }
+    );
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![4, -4, 8]
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn p3_chunked_stream_commits_each_chunk_atomically(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -3231,8 +3400,8 @@ async fn p3_chunked_stream_commits_one_storage_transition(
     assert_eq!(result, SchemaValue::U64(16));
     assert_eq!(
         filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
-        vec![16],
-        "one P3 filesystem stream must commit one canonical storage transition"
+        vec![4, 4, 4, 4],
+        "each P3 filesystem stream chunk must commit one canonical storage transition"
     );
     Ok(())
 }

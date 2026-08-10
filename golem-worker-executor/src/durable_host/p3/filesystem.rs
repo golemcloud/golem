@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::{Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -20,18 +19,17 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use crate::durable_host::FilesystemStorageReservation;
-use crate::durable_host::filesystem::types::calculate_metadata_hash_parts;
-use crate::durable_host::io::streams::{
-    finish_pending_filesystem_stream_reconciliation, pending_filesystem_stream_measurement,
-    pending_filesystem_streams_for_path, poll_filesystem_stream_write_ready,
+use crate::durable_host::filesystem::durable::{
+    FilesystemSizeChange, FilesystemWriteMode, directory_entry_identity, replaced_file_storage,
+    write_file,
 };
+use crate::durable_host::filesystem::types::calculate_metadata_hash_parts;
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
     observe_function_call_store, run_read_access, wasi_filesystem_view,
 };
 use crate::durable_host::tail_work::TailActivity;
 use crate::workerctx::WorkerCtx;
-use cap_std::fs::FileExt;
 use golem_common::model::oplog::host_functions::{
     P3FilesystemTypesDescriptorStat, P3FilesystemTypesDescriptorStatAt,
 };
@@ -137,12 +135,6 @@ impl Drop for FilesystemWriteConsumer {
     fn drop(&mut self) {
         self.chunks_tx.take();
     }
-}
-
-#[derive(Clone, Copy)]
-enum FilesystemWriteMode {
-    At(types::Filesize),
-    Append,
 }
 
 struct FilesystemWriteTask<Ctx> {
@@ -533,7 +525,7 @@ async fn filesystem_file_size(file: &File) -> Option<u64> {
     spawn_blocking(move || file.metadata().map(|metadata| metadata.len()).ok()).await
 }
 
-async fn reconcile_p2_filesystem_streams_for_path<Ctx, U>(
+async fn settle_pending_filesystem_writes_for_path<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     path: &std::path::Path,
 ) -> wasmtime::Result<()>
@@ -541,52 +533,27 @@ where
     Ctx: WorkerCtx,
     U: 'static,
 {
-    let pending_streams = accessor.with(|mut access| {
-        pending_filesystem_streams_for_path(durable_worker_ctx::<Ctx, U>(access.data_mut()), path)
+    let filesystem = accessor.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut())
+            .filesystem
+            .clone()
     });
-
-    for stream_rep in pending_streams {
-        let readiness = std::future::poll_fn(|cx| {
-            accessor.with(|mut access| {
-                poll_filesystem_stream_write_ready(
-                    durable_worker_ctx::<Ctx, U>(access.data_mut()),
-                    stream_rep,
-                    cx,
-                )
-            })
-        })
-        .await;
-
-        let measurement = accessor.with(|mut access| {
-            pending_filesystem_stream_measurement(
-                durable_worker_ctx::<Ctx, U>(access.data_mut()),
-                stream_rep,
-            )
-        });
-        let actual_growth = match measurement {
-            Some((file, base_size)) => Some(
-                spawn_blocking(move || file.metadata().map(|metadata| metadata.len()))
-                    .await
-                    .map_err(|err| {
-                        wasmtime::Error::msg(format!(
-                            "failed to reconcile filesystem stream storage: {err}"
-                        ))
-                    })?
-                    .saturating_sub(base_size),
-            ),
-            None => None,
-        };
+    for settlement in filesystem.settle_pending_writes(path).await {
         let prepared = accessor.with(|mut access| {
-            finish_pending_filesystem_stream_reconciliation(
-                durable_worker_ctx::<Ctx, U>(access.data_mut()),
-                stream_rep,
-                actual_growth,
+            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+            let filesystem = ctx.filesystem.clone();
+            filesystem.finish_pending_write(
+                settlement.stream_rep,
+                settlement.actual_growth,
+                |reservation, growth| {
+                    ctx.prepare_filesystem_storage_reservation_commit(reservation, growth)
+                },
             )
         });
         if let Some((commit, reservation)) = prepared {
             commit.apply(reservation).await;
         }
-        readiness.map_err(|err| {
+        settlement.result.map_err(|err| {
             wasmtime::Error::msg(format!("filesystem stream write failed: {err}"))
         })?;
     }
@@ -606,7 +573,7 @@ where
         durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_mutation_lock(path)
     });
     let guard = mutation_lock.lock_owned().await;
-    reconcile_p2_filesystem_streams_for_path(accessor, path).await?;
+    settle_pending_filesystem_writes_for_path(accessor, path).await?;
     Ok(guard)
 }
 
@@ -619,32 +586,16 @@ where
     Ctx: WorkerCtx,
     U: 'static,
 {
-    let (old_lock, new_lock) = accessor.with(|mut access| {
+    let locks = accessor.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        (
-            ctx.filesystem_mutation_lock(old_path),
-            ctx.filesystem_mutation_lock(new_path),
-        )
+        ctx.ordered_filesystem_mutation_locks(old_path, new_path)
     });
-    let guards = if Arc::ptr_eq(&old_lock, &new_lock) {
-        vec![old_lock.lock_owned().await]
-    } else {
-        let (old_key, new_key) = accessor.with(|mut access| {
-            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-            (
-                ctx.filesystem_mutation_key(old_path),
-                ctx.filesystem_mutation_key(new_path),
-            )
-        });
-        let (first, second) = if old_key <= new_key {
-            (old_lock, new_lock)
-        } else {
-            (new_lock, old_lock)
-        };
-        vec![first.lock_owned().await, second.lock_owned().await]
-    };
-    reconcile_p2_filesystem_streams_for_path(accessor, old_path).await?;
-    reconcile_p2_filesystem_streams_for_path(accessor, new_path).await?;
+    let mut guards = Vec::new();
+    for lock in locks {
+        guards.push(lock.lock_owned().await);
+    }
+    settle_pending_filesystem_writes_for_path(accessor, old_path).await?;
+    settle_pending_filesystem_writes_for_path(accessor, new_path).await?;
     Ok(guards)
 }
 
@@ -681,60 +632,6 @@ where
     } else {
         Ok(None)
     }
-}
-
-async fn extend_filesystem_storage_reservation<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    reservation: &mut Option<FilesystemStorageReservation>,
-    additional_bytes: u64,
-) -> wasmtime::Result<()>
-where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    if additional_bytes == 0 {
-        return Ok(());
-    }
-    let storage_meter =
-        accessor.with(|mut access| durable_worker_ctx::<Ctx, U>(access.data_mut()).storage_meter());
-    let guard = storage_meter.lock_reservation().await;
-    let prepared = accessor
-        .with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut())
-                .prepare_filesystem_storage_reservation(additional_bytes)
-        })
-        .map_err(wasmtime::Error::from_anyhow)?;
-    drop(guard);
-    let Some((worker, extension)) = prepared else {
-        return Ok(());
-    };
-    extension
-        .acquire_capacity(&worker)
-        .await
-        .map_err(wasmtime::Error::from_anyhow)?;
-    if let Some(reservation) = reservation {
-        reservation.merge(extension);
-    } else {
-        *reservation = Some(extension);
-    }
-    Ok(())
-}
-
-async fn shrink_filesystem_storage_reservation<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    reservation: &mut Option<FilesystemStorageReservation>,
-    bytes: u64,
-) where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    let Some(reservation) = reservation else {
-        return;
-    };
-    let storage_meter =
-        accessor.with(|mut access| durable_worker_ctx::<Ctx, U>(access.data_mut()).storage_meter());
-    let _guard = storage_meter.lock_reservation().await;
-    reservation.shrink(bytes);
 }
 
 async fn commit_filesystem_write_storage<Ctx, U>(
@@ -800,8 +697,8 @@ where
 // the input stream finishing or erroring, never by the liveness of the returned
 // result future. The bytes themselves are not recorded in the oplog; on replay
 // the guest re-issues the same writes which deterministically rebuild the
-// transient worker filesystem. Quota and host capacity are extended as chunks arrive,
-// then the stream's actual growth is committed once when the input closes.
+// transient worker filesystem. Each chunk reserves and commits its exact file
+// growth while holding the worker's filesystem mutation lock.
 async fn run_streaming_filesystem_write<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     file: &File,
@@ -814,9 +711,6 @@ where
     U: 'static,
 {
     let mut result = Ok(());
-    let mut storage_reservation = None;
-    let mut committed_growth = 0u64;
-    let mut last_observed_size: Option<u64> = None;
     let mut position = match mode {
         FilesystemWriteMode::At(offset) => Some(offset),
         FilesystemWriteMode::Append => None,
@@ -832,59 +726,41 @@ where
             let write_len = chunk.contents.len() as u64;
             let _mutation_guard = filesystem_mutation_guard(accessor, &file.path).await?;
             let is_replay = is_replay_from_accessor::<Ctx, U>(accessor);
-            let current_size = if is_replay {
+            let filesystem = accessor.with(|mut access| {
+                durable_worker_ctx::<Ctx, U>(access.data_mut())
+                    .filesystem
+                    .clone()
+            });
+            let account_storage =
+                !is_replay && !filesystem.is_file_unlinked(Arc::clone(&file.file)).await;
+            let current_size = if !account_storage {
                 0
             } else {
                 filesystem_file_size(file).await.unwrap_or(0)
             };
-            if !is_replay && let Some(last_size) = last_observed_size {
-                let shrink = last_size.saturating_sub(current_size);
-                committed_growth = committed_growth.saturating_sub(shrink);
-                shrink_filesystem_storage_reservation::<Ctx, U>(
-                    accessor,
-                    &mut storage_reservation,
-                    shrink,
-                )
-                .await;
-            }
             let requested_growth = match chunk_mode {
                 FilesystemWriteMode::At(offset) => offset
                     .saturating_add(write_len)
                     .saturating_sub(current_size),
                 FilesystemWriteMode::Append => write_len,
             };
-            if let Err(error) = extend_filesystem_storage_reservation::<Ctx, U>(
-                accessor,
-                &mut storage_reservation,
-                requested_growth,
-            )
-            .await
-            {
-                finalize_streaming_filesystem_storage::<Ctx, U>(
-                    accessor,
-                    storage_reservation.take(),
-                    committed_growth,
-                )
-                .await?;
-                return Err(error);
-            }
+            let reservation = if account_storage {
+                reserve_filesystem_storage_bytes::<Ctx, U>(accessor, requested_growth).await?
+            } else {
+                None
+            };
 
             let (written_len, write_result) =
                 run_live_filesystem_write_chunk(file.clone(), chunk_mode, chunk.contents).await;
-            if !is_replay {
-                let growth = match chunk_mode {
+            if let Some(reservation) = reservation {
+                let actual_growth = match chunk_mode {
                     FilesystemWriteMode::At(offset) => offset
                         .saturating_add(written_len)
                         .saturating_sub(current_size),
                     FilesystemWriteMode::Append => written_len,
                 };
-                committed_growth = committed_growth.saturating_add(growth);
-                last_observed_size = Some(match chunk_mode {
-                    FilesystemWriteMode::At(offset) => {
-                        current_size.max(offset.saturating_add(written_len))
-                    }
-                    FilesystemWriteMode::Append => current_size.saturating_add(written_len),
-                });
+                commit_filesystem_write_storage::<Ctx, U>(accessor, reservation, actual_growth)
+                    .await?;
             }
             if let Some(offset) = &mut position {
                 *offset = offset.saturating_add(written_len);
@@ -895,45 +771,7 @@ where
         let _ = chunk.result_tx.send(result.clone());
     }
 
-    if storage_reservation.is_some() {
-        let _mutation_guard = filesystem_mutation_guard(accessor, &file.path).await?;
-        if let Some(last_size) = last_observed_size {
-            let current_size = filesystem_file_size(file).await.unwrap_or(0);
-            let shrink = last_size.saturating_sub(current_size);
-            committed_growth = committed_growth.saturating_sub(shrink);
-            shrink_filesystem_storage_reservation::<Ctx, U>(
-                accessor,
-                &mut storage_reservation,
-                shrink,
-            )
-            .await;
-        }
-        finalize_streaming_filesystem_storage::<Ctx, U>(
-            accessor,
-            storage_reservation,
-            committed_growth,
-        )
-        .await?;
-    }
-
     Ok(result)
-}
-
-async fn finalize_streaming_filesystem_storage<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    reservation: Option<FilesystemStorageReservation>,
-    committed_growth: u64,
-) -> wasmtime::Result<()>
-where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    let Some(reservation) = reservation else {
-        return Ok(());
-    };
-    // The task owns completion of the filesystem effect even if the guest-side result
-    // future is dropped, so accounting is finalized here as well.
-    commit_filesystem_write_storage::<Ctx, U>(accessor, reservation, committed_growth).await
 }
 
 async fn run_live_filesystem_write_chunk(
@@ -941,78 +779,8 @@ async fn run_live_filesystem_write_chunk(
     mode: FilesystemWriteMode,
     contents: Vec<u8>,
 ) -> (u64, Result<(), types::ErrorCode>) {
-    let file = Arc::clone(&file.file);
-    let (contents, written, result) = spawn_blocking(move || match mode {
-        FilesystemWriteMode::At(mut offset) => {
-            let mut written = 0;
-            while written < contents.len() {
-                match file.write_at(&contents[written..], offset) {
-                    Ok(0) => {
-                        return (
-                            contents,
-                            written,
-                            Err(std::io::Error::from(std::io::ErrorKind::WriteZero)),
-                        );
-                    }
-                    Ok(n) => {
-                        written += n;
-                        let n = match u64::try_from(n) {
-                            Ok(n) => n,
-                            Err(_) => {
-                                return (
-                                    contents,
-                                    written,
-                                    Err(std::io::Error::from(std::io::ErrorKind::InvalidData)),
-                                );
-                            }
-                        };
-                        offset = match offset.checked_add(n) {
-                            Some(offset) => offset,
-                            None => {
-                                return (
-                                    contents,
-                                    written,
-                                    Err(std::io::Error::from(std::io::ErrorKind::InvalidData)),
-                                );
-                            }
-                        };
-                    }
-                    Err(error) => return (contents, written, Err(error)),
-                }
-            }
-            (contents, written, Ok(()))
-        }
-        FilesystemWriteMode::Append => {
-            let mut file = file.as_ref();
-            if let Err(error) = file.seek(SeekFrom::End(0)) {
-                return (contents, 0, Err(error));
-            }
-            let mut written = 0;
-            while written < contents.len() {
-                match file.write(&contents[written..]) {
-                    Ok(0) => {
-                        return (
-                            contents,
-                            written,
-                            Err(std::io::Error::from(std::io::ErrorKind::WriteZero)),
-                        );
-                    }
-                    Ok(n) => {
-                        written += n;
-                    }
-                    Err(error) => return (contents, written, Err(error)),
-                }
-            }
-            (contents, written, Ok(()))
-        }
-    })
-    .await;
-
-    let written = written.min(contents.len());
-    (
-        written as u64,
-        result.map_err(|error: std::io::Error| error.into()),
-    )
+    let (written, result) = write_file(Arc::clone(&file.file), mode, contents).await;
+    (written, result.map_err(Into::into))
 }
 
 impl<Ctx: WorkerCtx> types::Host for DurableP3View<'_, Ctx> {
@@ -1160,20 +928,20 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
     }
 
     async fn advise(
-        store: &Accessor<U, Self>,
+        accessor: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
         offset: types::Filesize,
         length: types::Filesize,
         advice: types::Advice,
     ) -> FilesystemResult<()> {
-        store.with(|mut access| {
+        accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
                 "filesystem::types::descriptor",
                 "advise",
             )
         });
-        let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
+        let store = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::advise(
             &store, fd, offset, length, advice,
         )
@@ -1257,17 +1025,27 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let _mutation_guard = filesystem_mutation_guard(accessor, &path)
             .await
             .map_err(FilesystemError::trap)?;
+        let file = accessor
+            .with(|mut access| file_from_access::<Ctx, U>(&mut access, &fd))
+            .map_err(FilesystemError::trap)?;
+        let filesystem = accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .filesystem
+                .clone()
+        });
         // Charge growth before resizing and credit shrink afterwards, matching
         // the WASI P2 storage-quota accounting. The quota helpers are no-ops
         // during replay, so the storage usage is rebuilt purely from the oplog.
         let is_replay = is_replay_from_accessor::<Ctx, U>(accessor);
-        let current_size = if is_replay {
+        let account_storage =
+            !is_replay && !filesystem.is_file_unlinked(Arc::clone(&file.file)).await;
+        let current_size = if !account_storage {
             size
         } else {
             descriptor_size::<Ctx, U>(accessor, Resource::new_borrow(fd.rep())).await
         };
-        let growth = size.saturating_sub(current_size);
-        let reservation = if growth > 0 {
+        let size_change = FilesystemSizeChange::between(current_size, size);
+        let reservation = if let FilesystemSizeChange::Grow(growth) = size_change {
             reserve_filesystem_storage_bytes::<Ctx, U>(accessor, growth)
                 .await
                 .map_err(FilesystemError::trap)?
@@ -1282,14 +1060,19 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
 
         if let Some(reservation) = reservation {
             if result.is_ok() {
+                let FilesystemSizeChange::Grow(growth) = size_change else {
+                    unreachable!("storage was reserved without file growth")
+                };
                 commit_filesystem_write_storage::<Ctx, U>(accessor, reservation, growth)
                     .await
                     .map_err(FilesystemError::trap)?;
             } else {
                 drop(reservation);
             }
-        } else if result.is_ok() && size < current_size {
-            release_filesystem_write_storage::<Ctx, U>(accessor, current_size - size)
+        } else if result.is_ok()
+            && let FilesystemSizeChange::Shrink(shrink) = size_change
+        {
+            release_filesystem_write_storage::<Ctx, U>(accessor, shrink)
                 .await
                 .map_err(FilesystemError::trap)?;
         }
@@ -1392,18 +1175,23 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
     }
 
     async fn create_directory_at(
-        store: &Accessor<U, Self>,
+        accessor: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
         path: String,
     ) -> FilesystemResult<()> {
-        store.with(|mut access| {
+        let target = descriptor_path_at_from_accessor::<Ctx, U>(accessor, &fd, &path)
+            .map_err(FilesystemError::trap)?;
+        let _mutation_guard = filesystem_mutation_guard(accessor, &target)
+            .await
+            .map_err(FilesystemError::trap)?;
+        accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
                 "filesystem::types::descriptor",
                 "create-directory-at",
             )
         });
-        let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
+        let store = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::create_directory_at(&store, fd, path)
             .await
     }
@@ -1518,21 +1306,28 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
     }
 
     async fn link_at(
-        store: &Accessor<U, Self>,
+        accessor: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
         old_path_flags: types::PathFlags,
         old_path: String,
         new_fd: Resource<Descriptor>,
         new_path: String,
     ) -> FilesystemResult<()> {
-        store.with(|mut access| {
+        let old_target = descriptor_path_at_from_accessor::<Ctx, U>(accessor, &fd, &old_path)
+            .map_err(FilesystemError::trap)?;
+        let new_target = descriptor_path_at_from_accessor::<Ctx, U>(accessor, &new_fd, &new_path)
+            .map_err(FilesystemError::trap)?;
+        let _mutation_guards = filesystem_rename_guards(accessor, &old_target, &new_target)
+            .await
+            .map_err(FilesystemError::trap)?;
+        accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
                 "filesystem::types::descriptor",
                 "link-at",
             )
         });
-        let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
+        let store = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::link_at(
             &store,
             fd,
@@ -1596,6 +1391,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                     .open_p3_filesystem_descriptors
                     .insert(descriptor.rep());
             });
+            if let Ok(file) =
+                accessor.with(|mut access| file_from_access::<Ctx, U>(&mut access, descriptor))
+            {
+                let filesystem = accessor.with(|mut access| {
+                    durable_worker_ctx::<Ctx, U>(access.data_mut())
+                        .filesystem
+                        .clone()
+                });
+                filesystem.mark_file_linked(Arc::clone(&file.file)).await;
+            }
         }
 
         if result.is_ok() && truncated_size > 0 {
@@ -1624,18 +1429,23 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
     }
 
     async fn remove_directory_at(
-        store: &Accessor<U, Self>,
+        accessor: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
         path: String,
     ) -> FilesystemResult<()> {
-        store.with(|mut access| {
+        let target = descriptor_path_at_from_accessor::<Ctx, U>(accessor, &fd, &path)
+            .map_err(FilesystemError::trap)?;
+        let _mutation_guard = filesystem_mutation_guard(accessor, &target)
+            .await
+            .map_err(FilesystemError::trap)?;
+        accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
                 "filesystem::types::descriptor",
                 "remove-directory-at",
             )
         });
-        let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
+        let store = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::remove_directory_at(&store, fd, path)
             .await
     }
@@ -1656,50 +1466,53 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let _mutation_guards = filesystem_rename_guards(accessor, &old_target, &new_target)
             .await
             .map_err(FilesystemError::trap)?;
-        let replaced_size = if is_replay_from_accessor::<Ctx, U>(accessor) {
-            0
+        let (replaced_size, replaced_identity) = if is_replay_from_accessor::<Ctx, U>(accessor) {
+            (0, None)
         } else {
+            let old_directory = accessor
+                .with(|mut access| dir_result_from_access::<Ctx, U>(&mut access, &fd))
+                .ok()
+                .and_then(Result::ok);
+            let new_directory = accessor
+                .with(|mut access| dir_result_from_access::<Ctx, U>(&mut access, &new_fd))
+                .ok()
+                .and_then(Result::ok);
             let store = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
-            let source_hash =
-                <WasiFilesystem as types::HostDescriptorWithStore<U>>::metadata_hash_at(
-                    &store,
-                    Resource::new_borrow(fd.rep()),
-                    types::PathFlags::empty(),
-                    old_path.clone(),
-                )
-                .await;
-            let destination_hash =
-                <WasiFilesystem as types::HostDescriptorWithStore<U>>::metadata_hash_at(
-                    &store,
-                    Resource::new_borrow(new_fd.rep()),
-                    types::PathFlags::empty(),
-                    new_path.clone(),
-                )
-                .await;
-            if matches!(
-                (source_hash, destination_hash),
-                (Ok(source), Ok(destination))
-                    if source.lower != destination.lower || source.upper != destination.upper
-            ) {
-                <WasiFilesystem as types::HostDescriptorWithStore<U>>::stat_at(
-                    &store,
-                    Resource::new_borrow(new_fd.rep()),
-                    types::PathFlags::empty(),
-                    new_path.clone(),
-                )
-                .await
-                .map(|stat| {
-                    if matches!(stat.type_, types::DescriptorType::RegularFile)
-                        && stat.link_count == 1
-                    {
-                        stat.size
-                    } else {
-                        0
-                    }
-                })
-                .unwrap_or(0)
-            } else {
-                0
+            let source_stat = <WasiFilesystem as types::HostDescriptorWithStore<U>>::stat_at(
+                &store,
+                Resource::new_borrow(fd.rep()),
+                types::PathFlags::empty(),
+                old_path.clone(),
+            )
+            .await;
+            let destination_stat = <WasiFilesystem as types::HostDescriptorWithStore<U>>::stat_at(
+                &store,
+                Resource::new_borrow(new_fd.rep()),
+                types::PathFlags::empty(),
+                new_path.clone(),
+            )
+            .await;
+            match (source_stat, destination_stat) {
+                (Ok(_), Ok(destination)) if old_directory.is_some() && new_directory.is_some() => {
+                    let (source_identity, destination_identity) = tokio::join!(
+                        directory_entry_identity(
+                            old_directory.expect("checked above"),
+                            old_path.clone().into()
+                        ),
+                        directory_entry_identity(
+                            new_directory.expect("checked above"),
+                            new_path.clone().into()
+                        )
+                    );
+                    replaced_file_storage(
+                        source_identity.ok().flatten(),
+                        destination_identity.ok().flatten(),
+                        destination.size,
+                        matches!(destination.type_, types::DescriptorType::RegularFile),
+                        destination.link_count,
+                    )
+                }
+                _ => (0, None),
             }
         };
         accessor.with(|mut access| {
@@ -1715,6 +1528,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         )
         .await;
         if result.is_ok() {
+            accessor.with(|mut access| {
+                durable_worker_ctx::<Ctx, U>(access.data_mut())
+                    .filesystem
+                    .mark_object_unlinked(replaced_identity);
+            });
             let descriptor_reps = accessor.with(|mut access| {
                 durable_worker_ctx::<Ctx, U>(access.data_mut())
                     .state
@@ -1757,6 +1575,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         new_path: String,
     ) -> FilesystemResult<()> {
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
+        let target = descriptor_path_at_from_accessor::<Ctx, U>(accessor, &fd, &new_path)
+            .map_err(FilesystemError::trap)?;
+        let _mutation_guard = filesystem_mutation_guard(accessor, &target)
+            .await
+            .map_err(FilesystemError::trap)?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1783,20 +1606,42 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let _mutation_guard = filesystem_mutation_guard(accessor, &target_path)
             .await
             .map_err(FilesystemError::trap)?;
+        let directory = accessor
+            .with(|mut access| dir_result_from_access::<Ctx, U>(&mut access, &fd))
+            .ok()
+            .and_then(Result::ok);
         // Stat the file before unlinking so the freed bytes can be credited back
         // to the storage quota on success, matching WASI P2. The release helper
         // is a no-op during replay.
         let is_replay = is_replay_from_accessor::<Ctx, U>(accessor);
-        let file_size = if is_replay {
-            0
+        let (file_size, target_identity) = if is_replay {
+            (0, None)
         } else {
-            descriptor_size_at::<Ctx, U>(
-                accessor,
+            let target_identity = match directory {
+                Some(directory) => directory_entry_identity(directory, path.clone().into())
+                    .await
+                    .ok()
+                    .flatten(),
+                None => None,
+            };
+            let store = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
+            match <WasiFilesystem as types::HostDescriptorWithStore<U>>::stat_at(
+                &store,
                 Resource::new_borrow(fd.rep()),
                 types::PathFlags::empty(),
                 path.clone(),
             )
             .await
+            {
+                Ok(stat)
+                    if target_identity.is_some()
+                        && matches!(stat.type_, types::DescriptorType::RegularFile)
+                        && stat.link_count == 1 =>
+                {
+                    (stat.size, target_identity)
+                }
+                _ => (0, None),
+            }
         };
 
         accessor.with(|mut access| {
@@ -1812,10 +1657,17 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 .await
         };
 
-        if result.is_ok() && file_size > 0 {
-            release_filesystem_write_storage::<Ctx, U>(accessor, file_size)
-                .await
-                .map_err(FilesystemError::trap)?;
+        if result.is_ok() {
+            accessor.with(|mut access| {
+                durable_worker_ctx::<Ctx, U>(access.data_mut())
+                    .filesystem
+                    .mark_object_unlinked(target_identity);
+            });
+            if file_size > 0 {
+                release_filesystem_write_storage::<Ctx, U>(accessor, file_size)
+                    .await
+                    .map_err(FilesystemError::trap)?;
+            }
         }
 
         result

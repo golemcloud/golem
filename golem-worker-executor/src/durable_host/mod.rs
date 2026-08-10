@@ -42,19 +42,20 @@ pub mod websocket;
 
 use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::durability::collect_named_retry_policies;
+use crate::durable_host::filesystem::durable::DurableFilesystem;
+pub(crate) use crate::durable_host::filesystem::durable::{
+    FilesystemStorageCommit, FilesystemStorageReservation,
+};
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
 use crate::metrics::ephemeral::record_non_suspending_failure;
-use crate::metrics::storage::{
-    STORAGE_TYPE_FILESYSTEM, record_storage_bytes_deleted, record_storage_bytes_written,
-};
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
     AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
 };
 use crate::services::active_workers::MemoryGrant;
-use crate::services::agent_storage_meter::{AgentStorageMeter, StorageAccountingGuard};
+use crate::services::agent_storage_meter::AgentStorageMeter;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -165,97 +166,6 @@ enum WorkerDir {
     Temp(TempDir),
     /// Deterministic directory. Deleted explicitly on drop.
     Deterministic(PathBuf),
-}
-
-#[derive(Clone, Default)]
-struct FilesystemMutationRegistry {
-    state: Arc<Mutex<FilesystemMutationRegistryState>>,
-}
-
-#[derive(Default)]
-struct FilesystemMutationRegistryState {
-    locks: HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>,
-    pending: HashSet<PathBuf>,
-}
-
-impl FilesystemMutationRegistry {
-    fn normalized_path_key(path: &Path) -> PathBuf {
-        let mut normalized = PathBuf::new();
-        let rooted = path.has_root();
-        for component in path.components() {
-            match component {
-                std::path::Component::CurDir => {}
-                std::path::Component::ParentDir => {
-                    let can_pop = normalized
-                        .file_name()
-                        .is_some_and(|name| name != std::ffi::OsStr::new(".."));
-                    if can_pop {
-                        normalized.pop();
-                    } else if !rooted {
-                        normalized.push(component.as_os_str());
-                    }
-                }
-                _ => normalized.push(component.as_os_str()),
-            }
-        }
-        normalized
-    }
-
-    fn lock(&self, path: &Path) -> Arc<tokio::sync::Mutex<()>> {
-        let path = Self::normalized_path_key(path);
-        let mut state = self.state.lock().unwrap();
-        if let Some(lock) = state.locks.get(&path).and_then(Weak::upgrade) {
-            return lock;
-        }
-
-        state.locks.retain(|_, lock| lock.strong_count() > 0);
-        let lock = Arc::new(tokio::sync::Mutex::new(()));
-        state.locks.insert(path, Arc::downgrade(&lock));
-        lock
-    }
-
-    fn mark_pending(&self, path: &Path) {
-        self.state
-            .lock()
-            .unwrap()
-            .pending
-            .insert(Self::normalized_path_key(path));
-    }
-
-    fn clear_pending(&self, path: &Path) {
-        self.state
-            .lock()
-            .unwrap()
-            .pending
-            .remove(&Self::normalized_path_key(path));
-    }
-
-    fn is_pending(&self, path: &Path) -> bool {
-        self.state
-            .lock()
-            .unwrap()
-            .pending
-            .contains(&Self::normalized_path_key(path))
-    }
-
-    fn alias_paths(&self, old_path: &Path, new_path: &Path) {
-        let old_path = Self::normalized_path_key(old_path);
-        let new_path = Self::normalized_path_key(new_path);
-        let mut state = self.state.lock().unwrap();
-        let lock = state
-            .locks
-            .get(&old_path)
-            .and_then(Weak::upgrade)
-            .or_else(|| state.locks.get(&new_path).and_then(Weak::upgrade))
-            .unwrap_or_else(|| Arc::new(tokio::sync::Mutex::new(())));
-        state.locks.insert(old_path, Arc::downgrade(&lock));
-        state.locks.insert(new_path, Arc::downgrade(&lock));
-    }
-
-    #[cfg(test)]
-    fn lock_count(&self) -> usize {
-        self.state.lock().unwrap().locks.len()
-    }
 }
 
 impl WorkerDir {
@@ -470,8 +380,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
     linear_memory: LinearMemoryTracker,
-    storage_meter: AgentStorageMeter,
-    filesystem_mutations: FilesystemMutationRegistry,
+    filesystem: DurableFilesystem,
     /// Per-instance cache of resolved typed guest export handles, populated
     /// lazily on first use during invocation dispatch.
     agent_export_funcs: AgentExportFuncs,
@@ -509,179 +418,14 @@ pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
 
 impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
     fn drop(&mut self) {
-        let pending_paths = self
-            .state
-            .open_filesystem_output_streams
-            .values()
-            .filter(|stream| stream.pending_write)
-            .map(|stream| stream.mutation_path.clone())
-            .collect::<Vec<_>>();
-        for path in pending_paths {
-            self.clear_filesystem_mutation_pending(&path);
-        }
         let now = Instant::now();
         self.linear_memory.stop(now);
         self.resource_limits
             .unregister_memory_meter(&self.owned_agent_id, self.linear_memory.meter());
-        self.storage_meter.stop(now);
+        let storage_meter = self.filesystem.storage_meter();
+        storage_meter.stop(now);
         self.resource_limits
-            .unregister_storage_meter(&self.owned_agent_id, &self.storage_meter);
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct FilesystemStorageReservation {
-    logical_bytes: u64,
-    storage_meter: Option<AgentStorageMeter>,
-    finalized: bool,
-}
-
-impl FilesystemStorageReservation {
-    pub(crate) fn logical_bytes(&self) -> u64 {
-        self.logical_bytes
-    }
-
-    pub(crate) async fn acquire_capacity<Ctx: WorkerCtx>(
-        &self,
-        worker: &Arc<Worker<Ctx>>,
-    ) -> anyhow::Result<()> {
-        let Some(storage_meter) = &self.storage_meter else {
-            return Ok(());
-        };
-        let mut requested = storage_meter.capacity_shortfall();
-        loop {
-            if requested == 0 {
-                return Ok(());
-            }
-            match worker.acquire_filesystem_storage_space(requested).await {
-                Ok(Some(permit)) => {
-                    storage_meter.merge_capacity(Some(permit));
-                    return Ok(());
-                }
-                Ok(None) => return Ok(()),
-                Err(error) => {
-                    let latest = storage_meter.capacity_shortfall();
-                    if latest < requested {
-                        requested = latest;
-                    } else {
-                        worker.record_desired_extra_filesystem_storage(requested);
-                        return Err(error);
-                    }
-                }
-            }
-        }
-    }
-
-    pub(crate) fn merge(&mut self, mut other: FilesystemStorageReservation) {
-        self.logical_bytes = self.logical_bytes.saturating_add(other.logical_bytes);
-        other.finalized = true;
-    }
-
-    pub(crate) fn shrink(&mut self, bytes: u64) {
-        let bytes = bytes.min(self.logical_bytes);
-        if bytes == 0 {
-            return;
-        }
-        if let Some(storage_meter) = &self.storage_meter {
-            storage_meter.shrink_reservation(bytes);
-        }
-        self.logical_bytes = self.logical_bytes.saturating_sub(bytes);
-    }
-
-    pub(crate) async fn commit<Ctx: WorkerCtx>(
-        mut self,
-        worker: Arc<Worker<Ctx>>,
-        storage_meter: AgentStorageMeter,
-        committed_bytes: u64,
-        account_id: AccountId,
-        environment_id: EnvironmentId,
-    ) {
-        let _guard = storage_meter.lock_reservation().await;
-        if committed_bytes == 0 {
-            if let Some(meter) = self.storage_meter.take() {
-                meter.commit_reservation(self.logical_bytes, 0, Instant::now());
-            }
-            return;
-        }
-        worker
-            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
-                committed_bytes as i64,
-            ))
-            .await;
-        if let Some(meter) = self.storage_meter.take() {
-            meter.commit_reservation(self.logical_bytes, committed_bytes, Instant::now());
-        } else {
-            storage_meter.on_acquire(committed_bytes, Instant::now());
-        }
-        record_storage_bytes_written(
-            STORAGE_TYPE_FILESYSTEM,
-            &account_id.to_string(),
-            &environment_id.to_string(),
-            committed_bytes,
-        );
-    }
-
-    pub(crate) async fn release<Ctx: WorkerCtx>(
-        self,
-        worker: Arc<Worker<Ctx>>,
-        storage_meter: AgentStorageMeter,
-        guard: Option<StorageAccountingGuard>,
-        account_id: AccountId,
-        environment_id: EnvironmentId,
-    ) {
-        let requested_bytes = self.logical_bytes;
-        let _guard = match guard {
-            Some(guard) => guard,
-            None => storage_meter.lock_reservation().await,
-        };
-        let freed_bytes = requested_bytes.min(storage_meter.current_bytes());
-        if freed_bytes == 0 {
-            return;
-        }
-        worker
-            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
-                -(freed_bytes as i64),
-            ))
-            .await;
-        storage_meter.on_release(freed_bytes, Instant::now());
-        record_storage_bytes_deleted(
-            STORAGE_TYPE_FILESYSTEM,
-            &account_id.to_string(),
-            &environment_id.to_string(),
-            freed_bytes,
-        );
-    }
-}
-
-impl Drop for FilesystemStorageReservation {
-    fn drop(&mut self) {
-        if !self.finalized
-            && let Some(storage_meter) = self.storage_meter.take()
-        {
-            storage_meter.rollback_reservation(self.logical_bytes);
-        }
-    }
-}
-
-pub(crate) struct FilesystemStorageCommit<Ctx: WorkerCtx> {
-    worker: Arc<Worker<Ctx>>,
-    storage_meter: AgentStorageMeter,
-    committed_bytes: u64,
-    account_id: AccountId,
-    environment_id: EnvironmentId,
-}
-
-impl<Ctx: WorkerCtx> FilesystemStorageCommit<Ctx> {
-    pub(crate) async fn apply(self, reservation: FilesystemStorageReservation) {
-        reservation
-            .commit(
-                self.worker,
-                self.storage_meter,
-                self.committed_bytes,
-                self.account_id,
-                self.environment_id,
-            )
-            .await;
+            .unregister_storage_meter(&self.owned_agent_id, &storage_meter);
     }
 }
 
@@ -1058,8 +802,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             execution_status,
             resource_limits,
             linear_memory,
-            storage_meter,
-            filesystem_mutations: FilesystemMutationRegistry::default(),
+            filesystem: DurableFilesystem::new(storage_meter),
             agent_export_funcs: AgentExportFuncs::default(),
             _store_alive_guard: StoreAliveGuard::new(),
         })
@@ -1603,54 +1346,28 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn storage_meter(&self) -> AgentStorageMeter {
-        self.storage_meter.clone()
+        self.filesystem.storage_meter()
     }
 
     pub(crate) fn filesystem_mutation_lock(&self, path: &Path) -> Arc<tokio::sync::Mutex<()>> {
-        self.filesystem_mutations.lock(path)
+        self.filesystem.mutation_lock(path)
     }
 
-    pub(crate) fn filesystem_mutation_key(&self, path: &Path) -> PathBuf {
-        FilesystemMutationRegistry::normalized_path_key(path)
+    pub(crate) fn ordered_filesystem_mutation_locks(
+        &self,
+        first_path: &Path,
+        second_path: &Path,
+    ) -> Vec<Arc<tokio::sync::Mutex<()>>> {
+        self.filesystem
+            .ordered_mutation_locks(first_path, second_path)
     }
 
     pub(crate) fn rename_open_filesystem_stream_paths(&mut self, old_path: &Path, new_path: &Path) {
-        let old_path = self.filesystem_mutation_key(old_path);
-        let new_path = self.filesystem_mutation_key(new_path);
-        self.filesystem_mutations.alias_paths(&old_path, &new_path);
-        let aliases = self
-            .state
-            .open_filesystem_output_streams
-            .values()
-            .filter_map(|state| {
-                state
-                    .mutation_path
-                    .strip_prefix(&old_path)
-                    .ok()
-                    .map(|remainder| (state.mutation_path.clone(), new_path.join(remainder)))
-            })
-            .collect::<Vec<_>>();
-        for (old_stream_path, new_stream_path) in &aliases {
-            self.filesystem_mutations
-                .alias_paths(old_stream_path, new_stream_path);
-        }
-        for state in self.state.open_filesystem_output_streams.values_mut() {
-            if let Ok(remainder) = state.mutation_path.strip_prefix(&old_path) {
-                state.mutation_path = new_path.join(remainder);
-            }
-        }
-    }
-
-    pub(crate) fn mark_filesystem_mutation_pending(&self, path: &Path) {
-        self.filesystem_mutations.mark_pending(path);
-    }
-
-    pub(crate) fn clear_filesystem_mutation_pending(&self, path: &Path) {
-        self.filesystem_mutations.clear_pending(path);
+        self.filesystem.rename_stream_paths(old_path, new_path);
     }
 
     pub(crate) fn filesystem_mutation_is_pending(&self, path: &Path) -> bool {
-        self.filesystem_mutations.is_pending(path)
+        self.filesystem.is_mutation_pending(path)
     }
 
     async fn switch_to_live(&self) {
@@ -1659,7 +1376,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn current_filesystem_storage_usage(&self) -> u64 {
-        self.storage_meter.current_bytes()
+        self.filesystem.storage_meter().current_bytes()
     }
 
     pub fn max_disk_space(&self) -> u64 {
@@ -1686,7 +1403,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             reservation
                 .release(
                     worker,
-                    self.storage_meter.clone(),
+                    self.filesystem.storage_meter(),
                     None,
                     self.created_by(),
                     self.state.owned_agent_id.environment_id,
@@ -1702,7 +1419,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if new_bytes == 0 || self.state.is_replay() {
             return Ok(None);
         }
-        let guard = self.storage_meter.lock_reservation().await;
+        let storage_meter = self.filesystem.storage_meter();
+        let guard = storage_meter.lock_reservation().await;
         let (worker, reservation) = self
             .prepare_filesystem_storage_reservation(new_bytes)?
             .expect("live non-zero reservation must be prepared");
@@ -1718,9 +1436,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if new_bytes == 0 || self.state.is_replay() {
             return Ok(None);
         }
-        let Some(_host_bytes) = self
-            .storage_meter
-            .reserve(new_bytes, self.resource_limits.max_disk_space_limit())
+        let storage_meter = self.filesystem.storage_meter();
+        let Some(_host_bytes) =
+            storage_meter.reserve(new_bytes, self.resource_limits.max_disk_space_limit())
         else {
             return Err(anyhow!(
                 GolemSpecificWasmTrap::WorkerAgentExceededFilesystemStorageLimit
@@ -1730,7 +1448,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.public_state.worker(),
             FilesystemStorageReservation {
                 logical_bytes: new_bytes,
-                storage_meter: Some(self.storage_meter.clone()),
+                storage_meter: Some(storage_meter),
                 finalized: false,
             },
         )))
@@ -1747,7 +1465,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let committed_bytes = committed_bytes.min(reservation.logical_bytes);
         Some(FilesystemStorageCommit {
             worker: self.public_state.worker(),
-            storage_meter: self.storage_meter.clone(),
+            storage_meter: self.filesystem.storage_meter(),
             committed_bytes,
             account_id: self.created_by(),
             environment_id: self.state.owned_agent_id.environment_id,
@@ -5023,55 +4741,67 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
-    fn filesystem_mutation_registry_reuses_live_path_lock() {
-        let registry = FilesystemMutationRegistry::default();
-        let first = registry.lock(Path::new("same"));
-        let second = registry.lock(Path::new("same"));
+    fn durable_filesystem_serializes_all_worker_mutations() {
+        let filesystem = DurableFilesystem::default();
+        let first = filesystem.mutation_lock(Path::new("first"));
+        let second = filesystem.mutation_lock(Path::new("second"));
 
         assert!(Arc::ptr_eq(&first, &second));
-        assert_eq!(registry.lock_count(), 1);
     }
 
     #[test]
-    fn filesystem_mutation_registry_reuses_lexical_alias_lock() {
-        let registry = FilesystemMutationRegistry::default();
-        let direct = registry.lock(Path::new("dir/file"));
-        let alias = registry.lock(Path::new("dir/./nested/../file"));
+    fn durable_filesystem_reuses_lexical_alias_lock() {
+        let filesystem = DurableFilesystem::default();
+        let direct = filesystem.mutation_lock(Path::new("dir/file"));
+        let alias = filesystem.mutation_lock(Path::new("dir/./nested/../file"));
 
         assert!(Arc::ptr_eq(&direct, &alias));
-        assert_eq!(registry.lock_count(), 1);
     }
 
     #[test]
-    fn filesystem_mutation_registry_prunes_expired_path_locks() {
-        let registry = FilesystemMutationRegistry::default();
-        drop(registry.lock(Path::new("expired")));
-        let _live = registry.lock(Path::new("live"));
+    fn durable_filesystem_mutation_lock_is_instance_local() {
+        let first = DurableFilesystem::default();
+        let second = DurableFilesystem::default();
 
-        assert_eq!(registry.lock_count(), 1);
+        assert!(!Arc::ptr_eq(
+            &first.mutation_lock(Path::new("path")),
+            &second.mutation_lock(Path::new("path"))
+        ));
     }
 
     #[test]
-    fn filesystem_mutation_registry_pending_state_is_instance_local() {
-        let first = FilesystemMutationRegistry::default();
-        let second = FilesystemMutationRegistry::default();
+    fn durable_filesystem_pending_state_is_instance_local() {
+        let first = DurableFilesystem::default();
+        let second = DurableFilesystem::default();
         let path = Path::new("pending");
 
-        first.mark_pending(path);
-        assert!(first.is_pending(path));
-        assert!(!second.is_pending(path));
-        first.clear_pending(path);
-        assert!(!first.is_pending(path));
+        first.mark_path_pending(path);
+        assert!(first.is_mutation_pending(path));
+        assert!(!second.is_mutation_pending(path));
+        first.clear_path_pending(path);
+        assert!(!first.is_mutation_pending(path));
     }
 
     #[test]
-    fn filesystem_mutation_registry_pending_state_matches_lexical_aliases() {
-        let registry = FilesystemMutationRegistry::default();
+    fn durable_filesystem_pending_state_matches_lexical_aliases() {
+        let filesystem = DurableFilesystem::default();
 
-        registry.mark_pending(Path::new("dir/file"));
-        assert!(registry.is_pending(Path::new("dir/./file")));
-        registry.clear_pending(Path::new("dir/nested/../file"));
-        assert!(!registry.is_pending(Path::new("dir/file")));
+        filesystem.mark_path_pending(Path::new("dir/file"));
+        assert!(filesystem.is_mutation_pending(Path::new("dir/./file")));
+        filesystem.clear_path_pending(Path::new("dir/nested/../file"));
+        assert!(!filesystem.is_mutation_pending(Path::new("dir/file")));
+    }
+
+    #[test]
+    fn durable_filesystem_keeps_pending_state_through_rename() {
+        let filesystem = DurableFilesystem::default();
+
+        filesystem.mark_path_pending(Path::new("old/file"));
+        filesystem.alias_paths(Path::new("old/file"), Path::new("new/file"));
+
+        assert!(filesystem.is_mutation_pending(Path::new("new/file")));
+        filesystem.clear_path_pending(Path::new("new/file"));
+        assert!(!filesystem.is_mutation_pending(Path::new("new/file")));
     }
 
     #[test]
@@ -6510,15 +6240,6 @@ struct ActiveDurableScope {
 }
 
 #[derive(Debug)]
-pub(crate) struct FilesystemOutputStreamState {
-    pub mutation_path: PathBuf,
-    pub file: Arc<cap_std::fs::File>,
-    pub position: Option<u64>,
-    pub pending_write: bool,
-    pub pending_reservation: Option<PendingFilesystemReservation>,
-}
-
-#[derive(Debug)]
 pub(crate) struct FilesystemInputStreamState {
     pub file: Arc<cap_std::fs::File>,
     pub position: u64,
@@ -6664,10 +6385,6 @@ struct PrivateDurableWorkerState {
     /// Maps outgoing request rep → outgoing body rep, set during outgoing_request::body()
     /// before outgoing_handler::handle() is called and the HttpRequestState is created.
     pending_http_outgoing_request_body: HashMap<u32, u32>,
-
-    /// Tracks file-backed wasi output streams so quota charging can be based on
-    /// actual file growth instead of requested write size.
-    open_filesystem_output_streams: HashMap<u32, FilesystemOutputStreamState>,
 
     /// Reps of file-backed wasi input streams created by `read_via_stream`. Used together with
     /// [`Self::file_stream_pollables`] to identify pollables whose backing operation re-executes
@@ -7035,7 +6752,6 @@ impl PrivateDurableWorkerState {
             pending_http_outgoing_request_body: HashMap::new(),
             pending_http_outgoing_body_stream: HashMap::new(),
             pending_http_retry_eligibility: HashMap::new(),
-            open_filesystem_output_streams: HashMap::new(),
             open_filesystem_input_streams: HashMap::new(),
             open_p2_filesystem_descriptors: HashSet::new(),
             open_p3_filesystem_descriptors: HashSet::new(),

@@ -570,7 +570,6 @@ pub(all) struct RawCreateParameters {
   parent : @types.AgentId?
   component_size : UInt64
   initial_total_linear_memory_size : UInt64
-  initial_filesystem_storage_usage : UInt64
   initial_active_plugins : Array[EnvironmentPluginGrantId]
   local_agent_config : Array[RawLocalAgentConfigEntry]
   original_phantom_id : @types.Uuid?

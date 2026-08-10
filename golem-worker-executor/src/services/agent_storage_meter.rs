@@ -201,6 +201,7 @@ struct Inner {
     entry: Weak<AtomicResourceEntry>,
     state: Mutex<State>,
     reservation_lock: Arc<tokio::sync::Mutex<()>>,
+    capacity_acquisition_lock: Arc<tokio::sync::Mutex<()>>,
     capacity: Arc<FilesystemStoragePermitBank>,
     capacity_generation: Option<Weak<FilesystemStoragePermitGeneration>>,
 }
@@ -239,6 +240,7 @@ impl AgentStorageMeter {
                 mode,
                 entry: Arc::downgrade(&entry),
                 reservation_lock: Arc::new(tokio::sync::Mutex::new(())),
+                capacity_acquisition_lock: Arc::new(tokio::sync::Mutex::new(())),
                 capacity,
                 capacity_generation,
                 state: Mutex::new(State {
@@ -303,6 +305,17 @@ impl AgentStorageMeter {
     pub async fn lock_reservation(&self) -> StorageAccountingGuard {
         StorageAccountingGuard {
             _guard: self.inner.reservation_lock.clone().lock_owned().await,
+        }
+    }
+
+    pub(crate) async fn lock_capacity_acquisition(&self) -> StorageAccountingGuard {
+        StorageAccountingGuard {
+            _guard: self
+                .inner
+                .capacity_acquisition_lock
+                .clone()
+                .lock_owned()
+                .await,
         }
     }
 

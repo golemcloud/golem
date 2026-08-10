@@ -684,7 +684,6 @@ declare module 'golem:api/oplog@1.5.0' {
     parent?: AgentId;
     componentSize: bigint;
     initialTotalLinearMemorySize: bigint;
-    initialFilesystemStorageUsage: bigint;
     initialActivePlugins: EnvironmentPluginGrantId[];
     localAgentConfig: RawLocalAgentConfigEntry[];
     originalPhantomId?: Uuid;

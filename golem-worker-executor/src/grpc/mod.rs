@@ -60,7 +60,7 @@ use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPrior
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::AgentMetadataForGuests;
-use golem_common::model::oplog::{OplogIndex, UpdateDescription};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, TypedAgentConfigEntry};
 use golem_common::model::{
@@ -2186,12 +2186,32 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             environment_id: metadata_dto.environment_id,
         };
 
-        let entries: Vec<golem_common::model::oplog::OplogEntry> = request
+        let mut entries: Vec<OplogEntry> = request
             .entries
             .into_iter()
             .map(golem_common::model::oplog::OplogEntry::try_from)
             .collect::<Result<Vec<_>, _>>()
             .map_err(WorkerExecutorError::invalid_request)?;
+        if entries
+            .iter()
+            .any(|entry| matches!(entry, OplogEntry::Create { .. }))
+        {
+            let component = self
+                .component_service()
+                .get_metadata(
+                    owned_agent_id.agent_id.component_id,
+                    Some(component_revision),
+                )
+                .await?;
+            let agent_type =
+                ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+            restore_initial_filesystem_storage_usage(
+                &mut entries,
+                component
+                    .metadata
+                    .initial_filesystem_storage_usage(agent_type.as_ref()),
+            );
+        }
 
         let first_entry_index = OplogIndex::from_u64(request.first_entry_index);
 
@@ -3357,11 +3377,31 @@ fn extract_owned_agent_id<T>(
     Ok(OwnedAgentId::new(environment_id, &agent_id))
 }
 
+fn restore_initial_filesystem_storage_usage(entries: &mut [OplogEntry], baseline: u64) {
+    for entry in entries {
+        if let OplogEntry::Create {
+            initial_filesystem_storage_usage,
+            ..
+        } = entry
+        {
+            *initial_filesystem_storage_usage = baseline;
+        }
+    }
+}
+
 #[cfg(test)]
 mod freshness_tests {
-    use super::decode_invocation_freshness_disposition;
-    use golem_common::model::agent::InvocationFreshnessDisposition;
+    use super::{
+        decode_invocation_freshness_disposition, restore_initial_filesystem_storage_usage,
+    };
+    use golem_common::model::AgentId;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::agent::{AgentMode, InvocationFreshnessDisposition};
+    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::oplog::OplogEntry;
     use test_r::test;
+    use uuid::Uuid;
 
     #[test]
     fn invocation_freshness_defaults_unknown_values_to_may_exist() {
@@ -3384,5 +3424,38 @@ mod freshness_tests {
             ),
             InvocationFreshnessDisposition::KnownFresh
         );
+    }
+
+    #[test]
+    fn oplog_import_restores_create_filesystem_baseline_from_component_metadata() {
+        let mut entries = vec![OplogEntry::create(
+            AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "baseline-import".to_string(),
+            },
+            AgentMode::Durable,
+            ComponentRevision::INITIAL,
+            vec![],
+            EnvironmentId::new(),
+            AccountId::new(),
+            None,
+            0,
+            0,
+            0,
+            Default::default(),
+            vec![],
+            None,
+            Uuid::new_v4(),
+        )];
+
+        restore_initial_filesystem_storage_usage(&mut entries, 123);
+
+        assert!(matches!(
+            entries.as_slice(),
+            [OplogEntry::Create {
+                initial_filesystem_storage_usage: 123,
+                ..
+            }]
+        ));
     }
 }

@@ -15,6 +15,11 @@ pub trait P3FileSystem {
     async fn mutation_sizes(&self) -> Vec<u64>;
     async fn grow_replacement_beyond_quota(&self);
     async fn write_bytes(&self, path: String, len: u64);
+    async fn grow_unlinked_open_file_then_replace(
+        &self,
+        path: String,
+        replacement_path: String,
+    ) -> Vec<u64>;
     async fn write_chunks(&self, path: String, chunk_len: u64, chunk_count: u64) -> u64;
     async fn overlapping_stream_writes(
         &self,
@@ -22,12 +27,7 @@ pub trait P3FileSystem {
         second_path: String,
         len: u64,
     ) -> Vec<u64>;
-    async fn p2_stream_then_p3_set_size(
-        &self,
-        path: String,
-        write_len: u64,
-        new_size: u64,
-    ) -> u64;
+    async fn p2_stream_then_p3_set_size(&self, path: String, write_len: u64, new_size: u64) -> u64;
     async fn replace_file(
         &self,
         source: String,
@@ -35,6 +35,7 @@ pub trait P3FileSystem {
         source_len: u64,
         destination_len: u64,
     ) -> u64;
+    async fn hardlink_then_unlink_alias(&self, source: String, alias: String, len: u64) -> u64;
     async fn sleep_for(&self, seconds: f64);
 }
 
@@ -409,6 +410,56 @@ impl P3FileSystem for P3FileSystemImpl {
         write.await.expect("P3 write failed");
     }
 
+    async fn grow_unlinked_open_file_then_replace(
+        &self,
+        path: String,
+        replacement_path: String,
+    ) -> Vec<u64> {
+        let (root, _) = p3_preopens::get_directories()
+            .into_iter()
+            .next()
+            .expect("no P3 preopened directory");
+        let file = root
+            .open_at(
+                p3_types::PathFlags::empty(),
+                path.clone(),
+                p3_types::OpenFlags::CREATE,
+                p3_types::DescriptorFlags::READ | p3_types::DescriptorFlags::WRITE,
+            )
+            .await
+            .expect("P3 create failed");
+        file.set_size(4).await.expect("P3 initial growth failed");
+        root.unlink_file_at(path)
+            .await
+            .expect("P3 unlink of open file failed");
+        file.set_size(8)
+            .await
+            .expect("P3 unlinked file growth failed");
+
+        let replacement = root
+            .open_at(
+                p3_types::PathFlags::empty(),
+                replacement_path,
+                p3_types::OpenFlags::CREATE,
+                p3_types::DescriptorFlags::READ | p3_types::DescriptorFlags::WRITE,
+            )
+            .await
+            .expect("P3 replacement create failed");
+        replacement
+            .set_size(8)
+            .await
+            .expect("P3 replacement growth failed");
+
+        vec![
+            file.stat().await.expect("P3 unlinked stat failed").size,
+            replacement
+                .stat()
+                .await
+                .expect("P3 replacement stat failed")
+                .size,
+        ]
+    }
+
     async fn write_chunks(&self, path: String, chunk_len: u64, chunk_count: u64) -> u64 {
         let (root, _) = p3_preopens::get_directories()
             .into_iter()
@@ -471,8 +522,18 @@ impl P3FileSystem for P3FileSystemImpl {
         let first_write = first.write_via_stream(first_reader, 0);
         let second_write = second.write_via_stream(second_reader, 0);
 
-        assert!(first_writer.write_all(vec![1; len as usize]).await.is_empty());
-        assert!(second_writer.write_all(vec![2; len as usize]).await.is_empty());
+        assert!(
+            first_writer
+                .write_all(vec![1; len as usize])
+                .await
+                .is_empty()
+        );
+        assert!(
+            second_writer
+                .write_all(vec![2; len as usize])
+                .await
+                .is_empty()
+        );
         drop(second_writer);
         second_write.await.expect("P3 second write failed");
         drop(first_writer);
@@ -484,12 +545,7 @@ impl P3FileSystem for P3FileSystemImpl {
         ]
     }
 
-    async fn p2_stream_then_p3_set_size(
-        &self,
-        path: String,
-        write_len: u64,
-        new_size: u64,
-    ) -> u64 {
+    async fn p2_stream_then_p3_set_size(&self, path: String, write_len: u64, new_size: u64) -> u64 {
         let (root_p2, _) = p2_preopens::get_directories()
             .into_iter()
             .next()
@@ -562,6 +618,42 @@ impl P3FileSystem for P3FileSystemImpl {
         root.stat_at(p3_types::PathFlags::empty(), destination)
             .await
             .expect("P3 destination stat failed")
+            .size
+    }
+
+    async fn hardlink_then_unlink_alias(&self, source: String, alias: String, len: u64) -> u64 {
+        let (root, _) = p3_preopens::get_directories()
+            .into_iter()
+            .next()
+            .expect("no P3 preopened directory");
+        let file = root
+            .open_at(
+                p3_types::PathFlags::empty(),
+                source.clone(),
+                p3_types::OpenFlags::CREATE,
+                p3_types::DescriptorFlags::WRITE,
+            )
+            .await
+            .expect("P3 create failed");
+        let (mut writer, reader) = wit_stream::new::<u8>();
+        let write = file.write_via_stream(reader, 0);
+        assert!(writer.write_all(vec![0; len as usize]).await.is_empty());
+        drop(writer);
+        write.await.expect("P3 write failed");
+        root.link_at(
+            p3_types::PathFlags::empty(),
+            source.clone(),
+            &root,
+            alias.clone(),
+        )
+        .await
+        .expect("P3 hard link failed");
+        root.unlink_file_at(alias)
+            .await
+            .expect("P3 hard-link unlink failed");
+        root.stat_at(p3_types::PathFlags::empty(), source)
+            .await
+            .expect("P3 source stat failed")
             .size
     }
 

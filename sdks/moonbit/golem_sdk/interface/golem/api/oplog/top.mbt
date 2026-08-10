@@ -714,7 +714,6 @@ pub(all) struct RawCreateParameters {
   parent : @types.AgentId?
   component_size : UInt64
   initial_total_linear_memory_size : UInt64
-  initial_filesystem_storage_usage : UInt64
   initial_active_plugins : Array[EnvironmentPluginGrantId]
   local_agent_config : Array[RawLocalAgentConfigEntry]
   original_phantom_id : @types.Uuid?
@@ -1020,10 +1019,10 @@ pub fn enrich_oplog_entries(
 
   let ptr = mbt_ffi_str2ptr(agent_id.agent_id)
 
-  let address459 = mbt_ffi_malloc(entries.length() * 224)
+  let address459 = mbt_ffi_malloc(entries.length() * 216)
   for index460 = 0; index460 < entries.length(); index460 = index460 + 1 {
     let iter_elem : (UInt64, OplogEntry) = entries[index460]
-    let iter_base = address459 + index460 * 224
+    let iter_base = address459 + index460 * 216
     mbt_ffi_store64(iter_base + 0, iter_elem.0.reinterpret_as_int64())
 
     match iter_elem.1 {
@@ -1119,10 +1118,6 @@ pub fn enrich_oplog_entries(
           iter_base + 152,
           payload.initial_total_linear_memory_size.reinterpret_as_int64(),
         )
-        mbt_ffi_store64(
-          iter_base + 160,
-          payload.initial_filesystem_storage_usage.reinterpret_as_int64(),
-        )
 
         let address6 = mbt_ffi_malloc(
           payload.initial_active_plugins.length() * 16,
@@ -1142,10 +1137,10 @@ pub fn enrich_oplog_entries(
           )
         }
         mbt_ffi_store32(
-          iter_base + 172,
+          iter_base + 164,
           payload.initial_active_plugins.length(),
         )
-        mbt_ffi_store32(iter_base + 168, address6)
+        mbt_ffi_store32(iter_base + 160, address6)
 
         let address82 = mbt_ffi_malloc(payload.local_agent_config.length() * 20)
         for index83 = 0
@@ -1598,23 +1593,23 @@ pub fn enrich_oplog_entries(
           cleanup_list.push(address9)
           cleanup_list.push(address80)
         }
-        mbt_ffi_store32(iter_base + 180, payload.local_agent_config.length())
-        mbt_ffi_store32(iter_base + 176, address82)
+        mbt_ffi_store32(iter_base + 172, payload.local_agent_config.length())
+        mbt_ffi_store32(iter_base + 168, address82)
 
         match payload.original_phantom_id {
           None => {
-            mbt_ffi_store8(iter_base + 184, 0)
+            mbt_ffi_store8(iter_base + 176, 0)
 
             ()
           }
           Some(payload85) => {
-            mbt_ffi_store8(iter_base + 184, 1)
+            mbt_ffi_store8(iter_base + 176, 1)
             mbt_ffi_store64(
-              iter_base + 192,
+              iter_base + 184,
               payload85.high_bits.reinterpret_as_int64(),
             )
             mbt_ffi_store64(
-              iter_base + 200,
+              iter_base + 192,
               payload85.low_bits.reinterpret_as_int64(),
             )
 
@@ -1622,11 +1617,11 @@ pub fn enrich_oplog_entries(
           }
         }
         mbt_ffi_store64(
-          iter_base + 208,
+          iter_base + 200,
           payload.instance_id.high_bits.reinterpret_as_int64(),
         )
         mbt_ffi_store64(
-          iter_base + 216,
+          iter_base + 208,
           payload.instance_id.low_bits.reinterpret_as_int64(),
         )
         cleanup_list.push(ptr0)
