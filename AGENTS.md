@@ -45,6 +45,24 @@ exec --fail-on-error ${golem} build -P release --yes
 '''
 ```
 
+### Wasmtime configuration compatibility
+
+All production engines that compile, load, or inspect components must use the shared constructors
+in `golem_common::wasmtime_config`. This includes the component compilation service, worker
+executor, component metadata extraction, and any future component tools. Do not set Wasmtime
+features or tunables independently at those call sites; change the shared constructor instead and
+verify every consumer still uses it.
+
+The component compilation service serializes precompiled `.cwasm` artifacts that the worker
+executor deserializes. Wasmtime validates artifact-affecting feature and tunable settings during
+deserialization. A mismatch makes the executor reject the cached artifact and compile the original
+component again, causing a severe cold-start regression. When changing the Wasmtime version or
+configuration, run the cross-engine precompiled-component compatibility test in `golem-common`.
+
+Minimal Wasmtime engines in unit tests may use a local configuration only when they exercise an
+isolated host primitive and neither load production components nor produce or consume precompiled
+artifacts. Tests intended to mirror production component behavior must use the shared constructor.
+
 ## Testing
 
 Tests use [test-r](https://test-r.vigoo.dev). **Important:** Each test file must import `test_r::test` or tests will not run.

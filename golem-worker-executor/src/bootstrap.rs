@@ -54,3 +54,17 @@ pub async fn run(
     )
     .await
 }
+
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+    use wasmtime::{Engine, Module};
+
+    #[test]
+    fn production_engine_rejects_shared_memory_modules() {
+        let config = golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache();
+        let engine = Engine::new(&config).unwrap();
+
+        assert!(Module::new(&engine, "(module (memory 1 2 shared))").is_err());
+    }
+}

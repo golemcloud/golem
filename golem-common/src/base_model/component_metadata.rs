@@ -96,7 +96,6 @@ pub struct KnownExports {
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
 )]
-#[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct LinearMemory {
@@ -104,6 +103,10 @@ pub struct LinearMemory {
     pub initial: u64,
     /// Optional maximal size of the linear memory in bytes
     pub maximum: Option<u64>,
+    /// Whether the linear memory is shared between WebAssembly threads
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub shared: bool,
 }
 
 impl LinearMemory {

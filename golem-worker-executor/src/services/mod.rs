@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod active_workers;
+pub mod agent_memory_meter;
 pub mod agent_storage_meter;
 pub mod agent_types;
 pub mod agent_webhooks;
@@ -27,6 +28,7 @@ pub mod events;
 pub mod file_loader;
 pub mod golem_config;
 pub mod key_value;
+pub mod linear_memory;
 pub mod oplog;
 pub mod promise;
 pub mod quota;

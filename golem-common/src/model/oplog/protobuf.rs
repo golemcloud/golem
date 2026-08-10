@@ -2624,6 +2624,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     timestamp: p.timestamp,
                     target_revision: p.target_revision,
                     new_component_size: p.new_component_size,
+                    new_total_linear_memory_size: None,
                     new_active_plugins,
                 })
             }
@@ -3385,11 +3386,13 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             OplogEntry::SuccessfulUpdate {
                 target_revision,
                 new_component_size,
+                new_total_linear_memory_size,
                 new_active_plugins,
                 ..
             } => Entry::SuccessfulUpdate(RawSuccessfulUpdateParameters {
                 target_revision: target_revision.into(),
                 new_component_size,
+                new_total_linear_memory_size,
                 new_active_plugins: new_active_plugins.into_iter().map(Into::into).collect(),
             }),
             OplogEntry::FailedUpdate {
@@ -3840,6 +3843,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     timestamp,
                     target_revision,
                     new_component_size: p.new_component_size,
+                    new_total_linear_memory_size: p.new_total_linear_memory_size,
                     new_active_plugins,
                 })
             }
@@ -4102,6 +4106,32 @@ fn host_stream_kind_from_proto(kind: i32) -> Result<HostStreamKind, String> {
             Ok(HostStreamKind::P3HttpRequestBody)
         }
         Err(_) => Err(format!("Invalid host stream kind: {kind}")),
+    }
+}
+
+#[cfg(test)]
+mod successful_update_proto_tests {
+    use crate::model::Timestamp;
+    use crate::model::component::ComponentRevision;
+    use crate::model::oplog::OplogEntry;
+    use golem_api_grpc::proto::golem::worker::RawOplogEntry;
+    use std::collections::HashSet;
+    use test_r::test;
+
+    #[test]
+    fn raw_successful_update_preserves_canonical_linear_memory_total() {
+        let original = OplogEntry::SuccessfulUpdate {
+            timestamp: Timestamp::now_utc(),
+            target_revision: ComponentRevision::new(2).unwrap(),
+            new_component_size: 123,
+            new_total_linear_memory_size: Some(456),
+            new_active_plugins: HashSet::new(),
+        };
+
+        let proto: RawOplogEntry = original.clone().try_into().unwrap();
+        let roundtrip: OplogEntry = proto.try_into().unwrap();
+
+        assert_eq!(roundtrip, original);
     }
 }
 

@@ -32,7 +32,7 @@ use golem_client::model::{
     PermissionShareUpdate,
 };
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::account_usage::{SetStorageLimit, StorageUsagePeriod};
+use golem_common::model::account_usage::{SetMemoryLimit, SetStorageLimit, StorageUsagePeriod};
 use golem_common::model::permission_share::{
     PermissionShareData, PermissionShareId, PermissionShareName,
 };
@@ -93,12 +93,30 @@ impl AccountCommandHandler {
             AccountLimitsSubcommand::Set {
                 account_id,
                 max_storage_per_agent,
+                max_memory_per_agent,
+                monthly_memory_gb_seconds,
             } => {
-                self.cmd_limits_set(account_id.account_id, max_storage_per_agent)
-                    .await
+                self.cmd_limits_set(
+                    account_id.account_id,
+                    max_storage_per_agent,
+                    max_memory_per_agent,
+                    monthly_memory_gb_seconds,
+                )
+                .await
             }
-            AccountLimitsSubcommand::Unset { account_id } => {
-                self.cmd_limits_unset(account_id.account_id).await
+            AccountLimitsSubcommand::Unset {
+                account_id,
+                storage,
+                max_memory_per_agent,
+                monthly_memory_gb_seconds,
+            } => {
+                self.cmd_limits_unset(
+                    account_id.account_id,
+                    storage,
+                    max_memory_per_agent,
+                    monthly_memory_gb_seconds,
+                )
+                .await
             }
         }
     }
@@ -277,58 +295,122 @@ impl AccountCommandHandler {
 
     async fn cmd_limits_show(&self, account_id: Option<AccountId>) -> anyhow::Result<()> {
         let account_id = self.select_account_id_or_err(account_id).await?;
-        let limit = self
-            .ctx
-            .golem_clients()
-            .await?
+        let clients = self.ctx.golem_clients().await?;
+        let storage = clients
             .account
             .get_account_storage_override(&account_id.0)
             .await
             .map_service_error()?;
-        self.ctx
-            .log_handler()
-            .log_output(AccountLimitsView::from(limit))?;
+        let max_memory = clients
+            .account
+            .get_account_max_memory_override(&account_id.0)
+            .await
+            .map_service_error()?;
+        let monthly_memory = clients
+            .account
+            .get_account_monthly_memory_override(&account_id.0)
+            .await
+            .map_service_error()?;
+        self.ctx.log_handler().log_output(AccountLimitsView::new(
+            storage,
+            max_memory,
+            monthly_memory,
+        ))?;
         Ok(())
     }
 
     async fn cmd_limits_set(
         &self,
         account_id: Option<AccountId>,
-        value: u64,
+        storage: Option<u64>,
+        max_memory: Option<u64>,
+        monthly_memory: Option<u64>,
     ) -> anyhow::Result<()> {
-        let account_id = self.select_account_id_or_err(account_id).await?;
-        let limit = self
-            .ctx
-            .golem_clients()
-            .await?
-            .account
-            .set_account_storage_override(
-                &account_id.0,
-                &SetStorageLimit {
-                    value,
-                    expires_at: None,
-                },
-            )
-            .await
-            .map_service_error()?;
-        self.ctx
-            .log_handler()
-            .log_output(AccountLimitsView::from(limit))?;
-        Ok(())
-    }
-
-    async fn cmd_limits_unset(&self, account_id: Option<AccountId>) -> anyhow::Result<()> {
+        if storage.is_none() && max_memory.is_none() && monthly_memory.is_none() {
+            bail!("at least one limit must be provided");
+        }
+        if storage.is_some() as u8 + max_memory.is_some() as u8 + monthly_memory.is_some() as u8 > 1
+        {
+            bail!("only one limit can be changed per command");
+        }
         let account_id = self.select_account_id_or_err(account_id).await?;
         let clients = self.ctx.golem_clients().await?;
-        let limit = clients
-            .account
-            .clear_account_storage_override(&account_id.0)
-            .await
-            .map_service_error()?;
-        self.ctx
-            .log_handler()
-            .log_output(AccountLimitsView::from(limit))?;
-        Ok(())
+        if let Some(value) = storage {
+            clients
+                .account
+                .set_account_storage_override(
+                    &account_id.0,
+                    &SetStorageLimit {
+                        value,
+                        expires_at: None,
+                    },
+                )
+                .await
+                .map_service_error()?;
+        }
+        if let Some(value) = max_memory {
+            clients
+                .account
+                .set_account_max_memory_override(
+                    &account_id.0,
+                    &SetMemoryLimit {
+                        value,
+                        expires_at: None,
+                    },
+                )
+                .await
+                .map_service_error()?;
+        }
+        if let Some(value) = monthly_memory {
+            clients
+                .account
+                .set_account_monthly_memory_override(
+                    &account_id.0,
+                    &SetMemoryLimit {
+                        value,
+                        expires_at: None,
+                    },
+                )
+                .await
+                .map_service_error()?;
+        }
+        self.cmd_limits_show(Some(account_id)).await
+    }
+
+    async fn cmd_limits_unset(
+        &self,
+        account_id: Option<AccountId>,
+        storage: bool,
+        max_memory: bool,
+        monthly_memory: bool,
+    ) -> anyhow::Result<()> {
+        if storage as u8 + max_memory as u8 + monthly_memory as u8 > 1 {
+            bail!("only one limit can be changed per command");
+        }
+        let account_id = self.select_account_id_or_err(account_id).await?;
+        let clients = self.ctx.golem_clients().await?;
+        if storage || (!max_memory && !monthly_memory) {
+            clients
+                .account
+                .clear_account_storage_override(&account_id.0)
+                .await
+                .map_service_error()?;
+        }
+        if max_memory {
+            clients
+                .account
+                .clear_account_max_memory_override(&account_id.0)
+                .await
+                .map_service_error()?;
+        }
+        if monthly_memory {
+            clients
+                .account
+                .clear_account_monthly_memory_override(&account_id.0)
+                .await
+                .map_service_error()?;
+        }
+        self.cmd_limits_show(Some(account_id)).await
     }
 
     async fn cmd_permission_share_list(

@@ -2325,24 +2325,55 @@ pub mod account {
 
     #[derive(Debug, Subcommand)]
     pub enum AccountLimitsSubcommand {
-        /// Show the effective maximum storage per agent.
+        /// Show effective storage and memory limits.
         Show {
             #[command(flatten)]
             account_id: AccountIdOptionalArg,
         },
-        /// Set the maximum storage per agent in bytes.
+        /// Set one storage or memory limit.
         Set {
             #[command(flatten)]
             account_id: AccountIdOptionalArg,
 
             /// Maximum storage per agent in bytes. Cannot exceed the plan ceiling.
-            #[arg(value_name = "BYTES")]
-            max_storage_per_agent: u64,
+            #[arg(
+                value_name = "BYTES",
+                required_unless_present_any = ["max_memory_per_agent", "monthly_memory_gb_seconds"],
+                conflicts_with_all = ["max_memory_per_agent", "monthly_memory_gb_seconds"]
+            )]
+            max_storage_per_agent: Option<u64>,
+
+            /// Maximum linear memory per agent in bytes.
+            #[arg(
+                long,
+                value_name = "BYTES",
+                conflicts_with = "monthly_memory_gb_seconds"
+            )]
+            max_memory_per_agent: Option<u64>,
+
+            /// Monthly included memory usage in GB-seconds.
+            #[arg(long, value_name = "GB_SECONDS")]
+            monthly_memory_gb_seconds: Option<u64>,
         },
-        /// Clear the account storage override and use the plan default.
+        /// Clear selected overrides. With no flags, clears storage for compatibility.
         Unset {
             #[command(flatten)]
             account_id: AccountIdOptionalArg,
+
+            /// Clear the maximum storage per-agent override.
+            #[arg(
+                long,
+                conflicts_with_all = ["max_memory_per_agent", "monthly_memory_gb_seconds"]
+            )]
+            storage: bool,
+
+            /// Clear the maximum memory per-agent override.
+            #[arg(long, conflicts_with = "monthly_memory_gb_seconds")]
+            max_memory_per_agent: bool,
+
+            /// Clear the monthly memory GB-seconds override.
+            #[arg(long)]
+            monthly_memory_gb_seconds: bool,
         },
     }
 
@@ -3002,6 +3033,34 @@ mod test {
                 .unwrap();
         let unset_command =
             GolemCliCommand::try_parse_from(["golem", "account", "limits", "unset"]).unwrap();
+        let memory_command = GolemCliCommand::try_parse_from([
+            "golem",
+            "account",
+            "limits",
+            "set",
+            "--max-memory-per-agent",
+            "2097152",
+        ])
+        .unwrap();
+        let multiple_memory_limits = GolemCliCommand::try_parse_from([
+            "golem",
+            "account",
+            "limits",
+            "set",
+            "--max-memory-per-agent",
+            "2097152",
+            "--monthly-memory-gb-seconds",
+            "3600",
+        ]);
+        let missing_limit = GolemCliCommand::try_parse_from(["golem", "account", "limits", "set"]);
+        let multiple_unset_limits = GolemCliCommand::try_parse_from([
+            "golem",
+            "account",
+            "limits",
+            "unset",
+            "--storage",
+            "--max-memory-per-agent",
+        ]);
 
         assert!(matches!(
             show_command.subcommand,
@@ -3016,7 +3075,7 @@ mod test {
             GolemCliSubcommand::Account {
                 subcommand: AccountSubcommand::Limits {
                     subcommand: AccountLimitsSubcommand::Set {
-                        max_storage_per_agent: 1_048_576,
+                        max_storage_per_agent: Some(1_048_576),
                         ..
                     },
                 },
@@ -3030,6 +3089,22 @@ mod test {
                 },
             }
         ));
+        assert!(matches!(
+            memory_command.subcommand,
+            GolemCliSubcommand::Account {
+                subcommand: AccountSubcommand::Limits {
+                    subcommand: AccountLimitsSubcommand::Set {
+                        max_storage_per_agent: None,
+                        max_memory_per_agent: Some(2_097_152),
+                        monthly_memory_gb_seconds: None,
+                        ..
+                    },
+                },
+            }
+        ));
+        assert!(multiple_memory_limits.is_err());
+        assert!(missing_limit.is_err());
+        assert!(multiple_unset_limits.is_err());
     }
 
     #[test]

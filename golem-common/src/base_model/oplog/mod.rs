@@ -344,6 +344,7 @@ oplog_entry! {
         raw {
             target_revision: ComponentRevision,
             new_component_size: u64,
+            new_total_linear_memory_size: Option<u64>,
             new_active_plugins: HashSet<EnvironmentPluginGrantId>,
         }
         public {

@@ -17,10 +17,10 @@ use axum::Router;
 use axum::extract::Query;
 use axum::routing::get;
 use golem_api_grpc::proto::golem::worker::LogEvent;
-use golem_common::model::AgentEvent;
 use golem_common::model::oplog::{
-    MultipartPartData, OplogIndex, PublicOplogEntry, PublicSnapshotData,
+    MultipartPartData, OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex, PublicSnapshotData,
 };
+use golem_common::model::{AgentEvent, AgentStatus, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
@@ -34,7 +34,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::Instrument;
 
@@ -53,6 +53,16 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
+
+fn total_memory_growth(entries: &[PublicOplogEntryWithIndex]) -> u64 {
+    entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::GrowMemory(params) => Some(params.delta),
+            _ => None,
+        })
+        .sum()
+}
 
 async fn assert_snapshot_recovery_loaded(events: &mut UnboundedReceiver<LogEvent>) {
     tokio::time::timeout(Duration::from_secs(10), async {
@@ -150,6 +160,95 @@ async fn custom_durability_1(
 
     assert_eq!(result1.into_typed::<String>()?, "0-a");
     assert_eq!(result2.into_typed::<String>()?, "1-b");
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn immediate_recovery_does_not_duplicate_instantiation_memory_growth(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("InstantiationGrowthCounter", "memory-growth-recovery");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let initial_bytes = executor.worker_memory_requirement(&owned_agent_id).await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+    let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let growth_before = total_memory_growth(&before);
+    assert!(
+        growth_before > 0,
+        "fixture must produce instantiation-time memory growth"
+    );
+    let canonical_bytes = executor.worker_memory_requirement(&owned_agent_id).await?;
+    assert!(
+        canonical_bytes > initial_bytes,
+        "fixture must grow linear memory after instantiation: initial={initial_bytes}, canonical={canonical_bytes}"
+    );
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let invocation = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_clone,
+                    "delayed_increment",
+                    data_value!(5_000u64),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+    executor.simulated_crash(&worker_id).await?;
+
+    let recovered_result = invocation.await??;
+    assert_eq!(
+        recovered_result.into_typed::<u32>()?,
+        2,
+        "the interrupted invocation must complete after recovery without duplicating state"
+    );
+    let post_recovery_result = executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+    assert_eq!(
+        post_recovery_result.into_typed::<u32>()?,
+        3,
+        "the recovered worker must accept subsequent invocations"
+    );
+
+    let after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let growth_after = total_memory_growth(&after);
+    assert_eq!(
+        growth_after, growth_before,
+        "immediate recovery must not persist instantiation growth again"
+    );
+    assert_eq!(
+        executor.worker_memory_requirement(&owned_agent_id).await?,
+        canonical_bytes,
+        "re-instantiation must preserve the canonical memory requirement"
+    );
+
     Ok(())
 }
 

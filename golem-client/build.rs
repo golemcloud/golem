@@ -74,6 +74,14 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "StorageUsagePeriod",
                 "golem_common::model::account_usage::StorageUsagePeriod",
             ),
+            (
+                "MemoryLimit",
+                "golem_common::model::account_usage::MemoryLimit",
+            ),
+            (
+                "SetMemoryLimit",
+                "golem_common::model::account_usage::SetMemoryLimit",
+            ),
             // agent
             (
                 "JsonComponentModelValue",

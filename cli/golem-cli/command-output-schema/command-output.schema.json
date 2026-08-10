@@ -344,7 +344,7 @@
     },
     "account.limits.show": {
       "type": "object",
-      "description": "Single structured output document emitted by account storage limit commands.",
+      "description": "Single structured output document emitted by account storage and memory limit commands.",
       "x-golem-output-mode": "single",
       "x-golem-command": "account limits show",
       "x-golem-commands": [
@@ -358,7 +358,9 @@
         "planDefault",
         "overrideValue",
         "ceiling",
-        "userConfigurable"
+        "userConfigurable",
+        "maxMemoryPerAgent",
+        "monthlyMemoryGbSeconds"
       ],
       "properties": {
         "$type": {
@@ -382,6 +384,12 @@
         },
         "userConfigurable": {
           "type": "boolean"
+        },
+        "maxMemoryPerAgent": {
+          "$ref": "#/definitions/MemoryLimit"
+        },
+        "monthlyMemoryGbSeconds": {
+          "$ref": "#/definitions/MemoryLimit"
         }
       },
       "additionalProperties": false
@@ -655,7 +663,7 @@
       "additionalProperties": false
     },
     "account.usage.show": {
-      "description": "Current or selected-period account storage usage.",
+      "description": "Current or selected-period account compute, memory, and storage usage.",
       "x-golem-output-mode": "single",
       "x-golem-command": "account usage show",
       "allOf": [
@@ -671,7 +679,7 @@
     },
     "account.usage.history": {
       "type": "object",
-      "description": "Account storage usage history.",
+      "description": "Account compute, memory, and storage usage history.",
       "x-golem-output-mode": "single",
       "x-golem-command": "account usage history",
       "required": [
@@ -695,6 +703,7 @@
       "type": "object",
       "required": [
         "computeGcu",
+        "memoryGbSeconds",
         "durableStorageGbMonth",
         "ephemeralStorageGbMonth",
         "period"
@@ -706,6 +715,11 @@
         "computeGcu": {
           "description": "Compute usage in GCU.",
           "type": "number"
+        },
+        "memoryGbSeconds": {
+          "description": "Raw allocated linear-memory usage in GB-seconds.",
+          "type": "integer",
+          "minimum": 0
         },
         "durableStorageGbMonth": {
           "type": "number"
@@ -748,6 +762,38 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 12
+        }
+      },
+      "additionalProperties": false
+    },
+    "MemoryLimit": {
+      "type": "object",
+      "required": [
+        "effectiveValue",
+        "planDefault",
+        "overrideValue",
+        "ceiling",
+        "userConfigurable"
+      ],
+      "properties": {
+        "effectiveValue": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "planDefault": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "overrideValue": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "ceiling": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "userConfigurable": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false

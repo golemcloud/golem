@@ -38,7 +38,8 @@ use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy)]
-pub struct DiskOverridePolicy {
+pub struct OverridePolicy {
+    pub dimension: AccountResourceOverrideDimension,
     pub ceiling: u64,
     pub user_configurable: bool,
 }
@@ -59,7 +60,7 @@ pub trait AccountRepo: Send + Sync {
     async fn update_plan_and_reconcile_overrides(
         &self,
         revision: AccountRevisionRecord,
-        disk_override_policy: DiskOverridePolicy,
+        override_policies: [OverridePolicy; 3],
     ) -> Result<AccountExtRevisionRecord, AccountRepoError>;
 
     async fn delete(
@@ -128,11 +129,11 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
     async fn update_plan_and_reconcile_overrides(
         &self,
         revision: AccountRevisionRecord,
-        disk_override_policy: DiskOverridePolicy,
+        override_policies: [OverridePolicy; 3],
     ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
         let span = Self::span_account_id(revision.account_id);
         self.repo
-            .update_plan_and_reconcile_overrides(revision, disk_override_policy)
+            .update_plan_and_reconcile_overrides(revision, override_policies)
             .instrument(span)
             .await
     }
@@ -310,7 +311,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
     async fn update_plan_and_reconcile_overrides(
         &self,
         revision: AccountRevisionRecord,
-        disk_override_policy: DiskOverridePolicy,
+        override_policies: [OverridePolicy; 3],
     ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
         self.db_pool
             .with_tx_err(
@@ -321,9 +322,10 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                         let account = Self::update_in_tx(tx, revision.clone()).await?;
                         let now = SqlDateTime::now();
 
-                        if disk_override_policy.user_configurable {
-                            tx.execute(
-                                sqlx::query(indoc! { r#"
+                        for policy in override_policies {
+                            if policy.user_configurable {
+                                tx.execute(
+                                    sqlx::query(indoc! { r#"
                                 UPDATE account_resource_overrides
                                 SET override_value = $1, reason = $2
                                 WHERE account_id = $3
@@ -331,32 +333,27 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                                   AND (expires_at IS NULL OR expires_at > $5)
                                   AND override_value > $1
                             "# })
-                                .bind(NumericU64::new(disk_override_policy.ceiling))
-                                .bind(AccountResourceOverrideReason::DowngradeClamp.as_str())
-                                .bind(revision.account_id)
-                                .bind(
-                                    AccountResourceOverrideDimension::MaxDiskSpacePerWorker
-                                        .as_str(),
+                                    .bind(NumericU64::new(policy.ceiling))
+                                    .bind(AccountResourceOverrideReason::DowngradeClamp.as_str())
+                                    .bind(revision.account_id)
+                                    .bind(policy.dimension.as_str())
+                                    .bind(&now),
                                 )
-                                .bind(now),
-                            )
-                            .await?;
-                        } else {
-                            tx.execute(
-                                sqlx::query(indoc! { r#"
+                                .await?;
+                            } else {
+                                tx.execute(
+                                    sqlx::query(indoc! { r#"
                                 DELETE FROM account_resource_overrides
                                 WHERE account_id = $1
                                   AND dimension = $2
                                   AND (expires_at IS NULL OR expires_at > $3)
                             "# })
-                                .bind(revision.account_id)
-                                .bind(
-                                    AccountResourceOverrideDimension::MaxDiskSpacePerWorker
-                                        .as_str(),
+                                    .bind(revision.account_id)
+                                    .bind(policy.dimension.as_str())
+                                    .bind(&now),
                                 )
-                                .bind(now),
-                            )
-                            .await?;
+                                .await?;
+                            }
                         }
 
                         Ok(account)
