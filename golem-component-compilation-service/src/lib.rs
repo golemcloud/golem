@@ -36,7 +36,6 @@ use tonic::codec::CompressionEncoding;
 use tonic_tracing_opentelemetry::middleware;
 use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::{Instrument, info};
-use wasmtime::WasmBacktraceDetails;
 
 pub mod config;
 mod grpc;
@@ -168,24 +167,5 @@ async fn start_grpc_server(
 }
 
 fn create_wasmtime_config(engine_config: &config::EngineConfig) -> wasmtime::Config {
-    let mut config = wasmtime::Config::default();
-
-    config.wasm_multi_value(true);
-    config.wasm_component_model(true);
-    // Must match the executor's enabled wasm features so that components
-    // pre-compiled here are accepted at runtime. WASI p3 components use the
-    // async ABI (stream<T>, future<T>, async lift/lower, error-context).
-    config.wasm_component_model_async(true);
-    config.wasm_component_model_error_context(true);
-    config.epoch_interruption(true);
-    config.consume_fuel(true);
-    config.wasm_backtrace_details(WasmBacktraceDetails::Enable);
-
-    if engine_config.enable_fs_cache {
-        config.cache(Some(
-            wasmtime::Cache::new(wasmtime::CacheConfig::new()).expect("Failed to initialize cache"),
-        ));
-    }
-
-    config
+    golem_common::wasmtime_config::create_wasmtime_config(engine_config.enable_fs_cache)
 }

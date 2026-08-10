@@ -19,6 +19,7 @@ use crate::schema::agent::wit::{decode_agent_error_rejecting_quota_with, decode_
 use crate::schema::tool::Tool;
 use crate::schema::tool::validation::validate_tool;
 use crate::schema::tool::wit::{decode_tool, wire as tool_wire};
+use crate::wasmtime_config::create_wasmtime_config;
 use anyhow::anyhow;
 use golem_schema::schema::wit::{
     QuotaTokenHandleDropper, QuotaTokenHandleRep, SecretHandleDropper, SecretHandleRep,
@@ -133,24 +134,7 @@ async fn extract_component_metadata_impl(
     enable_fs_cache: bool,
     include_tools: bool,
 ) -> anyhow::Result<ExtractedComponentMetadata> {
-    let mut config = wasmtime::Config::default();
-    config.wasm_multi_value(true);
-    config.wasm_component_model(true);
-    // Required for WASI p3: enables the async ABI (stream<T>, future<T>,
-    // async lift/lower, error-context). Without this, components that use
-    // any p3 async builtins fail to parse via `Component::from_file`.
-    config.wasm_component_model_async(true);
-    config.wasm_component_model_error_context(true);
-    config.epoch_interruption(true);
-    config.consume_fuel(true);
-    config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Enable);
-
-    if enable_fs_cache {
-        config.cache(Some(
-            wasmtime::Cache::new(wasmtime::CacheConfig::new()).expect("Failed to initialize cache"),
-        ));
-    }
-
+    let config = create_wasmtime_config(enable_fs_cache);
     let engine = Engine::new(&config)?;
     let mut linker: Linker<Host> = Linker::new(&engine);
     linker.allow_shadowing(true);

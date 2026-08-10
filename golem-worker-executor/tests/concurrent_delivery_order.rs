@@ -37,7 +37,7 @@
 
 use test_r::test;
 use wasmtime::component::{Accessor, Component, Linker};
-use wasmtime::{Config, Engine, Store};
+use wasmtime::{Engine, Store};
 
 /// Host-side state driving the completion order of the bespoke `call` host
 /// function.
@@ -49,12 +49,7 @@ struct DeliveryState {
 }
 
 fn engine() -> Engine {
-    let mut config = Config::default();
-    // Mirror the production component-model-async configuration (see
-    // `Golem::create_wasmtime_config`).
-    config.wasm_component_model(true);
-    config.wasm_component_model_async(true);
-    config.wasm_component_model_error_context(true);
+    let config = golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache();
     Engine::new(&config).expect("failed to create engine")
 }
 
@@ -116,6 +111,8 @@ async fn delivery_order_for(schedule: Vec<u32>) -> Vec<u32> {
         .expect("register golem:cmtest/host#call");
 
     let mut store = Store::new(&engine, DeliveryState { schedule, step: 0 });
+    store.set_fuel(u64::MAX).expect("set test fuel");
+    store.set_epoch_deadline(u64::MAX);
     let instance = linker
         .instantiate_async(&mut store, &component)
         .await
