@@ -227,6 +227,41 @@ mod tests {
 
     #[test]
     #[timeout("2m")]
+    async fn loaded_idle_large_file_does_not_accrue_storage_billing() -> anyhow::Result<()> {
+        const FILE_BYTES: usize = 1024 * 1024;
+        let deps = create_deps(2 * FILE_BYTES as u64, Duration::from_secs(5)).await;
+        let user = deps.user().await?;
+        let (_, env) = user.app_and_env().await?;
+        let component = user
+            .component(&env.id, "golem_it_host_api_tests_release")
+            .store()
+            .await?;
+        let agent = agent_id!("FileSystem", "large-loaded-idle-storage-billing");
+        let worker = user.start_agent(&component.id, agent.clone()).await?;
+        user.invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/metered.txt", "x".repeat(FILE_BYTES)),
+        )
+        .await?;
+
+        let idle_start = wait_for_durable_billing_to_settle(&deps, &user).await?;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let idle_end = wait_for_durable_billing_to_settle(&deps, &user).await?;
+        assert_billing_window(
+            idle_end - idle_start,
+            0.0,
+            1.0,
+            "loaded-idle one-megabyte file",
+        );
+
+        user.delete_worker(&worker).await?;
+        Ok(())
+    }
+
+    #[test]
+    #[timeout("2m")]
     async fn evicted_agent_stops_metering_until_reload() -> anyhow::Result<()> {
         const FILE_BYTES: usize = 1024 * 1024;
         let deps = create_deps(FILE_BYTES as u64, Duration::from_secs(60)).await;

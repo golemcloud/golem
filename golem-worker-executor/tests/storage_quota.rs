@@ -25,7 +25,7 @@ use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::model::IFSEntry;
 use golem_worker_executor::metrics::storage::{
-    STORAGE_BYTES_WRITTEN_TOTAL, STORAGE_TYPE_FILESYSTEM,
+    STORAGE_BYTES_DELETED_TOTAL, STORAGE_BYTES_WRITTEN_TOTAL, STORAGE_TYPE_FILESYSTEM,
 };
 use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::{
@@ -494,6 +494,7 @@ async fn executor_pool_reuses_existing_rounding_capacity_for_same_agent(
         .store()
         .await?;
     let agent = agent_id!("FileSystem", "same-agent-rounded-capacity");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
 
     executor
         .invoke_and_await_agent(
@@ -511,6 +512,377 @@ async fn executor_pool_reuses_existing_rounding_capacity_for_same_agent(
             data_value!("/second.bin", "5678"),
         )
         .await?;
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&oplog),
+        vec![4, 4],
+        "both writes must commit while sharing one rounded host permit"
+    );
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "reusing existing rounded capacity must not require a storage-failure restart"
+    );
+    assert_eq!(
+        executor
+            .worker_eviction_class(&OwnedAgentId::new(context.default_environment_id, &worker,))
+            .await,
+        Some(EvictionClass::LoadedIdle)
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn nonblocking_stream_flush_settles_storage_before_descriptor_mutation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 8).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "flush-before-descriptor-mutation");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "stream_flush_then_set_size",
+            data_value!("/flush-then-resize.bin", 8u64, 4u64),
+        )
+        .await?;
+
+    assert_file_len(&executor, &component, &agent, "/flush-then-resize.bin", 4).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![8, -4],
+        "flush must settle the stream reservation before set_size releases storage"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn pending_stream_write_completes_before_descriptor_mutation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 8).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "pending-write-before-descriptor-mutation");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "stream_write_then_set_size",
+            data_value!("/write-then-resize.bin", 8u64, 4u64),
+        )
+        .await?;
+
+    assert_file_len(&executor, &component, &agent, "/write-then-resize.bin", 4).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![8, -4],
+        "descriptor mutation must complete and settle the pending stream write first"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn filesystem_stream_accounting_survives_descriptor_drop(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 8).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "stream-after-descriptor-drop");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "stream_after_descriptor_drop",
+            data_value!("/descriptor-dropped.bin", 8u64),
+        )
+        .await?;
+
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![8],
+        "stream reconciliation must not depend on the descriptor resource remaining open"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn filesystem_stream_accounting_survives_file_rename(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 8).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "stream-after-rename");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "stream_after_rename",
+            data_value!("/before-rename.bin", "/after-rename.bin", 8u64),
+        )
+        .await?;
+
+    assert_file_len(&executor, &component, &agent, "/after-rename.bin", 8).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![8],
+        "stream reconciliation must follow the open file across a rename"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn renamed_open_stream_uses_the_destination_mutation_lock(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 8).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "stream-write-after-rename");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "stream_write_after_rename_then_set_size",
+            data_value!("/before.bin", "/after.bin", 8u64, 4u64),
+        )
+        .await?;
+
+    assert_file_len(&executor, &component, &agent, "/after.bin", 4).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![8, -4]
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn renamed_descriptor_keeps_its_file_lock_after_old_path_reuse(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 8).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "renamed-descriptor-path-reuse");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "stream_after_rename_path_reuse",
+            data_value!("/a.bin", "/b.bin", "/c.bin", 8u64, 4u64),
+        )
+        .await?;
+
+    assert_file_len(&executor, &component, &agent, "/b.bin", 4).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![8, -4]
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn rename_releases_replaced_file_storage(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 12).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "rename-replaces-file");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/source.bin", "1234"),
+        )
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/destination.bin", "12345678"),
+        )
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "rename_file",
+            data_value!("/source.bin", "/destination.bin"),
+        )
+        .await?;
+
+    assert_file_len(&executor, &component, &agent, "/destination.bin", 4).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![4, 8, -8]
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn rename_does_not_release_a_replaced_hardlink_target(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 6).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "rename-replaces-hardlink");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    for (path, contents) in [("/original.bin", "12"), ("/replacement.bin", "1234")] {
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &agent,
+                "write_file",
+                data_value!(path, contents),
+            )
+            .await?;
+    }
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "create_link",
+            data_value!("/original.bin", "/linked.bin"),
+        )
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "rename_file",
+            data_value!("/replacement.bin", "/linked.bin"),
+        )
+        .await?;
+
+    assert_file_len(&executor, &component, &agent, "/original.bin", 2).await?;
+    assert_file_len(&executor, &component, &agent, "/linked.bin", 4).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![2, 4]
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn pending_stream_is_reconciled_before_invocation_completion(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 8).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "pending-stream-at-invocation-end");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "leaked_stream_to_file",
+            data_value!("/pending-at-end.bin", 8u64),
+        )
+        .await?;
+
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![8],
+        "invocation completion must persist every pending stream reservation"
+    );
     Ok(())
 }
 
@@ -1521,6 +1893,28 @@ async fn executor_pool_idle_worker_evicted_on_first_write_node_out_of_filesystem
 
     let agent_a = agent_id!("FileSystem", "exec-pool-exhausted-a-1");
     let agent_b = agent_id!("FileSystem", "exec-pool-exhausted-b-1");
+    let zero_storage_agent = agent_id!("FileSystem", "exec-pool-zero-storage-1");
+
+    let zero_storage_worker = executor
+        .start_agent(&component.id, zero_storage_agent.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &zero_storage_agent,
+            "file_len",
+            data_value!("/missing.txt"),
+        )
+        .await?;
+    assert_eq!(
+        executor
+            .worker_eviction_class(&OwnedAgentId::new(
+                context.default_environment_id,
+                &zero_storage_worker,
+            ))
+            .await,
+        Some(EvictionClass::LoadedIdle)
+    );
 
     // 2 KB content (> 1 KB so each write consumes 2 permits, not just 1).
     let content_a = "A".repeat(2048);
@@ -1567,6 +1961,27 @@ async fn executor_pool_idle_worker_evicted_on_first_write_node_out_of_filesystem
         SchemaValue::Result(ResultValuePayload::Ok {
             value: Some(Box::new(SchemaValue::String(content_b)))
         })
+    );
+
+    assert_eq!(
+        executor
+            .worker_eviction_class(&OwnedAgentId::new(
+                context.default_environment_id,
+                &zero_storage_worker,
+            ))
+            .await,
+        Some(EvictionClass::LoadedIdle),
+        "filesystem pressure must not evict a worker that holds no filesystem permits"
+    );
+    assert_ne!(
+        executor
+            .worker_eviction_class(&OwnedAgentId::new(
+                context.default_environment_id,
+                &worker_a,
+            ))
+            .await,
+        Some(EvictionClass::LoadedIdle),
+        "filesystem pressure must evict the worker holding the exhausted pool"
     );
 
     executor.check_oplog_is_queryable(&worker_a).await?;
@@ -1994,6 +2409,165 @@ async fn agent_quota_blocking_splice_within_limit_completes(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+async fn blocking_splice_reserves_the_available_input_not_the_requested_limit(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 2).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "blocking-splice-request-limit");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/one-byte-source.bin", "x"),
+        )
+        .await?;
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "blocking_splice_len",
+            data_value!(
+                "/one-byte-source.bin",
+                "/one-byte-destination.bin",
+                u64::MAX
+            ),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected blocking_splice_len return value"))?;
+
+    assert_eq!(
+        result,
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::U64(1)))
+        })
+    );
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![1, 1]
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn splice_reserves_the_available_input_not_the_requested_limit(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 2).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "splice-request-limit");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/one-byte-source.bin", "x"),
+        )
+        .await?;
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "splice_len",
+            data_value!(
+                "/one-byte-source.bin",
+                "/one-byte-destination.bin",
+                u64::MAX
+            ),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected splice_len return value"))?;
+
+    assert_eq!(
+        result,
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::U64(1)))
+        })
+    );
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![1, 1]
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn positioned_splice_accounts_for_the_sparse_hole(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 12).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "positioned-splice-hole");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/four-byte-source.bin", "1234"),
+        )
+        .await?;
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "blocking_splice_at",
+            data_value!("/four-byte-source.bin", "/sparse.bin", 4u64, u64::MAX),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected blocking_splice_at return value"))?;
+
+    assert_eq!(
+        result,
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::U64(4)))
+        })
+    );
+    assert_file_len(&executor, &component, &agent, "/sparse.bin", 8).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![4, 8]
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
 async fn executor_pool_overlapping_p2_streams_use_aggregate_rounding(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2212,7 +2786,20 @@ async fn provisioned_read_write_baseline_survives_restart_without_duplication(
         .store()
         .await?;
     let agent = agent_id!("FileSystem", "provisioned-file-restart");
+    let account_id = context.account_id.to_string();
+    let environment_id = context.default_environment_id.to_string();
+    let written_before = STORAGE_BYTES_WRITTEN_TOTAL
+        .with_label_values(&[STORAGE_TYPE_FILESYSTEM, &account_id, &environment_id])
+        .get();
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    let written_after_creation = STORAGE_BYTES_WRITTEN_TOTAL
+        .with_label_values(&[STORAGE_TYPE_FILESYSTEM, &account_id, &environment_id])
+        .get();
+    assert_eq!(
+        written_after_creation - written_before,
+        4.0,
+        "fresh creation must record the provisioned read-write baseline once"
+    );
 
     executor
         .invoke_and_await_agent(
@@ -2246,6 +2833,14 @@ async fn provisioned_read_write_baseline_survives_restart_without_duplication(
         filesystem_storage_deltas(&after_restart),
         vec![4],
         "restart must not emit a duplicate provisioned-file seed"
+    );
+    let written_after_restart = STORAGE_BYTES_WRITTEN_TOTAL
+        .with_label_values(&[STORAGE_TYPE_FILESYSTEM, &account_id, &environment_id])
+        .get();
+    assert_eq!(
+        written_after_restart - written_before,
+        8.0,
+        "restart must not record the four-byte provisioned baseline again"
     );
 
     let over_quota = executor
@@ -2358,6 +2953,14 @@ async fn p2_filesystem_mutations_use_exact_canonical_quota_accounting(
     let agent = agent_id!("FileSystem", "p2-quota-mutations");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     let path = "/quota-mutations.bin";
+    let account_id = context.account_id.to_string();
+    let environment_id = context.default_environment_id.to_string();
+    let written_before = STORAGE_BYTES_WRITTEN_TOTAL
+        .with_label_values(&[STORAGE_TYPE_FILESYSTEM, &account_id, &environment_id])
+        .get();
+    let deleted_before = STORAGE_BYTES_DELETED_TOTAL
+        .with_label_values(&[STORAGE_TYPE_FILESYSTEM, &account_id, &environment_id])
+        .get();
 
     executor
         .invoke_and_await_agent(&component, &agent, "write_file", data_value!(path, "1234"))
@@ -2411,6 +3014,14 @@ async fn p2_filesystem_mutations_use_exact_canonical_quota_accounting(
         vec![4, 3, 3, -4, -6, 10, -10, 10],
         "P2 committed deltas must match each observed file-size transition"
     );
+    let written_after = STORAGE_BYTES_WRITTEN_TOTAL
+        .with_label_values(&[STORAGE_TYPE_FILESYSTEM, &account_id, &environment_id])
+        .get();
+    let deleted_after = STORAGE_BYTES_DELETED_TOTAL
+        .with_label_values(&[STORAGE_TYPE_FILESYSTEM, &account_id, &environment_id])
+        .get();
+    assert_eq!(written_after - written_before, 30.0);
+    assert_eq!(deleted_after - deleted_before, 20.0);
     let over_quota = executor
         .invoke_and_await_agent(
             &component,
@@ -2463,6 +3074,14 @@ async fn p3_filesystem_mutations_use_exact_canonical_quota_accounting(
     let worker = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
+    let account_id = context.account_id.to_string();
+    let environment_id = context.default_environment_id.to_string();
+    let written_before = STORAGE_BYTES_WRITTEN_TOTAL
+        .with_label_values(&[STORAGE_TYPE_FILESYSTEM, &account_id, &environment_id])
+        .get();
+    let deleted_before = STORAGE_BYTES_DELETED_TOTAL
+        .with_label_values(&[STORAGE_TYPE_FILESYSTEM, &account_id, &environment_id])
+        .get();
 
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "mutation_sizes", data_value!())
@@ -2485,6 +3104,14 @@ async fn p3_filesystem_mutations_use_exact_canonical_quota_accounting(
         vec![4, 3, 3, -4, -6, 10, -10, 10],
         "P3 committed deltas must match each observed file-size transition"
     );
+    let written_after = STORAGE_BYTES_WRITTEN_TOTAL
+        .with_label_values(&[STORAGE_TYPE_FILESYSTEM, &account_id, &environment_id])
+        .get();
+    let deleted_after = STORAGE_BYTES_DELETED_TOTAL
+        .with_label_values(&[STORAGE_TYPE_FILESYSTEM, &account_id, &environment_id])
+        .get();
+    assert_eq!(written_after - written_before, 30.0);
+    assert_eq!(deleted_after - deleted_before, 20.0);
     let over_quota = executor
         .invoke_and_await_agent(
             &component,
@@ -2495,6 +3122,81 @@ async fn p3_filesystem_mutations_use_exact_canonical_quota_accounting(
         .await;
     assert_specific_storage_quota_failure(&over_quota, "P3 one-byte growth");
 
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn p3_mutation_waits_for_pending_p2_stream_accounting(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 8).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let agent = agent_id!("P3FileSystem", "p2-stream-before-p3-mutation");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "p2_stream_then_p3_set_size",
+            data_value!("mixed-preview.bin", 8u64, 4u64),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected mixed-preview size"))?;
+
+    assert_eq!(result, SchemaValue::U64(4));
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![8, -4],
+        "P3 must settle the P2 stream before measuring its mutation"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn p3_rename_releases_replaced_file_storage(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 12).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let agent = agent_id!("P3FileSystem", "p3-rename-replaces-file");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "replace_file",
+            data_value!("source.bin", "destination.bin", 4u64, 8u64),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected P3 replacement size"))?;
+
+    assert_eq!(result, SchemaValue::U64(4));
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![4, 8, -8]
+    );
     Ok(())
 }
 

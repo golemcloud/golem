@@ -66,6 +66,41 @@ pub trait FileSystem {
     fn rename_file(&self, source: String, destination: String) -> Result<(), String>;
     fn hash(&self, path: String) -> Result<HashResult, String>;
     fn stream_to_file(&self, path: String, len: u64) -> Result<(), String>;
+    fn leaked_stream_to_file(&self, path: String, len: u64) -> Result<(), String>;
+    fn stream_flush_then_set_size(
+        &self,
+        path: String,
+        write_len: u64,
+        new_size: u64,
+    ) -> Result<(), String>;
+    fn stream_write_then_set_size(
+        &self,
+        path: String,
+        write_len: u64,
+        new_size: u64,
+    ) -> Result<(), String>;
+    fn stream_after_descriptor_drop(&self, path: String, len: u64) -> Result<(), String>;
+    fn stream_after_rename(
+        &self,
+        source: String,
+        destination: String,
+        len: u64,
+    ) -> Result<(), String>;
+    fn stream_write_after_rename_then_set_size(
+        &self,
+        source: String,
+        destination: String,
+        write_len: u64,
+        new_size: u64,
+    ) -> Result<(), String>;
+    fn stream_after_rename_path_reuse(
+        &self,
+        source: String,
+        destination: String,
+        replacement: String,
+        write_len: u64,
+        new_size: u64,
+    ) -> Result<(), String>;
     fn stream_to_stdout(&self, len: u64) -> Result<(), String>;
     fn blocking_stream_and_flush_to_file(&self, path: String, len: u64) -> Result<(), String>;
     fn consecutive_blocking_stream_writes(
@@ -90,9 +125,23 @@ pub trait FileSystem {
     /// Read from `src_path` and splice into a new file at `dst_path` using
     /// `output-stream.blocking-splice`.
     fn blocking_splice(&self, src_path: String, dst_path: String) -> Result<u64, String>;
+    fn blocking_splice_len(
+        &self,
+        src_path: String,
+        dst_path: String,
+        len: u64,
+    ) -> Result<u64, String>;
+    fn blocking_splice_at(
+        &self,
+        src_path: String,
+        dst_path: String,
+        offset: u64,
+        len: u64,
+    ) -> Result<u64, String>;
     /// Read from `src_path` and splice into a new file at `dst_path` using
     /// the non-blocking `output-stream.splice`.
     fn splice(&self, src_path: String, dst_path: String) -> Result<u64, String>;
+    fn splice_len(&self, src_path: String, dst_path: String, len: u64) -> Result<u64, String>;
     fn sleep_for(&self, seconds: f64);
 }
 
@@ -197,7 +246,8 @@ impl FileSystem for FileSystemImpl {
             .append(true)
             .open(path)
             .map_err(|e| e.to_string())?;
-        file.write_all(contents.as_bytes()).map_err(|e| e.to_string())
+        file.write_all(contents.as_bytes())
+            .map_err(|e| e.to_string())
     }
 
     fn truncate_file(&self, path: String) -> Result<(), String> {
@@ -307,6 +357,162 @@ impl FileSystem for FileSystemImpl {
         stream.write_zeroes(len).map_err(|e| format!("{e:?}"))
     }
 
+    fn leaked_stream_to_file(&self, path: String, len: u64) -> Result<(), String> {
+        let dirs = wasi::filesystem::preopens::get_directories();
+        let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
+        let fd = root
+            .open_at(
+                PathFlags::empty(),
+                path.trim_start_matches('/'),
+                OpenFlags::CREATE,
+                DescriptorFlags::WRITE,
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        let stream = fd.write_via_stream(0).map_err(|e| format!("{e:?}"))?;
+        stream.write_zeroes(len).map_err(|e| format!("{e:?}"))?;
+        std::mem::forget(stream);
+        Ok(())
+    }
+
+    fn stream_flush_then_set_size(
+        &self,
+        path: String,
+        write_len: u64,
+        new_size: u64,
+    ) -> Result<(), String> {
+        let dirs = wasi::filesystem::preopens::get_directories();
+        let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
+        let fd = root
+            .open_at(
+                PathFlags::empty(),
+                path.trim_start_matches('/'),
+                OpenFlags::CREATE,
+                DescriptorFlags::WRITE,
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        let stream = fd.write_via_stream(0).map_err(|e| format!("{e:?}"))?;
+        stream
+            .write_zeroes(write_len)
+            .map_err(|e| format!("{e:?}"))?;
+        stream.flush().map_err(|e| format!("{e:?}"))?;
+        fd.set_size(new_size).map_err(|e| format!("{e:?}"))
+    }
+
+    fn stream_write_then_set_size(
+        &self,
+        path: String,
+        write_len: u64,
+        new_size: u64,
+    ) -> Result<(), String> {
+        let dirs = wasi::filesystem::preopens::get_directories();
+        let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
+        let fd = root
+            .open_at(
+                PathFlags::empty(),
+                path.trim_start_matches('/'),
+                OpenFlags::CREATE,
+                DescriptorFlags::WRITE,
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        let stream = fd.write_via_stream(0).map_err(|e| format!("{e:?}"))?;
+        stream
+            .write_zeroes(write_len)
+            .map_err(|e| format!("{e:?}"))?;
+        fd.set_size(new_size).map_err(|e| format!("{e:?}"))
+    }
+
+    fn stream_after_descriptor_drop(&self, path: String, len: u64) -> Result<(), String> {
+        let dirs = wasi::filesystem::preopens::get_directories();
+        let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
+        let fd = root
+            .open_at(
+                PathFlags::empty(),
+                path.trim_start_matches('/'),
+                OpenFlags::CREATE,
+                DescriptorFlags::WRITE,
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        let stream = fd.write_via_stream(0).map_err(|e| format!("{e:?}"))?;
+        stream.write_zeroes(len).map_err(|e| format!("{e:?}"))?;
+        drop(fd);
+        stream.blocking_flush().map_err(|e| format!("{e:?}"))
+    }
+
+    fn stream_after_rename(
+        &self,
+        source: String,
+        destination: String,
+        len: u64,
+    ) -> Result<(), String> {
+        let dirs = wasi::filesystem::preopens::get_directories();
+        let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
+        let fd = root
+            .open_at(
+                PathFlags::empty(),
+                source.trim_start_matches('/'),
+                OpenFlags::CREATE,
+                DescriptorFlags::WRITE,
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        let stream = fd.write_via_stream(0).map_err(|e| format!("{e:?}"))?;
+        stream.write_zeroes(len).map_err(|e| format!("{e:?}"))?;
+        fs::rename(source, destination).map_err(|e| e.to_string())?;
+        stream.blocking_flush().map_err(|e| format!("{e:?}"))
+    }
+
+    fn stream_write_after_rename_then_set_size(
+        &self,
+        source: String,
+        destination: String,
+        write_len: u64,
+        new_size: u64,
+    ) -> Result<(), String> {
+        let dirs = wasi::filesystem::preopens::get_directories();
+        let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
+        let fd = root
+            .open_at(
+                PathFlags::empty(),
+                source.trim_start_matches('/'),
+                OpenFlags::CREATE,
+                DescriptorFlags::WRITE,
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        let stream = fd.write_via_stream(0).map_err(|e| format!("{e:?}"))?;
+        fs::rename(source, &destination).map_err(|e| e.to_string())?;
+        stream
+            .write_zeroes(write_len)
+            .map_err(|e| format!("{e:?}"))?;
+        fd.set_size(new_size).map_err(|e| format!("{e:?}"))
+    }
+
+    fn stream_after_rename_path_reuse(
+        &self,
+        source: String,
+        destination: String,
+        replacement: String,
+        write_len: u64,
+        new_size: u64,
+    ) -> Result<(), String> {
+        let dirs = wasi::filesystem::preopens::get_directories();
+        let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
+        let fd = root
+            .open_at(
+                PathFlags::empty(),
+                source.trim_start_matches('/'),
+                OpenFlags::CREATE,
+                DescriptorFlags::WRITE,
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        let stream = fd.write_via_stream(0).map_err(|e| format!("{e:?}"))?;
+        fs::rename(&source, &destination).map_err(|e| e.to_string())?;
+        fs::write(&replacement, []).map_err(|e| e.to_string())?;
+        fs::rename(replacement, source).map_err(|e| e.to_string())?;
+        stream
+            .write_zeroes(write_len)
+            .map_err(|e| format!("{e:?}"))?;
+        fd.set_size(new_size).map_err(|e| format!("{e:?}"))
+    }
+
     fn stream_to_stdout(&self, len: u64) -> Result<(), String> {
         let stdout: OutputStream = wasi::cli::stdout::get_stdout();
         stdout.write_zeroes(len).map_err(|e| format!("{e:?}"))
@@ -391,9 +597,7 @@ impl FileSystem for FileSystemImpl {
         first_stream
             .blocking_flush()
             .map_err(|e| format!("{e:?}"))?;
-        second_stream
-            .blocking_flush()
-            .map_err(|e| format!("{e:?}"))
+        second_stream.blocking_flush().map_err(|e| format!("{e:?}"))
     }
 
     fn set_file_size(&self, path: String, new_size: u64) -> Result<(), String> {
@@ -492,6 +696,73 @@ impl FileSystem for FileSystemImpl {
         Ok(spliced)
     }
 
+    fn blocking_splice_len(
+        &self,
+        src_path: String,
+        dst_path: String,
+        len: u64,
+    ) -> Result<u64, String> {
+        let dirs = wasi::filesystem::preopens::get_directories();
+        let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
+        let input = root
+            .open_at(
+                PathFlags::empty(),
+                src_path.trim_start_matches('/'),
+                OpenFlags::empty(),
+                DescriptorFlags::READ,
+            )
+            .map_err(|e| format!("open src: {e:?}"))?
+            .read_via_stream(0)
+            .map_err(|e| format!("read_via_stream: {e:?}"))?;
+        let output = root
+            .open_at(
+                PathFlags::empty(),
+                dst_path.trim_start_matches('/'),
+                OpenFlags::CREATE,
+                DescriptorFlags::WRITE,
+            )
+            .map_err(|e| format!("open dst: {e:?}"))?
+            .write_via_stream(0)
+            .map_err(|e| format!("write_via_stream: {e:?}"))?;
+        output
+            .blocking_splice(&input, len)
+            .map_err(|e| format!("blocking_splice: {e:?}"))
+    }
+
+    fn blocking_splice_at(
+        &self,
+        src_path: String,
+        dst_path: String,
+        offset: u64,
+        len: u64,
+    ) -> Result<u64, String> {
+        let dirs = wasi::filesystem::preopens::get_directories();
+        let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
+        let input = root
+            .open_at(
+                PathFlags::empty(),
+                src_path.trim_start_matches('/'),
+                OpenFlags::empty(),
+                DescriptorFlags::READ,
+            )
+            .map_err(|e| format!("open src: {e:?}"))?
+            .read_via_stream(0)
+            .map_err(|e| format!("read_via_stream: {e:?}"))?;
+        let output = root
+            .open_at(
+                PathFlags::empty(),
+                dst_path.trim_start_matches('/'),
+                OpenFlags::CREATE,
+                DescriptorFlags::WRITE,
+            )
+            .map_err(|e| format!("open dst: {e:?}"))?
+            .write_via_stream(offset)
+            .map_err(|e| format!("write_via_stream: {e:?}"))?;
+        output
+            .blocking_splice(&input, len)
+            .map_err(|e| format!("blocking_splice: {e:?}"))
+    }
+
     fn splice(&self, src_path: String, dst_path: String) -> Result<u64, String> {
         let dirs = wasi::filesystem::preopens::get_directories();
         let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
@@ -536,5 +807,33 @@ impl FileSystem for FileSystemImpl {
         }
 
         Ok(total)
+    }
+
+    fn splice_len(&self, src_path: String, dst_path: String, len: u64) -> Result<u64, String> {
+        let dirs = wasi::filesystem::preopens::get_directories();
+        let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
+        let input = root
+            .open_at(
+                PathFlags::empty(),
+                src_path.trim_start_matches('/'),
+                OpenFlags::empty(),
+                DescriptorFlags::READ,
+            )
+            .map_err(|e| format!("open src: {e:?}"))?
+            .read_via_stream(0)
+            .map_err(|e| format!("read_via_stream: {e:?}"))?;
+        let output = root
+            .open_at(
+                PathFlags::empty(),
+                dst_path.trim_start_matches('/'),
+                OpenFlags::CREATE,
+                DescriptorFlags::WRITE,
+            )
+            .map_err(|e| format!("open dst: {e:?}"))?
+            .write_via_stream(0)
+            .map_err(|e| format!("write_via_stream: {e:?}"))?;
+        input.subscribe().block();
+        output.subscribe().block();
+        output.splice(&input, len).map_err(|e| format!("splice: {e:?}"))
     }
 }

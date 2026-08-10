@@ -123,6 +123,11 @@ impl AgentMemoryMeter {
         self.inner.transition(now, |state| state.active = false);
     }
 
+    #[cfg(test)]
+    pub(crate) fn last_sample(&self) -> Instant {
+        self.inner.state.lock().unwrap().last_sample
+    }
+
     pub fn stop(&self, now: Instant) {
         let settlement = {
             let mut state = self.inner.state.lock().unwrap();

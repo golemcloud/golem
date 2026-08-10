@@ -26,6 +26,7 @@ use self::agent_config::{
     ensure_required_agent_secrets_are_configured, parse_worker_creation_agent_config,
 };
 use crate::durable_host::{agent_effective_surface_from_component_metadata, recover_stderr_logs};
+use crate::metrics::storage::{STORAGE_TYPE_FILESYSTEM, record_storage_bytes_written};
 use crate::metrics::workers::AdmissionPhase;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::active_workers::{
@@ -114,6 +115,29 @@ struct ReadOnlyContext {
     principal: Principal,
     cfg: golem_common::base_model::agent::ReadOnlyConfig,
     component_revision: ComponentRevision,
+}
+
+struct DesiredFilesystemStorage {
+    bytes: u64,
+    accepting_retries: bool,
+}
+
+impl DesiredFilesystemStorage {
+    fn record_retry(&mut self, bytes: u64) {
+        if self.accepting_retries {
+            self.bytes = self.bytes.max(bytes);
+        }
+    }
+
+    fn stop_retrying(&mut self) {
+        self.bytes = 0;
+        self.accepting_retries = false;
+    }
+
+    fn worker_started(&mut self) {
+        self.bytes = 0;
+        self.accepting_retries = true;
+    }
 }
 
 /// `Ttl(0)` is folded in as it is equivalent to `NoCache`.
@@ -338,11 +362,10 @@ pub struct Worker<Ctx: WorkerCtx> {
 
     last_resume_request: Mutex<Timestamp>,
     pub(crate) snapshot_recovery_disabled: AtomicBool,
-    /// Bytes that triggered the last `NodeOutOfFilesystemStorage` trap. Set by
-    /// `acquire_filesystem_space` on failure so `WaitingWorker::new` can request
-    /// at least that many bytes from the blocking eviction path, ensuring
-    /// enough idle workers are evicted to satisfy the pending write.
-    desired_extra_filesystem_storage: AtomicU64,
+    /// Stable capacity shortfall observed by a failed filesystem reservation. A waiting worker
+    /// consumes the latest value before using the blocking eviction path, ensuring enough idle
+    /// workers are evicted for the pending write without retaining stale restart demand.
+    desired_extra_filesystem_storage: StdMutex<DesiredFilesystemStorage>,
     startup_linear_memory_bytes: AtomicU64,
     memory_growth: StdMutex<Arc<PendingMemoryGrowth>>,
     memory_limit_interrupt_queued: AtomicBool,
@@ -769,7 +792,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             status_checkpointer,
             last_resume_request: Mutex::new(Timestamp::now_utc()),
             snapshot_recovery_disabled: AtomicBool::new(false),
-            desired_extra_filesystem_storage: AtomicU64::new(0),
+            desired_extra_filesystem_storage: StdMutex::new(DesiredFilesystemStorage {
+                bytes: 0,
+                accepting_retries: true,
+            }),
             startup_linear_memory_bytes: AtomicU64::new(0),
             memory_growth: StdMutex::new(Arc::new(PendingMemoryGrowth::default())),
             memory_limit_interrupt_queued: AtomicBool::new(false),
@@ -1066,11 +1092,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         interrupt_kind: InterruptKind,
         reacquire_permits: bool,
     ) -> bool {
+        let is_terminal = !matches!(
+            &interrupt_kind,
+            InterruptKind::Restart | InterruptKind::Jump
+        );
         let mut state = self.interrupt_signal.lock().await;
-        state.queue(PendingWorkerInterrupt {
+        let queued = state.queue(PendingWorkerInterrupt {
             kind: interrupt_kind,
             reacquire_permits,
-        })
+        });
+        drop(state);
+        if queued && is_terminal {
+            self.desired_extra_filesystem_storage
+                .lock()
+                .unwrap()
+                .stop_retrying();
+        }
+        queued
     }
 
     pub async fn resume_replay(&self) -> Result<(), WorkerExecutorError> {
@@ -2158,6 +2196,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.filesystem_storage_permits.clone()
     }
 
+    pub(crate) fn held_filesystem_storage_bytes(&self) -> u64 {
+        self.filesystem_storage_permits.held_bytes()
+    }
+
+    pub(crate) fn record_desired_extra_filesystem_storage(&self, bytes: u64) {
+        self.desired_extra_filesystem_storage
+            .lock()
+            .unwrap()
+            .record_retry(bytes);
+    }
+
     /// Reserve storage semaphore permits for a write operation.
     /// The returned permit releases itself unless a successful filesystem mutation commits it.
     /// Returns `NodeOutOfFilesystemStorage` if the executor pool is exhausted.
@@ -2176,10 +2225,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 {
                     Ok(Some(permit))
                 } else {
-                    // Preserve the largest concurrent shortfall so the replacement
-                    // generation admits enough capacity for every pending write.
-                    self.desired_extra_filesystem_storage
-                        .fetch_max(new_bytes, Ordering::Relaxed);
                     Err(anyhow!(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage))
                 }
             }
@@ -3464,6 +3509,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .await
                 };
 
+                if initial_filesystem_storage_usage > 0 {
+                    record_storage_bytes_written(
+                        STORAGE_TYPE_FILESYSTEM,
+                        &component.account_id.to_string(),
+                        &component.environment_id.to_string(),
+                        initial_filesystem_storage_usage,
+                    );
+                }
+
                 {
                     let mut status = initial_status.load_full().as_ref().clone();
                     status.oplog_idx = oplog.current_oplog_index().await;
@@ -3504,7 +3558,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         oom_retry_count: u32,
         start_attempt: Uuid,
         worker_trace: WorkerTrace,
-        desired_extra_filesystem_storage: u64,
     ) {
         let mut instance_guard = this.instance.lock().await;
         match &*instance_guard {
@@ -3528,12 +3581,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
                 crate::metrics::workers::dec_worker_waiting_for_memory();
                 crate::metrics::workers::inc_worker_memory_resident();
-                let _ = this.desired_extra_filesystem_storage.compare_exchange(
-                    desired_extra_filesystem_storage,
-                    0,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                );
+                this.desired_extra_filesystem_storage
+                    .lock()
+                    .unwrap()
+                    .worker_started();
                 *instance_guard = WorkerInstance::Running(running);
             }
             _ => {
@@ -3813,9 +3864,8 @@ impl WaitingWorker {
             // We need to acquire `filesystem_storage_requirement + desired_extra` total:
             // - `filesystem_storage_requirement`: bytes to hold as the pre-acquired permit
             //   for replay (mirrors what the worker held before being evicted).
-            //   The old RunningWorker already returned these bytes to the pool
-            //   when it dropped, so the pool likely already has them — the
-            //   blocking acquire will find them without needing to evict anyone.
+            //   The previous permit-bank registration already returned these bytes to the pool,
+            //   so the blocking acquire will usually find them without evicting another worker.
             // - `desired_extra`: bytes for the write that triggered NodeOutOfFilesystemStorage.
             //   The pool may not have these yet, so the blocking acquire will
             //   evict idle workers only for the missing portion.
@@ -3824,13 +3874,15 @@ impl WaitingWorker {
             // it is available for the pending write to re-acquire at runtime.
             //
             // Example: prior writes = 3 KB, failing write needs 1 KB extra.
-            //   Old RunningWorker drops → 3 KB returned to pool.
+            //   Previous permit-bank registration drops → 3 KB returned to pool.
             //   acquire_bytes = 4 KB. Pool has 3 KB → 1 KB gap → evict 1 KB.
             //   Hold 3 KB as filesystem_storage_permit, release 1 KB → pool has 1 KB free.
             //   Pending write re-acquires 1 KB → succeeds.
             let desired_extra = parent
                 .desired_extra_filesystem_storage
-                .load(Ordering::Relaxed);
+                .lock()
+                .unwrap()
+                .bytes;
             let acquire_bytes = filesystem_storage_requirement + desired_extra;
             let filesystem_storage_permit = if acquire_bytes > 0 {
                 let phase_start = std::time::Instant::now();
@@ -3874,7 +3926,6 @@ impl WaitingWorker {
                 oom_retry_count,
                 start_attempt,
                 worker_trace,
-                desired_extra,
             )
             .await;
             // If we do not start the worker here we will drop the permits here, which will release them to the host.
@@ -4686,6 +4737,23 @@ mod tests {
     use super::*;
     use golem_common::model::oplog::AgentError;
     use test_r::test;
+
+    #[test]
+    fn terminal_interrupt_rejects_late_filesystem_storage_retry_demand() {
+        let mut desired = DesiredFilesystemStorage {
+            bytes: 0,
+            accepting_retries: true,
+        };
+
+        desired.record_retry(1024);
+        desired.stop_retrying();
+        desired.record_retry(2048);
+        assert_eq!(desired.bytes, 0);
+
+        desired.worker_started();
+        desired.record_retry(4096);
+        assert_eq!(desired.bytes, 4096);
+    }
 
     #[test]
     fn allocated_memory_sums_unique_untouched_backings() -> anyhow::Result<()> {

@@ -146,8 +146,10 @@ impl FilesystemStorageSemaphore {
                     let available = self.semaphore.available_permits() as u32;
                     let shortfall = permits.saturating_sub(available);
                     debug!(
-                        "Not enough storage to allocate {} permits (available: {}), trying to free {} permits",
-                        permits, available, shortfall
+                        requested_permits = permits,
+                        available_permits = available,
+                        shortfall_permits = shortfall,
+                        "Not enough filesystem storage permits; trying to free capacity"
                     );
                     if try_free_up(filesystem_storage_permits_to_bytes(shortfall)).await {
                         debug!("Freed up some storage, retrying");

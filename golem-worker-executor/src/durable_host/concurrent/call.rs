@@ -3145,8 +3145,7 @@ where
         let storage_meter = store.with(|mut access| get_ctx(access.data_mut()).storage_meter());
         let storage_guard = storage_meter.lock_reservation().await;
         let prepared = match store.with(|mut access| {
-            get_ctx(access.data_mut())
-                .prepare_filesystem_storage_reservation(storage_growth, &storage_guard)
+            get_ctx(access.data_mut()).prepare_filesystem_storage_reservation(storage_growth)
         }) {
             Ok(prepared) => prepared,
             Err(error) => {
@@ -3154,6 +3153,7 @@ where
                 return Err(WorkerExecutorError::runtime(error.to_string()));
             }
         };
+        drop(storage_guard);
         if let Some((worker, reservation)) = prepared {
             match reservation.acquire_capacity(&worker).await {
                 Ok(()) => {}
@@ -3186,7 +3186,7 @@ where
 
     if let Some(error) = update_error {
         restore_initial_files_access(store, get_ctx, files)?;
-        commit_revision_update_storage_access(
+        commit_revision_update_storage_reservation(
             store,
             get_ctx,
             storage_reservation.take(),
@@ -3196,7 +3196,7 @@ where
         return Err(error);
     }
 
-    commit_revision_update_storage_access(
+    commit_revision_update_storage_reservation(
         store,
         get_ctx,
         storage_reservation.take(),
@@ -3211,7 +3211,7 @@ where
     })
 }
 
-async fn commit_revision_update_storage_access<T, D, Ctx>(
+async fn commit_revision_update_storage_reservation<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     reservation: Option<FilesystemStorageReservation>,

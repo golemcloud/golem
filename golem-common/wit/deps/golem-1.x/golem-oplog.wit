@@ -589,6 +589,7 @@ interface oplog {
         parent: option<agent-id>,
         component-size: u64,
         initial-total-linear-memory-size: u64,
+        initial-filesystem-storage-usage: u64,
         initial-active-plugins: list<environment-plugin-grant-id>,
         local-agent-config: list<raw-local-agent-config-entry>,
         original-phantom-id: option<uuid>,

@@ -22,6 +22,19 @@ pub trait P3FileSystem {
         second_path: String,
         len: u64,
     ) -> Vec<u64>;
+    async fn p2_stream_then_p3_set_size(
+        &self,
+        path: String,
+        write_len: u64,
+        new_size: u64,
+    ) -> u64;
+    async fn replace_file(
+        &self,
+        source: String,
+        destination: String,
+        source_len: u64,
+        destination_len: u64,
+    ) -> u64;
     async fn sleep_for(&self, seconds: f64);
 }
 
@@ -469,6 +482,87 @@ impl P3FileSystem for P3FileSystemImpl {
             first.stat().await.expect("P3 first stat failed").size,
             second.stat().await.expect("P3 second stat failed").size,
         ]
+    }
+
+    async fn p2_stream_then_p3_set_size(
+        &self,
+        path: String,
+        write_len: u64,
+        new_size: u64,
+    ) -> u64 {
+        let (root_p2, _) = p2_preopens::get_directories()
+            .into_iter()
+            .next()
+            .expect("no P2 preopened directory");
+        let file_p2 = root_p2
+            .open_at(
+                p2_types::PathFlags::empty(),
+                &path,
+                p2_types::OpenFlags::CREATE,
+                p2_types::DescriptorFlags::WRITE,
+            )
+            .expect("P2 create failed");
+        let stream = file_p2
+            .write_via_stream(0)
+            .expect("P2 write_via_stream failed");
+        stream
+            .write_zeroes(write_len)
+            .expect("P2 stream write failed");
+
+        let (root_p3, _) = p3_preopens::get_directories()
+            .into_iter()
+            .next()
+            .expect("no P3 preopened directory");
+        let file_p3 = root_p3
+            .open_at(
+                p3_types::PathFlags::empty(),
+                path,
+                p3_types::OpenFlags::empty(),
+                p3_types::DescriptorFlags::READ | p3_types::DescriptorFlags::WRITE,
+            )
+            .await
+            .expect("P3 open failed");
+        file_p3
+            .set_size(new_size)
+            .await
+            .expect("P3 set_size failed");
+        file_p3.stat().await.expect("P3 stat failed").size
+    }
+
+    async fn replace_file(
+        &self,
+        source: String,
+        destination: String,
+        source_len: u64,
+        destination_len: u64,
+    ) -> u64 {
+        let (root, _) = p3_preopens::get_directories()
+            .into_iter()
+            .next()
+            .expect("no P3 preopened directory");
+        for (path, len) in [(&source, source_len), (&destination, destination_len)] {
+            let file = root
+                .open_at(
+                    p3_types::PathFlags::empty(),
+                    path.clone(),
+                    p3_types::OpenFlags::CREATE,
+                    p3_types::DescriptorFlags::WRITE,
+                )
+                .await
+                .expect("P3 create failed");
+            let (mut writer, reader) = wit_stream::new::<u8>();
+            let write = file.write_via_stream(reader, 0);
+            assert!(writer.write_all(vec![0; len as usize]).await.is_empty());
+            drop(writer);
+            write.await.expect("P3 write failed");
+        }
+        root.rename_at(source, &root, destination.clone())
+            .await
+            .expect("P3 rename failed");
+        root.stat_at(p3_types::PathFlags::empty(), destination)
+            .await
+            .expect("P3 destination stat failed")
+            .size
     }
 
     async fn sleep_for(&self, seconds: f64) {

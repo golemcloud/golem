@@ -703,9 +703,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// Called when the agent enters idle state. No-op if already released.
     fn release_concurrent_agent_permit(&mut self) {
         if let Some(permit) = self.concurrent_agent_permit.take() {
-            let now = Instant::now();
-            self.linear_memory.pause(now);
-            self.storage_meter.pause(now);
+            pause_resource_meters(&self.linear_memory, &self.storage_meter);
             debug!(agent_id = %self.owned_agent_id.agent_id, "Releasing concurrent-agent permit (entering idle)");
             drop(permit);
         }
@@ -727,9 +725,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             .instrument(span)
             .await;
             *self.concurrent_agent_permit = Some(permit);
-            let now = Instant::now();
-            self.linear_memory.resume(now);
-            self.storage_meter.resume(now);
+            resume_resource_meters(&self.linear_memory, &self.storage_meter);
         }
     }
 
@@ -1003,6 +999,24 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     async fn interrupt(&self, interrupt: PendingWorkerInterrupt) -> CommandOutcome {
         CommandOutcome::BreakInnerLoop(interrupt.retry_decision())
     }
+}
+
+fn pause_resource_meters(
+    linear_memory: &crate::services::linear_memory::LinearMemoryTracker,
+    storage_meter: &crate::services::agent_storage_meter::AgentStorageMeter,
+) {
+    let now = Instant::now();
+    linear_memory.pause(now);
+    storage_meter.pause(now);
+}
+
+fn resume_resource_meters(
+    linear_memory: &crate::services::linear_memory::LinearMemoryTracker,
+    storage_meter: &crate::services::agent_storage_meter::AgentStorageMeter,
+) {
+    let now = Instant::now();
+    linear_memory.resume(now);
+    storage_meter.resume(now);
 }
 
 async fn take_pending_interrupt(
@@ -1835,9 +1849,13 @@ fn snapshot_action_at(
 mod tests {
     use super::{
         CommandOutcome, PeriodicSnapshotAction, failed_agent_invocation_outcome,
-        periodic_snapshot_failure_outcome, snapshot_action_at, snapshot_baseline_timestamp,
-        successful_agent_invocation_outcome,
+        pause_resource_meters, periodic_snapshot_failure_outcome, resume_resource_meters,
+        snapshot_action_at, snapshot_baseline_timestamp, successful_agent_invocation_outcome,
     };
+    use crate::services::active_workers::MemoryGrant;
+    use crate::services::agent_storage_meter::AgentStorageMeter;
+    use crate::services::linear_memory::LinearMemoryTracker;
+    use crate::services::resource_limits::AtomicResourceEntry;
     use crate::worker::RetryDecision;
     use crate::worker::invocation::InvokeResult;
     use golem_common::model::AgentInvocationKind;
@@ -1845,7 +1863,8 @@ mod tests {
     use golem_common::model::oplog::AgentError;
     use golem_common::model::{OplogIndex, Timestamp};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
-    use std::time::Duration;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
     use test_r::test;
 
     #[test]
@@ -1855,6 +1874,34 @@ mod tests {
         let baseline = snapshot_baseline_timestamp(None, created_at);
 
         assert_eq!(baseline, created_at);
+    }
+
+    #[test]
+    fn resource_meters_share_pause_and_resume_timestamps() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let now = Instant::now();
+        let linear_memory = LinearMemoryTracker::new(
+            10,
+            10,
+            AgentMode::Durable,
+            false,
+            entry.clone(),
+            Arc::new(Mutex::new(MemoryGrant::inert(0))),
+            now,
+        );
+        let storage_meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry, now);
+
+        pause_resource_meters(&linear_memory, &storage_meter);
+        assert_eq!(
+            linear_memory.meter().last_sample(),
+            storage_meter.last_sample()
+        );
+
+        resume_resource_meters(&linear_memory, &storage_meter);
+        assert_eq!(
+            linear_memory.meter().last_sample(),
+            storage_meter.last_sample()
+        );
     }
 
     #[test]

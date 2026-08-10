@@ -1069,7 +1069,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 parent: params.parent.map(golem_common::model::AgentId::from),
                 component_size: params.component_size,
                 initial_total_linear_memory_size: params.initial_total_linear_memory_size,
-                initial_filesystem_storage_usage: 0,
+                initial_filesystem_storage_usage: params.initial_filesystem_storage_usage,
                 initial_active_plugins: params
                     .initial_active_plugins
                     .into_iter()
@@ -1770,7 +1770,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 parent,
                 component_size,
                 initial_total_linear_memory_size,
-                initial_filesystem_storage_usage: _,
+                initial_filesystem_storage_usage,
                 initial_active_plugins,
                 local_agent_config,
                 original_phantom_id,
@@ -1789,6 +1789,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 parent: parent.map(|id| id.into()),
                 component_size,
                 initial_total_linear_memory_size,
+                initial_filesystem_storage_usage,
                 initial_active_plugins: initial_active_plugins
                     .into_iter()
                     .map(|g| g.into())
@@ -2230,5 +2231,51 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 },
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::agent::AgentMode;
+    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::{AgentId, oplog::OplogEntry};
+    use test_r::test;
+    use uuid::Uuid;
+
+    #[test]
+    fn raw_create_filesystem_baseline_roundtrips_through_wit() {
+        let entry = OplogEntry::create(
+            AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "baseline-roundtrip".to_string(),
+            },
+            AgentMode::Durable,
+            ComponentRevision::INITIAL,
+            vec![],
+            EnvironmentId::new(),
+            AccountId::new(),
+            None,
+            0,
+            0,
+            123,
+            Default::default(),
+            vec![],
+            None,
+            Uuid::new_v4(),
+        );
+
+        let raw = oplog::OplogEntry::try_from(entry).unwrap();
+        let decoded = OplogEntry::try_from(raw).unwrap();
+
+        assert!(matches!(
+            decoded,
+            OplogEntry::Create {
+                initial_filesystem_storage_usage: 123,
+                ..
+            }
+        ));
     }
 }

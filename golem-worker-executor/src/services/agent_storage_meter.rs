@@ -39,15 +39,18 @@ pub struct FilesystemStoragePermitBank {
     state: Mutex<FilesystemStoragePermitBankState>,
 }
 
+#[derive(Debug)]
+struct FilesystemStoragePermitGeneration;
+
 #[derive(Debug, Default)]
 struct FilesystemStoragePermitBankState {
     permit: Option<FilesystemStoragePermit>,
-    generation: Option<Arc<()>>,
+    generation: Option<Arc<FilesystemStoragePermitGeneration>>,
 }
 
 pub struct FilesystemStoragePermitRegistration {
     bank: Arc<FilesystemStoragePermitBank>,
-    generation: Arc<()>,
+    generation: Arc<FilesystemStoragePermitGeneration>,
 }
 
 impl Drop for FilesystemStoragePermitRegistration {
@@ -69,7 +72,7 @@ impl FilesystemStoragePermitBank {
         self: &Arc<Self>,
         permit: Option<FilesystemStoragePermit>,
     ) -> FilesystemStoragePermitRegistration {
-        let generation = Arc::new(());
+        let generation = Arc::new(FilesystemStoragePermitGeneration);
         let mut state = self.state.lock().unwrap();
         assert!(
             state.generation.is_none(),
@@ -83,7 +86,7 @@ impl FilesystemStoragePermitBank {
         }
     }
 
-    fn generation(&self) -> Option<Weak<()>> {
+    fn generation(&self) -> Option<Weak<FilesystemStoragePermitGeneration>> {
         self.state
             .lock()
             .unwrap()
@@ -94,7 +97,7 @@ impl FilesystemStoragePermitBank {
 
     fn is_current_generation(
         state: &FilesystemStoragePermitBankState,
-        generation: &Option<Weak<()>>,
+        generation: &Option<Weak<FilesystemStoragePermitGeneration>>,
     ) -> bool {
         match (&state.generation, generation) {
             (None, None) => true,
@@ -105,7 +108,11 @@ impl FilesystemStoragePermitBank {
         }
     }
 
-    fn merge(&self, generation: &Option<Weak<()>>, permit: Option<FilesystemStoragePermit>) {
+    fn merge(
+        &self,
+        generation: &Option<Weak<FilesystemStoragePermitGeneration>>,
+        permit: Option<FilesystemStoragePermit>,
+    ) {
         let Some(permit) = permit else {
             return;
         };
@@ -119,7 +126,7 @@ impl FilesystemStoragePermitBank {
         }
     }
 
-    fn reconcile(&self, generation: &Option<Weak<()>>, bytes: u64) {
+    fn reconcile(&self, generation: &Option<Weak<FilesystemStoragePermitGeneration>>, bytes: u64) {
         let target = bytes_to_filesystem_storage_permits(bytes) as usize;
         let mut state = self.state.lock().unwrap();
         if !Self::is_current_generation(&state, generation) {
@@ -150,7 +157,10 @@ impl FilesystemStoragePermitBank {
         state.permit.take();
     }
 
-    fn held_bytes_for(&self, generation: &Option<Weak<()>>) -> Option<u64> {
+    fn held_bytes_for(
+        &self,
+        generation: &Option<Weak<FilesystemStoragePermitGeneration>>,
+    ) -> Option<u64> {
         let state = self.state.lock().unwrap();
         Self::is_current_generation(&state, generation).then(|| {
             filesystem_storage_permits_to_bytes(
@@ -192,7 +202,7 @@ struct Inner {
     state: Mutex<State>,
     reservation_lock: Arc<tokio::sync::Mutex<()>>,
     capacity: Arc<FilesystemStoragePermitBank>,
-    capacity_generation: Option<Weak<()>>,
+    capacity_generation: Option<Weak<FilesystemStoragePermitGeneration>>,
 }
 
 #[derive(Debug)]
@@ -256,23 +266,6 @@ impl AgentStorageMeter {
         }
         let host_bytes = host_capacity_delta(before, after);
         state.reserved_bytes = state.reserved_bytes.saturating_add(bytes);
-        Some(host_bytes)
-    }
-
-    pub fn extend_reservation(
-        &self,
-        _reservation_bytes: u64,
-        additional_bytes: u64,
-        limit: u64,
-    ) -> Option<u64> {
-        let mut state = self.inner.state.lock().unwrap();
-        let before = state.bytes.saturating_add(state.reserved_bytes);
-        let after = before.saturating_add(additional_bytes);
-        if after > limit {
-            return None;
-        }
-        let host_bytes = host_capacity_delta(before, after);
-        state.reserved_bytes = state.reserved_bytes.saturating_add(additional_bytes);
         Some(host_bytes)
     }
 
@@ -360,6 +353,11 @@ impl AgentStorageMeter {
 
     pub fn pause(&self, now: Instant) {
         self.inner.transition(now, |state| state.active = false);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_sample(&self) -> Instant {
+        self.inner.state.lock().unwrap().last_sample
     }
 
     pub fn stop(&self, now: Instant) {
@@ -456,7 +454,6 @@ impl Drop for Inner {
 mod tests {
     use super::*;
     use crate::services::active_workers::FilesystemStorageSemaphore;
-    use proptest::prelude::*;
     use std::time::Duration;
     use test_r::test;
 
@@ -587,9 +584,9 @@ mod tests {
         let meter = AgentStorageMeter::new(AgentMode::Durable, 0, entry, now);
 
         assert_eq!(meter.reserve(4, 2048), Some(1024));
-        assert_eq!(meter.extend_reservation(4, 4, 2048), Some(0));
-        assert_eq!(meter.extend_reservation(8, 1020, 2048), Some(1024));
-        assert_eq!(meter.extend_reservation(1028, 1021, 2048), None);
+        assert_eq!(meter.reserve(4, 2048), Some(0));
+        assert_eq!(meter.reserve(1020, 2048), Some(1024));
+        assert_eq!(meter.reserve(1021, 2048), None);
     }
 
     async fn acquire_capacity(
@@ -779,35 +776,25 @@ mod tests {
         assert_eq!(current_capacity_bytes(&capacity), 2048);
     }
 
-    proptest! {
-        #[test]
-        fn integrates_arbitrary_monotonic_storage_changes(
-            operations in prop::collection::vec((0u8..3, 0u64..1024, 1u64..5), 1..100),
-        ) {
-            let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-            let mut now = Instant::now();
-            let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
-            let mut bytes = 10u64;
-            let mut expected = 0u64;
+    #[test]
+    fn subsecond_remainders_cross_transitions_without_drift() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let now = Instant::now();
+        let meter = AgentStorageMeter::new(AgentMode::Durable, 3, entry.clone(), now);
 
-            for (operation, amount, elapsed_seconds) in operations {
-                now += Duration::from_secs(elapsed_seconds);
-                expected += bytes * elapsed_seconds;
+        meter.flush(now + Duration::from_millis(250));
+        assert_eq!(entry.durable_byte_seconds_delta(), 0);
 
-                match operation {
-                    0 => {
-                        meter.on_acquire(amount, now);
-                        bytes = bytes.saturating_add(amount);
-                    }
-                    1 => {
-                        meter.on_release(amount, now);
-                        bytes = bytes.saturating_sub(amount);
-                    }
-                    _ => meter.flush(now),
-                }
-            }
+        meter.on_acquire(1, now + Duration::from_millis(500));
+        assert_eq!(entry.durable_byte_seconds_delta(), 1);
 
-            prop_assert_eq!(entry.durable_byte_seconds_delta(), expected as i64);
-        }
+        meter.on_release(2, now + Duration::from_millis(750));
+        assert_eq!(entry.durable_byte_seconds_delta(), 2);
+
+        meter.pause(now + Duration::from_secs(1));
+        assert_eq!(entry.durable_byte_seconds_delta(), 3);
+        meter.resume(now + Duration::from_millis(1250));
+        meter.flush(now + Duration::from_millis(1750));
+        assert_eq!(entry.durable_byte_seconds_delta(), 4);
     }
 }

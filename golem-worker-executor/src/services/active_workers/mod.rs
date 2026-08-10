@@ -468,7 +468,9 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
         debug!("Collecting storage eviction candidates");
         for (agent_id, worker) in workers.iter().await {
-            if let Some(class) = worker.eviction_class().await {
+            if worker.held_filesystem_storage_bytes() > 0
+                && let Some(class) = worker.eviction_class().await
+            {
                 let last_changed = worker.last_execution_state_change();
                 let entry = (agent_id, worker, last_changed);
                 match class {
@@ -486,31 +488,32 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
         let mut freed: u64 = 0;
 
-        // First evict LoadedIdle workers
-        while freed < storage_bytes && !idle_candidates.is_empty() {
-            let (agent_id, worker, _) = idle_candidates.pop().unwrap();
-            debug!("Trying to stop idle {agent_id} to free up storage");
-            if let Some(storage) = worker
-                .stop_if_evictable(crate::worker::EvictionClass::LoadedIdle)
-                .await
+        for (class, candidates, metric_label) in [
+            (
+                crate::worker::EvictionClass::LoadedIdle,
+                &mut idle_candidates,
+                "LoadedIdle",
+            ),
+            (
+                crate::worker::EvictionClass::WarmRunnable,
+                &mut warm_candidates,
+                "WarmRunnable",
+            ),
+        ] {
+            while freed < storage_bytes
+                && let Some((agent_id, worker, _)) = candidates.pop()
             {
-                debug!("Stopped idle {agent_id}, freed {storage} bytes of storage");
-                crate::metrics::workers::record_worker_eviction("LoadedIdle");
-                freed += storage;
-            }
-        }
-
-        // Then evict WarmRunnable workers if still under pressure
-        while freed < storage_bytes && !warm_candidates.is_empty() {
-            let (agent_id, worker, _) = warm_candidates.pop().unwrap();
-            debug!("Trying to stop warm-runnable {agent_id} to free up storage");
-            if let Some(storage) = worker
-                .stop_if_evictable(crate::worker::EvictionClass::WarmRunnable)
-                .await
-            {
-                debug!("Stopped warm-runnable {agent_id}, freed {storage} bytes of storage");
-                crate::metrics::workers::record_worker_eviction("WarmRunnable");
-                freed += storage;
+                debug!(%agent_id, ?class, "Trying to stop worker to free filesystem storage");
+                if let Some(storage) = worker.stop_if_evictable(class).await {
+                    debug!(
+                        %agent_id,
+                        ?class,
+                        storage,
+                        "Stopped worker and freed filesystem storage"
+                    );
+                    crate::metrics::workers::record_worker_eviction(metric_label);
+                    freed += storage;
+                }
             }
         }
 

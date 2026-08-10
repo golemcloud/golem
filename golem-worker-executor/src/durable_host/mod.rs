@@ -167,9 +167,9 @@ enum WorkerDir {
     Deterministic(PathBuf),
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct FilesystemMutationRegistry {
-    state: Mutex<FilesystemMutationRegistryState>,
+    state: Arc<Mutex<FilesystemMutationRegistryState>>,
 }
 
 #[derive(Default)]
@@ -179,17 +179,38 @@ struct FilesystemMutationRegistryState {
 }
 
 impl FilesystemMutationRegistry {
+    fn normalized_path_key(path: &Path) -> PathBuf {
+        let mut normalized = PathBuf::new();
+        let rooted = path.has_root();
+        for component in path.components() {
+            match component {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    let can_pop = normalized
+                        .file_name()
+                        .is_some_and(|name| name != std::ffi::OsStr::new(".."));
+                    if can_pop {
+                        normalized.pop();
+                    } else if !rooted {
+                        normalized.push(component.as_os_str());
+                    }
+                }
+                _ => normalized.push(component.as_os_str()),
+            }
+        }
+        normalized
+    }
+
     fn lock(&self, path: &Path) -> Arc<tokio::sync::Mutex<()>> {
+        let path = Self::normalized_path_key(path);
         let mut state = self.state.lock().unwrap();
-        if let Some(lock) = state.locks.get(path).and_then(Weak::upgrade) {
+        if let Some(lock) = state.locks.get(&path).and_then(Weak::upgrade) {
             return lock;
         }
 
         state.locks.retain(|_, lock| lock.strong_count() > 0);
         let lock = Arc::new(tokio::sync::Mutex::new(()));
-        state
-            .locks
-            .insert(path.to_path_buf(), Arc::downgrade(&lock));
+        state.locks.insert(path, Arc::downgrade(&lock));
         lock
     }
 
@@ -198,15 +219,37 @@ impl FilesystemMutationRegistry {
             .lock()
             .unwrap()
             .pending
-            .insert(path.to_path_buf());
+            .insert(Self::normalized_path_key(path));
     }
 
     fn clear_pending(&self, path: &Path) {
-        self.state.lock().unwrap().pending.remove(path);
+        self.state
+            .lock()
+            .unwrap()
+            .pending
+            .remove(&Self::normalized_path_key(path));
     }
 
     fn is_pending(&self, path: &Path) -> bool {
-        self.state.lock().unwrap().pending.contains(path)
+        self.state
+            .lock()
+            .unwrap()
+            .pending
+            .contains(&Self::normalized_path_key(path))
+    }
+
+    fn alias_paths(&self, old_path: &Path, new_path: &Path) {
+        let old_path = Self::normalized_path_key(old_path);
+        let new_path = Self::normalized_path_key(new_path);
+        let mut state = self.state.lock().unwrap();
+        let lock = state
+            .locks
+            .get(&old_path)
+            .and_then(Weak::upgrade)
+            .or_else(|| state.locks.get(&new_path).and_then(Weak::upgrade))
+            .unwrap_or_else(|| Arc::new(tokio::sync::Mutex::new(())));
+        state.locks.insert(old_path, Arc::downgrade(&lock));
+        state.locks.insert(new_path, Arc::downgrade(&lock));
     }
 
     #[cfg(test)]
@@ -521,6 +564,7 @@ impl FilesystemStorageReservation {
                     if latest < requested {
                         requested = latest;
                     } else {
+                        worker.record_desired_extra_filesystem_storage(requested);
                         return Err(error);
                     }
                 }
@@ -549,8 +593,8 @@ impl FilesystemStorageReservation {
         worker: Arc<Worker<Ctx>>,
         storage_meter: AgentStorageMeter,
         committed_bytes: u64,
-        account_id: String,
-        environment_id: String,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
     ) {
         let _guard = storage_meter.lock_reservation().await;
         if committed_bytes == 0 {
@@ -571,8 +615,8 @@ impl FilesystemStorageReservation {
         }
         record_storage_bytes_written(
             STORAGE_TYPE_FILESYSTEM,
-            &account_id,
-            &environment_id,
+            &account_id.to_string(),
+            &environment_id.to_string(),
             committed_bytes,
         );
     }
@@ -582,8 +626,8 @@ impl FilesystemStorageReservation {
         worker: Arc<Worker<Ctx>>,
         storage_meter: AgentStorageMeter,
         guard: Option<StorageAccountingGuard>,
-        account_id: String,
-        environment_id: String,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
     ) {
         let requested_bytes = self.logical_bytes;
         let _guard = match guard {
@@ -602,8 +646,8 @@ impl FilesystemStorageReservation {
         storage_meter.on_release(freed_bytes, Instant::now());
         record_storage_bytes_deleted(
             STORAGE_TYPE_FILESYSTEM,
-            &account_id,
-            &environment_id,
+            &account_id.to_string(),
+            &environment_id.to_string(),
             freed_bytes,
         );
     }
@@ -623,8 +667,8 @@ pub(crate) struct FilesystemStorageCommit<Ctx: WorkerCtx> {
     worker: Arc<Worker<Ctx>>,
     storage_meter: AgentStorageMeter,
     committed_bytes: u64,
-    account_id: String,
-    environment_id: String,
+    account_id: AccountId,
+    environment_id: EnvironmentId,
 }
 
 impl<Ctx: WorkerCtx> FilesystemStorageCommit<Ctx> {
@@ -1566,6 +1610,37 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.filesystem_mutations.lock(path)
     }
 
+    pub(crate) fn filesystem_mutation_key(&self, path: &Path) -> PathBuf {
+        FilesystemMutationRegistry::normalized_path_key(path)
+    }
+
+    pub(crate) fn rename_open_filesystem_stream_paths(&mut self, old_path: &Path, new_path: &Path) {
+        let old_path = self.filesystem_mutation_key(old_path);
+        let new_path = self.filesystem_mutation_key(new_path);
+        self.filesystem_mutations.alias_paths(&old_path, &new_path);
+        let aliases = self
+            .state
+            .open_filesystem_output_streams
+            .values()
+            .filter_map(|state| {
+                state
+                    .mutation_path
+                    .strip_prefix(&old_path)
+                    .ok()
+                    .map(|remainder| (state.mutation_path.clone(), new_path.join(remainder)))
+            })
+            .collect::<Vec<_>>();
+        for (old_stream_path, new_stream_path) in &aliases {
+            self.filesystem_mutations
+                .alias_paths(old_stream_path, new_stream_path);
+        }
+        for state in self.state.open_filesystem_output_streams.values_mut() {
+            if let Ok(remainder) = state.mutation_path.strip_prefix(&old_path) {
+                state.mutation_path = new_path.join(remainder);
+            }
+        }
+    }
+
     pub(crate) fn mark_filesystem_mutation_pending(&self, path: &Path) {
         self.filesystem_mutations.mark_pending(path);
     }
@@ -1607,35 +1682,31 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Called when files are deleted or truncated.
     /// During replay this is a no-op.
     pub async fn release_filesystem_storage_space(&mut self, freed_bytes: u64) {
-        if freed_bytes == 0 || self.state.is_replay() {
-            return;
+        if let Some((worker, reservation)) = self.prepare_filesystem_storage_release(freed_bytes) {
+            reservation
+                .release(
+                    worker,
+                    self.storage_meter.clone(),
+                    None,
+                    self.created_by(),
+                    self.state.owned_agent_id.environment_id,
+                )
+                .await;
         }
-        FilesystemStorageReservation {
-            logical_bytes: freed_bytes,
-            storage_meter: None,
-            finalized: false,
-        }
-        .release(
-            self.public_state.worker(),
-            self.storage_meter.clone(),
-            None,
-            self.created_by().to_string(),
-            self.state.owned_agent_id.environment_id().to_string(),
-        )
-        .await;
     }
 
-    pub(crate) async fn reserve_filesystem_storage_with_guard(
+    pub(crate) async fn reserve_filesystem_storage(
         &mut self,
         new_bytes: u64,
-        guard: StorageAccountingGuard,
     ) -> anyhow::Result<Option<FilesystemStorageReservation>> {
         if new_bytes == 0 || self.state.is_replay() {
             return Ok(None);
         }
+        let guard = self.storage_meter.lock_reservation().await;
         let (worker, reservation) = self
-            .prepare_filesystem_storage_reservation(new_bytes, &guard)?
+            .prepare_filesystem_storage_reservation(new_bytes)?
             .expect("live non-zero reservation must be prepared");
+        drop(guard);
         reservation.acquire_capacity(&worker).await?;
         Ok(Some(reservation))
     }
@@ -1643,7 +1714,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) fn prepare_filesystem_storage_reservation(
         &mut self,
         new_bytes: u64,
-        _guard: &StorageAccountingGuard,
     ) -> anyhow::Result<Option<(Arc<Worker<Ctx>>, FilesystemStorageReservation)>> {
         if new_bytes == 0 || self.state.is_replay() {
             return Ok(None);
@@ -1666,34 +1736,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         )))
     }
 
-    pub(crate) fn prepare_filesystem_storage_reservation_extension(
-        &mut self,
-        reservation_bytes: u64,
-        additional_bytes: u64,
-        _guard: &StorageAccountingGuard,
-    ) -> anyhow::Result<Option<(Arc<Worker<Ctx>>, FilesystemStorageReservation)>> {
-        if additional_bytes == 0 || self.state.is_replay() {
-            return Ok(None);
-        }
-        let Some(_host_bytes) = self.storage_meter.extend_reservation(
-            reservation_bytes,
-            additional_bytes,
-            self.resource_limits.max_disk_space_limit(),
-        ) else {
-            return Err(anyhow!(
-                GolemSpecificWasmTrap::WorkerAgentExceededFilesystemStorageLimit
-            ));
-        };
-        Ok(Some((
-            self.public_state.worker(),
-            FilesystemStorageReservation {
-                logical_bytes: additional_bytes,
-                storage_meter: Some(self.storage_meter.clone()),
-                finalized: false,
-            },
-        )))
-    }
-
     pub(crate) fn prepare_filesystem_storage_reservation_commit(
         &self,
         reservation: &FilesystemStorageReservation,
@@ -1707,8 +1749,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             worker: self.public_state.worker(),
             storage_meter: self.storage_meter.clone(),
             committed_bytes,
-            account_id: self.created_by().to_string(),
-            environment_id: self.state.owned_agent_id.environment_id().to_string(),
+            account_id: self.created_by(),
+            environment_id: self.state.owned_agent_id.environment_id,
         })
     }
 
@@ -3656,9 +3698,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let reservation = if storage_growth == 0 {
                 None
             } else {
-                let storage_guard = self.storage_meter.lock_reservation().await;
-                self.reserve_filesystem_storage_with_guard(storage_growth, storage_guard)
-                    .await?
+                self.reserve_filesystem_storage(storage_growth).await?
             };
             let update_result = {
                 let mut current_files = self.state.files.write().await;
@@ -3892,12 +3932,17 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     ) -> RetryDecision {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
-        if self.state.is_live()
-            && self.state.snapshotting_mode.is_none()
-            && let Err(err) = concurrent::drain_queued_dropped_call_events(self).await
-        {
-            error!("failed to drain dropped durable calls before invocation failure entry: {err}");
-            return RetryDecision::None;
+        if self.state.is_live() && self.state.snapshotting_mode.is_none() {
+            if let Err(err) = io::streams::reconcile_all_pending_filesystem_streams(self).await {
+                error!("failed to reconcile filesystem streams before invocation failure: {err}");
+                return RetryDecision::None;
+            }
+            if let Err(err) = concurrent::drain_queued_dropped_call_events(self).await {
+                error!(
+                    "failed to drain dropped durable calls before invocation failure entry: {err}"
+                );
+                return RetryDecision::None;
+            }
         }
 
         if let TrapType::Error { error, .. } = trap_type {
@@ -4037,6 +4082,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         if is_live {
             if self.state.snapshotting_mode.is_none() {
+                io::streams::reconcile_all_pending_filesystem_streams(self)
+                    .await
+                    .map_err(|err| WorkerExecutorError::runtime(err.to_string()))?;
                 concurrent::drain_queued_dropped_call_events(self)
                     .await
                     .map_err(|err| err.source)?;
@@ -4985,6 +5033,16 @@ mod tests {
     }
 
     #[test]
+    fn filesystem_mutation_registry_reuses_lexical_alias_lock() {
+        let registry = FilesystemMutationRegistry::default();
+        let direct = registry.lock(Path::new("dir/file"));
+        let alias = registry.lock(Path::new("dir/./nested/../file"));
+
+        assert!(Arc::ptr_eq(&direct, &alias));
+        assert_eq!(registry.lock_count(), 1);
+    }
+
+    #[test]
     fn filesystem_mutation_registry_prunes_expired_path_locks() {
         let registry = FilesystemMutationRegistry::default();
         drop(registry.lock(Path::new("expired")));
@@ -5004,6 +5062,16 @@ mod tests {
         assert!(!second.is_pending(path));
         first.clear_pending(path);
         assert!(!first.is_pending(path));
+    }
+
+    #[test]
+    fn filesystem_mutation_registry_pending_state_matches_lexical_aliases() {
+        let registry = FilesystemMutationRegistry::default();
+
+        registry.mark_pending(Path::new("dir/file"));
+        assert!(registry.is_pending(Path::new("dir/./file")));
+        registry.clear_pending(Path::new("dir/nested/../file"));
+        assert!(!registry.is_pending(Path::new("dir/file")));
     }
 
     #[test]
@@ -6443,11 +6511,17 @@ struct ActiveDurableScope {
 
 #[derive(Debug)]
 pub(crate) struct FilesystemOutputStreamState {
-    pub descriptor_rep: u32,
     pub mutation_path: PathBuf,
+    pub file: Arc<cap_std::fs::File>,
     pub position: Option<u64>,
     pub pending_write: bool,
     pub pending_reservation: Option<PendingFilesystemReservation>,
+}
+
+#[derive(Debug)]
+pub(crate) struct FilesystemInputStreamState {
+    pub file: Arc<cap_std::fs::File>,
+    pub position: u64,
 }
 
 #[derive(Debug)]
@@ -6598,7 +6672,9 @@ struct PrivateDurableWorkerState {
     /// Reps of file-backed wasi input streams created by `read_via_stream`. Used together with
     /// [`Self::file_stream_pollables`] to identify pollables whose backing operation re-executes
     /// during replay.
-    open_filesystem_input_streams: HashSet<u32>,
+    open_filesystem_input_streams: HashMap<u32, FilesystemInputStreamState>,
+    open_p2_filesystem_descriptors: HashSet<u32>,
+    open_p3_filesystem_descriptors: HashSet<u32>,
 
     /// Reps of pollables subscribed to file-backed input/output streams. Reads/writes on file
     /// streams are not persisted — they re-execute against the restored filesystem during replay —
@@ -6960,7 +7036,9 @@ impl PrivateDurableWorkerState {
             pending_http_outgoing_body_stream: HashMap::new(),
             pending_http_retry_eligibility: HashMap::new(),
             open_filesystem_output_streams: HashMap::new(),
-            open_filesystem_input_streams: HashSet::new(),
+            open_filesystem_input_streams: HashMap::new(),
+            open_p2_filesystem_descriptors: HashSet::new(),
+            open_p3_filesystem_descriptors: HashSet::new(),
             file_stream_pollables: HashSet::new(),
             tcp_taken_streams: HashMap::new(),
             snapshotting_mode: None,
