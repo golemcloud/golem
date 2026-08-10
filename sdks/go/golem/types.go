@@ -180,6 +180,22 @@ func (r Result[Ok, Err]) OkOr(def Ok) Ok {
 	return r.ok
 }
 
+// MustOk returns the success value, or panics with the failure as a Go error if
+// the Result is a failure. It is the fail-loud shorthand for the common
+// "propagate the failure" case and is equivalent to golem.Must(r.Get()):
+//
+//	total := ledger.Record.Call(l, in).MustOk()
+//
+// The panic carries the Err arm as an error — a data-typed Err is wrapped in a
+// [ResultError] recoverable via errors.As, matching [Result.Get]. Use the typed
+// [Result.Ok]/[Result.Err] when you want the Err value in its own type.
+func (r Result[Ok, Err]) MustOk() Ok {
+	if r.isErr {
+		panic(asGoError(r.err))
+	}
+	return r.ok
+}
+
 // ResultError adapts a data-typed Err arm (one that is not itself an error) into
 // a Go error, so [Result.Get] can bridge to (value, error) without flattening the
 // typed payload — recover it with [errors.As]:

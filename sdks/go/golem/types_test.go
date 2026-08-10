@@ -46,7 +46,7 @@ func TestOptionHelpers(t *testing.T) {
 
 func TestResultHelpers(t *testing.T) {
 	ok := Ok[int, string](3)
-	if !ok.IsOk() || ok.IsErr() || ok.Ok() != 3 || ok.OkOr(9) != 3 {
+	if !ok.IsOk() || ok.IsErr() || ok.Ok() != 3 || ok.OkOr(9) != 3 || ok.MustOk() != 3 {
 		t.Fatal("Ok result")
 	}
 	if v, err := ok.Get(); err != nil || v != 3 {
@@ -60,6 +60,25 @@ func TestResultHelpers(t *testing.T) {
 
 	mustPanic(t, "Result.Ok() on a failed Result", func() { er.Ok() })
 	mustPanic(t, "Result.Err() on a successful Result", func() { ok.Err() })
+	mustPanic(t, "boom", func() { er.MustOk() })
+}
+
+// TestMustOkPanicsWithTypedError — MustOk panics with the same error Get() would
+// return, so a recover() can pull the typed Err payload back out via errors.As.
+func TestMustOkPanicsWithTypedError(t *testing.T) {
+	defer func() {
+		r := recover()
+		err, isErr := r.(error)
+		if !isErr {
+			t.Fatalf("MustOk should panic with an error, got %#v", r)
+		}
+		var re *ResultError[string]
+		if !errors.As(err, &re) || re.Value != "boom" {
+			t.Fatalf("panic did not carry the typed payload: %v", err)
+		}
+	}()
+	Err[int, string]("boom").MustOk()
+	t.Fatal("MustOk on a failed Result should have panicked")
 }
 
 // TestResultGetBridgesToError — Get returns (value, error): nil error on Ok, and
