@@ -73,8 +73,6 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-interactive-repl-go` | Interactive testing/scripting of agents via the REPL |
 | `golem-add-go-module` | Adding a Go module dependency |
 
-> Not yet available for Go (pending SDK support): LLM integration, Apache Ignite, and quota skills.
-
 # Golem Application Development Guide (Go)
 
 ## Overview
