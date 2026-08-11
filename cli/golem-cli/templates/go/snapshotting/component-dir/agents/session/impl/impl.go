@@ -1,10 +1,10 @@
-// Package sessionagentimpl is the IMPLEMENTATION of the session agent: its private
-// state, method handlers, and custom snapshot serialization. Importing it
-// registers the agent.
-package sessionagentimpl
+// Package impl is the IMPLEMENTATION of the session agent: its private state,
+// method handlers, and custom snapshot serialization. Importing it registers the
+// agent.
+package impl
 
 import (
-	"component-name/sessionagent"
+	"component-name/agents/session"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
 )
@@ -24,14 +24,14 @@ func (s *state) Load(b []byte) error {
 	return nil
 }
 
-var session = golem.Implement(sessionagent.Agent, func(sessionagent.SessionID) *state { return &state{} })
+var agent = golem.Implement(session.Agent, func(session.ID) *state { return &state{} })
 
 func init() {
-	golem.Handle(session, sessionagent.Spend, func(ctx *golem.Context[state], in sessionagent.SpendIn) int64 {
+	golem.Handle(agent, session.Spend, func(ctx *golem.Context[state], in session.SpendIn) int64 {
 		ctx.State.total += in.Amount
 		return ctx.State.total
 	})
-	golem.Handle(session, sessionagent.Total, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+	golem.Handle(agent, session.Total, func(ctx *golem.Context[state], _ golem.Unit) int64 {
 		return ctx.State.total
 	})
 }

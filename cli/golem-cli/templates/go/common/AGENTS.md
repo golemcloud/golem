@@ -78,26 +78,30 @@ Only customize when the *strategy* needs to change (different backoff, give-up c
 
 ```
 golem.yaml                        # Root application manifest
-<component>/                      # Component directory (each becomes a WASM component)
+<component>/                      # Component directory (each becomes a WASM component; its own Go module)
   golem.yaml                      # Component manifest
   go.mod                          # This component's module; pins the SDK and componentize-go
   main.go                         # package main — blank-imports the SDK + each agent's impl package
-  counteragent/                   # DEFINITION package — the agent's contract (no state)
-    counter.go                    #   package counteragent — DefineAgent + method descriptors + types
-  counteragentimpl/               # IMPLEMENTATION package — behaviour + private state
-    counter.go                    #   package counteragentimpl — golem.Implement (registers on import)
+  agents/                         # one folder per agent
+    counter/                      #   the counter agent
+      counter.go                  #     package counter — DEFINITION: DefineAgent + method descriptors + types
+      impl/
+        impl.go                   #     package impl — IMPLEMENTATION: golem.Implement (registers on import)
+  internal/                       # (optional) non-agent domain packages
 golem-temp/                       # Build artifacts (gitignored)
 ```
 
 Each component directory is **its own Go module** (its own `go.mod`), built to a separate WASM
-component. Within a component, every agent is split across two packages: a state-free **definition**
-(`<name>agent`) holding the identity, method descriptors, and input/output types; and an
-**implementation** (`<name>agentimpl`) holding the private state and the handlers. This split is what
-lets agents call one another without a Go import cycle — a caller imports only the callee's
-`<name>agent` definition package, never its implementation. `main.go` (`package main`) blank-imports
-the SDK and each agent's **implementation** package so their registration runs on import — the same
-blank-import-for-side-effects pattern Go uses for database drivers (`import _ "..."`). Adding an agent
-means adding a definition package, an implementation package, and a blank import to `main.go`.
+component. Within a component, each agent lives in `agents/<name>/`, split across two packages: a
+state-free **definition** (`package <name>`, e.g. `counter`) holding the identity, method descriptors,
+and input/output types; and an **implementation** in the nested `impl/` subpackage holding the private
+state and the handlers. This split is what lets agents call one another without a Go import cycle — a
+caller imports only the callee's definition package (`myapp/agents/ledger`, used as `ledger.Agent`,
+`ledger.Record`), never its implementation. `main.go` (`package main`) blank-imports the SDK and each
+agent's **impl** package so their registration runs on import — the same blank-import-for-side-effects
+pattern Go uses for database drivers (`import _ "..."`). Adding an agent means adding an
+`agents/<name>/` folder (a def file + an `impl/` subpackage) and a blank import to `main.go`. Non-agent
+domain code goes in `internal/`.
 
 ## Prerequisites
 
@@ -126,7 +130,7 @@ Wire names come from the SDK's declarations, not from Go identifiers:
 - Method descriptors must be **package-level vars** in the definition package: the same value drives
   the schema, the implementation binding and cross-agent calls.
 - State is **private to the implementation package** — a caller never sees it. Cross-agent calls go
-  through the definition: `client := ledgeragent.Agent.Get(id)` then `ledgeragent.Record.Call(client, in)`.
+  through the definition: `client := ledger.Agent.Get(id)` then `ledger.Record.Call(client, in)`.
   The client hangs off the definition and the call off the descriptor, because Go methods cannot
   introduce type parameters.
 - `main.go` (`package main`) holds an empty `func main() {}` plus a blank import of each agent's
