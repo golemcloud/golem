@@ -1947,10 +1947,13 @@ impl AgentCommandHandler {
                 .worker
                 .get_worker_metadata(&component_id.0, agent_id)
                 .await?;
+            // Aggregate across ALL update records for the target revision, then decide once.
+            // (Deciding per-record would act on whichever record comes first — spuriously erroring on
+            // a non-target record, or reporting a stale outcome instead of the most recent one.)
+            let mut pending_count = 0;
+            let mut successes = Vec::new();
+            let mut failures = Vec::new();
             for update_record in metadata.updates {
-                let mut latest_success = None;
-                let mut latest_failure = None;
-                let mut pending_count = 0;
                 match update_record {
                     UpdateRecord::PendingUpdate(details)
                         if details.target_revision == target_revision =>
@@ -1960,66 +1963,60 @@ impl AgentCommandHandler {
                     UpdateRecord::SuccessfulUpdate(details)
                         if details.target_revision == target_revision =>
                     {
-                        match latest_success {
-                            None => latest_success = Some(details),
-                            Some(previous_success)
-                                if previous_success.timestamp < details.timestamp =>
-                            {
-                                latest_success = Some(details);
-                            }
-                            _ => {}
-                        }
+                        successes.push(details);
                     }
                     UpdateRecord::FailedUpdate(details)
                         if details.target_revision == target_revision =>
                     {
-                        match latest_failure {
-                            None => latest_failure = Some(details),
-                            Some(previous_failure)
-                                if previous_failure.timestamp < details.timestamp =>
-                            {
-                                latest_failure = Some(details);
-                            }
-                            _ => {}
-                        }
+                        failures.push(details);
                     }
                     _ => {}
                 }
+            }
+            let latest_success = successes.into_iter().max_by(|a, b| {
+                a.timestamp
+                    .partial_cmp(&b.timestamp)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let latest_failure = failures.into_iter().max_by(|a, b| {
+                a.timestamp
+                    .partial_cmp(&b.timestamp)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
 
-                if pending_count > 0 {
-                    log_action("Agent update", "is still pending");
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                } else if let Some(success) = latest_success {
-                    log_action(
-                        "Agent update",
-                        format!(
-                            "to revision {} succeeded at {}",
-                            success.target_revision.to_string().log_color_highlight(),
-                            success.timestamp.to_string().log_color_highlight()
-                        ),
-                    );
-                    return Ok(());
-                } else if let Some(failure) = latest_failure {
-                    let error = failure.details.unwrap_or("unknown reason".to_string());
-                    log_error_action(
-                        "Agent update",
-                        format!(
-                            "to revision {} failed at {}: {}",
-                            failure.target_revision.to_string().log_color_highlight(),
-                            failure.timestamp.to_string().log_color_highlight(),
-                            error
-                        ),
-                    );
-                    return Err(anyhow!(error));
-                } else {
-                    log_error_action(
-                        "Agent update",
-                        "is not pending anymore, but no outcome has been found",
-                    );
-                    return Err(anyhow!(
-                        "Unexpected agent state: update is not pending anymore, but no outcome has been found"
-                    ));
-                }
+            if pending_count > 0 {
+                log_action("Agent update", "is still pending");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            } else if let Some(success) = latest_success {
+                log_action(
+                    "Agent update",
+                    format!(
+                        "to revision {} succeeded at {}",
+                        success.target_revision.to_string().log_color_highlight(),
+                        success.timestamp.to_string().log_color_highlight()
+                    ),
+                );
+                return Ok(());
+            } else if let Some(failure) = latest_failure {
+                let error = failure.details.unwrap_or("unknown reason".to_string());
+                log_error_action(
+                    "Agent update",
+                    format!(
+                        "to revision {} failed at {}: {}",
+                        failure.target_revision.to_string().log_color_highlight(),
+                        failure.timestamp.to_string().log_color_highlight(),
+                        error
+                    ),
+                );
+                return Err(anyhow!(error));
+            } else {
+                log_error_action(
+                    "Agent update",
+                    "is not pending anymore, but no outcome has been found",
+                );
+                return Err(anyhow!(
+                    "Unexpected agent state: update is not pending anymore, but no outcome has been found"
+                ));
             }
         }
     }
