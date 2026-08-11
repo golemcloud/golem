@@ -1,6 +1,6 @@
-// Package ledgeragent is the DEFINITION of the per-region ledger agent (the RPC
-// callee). The behaviour and state live in ledgeragentimpl.
-package ledgeragent
+// Package ledger is the DEFINITION of the per-region ledger agent (the RPC
+// callee). The behaviour and state live in ledger/impl.
+package ledger
 
 import "github.com/golemcloud/golem/sdks/go/golem"
 

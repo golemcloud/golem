@@ -1,16 +1,16 @@
 // Package main is the barrel for the agent-sdk-go test component: it blank-imports
 // each agent's IMPLEMENTATION package so their registration runs on import, and
-// blank-imports the SDK so its runtime is linked. Definitions live in the sibling
-// <name>agent packages; implementations in <name>agentimpl.
+// blank-imports the SDK so its runtime is linked. Agents live under agents/<name>/
+// (definition = package <name>, implementation = the impl subpackage).
 package main
 
 import (
-	_ "agent-sdk-go/configechoagentimpl"
-	_ "agent-sdk-go/counteragentimpl"
-	_ "agent-sdk-go/httpcallagentimpl"
-	_ "agent-sdk-go/ledgeragentimpl"
-	_ "agent-sdk-go/richtypesagentimpl"
-	_ "agent-sdk-go/rpccalleragentimpl"
+	_ "agent-sdk-go/agents/configecho/impl"
+	_ "agent-sdk-go/agents/counter/impl"
+	_ "agent-sdk-go/agents/httpcall/impl"
+	_ "agent-sdk-go/agents/ledger/impl"
+	_ "agent-sdk-go/agents/richtypes/impl"
+	_ "agent-sdk-go/agents/rpccaller/impl"
 
 	_ "github.com/golemcloud/golem/sdks/go/golem"
 )

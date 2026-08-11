@@ -1,6 +1,6 @@
-// Package rpccalleragent is the DEFINITION of the cross-agent RPC caller. The
-// behaviour lives in rpccalleragentimpl.
-package rpccalleragent
+// Package rpccaller is the DEFINITION of the cross-agent RPC caller. The
+// behaviour lives in rpccaller/impl.
+package rpccaller
 
 import "github.com/golemcloud/golem/sdks/go/golem"
 

@@ -21,4 +21,4 @@ tool github.com/bytecodealliance/componentize-go
 
 // Relative path to the in-repo SDK (like the Rust test components). The CLI's
 // build-check may re-point this at GOLEM_GO_PATH when set.
-replace github.com/golemcloud/golem/sdks/go/golem => ../../sdks/go/golem
+replace github.com/golemcloud/golem/sdks/go/golem => ../../../sdks/go/golem

@@ -1,6 +1,6 @@
-// Package richtypesagent is the DEFINITION of the composite-types agent. The
-// behaviour lives in richtypesagentimpl.
-package richtypesagent
+// Package richtypes is the DEFINITION of the composite-types agent. The
+// behaviour lives in richtypes/impl.
+package richtypes
 
 import "github.com/golemcloud/golem/sdks/go/golem"
 

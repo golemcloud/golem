@@ -1,6 +1,6 @@
-// Package httpcallagent is the DEFINITION of the durable outbound-HTTP agent used
-// by the replay tests. The behaviour lives in httpcallagentimpl.
-package httpcallagent
+// Package httpcall is the DEFINITION of the durable outbound-HTTP agent used
+// by the replay tests. The behaviour lives in httpcall/impl.
+package httpcall
 
 import "github.com/golemcloud/golem/sdks/go/golem"
 

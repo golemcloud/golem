@@ -1,7 +1,7 @@
-// Package counteragent is the DEFINITION of the durable counter agent: its
+// Package counter is the DEFINITION of the durable counter agent: its
 // identity, method descriptors, and input/output types. Other agents import this
-// package to call the counter; the behaviour and state live in counteragentimpl.
-package counteragent
+// package to call the counter; the behaviour and state live in counter/impl.
+package counter
 
 import "github.com/golemcloud/golem/sdks/go/golem"
 

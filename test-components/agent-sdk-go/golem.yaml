@@ -7,7 +7,7 @@ includes:
 
 components:
   golem-it:agent-sdk-go:
-    dir: "."
+    dir: "module"
     templates: go, go-test-component
 
 environments:

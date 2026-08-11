@@ -1,6 +1,6 @@
-// Package configechoagent is the DEFINITION of the configured echo agent. The
-// behaviour lives in configechoagentimpl.
-package configechoagent
+// Package configecho is the DEFINITION of the configured echo agent. The
+// behaviour lives in configecho/impl.
+package configecho
 
 import "github.com/golemcloud/golem/sdks/go/golem"
 
