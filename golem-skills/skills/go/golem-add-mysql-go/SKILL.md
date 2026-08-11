@@ -1,0 +1,175 @@
+---
+name: golem-add-mysql-go
+description: "Using MySQL from a Go Golem agent via the golem/rdbms/mysql wrapper. Use when the user asks to connect to MySQL, run SQL, scan rows, or execute a MySQL transaction in a Go Golem project."
+---
+
+# Using MySQL from a Go Agent
+
+## Overview
+
+The Go SDK ships a durable MySQL client at `github.com/golemcloud/golem/sdks/go/golem/rdbms/mysql`. It mirrors the `postgres` wrapper: open a connection with a URL, then run parametrised statements in a `database/sql`-flavoured style. Every query, execute, and commit is journaled and replayed, so the connection is durable across restarts.
+
+There is **no** native driver and **no** raw socket — all traffic goes through the `golem:rdbms` host, so nothing needs wiring beyond importing the subpackage. Unlike Postgres, MySQL has no recursive value families, so every value maps directly to a Go value.
+
+## Steps
+
+1. **Import** `.../golem/rdbms/mysql` in your agent's `impl` package.
+2. **Open** a connection with `mysql.Open(addr)` and `defer db.Close()`.
+3. **Exec / Query** with `?` placeholders; pass plain Go values or typed constructors.
+4. **Scan** rows with `row.Scan(&dst…)` or the typed getters.
+5. **Transactions** via `db.Transaction(func(tx *mysql.Tx) error { … })`.
+
+Prefer a config value or env var for the connection string over hardcoding it (see `golem-add-config-go`).
+
+## Definition (`agents/notes/notes.go`)
+
+```go
+// Package notes is the DEFINITION of the notes agent.
+package notes
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+type ID struct{ Name string }
+
+type AddIn struct {
+	Addr string
+	Body string
+}
+
+var Agent = golem.DefineAgent[ID](golem.Spec{
+	Name: "NotesAgent", Description: "Durable MySQL-backed notes",
+})
+
+var (
+	Add  = golem.DefineMethod[ID, AddIn, int64]("add", golem.Desc("Insert a note, return the new count"))
+	List = golem.DefineMethod[ID, golem.Unit, []string]("list", golem.Desc("Return all note bodies"))
+)
+```
+
+## Implementation (`agents/notes/impl/impl.go`)
+
+```go
+// Package impl is the IMPLEMENTATION of the notes agent.
+package impl
+
+import (
+	"myapp/agents/notes"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/rdbms/mysql"
+)
+
+type state struct{}
+
+var agent = golem.Implement(notes.Agent, func(notes.ID) *state { return &state{} })
+
+func init() {
+	golem.Handle(agent, notes.Add, func(_ *golem.Context[state], in notes.AddIn) int64 {
+		db := golem.Must(mysql.Open(in.Addr)) // "mysql://user:pass@host:3306/app"
+		defer db.Close()
+
+		golem.Must(db.Exec(`CREATE TABLE IF NOT EXISTS notes (
+			id bigint AUTO_INCREMENT PRIMARY KEY, body varchar(255) NOT NULL)`))
+
+		// Placeholders are ?; a bare Go string maps to varchar.
+		golem.Must(db.Exec(`INSERT INTO notes (body) VALUES (?)`, in.Body))
+
+		count := golem.Must(db.Query(`SELECT count(*) FROM notes`))
+		n, _ := count.Rows()[0].Int64(0) // read column 0 as int64
+		return n
+	})
+
+	golem.Handle(agent, notes.List, func(_ *golem.Context[state], _ golem.Unit) []string {
+		db := golem.Must(mysql.Open("mysql://user:pass@localhost:3306/app"))
+		defer db.Close()
+
+		rs := golem.Must(db.Query(`SELECT body FROM notes ORDER BY id`))
+		var out []string
+		for _, r := range rs.Rows() {
+			var body string
+			golem.Must0(r.Scan(&body)) // Scan fills dsts positionally
+			out = append(out, body)
+		}
+		return out
+	})
+}
+```
+
+`golem.Must` unwraps `(value, error)` and panics on error (aborting the invocation, which then retries per the agent's policy); `golem.Must0` does the same for an error-only return like `Scan`.
+
+## Parameters and Row Getters
+
+Parameters are ordinary Go values — `nil`, `bool`, the signed **and unsigned** int widths, `float32`/`float64`, `string`, `[]byte`, and `time.Time` map to their natural MySQL types:
+
+```go
+golem.Must(db.Exec(
+	`INSERT INTO events (id, name, qty, at) VALUES (?, ?, ?, ?)`,
+	int64(1), "alice", uint32(3), time.Now(),
+))
+```
+
+When the exact column type matters (decimal, a specific integer width, json, enum), build the parameter with a constructor from the package — each returns a `mysql.DbValue`:
+
+```go
+golem.Must(db.Exec(
+	`INSERT INTO items (id, price, meta) VALUES (?, ?, ?)`,
+	mysql.Bigint(1),
+	mysql.Decimal("12.3400"),          // exact decimal from string, no float rounding
+	mysql.JSON(`{"featured":true}`),   // json from serialized text
+))
+```
+
+Read columns back positionally with the typed getters on `mysql.Row` — `Int64`, `Float64`, `String`, `Bool`, `Bytes`, `Time`, the generic `Get`, or `Scan`. Each returns `(value, error)`:
+
+```go
+row := golem.Must(db.Query(`SELECT id, name, at FROM events WHERE id = ?`, int64(1))).Rows()[0]
+id := golem.Must(row.Int64(0))
+name := golem.Must(row.String(1))
+at := golem.Must(row.Time(2))
+```
+
+`rs.Columns()` returns the `[]mysql.Column` metadata (`Ordinal`, `Name`, `DbTypeName`).
+
+## Transactions
+
+`db.Transaction` runs a closure inside a transaction, committing if it returns `nil` and rolling back (returning the error) otherwise:
+
+```go
+golem.Must0(db.Transaction(func(tx *mysql.Tx) error {
+	if _, err := tx.Exec(`UPDATE notes SET body = ? WHERE id = ?`, "updated", int64(1)); err != nil {
+		return err
+	}
+	return nil // returning an error here rolls back instead
+}))
+```
+
+For manual control use `db.Begin()` then `tx.Exec` / `tx.Query` and `tx.Commit()` or `tx.Rollback()`.
+
+## Returning Host Errors to the Caller
+
+`golem.Must*` treats a host error as a crash (retry). To let the caller *observe* a failure as a value instead, keep the fallible call's `error` and model the method output as `golem.Result[Ok, Err]`:
+
+```go
+db, err := mysql.Open(in.Addr)
+if err != nil {
+	return golem.Err[int64, string](err.Error())
+}
+```
+
+## Key Constraints
+
+- Target is **WASM only**: no native `go-sql-driver/mysql`, no raw sockets. All SQL goes through the `golem:rdbms` host — just import `.../rdbms/mysql`.
+- The connection is **durable**: every query/execute/commit is journaled and replayed. Because these are remote side effects, using the client inside a **read-only** method traps (see `golem-mark-read-only-go`).
+- Placeholders are `?` (MySQL style). Postgres uses `$1, $2, …` — see `golem-add-postgres-go`.
+- Bare `int` maps to `bigint`; use `mysql.Int(...)` for a 32-bit integer column and the `*Unsigned` constructors (or plain `uint*` values) for unsigned columns. All getters and fallible calls return `(value, error)` — pair them with `golem.Must` / `golem.Must0`.
+- An unsupported plain parameter type errors at encode time with a message telling you to wrap it in a `mysql.*` constructor.
+
+### Related Skills
+
+| Skill | When to Load |
+|-------|--------------|
+| `golem-add-agent-go` | Create the agent that owns this MySQL client |
+| `golem-add-postgres-go` | Use PostgreSQL instead of (or alongside) MySQL |
+| `golem-add-config-go` | Read the connection string from typed config |
+| `golem-add-transactions-go` | Coordinate a saga across agents (distinct from a single DB transaction) |
+| `golem-mark-read-only-go` | Understand why DB calls trap in read-only methods |
