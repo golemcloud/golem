@@ -734,6 +734,37 @@ description = "Runs all CLI integration tests with dev-release golem and golem-c
 env = { "GOLEM_CLI_TEST_BIN_PROFILE" = "dev-release" }
 run_task = "cli-integration-tests"
 
+# CI shards: the it-cli tests are split by module-level test-r tag (see the it-cli matrix in
+# .github/workflows/ci.yaml). `agents` and `bridge_gen` modules are tagged (tests/lib.rs,
+# tests/app/mod.rs); the `core` shard runs everything untagged (`:tag:`), so the three are
+# disjoint and cover every test.
+[tasks.cli-integration-tests-agents]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
+description = "Runs the it-cli 'agents' shard (app::agents)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:agents" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-bridge]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
+description = "Runs the it-cli 'bridge' shard (bridge_gen)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:bridge_gen" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-core]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
+description = "Runs the it-cli 'core' shard (everything not tagged agents/bridge_gen)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
 [tasks.cli-integration-tests-update-golden-files]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "UPDATE_GOLDENFILES" = "1" }
