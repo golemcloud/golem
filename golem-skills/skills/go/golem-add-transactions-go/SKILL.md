@@ -1,0 +1,182 @@
+---
+name: golem-add-transactions-go
+description: "Adding saga-pattern transactions with compensation to a Go Golem agent. Use when the user asks about transactions, sagas, compensation, rollback, Operation/Step, FallibleTransaction, InfallibleTransaction, or multi-step operations that need undo logic in a Go Golem project."
+---
+
+# Saga-Pattern Transactions (Go)
+
+## Overview
+
+Golem supports the **saga pattern** for multi-step operations where each step has a
+compensation (undo). If a later step fails, the steps that already succeeded are
+compensated in **reverse order**. The saga helpers build on the durability
+primitives (an atomic region + the oplog) — no persistence beyond what the runtime
+already provides.
+
+The Go API lives in the `golem` package:
+
+- `golem.Operation[In, Out, E]` — a compensable step, built with `golem.NewOperation`.
+- `golem.Step(tx, op, input)` — run an operation inside a transaction (a **free
+  function**, because Go methods cannot take type parameters).
+- `golem.FallibleTransaction[Out, E](...)` — rolls back on failure and **returns** a
+  `golem.TransactionFailure[E]`.
+- `golem.InfallibleTransaction[Out, E](...)` — rolls back and **retries** the whole
+  transaction until it succeeds.
+
+Expected step failures are modeled as the **error arm** of a `golem.Result` (type
+`E`, often `string`). A `panic` is an infra failure: it leaves the atomic region
+open so the runtime replays it.
+
+## Steps
+
+1. **Define each operation** with `golem.NewOperation(execute, compensate)`.
+2. **Choose a transaction flavor** — fallible (failure is acceptable) or infallible (must eventually succeed).
+3. **Run the steps** with `golem.Step(tx, op, input)` inside the transaction body.
+4. **Handle the outcome** — inspect the `golem.Result` (fallible) or use the returned value (infallible).
+
+## Defining Operations
+
+An operation pairs an `execute` action with the `compensate` that undoes it.
+`execute` is `func(In) golem.Result[Out, E]`; `compensate` receives **both** the
+original input and the output `execute` produced, and returns
+`golem.Result[golem.Unit, E]`. Compensation runs only if a later step fails.
+
+```go
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+// Reserve inventory; compensation cancels the reservation. E is string here.
+var reserveInventory = golem.NewOperation(
+	func(sku string) golem.Result[string, string] {
+		reservationID, err := callInventoryAPI(sku)
+		if err != nil {
+			return golem.Err[string, string](err.Error())
+		}
+		return golem.Ok[string, string](reservationID)
+	},
+	func(sku, reservationID string) golem.Result[golem.Unit, string] {
+		if err := cancelReservation(reservationID); err != nil {
+			return golem.Err[golem.Unit, string](err.Error())
+		}
+		return golem.Ok[golem.Unit, string](golem.Unit{})
+	},
+)
+
+var chargePayment = golem.NewOperation(
+	func(amount int64) golem.Result[string, string] {
+		chargeID, err := callPaymentAPI(amount)
+		if err != nil {
+			return golem.Err[string, string](err.Error())
+		}
+		return golem.Ok[string, string](chargeID)
+	},
+	func(amount int64, chargeID string) golem.Result[golem.Unit, string] {
+		if err := refundPayment(chargeID); err != nil {
+			return golem.Err[golem.Unit, string](err.Error())
+		}
+		return golem.Ok[golem.Unit, string](golem.Unit{})
+	},
+)
+```
+
+## Fallible Transactions
+
+On a step failure, the completed steps are compensated (best-effort, in reverse)
+and a `golem.TransactionFailure[E]` is returned — **there is no retry**. Run steps
+with `golem.Step(tx, op, input)`; return an error result from the body to trigger
+rollback.
+
+```go
+result := golem.FallibleTransaction(func(tx *golem.Transaction[string]) golem.Result[string, string] {
+	r1 := golem.Step(tx, reserveInventory, "SKU-123")
+	if r1.IsErr() {
+		return golem.Err[string, string](r1.Err())
+	}
+	r2 := golem.Step(tx, chargePayment, 4999)
+	if r2.IsErr() {
+		return golem.Err[string, string](r2.Err())
+	}
+	// Combine the two outputs into the transaction's result value.
+	return golem.Ok[string, string](r1.Ok() + ":" + r2.Ok())
+})
+
+if result.IsErr() {
+	f := result.Err() // golem.TransactionFailure[string]
+	_ = f.Error       // the step failure that aborted the transaction
+	if !f.RolledBackFully() {
+		// A compensation itself failed — some effects may remain (needs attention).
+		_ = f.CompensationFailure // golem.Option[string], Some(...) here
+	}
+} else {
+	orderID := result.Ok()
+	_ = orderID
+}
+```
+
+`golem.TransactionFailure[E]` fields:
+
+- `Error E` — the step failure that aborted the transaction.
+- `CompensationFailure golem.Option[E]` — `Some(...)` if a compensation itself
+  failed during rollback (a **partial** rollback); `None` if every compensation
+  succeeded.
+- `RolledBackFully() bool` — true when the rollback was complete.
+
+## Infallible Transactions
+
+On a step failure, the completed steps are compensated in reverse, the oplog is
+rewound to the transaction start, and the runtime **replays the whole
+transaction** — so it returns the plain `Out` value, always succeeding eventually:
+
+```go
+orderID := golem.InfallibleTransaction(func(tx *golem.Transaction[string]) golem.Result[string, string] {
+	r1 := golem.Step(tx, reserveInventory, "SKU-123")
+	if r1.IsErr() {
+		return golem.Err[string, string](r1.Err())
+	}
+	r2 := golem.Step(tx, chargePayment, 4999)
+	if r2.IsErr() {
+		return golem.Err[string, string](r2.Err())
+	}
+	return golem.Ok[string, string](r1.Ok() + ":" + r2.Ok())
+})
+// orderID is a plain string — the transaction retried until it succeeded.
+```
+
+Use `InfallibleTransaction` only when the steps are expected to **eventually
+succeed** — a deterministic failure would retry forever. If a compensation itself
+fails during a rollback-for-retry, the transaction cannot be made consistent and
+the helper **panics** (surfacing which compensation failed).
+
+## Not available in the Go SDK
+
+The Rust SDK splits operations into `sync_operation` and `operation` (async), and
+its transactions are `async` and require wrapping bodies in `boxed(async move { …
+})`. The Go SDK has **none of that** — there is a single `golem.NewOperation`, and
+transaction bodies are plain synchronous functions. Blocking work inside a step
+(HTTP, RPC, promises) suspends the fiber at its await point, so no `async`/`boxed`
+plumbing is needed. `golem.Step` is a top-level function (not a method on the
+transaction) because Go methods cannot carry the per-step type parameters.
+
+## Guidelines
+
+- Model expected step failures as the **error arm** of the step's `golem.Result`;
+  reserve `panic` for infra failures (it leaves the region open for replay).
+- Run every step with `golem.Step(tx, op, input)` — that is what records the
+  compensation to run on rollback.
+- Keep compensation logic **idempotent** — it may run more than once (especially
+  under `InfallibleTransaction`).
+- Compensation runs in **reverse** order of execution.
+- All steps in one transaction share the error type `E` (commonly `string`).
+- Use `FallibleTransaction` when failure is an acceptable outcome;
+  `InfallibleTransaction` when the operation must eventually succeed.
+- A transaction opens a **worker-global** atomic region — keep the whole
+  transaction on one logical flow; don't run concurrent goroutines that perform
+  durable side effects while it is open.
+
+### Related Skills
+
+| Skill | When to Load |
+|-------|--------------|
+| `golem-atomic-block-go` | The atomic-region / durability primitives transactions build on |
+| `golem-call-another-agent-go` | Steps that call other agents via RPC |
+| `golem-make-http-request-go` | Steps that call external HTTP APIs |
+| `golem-retry-policies-go` | Tune how failing steps/operations are retried |
