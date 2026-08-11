@@ -1,3 +1,3 @@
 package main
 
-import _ "component-name/session"
+import _ "component-name/sessionagentimpl"

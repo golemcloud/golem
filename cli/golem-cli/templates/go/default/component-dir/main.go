@@ -1,3 +1,3 @@
 package main
 
-import _ "component-name/counter"
+import _ "component-name/counteragentimpl"

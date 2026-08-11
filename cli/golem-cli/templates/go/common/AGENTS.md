@@ -81,18 +81,23 @@ golem.yaml                        # Root application manifest
 <component>/                      # Component directory (each becomes a WASM component)
   golem.yaml                      # Component manifest
   go.mod                          # This component's module; pins the SDK and componentize-go
-  main.go                         # package main — blank-imports the SDK + each agent package
-  counter/                        # One package per agent
-    counter.go                    #   package counter — agent definition + init() registration
+  main.go                         # package main — blank-imports the SDK + each agent's impl package
+  counteragent/                   # DEFINITION package — the agent's contract (no state)
+    counter.go                    #   package counteragent — DefineAgent + method descriptors + types
+  counteragentimpl/               # IMPLEMENTATION package — behaviour + private state
+    counter.go                    #   package counteragentimpl — golem.Implement (registers on import)
 golem-temp/                       # Build artifacts (gitignored)
 ```
 
 Each component directory is **its own Go module** (its own `go.mod`), built to a separate WASM
-component. Within a component, every agent lives in its own package (`counter/counter.go` is
-`package counter`), and a single `main.go` (`package main`) blank-imports the SDK and each agent
-package so their `init()` functions register the agents — the same blank-import-for-side-effects
-pattern Go uses to register database drivers (`import _ "..."`). Adding an agent means adding a package
-and a blank import to `main.go`.
+component. Within a component, every agent is split across two packages: a state-free **definition**
+(`<name>agent`) holding the identity, method descriptors, and input/output types; and an
+**implementation** (`<name>agentimpl`) holding the private state and the handlers. This split is what
+lets agents call one another without a Go import cycle — a caller imports only the callee's
+`<name>agent` definition package, never its implementation. `main.go` (`package main`) blank-imports
+the SDK and each agent's **implementation** package so their registration runs on import — the same
+blank-import-for-side-effects pattern Go uses for database drivers (`import _ "..."`). Adding an agent
+means adding a definition package, an implementation package, and a blank import to `main.go`.
 
 ## Prerequisites
 
@@ -118,16 +123,18 @@ Wire names come from the SDK's declarations, not from Go identifiers:
   type would be ambiguous. Use `int64`/`uint64` or another sized type.
 - A `*T` field means `option<T>`. A nil slice or map is an **empty** list/map, never "absent" — spell
   the optional container `*[]T` if you need to distinguish.
-- Method descriptors must be **package-level vars**: the same value drives the schema, the
-  implementation binding and cross-agent calls.
-- Cross-agent calls hang off the descriptor (`Charge.Call(client, in)`), because Go methods cannot
+- Method descriptors must be **package-level vars** in the definition package: the same value drives
+  the schema, the implementation binding and cross-agent calls.
+- State is **private to the implementation package** — a caller never sees it. Cross-agent calls go
+  through the definition: `client := ledgeragent.Agent.Get(id)` then `ledgeragent.Record.Call(client, in)`.
+  The client hangs off the definition and the call off the descriptor, because Go methods cannot
   introduce type parameters.
-- `main.go` (`package main`) holds an empty `func main() {}` plus a blank import of each agent
-  package. The blank `_ "github.com/golemcloud/golem/sdks/go/golem"` import must stay — it initializes
-  the SDK runtime (e.g. HTTP) and links the component exports; do not remove it even though it looks
-  unused.
-- Multiple agents can coexist in one component (each its own package, all blank-imported by `main.go`);
-  a worker is initialized as exactly one of them.
+- `main.go` (`package main`) holds an empty `func main() {}` plus a blank import of each agent's
+  **implementation** package. The blank `_ "github.com/golemcloud/golem/sdks/go/golem"` import must
+  stay — it initializes the SDK runtime (e.g. HTTP) and links the component exports; do not remove it
+  even though it looks unused.
+- Multiple agents can coexist in one component (each split into a definition + implementation package,
+  the impls all blank-imported by `main.go`); a worker is initialized as exactly one of them.
 - **Environment variables** use the standard library — `os.Getenv` / `os.Environ` read the worker's
   environment with no special setup (they route to `wasi:cli/environment` via the toolchain's WASI
   adapter). Alongside any vars you set (`env:` in `golem.yaml`, or `golem agent new --env`), the runtime
@@ -145,10 +152,12 @@ Wire names come from the SDK's declarations, not from Go identifiers:
 
 - Standard Go style: `gofmt` decides formatting; `UpperCamelCase` for exported identifiers,
   `lowerCamelCase` otherwise.
-- Agents are declared with `golem.DefineAgent`, methods with `golem.DefineMethod`, and behaviour
-  bound with `golem.Implement` in an `init()`.
-- Handlers may be plain closures or ordinary Go methods bound with a method expression
-  (`golem.Bind((*CartState).AddItem)`).
+- Agents are declared with `golem.DefineAgent` and their methods with `golem.DefineMethod` (in the
+  definition package); behaviour is bound with `golem.Implement(def, init, golem.Bound(method, handler), …)`
+  (in the implementation package). A configured agent whose constructor reads config uses
+  `golem.ImplementConfigured` and reads config in a method via `golem.Config(def, ctx)`.
+- Handlers may be plain closures or ordinary Go methods bound with a method expression, wrapped in
+  `golem.Bound` (`golem.Bound(Cart.AddItem, golem.Bind((*state).AddItem))`).
 
 ## Tooling
 
