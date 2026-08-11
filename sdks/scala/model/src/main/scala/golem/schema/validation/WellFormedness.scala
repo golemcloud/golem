@@ -256,17 +256,19 @@ object WellFormedness {
     if (bs.isEmpty) e += EmptyUnion; dup(bs.map(_.tag), DuplicateUnionTag, e);
     bs.foreach { b => checkBranch(g, b, e); checkType(g, b.body, e) };
     for (i <- bs.indices; j <- i + 1 until bs.length)
-      overlap(bs(i).discriminator, bs(j).discriminator).foreach(r =>
-        e += UnionAmbiguousDiscriminators(bs(i).tag, bs(j).tag, r)
-      )
+      classifyDiscriminatorPair(bs(i).discriminator, bs(j).discriminator) match {
+        case DiscriminatorPairClassification.Reject(reason) =>
+          e += UnionAmbiguousDiscriminators(bs(i).tag, bs(j).tag, reason)
+        case _ => ()
+      }
   }
   private sealed trait Shape; private case object Str        extends Shape;
   private final case class Rec(fields: List[NamedFieldType]) extends Shape; private case object Other extends Shape;
   private case object Unres                                  extends Shape
   private def shape(g: SchemaGraph, t: SchemaType, seen: Set[String] = Set.empty): Shape = t.body match {
-    case RefType(id) if seen(id)                             => Unres;
-    case RefType(id)                                         => g.defs.get(id).map(d => shape(g, d.body, seen + id)).getOrElse(Unres);
-    case StringType | TextType(_) | UrlType(_) | PathType(_) => Str; case RecordType(fs) => Rec(fs); case _ => Other
+    case RefType(id) if seen(id)               => Unres;
+    case RefType(id)                           => g.defs.get(id).map(d => shape(g, d.body, seen + id)).getOrElse(Unres);
+    case StringType | UrlType(_) | PathType(_) => Str; case RecordType(fs) => Rec(fs); case _ => Other
   }
   private def checkBranch(g: SchemaGraph, b: UnionBranch, e: mutable.ListBuffer[SchemaError]): Unit =
     b.discriminator match {
@@ -295,19 +297,78 @@ object WellFormedness {
           case _       => e += UnionFieldRuleOnNonRecordBody(b.tag)
         }
     }
-  private def overlap(a: DiscriminatorRule, b: DiscriminatorRule): Option[String] = (a, b) match {
-    case (DiscriminatorRule.Prefix(x), DiscriminatorRule.Prefix(y)) if x.isEmpty && y.isEmpty =>
-      Some("both prefixes are empty");
-    case (DiscriminatorRule.Prefix(x), DiscriminatorRule.Prefix(y)) if x.isEmpty =>
-      Some(s"empty prefix overlaps any other prefix `$y`");
-    case (DiscriminatorRule.Prefix(x), DiscriminatorRule.Prefix(y)) if y.isEmpty =>
-      Some(s"empty prefix overlaps any other prefix `$x`");
-    case (DiscriminatorRule.Prefix(x), DiscriminatorRule.Prefix(y)) if x.startsWith(y) || y.startsWith(x) =>
-      Some(s"prefix `$x` and prefix `$y` overlap");
-    case (DiscriminatorRule.Regex(x), DiscriminatorRule.Regex(y)) if x == y                       => Some(s"both branches share regex `$x`");
-    case (DiscriminatorRule.Contains(x), DiscriminatorRule.Contains(y)) if x.isEmpty || y.isEmpty =>
-      Some("empty contains substring matches every string");
-    case _ => None
+  private[validation] sealed trait DiscriminatorPairClassification
+  private[validation] object DiscriminatorPairClassification {
+    final case class Reject(reason: String) extends DiscriminatorPairClassification
+    case object Disjoint                    extends DiscriminatorPairClassification
+    case object Indeterminate               extends DiscriminatorPairClassification
+  }
+  private[validation] def classifyDiscriminatorPair(
+    a: DiscriminatorRule,
+    b: DiscriminatorRule
+  ): DiscriminatorPairClassification = {
+    import DiscriminatorPairClassification._
+    (a, b) match {
+      case (DiscriminatorRule.Prefix(x), DiscriminatorRule.Prefix(y)) =>
+        if (x.startsWith(y) || y.startsWith(x)) Reject(s"prefix `$x` and prefix `$y` overlap") else Disjoint
+      case (DiscriminatorRule.Suffix(x), DiscriminatorRule.Suffix(y)) =>
+        if (x.endsWith(y) || y.endsWith(x)) Reject(s"suffix `$x` and suffix `$y` overlap") else Disjoint
+      case (DiscriminatorRule.Prefix(x), DiscriminatorRule.Suffix(y)) =>
+        Reject(s"prefix `$x` and suffix `$y` overlap")
+      case (DiscriminatorRule.Suffix(y), DiscriminatorRule.Prefix(x)) =>
+        Reject(s"prefix `$x` and suffix `$y` overlap")
+      case (DiscriminatorRule.Prefix(x), DiscriminatorRule.Contains(y)) =>
+        Reject(s"prefix `$x` and contains `$y` overlap")
+      case (DiscriminatorRule.Contains(y), DiscriminatorRule.Prefix(x)) =>
+        Reject(s"prefix `$x` and contains `$y` overlap")
+      case (DiscriminatorRule.Suffix(x), DiscriminatorRule.Contains(y)) =>
+        Reject(s"suffix `$x` and contains `$y` overlap")
+      case (DiscriminatorRule.Contains(y), DiscriminatorRule.Suffix(x)) =>
+        Reject(s"suffix `$x` and contains `$y` overlap")
+      case (DiscriminatorRule.Contains(x), DiscriminatorRule.Contains(y)) =>
+        Reject(s"contains `$x` and contains `$y` overlap")
+      case (DiscriminatorRule.Regex(x), DiscriminatorRule.Regex(y)) =>
+        if (x == y) Reject(s"both branches share regex `$x`") else Indeterminate
+      case (
+            DiscriminatorRule.Regex(_),
+            DiscriminatorRule.Prefix(_) | DiscriminatorRule.Suffix(_) | DiscriminatorRule.Contains(_)
+          ) | (
+            DiscriminatorRule.Prefix(_) | DiscriminatorRule.Suffix(_) | DiscriminatorRule.Contains(_),
+            DiscriminatorRule.Regex(_)
+          ) =>
+        Indeterminate
+      case (
+            DiscriminatorRule.Prefix(_) | DiscriminatorRule.Suffix(_) | DiscriminatorRule.Contains(_) |
+            DiscriminatorRule.Regex(_),
+            DiscriminatorRule.FieldEquals(_) | DiscriminatorRule.FieldAbsent(_)
+          ) | (
+            DiscriminatorRule.FieldEquals(_) | DiscriminatorRule.FieldAbsent(_),
+            DiscriminatorRule.Prefix(_) | DiscriminatorRule.Suffix(_) | DiscriminatorRule.Contains(_) |
+            DiscriminatorRule.Regex(_)
+          ) =>
+        Disjoint
+      case (DiscriminatorRule.FieldEquals(x), DiscriminatorRule.FieldEquals(y)) =>
+        if (x.fieldName != y.fieldName)
+          Reject(s"field-equals on `${x.fieldName}` and `${y.fieldName}` can match the same object")
+        else
+          (x.literal, y.literal) match {
+            case (None, _) | (_, None) =>
+              Reject(
+                s"field-equals on `${x.fieldName}` without literal overlaps another field-equals on the same field"
+              )
+            case (Some(l), Some(r)) if l == r =>
+              Reject(s"two field-equals on `${x.fieldName}` share literal `$l`")
+            case _ => Disjoint
+          }
+      case (DiscriminatorRule.FieldAbsent(x), DiscriminatorRule.FieldAbsent(y)) =>
+        Reject(s"field-absent on `$x` and `$y` can match the same object")
+      case (DiscriminatorRule.FieldEquals(x), DiscriminatorRule.FieldAbsent(y)) =>
+        if (x.fieldName == y) Disjoint
+        else Reject(s"field-equals on `${x.fieldName}` and field-absent on `$y` can match the same object")
+      case (DiscriminatorRule.FieldAbsent(y), DiscriminatorRule.FieldEquals(x)) =>
+        if (x.fieldName == y) Disjoint
+        else Reject(s"field-equals on `${x.fieldName}` and field-absent on `$y` can match the same object")
+    }
   }
   private def isNullable(g: SchemaGraph, t: SchemaType, seen: Set[String]): Boolean = t.body match {
     case OptionType(_)           => true; case UnionType(bs)                                             => bs.exists(b => isNullable(g, b.body, seen));
