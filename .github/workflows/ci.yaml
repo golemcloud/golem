@@ -285,7 +285,6 @@ jobs:
       - name: ${{ matrix.group.description }}
         env:
           QUIET: true
-          GOLEM_PRESET: quick
         run: cargo make --profile ci ${{ matrix.group.name }}
         timeout-minutes: 45
       - uses: ./.github/actions/publish-test-report
@@ -399,7 +398,6 @@ jobs:
       - name: CLI integration tests
         env:
           QUIET: true
-          GOLEM_PRESET: quick
         run: cargo make --profile ci cli-integration-tests
         timeout-minutes: 30
       - uses: ./.github/actions/publish-test-report
