@@ -55,7 +55,7 @@ type ParsedAgentID[Id any] struct {
 // method parameter carrying another agent's id) into its typed form.
 //
 // Id must be the target agent's Id struct — the same type used with
-// [DefineAgent]/[ClientFor] — so the constructor parameters decode back into it.
+// [DefineAgent]/[AgentDefinition.Get] — so the constructor parameters decode back into it.
 // It calls the host, so it must run inside an invocation.
 func ParseAgentID[Id any](agentID string) (ParsedAgentID[Id], error) {
 	res := host.ParseAgentId(agentID)

@@ -57,8 +57,8 @@ func TestAgentDefErrorsFiltersByAgentAndGlobal(t *testing.T) {
 }
 
 func TestPublicAccessors(t *testing.T) {
-	if got := (&Agent[struct{}, struct{}, NoConfig]{name: "N"}).Name(); got != "N" {
-		t.Errorf("Agent.Name = %q", got)
+	if got := (&AgentDefinition[struct{}, NoConfig]{name: "N"}).Name(); got != "N" {
+		t.Errorf("AgentDefinition.Name = %q", got)
 	}
 	md := DefineMethod[struct{}, struct{}, struct{}]("m", Desc("d"), HTTP(GET("/x")))
 	if md.Name() != "m" {
@@ -103,11 +103,12 @@ func TestValidAgentFinalizesAndPublishesItsMount(t *testing.T) {
 	type St struct{}
 	type AddIn struct{ By int64 }
 	withDefs(t, func(d *definitions) {
-		a := defineAgentInto[Id, St](d,
-			Spec{Name: "Counter", HTTP: &Mount{Path: "/c/{name}"}},
-			func(Id) *St { return &St{} })
+		a := defineAgentInto[Id, NoConfig](d,
+			Spec{Name: "Counter", HTTP: &Mount{Path: "/c/{name}"}})
 		add := DefineMethod[Id, AddIn, int64]("add", HTTP(POST("/add?by={by}")))
-		implementInto[Id, St, NoConfig, AddIn, int64](d, a, add, func(*Context[St], AddIn) int64 { return 0 })
+		implementAgentInto[Id, St, NoConfig](d, a,
+			simpleNewState[Id, St](func(Id) *St { return &St{} }), false,
+			[]Binding[Id, St]{Bound(add, func(*Context[St], AddIn) int64 { return 0 })})
 
 		types, errs := d.discover()
 		if len(errs) != 0 {
@@ -138,7 +139,7 @@ func TestSeparateDefinitionsDoNotLeak(t *testing.T) {
 		type St struct{}
 		var errs []definitionError
 		withDefs(t, func(d *definitions) {
-			defineAgentInto[Id, St](d, Spec{Name: "Solo"}, func(Id) *St { return &St{} })
+			defineAgentInto[Id, NoConfig](d, Spec{Name: "Solo"})
 			_, errs = d.discover()
 		})
 		return errs

@@ -17,9 +17,8 @@ type tCounterId struct{ Name string }
 type tCounterState struct{ count int64 }
 type tAddIn struct{ By int64 }
 
-var tCounter = DefineAgent[tCounterId, tCounterState](
+var tCounter = DefineAgent[tCounterId](
 	Spec{Name: "TestCounter", Description: "counter under test", Mode: Durable},
-	func(id tCounterId) *tCounterState { return &tCounterState{} },
 )
 
 var (
@@ -31,21 +30,23 @@ var (
 )
 
 func init() {
-	Implement(tCounter, tValue, func(ctx *Context[tCounterState], _ Unit) int64 {
-		return ctx.State.count
-	})
-	Implement(tCounter, tInc, func(ctx *Context[tCounterState], _ Unit) int64 {
-		ctx.State.count++
-		return ctx.State.count
-	})
-	Implement(tCounter, tAdd, func(ctx *Context[tCounterState], in tAddIn) int64 {
-		ctx.State.count += in.By
-		return ctx.State.count
-	})
-	Implement(tCounter, tReset, Bind0Unit((*tCounterState).reset)) // method-expression binding
-	Implement(tCounter, tBoom, func(*Context[tCounterState], Unit) int64 {
-		panic("kaboom from agent code")
-	})
+	Implement(tCounter, func(id tCounterId) *tCounterState { return &tCounterState{} },
+		Bound(tValue, func(ctx *Context[tCounterState], _ Unit) int64 {
+			return ctx.State.count
+		}),
+		Bound(tInc, func(ctx *Context[tCounterState], _ Unit) int64 {
+			ctx.State.count++
+			return ctx.State.count
+		}),
+		Bound(tAdd, func(ctx *Context[tCounterState], in tAddIn) int64 {
+			ctx.State.count += in.By
+			return ctx.State.count
+		}),
+		Bound(tReset, Bind0Unit((*tCounterState).reset)), // method-expression binding
+		Bound(tBoom, func(*Context[tCounterState], Unit) int64 {
+			panic("kaboom from agent code")
+		}),
+	)
 }
 
 func (s *tCounterState) reset() { s.count = 0 }
@@ -231,17 +232,23 @@ type tEchoId struct{ Prefix string }
 type tEchoState struct{ prefix string }
 type tEchoIn struct{ Msg string }
 
-var tEcho = DefineAgent[tEchoId, tEchoState](
+var tEcho = DefineAgent[tEchoId](
 	Spec{Name: "TestEcho", Mode: Ephemeral},
-	func(id tEchoId) *tEchoState { return &tEchoState{prefix: id.Prefix} },
 )
 
 var tSay = DefineMethod[tEchoId, tEchoIn, string]("say")
 
 func init() {
-	Implement(tEcho, tSay, func(ctx *Context[tEchoState], in tEchoIn) string {
-		return ctx.State.prefix + in.Msg
-	})
+	// One Implement bundles the constructor and every method (tPay too, declared
+	// below — package vars initialize before any init runs).
+	Implement(tEcho, func(id tEchoId) *tEchoState { return &tEchoState{prefix: id.Prefix} },
+		Bound(tSay, func(ctx *Context[tEchoState], in tEchoIn) string {
+			return ctx.State.prefix + in.Msg
+		}),
+		Bound(tPay, func(*Context[tEchoState], Unit) PaymentMethod {
+			return Transfer{IBAN: "GB33"}
+		}),
+	)
 }
 
 func TestWorkerRunsOneOfSeveralAgentTypes(t *testing.T) {
@@ -284,14 +291,8 @@ func TestWorkerRunsOneOfSeveralAgentTypes(t *testing.T) {
 // tPay — Regression: a method whose declared output is an interface (a variant) must
 // keep that declared type through encoding. reflect.ValueOf on an interface
 // yields the concrete type it holds, so encoding the handler result directly
-// would look up the wrong codec.
+// would look up the wrong codec. Bound into tEcho's Implement above.
 var tPay = DefineMethod[tEchoId, Unit, PaymentMethod]("pay")
-
-func init() {
-	Implement(tEcho, tPay, func(*Context[tEchoState], Unit) PaymentMethod {
-		return Transfer{IBAN: "GB33"}
-	})
-}
 
 func TestVariantTypedMethodOutputRoundTripsThroughTheExports(t *testing.T) {
 	active = nil

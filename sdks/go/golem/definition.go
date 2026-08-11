@@ -65,7 +65,7 @@ func (e definitionError) Error() string {
 type definitions struct {
 	agents    map[string]*agentEntry
 	order     []string
-	idToAgent map[reflect.Type]string // Id type -> agent name, for ClientFor
+	idToAgent map[reflect.Type]string // Id type -> agent name, for typed calls (Get)
 	variants  map[reflect.Type]*variantDef
 	enums     map[reflect.Type]*enumDef
 	pins      map[reflect.Type]string // NameType type-id overrides

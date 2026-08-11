@@ -26,7 +26,7 @@ import (
 )
 
 // Client addresses one agent instance for remote calls. It is produced by
-// [ClientFor] and consumed by the call methods on [MethodDef].
+// [AgentDefinition.Get] and consumed by the call methods on [MethodDef].
 //
 // The Id type parameter is what makes cross-agent calls type-safe: a
 // MethodDef[PaymentId, …] only accepts a Client[PaymentId], so aiming a method
@@ -45,7 +45,7 @@ type Client[Id any] struct {
 func (c Client[Id]) AgentID() string { return c.agentID }
 
 // PhantomID returns the phantom instance id this client addresses, or None for a
-// durable client. A [NewPhantom] client carries the freshly allocated id here
+// durable client. A [AgentDefinition.NewPhantom] client carries the freshly allocated id here
 // (re-address it later with [WithPhantomID]).
 func (c Client[Id]) PhantomID() Option[UUID] { return c.phantomID }
 
@@ -58,24 +58,24 @@ type clientOpts struct {
 }
 
 // WithPhantomID addresses a specific phantom instance of the target agent.
-// Use [NewPhantom] to allocate a fresh one.
+// Use [AgentDefinition.NewPhantom] to allocate a fresh one.
 func WithPhantomID(id UUID) ClientOpt {
 	return func(o *clientOpts) { o.phantomID = witTypes.Some(uuidToWit(id)) }
 }
 
-// ClientFor returns a client addressing the agent instance identified by id, or
-// panics if the target can't be resolved (unknown agent, a bad config override,
-// or invalid constructor parameters). Such a failure is a programming or
+// Get returns a client addressing the agent instance identified by id, or panics
+// if the target can't be resolved (unknown agent, a bad config override, or
+// invalid constructor parameters). Such a failure is a programming or
 // configuration error with no in-band recovery, so it panics rather than
 // returning an error; the panic surfaces to the caller as an agent-error.
 //
 // The id is encoded with the same codecs the target uses to decode its
 // constructor parameters — they are derived from the same Go types — so caller
 // and callee agree by construction rather than by convention.
-func ClientFor[Id any, S any, Cfg any](a *Agent[Id, S, Cfg], id Id, opts ...ClientOpt) Client[Id] {
+func (a *AgentDefinition[Id, Cfg]) Get(id Id, opts ...ClientOpt) Client[Id] {
 	e := defs.agents[a.name]
 	if e == nil {
-		panic(fmt.Errorf("golem: ClientFor: unknown agent %s", a.name))
+		panic(fmt.Errorf("golem: Get: unknown agent %s", a.name))
 	}
 
 	var o clientOpts
@@ -91,7 +91,7 @@ func ClientFor[Id any, S any, Cfg any](a *Agent[Id, S, Cfg], id Id, opts ...Clie
 	// before touching the host, so a mistyped or undeclared key is a clear error.
 	agentConfig, err := buildAgentConfig(defs, e, o.configs)
 	if err != nil {
-		panic(fmt.Errorf("golem: ClientFor %s: %w", a.name, err))
+		panic(fmt.Errorf("golem: Get %s: %w", a.name, err))
 	}
 
 	// Resolve the id up front: it is wanted for error messages, and a failure
@@ -99,7 +99,7 @@ func ClientFor[Id any, S any, Cfg any](a *Agent[Id, S, Cfg], id Id, opts ...Clie
 	// now than as an opaque not-found on the first call.
 	resolved := host.MakeAgentId(a.name, ctor, o.phantomID)
 	if resolved.IsErr() {
-		panic(fmt.Errorf("golem: ClientFor %s: %w", a.name, agentErrorToGo(resolved.Err())))
+		panic(fmt.Errorf("golem: Get %s: %w", a.name, agentErrorToGo(resolved.Err())))
 	}
 
 	phantomID := None[UUID]()
@@ -115,15 +115,15 @@ func ClientFor[Id any, S any, Cfg any](a *Agent[Id, S, Cfg], id Id, opts ...Clie
 }
 
 // NewPhantom allocates a fresh phantom instance of the target agent and returns
-// a client for it (panicking on failure, like [ClientFor]). The freshly allocated
-// phantom id rides on the client — read it back with [Client.PhantomID] to
-// address the same instance again (via [WithPhantomID]).
+// a client for it (panicking on failure, like [AgentDefinition.Get]). The freshly
+// allocated phantom id rides on the client — read it back with [Client.PhantomID]
+// to address the same instance again (via [WithPhantomID]).
 //
 // Ephemeral agents have no durable identity, so this is the only way to obtain
 // a client for one.
-func NewPhantom[Id any, S any, Cfg any](a *Agent[Id, S, Cfg], id Id) Client[Id] {
+func (a *AgentDefinition[Id, Cfg]) NewPhantom(id Id) Client[Id] {
 	phantom := uuidFromWit(apiHost.GenerateIdempotencyKey())
-	return ClientFor(a, id, WithPhantomID(phantom))
+	return a.Get(id, WithPhantomID(phantom))
 }
 
 // AgentErrorKind classifies an [AgentError].

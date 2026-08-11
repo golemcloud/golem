@@ -40,16 +40,16 @@ import (
 //	    Greeting string
 //	    APIKey   golem.Secret[string] // a secret field, at any depth
 //	}
-//	var Shop = golem.DefineConfiguredAgent[ShopId, ShopState, ShopConfig](spec, initShop)
+//	var Shop = golem.DefineConfiguredAgent[ShopId, ShopConfig](spec)
 //
-// and read it from inside a method via [Agent.Config] (or, in the constructor,
+// and read it from inside a method via [Config] (or, in the constructor,
 // [InitContext.Config]):
 //
-//	cfg := Shop.Config(ctx)  // ctx is the running agent's *Context[S]
-//	_ = cfg.Greeting         // local field — cached (worker-lifetime), so this is fast
-//	_ = cfg.APIKey.Get()     // secret field — re-reads the host each call (live)
+//	cfg := golem.Config(Shop, ctx)  // ctx is the running agent's *Context[S]
+//	_ = cfg.Greeting                // local field — cached (worker-lifetime), so this is fast
+//	_ = cfg.APIKey.Get()            // secret field — re-reads the host each call (live)
 //
-// Config is materialized ONCE per worker and cached, so calling Shop.Config(ctx)
+// Config is materialized ONCE per worker and cached, so calling golem.Config(Shop, ctx)
 // on a hot method is near-free: local fields are read from the host on the first
 // call and reused for the worker's life. Only **secret** fields stay live — a
 // [Secret] field is a lazy handle whose [Secret.Get] re-reads the host on every
@@ -186,10 +186,10 @@ func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgTyp
 // pure and covered by native tests.
 // ---------------------------------------------------------------------------
 
-// Config returns the agent's config from within a method. scope is the running
-// agent's *[Context]: because it carries the agent's own state type S — and the
-// method returns the agent's own Cfg — config can be read only from within the
-// owning agent's method (no free-floating read).
+// Config returns the running agent's config from within a method. def is the
+// agent's [AgentDefinition] — its Cfg gives the config type — and scope is the
+// running method's *[Context]: requiring a context means config can be read only
+// from inside a running method, not from arbitrary code.
 //
 // The config is materialized once per worker and cached, so repeated calls on a
 // hot method are near-free: its local fields are read from the host on the first
@@ -198,15 +198,15 @@ func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgTyp
 // so a rotated secret is observed and the user decides when to read (and whether
 // to store) it. A read failure has no in-band recovery, so it panics rather than
 // returning an error; the panic surfaces as an agent-error.
-func (a *Agent[Id, S, Cfg]) Config(scope agentScope[S]) Cfg {
-	// scope is a compile-time gate only: requiring it means the read can happen
-	// only from inside the agent's own execution.
+func Config[Id any, S any, Cfg any](def *AgentDefinition[Id, Cfg], scope agentScope[S]) Cfg {
+	// def fixes Cfg; scope (the running method's *Context) is a compile-time gate.
+	_ = def
 	_ = scope
 	return materializeAgentConfig[Cfg]()
 }
 
 // Config reads the agent's config from within its constructor. It behaves like
-// [Agent.Config] and populates the same per-worker cache the methods reuse.
+// [Config] and populates the same per-worker cache the methods reuse.
 func (c *InitContext[Id, S, Cfg]) Config() Cfg {
 	return materializeAgentConfig[Cfg]()
 }
@@ -243,7 +243,7 @@ func materializeAgentConfig[Cfg any]() Cfg {
 }
 
 // materializeConfig assembles a Cfg value by reading each declared leaf through
-// readLeaf; [Agent.Config] / [InitContext.Config] supply the host-backed reader.
+// readLeaf; [Config] / [InitContext.Config] supply the host-backed reader.
 func materializeConfig[Cfg any](readLeaf func(lf configLeaf) (reflect.Value, error)) (Cfg, error) {
 	var zero Cfg
 	cfgType := reflect.TypeFor[Cfg]()
@@ -398,7 +398,7 @@ type configOverrideFn func(d *definitions) ([]common.TypedAgentConfigValue, erro
 // WithConfig supplies the callee's local config values at client creation
 // (make-wasm-rpc's agent-config), overriding what the platform would otherwise
 // provision. Cfg is inferred from value; each local field is encoded as an
-// override and validated against the target agent's declarations by [ClientFor]
+// override and validated against the target agent's declarations by [AgentDefinition.Get]
 // (which already names the target). Secret fields are provisioned by the
 // platform, not by a caller, so they are skipped.
 func WithConfig[Cfg any](value Cfg) ClientOpt {

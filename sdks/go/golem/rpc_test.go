@@ -33,18 +33,19 @@ type tChargeIn struct {
 	Note        *string
 }
 
-var tPayment = DefineAgent[tPayId, tPayState](
+var tPayment = DefineAgent[tPayId](
 	Spec{Name: "TestPayment", Mode: Durable},
-	func(id tPayId) *tPayState { return &tPayState{} },
 )
 
 var tCharge = DefineMethod[tPayId, tChargeIn, Money]("charge")
 
 func init() {
-	Implement(tPayment, tCharge, func(ctx *Context[tPayState], in tChargeIn) Money {
-		ctx.State.charged += in.AmountCents
-		return Money{Amount: ctx.State.charged, Currency: "EUR"}
-	})
+	Implement(tPayment, func(id tPayId) *tPayState { return &tPayState{} },
+		Bound(tCharge, func(ctx *Context[tPayState], in tChargeIn) Money {
+			ctx.State.charged += in.AmountCents
+			return Money{Amount: ctx.State.charged, Currency: "EUR"}
+		}),
+	)
 }
 
 // TestCallerEncodingMatchesCalleeDecoding — The caller encodes arguments with the same codecs the callee decodes with,

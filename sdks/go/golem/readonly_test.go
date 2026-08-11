@@ -29,15 +29,19 @@ func TestReadOnlyLowering(t *testing.T) {
 	h := func(*Context[St], Unit) Unit { return Unit{} }
 
 	withDefs(t, func(d *definitions) {
-		a := defineAgentInto[Id, St](d, Spec{Name: "A"}, func(Id) *St { return &St{} })
-		def := func(name string, opts ...MethodOpt) {
-			implementInto[Id, St, NoConfig, Unit, Unit](d, a, DefineMethod[Id, Unit, Unit](name, opts...), h)
+		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "A"})
+		bound := func(name string, opts ...MethodOpt) Binding[Id, St] {
+			return Bound(DefineMethod[Id, Unit, Unit](name, opts...), h)
 		}
-		def("rw")             // read-write
-		def("ro", ReadOnly()) // default => until-write
-		def("nc", ReadOnly(NoCache()))
-		def("uw", ReadOnly(CacheUntilWrite()))
-		def("ttl", ReadOnly(CacheFor(30*time.Second)))
+		implementAgentInto[Id, St, NoConfig](d, def,
+			simpleNewState[Id, St](func(Id) *St { return &St{} }), false,
+			[]Binding[Id, St]{
+				bound("rw"),             // read-write
+				bound("ro", ReadOnly()), // default => until-write
+				bound("nc", ReadOnly(NoCache())),
+				bound("uw", ReadOnly(CacheUntilWrite())),
+				bound("ttl", ReadOnly(CacheFor(30*time.Second))),
+			})
 
 		types, errs := d.discover()
 		if len(errs) != 0 {
@@ -91,8 +95,10 @@ func TestReadOnlyMisuse(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			withDefs(t, func(d *definitions) {
-				a := defineAgentInto[Id, St](d, Spec{Name: "A", Mode: c.mode}, func(Id) *St { return &St{} })
-				implementInto[Id, St, NoConfig, Unit, Unit](d, a, c.method, h)
+				def := defineAgentInto[Id, NoConfig](d, Spec{Name: "A", Mode: c.mode})
+				implementAgentInto[Id, St, NoConfig](d, def,
+					simpleNewState[Id, St](func(Id) *St { return &St{} }), false,
+					[]Binding[Id, St]{Bound(c.method, h)})
 				mustDefErr(t, d, c.want)
 			})
 		})

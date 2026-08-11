@@ -14,38 +14,55 @@
 
 // Package golem is the Golem Go SDK for authoring agents.
 //
-// An agent is declared with [DefineAgent], its methods with [DefineMethod], and
-// their behaviour bound with [Implement]:
+// An agent's DEFINITION (its contract) and its IMPLEMENTATION (its behaviour)
+// live in separate packages, so agents can call one another without Go import
+// cycles. The definition is state-free and is what other agents import:
 //
-//	type CounterId struct{ Name string }     // constructor params; also the type-level marker
-//	type CounterState struct{ count int64 }  // private state
+//	// package counteragent — the definition (no state)
+//	type CounterId struct{ Name string } // constructor params; also the type-level identity
 //	type AddIn struct{ By int64 }
 //
-//	var Counter = golem.DefineAgent[CounterId, CounterState](
-//	    golem.Spec{Name: "CounterAgent", Mode: golem.Durable},
-//	    func(id CounterId) *CounterState { return &CounterState{} },
+//	var Agent = golem.DefineAgent[CounterId](golem.Spec{Name: "CounterAgent"})
+//	var (
+//	    Add   = golem.DefineMethod[CounterId, AddIn, int64]("add")
+//	    Value = golem.DefineMethod[CounterId, golem.Unit, int64]("value")
 //	)
 //
-//	var Add = golem.DefineMethod[CounterId, AddIn, int64]("add")
+// The implementation lives in its own package and owns the private state:
 //
-//	func init() {
-//	    golem.Implement(Counter, Add, func(ctx *golem.Context[CounterState], in AddIn) int64 {
+//	// package counteragentimpl — the behaviour (state is unexported)
+//	type state struct{ count int64 }
+//
+//	var _ = golem.Implement(counteragent.Agent,
+//	    func(counteragent.CounterId) *state { return &state{} },
+//	    golem.Bound(counteragent.Add, func(ctx *golem.Context[state], in counteragent.AddIn) int64 {
 //	        ctx.State.count += in.By
 //	        return ctx.State.count
-//	    })
-//	}
+//	    }),
+//	    golem.Bound(counteragent.Value, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+//	        return ctx.State.count
+//	    }),
+//	)
 //
-//	func main() {} // the SDK wires the component exports from its own init()
+// Another agent calls it through the definition — [AgentDefinition.Get] returns a
+// client, and the method descriptor carries the call:
+//
+//	client := counteragent.Agent.Get(counteragent.CounterId{Name: "c1"})
+//	n := counteragent.Add.Call(client, counteragent.AddIn{By: 5})
 //
 // Method descriptors are package-level values so the same value drives the
-// agent-type schema, the implementation binding, and (typed) calls from other
+// agent-type schema, the implementation binding, and typed calls from other
 // agents. Schemas are derived from the Go types by reflection; there is no code
 // generation step.
 //
-// Importing this package links the generated golem:agent/guest export glue into
-// the component, so an agent's main package needs only:
+// A component's main package blank-imports each implementation package (which
+// registers its agent on import) and this package (which links the generated
+// golem:agent/guest export glue into the component):
 //
-//	import _ "github.com/golemcloud/golem/sdks/go/golem"
+//	import (
+//	    _ "example.com/app/counteragentimpl"
+//	    _ "github.com/golemcloud/golem/sdks/go/golem"
+//	)
 package golem
 
 import (
@@ -168,7 +185,7 @@ type Context[S any] struct {
 func (c *Context[S]) AgentID() string { return c.agentID }
 
 // agentScope is the unexported capability carried by a method's *[Context].
-// [Agent.Config] requires it, so config can be read only from inside a running
+// [Config] requires it, so config can be read only from inside a running
 // method. The *S in the signature ties the scope to the agent's state type, so
 // one agent cannot read another agent's config (whose state type differs) at
 // compile time. (A constructor reads config off its own *[InitContext] via
@@ -178,7 +195,7 @@ type agentScope[S any] interface {
 }
 
 // agentScopeState satisfies [agentScope] for a method context. It exists only to
-// gate [Agent.Config] at compile time.
+// gate [Config] at compile time.
 //
 //nolint:unused // false positive: staticcheck's unused can't trace generic-interface satisfaction; the compiler requires this method for agentScope[S].
 func (c *Context[S]) agentScopeState() *S { return c.State }
@@ -200,15 +217,16 @@ func (c *InitContext[Id, S, Cfg]) ID() Id { return c.id }
 // AgentID returns the raw agent id the instance is being initialized with.
 func (c *InitContext[Id, S, Cfg]) AgentID() string { return c.agentID }
 
-// Agent is the handle returned by [DefineAgent] / [DefineConfiguredAgent]. Id is
-// the constructor parameter type, which doubles as the agent's type-level
-// identity; S is the private state type; Cfg is the agent's config struct
-// ([NoConfig] for a config-less agent). Cfg is carried on the handle so config
-// can be read in a method via [Agent.Config] without a separate config handle.
-type Agent[Id any, S any, Cfg any] struct{ name string }
+// AgentDefinition is the state-free handle returned by [DefineAgent] /
+// [DefineConfiguredAgent]. Id is the constructor parameter type, which doubles as
+// the agent's type-level identity; Cfg is the agent's config struct ([NoConfig]
+// for a config-less agent). It carries no state type: callers obtain a client
+// with [AgentDefinition.Get] and never depend on how the target stores state.
+// The behaviour (and the private state) is attached separately with [Implement].
+type AgentDefinition[Id any, Cfg any] struct{ name string }
 
 // Name returns the agent's wire-level type name.
-func (a *Agent[Id, S, Cfg]) Name() string { return a.name }
+func (a *AgentDefinition[Id, Cfg]) Name() string { return a.name }
 
 // MethodDef is a typed method descriptor: the single source of truth shared by
 // the agent-type schema, the implementation binding, and calls from other

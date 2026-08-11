@@ -97,9 +97,8 @@ func TestSnapshotPolicyMapsToWit(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			type Id struct{ Name string }
-			type St struct{}
 			withDefs(t, func(d *definitions) {
-				defineAgentInto[Id, St](d, Spec{Name: "A", Snapshot: c.policy}, func(Id) *St { return &St{} })
+				defineAgentInto[Id, NoConfig](d, Spec{Name: "A", Snapshot: c.policy})
 				types, errs := d.discover()
 				if len(errs) != 0 {
 					t.Fatalf("errs: %v", errs)

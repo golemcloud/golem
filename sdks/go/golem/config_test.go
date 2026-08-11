@@ -43,14 +43,11 @@ type demoAppConfig struct {
 	Db       demoDBConfig
 }
 
-// cfgConfiguredAgent registers the "Cfg" agent with config type Cfg attached (a
-// no-op constructor — the host read must stay out of the natively-linked test).
-func cfgConfiguredAgent[Cfg any](d *definitions) *Agent[cfgId, cfgState, Cfg] {
-	return defineConfiguredAgentInto[cfgId, cfgState, Cfg](
-		d,
-		Spec{Name: "Cfg"},
-		func(*InitContext[cfgId, cfgState, Cfg]) *cfgState { return &cfgState{} },
-	)
+// cfgConfiguredAgent registers the "Cfg" agent's definition with config type Cfg
+// attached. Declaration alone flattens the config surface (what these tests
+// exercise); no implementation is needed.
+func cfgConfiguredAgent[Cfg any](d *definitions) *AgentDefinition[cfgId, Cfg] {
+	return defineAgentInto[cfgId, Cfg](d, Spec{Name: "Cfg"})
 }
 
 // TestConfigDeclarationsInMetadata — DefineConfiguredAgent flattens the agent's

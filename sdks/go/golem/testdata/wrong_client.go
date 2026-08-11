@@ -12,28 +12,20 @@ package main
 import "github.com/golemcloud/golem/sdks/go/golem"
 
 type PaymentID struct{ Merchant string }
-type PaymentState struct{}
 type ChargeIn struct{ AmountCents int64 }
 
 type OrderID struct{ Number string }
-type OrderState struct{}
 
-var Payment = golem.DefineAgent[PaymentID, PaymentState](
-	golem.Spec{Name: "PaymentAgent"},
-	func(PaymentID) *PaymentState { return &PaymentState{} },
-)
+var Payment = golem.DefineAgent[PaymentID](golem.Spec{Name: "PaymentAgent"})
 
-var Order = golem.DefineAgent[OrderID, OrderState](
-	golem.Spec{Name: "OrderAgent"},
-	func(OrderID) *OrderState { return &OrderState{} },
-)
+var Order = golem.DefineAgent[OrderID](golem.Spec{Name: "OrderAgent"})
 
 // Charge is a method of the PAYMENT agent (its Id is PaymentID).
 var Charge = golem.DefineMethod[PaymentID, ChargeIn, int64]("charge")
 
 func main() {
 	// A client for the ORDER agent — Client[OrderID].
-	orderClient := golem.ClientFor(Order, OrderID{Number: "o-1"})
+	orderClient := Order.Get(OrderID{Number: "o-1"})
 
 	// ERROR: Charge is MethodDef[PaymentID, …]; Call wants Client[PaymentID],
 	// but orderClient is Client[OrderID]. Type-check must reject this.

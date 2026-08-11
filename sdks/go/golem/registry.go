@@ -108,79 +108,50 @@ func lowerFirst(s string) string {
 	return string(b)
 }
 
-// DefineAgent registers an agent type and returns its typed handle. init builds
-// the instance state from the constructor parameters.
+// DefineAgent declares a config-less agent and returns its state-free
+// [AgentDefinition]. Put it in a package-level var in the agent's DEFINITION
+// package; other agents import that package to call the agent. The behaviour and
+// the private state are attached separately with [Implement] — typically from a
+// different (implementation) package, so agents can call one another without a Go
+// import cycle.
 //
-// Call it from a package-level var so registration happens before the component
-// is invoked.
-//
-// A config-less agent uses this form. To attach config — whether the constructor
-// needs it or only the methods do — declare the agent with [DefineConfiguredAgent]
-// and read it with [Agent.Config].
-//
-// This is sugar over [DefineConfiguredAgent] with [NoConfig]: the constructor
-// gets its id directly and never sees [InitContext].
-func DefineAgent[Id any, S any](spec Spec, init func(Id) *S) *Agent[Id, S, NoConfig] {
-	return defineAgentInto[Id, S](defs, spec, init)
+// To attach config, declare the agent with [DefineConfiguredAgent].
+func DefineAgent[Id any](spec Spec) *AgentDefinition[Id, NoConfig] {
+	return defineAgentInto[Id, NoConfig](defs, spec)
 }
 
-// defineAgentInto is the instance-scoped form of DefineAgent — sugar over
-// [defineConfiguredAgentInto] with [NoConfig], adapting the simple func(Id) *S
-// constructor. Tests call it with their own definitions for full isolation.
-func defineAgentInto[Id any, S any](d *definitions, spec Spec, init func(Id) *S) *Agent[Id, S, NoConfig] {
-	var cinit func(*InitContext[Id, S, NoConfig]) *S
-	if init != nil {
-		cinit = func(ctx *InitContext[Id, S, NoConfig]) *S { return init(ctx.id) }
-	}
-	return defineConfiguredAgentInto[Id, S, NoConfig](d, spec, cinit)
+// DefineConfiguredAgent declares an agent with config type Cfg and returns its
+// state-free [AgentDefinition]. Cfg rides on the definition, so a method reads
+// config with [Config] and the constructor reads it with [InitContext.Config].
+// Attach the behaviour with [ImplementConfigured] (whose init receives an
+// *[InitContext]); an agent whose constructor does not itself need config can
+// still use the plain [Implement].
+//
+//	type ShopConfig struct{ Greeting string }
+//	var Shop = golem.DefineConfiguredAgent[ShopId, ShopConfig](golem.Spec{Name: "Shop"})
+func DefineConfiguredAgent[Id any, Cfg any](spec Spec) *AgentDefinition[Id, Cfg] {
+	return defineAgentInto[Id, Cfg](defs, spec)
 }
 
-// DefineConfiguredAgent registers an agent with config type Cfg and returns its
-// handle. Cfg is carried on the handle, so config is read in a method with
-// [Agent.Config] — no separate config handle. init receives an
-// *[InitContext][Id, S, Cfg], which carries the constructor parameters
-// ([InitContext.ID]) and reads config with [InitContext.Config] — off the
-// context, not the returned agent, so the constructor does not self-reference the
-// package-level var it is being assigned to:
-//
-//	var Shop = golem.DefineConfiguredAgent[ShopId, ShopState, ShopConfig](
-//	    golem.Spec{Name: "Shop"},
-//	    func(ctx *golem.InitContext[ShopId, ShopState, ShopConfig]) *ShopState {
-//	        return &ShopState{greeting: ctx.Config().Greeting}
-//	    },
-//	)
-//
-// Methods take *[Context] and read config with Shop.Config(ctx). An agent whose
-// constructor does not need config can ignore the InitContext's config; an agent
-// with no config at all uses the simpler [DefineAgent].
-func DefineConfiguredAgent[Id any, S any, Cfg any](spec Spec, init func(*InitContext[Id, S, Cfg]) *S) *Agent[Id, S, Cfg] {
-	return defineConfiguredAgentInto[Id, S, Cfg](defs, spec, init)
-}
-
-// defineConfiguredAgentInto is the instance-scoped implementation behind both
-// DefineAgent and DefineConfiguredAgent. The public entry points wrap it against
-// the package-global defs; tests call it with their own definitions for full
-// isolation. (It must stay a generic function — Go forbids generic methods.)
-func defineConfiguredAgentInto[Id any, S any, Cfg any](d *definitions, spec Spec, init func(*InitContext[Id, S, Cfg]) *S) *Agent[Id, S, Cfg] {
+// defineAgentInto registers the agent's DEFINITION shell (name, mode, mount,
+// snapshot policy, id fields, and config surface) on d and returns the handle.
+// The constructor and the methods are attached later by [Implement]/[Bound].
+// Tests call it with their own definitions for full isolation. (It must stay a
+// generic function — Go forbids generic methods.)
+func defineAgentInto[Id any, Cfg any](d *definitions, spec Spec) *AgentDefinition[Id, Cfg] {
 	idType := reflect.TypeFor[Id]()
 	if spec.Name == "" {
 		d.recordErr("", "", "DefineAgent requires a non-empty Spec.Name (Id type %s)", idType)
-		return &Agent[Id, S, Cfg]{name: spec.Name}
+		return &AgentDefinition[Id, Cfg]{name: spec.Name}
 	}
 	if _, dup := d.agents[spec.Name]; dup {
 		d.recordErr(spec.Name, "", "agent type already defined")
-		return &Agent[Id, S, Cfg]{name: spec.Name}
+		return &AgentDefinition[Id, Cfg]{name: spec.Name}
 	}
 	if idType.Kind() != reflect.Struct {
-		// Record but still register (with no id fields) so downstream Implement
-		// calls attach rather than cascading into "unknown agent" errors.
+		// Record but still register (with no id fields) so a later Implement attaches
+		// rather than cascading into "unknown agent" errors.
 		d.recordErr(spec.Name, "", "Id must be a struct, got %s", idType)
-	}
-	if init == nil {
-		// Recorded, not fatal: init is only called from a successful initialize,
-		// which is gated on this agent having no definition errors — so the nil is
-		// reported at discovery rather than panicking at construction time.
-		d.recordErr(spec.Name, "", "DefineAgent requires a non-nil init function")
 	}
 	e := &agentEntry{
 		name:     spec.Name,
@@ -191,27 +162,22 @@ func defineConfiguredAgentInto[Id any, S any, Cfg any](d *definitions, spec Spec
 		idType:   idType,
 		idFields: d.structFields(idType),
 		methods:  map[string]*methodEntry{},
-		newState: func(idVal reflect.Value, agentID string) any {
-			// No host call here: the constructor reads config lazily via
-			// ctx.Config(), keeping get-config-value out of this always-linked path
-			// (it must stay reachable only from wasm, like Agent.Config).
-			return init(&InitContext[Id, S, Cfg]{id: idVal.Interface().(Id), agentID: agentID})
-		},
+		// newState and the methods are attached by Implement; newState stays nil
+		// until then (an agent defined but never implemented fails at initialize).
 	}
 	d.agents[spec.Name] = e
 	d.order = append(d.order, spec.Name)
 	// Attach Cfg's config surface. NoConfig (the DefineAgent path) has no fields,
-	// so this records nothing. Done after registration so it lands on the live
-	// entry.
+	// so this records nothing. Done after registration so it lands on the live entry.
 	flattenConfigStruct(d, e, spec.Name, reflect.TypeFor[Cfg]())
-	// The Id type identifies the target agent for typed calls (ClientFor), so two
-	// agents cannot share one — the second would silently shadow the first.
+	// The Id type identifies the target agent for typed calls (Get), so two agents
+	// cannot share one — the second would silently shadow the first.
 	if existing, ok := d.idToAgent[idType]; ok && existing != spec.Name {
 		d.recordErr(spec.Name, "", "Id type %s is already used by agent %q; each agent needs a distinct Id type", idType, existing)
 	} else {
 		d.idToAgent[idType] = spec.Name
 	}
-	return &Agent[Id, S, Cfg]{name: spec.Name}
+	return &AgentDefinition[Id, Cfg]{name: spec.Name}
 }
 
 // DefineMethod declares a typed method descriptor. The type parameters are
@@ -232,102 +198,156 @@ func DefineMethod[Id any, In any, Out any](name string, opts ...MethodOpt) Metho
 	}
 }
 
-// Implement binds a handler to a method descriptor. S, In and Out are inferred
-// from the handler, and Id must match the agent — so binding a descriptor to the
-// wrong agent, or a handler with the wrong signature, is a compile error.
+// Implement attaches an agent's behaviour: its constructor init (which builds the
+// private state from the constructor parameters) and its method handlers (each
+// wrapped with [Bound]). Put it in the agent's IMPLEMENTATION package. The state
+// type S is introduced here and stays private to this package — callers of the
+// agent never see it.
 //
-// The handler is wrapped once, here, into a uniform dispatcher; dispatch itself
-// never uses reflection to call user code.
+//	type state struct{ count int64 }
+//	var _ = golem.Implement(counteragent.Agent,
+//	    func(counteragent.CounterId) *state { return &state{} },
+//	    golem.Bound(counteragent.Add, addHandler),
+//	)
+//
 // A handler returns only its output value. There is no error return: a failed
 // invocation is signalled by panicking (the SDK recovers it into a non-retriable
 // agent-error surfaced to the caller — the worker survives). Reserve panic for
 // genuine failures; model expected, typed outcomes as a [Result] in the output.
 // Use [Must] to turn an inner (value, error) call into a panic-on-error.
-func Implement[Id any, S any, Cfg any, In any, Out any](
-	a *Agent[Id, S, Cfg],
-	m MethodDef[Id, In, Out],
-	h func(*Context[S], In) Out,
-) {
-	implementInto[Id, S, Cfg, In, Out](defs, a, m, h)
-}
-
-// Method declares a typed method and binds its handler in one call — the usual
-// way to define an agent method. In and Out are inferred from the handler and Id
-// from the agent, so no type arguments are needed, and the returned descriptor
-// drives type-safe RPC exactly like one from [DefineMethod]:
 //
-//	var Add = golem.Method(Counter, "add", func(ctx *golem.Context[CounterState], in AddIn) int64 {
-//		ctx.State.Total += in.Amount
-//		return ctx.State.Total
-//	})
-//	// elsewhere: Add.Call(counter, AddIn{Amount: 5})
-//
-// Assigning the result to a package-level var registers the handler when the
-// package is imported; the agent must be defined first, which var-init ordering
-// guarantees when the initializer references it. Use the separate [DefineMethod]
-// + [Implement] pair when the descriptor and the handler live apart — e.g. a
-// descriptor in a shared package whose handler is implemented only in the server.
-func Method[Id any, S any, Cfg any, In any, Out any](
-	a *Agent[Id, S, Cfg],
-	name string,
-	h func(*Context[S], In) Out,
-	opts ...MethodOpt,
-) MethodDef[Id, In, Out] {
-	return methodInto[Id, S, Cfg, In, Out](defs, a, name, h, opts...)
+// For an agent whose constructor reads config, use [ImplementConfigured].
+func Implement[Id any, S any, Cfg any](
+	def *AgentDefinition[Id, Cfg],
+	init func(Id) *S,
+	bindings ...Binding[Id, S],
+) Registered {
+	implementAgentInto[Id, S, Cfg](defs, def, simpleNewState[Id, S](init), init == nil, bindings)
+	return Registered{}
 }
 
-// methodInto is the instance-scoped implementation behind Method.
-func methodInto[Id any, S any, Cfg any, In any, Out any](
-	d *definitions,
-	a *Agent[Id, S, Cfg],
-	name string,
-	h func(*Context[S], In) Out,
-	opts ...MethodOpt,
-) MethodDef[Id, In, Out] {
-	m := DefineMethod[Id, In, Out](name, opts...)
-	implementInto[Id, S, Cfg, In, Out](d, a, m, h)
-	return m
+// ImplementConfigured is [Implement] for an agent whose constructor reads config:
+// init receives an *[InitContext] carrying the id ([InitContext.ID]) and the
+// config ([InitContext.Config]).
+func ImplementConfigured[Id any, S any, Cfg any](
+	def *AgentDefinition[Id, Cfg],
+	init func(*InitContext[Id, S, Cfg]) *S,
+	bindings ...Binding[Id, S],
+) Registered {
+	implementAgentInto[Id, S, Cfg](defs, def, configuredNewState[Id, S, Cfg](init), init == nil, bindings)
+	return Registered{}
 }
 
-// implementInto is the instance-scoped implementation behind Implement.
-func implementInto[Id any, S any, Cfg any, In any, Out any](
+// Registered is the result of [Implement]/[ImplementConfigured]. It carries no
+// data; it exists so the call can sit in a package-level `var _ = golem.Implement(…)`
+// that registers the agent when the implementation package is imported. (A
+// `func init() { golem.Implement(…) }` works equally well.)
+type Registered struct{}
+
+// Binding is one method-handler binding produced by [Bound]. Its Id and S type
+// parameters tie it to a specific agent definition and state type, so [Implement]
+// rejects a handler for the wrong agent or the wrong state at compile time.
+type Binding[Id any, S any] struct {
+	register func(d *definitions, e *agentEntry)
+}
+
+// Bound binds a handler to a method descriptor for use in [Implement]. S, In and
+// Out are inferred from the handler, and Id must match the descriptor's agent, so
+// binding a descriptor to the wrong agent, or a handler with the wrong signature,
+// is a compile error. Compose it with the method-expression adapters ([Bind] etc.)
+// to author handlers as ordinary Go methods. The handler is wrapped once, here,
+// into a uniform dispatcher; dispatch itself never uses reflection to call it.
+func Bound[Id any, S any, In any, Out any](m MethodDef[Id, In, Out], h func(*Context[S], In) Out) Binding[Id, S] {
+	return Binding[Id, S]{
+		register: func(d *definitions, e *agentEntry) { bindMethodInto[Id, S, In, Out](d, e, m, h) },
+	}
+}
+
+func simpleNewState[Id any, S any](init func(Id) *S) func(reflect.Value, string) any {
+	if init == nil {
+		return nil
+	}
+	return func(idVal reflect.Value, _ string) any { return init(idVal.Interface().(Id)) }
+}
+
+func configuredNewState[Id any, S any, Cfg any](init func(*InitContext[Id, S, Cfg]) *S) func(reflect.Value, string) any {
+	if init == nil {
+		return nil
+	}
+	// No host call here: the constructor reads config lazily via ctx.Config(),
+	// keeping get-config-value out of this always-linked path.
+	return func(idVal reflect.Value, agentID string) any {
+		return init(&InitContext[Id, S, Cfg]{id: idVal.Interface().(Id), agentID: agentID})
+	}
+}
+
+// implementAgentInto attaches the constructor and method bindings to an already
+// declared agent entry. Tests call it with their own definitions for isolation.
+func implementAgentInto[Id any, S any, Cfg any](
 	d *definitions,
-	a *Agent[Id, S, Cfg],
-	m MethodDef[Id, In, Out],
-	h func(*Context[S], In) Out,
+	def *AgentDefinition[Id, Cfg],
+	newState func(reflect.Value, string) any,
+	initNil bool,
+	bindings []Binding[Id, S],
 ) {
-	e := d.agents[a.name]
+	e := d.agents[def.name]
 	if e == nil {
-		d.recordErr(a.name, m.name, "Implement: unknown agent %q (was DefineAgent called?)", a.name)
+		d.recordErr(def.name, "", "Implement: unknown agent %q (was DefineAgent called?)", def.name)
 		return
 	}
+	if initNil {
+		// Recorded, not fatal: init is only called from a successful initialize,
+		// gated on this agent having no definition errors.
+		d.recordErr(def.name, "", "Implement requires a non-nil init function")
+	}
+	if e.newState != nil {
+		d.recordErr(def.name, "", "agent already implemented")
+		return
+	}
+	e.newState = newState
+	for _, b := range bindings {
+		if b.register != nil {
+			b.register(d, e)
+		}
+	}
+}
+
+// bindMethodInto registers one method handler on an agent entry: it validates the
+// descriptor, compiles the in/out codecs once (not per invocation), and installs
+// the erased dispatcher (dispatch never uses reflection to reach the handler).
+func bindMethodInto[Id any, S any, In any, Out any](
+	d *definitions,
+	e *agentEntry,
+	m MethodDef[Id, In, Out],
+	h func(*Context[S], In) Out,
+) {
 	if m.name == "" {
-		d.recordErr(a.name, "", "DefineMethod requires a non-empty method name")
+		d.recordErr(e.name, "", "DefineMethod requires a non-empty method name")
 		return
 	}
 	if h == nil {
-		d.recordErr(a.name, m.name, "Implement requires a non-nil handler")
+		d.recordErr(e.name, m.name, "Bound requires a non-nil handler")
 		return
 	}
 	if m.descCount > 1 {
-		d.recordErr(a.name, m.name, "method %q: Desc set %d times (a method has one description)", m.name, m.descCount)
+		d.recordErr(e.name, m.name, "method %q: Desc set %d times (a method has one description)", m.name, m.descCount)
 	}
 	if m.readOnlyCount > 1 {
-		d.recordErr(a.name, m.name, "method %q: ReadOnly set %d times (a method is read-only once)", m.name, m.readOnlyCount)
+		d.recordErr(e.name, m.name, "method %q: ReadOnly set %d times (a method is read-only once)", m.name, m.readOnlyCount)
 	}
 	if m.cacheCount > 1 {
-		d.recordErr(a.name, m.name, "method %q: ReadOnly accepts at most one cache policy, got %d", m.name, m.cacheCount)
+		d.recordErr(e.name, m.name, "method %q: ReadOnly accepts at most one cache policy, got %d", m.name, m.cacheCount)
 	}
 	if m.readOnly != nil {
 		if m.readOnly.policy.kind == cacheTTL && m.readOnly.policy.ttl <= 0 {
-			d.recordErr(a.name, m.name, "method %q: CacheFor requires a positive ttl, got %v (use NoCache to disable caching)", m.name, m.readOnly.policy.ttl)
+			d.recordErr(e.name, m.name, "method %q: CacheFor requires a positive ttl, got %v (use NoCache to disable caching)", m.name, m.readOnly.policy.ttl)
 		}
 		if e.mode == common.AgentModeEphemeral {
-			d.recordErr(a.name, m.name, "method %q: ReadOnly is only valid on a Durable agent (an ephemeral agent has no shared state to cache)", m.name)
+			d.recordErr(e.name, m.name, "method %q: ReadOnly is only valid on a Durable agent (an ephemeral agent has no shared state to cache)", m.name)
 		}
 	}
 	if _, dup := e.methods[m.name]; dup {
-		d.recordErr(a.name, m.name, "method already implemented")
+		d.recordErr(e.name, m.name, "method already implemented")
 		return
 	}
 
