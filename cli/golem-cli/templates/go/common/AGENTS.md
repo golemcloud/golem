@@ -153,11 +153,12 @@ Wire names come from the SDK's declarations, not from Go identifiers:
 - Standard Go style: `gofmt` decides formatting; `UpperCamelCase` for exported identifiers,
   `lowerCamelCase` otherwise.
 - Agents are declared with `golem.DefineAgent` and their methods with `golem.DefineMethod` (in the
-  definition package); behaviour is bound with `golem.Implement(def, init, golem.Bound(method, handler), …)`
-  (in the implementation package). A configured agent whose constructor reads config uses
-  `golem.ImplementConfigured` and reads config in a method via `golem.Config(def, ctx)`.
-- Handlers may be plain closures or ordinary Go methods bound with a method expression, wrapped in
-  `golem.Bound` (`golem.Bound(Cart.AddItem, golem.Bind((*state).AddItem))`).
+  definition package); behaviour is attached in the implementation package with
+  `impl := golem.Implement(def, init)` and then `golem.Handle(impl, method, handler)` per method (in an
+  `init()`). A configured agent whose constructor reads config uses `golem.ImplementConfigured` and reads
+  config in a method via `golem.Config(def, ctx)`.
+- Handlers may be plain closures or ordinary Go methods bound with a method expression
+  (`golem.Handle(impl, Cart.AddItem, golem.Bind((*state).AddItem))`).
 
 ## Tooling
 
