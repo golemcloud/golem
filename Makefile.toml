@@ -48,9 +48,7 @@ CARGO_INCREMENTAL = "false"
 #CARGO_PROFILE_test_STRIP = "debuginfo"
 JUNIT_OPTS = "--format ctrf --logfile target/ctrf.json"
 WORKER_TEST_THREAD_OPTS = ""
-# it-cli runs on a 32-vCPU runner with CARGO_BUILD_JOBS=4 (see ci.yaml), so 8 concurrent
-# tests * 4 cargo jobs = 32, matched to cores (was 4 threads * 10 jobs = 40, over-subscribed).
-CLI_TEST_THREADS = "8"
+CLI_TEST_THREADS = "4"
 PROFILE = "dev-ci"
 CI = "true"
 # CARGO_LOG="cargo::core::compiler::fingerprint=trace"
