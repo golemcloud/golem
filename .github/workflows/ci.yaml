@@ -296,7 +296,9 @@ jobs:
   it-cli:
     name: it-cli
     env:
-      CARGO_BUILD_JOBS: 10
+      # 32-vCPU runner: 4 cargo jobs per test * CLI_TEST_THREADS=8 (set in Makefile [env.ci])
+      # = 32, matched to cores. Previously 10 jobs * 4 threads = 40 (over-subscribed).
+      CARGO_BUILD_JOBS: 4
       GOLEM_CLI_TEST_BIN_PROFILE: dev-release-ci
     runs-on: blacksmith-32vcpu-ubuntu-2204
     needs:
