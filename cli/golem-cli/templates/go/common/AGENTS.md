@@ -36,10 +36,17 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-integration-test-setup` | Setting up a dedicated Golem environment for integration testing — isolated local server, test environment in golem.yaml, dynamic port discovery, and non-interactive deploys |
 | `golem-cancel-queued-invocation` | Canceling a pending (queued) invocation on an agent |
 | `golem-delete-agent` | Deleting an agent instance |
+| `golem-add-agent-go` | Adding a new agent type (definition + implementation packages) to a Go component |
+| `golem-call-another-agent-go` | Calling another agent via typed RPC (`Call` / `CallAsync`) |
+| `golem-fire-and-forget-go` | Fire-and-forget invocations with `Trigger` |
+| `golem-recurring-task-go` | Recurring / scheduled work (self-rescheduling via `Schedule`) |
+| `golem-add-http-endpoint-go` | Exposing an agent's methods over HTTP (mount + endpoints) |
+| `golem-make-http-request-go` | Outgoing HTTP requests from an agent via `net/http` |
+| `golem-multi-instance-agent-go` | Addressing many instances by `Id` (and phantom instances) |
+| `golem-add-go-module` | Adding a Go module dependency |
 
-> **Go support is new.** Go-specific skills (`golem-add-agent-go`, `golem-add-http-endpoint-go`, …)
-> are not available yet, so only the common skills are listed above. Until they land, use the Go SDK's
-> own documentation.
+> More Go-specific skills are being added; until then, use the Go SDK's own documentation for areas not
+> covered above.
 
 # Golem Application Development Guide (Go)
 

@@ -1,0 +1,90 @@
+---
+name: golem-add-http-endpoint-go
+description: "Exposing a Go agent's methods over HTTP. Use when the user wants to add an HTTP endpoint/route to an agent, mount an agent under a URL path, make agent methods callable over HTTP, or map path/query/header parameters in a Go Golem project."
+---
+
+# Exposing a Go Agent over HTTP
+
+## Overview
+
+HTTP mounting is **metadata only**: you declare, on the agent's definition, a URL prefix for the agent and a route for each method. The platform routes matching requests to the right instance and method — there is no incoming-request handler to write in the guest.
+
+Two pieces, both on the **definition**:
+
+1. `Spec.HTTP = &golem.Mount{Path: "…"}` — the agent-level prefix. Its `{var}` segments bind the agent's constructor (`ID`) fields, so a request URL selects the instance. **Every `ID` field must appear as a `{var}`.**
+2. `golem.HTTP(golem.GET("/suffix"), …)` as a method option — one or more routes per method, with request data bound to the method's input fields.
+
+## Steps
+
+1. **Add a mount** to the agent's `Spec`: `HTTP: &golem.Mount{Path: "/counters/{name}"}`.
+2. **Add routes** to methods with the `golem.HTTP(...)` option and a verb constructor.
+3. **Bind request data** to input fields (path `{var}`, `golem.Query`, `golem.Header`, or the JSON body).
+4. **Build**, then **deploy behind an HTTP API** so the routes are served.
+
+## Example (definition)
+
+```go
+package counter
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+type ID struct{ Name string } // bound by {name} in the mount path
+
+type AddIn struct{ By int64 }
+
+var Agent = golem.DefineAgent[ID](golem.Spec{
+	Name:        "CounterAgent",
+	Description: "A counter exposed over HTTP",
+	// {name} binds ID.Name; CORS/Auth optional.
+	HTTP: &golem.Mount{Path: "/counters/{name}", CORS: []string{"*"}},
+})
+
+var (
+	// GET /counters/{name}/value  — options compose: Desc + HTTP in one call.
+	Value = golem.DefineMethod[ID, golem.Unit, int64]("value",
+		golem.Desc("Read the current value"), golem.HTTP(golem.GET("/value")))
+
+	// POST /counters/{name}/add  — AddIn arrives as the JSON body
+	Add = golem.DefineMethod[ID, AddIn, int64]("add",
+		golem.Desc("Add to the count"), golem.HTTP(golem.POST("/add")))
+)
+```
+
+The handlers are ordinary handlers (see `golem-add-agent-go`) — nothing HTTP-specific in the impl.
+
+## Binding request data to input fields
+
+- **Path variables** — `{sku}` in a route suffix binds the input field `Sku`: `golem.GET("/items/{sku}")`.
+- **Query parameters** — `golem.Query("detailed", "detailed")` binds `?detailed=` to the `Detailed` field:
+  ```go
+  Lookup = golem.DefineMethod[ID, LookupIn, ItemInfo]("lookup",
+      golem.HTTP(golem.GET("/items/{sku}", golem.Query("detailed", "detailed"))))
+  ```
+- **Headers** — `golem.Header("X-Tenant", "tenant")` binds the header to the `Tenant` field.
+- **Body** — for body-carrying verbs (`POST`/`PUT`), input fields not bound to path/query/header come from the JSON request body.
+
+## Auth & CORS
+
+- `Mount{Auth: true}` requires auth on every endpoint; `golem.EndpointAuth(true|false)` overrides it per route:
+  ```go
+  golem.HTTP(golem.GET("/items/{sku}", golem.EndpointAuth(true)))
+  ```
+- `Mount{CORS: []string{"*"}}` sets allowed origins for the agent; `golem.EndpointCORS(patterns...)` overrides per route.
+
+## Verbs
+
+`golem.GET`, `golem.POST`, `golem.PUT`, `golem.DELETE`, and `golem.Custom("VERB", "/path")`. `GET`/`HEAD` are bodyless — bind their inputs from path/query/header.
+
+## Key Constraints
+
+- Every `ID` field must appear as a `{var}` in `Mount.Path` (else the platform can't identify the instance); path vars may also be literals or the trailing catch-all `{*rest}`.
+- A method with an HTTP endpoint but no agent-level `Spec.HTTP` mount is a definition error — set the mount.
+- Serving the routes requires an HTTP API deployment (see the manifest `httpApi` configuration); mounting alone only advertises the routes.
+
+### Related Skills
+
+| Skill | When to Load |
+|-------|--------------|
+| `golem-add-agent-go` | Define the agent whose methods you're exposing |
+| `golem-make-http-request-go` | Make an *outgoing* HTTP request from agent code |
+| `golem-multi-instance-agent-go` | The `{var}` path segments select an instance by ID |
