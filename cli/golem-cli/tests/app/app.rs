@@ -1333,6 +1333,7 @@ async fn dependency_guest_bridge_enabled_for_rust_consumer(_tracing: &Tracing) {
                 dependencies:
                   agents:
                     - app:producer/BarAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -2664,6 +2665,7 @@ async fn dependency_guest_bridge_includes_producers_that_also_consume_guest_brid
                   agents:
                     - app:base/BarAgent
                     - app:middle/FooAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -2813,6 +2815,7 @@ async fn dependency_guest_bridge_uses_manifest_dependencies_for_rust_consumers(_
                 dependencies:
                   agents:
                     - app:middle/FooAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -2964,6 +2967,7 @@ async fn selected_dependency_guest_bridge_uses_transitive_manifest_dependencies(
                 dependencies:
                   agents:
                     - app:middle/FooAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -4393,6 +4397,7 @@ async fn dependency_guest_bridge_builds_rust_consumers_after_post_build_guest_cl
                 dependencies:
                   agents:
                     - app:base/FooAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -4534,6 +4539,7 @@ async fn dependency_guest_bridge_waits_for_unseeded_producer_consumers(_tracing:
                 dependencies:
                   agents:
                     - app:base/FooAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -4683,6 +4689,7 @@ async fn dependency_guest_bridge_counts_explicit_pre_build_clients_when_scheduli
                 dependencies:
                   agents:
                     - app:base/FooAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -4989,6 +4996,7 @@ async fn rust_cargo_path_guest_bridge_dependency_waits_for_guest_bridge_sdks(_tr
                 dependencies:
                   agents:
                     - app:producer/BarAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -5091,6 +5099,7 @@ async fn rust_manifest_path_cargo_guest_bridge_dependency_waits_for_guest_bridge
                 dependencies:
                   agents:
                     - app:producer/BarAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -5181,6 +5190,7 @@ async fn rust_target_specific_cargo_path_guest_bridge_dependency_waits_for_guest
                 dependencies:
                   agents:
                     - app:producer/BarAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -5283,6 +5293,7 @@ async fn rust_workspace_cargo_path_guest_bridge_dependency_waits_for_guest_bridg
                 dependencies:
                   agents:
                     - app:producer/BarAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -5388,6 +5399,7 @@ async fn rust_workspace_multiline_guest_bridge_dependency_waits_for_guest_bridge
                 dependencies:
                   agents:
                     - app:producer/BarAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -5490,6 +5502,7 @@ async fn rust_workspace_multiline_dependency_use_waits_for_guest_bridge_sdks(_tr
                 dependencies:
                   agents:
                     - app:producer/BarAgent
+                buildMergeMode: replace
                 componentWasm: consumer.wasm
                 outputWasm: consumer-final.wasm
                 build:
@@ -7382,6 +7395,7 @@ async fn rust_guest_bridge_matcher_without_non_rust_component_is_rejected(_traci
             components:
               app:producer:
                 templates: rust
+                buildMergeMode: replace
                 componentWasm: producer.wasm
                 outputWasm: producer-final.wasm
                 build:
@@ -7421,6 +7435,7 @@ async fn rust_guest_bridge_component_matcher_without_non_rust_component_is_rejec
             components:
               app:producer:
                 templates: rust
+                buildMergeMode: replace
                 componentWasm: producer.wasm
                 outputWasm: producer-final.wasm
                 build:
