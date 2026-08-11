@@ -294,6 +294,10 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
   it-cli:
+    # Explicit, stable check-context name per shard (e.g. "it-cli (agents)") so branch-protection
+    # required checks have a fixed name to target — otherwise GitHub derives it from the whole matrix
+    # object, which is fragile.
+    name: it-cli (${{ matrix.group.shard }})
     env:
       CARGO_BUILD_JOBS: 10
       GOLEM_CLI_TEST_BIN_PROFILE: dev-release-ci
@@ -308,9 +312,9 @@ jobs:
       fail-fast: false
       matrix:
         group:
-          - { name: cli-integration-tests-agents, description: "it-cli app/agents" }
-          - { name: cli-integration-tests-bridge, description: "it-cli bridge_gen" }
-          - { name: cli-integration-tests-core, description: "it-cli app core" }
+          - { name: cli-integration-tests-agents, shard: agents }
+          - { name: cli-integration-tests-bridge, shard: bridge_gen }
+          - { name: cli-integration-tests-core, shard: core }
     steps:
       - uses: actions/checkout@v5
         with:
@@ -346,6 +350,12 @@ jobs:
 
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
+
+      # Warm the coursier/ivy cache: the bridge shard resolves the Scala SDK deps from ~/.ivy2/local
+      # (restored below) plus transitive deps that otherwise download cold, since the SDK publish that
+      # used to warm this in-job moved to build-golem-scala.
+      - name: Cache scala dependencies
+        uses: coursier/cache-action@v8
 
       - name: Setup MoonBit
         uses: hustcer/setup-moonbit@v1
@@ -410,7 +420,7 @@ jobs:
           cp tmp/golem-cli-test-binaries/* target/dev-release-ci/
           chmod +x target/dev-release-ci/*
 
-      - name: ${{ matrix.group.description }}
+      - name: it-cli ${{ matrix.group.shard }}
         env:
           QUIET: true
         run: cargo make --profile ci ${{ matrix.group.name }}
