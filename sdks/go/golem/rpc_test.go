@@ -40,12 +40,11 @@ var tPayment = DefineAgent[tPayId](
 var tCharge = DefineMethod[tPayId, tChargeIn, Money]("charge")
 
 func init() {
-	Implement(tPayment, func(id tPayId) *tPayState { return &tPayState{} },
-		Bound(tCharge, func(ctx *Context[tPayState], in tChargeIn) Money {
-			ctx.State.charged += in.AmountCents
-			return Money{Amount: ctx.State.charged, Currency: "EUR"}
-		}),
-	)
+	p := Implement(tPayment, func(id tPayId) *tPayState { return &tPayState{} })
+	Handle(p, tCharge, func(ctx *Context[tPayState], in tChargeIn) Money {
+		ctx.State.charged += in.AmountCents
+		return Money{Amount: ctx.State.charged, Currency: "EUR"}
+	})
 }
 
 // TestCallerEncodingMatchesCalleeDecoding — The caller encodes arguments with the same codecs the callee decodes with,

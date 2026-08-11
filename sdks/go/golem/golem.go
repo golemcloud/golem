@@ -33,16 +33,17 @@
 //	// package counteragentimpl — the behaviour (state is unexported)
 //	type state struct{ count int64 }
 //
-//	var _ = golem.Implement(counteragent.Agent,
-//	    func(counteragent.CounterId) *state { return &state{} },
-//	    golem.Bound(counteragent.Add, func(ctx *golem.Context[state], in counteragent.AddIn) int64 {
+//	var counter = golem.Implement(counteragent.Agent, func(counteragent.CounterId) *state { return &state{} })
+//
+//	func init() {
+//	    golem.Handle(counter, counteragent.Add, func(ctx *golem.Context[state], in counteragent.AddIn) int64 {
 //	        ctx.State.count += in.By
 //	        return ctx.State.count
-//	    }),
-//	    golem.Bound(counteragent.Value, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+//	    })
+//	    golem.Handle(counter, counteragent.Value, func(ctx *golem.Context[state], _ golem.Unit) int64 {
 //	        return ctx.State.count
-//	    }),
-//	)
+//	    })
+//	}
 //
 // Another agent calls it through the definition — [AgentDefinition.Get] returns a
 // client, and the method descriptor carries the call:
@@ -227,6 +228,16 @@ type AgentDefinition[Id any, Cfg any] struct{ name string }
 
 // Name returns the agent's wire-level type name.
 func (a *AgentDefinition[Id, Cfg]) Name() string { return a.name }
+
+// AgentImpl is the state-bound implementation handle returned by [Implement] /
+// [ImplementConfigured]. Register the agent's methods on it with [Handle]. Its S
+// type parameter is the agent's private state type, introduced at [Implement]; it
+// is used only inside the agent's implementation package (callers use the
+// [AgentDefinition] instead).
+type AgentImpl[Id any, S any, Cfg any] struct {
+	d *definitions
+	e *agentEntry
+}
 
 // MethodDef is a typed method descriptor: the single source of truth shared by
 // the agent-type schema, the implementation binding, and calls from other

@@ -43,11 +43,16 @@ type demoAppConfig struct {
 	Db       demoDBConfig
 }
 
-// cfgConfiguredAgent registers the "Cfg" agent's definition with config type Cfg
-// attached. Declaration alone flattens the config surface (what these tests
-// exercise); no implementation is needed.
+var cfgPing = DefineMethod[cfgId, Unit, Unit]("ping")
+
+// cfgConfiguredAgent registers the "Cfg" agent's definition (with config type Cfg
+// attached — declaration flattens the config surface, what these tests exercise)
+// and a trivial implementation so discover() sees a complete agent.
 func cfgConfiguredAgent[Cfg any](d *definitions) *AgentDefinition[cfgId, Cfg] {
-	return defineAgentInto[cfgId, Cfg](d, Spec{Name: "Cfg"})
+	def := defineAgentInto[cfgId, Cfg](d, Spec{Name: "Cfg"})
+	impl := implementInto[cfgId, cfgState, Cfg](d, def, simpleNewState[cfgId, cfgState](func(cfgId) *cfgState { return &cfgState{} }), false)
+	Handle(impl, cfgPing, func(*Context[cfgState], Unit) Unit { return Unit{} })
+	return def
 }
 
 // TestConfigDeclarationsInMetadata — DefineConfiguredAgent flattens the agent's

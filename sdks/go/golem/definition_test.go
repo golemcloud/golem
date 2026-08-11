@@ -106,9 +106,8 @@ func TestValidAgentFinalizesAndPublishesItsMount(t *testing.T) {
 		a := defineAgentInto[Id, NoConfig](d,
 			Spec{Name: "Counter", HTTP: &Mount{Path: "/c/{name}"}})
 		add := DefineMethod[Id, AddIn, int64]("add", HTTP(POST("/add?by={by}")))
-		implementAgentInto[Id, St, NoConfig](d, a,
-			simpleNewState[Id, St](func(Id) *St { return &St{} }), false,
-			[]Binding[Id, St]{Bound(add, func(*Context[St], AddIn) int64 { return 0 })})
+		impl := implementInto[Id, St, NoConfig](d, a, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
+		Handle(impl, add, func(*Context[St], AddIn) int64 { return 0 })
 
 		types, errs := d.discover()
 		if len(errs) != 0 {
@@ -139,7 +138,9 @@ func TestSeparateDefinitionsDoNotLeak(t *testing.T) {
 		type St struct{}
 		var errs []definitionError
 		withDefs(t, func(d *definitions) {
-			defineAgentInto[Id, NoConfig](d, Spec{Name: "Solo"})
+			def := defineAgentInto[Id, NoConfig](d, Spec{Name: "Solo"})
+			impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
+			Handle(impl, DefineMethod[Id, Unit, Unit]("ping"), func(*Context[St], Unit) Unit { return Unit{} })
 			_, errs = d.discover()
 		})
 		return errs

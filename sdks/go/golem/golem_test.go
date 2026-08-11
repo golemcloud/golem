@@ -30,23 +30,22 @@ var (
 )
 
 func init() {
-	Implement(tCounter, func(id tCounterId) *tCounterState { return &tCounterState{} },
-		Bound(tValue, func(ctx *Context[tCounterState], _ Unit) int64 {
-			return ctx.State.count
-		}),
-		Bound(tInc, func(ctx *Context[tCounterState], _ Unit) int64 {
-			ctx.State.count++
-			return ctx.State.count
-		}),
-		Bound(tAdd, func(ctx *Context[tCounterState], in tAddIn) int64 {
-			ctx.State.count += in.By
-			return ctx.State.count
-		}),
-		Bound(tReset, Bind0Unit((*tCounterState).reset)), // method-expression binding
-		Bound(tBoom, func(*Context[tCounterState], Unit) int64 {
-			panic("kaboom from agent code")
-		}),
-	)
+	c := Implement(tCounter, func(id tCounterId) *tCounterState { return &tCounterState{} })
+	Handle(c, tValue, func(ctx *Context[tCounterState], _ Unit) int64 {
+		return ctx.State.count
+	})
+	Handle(c, tInc, func(ctx *Context[tCounterState], _ Unit) int64 {
+		ctx.State.count++
+		return ctx.State.count
+	})
+	Handle(c, tAdd, func(ctx *Context[tCounterState], in tAddIn) int64 {
+		ctx.State.count += in.By
+		return ctx.State.count
+	})
+	Handle(c, tReset, Bind0Unit((*tCounterState).reset)) // method-expression binding
+	Handle(c, tBoom, func(*Context[tCounterState], Unit) int64 {
+		panic("kaboom from agent code")
+	})
 }
 
 func (s *tCounterState) reset() { s.count = 0 }
@@ -239,16 +238,15 @@ var tEcho = DefineAgent[tEchoId](
 var tSay = DefineMethod[tEchoId, tEchoIn, string]("say")
 
 func init() {
-	// One Implement bundles the constructor and every method (tPay too, declared
-	// below — package vars initialize before any init runs).
-	Implement(tEcho, func(id tEchoId) *tEchoState { return &tEchoState{prefix: id.Prefix} },
-		Bound(tSay, func(ctx *Context[tEchoState], in tEchoIn) string {
-			return ctx.State.prefix + in.Msg
-		}),
-		Bound(tPay, func(*Context[tEchoState], Unit) PaymentMethod {
-			return Transfer{IBAN: "GB33"}
-		}),
-	)
+	// tPay is declared below — package vars initialize before any init runs, so it
+	// is safe to reference here.
+	e := Implement(tEcho, func(id tEchoId) *tEchoState { return &tEchoState{prefix: id.Prefix} })
+	Handle(e, tSay, func(ctx *Context[tEchoState], in tEchoIn) string {
+		return ctx.State.prefix + in.Msg
+	})
+	Handle(e, tPay, func(*Context[tEchoState], Unit) PaymentMethod {
+		return Transfer{IBAN: "GB33"}
+	})
 }
 
 func TestWorkerRunsOneOfSeveralAgentTypes(t *testing.T) {

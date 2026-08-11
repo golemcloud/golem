@@ -97,8 +97,11 @@ func TestSnapshotPolicyMapsToWit(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			type Id struct{ Name string }
+			type St struct{}
 			withDefs(t, func(d *definitions) {
-				defineAgentInto[Id, NoConfig](d, Spec{Name: "A", Snapshot: c.policy})
+				def := defineAgentInto[Id, NoConfig](d, Spec{Name: "A", Snapshot: c.policy})
+				impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
+				Handle(impl, DefineMethod[Id, Unit, Unit]("m"), func(*Context[St], Unit) Unit { return Unit{} })
 				types, errs := d.discover()
 				if len(errs) != 0 {
 					t.Fatalf("errs: %v", errs)

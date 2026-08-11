@@ -112,6 +112,14 @@ func (d *definitions) discover() ([]common.AgentType, []definitionError) {
 
 	for _, name := range d.order {
 		e := d.agents[name]
+		// An agent must be implemented, and have at least one method — otherwise a
+		// worker initialized as it would hit a nil constructor. Surface that as a
+		// definition error rather than a runtime panic.
+		if e.newState == nil {
+			errs = append(errs, definitionError{agent: name, detail: "agent defined but never implemented (call golem.Implement)"})
+		} else if len(e.order) == 0 {
+			errs = append(errs, definitionError{agent: name, detail: "agent implemented but has no methods (call golem.Handle)"})
+		}
 		at, invalids, err := d.safeBuildAgentType(e)
 		if err != nil {
 			errs = append(errs, definitionError{agent: name, detail: err.Error()})

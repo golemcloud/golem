@@ -67,18 +67,15 @@ func TestImplementRegistersMethods(t *testing.T) {
 		add := DefineMethod[Id, int64, int64]("add", Desc("adds to the counter"))
 		get := DefineMethod[Id, Unit, int64]("get")
 
-		// One Implement bundles the constructor and every method binding; In/Out are
-		// inferred from each handler, and each Bound is tied to the agent's Id + St.
-		implementAgentInto[Id, St, NoConfig](d, def,
-			simpleNewState[Id, St](func(Id) *St { return &St{} }), false,
-			[]Binding[Id, St]{
-				Bound(add, func(ctx *Context[St], in int64) int64 { ctx.State.n += in; return ctx.State.n }),
-				Bound(get, Bind0(func(s *St) int64 { return s.n })), // method-expression style
-			})
+		// Implement binds the constructor + returns the handle; Handle registers each
+		// method, In/Out inferred from the handler and tied to the agent's Id + St.
+		impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
+		Handle(impl, add, func(ctx *Context[St], in int64) int64 { ctx.State.n += in; return ctx.State.n })
+		Handle(impl, get, Bind0(func(s *St) int64 { return s.n })) // method-expression style
 
 		e := d.agents["Counter"]
 		if e == nil || e.methods["add"] == nil || e.methods["get"] == nil {
-			t.Fatal("Implement did not register the handlers under the agent")
+			t.Fatal("Handle did not register the handlers under the agent")
 		}
 		if e.methods["add"].desc != "adds to the counter" {
 			t.Fatalf("desc = %q", e.methods["add"].desc)
@@ -87,16 +84,16 @@ func TestImplementRegistersMethods(t *testing.T) {
 	})
 }
 
-func TestImplementRejectsDuplicateMethod(t *testing.T) {
+func TestHandleRejectsDuplicateMethod(t *testing.T) {
 	type Id struct{ Name string }
 	type St struct{}
 	withDefs(t, func(d *definitions) {
 		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "A"})
 		m := DefineMethod[Id, Unit, Unit]("m")
 		h := func(*Context[St], Unit) Unit { return Unit{} }
-		implementAgentInto[Id, St, NoConfig](d, def,
-			simpleNewState[Id, St](func(Id) *St { return &St{} }), false,
-			[]Binding[Id, St]{Bound(m, h), Bound(m, h)})
+		impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
+		Handle(impl, m, h)
+		Handle(impl, m, h)
 		mustDefErr(t, d, "method already implemented")
 	})
 }
@@ -107,13 +104,13 @@ func TestImplementRejectsSecondImplementAndNilInit(t *testing.T) {
 	newState := simpleNewState[Id, St](func(Id) *St { return &St{} })
 	withDefs(t, func(d *definitions) {
 		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "A"})
-		implementAgentInto[Id, St, NoConfig](d, def, newState, false, nil)
-		implementAgentInto[Id, St, NoConfig](d, def, newState, false, nil) // second time
+		implementInto[Id, St, NoConfig](d, def, newState, false)
+		implementInto[Id, St, NoConfig](d, def, newState, false) // second time
 		mustDefErr(t, d, "already implemented")
 	})
 	withDefs(t, func(d *definitions) {
 		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "B"})
-		implementAgentInto[Id, St, NoConfig](d, def, nil, true, nil) // nil init
+		implementInto[Id, St, NoConfig](d, def, nil, true) // nil init
 		mustDefErr(t, d, "non-nil init")
 	})
 }
@@ -124,8 +121,8 @@ func TestRegistrationErrorsAreRecorded(t *testing.T) {
 	withDefs(t, func(d *definitions) {
 		defineAgentInto[Id, NoConfig](d, Spec{}) // empty Spec.Name
 		// Implement against an agent that was never defined.
-		implementAgentInto[Id, St, NoConfig](d, &AgentDefinition[Id, NoConfig]{name: "does-not-exist"},
-			simpleNewState[Id, St](func(Id) *St { return &St{} }), false, nil)
+		implementInto[Id, St, NoConfig](d, &AgentDefinition[Id, NoConfig]{name: "does-not-exist"},
+			simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
 		mustDefErr(t, d, "non-empty Spec.Name")
 		mustDefErr(t, d, "unknown agent")
 	})
