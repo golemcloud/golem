@@ -76,32 +76,49 @@ Only customize when the *strategy* needs to change (different backoff, give-up c
 
 ## Project Structure
 
+A single-component app keeps the whole Go module in a `module/` directory:
+
 ```
-golem.yaml                        # Root application manifest
-<component>/                      # Component directory (each becomes a WASM component; its own Go module)
-  golem.yaml                      # Component manifest
-  go.mod                          # This component's module; pins the SDK and componentize-go
+golem.yaml                        # Application manifest
+module/                           # This component — its own Go module (golem.yaml dir: "module")
+  go.mod                          # pins the SDK and componentize-go
   main.go                         # package main — blank-imports the SDK + each agent's impl package
   agents/                         # one folder per agent
     counter/                      #   the counter agent
       counter.go                  #     package counter — DEFINITION: DefineAgent + method descriptors + types
       impl/
         impl.go                   #     package impl — IMPLEMENTATION: golem.Implement (registers on import)
-  internal/                       # (optional) non-agent domain packages
+  internal/                       # (optional) any non-agent packages
 golem-temp/                       # Build artifacts (gitignored)
 ```
 
-Each component directory is **its own Go module** (its own `go.mod`), built to a separate WASM
-component. Within a component, each agent lives in `agents/<name>/`, split across two packages: a
-state-free **definition** (`package <name>`, e.g. `counter`) holding the identity, method descriptors,
-and input/output types; and an **implementation** in the nested `impl/` subpackage holding the private
-state and the handlers. This split is what lets agents call one another without a Go import cycle — a
-caller imports only the callee's definition package (`myapp/agents/ledger`, used as `ledger.Agent`,
+The Go module lives in its own directory rather than at the app root, so the module — `go.mod` plus all
+your packages — stays sealed away from the application's `golem.yaml` and the `golem-temp/` build output
+(a `go.mod` at the app root would otherwise enclose them). The directory name never appears in import
+paths (`go.mod` is the module root), so imports stay clean: `<module>/agents/counter`.
+
+Adding a **second** component promotes the app to the multi-component layout: `module/` is renamed to its
+component name and each further component gets its own directory (each still its own Go module):
+
+```
+golem.yaml
+<component-a>/                    # was module/, renamed on promotion
+  go.mod  main.go  agents/ ...
+<component-b>/
+  go.mod  main.go  agents/ ...
+golem-temp/
+```
+
+Within a component, each agent lives in `agents/<name>/`, split across two packages: a state-free
+**definition** (`package <name>`, e.g. `counter`) holding the identity, method descriptors, and
+input/output types; and an **implementation** in the nested `impl/` subpackage holding the private state
+and the handlers. This split is what lets agents call one another without a Go import cycle — a caller
+imports only the callee's definition package (`<module>/agents/ledger`, used as `ledger.Agent`,
 `ledger.Record`), never its implementation. `main.go` (`package main`) blank-imports the SDK and each
 agent's **impl** package so their registration runs on import — the same blank-import-for-side-effects
-pattern Go uses for database drivers (`import _ "..."`). Adding an agent means adding an
-`agents/<name>/` folder (a def file + an `impl/` subpackage) and a blank import to `main.go`. Non-agent
-domain code goes in `internal/`.
+pattern Go uses for database drivers (`import _ "..."`). Adding an agent means adding an `agents/<name>/`
+folder (a def file + an `impl/` subpackage) and a blank import to `main.go`. Non-agent packages can live
+anywhere in the module (e.g. an `internal/` directory).
 
 ## Prerequisites
 
