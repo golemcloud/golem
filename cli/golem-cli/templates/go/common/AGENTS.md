@@ -36,17 +36,44 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-integration-test-setup` | Setting up a dedicated Golem environment for integration testing — isolated local server, test environment in golem.yaml, dynamic port discovery, and non-interactive deploys |
 | `golem-cancel-queued-invocation` | Canceling a pending (queued) invocation on an agent |
 | `golem-delete-agent` | Deleting an agent instance |
-| `golem-add-agent-go` | Adding a new agent type (definition + implementation packages) to a Go component |
-| `golem-call-another-agent-go` | Calling another agent via typed RPC (`Call` / `CallAsync`) |
-| `golem-fire-and-forget-go` | Fire-and-forget invocations with `Trigger` |
+| `golem-add-agent-go` | Adding a new Go agent to a Golem component |
+| `golem-annotate-agent-go` | Configuring an agent's definition — name, description, mode, HTTP mount, method descriptions |
+| `golem-multi-instance-agent-go` | Addressing multiple instances of an agent by identity (and phantoms) |
+| `golem-stateless-agent-go` | Creating ephemeral (stateless) agents |
+| `golem-configure-durability-go` | Choosing durable vs ephemeral agents, and adding periodic snapshots |
+| `golem-custom-snapshot-go` | Snapshot-based recovery and customizing state save/load |
+| `golem-call-another-agent-go` | Calling one agent from another via typed RPC |
+| `golem-fire-and-forget-go` | Fire-and-forget agent invocations with `Trigger` |
+| `golem-parallel-workers-go` | Fanning out work to parallel agents and collecting results |
 | `golem-recurring-task-go` | Recurring / scheduled work (self-rescheduling via `Schedule`) |
-| `golem-add-http-endpoint-go` | Exposing an agent's methods over HTTP (mount + endpoints) |
-| `golem-make-http-request-go` | Outgoing HTTP requests from an agent via `net/http` |
-| `golem-multi-instance-agent-go` | Addressing many instances by `Id` (and phantom instances) |
+| `golem-schedule-future-call-go` | Scheduling a one-off future call from code, and canceling it |
+| `golem-wait-for-external-input-go` | Waiting for external input using Golem promises |
+| `golem-call-from-external-go` | Invoking agents from outside the platform (CLI, HTTP, worker REST API) |
+| `golem-add-http-endpoint-go` | Exposing an agent's methods over HTTP |
+| `golem-http-params-go` | Mapping HTTP path/query/header/body to method inputs |
+| `golem-add-http-auth-go` | Requiring authentication on HTTP endpoints |
+| `golem-add-cors-go` | Configuring CORS on HTTP endpoints |
+| `golem-add-webhook-go` | Receiving external webhook callbacks |
+| `golem-make-http-request-go` | Making outgoing HTTP requests via `net/http` |
+| `golem-mark-read-only-go` | Marking methods read-only (side-effect-free) with result caching |
+| `golem-atomic-block-go` | Atomic regions, persistence level, idempotence, oplog commit, idempotency keys |
+| `golem-retry-policies-go` | Configuring semantic retry policies |
+| `golem-add-transactions-go` | Saga-pattern transactions with compensation |
+| `golem-add-postgres-go` | Using PostgreSQL via the `golem/rdbms/postgres` wrapper |
+| `golem-add-mysql-go` | Using MySQL via the `golem/rdbms/mysql` wrapper |
+| `golem-add-config-go` | Adding typed configuration (`DefineConfiguredAgent` + `golem.Config`) |
+| `golem-add-secret-go` | Adding typed secrets (`golem.Secret[T]`) |
+| `golem-file-io-go` | Reading and writing files with the standard `os`/`io` packages |
+| `golem-logging-go` | Structured logging via `log/slog` |
+| `golem-enable-otlp-go` | Enabling the OpenTelemetry (OTLP) exporter plugin |
+| `golem-invoke-agent-go` | Invoking an agent method from the CLI and waiting for the result |
+| `golem-trigger-agent-go` | Triggering a fire-and-forget invocation from the CLI |
+| `golem-schedule-agent-go` | Scheduling a future invocation from the CLI |
+| `golem-create-agent-instance-go` | Creating an agent instance with `golem agent new` |
+| `golem-interactive-repl-go` | Interactive testing/scripting of agents via the REPL |
 | `golem-add-go-module` | Adding a Go module dependency |
 
-> More Go-specific skills are being added; until then, use the Go SDK's own documentation for areas not
-> covered above.
+> Not yet available for Go (pending SDK support): LLM integration, Apache Ignite, and quota skills.
 
 # Golem Application Development Guide (Go)
 
