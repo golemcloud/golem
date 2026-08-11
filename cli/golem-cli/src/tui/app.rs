@@ -4017,7 +4017,6 @@ pub(super) fn render_production_preview_buffer(
 
 fn render_home_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     render_surface(frame, area);
-    render_dashboard_logo(frame, area);
     let home = Paragraph::new(home_lines(app, area.width as usize))
         .style(surface_style())
         .wrap(Wrap { trim: false });
@@ -4946,53 +4945,6 @@ fn push_leader_item(spans: &mut Vec<Span<'static>>, id: TuiActionId, label: impl
     spans.push(shortcut_span(action_shortcut(id)));
     spans.push(Span::raw(" "));
     spans.push(Span::raw(label.into()));
-}
-
-fn render_dashboard_logo(frame: &mut Frame<'_>, area: Rect) {
-    const LOGO: [&str; 11] = [
-        "⠀⠀⠀⠀⠀⢀⣤⣦⡀⣼⣿⣿⣷⣤⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⣀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⢀⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⢷⣦⡀⠀⠀⠀⠀⠀⠀⢀⣠⣤⣤⣤⣤⣤⣤⡄⠀⠀⠀⣀⣤⣤⣤⣤⣀⠀⠀⠀⠀⣤⡄⠀⠀⠀⠀⠀⠀⠀⢠⣤⣤⣤⣤⣤⣤⣤⣤⣤⠀⢠⡀⠀⠀⠀⠀⠀⠀⠀⠀⣠",
-        "⢠⣿⣿⡾⣿⣿⡏⠹⣿⣿⣿⡿⠙⣿⣿⣿⣷⣿⣷⡄⠀⠀⠀⢀⣴⣿⠿⠟⠛⠛⠛⠛⠛⠃⠀⢀⣾⣿⠿⠛⠛⠿⣿⣷⡄⠀⠀⣿⡇⠀⠀⠀⠀⠀⠀⠀⢸⣿⡟⠛⠛⠛⠛⠛⠛⠛⠀⢸⣿⣶⣄⠀⠀⠀⢀⣠⣾⣿",
-        "⢶⣿⣿⣇⣋⢿⣷⣶⣾⣿⣿⣶⣶⠿⣿⣬⣿⣿⣿⡶⠀⠀⠀⣾⡿⠁⠀⠀⠀⠀⠀⠀⠀⠀⢠⣿⡿⠁⠀⠀⠀⠀⠈⢻⣿⡄⠀⣿⡇⠀⠀⠀⠀⠀⠀⠀⢸⣿⣇⣀⣀⣀⣀⣀⠀⠀⠀⢸⣿⡿⣿⣷⣤⣴⣿⡿⢻⣿",
-        "⣶⣿⣿⣿⣿⣷⢽⣻⢿⣿⣿⣛⢋⡼⣾⣿⣿⣿⣿⣶⠀⠀⢸⣿⡇⠀⠀⠀⣶⣶⣶⣶⣶⡆⢸⣿⡇⠀⠀⠀⠀⠀⠀⢸⣿⡇⠀⣿⡇⠀⠀⠀⠀⠀⠀⠀⢸⣿⡿⠿⠿⠿⠿⠿⠀⠀⠀⢸⣿⡇⠀⠙⢿⠟⠉⠀⢸⣿",
-        "⣿⣿⠟⠊⠉⠁⠀⢻⣿⣿⣿⣿⠏⠀⠈⠉⠙⢻⣿⡏⠀⠀⠀⢿⣷⡀⠀⠀⠉⠉⠉⢹⣿⡇⠘⣿⣷⡀⠀⠀⠀⠀⠀⣼⣿⠃⠀⣿⡇⠀⠀⠀⠀⠀⠀⠀⢸⣿⡇⠀⠀⠀⠀⠀⠀⠀⠀⢸⣿⡇⠀⠀⠀⠀⠀⠀⢸⣿",
-        "⠻⣿⣿⣿⣅⢀⣴⣽⣿⣿⣿⣿⣯⣦⡀⣸⣿⣿⣿⠃⠀⠀⠀⠈⠻⣿⣶⣤⣤⣤⣤⣼⣿⡇⠀⠘⢿⣿⣦⣤⣤⣴⣾⡿⠋⠀⠀⣿⣧⣤⣤⣤⣤⣤⣤⡄⢸⣿⣧⣤⣤⣤⣤⣤⣤⣤⠀⢸⣿⡇⠀⠀⠀⠀⠀⠀⢸⣿",
-        "⠀⠈⠙⠛⠃⣼⣾⣾⣿⠟⠻⣿⣷⣿⣇⠙⠛⠋⠁⠀⠀⠀⠀⠀⠀⠈⠙⠛⠛⠛⠛⠛⠛⠃⠀⠀⠀⠉⠛⠛⠟⠛⠉⠀⠀⠀⠀⠛⠛⠛⠛⠛⠛⠛⠛⠃⠘⠛⠛⠛⠛⠛⠛⠛⠛⠛⠀⠘⠛⠃⠀⠀⠀⠀⠀⠀⠘⠛",
-        "⠀⠀⠀⢀⣶⡾⣿⣿⣿⠀⢀⣿⣿⣿⢷⣢⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠺⢿⣷⣿⡿⠿⠂⠘⠿⢿⣿⣽⡿⠗⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
-    ];
-
-    let logo_width = LOGO
-        .iter()
-        .map(|line| line.chars().count())
-        .max()
-        .unwrap_or(0) as u16;
-    let logo_height = LOGO.len() as u16;
-    if area.width <= logo_width.saturating_add(4) || area.height <= logo_height.saturating_add(2) {
-        return;
-    }
-
-    let x = area.x + area.width.saturating_sub(logo_width) / 2;
-    let y = area.y + area.height.saturating_sub(logo_height) / 2;
-    let style = Style::default()
-        .fg(Color::Rgb(34, 34, 42))
-        .bg(theme().surface);
-
-    for (row, line) in LOGO.iter().enumerate() {
-        for (col, character) in line.chars().enumerate() {
-            if character == ' ' {
-                continue;
-            }
-            let x = x.saturating_add(col as u16);
-            let y = y.saturating_add(row as u16);
-            if x < area.x.saturating_add(area.width) && y < area.y.saturating_add(area.height) {
-                frame.buffer_mut()[(x, y)]
-                    .set_symbol(character.to_string().as_str())
-                    .set_style(style);
-            }
-        }
-    }
 }
 
 fn home_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
@@ -6844,12 +6796,12 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_renders_braille_logo_background() {
+    fn dashboard_omits_decorative_logo_background() {
         let app = test_app();
         let frame = render_app_text_at(&app, 160, 32);
 
-        assert!(frame.contains("⠻⣿⣿"), "{frame}");
-        assert!(frame.contains("⠺⢿⣷"), "{frame}");
+        assert!(!frame.contains("⠻⣿⣿"), "{frame}");
+        assert!(!frame.contains("⠺⢿⣷"), "{frame}");
     }
 
     #[test]

@@ -131,6 +131,16 @@ This is the active TUI backlog. Keep it goal-sized and synchronized with `progre
 
 ## Deferred Goal: DX/UX Hardening
 
+- [x] Add a Production-first, linkable real-renderer review surface and a
+  long-lived story review ledger under `.tui-plan`.
+- [ ] Review deterministic stories one at a time and record decision-ready
+  feedback in `dx-ux-review.md`.
+- [ ] Implement explicitly approved feedback as small themed batches and keep
+  the design system, tasks, progress, and tests synchronized.
+- [x] Remove the Braille Golem logo from the Home background so previews and
+  terminals do not depend on platform-specific glyph fallback.
+- [ ] Decide whether the Golem logo should return and, if so, choose its
+  workspace, size, and terminal-safe representation through DX/UX review.
 - [ ] Define the source-of-truth format for documenting actions, shortcuts, scopes, availability rules, and help text after the broader design system settles.
 - [ ] Decide which user-facing surfaces are generated from that source: help, palette metadata, footer hints, docs, and test expectations.
 - [ ] Add drift checks so shortcut/action documentation cannot silently diverge from the registered TUI actions.

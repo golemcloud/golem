@@ -40,6 +40,8 @@ The next work should invest in foundations that make larger UX and feature goals
 - `architecture.md`: runtime, action rules, context model, job model, and module direction.
 - `ui-system.md`: visual system, action/help rules, shortcuts, and dev/ops workspace split.
 - `testing.md`: TUI driver strategy, scenario coverage, and validation commands.
+- `dx-ux-review.md`: story-by-story design review workflow, coverage, and active
+  feedback ledger.
 - `phases.md`: prioritized arcs and acceptance criteria.
 - `tasks.md`: active goal-sized backlog.
 - `progress.md`: running implementation notes and validation history.

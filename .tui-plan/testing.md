@@ -65,3 +65,8 @@ cargo test -p golem-cli --lib -- tui::
 Also inspect `cargo make tui-preview` for browser reload behavior and
 `cargo make tui-preview-terminal` for story/variant switching. Use
 `cargo make tui-preview-live` only for the production provider and PTY path.
+
+Browser review links must preserve the selected preview case and Review,
+Compare, or Coverage mode, plus the selected font and size, across watched
+server restarts. Every preview case needs a unique ID even when multiple
+dimensions reuse the same underlying `TuiApp` fixture.

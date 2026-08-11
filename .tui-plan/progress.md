@@ -1,5 +1,30 @@
 # Progress
 
+## 2026-08-06
+
+TUI DX/UX review workflow:
+
+- Made browser preview cases independently addressable, including compact and
+  wide cases that reuse an underlying deterministic story fixture.
+- Added Production-first Review, side-by-side Compare, and single-variant
+  Coverage views with URL-backed selection and copied review links.
+- Made browser typography terminal-oriented with a Fira Code default, disabled
+  ligatures, remotely loaded open-source webfonts, a visible glyph sample,
+  selectable monospace fonts, and link-persisted font size. Remote loading keeps
+  previews consistent when the Linux server is viewed through a Mac port
+  forward.
+- Added Noto Sans Symbols 2 as the deterministic Braille fallback and exposed
+  whether the selected primary webfont finished loading.
+- Removed the large Braille Golem logo from the Home background because its
+  platform-dependent glyph rendering obscured preview review. Logo placement
+  and representation remain a future DX/UX decision.
+- Reduced watched-gallery revision polling from 700 ms to 2 seconds per tab.
+- Added `dx-ux-review.md` as the long-lived operational ledger for
+  story-by-story feedback and explicitly approved themed implementation batches.
+- Defined synchronization rules so durable decisions, executable tasks,
+  validation history, and active feedback stay in their existing authoritative
+  documents.
+
 ## 2026-07-02
 
 TUI visual preview workflow:

@@ -13,6 +13,19 @@ widget tree. Run `cargo make tui-preview` for the watched browser gallery,
 `cargo make tui-preview-terminal` for the interactive terminal gallery, or
 `cargo make tui-preview-export` for a standalone artifact under `target/`.
 
+The browser opens in a Production-first review view. Its URL identifies the
+selected preview case, view mode, font, and font size, so feedback and follow-up
+changes should reuse copied gallery links. Fira Code is the local default and
+browser ligatures are disabled to better match terminal cell rendering. The
+browser loads Fira Code and JetBrains Mono from the Google Fonts CSS API so the
+preview remains consistent when the server and browser run on different
+machines. Because those primary fonts do not contain Braille glyphs, Noto Sans
+Symbols 2 provides a web-loaded symbol fallback; system monospace remains the
+offline fallback. Use the comparison view for one story across all visual
+candidates and the coverage view for all stories under one candidate. Track
+normalized feedback and review status in `dx-ux-review.md`; durable rules
+accepted through that review still belong in this document.
+
 The `Production` visual style is the only runtime style. `Quiet`, `Dense`, and
 `Ops Contrast` are preview-only candidates; accepting a candidate means
 deliberately changing `Production`, not exposing a persisted theme setting.
