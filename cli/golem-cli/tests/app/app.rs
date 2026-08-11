@@ -55,7 +55,6 @@ async fn app_help_does_not_apply_manifest_upgrade(_tracing: &Tracing) {
         environments:
           local:
             server: local
-            componentPresets: debug
 
         components:
           test-app-help-no-upgrade:ts-main:
@@ -8228,7 +8227,6 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
             environments:
               local:
                 server: local
-                componentPresets: debug
 
             components:
               test-app-reset-incompatible:ts-main:
@@ -8303,7 +8301,6 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
             environments:
               local:
                 server: local
-                componentPresets: debug
 
             components:
               test-app-reset-incompatible:ts-main:
@@ -8374,7 +8371,6 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
             environments:
               local:
                 server: local
-                componentPresets: debug
 
             components:
               test-app-reset-incompatible:ts-main:
@@ -8602,7 +8598,6 @@ async fn component_level_ifs_with_multiple_agents_deploys(_tracing: &Tracing) {
             environments:
               local:
                 server: local
-                componentPresets: debug
 
             components:
               test-app-component-level-ifs:ts-main:
@@ -8667,7 +8662,6 @@ async fn component_level_ifs_with_multiple_agents_deploys(_tracing: &Tracing) {
             environments:
               local:
                 server: local
-                componentPresets: debug
 
             components:
               test-app-component-level-ifs:ts-main:

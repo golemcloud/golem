@@ -1718,10 +1718,8 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
             environments:
               local:
                 server: local
-                componentPresets: debug
               cloud:
                 server: cloud
-                componentPresets: release
 
             components:
               long-agent-id-rejected:ts-main:
@@ -1861,10 +1859,8 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
             environments:
               local:
                 server: local
-                componentPresets: debug
               cloud:
                 server: cloud
-                componentPresets: release
 
             components:
               ts-code-first:ts-main:
