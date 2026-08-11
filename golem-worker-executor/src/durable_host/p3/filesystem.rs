@@ -21,7 +21,8 @@ use std::task::{Context, Poll};
 use crate::durable_host::FilesystemStorageReservation;
 use crate::durable_host::filesystem::durable::{
     DurableFilesystem, FilesystemEntryStorage, FilesystemPreview, FilesystemSizeChange,
-    FilesystemWriteMode, directory_entry_identity, replaced_file_storage, write_file,
+    FilesystemWriteMode, directory_entry_identity, replaced_file_storage, rewrite_descendant_path,
+    write_file,
 };
 use crate::durable_host::filesystem::types::calculate_metadata_hash_parts;
 use crate::durable_host::p3::{
@@ -517,43 +518,6 @@ async fn wait_filesystem_task_result(
         .unwrap_or_else(|_| Err(wasmtime::Error::msg("filesystem stream task dropped")))
 }
 
-async fn settle_pending_filesystem_writes_for_path<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    path: &std::path::Path,
-) -> wasmtime::Result<()>
-where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    let filesystem = accessor.with(|mut access| {
-        durable_worker_ctx::<Ctx, U>(access.data_mut())
-            .filesystem
-            .clone()
-    });
-    let settled = filesystem.settle_pending_writes(path).await;
-    finish_filesystem_write_settlements(accessor, settled).await
-}
-
-async fn settle_pending_filesystem_writes_for_rename<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    old_path: &std::path::Path,
-    new_path: &std::path::Path,
-) -> wasmtime::Result<()>
-where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    let filesystem = accessor.with(|mut access| {
-        durable_worker_ctx::<Ctx, U>(access.data_mut())
-            .filesystem
-            .clone()
-    });
-    let settled = filesystem
-        .settle_pending_writes_for_rename(old_path, new_path)
-        .await;
-    finish_filesystem_write_settlements(accessor, settled).await
-}
-
 async fn finish_filesystem_write_settlements<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     settled: Vec<crate::durable_host::filesystem::durable::SettledFilesystemWrite>,
@@ -562,17 +526,17 @@ where
     Ctx: WorkerCtx,
     U: 'static,
 {
+    let prepared = accessor.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut())
+            .filesystem
+            .prepare_write_settlements(settled)
+    });
     let mut first_error = None;
-    for settlement in settled {
-        let finished = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut())
-                .filesystem
-                .finish_pending_write(settlement.stream_rep, settlement.actual_growth)
-        });
-        if let Some((reservation, growth)) = finished {
+    for settlement in prepared {
+        if let Some((reservation, growth)) = settlement.reservation {
             commit_filesystem_write_storage::<Ctx, U>(accessor, reservation, growth).await?;
         }
-        if let Err(error) = settlement.result
+        if let Some(error) = settlement.error
             && first_error.is_none()
         {
             first_error = Some(wasmtime::Error::msg(format!(
@@ -586,7 +550,7 @@ where
 
 async fn filesystem_mutation_guard<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
-    path: &std::path::Path,
+    _path: &std::path::Path,
 ) -> wasmtime::Result<tokio::sync::OwnedMutexGuard<()>>
 where
     Ctx: WorkerCtx,
@@ -596,14 +560,20 @@ where
         durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_mutation_lock()
     });
     let guard = mutation_lock.lock_owned().await;
-    settle_pending_filesystem_writes_for_path(accessor, path).await?;
+    let filesystem = accessor.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut())
+            .filesystem
+            .clone()
+    });
+    let settled = filesystem.settle_all_pending_writes().await;
+    finish_filesystem_write_settlements(accessor, settled).await?;
     Ok(guard)
 }
 
 async fn filesystem_rename_guards<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
-    old_path: &std::path::Path,
-    new_path: &std::path::Path,
+    _old_path: &std::path::Path,
+    _new_path: &std::path::Path,
 ) -> wasmtime::Result<tokio::sync::OwnedMutexGuard<()>>
 where
     Ctx: WorkerCtx,
@@ -613,7 +583,13 @@ where
         durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_mutation_lock()
     });
     let guard = lock.lock_owned().await;
-    settle_pending_filesystem_writes_for_rename(accessor, old_path, new_path).await?;
+    let filesystem = accessor.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut())
+            .filesystem
+            .clone()
+    });
+    let settled = filesystem.settle_all_pending_writes().await;
+    finish_filesystem_write_settlements(accessor, settled).await?;
     Ok(guard)
 }
 
@@ -631,24 +607,20 @@ where
         return Ok(None);
     }
 
-    let storage_meter =
-        accessor.with(|mut access| durable_worker_ctx::<Ctx, U>(access.data_mut()).storage_meter());
-    let guard = storage_meter.lock_reservation().await;
-    let prepared = accessor
-        .with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut())
-                .prepare_filesystem_storage_reservation(bytes)
-        })
-        .map_err(wasmtime::Error::from_anyhow)?;
-    drop(guard);
-    if let Some((accounting, reservation)) = prepared {
-        reservation
-            .acquire_capacity(accounting.worker())
+    let prepared = accessor.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        (
+            ctx.filesystem_storage_accounting(),
+            ctx.resource_limits.max_disk_space_limit(),
+        )
+    });
+    match prepared.0 {
+        Some(accounting) => accounting
+            .reserve(bytes, prepared.1)
             .await
-            .map_err(wasmtime::Error::from_anyhow)?;
-        Ok(Some(reservation))
-    } else {
-        Ok(None)
+            .map(Some)
+            .map_err(wasmtime::Error::from_anyhow),
+        None => Ok(None),
     }
 }
 
@@ -683,7 +655,7 @@ where
     if let Some(accounting) = accessor.with(|mut access| {
         durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_storage_accounting()
     }) {
-        accounting.release(bytes, None).await;
+        accounting.release(bytes).await;
     }
 
     Ok(())
@@ -1566,9 +1538,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                             Descriptor::File(file) => &mut file.path,
                             Descriptor::Dir(directory) => &mut directory.path,
                         };
-                        if let Ok(remainder) = path.strip_prefix(&old_target) {
-                            *path = new_target.join(remainder);
-                        }
+                        rewrite_descendant_path(path, &old_target, &new_target);
                     }
                 }
             });

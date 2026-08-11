@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
 use wasmtime::component::Resource;
 use wasmtime_wasi::StreamError;
 
@@ -835,7 +834,11 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::output_stream", "flush");
-            HostOutputStream::flush(self.table(), self_).await
+            let result = HostOutputStream::flush(self.table(), self_).await;
+            if self.filesystem.pending_write_is_ready(rep) {
+                reconcile_pending_filesystem_stream_reservation(self, rep).await?;
+            }
+            result
         }
     }
 
@@ -1637,16 +1640,14 @@ async fn reserve_filesystem_stream_growth<Ctx: WorkerCtx>(
     stream_rep: u32,
     write_len: u64,
 ) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, StreamError> {
-    let Some((mutation_path, file, position, has_pending_write)) =
-        ctx.filesystem.output_stream_snapshot(stream_rep)
-    else {
+    let Some(snapshot) = ctx.filesystem.output_stream_snapshot(stream_rep) else {
         return Ok(None);
     };
 
     let mutation_guard = ctx.filesystem_mutation_lock().lock_owned().await;
 
-    if has_pending_write || ctx.filesystem_mutation_is_pending(&mutation_path) {
-        reconcile_pending_filesystem_streams_for_path_locked(ctx, &mutation_path).await?;
+    if snapshot.has_pending_write || !ctx.filesystem.pending_stream_reps().is_empty() {
+        reconcile_all_pending_filesystem_streams_locked(ctx).await?;
     }
 
     if ctx.state.is_replay() {
@@ -1655,14 +1656,14 @@ async fn reserve_filesystem_stream_growth<Ctx: WorkerCtx>(
 
     let (is_unlinked, current_size) = ctx
         .filesystem
-        .file_accounting_snapshot(file.clone())
+        .file_accounting_snapshot(snapshot.file.clone())
         .await
         .map_err(|error| StreamError::Trap(wasmtime::Error::new(error)))?;
     if is_unlinked {
         return Ok(Some(mutation_guard));
     }
 
-    let requested_end = match position {
+    let requested_end = match snapshot.position {
         Some(position) => position.saturating_add(write_len),
         None => current_size.saturating_add(write_len),
     };
@@ -1702,7 +1703,9 @@ async fn filesystem_input_stream_remaining<Ctx: WorkerCtx>(
         .open_filesystem_input_streams
         .get(&stream_rep)
         .map(|state| (state.file.clone(), state.position))?;
-    let current_size = filesystem_stream_file_size(file).await.unwrap_or(0);
+    let current_size = crate::durable_host::filesystem::durable::filesystem_file_size(file)
+        .await
+        .unwrap_or(0);
     Some(current_size.saturating_sub(position))
 }
 
@@ -1723,7 +1726,7 @@ async fn reconcile_pending_filesystem_stream_reservation<Ctx: WorkerCtx>(
     let mutation_path = ctx
         .filesystem
         .output_stream_snapshot(stream_rep)
-        .and_then(|(mutation_path, _, _, pending_write)| pending_write.then_some(mutation_path));
+        .and_then(|snapshot| snapshot.has_pending_write.then_some(snapshot.mutation_path));
     let Some(mutation_path) = mutation_path else {
         return Ok(());
     };
@@ -1736,36 +1739,31 @@ async fn reconcile_reserved_filesystem_stream_write<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     stream_rep: u32,
 ) -> Result<(), StreamError> {
-    let Some((_, file, _, _)) = ctx.filesystem.output_stream_snapshot(stream_rep) else {
+    let Some(snapshot) = ctx.filesystem.output_stream_snapshot(stream_rep) else {
         return Ok(());
     };
     let base_size = ctx.filesystem.pending_reservation_base_size(stream_rep);
     let measurement = match base_size {
-        Some(base_size) => filesystem_stream_file_size(file)
-            .await
-            .map(|size| Some(size.saturating_sub(base_size))),
+        Some(base_size) => {
+            crate::durable_host::filesystem::durable::filesystem_file_size(snapshot.file)
+                .await
+                .map(|size| Some(size.saturating_sub(base_size)))
+        }
         None => Ok(None),
     };
-    let actual_growth = *measurement.as_ref().map_err(|err| {
-        StreamError::Trap(wasmtime::Error::msg(format!(
-            "failed to reconcile filesystem stream storage: {err}"
-        )))
-    })?;
-    let prepared = finish_pending_filesystem_stream_reconciliation(ctx, stream_rep, actual_growth);
+    let actual_growth = measurement.as_ref().ok().copied().flatten();
+    let prepared = ctx
+        .filesystem
+        .finish_pending_write(stream_rep, actual_growth);
     if let Some((reservation, committed_growth)) = prepared {
         ctx.commit_filesystem_storage_reservation(reservation, committed_growth)
             .await;
     }
-    Ok(())
-}
-
-fn finish_pending_filesystem_stream_reconciliation<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    stream_rep: u32,
-    actual_growth: Option<u64>,
-) -> Option<(crate::durable_host::FilesystemStorageReservation, u64)> {
-    ctx.filesystem
-        .finish_pending_write(stream_rep, actual_growth)
+    measurement.map(|_| ()).map_err(|err| {
+        StreamError::Trap(wasmtime::Error::msg(format!(
+            "failed to reconcile filesystem stream storage: {err}"
+        )))
+    })
 }
 
 pub(crate) async fn reconcile_pending_filesystem_streams_for_path_locked<Ctx: WorkerCtx>(
@@ -1777,15 +1775,11 @@ pub(crate) async fn reconcile_pending_filesystem_streams_for_path_locked<Ctx: Wo
     finish_filesystem_stream_settlements(ctx, settled).await
 }
 
-pub(crate) async fn reconcile_pending_filesystem_streams_for_rename_locked<Ctx: WorkerCtx>(
+pub(crate) async fn reconcile_all_pending_filesystem_streams_locked<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-    old_path: &std::path::Path,
-    new_path: &std::path::Path,
 ) -> Result<(), StreamError> {
     let filesystem = ctx.filesystem.clone();
-    let settled = filesystem
-        .settle_pending_writes_for_rename(old_path, new_path)
-        .await;
+    let settled = filesystem.settle_all_pending_writes().await;
     finish_filesystem_stream_settlements(ctx, settled).await
 }
 
@@ -1794,17 +1788,12 @@ async fn finish_filesystem_stream_settlements<Ctx: WorkerCtx>(
     settled: Vec<crate::durable_host::filesystem::durable::SettledFilesystemWrite>,
 ) -> Result<(), StreamError> {
     let mut first_error = None;
-    for settlement in settled {
-        let prepared = finish_pending_filesystem_stream_reconciliation(
-            ctx,
-            settlement.stream_rep,
-            settlement.actual_growth,
-        );
-        if let Some((reservation, committed_growth)) = prepared {
+    for settlement in ctx.filesystem.prepare_write_settlements(settled) {
+        if let Some((reservation, committed_growth)) = settlement.reservation {
             ctx.commit_filesystem_storage_reservation(reservation, committed_growth)
                 .await;
         }
-        if let Err(error) = settlement.result
+        if let Some(error) = settlement.error
             && first_error.is_none()
         {
             first_error = Some(StreamError::Trap(wasmtime::Error::msg(format!(
@@ -1847,9 +1836,4 @@ fn filesystem_write_completion<Ctx: WorkerCtx>(
             "filesystem output stream did not start a write",
         ))
     })
-}
-
-async fn filesystem_stream_file_size(file: Arc<cap_std::fs::File>) -> std::io::Result<u64> {
-    wasmtime_wasi::runtime::spawn_blocking(move || file.metadata().map(|metadata| metadata.len()))
-        .await
 }

@@ -153,6 +153,11 @@ impl AgentMemoryMeter {
         };
         self.inner.record(units);
     }
+
+    #[cfg(test)]
+    pub(crate) fn last_sample(&self) -> Instant {
+        self.inner.state.lock().unwrap().last_sample
+    }
 }
 
 impl Inner {

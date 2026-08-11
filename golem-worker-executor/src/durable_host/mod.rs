@@ -1357,10 +1357,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.filesystem.rename_stream_paths(old_path, new_path);
     }
 
-    pub(crate) fn filesystem_mutation_is_pending(&self, path: &Path) -> bool {
-        self.filesystem.is_mutation_pending(path)
-    }
-
     async fn switch_to_live(&self) {
         self.state.replay_state.switch_to_live().await;
         self.linear_memory.switch_to_live();
@@ -1391,7 +1387,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if freed_bytes > 0
             && let Some(accounting) = self.filesystem_storage_accounting()
         {
-            accounting.release(freed_bytes, None).await;
+            accounting.release(freed_bytes).await;
         }
     }
 
@@ -1402,44 +1398,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if new_bytes == 0 || self.state.is_replay() {
             return Ok(None);
         }
-        let storage_meter = self.filesystem.storage_meter();
-        let guard = storage_meter.lock_reservation().await;
-        let (accounting, reservation) = self
-            .prepare_filesystem_storage_reservation(new_bytes)?
-            .expect("live non-zero reservation must be prepared");
-        drop(guard);
-        reservation.acquire_capacity(accounting.worker()).await?;
+        let accounting = self
+            .filesystem_storage_accounting()
+            .expect("live filesystem reservation must have accounting context");
+        let reservation = accounting
+            .reserve(new_bytes, self.resource_limits.max_disk_space_limit())
+            .await?;
         Ok(Some(reservation))
-    }
-
-    pub(crate) fn prepare_filesystem_storage_reservation(
-        &mut self,
-        new_bytes: u64,
-    ) -> anyhow::Result<
-        Option<(
-            FilesystemStorageAccounting<Ctx>,
-            FilesystemStorageReservation,
-        )>,
-    > {
-        if new_bytes == 0 || self.state.is_replay() {
-            return Ok(None);
-        }
-        let storage_meter = self.filesystem.storage_meter();
-        let Some(_host_bytes) =
-            storage_meter.reserve(new_bytes, self.resource_limits.max_disk_space_limit())
-        else {
-            return Err(anyhow!(
-                GolemSpecificWasmTrap::WorkerAgentExceededFilesystemStorageLimit
-            ));
-        };
-        Ok(Some((
-            self.filesystem_storage_accounting()
-                .expect("live filesystem reservation must have accounting context"),
-            FilesystemStorageReservation {
-                logical_bytes: new_bytes,
-                storage_meter,
-            },
-        )))
     }
 
     pub(crate) fn filesystem_storage_accounting(&self) -> Option<FilesystemStorageAccounting<Ctx>> {

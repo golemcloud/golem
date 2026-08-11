@@ -120,6 +120,29 @@ where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
     Fut: std::future::Future<Output = Option<AgentStatusRecord>>,
 {
+    calculate_last_known_status_with_checkpoint_reader_and_baseline(
+        this,
+        owned_agent_id,
+        agent_mode,
+        last_known,
+        read_checkpoint,
+        AgentStatusRecord::default(),
+    )
+    .await
+}
+
+pub async fn calculate_last_known_status_with_checkpoint_reader_and_baseline<T, Fut>(
+    this: &T,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    last_known: Option<AgentStatusRecord>,
+    read_checkpoint: impl FnOnce() -> Fut,
+    full_recompute_baseline: AgentStatusRecord,
+) -> Option<AgentStatusRecord>
+where
+    T: HasOplogService + HasConfig + HasComponentService + Sync,
+    Fut: std::future::Future<Output = Option<AgentStatusRecord>>,
+{
     // 1. Try folding forward from the live cached status.
     if let Some(last_known) = last_known
         && let Some(status) =
@@ -140,13 +163,8 @@ where
     }
 
     // 3. Fall back to a full recompute from the start of the oplog.
-    let status = try_fold_status_from(
-        this,
-        owned_agent_id,
-        agent_mode,
-        AgentStatusRecord::default(),
-    )
-    .await;
+    let status =
+        try_fold_status_from(this, owned_agent_id, agent_mode, full_recompute_baseline).await;
     if status.is_some() {
         crate::metrics::workers::record_agent_status_recompute("full");
     }
@@ -998,7 +1016,7 @@ fn calculate_current_filesystem_storage_usage(
     skipped_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> u64 {
-    let mut result = current;
+    let mut result = current as i128;
     for (idx, entry) in entries {
         if skipped_regions.is_in_deleted_region(*idx) {
             continue;
@@ -1010,20 +1028,16 @@ fn calculate_current_filesystem_storage_usage(
                 ..
             } => {
                 if *initial_filesystem_storage_usage != 0 || result == 0 {
-                    result = *initial_filesystem_storage_usage;
+                    result = *initial_filesystem_storage_usage as i128;
                 }
             }
             OplogEntry::FilesystemStorageUsageUpdate { delta, .. } => {
-                if *delta >= 0 {
-                    result = result.saturating_add(*delta as u64);
-                } else {
-                    result = result.saturating_sub(delta.unsigned_abs());
-                }
+                result = result.saturating_add(*delta as i128);
             }
             _ => {}
         }
     }
-    result
+    result.clamp(0, u64::MAX as i128) as u64
 }
 
 fn collect_resources(
@@ -3272,6 +3286,42 @@ mod test {
         );
 
         assert_eq!(result, 4608);
+    }
+
+    #[test]
+    fn filesystem_storage_usage_clamps_only_after_folding_all_deltas() {
+        let entries = BTreeMap::from([make_fs_entry(1, -10), make_fs_entry(2, 10)]);
+
+        assert_eq!(
+            super::calculate_current_filesystem_storage_usage(
+                0,
+                &DeletedRegions::default(),
+                &entries,
+            ),
+            0
+        );
+        assert_eq!(
+            super::calculate_current_filesystem_storage_usage(
+                5,
+                &DeletedRegions::default(),
+                &entries,
+            ),
+            5
+        );
+    }
+
+    #[test]
+    fn filesystem_storage_usage_saturates_at_u64_max_after_fold() {
+        let entries = BTreeMap::from([make_fs_entry(1, i64::MAX), make_fs_entry(2, i64::MAX)]);
+
+        assert_eq!(
+            super::calculate_current_filesystem_storage_usage(
+                u64::MAX,
+                &DeletedRegions::default(),
+                &entries,
+            ),
+            u64::MAX
+        );
     }
 
     #[test]

@@ -34,12 +34,9 @@ use crate::durable_host::concurrent::{CallHandle, NotCancellable};
 use crate::durable_host::filesystem::durable::{
     DurableFileOutputStream, DurableFilesystem, FilesystemEntryStorage,
     FilesystemOutputStreamState, FilesystemPreview, FilesystemSizeChange, FilesystemWriteMode,
-    directory_entry_identity, replaced_file_storage,
+    directory_entry_identity, replaced_file_storage, rewrite_descendant_path,
 };
-use crate::durable_host::io::streams::{
-    reconcile_pending_filesystem_streams_for_path_locked,
-    reconcile_pending_filesystem_streams_for_rename_locked,
-};
+use crate::durable_host::io::streams::reconcile_all_pending_filesystem_streams_locked;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, FilesystemInputStreamState};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::{
@@ -61,10 +58,10 @@ fn descriptor_path(descriptor: &Descriptor) -> &std::path::Path {
 
 async fn filesystem_mutation_guard<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-    path: &std::path::Path,
+    _path: &std::path::Path,
 ) -> Result<tokio::sync::OwnedMutexGuard<()>, FsError> {
     let guard = ctx.filesystem_mutation_lock().lock_owned().await;
-    reconcile_pending_filesystem_streams_for_path_locked(ctx, path)
+    reconcile_all_pending_filesystem_streams_locked(ctx)
         .await
         .map_err(|err| {
             FsError::trap(wasmtime::Error::msg(format!(
@@ -76,11 +73,11 @@ async fn filesystem_mutation_guard<Ctx: WorkerCtx>(
 
 async fn filesystem_rename_guards<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-    old_path: &std::path::Path,
-    new_path: &std::path::Path,
+    _old_path: &std::path::Path,
+    _new_path: &std::path::Path,
 ) -> Result<tokio::sync::OwnedMutexGuard<()>, FsError> {
     let guard = ctx.filesystem_mutation_lock().lock_owned().await;
-    reconcile_pending_filesystem_streams_for_rename_locked(ctx, old_path, new_path)
+    reconcile_all_pending_filesystem_streams_locked(ctx)
         .await
         .map_err(|err| {
             FsError::trap(wasmtime::Error::msg(format!(
@@ -769,9 +766,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
                         Descriptor::File(file) => &mut file.path,
                         Descriptor::Dir(directory) => &mut directory.path,
                     };
-                    if let Ok(remainder) = path.strip_prefix(&old_target) {
-                        *path = new_target.join(remainder);
-                    }
+                    rewrite_descendant_path(path, &old_target, &new_target);
                 }
             }
             if replaced_size > 0 {

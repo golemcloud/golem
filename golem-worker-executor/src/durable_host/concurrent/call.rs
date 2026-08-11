@@ -3142,27 +3142,21 @@ where
     let mut storage_reservation = if storage_growth == 0 {
         None
     } else {
-        let storage_meter = store.with(|mut access| get_ctx(access.data_mut()).storage_meter());
-        let storage_guard = storage_meter.lock_reservation().await;
-        let prepared = match store.with(|mut access| {
-            get_ctx(access.data_mut()).prepare_filesystem_storage_reservation(storage_growth)
-        }) {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                restore_initial_files_access(store, get_ctx, files)?;
-                return Err(WorkerExecutorError::runtime(error.to_string()));
-            }
-        };
-        drop(storage_guard);
-        if let Some((accounting, reservation)) = prepared {
-            match reservation.acquire_capacity(accounting.worker()).await {
-                Ok(()) => {}
+        let (accounting, limit) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            (
+                ctx.filesystem_storage_accounting(),
+                ctx.resource_limits.max_disk_space_limit(),
+            )
+        });
+        if let Some(accounting) = accounting {
+            match accounting.reserve(storage_growth, limit).await {
+                Ok(reservation) => Some(reservation),
                 Err(error) => {
                     restore_initial_files_access(store, get_ctx, files)?;
                     return Err(WorkerExecutorError::runtime(error.to_string()));
                 }
             }
-            Some(reservation)
         } else {
             None
         }

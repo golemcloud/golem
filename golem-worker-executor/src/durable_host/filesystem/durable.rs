@@ -29,7 +29,7 @@ use wasmtime_wasi::{StreamError, StreamResult};
 use crate::metrics::storage::{
     STORAGE_TYPE_FILESYSTEM, record_storage_bytes_deleted, record_storage_bytes_written,
 };
-use crate::services::agent_storage_meter::{AgentStorageMeter, StorageAccountingGuard};
+use crate::services::agent_storage_meter::AgentStorageMeter;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 
@@ -78,6 +78,13 @@ pub(crate) struct FilesystemOutputStreamState {
     pub pending_write: bool,
     pub pending_reservation: Option<PendingFilesystemReservation>,
     completion: Option<FilesystemWriteCompletion>,
+}
+
+pub(crate) struct FilesystemOutputStreamSnapshot {
+    pub mutation_path: PathBuf,
+    pub file: Arc<cap_std::fs::File>,
+    pub position: Option<u64>,
+    pub has_pending_write: bool,
 }
 
 impl FilesystemOutputStreamState {
@@ -204,19 +211,23 @@ impl FilesystemStorageReservation {
     ) -> anyhow::Result<()> {
         let storage_meter = &self.storage_meter;
         let _capacity_guard = storage_meter.lock_capacity_acquisition().await;
-        let mut requested = storage_meter.capacity_shortfall();
+        let mut requested = storage_meter.capacity_shortfall()?;
         loop {
             if requested == 0 {
                 return Ok(());
             }
             match worker.acquire_filesystem_storage_space(requested).await {
                 Ok(Some(permit)) => {
-                    storage_meter.merge_capacity(Some(permit));
-                    return Ok(());
+                    if storage_meter.merge_capacity(Some(permit)) {
+                        return Ok(());
+                    }
+                    return Err(anyhow::anyhow!(
+                        "filesystem storage capacity registration changed during acquisition"
+                    ));
                 }
                 Ok(None) => return Ok(()),
                 Err(error) => {
-                    let latest = storage_meter.capacity_shortfall();
+                    let latest = storage_meter.capacity_shortfall()?;
                     if latest < requested {
                         requested = latest;
                     } else {
@@ -273,8 +284,24 @@ impl<Ctx: WorkerCtx> FilesystemStorageAccounting<Ctx> {
         }
     }
 
-    pub(crate) fn worker(&self) -> &Arc<Worker<Ctx>> {
-        &self.worker
+    pub(crate) async fn reserve(
+        &self,
+        bytes: u64,
+        limit: u64,
+    ) -> anyhow::Result<FilesystemStorageReservation> {
+        let guard = self.storage_meter.lock_reservation().await;
+        if self.storage_meter.reserve(bytes, limit).is_none() {
+            return Err(anyhow::anyhow!(
+                golem_service_base::error::worker_executor::GolemSpecificWasmTrap::WorkerAgentExceededFilesystemStorageLimit
+            ));
+        }
+        let reservation = FilesystemStorageReservation {
+            logical_bytes: bytes,
+            storage_meter: self.storage_meter.clone(),
+        };
+        drop(guard);
+        reservation.acquire_capacity(&self.worker).await?;
+        Ok(reservation)
     }
 
     pub(crate) async fn commit(
@@ -302,15 +329,8 @@ impl<Ctx: WorkerCtx> FilesystemStorageAccounting<Ctx> {
         reservation.logical_bytes = 0;
     }
 
-    pub(crate) async fn release(
-        &self,
-        requested_bytes: u64,
-        guard: Option<StorageAccountingGuard>,
-    ) {
-        let _guard = match guard {
-            Some(guard) => guard,
-            None => self.storage_meter.lock_reservation().await,
-        };
+    pub(crate) async fn release(&self, requested_bytes: u64) {
+        let _guard = self.storage_meter.lock_reservation().await;
         let freed_bytes = requested_bytes.min(self.storage_meter.current_bytes());
         if freed_bytes == 0 {
             return;
@@ -374,6 +394,7 @@ struct FilesystemWriteOutcome {
 #[derive(Clone, Debug)]
 struct FilesystemWriteError {
     kind: std::io::ErrorKind,
+    raw_os_error: Option<i32>,
     message: Arc<str>,
 }
 
@@ -390,6 +411,7 @@ impl FilesystemWriteOutcome {
                 file_size: None,
                 error: Some(FilesystemWriteError {
                     kind: error.kind(),
+                    raw_os_error: error.raw_os_error(),
                     message: Arc::from(error.to_string()),
                 }),
             },
@@ -398,7 +420,10 @@ impl FilesystemWriteOutcome {
 
     fn result(&self) -> std::io::Result<u64> {
         match &self.error {
-            Some(error) => Err(std::io::Error::new(error.kind, error.message.to_string())),
+            Some(error) => Err(match error.raw_os_error {
+                Some(raw_os_error) => std::io::Error::from_raw_os_error(raw_os_error),
+                None => std::io::Error::new(error.kind, error.message.to_string()),
+            }),
             None => Ok(self.written),
         }
     }
@@ -456,12 +481,27 @@ impl FilesystemWriteCompletion {
     fn request_cancel(&self) {
         self.writer_abort.abort();
     }
+
+    fn is_ready(&self) -> bool {
+        self.outcome.peek().is_some()
+    }
 }
 
 pub(crate) struct SettledFilesystemWrite {
     pub stream_rep: u32,
     pub actual_growth: Option<u64>,
     pub result: std::io::Result<()>,
+}
+
+pub(crate) struct PreparedFilesystemWriteSettlement {
+    pub reservation: Option<(FilesystemStorageReservation, u64)>,
+    pub error: Option<std::io::Error>,
+}
+
+pub(crate) fn rewrite_descendant_path(path: &mut PathBuf, old_path: &Path, new_path: &Path) {
+    if let Ok(remainder) = path.strip_prefix(old_path) {
+        *path = new_path.join(remainder);
+    }
 }
 
 impl DurableFilesystem {
@@ -562,6 +602,7 @@ impl DurableFilesystem {
         self.mutation_lock.clone()
     }
 
+    #[cfg(test)]
     pub(crate) fn is_mutation_pending(&self, path: &Path) -> bool {
         let path = Self::normalized_path(path);
         self.state
@@ -625,20 +666,28 @@ impl DurableFilesystem {
     pub(crate) fn output_stream_snapshot(
         &self,
         stream_rep: u32,
-    ) -> Option<(PathBuf, Arc<cap_std::fs::File>, Option<u64>, bool)> {
+    ) -> Option<FilesystemOutputStreamSnapshot> {
         self.state
             .lock()
             .unwrap()
             .output_streams
             .get(&stream_rep)
-            .map(|stream| {
-                (
-                    stream.mutation_path.clone(),
-                    stream.file.clone(),
-                    stream.position,
-                    stream.pending_write || stream.pending_reservation.is_some(),
-                )
+            .map(|stream| FilesystemOutputStreamSnapshot {
+                mutation_path: stream.mutation_path.clone(),
+                file: stream.file.clone(),
+                position: stream.position,
+                has_pending_write: stream.pending_write || stream.pending_reservation.is_some(),
             })
+    }
+
+    pub(crate) fn pending_write_is_ready(&self, stream_rep: u32) -> bool {
+        self.state
+            .lock()
+            .unwrap()
+            .output_streams
+            .get(&stream_rep)
+            .and_then(|stream| stream.completion.as_ref())
+            .is_some_and(FilesystemWriteCompletion::is_ready)
     }
 
     pub(crate) fn set_pending_reservation(
@@ -757,6 +806,20 @@ impl DurableFilesystem {
         })
     }
 
+    pub(crate) fn prepare_write_settlements(
+        &self,
+        settled: Vec<SettledFilesystemWrite>,
+    ) -> Vec<PreparedFilesystemWriteSettlement> {
+        settled
+            .into_iter()
+            .map(|settlement| PreparedFilesystemWriteSettlement {
+                reservation: self
+                    .finish_pending_write(settlement.stream_rep, settlement.actual_growth),
+                error: settlement.result.err(),
+            })
+            .collect()
+    }
+
     pub(crate) async fn settle_pending_writes(
         &self,
         mutation_path: &Path,
@@ -766,17 +829,8 @@ impl DurableFilesystem {
             .await
     }
 
-    pub(crate) async fn settle_pending_writes_for_rename(
-        &self,
-        old_path: &Path,
-        new_path: &Path,
-    ) -> Vec<SettledFilesystemWrite> {
-        let old_path = Self::normalized_path(old_path);
-        let new_path = Self::normalized_path(new_path);
-        self.settle_pending_writes_matching(|stream_path| {
-            stream_path.starts_with(&old_path) || stream_path.starts_with(&new_path)
-        })
-        .await
+    pub(crate) async fn settle_all_pending_writes(&self) -> Vec<SettledFilesystemWrite> {
+        self.settle_pending_writes_matching(|_| true).await
     }
 
     async fn settle_pending_writes_matching(
@@ -874,9 +928,7 @@ impl DurableFilesystem {
         let mut state = self.state.lock().unwrap();
 
         for stream in state.output_streams.values_mut() {
-            if let Ok(remainder) = stream.mutation_path.strip_prefix(&old_path) {
-                stream.mutation_path = new_path.join(remainder);
-            }
+            rewrite_descendant_path(&mut stream.mutation_path, &old_path, &new_path);
         }
     }
 }
@@ -899,6 +951,9 @@ async fn file_object_identity(file: Arc<cap_std::fs::File>) -> Option<(u64, u64)
     .flatten()
 }
 
+// Wasmtime's P2 file stream does not expose write completion or the resulting file size. Durable
+// accounting needs both before committing reserved growth, so this wrapper preserves the upstream
+// nonblocking stream contract while making the actual write outcome observable.
 pub(crate) struct DurableFileOutputStream {
     file: Arc<cap_std::fs::File>,
     mode: FilesystemWriteMode,
@@ -918,6 +973,18 @@ impl DurableFileOutputStream {
             file,
             mode,
             state: FileOutputState::Ready,
+        }
+    }
+
+    #[cfg(test)]
+    fn waiting_for_test(
+        file: Arc<cap_std::fs::File>,
+        completion: FilesystemWriteCompletion,
+    ) -> Self {
+        Self {
+            file,
+            mode: FilesystemWriteMode::At(0),
+            state: FileOutputState::Waiting(completion),
         }
     }
 
@@ -1107,7 +1174,7 @@ fn write_file_blocking(
     }
 }
 
-async fn filesystem_file_size(file: Arc<cap_std::fs::File>) -> std::io::Result<u64> {
+pub(crate) async fn filesystem_file_size(file: Arc<cap_std::fs::File>) -> std::io::Result<u64> {
     tokio::task::spawn_blocking(move || file.metadata().map(|metadata| metadata.len()))
         .await
         .map_err(std::io::Error::other)?
@@ -1297,6 +1364,14 @@ mod tests {
     }
 
     #[test]
+    fn write_outcome_preserves_raw_os_error() {
+        let outcome =
+            FilesystemWriteOutcome::from_result(0, Err(std::io::Error::from_raw_os_error(2)));
+
+        assert_eq!(outcome.result().unwrap_err().raw_os_error(), Some(2));
+    }
+
+    #[test]
     #[timeout("10s")]
     async fn cancelling_started_writer_waits_for_its_real_outcome() {
         let (started_sender, started_receiver) = tokio::sync::oneshot::channel();
@@ -1311,20 +1386,16 @@ mod tests {
         started_receiver.await.unwrap();
 
         let directory = tempfile::tempdir().unwrap();
-        let stream = DurableFileOutputStream {
-            file: test_file(&directory.path().join("started.bin")),
-            mode: FilesystemWriteMode::At(0),
-            state: FileOutputState::Waiting(completion),
-        };
-        let cancel = tokio::spawn(async move {
-            let mut stream = stream;
-            stream.cancel().await;
-        });
-        tokio::task::yield_now().await;
-        assert!(!cancel.is_finished());
+        let mut stream = DurableFileOutputStream::waiting_for_test(
+            test_file(&directory.path().join("started.bin")),
+            completion,
+        );
+        let cancel = stream.cancel();
+        futures::pin_mut!(cancel);
+        assert!(futures::poll!(&mut cancel).is_pending());
 
         release_sender.send(()).unwrap();
-        cancel.await.unwrap();
+        cancel.await;
         assert_eq!(observed_completion.wait().await.unwrap(), 7);
     }
 
@@ -1354,11 +1425,10 @@ mod tests {
             let completion = FilesystemWriteCompletion::from_writer_task(writer_task);
             let observed_completion = completion.clone();
             let directory = tempfile::tempdir().unwrap();
-            let mut stream = DurableFileOutputStream {
-                file: test_file(&directory.path().join("queued.bin")),
-                mode: FilesystemWriteMode::At(0),
-                state: FileOutputState::Waiting(completion),
-            };
+            let mut stream = DurableFileOutputStream::waiting_for_test(
+                test_file(&directory.path().join("queued.bin")),
+                completion,
+            );
 
             let cancellation = tokio::spawn(async move { stream.cancel().await });
             // The current-thread runtime polls the spawned cancellation to its first await.
@@ -1386,11 +1456,10 @@ mod tests {
         completed_receiver.await.unwrap();
         observed_completion.clone().wait().await.unwrap();
         let directory = tempfile::tempdir().unwrap();
-        let mut stream = DurableFileOutputStream {
-            file: test_file(&directory.path().join("completed.bin")),
-            mode: FilesystemWriteMode::At(0),
-            state: FileOutputState::Waiting(completion),
-        };
+        let mut stream = DurableFileOutputStream::waiting_for_test(
+            test_file(&directory.path().join("completed.bin")),
+            completion,
+        );
 
         stream.cancel().await;
 
@@ -1408,12 +1477,14 @@ mod tests {
         let contents = Bytes::from(vec![1; FILE_WRITE_CAPACITY]);
 
         stream.write(contents).unwrap();
+        let completion = stream.current_completion().unwrap();
         stream.cancel().await;
+        let reported_written = completion.wait().await.unwrap();
         let length_after_cancel = std::fs::metadata(&path).unwrap().len();
         tokio::task::yield_now().await;
 
         assert_eq!(std::fs::metadata(path).unwrap().len(), length_after_cancel);
-        assert!(length_after_cancel == 0 || length_after_cancel == FILE_WRITE_CAPACITY as u64);
+        assert_eq!(length_after_cancel, reported_written);
     }
 
     #[test]
@@ -1448,6 +1519,22 @@ mod tests {
     }
 
     #[test]
+    fn normalized_path_resolves_parent_components_without_escaping_roots() {
+        assert_eq!(
+            DurableFilesystem::normalized_path(Path::new("dir/sub/../file.bin")),
+            PathBuf::from("dir/file.bin")
+        );
+        assert_eq!(
+            DurableFilesystem::normalized_path(Path::new("../../file.bin")),
+            PathBuf::from("../../file.bin")
+        );
+        assert_eq!(
+            DurableFilesystem::normalized_path(Path::new("/../../file.bin")),
+            PathBuf::from("/file.bin")
+        );
+    }
+
+    #[test]
     async fn rename_rewrites_real_pending_stream_state() {
         let directory = tempfile::tempdir().unwrap();
         let filesystem = test_filesystem();
@@ -1466,7 +1553,7 @@ mod tests {
         assert!(!filesystem.is_mutation_pending(Path::new("old/dir/file.bin")));
         assert!(filesystem.is_mutation_pending(Path::new("new/dir/file.bin")));
         assert_eq!(
-            filesystem.output_stream_snapshot(1).unwrap().0,
+            filesystem.output_stream_snapshot(1).unwrap().mutation_path,
             PathBuf::from("new/dir/file.bin")
         );
     }
@@ -1503,6 +1590,52 @@ mod tests {
 
         assert_eq!(settled.len(), 1);
         assert_eq!(settled[0].stream_rep, 1);
+    }
+
+    #[test]
+    fn failed_measurement_finishes_pending_settlement_and_rolls_back_reservation() {
+        let directory = tempfile::tempdir().unwrap();
+        let filesystem = test_filesystem();
+        let meter = filesystem.storage_meter();
+        assert_eq!(meter.reserve(8, 8), Some(1024));
+        filesystem.register_output_stream(
+            1,
+            FilesystemOutputStreamState::new(
+                PathBuf::from("failed-measurement.bin"),
+                test_file(&directory.path().join("failed-measurement.bin")),
+                Some(0),
+            ),
+        );
+        filesystem.set_pending_reservation(
+            1,
+            PendingFilesystemReservation {
+                base_size: 0,
+                reservation: Some(FilesystemStorageReservation {
+                    logical_bytes: 8,
+                    storage_meter: meter.clone(),
+                }),
+            },
+        );
+
+        let prepared = filesystem.prepare_write_settlements(vec![SettledFilesystemWrite {
+            stream_rep: 1,
+            actual_growth: None,
+            result: Err(std::io::Error::other("measurement failed")),
+        }]);
+
+        assert_eq!(prepared.len(), 1);
+        assert_eq!(
+            prepared[0].error.as_ref().unwrap().to_string(),
+            "measurement failed"
+        );
+        assert!(
+            !filesystem
+                .output_stream_snapshot(1)
+                .unwrap()
+                .has_pending_write
+        );
+        drop(prepared);
+        assert_eq!(meter.reserve(8, 8), Some(1024));
     }
 
     #[test]

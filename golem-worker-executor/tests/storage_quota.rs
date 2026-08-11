@@ -365,7 +365,10 @@ async fn agent_quota_stream_write_exceeding_limit_fails(
 
     assert_specific_storage_quota_failure(&result, "stream_to_file");
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?)
+            .is_empty()
+    );
 
     Ok(())
 }
@@ -418,7 +421,10 @@ async fn agent_quota_stream_write_within_limit_succeeds(
         )
         .await;
     assert_specific_storage_quota_failure(&result, "append_file");
-    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?),
+        vec![1024]
+    );
 
     Ok(())
 }
@@ -959,6 +965,57 @@ async fn p2_unlinking_a_hardlink_does_not_release_file_storage(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+async fn overlapping_p2_streams_through_hardlinks_commit_growth_once(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 8).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "overlapping-hardlink-streams-p2");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/source.bin", "x"),
+        )
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "create_link",
+            data_value!("/source.bin", "/alias.bin"),
+        )
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "overlapping_stream_writes",
+            data_value!("/source.bin", "/alias.bin", 8u64),
+        )
+        .await?;
+
+    assert_file_len(&executor, &component, &agent, "/source.bin", 8).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?),
+        vec![1, 7]
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
 async fn pending_stream_is_reconciled_before_invocation_completion(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1077,7 +1134,10 @@ async fn agent_quota_stream_to_stdout_does_not_charge_quota(
         )
         .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?)
+            .is_empty()
+    );
 
     Ok(())
 }
@@ -1118,7 +1178,10 @@ async fn agent_quota_blocking_stream_and_flush_exceeding_limit_fails(
 
     assert_specific_storage_quota_failure(&result, "blocking stream and flush");
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?)
+            .is_empty()
+    );
 
     Ok(())
 }
@@ -1156,7 +1219,10 @@ async fn agent_quota_blocking_stream_and_flush_within_limit_succeeds(
         )
         .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?),
+        vec![1024]
+    );
 
     Ok(())
 }
@@ -1532,9 +1598,9 @@ async fn agent_quota_cumulative_across_write_paths(
 /// 3. Delete file-1 → usage: 16, remaining: 16.
 /// 4. Interrupt → worker unloaded from memory.
 /// 5. Re-invoke → restart reconstructs current_filesystem_storage_usage = 16 bytes.
-/// 6. Write file-3 (16 bytes) → succeeds (16 bytes remaining in quota).
-/// 7. Write file-4 (16 bytes) → fails with `AgentExceededFilesystemStorageLimit`
-///    (quota exhausted: file-2 + file-3 = 32 bytes).
+/// 6. Write file-3 (11 bytes) → succeeds (16 bytes remaining in quota).
+/// 7. Write file-4 (11 bytes) → fails with `AgentExceededFilesystemStorageLimit`
+///    because file-2 + file-3 already use 27 of 32 bytes.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -1660,7 +1726,10 @@ async fn executor_pool_write_within_capacity_succeeds(
         )
         .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?),
+        vec![11]
+    );
 
     Ok(())
 }
@@ -1717,7 +1786,10 @@ async fn executor_pool_freed_after_file_deletion(
         )
         .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(
+        filesystem_storage_deltas(&executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?),
+        vec![11, -11, 11]
+    );
 
     Ok(())
 }

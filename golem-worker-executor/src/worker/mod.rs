@@ -2016,13 +2016,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let has_interrupt = running.interrupt_signal.lock().await.has_interrupt();
 
                 let has_pending_invocations = !self.pending_invocations().await.is_empty();
-                classify_worker_for_eviction(
+                classify_worker_for_eviction(RunningWorkerState {
                     waiting_for_command,
                     has_queued_internal_work,
                     has_resume_replay,
                     has_interrupt,
                     has_pending_invocations,
-                )
+                })
             }
             _ => None,
         }
@@ -2042,13 +2042,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let has_interrupt = running.interrupt_signal.lock().await.has_interrupt();
 
                 let has_pending_invocations = !self.pending_invocations().await.is_empty();
-                classify_worker_for_eviction(
+                classify_worker_for_eviction(RunningWorkerState {
                     waiting_for_command,
                     has_queued_internal_work,
                     has_resume_replay,
                     has_interrupt,
                     has_pending_invocations,
-                )
+                })
                 .is_some_and(|current_class| {
                     current_class.eviction_priority() <= target_class.eviction_priority()
                 })
@@ -3648,16 +3648,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 }
 
-fn classify_worker_for_eviction(
+struct RunningWorkerState {
     waiting_for_command: bool,
     has_queued_internal_work: bool,
     has_resume_replay: bool,
     has_interrupt: bool,
     has_pending_invocations: bool,
-) -> Option<EvictionClass> {
-    if !waiting_for_command || has_queued_internal_work || has_resume_replay || has_interrupt {
+}
+
+fn classify_worker_for_eviction(state: RunningWorkerState) -> Option<EvictionClass> {
+    if !state.waiting_for_command
+        || state.has_queued_internal_work
+        || state.has_resume_replay
+        || state.has_interrupt
+    {
         None
-    } else if has_pending_invocations {
+    } else if state.has_pending_invocations {
         Some(EvictionClass::WarmRunnable)
     } else {
         Some(EvictionClass::LoadedIdle)
@@ -4746,11 +4752,23 @@ mod tests {
     #[test]
     fn eviction_classification_covers_idle_warm_and_non_evictable_states() {
         assert_eq!(
-            classify_worker_for_eviction(true, false, false, false, false),
+            classify_worker_for_eviction(RunningWorkerState {
+                waiting_for_command: true,
+                has_queued_internal_work: false,
+                has_resume_replay: false,
+                has_interrupt: false,
+                has_pending_invocations: false,
+            }),
             Some(EvictionClass::LoadedIdle)
         );
         assert_eq!(
-            classify_worker_for_eviction(true, false, false, false, true),
+            classify_worker_for_eviction(RunningWorkerState {
+                waiting_for_command: true,
+                has_queued_internal_work: false,
+                has_resume_replay: false,
+                has_interrupt: false,
+                has_pending_invocations: true,
+            }),
             Some(EvictionClass::WarmRunnable)
         );
         for state in [
@@ -4760,7 +4778,13 @@ mod tests {
             (true, false, false, true),
         ] {
             assert_eq!(
-                classify_worker_for_eviction(state.0, state.1, state.2, state.3, false),
+                classify_worker_for_eviction(RunningWorkerState {
+                    waiting_for_command: state.0,
+                    has_queued_internal_work: state.1,
+                    has_resume_replay: state.2,
+                    has_interrupt: state.3,
+                    has_pending_invocations: false,
+                }),
                 None
             );
         }

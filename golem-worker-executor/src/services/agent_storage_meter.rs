@@ -24,6 +24,8 @@ use golem_common::model::agent::AgentMode;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
+pub(crate) const NANOSECONDS_PER_SECOND: u128 = 1_000_000_000;
+
 #[derive(Clone, Debug)]
 pub struct AgentStorageMeter {
     inner: Arc<Inner>,
@@ -117,18 +119,19 @@ impl FilesystemStoragePermitBank {
         &self,
         generation: &Option<Weak<FilesystemStoragePermitGeneration>>,
         permit: Option<FilesystemStoragePermit>,
-    ) {
+    ) -> bool {
         let Some(permit) = permit else {
-            return;
+            return true;
         };
         let mut state = self.state.lock().unwrap();
         if !Self::is_current_generation(&state, generation) {
-            return;
+            return false;
         }
         match &mut state.permit {
             Some(existing) => existing.merge(permit),
             None => state.permit = Some(permit),
         }
+        true
     }
 
     fn reconcile(&self, generation: &Option<Weak<FilesystemStoragePermitGeneration>>, bytes: u64) {
@@ -339,14 +342,16 @@ impl AgentStorageMeter {
         self.reconcile_capacity();
     }
 
-    pub fn merge_capacity(&self, permit: Option<FilesystemStoragePermit>) {
-        self.inner
+    pub fn merge_capacity(&self, permit: Option<FilesystemStoragePermit>) -> bool {
+        let merged = self
+            .inner
             .capacity
             .merge(&self.inner.capacity_generation, permit);
         self.reconcile_capacity();
+        merged
     }
 
-    pub fn capacity_shortfall(&self) -> u64 {
+    pub fn capacity_shortfall(&self) -> anyhow::Result<u64> {
         let state = self.inner.state.lock().unwrap();
         let target = filesystem_storage_permits_to_bytes(bytes_to_filesystem_storage_permits(
             state.bytes.saturating_add(state.reserved_bytes),
@@ -355,7 +360,8 @@ impl AgentStorageMeter {
         self.inner
             .capacity
             .held_bytes_for(&self.inner.capacity_generation)
-            .map_or(0, |held| target.saturating_sub(held))
+            .map(|held| target.saturating_sub(held))
+            .ok_or_else(|| anyhow::anyhow!("filesystem storage capacity registration is stale"))
     }
 
     fn reconcile_capacity(&self) {
@@ -380,22 +386,31 @@ impl AgentStorageMeter {
     }
 
     pub fn stop(&self, now: Instant) {
-        let (byte_seconds, remainder) = {
+        let settlement = {
             let mut state = self.inner.state.lock().unwrap();
-            let byte_seconds = state.take_whole_byte_seconds(now);
-            let remainder = std::mem::take(&mut state.pending_byte_nanoseconds);
-            state.active = false;
-            state.stopped = true;
-            (byte_seconds, remainder)
+            if state.stopped {
+                None
+            } else {
+                let byte_seconds = state.take_whole_byte_seconds(now);
+                let remainder = std::mem::take(&mut state.pending_byte_nanoseconds);
+                state.active = false;
+                state.stopped = true;
+                Some((byte_seconds, remainder))
+            }
         };
-        self.inner.record(byte_seconds);
-        if let Some(entry) = self.inner.entry.upgrade() {
-            entry.record_storage_remainder(self.inner.mode, remainder);
+        if let Some((byte_seconds, remainder)) = settlement {
+            self.inner.record(byte_seconds);
+            self.inner.transfer_remainder(remainder);
         }
     }
 
     pub fn flush(&self, now: Instant) {
         self.inner.integrate(now);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_sample(&self) -> Instant {
+        self.inner.state.lock().unwrap().last_sample
     }
 }
 
@@ -441,6 +456,14 @@ impl Inner {
             entry.record_storage_byte_seconds(self.mode, byte_seconds);
         }
     }
+
+    fn transfer_remainder(&self, remainder: u128) {
+        if remainder != 0
+            && let Some(entry) = self.entry.upgrade()
+        {
+            entry.record_storage_remainder(self.mode, remainder);
+        }
+    }
 }
 
 impl State {
@@ -457,19 +480,26 @@ impl State {
         self.pending_byte_nanoseconds = self
             .pending_byte_nanoseconds
             .saturating_add((self.bytes as u128).saturating_mul(elapsed_nanoseconds));
-        if self.pending_byte_nanoseconds < 1_000_000_000 {
+        if self.pending_byte_nanoseconds < NANOSECONDS_PER_SECOND {
             return 0;
         }
 
-        let byte_seconds = self.pending_byte_nanoseconds / 1_000_000_000;
-        self.pending_byte_nanoseconds %= 1_000_000_000;
+        let byte_seconds = self.pending_byte_nanoseconds / NANOSECONDS_PER_SECOND;
+        self.pending_byte_nanoseconds %= NANOSECONDS_PER_SECOND;
         byte_seconds.min(i64::MAX as u128) as i64
     }
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
-        self.integrate(Instant::now());
+        let (byte_seconds, remainder) = {
+            let state = self.state.get_mut().unwrap();
+            let byte_seconds = state.take_whole_byte_seconds(Instant::now());
+            let remainder = std::mem::take(&mut state.pending_byte_nanoseconds);
+            (byte_seconds, remainder)
+        };
+        self.record(byte_seconds);
+        self.transfer_remainder(remainder);
     }
 }
 
@@ -580,32 +610,24 @@ mod tests {
 
     proptest! {
         #[test]
-        fn integrates_arbitrary_monotonic_storage_changes(
-            operations in prop::collection::vec((0u8..3, 0u64..1024, 1u64..5), 1..100),
+        fn flush_partitioning_does_not_change_storage_billing(
+            bytes in 1u64..4096,
+            elapsed_micros in prop::collection::vec(1u64..2_000_000, 1..100),
         ) {
             let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
             let mut now = Instant::now();
-            let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
-            let mut bytes = 10u64;
-            let mut expected = 0u64;
+            let meter = AgentStorageMeter::new(AgentMode::Durable, bytes, entry.clone(), now);
+            let mut total_micros = 0u128;
 
-            for (operation, amount, elapsed_seconds) in operations {
-                now += Duration::from_secs(elapsed_seconds);
-                expected = expected.saturating_add(bytes.saturating_mul(elapsed_seconds));
-
-                match operation {
-                    0 => {
-                        meter.on_acquire(amount, now);
-                        bytes = bytes.saturating_add(amount);
-                    }
-                    1 => {
-                        meter.on_release(amount, now);
-                        bytes = bytes.saturating_sub(amount);
-                    }
-                    _ => meter.flush(now),
-                }
+            for elapsed in elapsed_micros {
+                now += Duration::from_micros(elapsed);
+                total_micros += elapsed as u128;
+                meter.flush(now);
             }
 
+            let expected = (bytes as u128)
+                .saturating_mul(total_micros)
+                / 1_000_000;
             prop_assert_eq!(entry.durable_byte_seconds_delta(), expected as i64);
         }
     }
@@ -701,8 +723,9 @@ mod tests {
 
         capacity.clear();
         let replacement_generation = capacity.install(semaphore.try_acquire(1024).await);
+        assert!(stale_meter.capacity_shortfall().is_err());
         stale_meter.rollback_reservation(1024);
-        stale_meter.merge_capacity(semaphore.try_acquire(1024).await);
+        assert!(!stale_meter.merge_capacity(semaphore.try_acquire(1024).await));
 
         assert_eq!(current_capacity_bytes(&capacity), 1024);
         assert_eq!(semaphore.available_bytes(), 1024);
@@ -726,10 +749,10 @@ mod tests {
         let first = meter.reserve(600, 4096).unwrap();
         acquire_capacity(&meter, &semaphore, first).await;
         assert_eq!(meter.reserve(1000, 4096), Some(1024));
-        assert_eq!(meter.capacity_shortfall(), 1024);
+        assert_eq!(meter.capacity_shortfall().unwrap(), 1024);
 
         meter.rollback_reservation(600);
-        assert_eq!(meter.capacity_shortfall(), 0);
+        assert_eq!(meter.capacity_shortfall().unwrap(), 0);
     }
 
     #[test]
@@ -864,6 +887,42 @@ mod tests {
 
         let second = AgentStorageMeter::new(AgentMode::Durable, 1, entry.clone(), now);
         second.stop(now + Duration::from_millis(600));
+
+        assert_eq!(entry.durable_byte_seconds_delta(), 1);
+    }
+
+    #[test]
+    fn storage_remainders_do_not_cross_agent_modes() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let now = Instant::now();
+
+        AgentStorageMeter::new(AgentMode::Durable, 1, entry.clone(), now)
+            .stop(now + Duration::from_millis(600));
+        AgentStorageMeter::new(AgentMode::Ephemeral, 1, entry.clone(), now)
+            .stop(now + Duration::from_millis(600));
+        assert_eq!(entry.durable_byte_seconds_delta(), 0);
+        assert_eq!(entry.ephemeral_byte_seconds_delta(), 0);
+
+        AgentStorageMeter::new(AgentMode::Durable, 1, entry.clone(), now)
+            .stop(now + Duration::from_millis(600));
+        assert_eq!(entry.durable_byte_seconds_delta(), 1);
+        assert_eq!(entry.ephemeral_byte_seconds_delta(), 0);
+
+        AgentStorageMeter::new(AgentMode::Ephemeral, 1, entry.clone(), now)
+            .stop(now + Duration::from_millis(600));
+        assert_eq!(entry.ephemeral_byte_seconds_delta(), 1);
+    }
+
+    #[test]
+    fn dropped_meters_transfer_remainders() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let now = Instant::now();
+
+        for _ in 0..2 {
+            let meter = AgentStorageMeter::new(AgentMode::Durable, 0, entry.clone(), now);
+            meter.inner.state.lock().unwrap().pending_byte_nanoseconds = 600_000_000;
+            drop(meter);
+        }
 
         assert_eq!(entry.durable_byte_seconds_delta(), 1);
     }

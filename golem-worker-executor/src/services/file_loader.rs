@@ -338,12 +338,7 @@ where
     let parent = path
         .parent()
         .ok_or_else(|| anyhow!("Initial file target has no parent directory"))?;
-    let temporary = temporary_file_in(parent).await?;
-    let file = tokio::fs::OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .open(&temporary)
-        .await?;
+    let (file, temporary) = temporary_writable_file_in(parent).await?;
     let mut writer = tokio::io::BufWriter::new(file);
 
     while let Some(chunk) = data
@@ -378,6 +373,18 @@ async fn temporary_file_in(parent: &Path) -> Result<tempfile::TempPath, anyhow::
     .await
     .map_err(std::io::Error::other)?
     .map_err(Into::into)
+}
+
+async fn temporary_writable_file_in(
+    parent: &Path,
+) -> Result<(tokio::fs::File, tempfile::TempPath), anyhow::Error> {
+    let parent = parent.to_path_buf();
+    let (file, path) = tokio::task::spawn_blocking(move || {
+        tempfile::NamedTempFile::new_in(parent).map(tempfile::NamedTempFile::into_parts)
+    })
+    .await
+    .map_err(std::io::Error::other)??;
+    Ok((tokio::fs::File::from_std(file), path))
 }
 
 async fn persist_temporary_file(
