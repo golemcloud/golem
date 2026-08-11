@@ -1,0 +1,138 @@
+# Using Webhooks in a Go Golem Agent
+
+## Overview
+
+A Golem webhook lets an agent mint a temporary public URL that an external system POSTs to; the POST body is delivered back to the agent. Under the hood a webhook **is a Golem promise**: the agent durably suspends while awaiting the callback, consuming no resources, and survives restarts (exactly-once via oplog replay).
+
+In Go there is no standalone `create_webhook` helper — you drive it through the promise API in `golem/promise.go`:
+
+- `golem.NewPromise[T]()` creates a promise owned by the current agent.
+- `p.WebhookURL()` mints the external URL that completes that promise on POST.
+- `p.ID()` returns the `golem.PromiseID` to persist in agent state.
+- `golem.PromiseByID[T](id).Await()` (or `p.Await()`) suspends until the POST arrives and returns the body decoded as `T`.
+
+This is useful for payment gateways, CI/CD, GitHub/Stripe callbacks, and any event-driven workflow where an external system notifies the agent.
+
+### Prerequisites
+
+The agent type **must** have an HTTP mount (`Spec.HTTP = &golem.Mount{Path: "/..."}`) and be deployed via an `httpApi` deployment in `golem.yaml`. Without that, `WebhookURL()` traps (it is fail-loud). The mount does not need any HTTP endpoints — it only makes the agent HTTP-API-deployable.
+
+## Steps
+
+1. **Add an HTTP mount** to the agent's `Spec` (see [`golem-add-http-endpoint-go`](/next/how-to-guides/go/golem-add-http-endpoint-go)).
+2. **Create a promise** and mint its webhook URL; persist the `PromiseID` in state and return/share the URL.
+3. **Await the callback** in a later invocation via the stored id.
+4. **Deploy** behind an `httpApi` so the URL is reachable.
+
+## API
+
+| Function / method | Description |
+|---|---|
+| `golem.NewPromise[T]()` | Create a promise owned by the current agent; returns `*golem.Promise[T]` |
+| `(*Promise[T]).WebhookURL() string` | Mint the public URL that a POST completes; requires the agent be HTTP-API-deployed |
+| `(*Promise[T]).ID() golem.PromiseID` | The durable id — persist it to await/complete in a later invocation |
+| `(*Promise[T]).Await() T` | Suspend until completed; returns the POST body decoded as `T` (JSON, or raw bytes when `T` is `[]byte`) |
+| `golem.PromiseByID[T](id)` | Rebuild a handle from a stored `PromiseID` |
+| `golem.CompletePromise[T](id, value)` | Complete a promise from *another agent* (external completers use the URL instead) |
+
+## Complete example
+
+### Definition (`agents/webhookdemo/webhookdemo.go`)
+
+```go
+// Package webhookdemo is the DEFINITION of a webhook agent. It needs the HTTP
+// mount below (plus an httpApi deployment) or WebhookURL() traps.
+package webhookdemo
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+type ID struct{ Queue string } // bound by {queue} in the mount path
+
+// Event is the webhook payload — JSON tags are the contract for the caller's POST.
+type Event struct {
+	OrderID string `json:"orderId"`
+	Amount  int64  `json:"amount"`
+}
+
+var Agent = golem.DefineAgent[ID](golem.Spec{
+	Name:        "WebhookDemoAgent",
+	Description: "Completes a promise from an external webhook POST",
+	HTTP:        &golem.Mount{Path: "/hooks/{queue}"}, // makes the agent HTTP-API-deployable
+})
+
+var (
+	Open = golem.DefineMethod[ID, golem.Unit, string]("open",
+		golem.Desc("Create a promise and return its webhook URL"))
+	Result = golem.DefineMethod[ID, golem.Unit, Event]("result",
+		golem.Desc("Await the payload POSTed to the webhook URL"))
+)
+```
+
+### Implementation (`agents/webhookdemo/impl/impl.go`)
+
+```go
+package impl
+
+import (
+	"myapp/agents/webhookdemo"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
+)
+
+type state struct {
+	pending golem.PromiseID
+	open    bool
+}
+
+var agent = golem.Implement(webhookdemo.Agent, func(webhookdemo.ID) *state { return &state{} })
+
+func init() {
+	// Mint a URL; persist the PromiseID so a later invocation can await it.
+	golem.Handle(agent, webhookdemo.Open, func(ctx *golem.Context[state], _ golem.Unit) string {
+		p := golem.NewPromise[webhookdemo.Event]()
+		ctx.State.pending = p.ID()
+		ctx.State.open = true
+		return p.WebhookURL() // hand this URL to the external system
+	})
+
+	// Suspend until the external POST arrives; returns the decoded body.
+	golem.Handle(agent, webhookdemo.Result, func(ctx *golem.Context[state], _ golem.Unit) webhookdemo.Event {
+		if !ctx.State.open {
+			panic("no open webhook — call open first")
+		}
+		return golem.PromiseByID[webhookdemo.Event](ctx.State.pending).Await()
+	})
+}
+```
+
+## Payload decoding
+
+`Await()` decodes the POST body as its type parameter `T` via JSON. Use a struct with `json` tags (as `Event` above) for structured payloads, or `golem.PromiseByID[[]byte](id).Await()` to receive the raw request bytes unchanged.
+
+## Webhook URL structure and suffix
+
+The minted URL has the shape `https://<domain>/<prefix>/<suffix>/<id>`:
+
+- `<domain>` — where the HTTP API is deployed.
+- `<prefix>` — defaults to `/webhooks`, customizable via `webhookUrl` in the `httpApi` deployment section of `golem.yaml`.
+- `<suffix>` — defaults to the agent type name in kebab-case; override it with `Mount.WebhookSuffix`.
+- `<id>` — a unique per-webhook identifier.
+
+```go
+HTTP: &golem.Mount{Path: "/api/orders/{id}", WebhookSuffix: "/workflow-hooks"},
+```
+
+## Key Constraints
+
+- The agent **must** set `Spec.HTTP` and be deployed via `httpApi`, or `WebhookURL()` traps (it is fail-loud, surfacing an agent-error).
+- Only the agent that created the promise may `Await` it; awaiting from another agent traps in the host.
+- Only a `POST` to the URL completes the promise; the URL is one-shot — once completed it is invalid, and a later `Await` returns the recorded body from the oplog.
+- The agent is durably suspended while awaiting — it survives failures, restarts, and updates.
+- **Go difference from Rust:** `Mount.WebhookSuffix` must be **literal segments only** — path variables like `{agent-type}` or `{name}` in the suffix are rejected in the Go SDK (the Rust `webhook_suffix` allows them).
+
+### Related Guides
+| Guide | Description |
+|---|---|
+| [`golem-add-http-endpoint-go`](/next/how-to-guides/go/golem-add-http-endpoint-go) | Set up the HTTP mount + `httpApi` deployment webhooks require |
+| [`golem-add-agent-go`](/next/how-to-guides/go/golem-add-agent-go) | Define the agent and its payload types |
+| [`golem-add-http-auth-go`](/next/how-to-guides/go/golem-add-http-auth-go) | Require authentication on the agent's other endpoints |
