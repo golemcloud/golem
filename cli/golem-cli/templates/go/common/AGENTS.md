@@ -81,7 +81,7 @@ This is a **Golem Application** — a distributed computing project targeting We
 
 Key concepts:
 - **Component**: A WASM component compiled from Go, defining one or more agent types
-- **Agent type**: A struct annotated with `#derive.agent`, defining the agent's API via its public methods
+- **Agent type**: A state-free **definition** (`golem.DefineAgent` + `golem.DefineMethod` descriptors) plus an **implementation** (`golem.Implement` + `golem.Handle`), split across a `<name>` / `impl` package pair
 - **Agent (worker)**: A running instance of an agent type, identified by constructor parameters, with persistent state
 
 ## Agent Fundamentals
@@ -89,9 +89,9 @@ Key concepts:
 - Every agent is uniquely identified by its **constructor parameter values** — two agents with the same parameters are the same agent
 - Agents are **durable by default** — their state persists across invocations, failures, and restarts
 - Invocations are processed **sequentially in a single thread** — no concurrency within a single agent, no need for locks
-- Agents can **spawn other agents** and communicate with them via **RPC** (see Agent-to-Agent Communication)
+- Agents can **spawn other agents** and communicate with them via **RPC** (see the `golem-call-another-agent-go` skill)
 - An agent is created implicitly on first invocation — no separate creation step needed
-- **Async handles cannot outlive invocations** — every WASI `pollable` or `future-*` resource (e.g. those returned by `@http.handle`) must be subscribed to / `get()`-ed within the same invocation; do not store unresolved pollables or futures in agent state to consume them from a later invocation
+- **Async handles cannot outlive invocations** — every async host resource (e.g. an outgoing-HTTP response or an RPC `*golem.Future`) must be consumed within the same invocation; do not store an unresolved response or future in agent state to consume it from a later invocation
 
 ## Durability & Automatic Retries
 
@@ -102,7 +102,7 @@ The following are retried transparently:
 - **HTTP requests** to external services (via `wasi:http` and friends)
 - **RPC calls** between agents
 - **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `golem:rdbms/ignite2`, `wasi:blobstore`, `wasi:keyvalue`
-- **Panics and unhandled errors** (raised via `raise` or propagated with `!`) escaping an agent method — the worker is restarted and the invocation is replayed from the oplog, with all previously-recorded side effects skipped
+- **Panics** escaping an agent method (e.g. from `golem.Must` on an unexpected error) — the worker is restarted and the invocation is replayed from the oplog, with all previously-recorded side effects skipped
 
 Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the Go SDK's retry-policy helpers.
 
