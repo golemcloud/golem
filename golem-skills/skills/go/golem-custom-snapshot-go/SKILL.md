@@ -99,6 +99,8 @@ var (
 package impl
 
 import (
+    "encoding/binary"
+
     "myapp/agents/session"
 
     "github.com/golemcloud/golem/sdks/go/golem"
@@ -111,10 +113,14 @@ type state struct{ total int64 }
 
 // Save/Load make *state a golem.Snapshotter: the returned bytes are stored
 // verbatim by the host and handed back on restore, so unexported state is kept.
-func (s *state) Save() ([]byte, error) { return []byte{byte(s.total)}, nil }
+func (s *state) Save() ([]byte, error) {
+    b := make([]byte, 8)
+    binary.LittleEndian.PutUint64(b, uint64(s.total))
+    return b, nil
+}
 func (s *state) Load(b []byte) error {
-    if len(b) > 0 {
-        s.total = int64(b[0])
+    if len(b) == 8 {
+        s.total = int64(binary.LittleEndian.Uint64(b))
     }
     return nil
 }
