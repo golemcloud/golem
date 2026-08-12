@@ -76,8 +76,6 @@ struct UntaggedBody {
 enum MixedDisc {
     #[schema(suffix = ".tar.gz")]
     Tarball(String),
-    #[schema(contains = "::")]
-    Scoped(String),
     #[schema(regex = "^\\d+$")]
     Digits(String),
     #[schema(field_equals(field = "kind", literal = "circle"))]
@@ -86,24 +84,34 @@ enum MixedDisc {
     Untagged(UntaggedBody),
 }
 
+#[derive(IntoSchema)]
+#[schema(union)]
+enum ContainsDisc {
+    #[schema(contains = "::")]
+    Scoped(String),
+}
+
 #[test]
 fn union_supports_all_discriminator_kinds() {
-    let graph = try_into_schema_graph::<MixedDisc>().expect("graph should be well-formed");
+    assert_union_discriminators::<MixedDisc>(&["suffix", "regex", "field_equals", "field_absent"]);
+    assert_union_discriminators::<ContainsDisc>(&["contains"]);
+}
+
+fn assert_union_discriminators<T: IntoSchema + ?Sized>(expected: &[&str]) {
+    let graph = try_into_schema_graph::<T>().expect("graph should be well-formed");
     let def = graph
         .defs
         .iter()
-        .find(|d| d.id == MixedDisc::type_id())
-        .expect("mixed disc def");
+        .find(|d| d.id == T::type_id())
+        .expect("union def");
     let body = match &def.body {
         SchemaType::Union { spec, .. } => spec,
         other => panic!("expected union body, got {other:?}"),
     };
-    assert_eq!(body.branches.len(), 5);
-    matches_disc(&body.branches[0].discriminator, "suffix");
-    matches_disc(&body.branches[1].discriminator, "contains");
-    matches_disc(&body.branches[2].discriminator, "regex");
-    matches_disc(&body.branches[3].discriminator, "field_equals");
-    matches_disc(&body.branches[4].discriminator, "field_absent");
+    assert_eq!(body.branches.len(), expected.len());
+    for (branch, expected) in body.branches.iter().zip(expected) {
+        matches_disc(&branch.discriminator, expected);
+    }
 }
 
 fn matches_disc(rule: &DiscriminatorRule, expected: &str) {
