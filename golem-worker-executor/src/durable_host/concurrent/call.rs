@@ -1332,6 +1332,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         self.start_idx
     }
 
+    /// Whether resources produced by this call must retain their own durable lifecycle after the
+    /// call returns. This uses the call's initiation-time state rather than ambient worker state,
+    /// which may change while a returned resource remains live.
+    pub fn persistence_enabled(&self) -> bool {
+        self.retry
+            .durable_execution_state()
+            .snapshotting_mode
+            .is_none()
+            && self.execution_scope.persistence_level != PersistenceLevel::PersistNothing
+    }
+
     /// The index returned by `begin_durable_function`: the durable scope `Start` for a
     /// non-idempotent `WriteRemote` / `WriteRemoteBatched(None)`, or the pre-call index otherwise.
     /// Used by call sites that derive a stable identifier from that index (e.g. the idempotency-key

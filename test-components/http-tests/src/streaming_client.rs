@@ -1,11 +1,15 @@
 use futures_concurrency::prelude::*;
-use golem_rust::{agent_definition, agent_implementation};
+use golem_rust::durability::{Durability, DurableFunctionType};
+use golem_rust::{
+    PersistenceLevel, agent_definition, agent_implementation, with_persistence_level_async,
+};
 
 #[agent_definition]
 pub trait StreamingClient {
     fn new() -> Self;
 
     async fn streaming_http_read(&self) -> String;
+    async fn streaming_http_read_with_persist_nothing(&self) -> String;
     async fn parallel_streaming_http_reads(&self, n: u64) -> String;
     async fn raw_streaming_http_read(&self) -> String;
     async fn parallel_raw_streaming_http_reads(&self, n: u64) -> String;
@@ -24,6 +28,13 @@ impl StreamingClient for StreamingClientImpl {
 
     async fn streaming_http_read(&self) -> String {
         match send_streaming_request().await {
+            Ok(s) => s,
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    async fn streaming_http_read_with_persist_nothing(&self) -> String {
+        match send_non_durable_streaming_request().await {
             Ok(s) => s,
             Err(e) => format!("Error: {e}"),
         }
@@ -129,6 +140,49 @@ async fn send_streaming_request() -> Result<String, String> {
     let mut result: Vec<u8> = Vec::new();
     while let Some(chunk) = stream.chunk().await {
         result.extend_from_slice(&chunk);
+    }
+
+    String::from_utf8(result).map_err(|e| e.to_string())
+}
+
+async fn send_non_durable_streaming_request() -> Result<String, String> {
+    let port = std::env::var("PORT").expect("Requires a PORT env var set");
+    let stream_durability = Durability::<bool, String>::new(
+        "test",
+        "non-durable-http-stream",
+        DurableFunctionType::WriteRemote,
+    );
+    let response = with_persistence_level_async(PersistenceLevel::PersistNothing, || async {
+        wasi_fetch::Client::new()
+            .get(&format!("http://localhost:{port}/streaming-chunks"))
+            .send()
+            .await
+    })
+    .await
+    .map_err(|e| format!("{e:?}"))?;
+    stream_durability.persist_infallible((), true);
+
+    let mut stream = response.into_body();
+    let mut result = Vec::new();
+    loop {
+        let poll_durability = Durability::<Option<Vec<u8>>, String>::new(
+            "test",
+            "non-durable-http-stream-poll",
+            DurableFunctionType::ReadRemote,
+        );
+        let chunk = if poll_durability.is_live() {
+            let chunk = with_persistence_level_async(PersistenceLevel::PersistNothing, || async {
+                stream.chunk().await.map(|chunk| chunk.to_vec())
+            })
+            .await;
+            poll_durability.persist_infallible((), chunk)
+        } else {
+            poll_durability.replay_infallible()
+        };
+        match chunk {
+            Some(chunk) => result.extend_from_slice(&chunk),
+            None => break,
+        }
     }
 
     String::from_utf8(result).map_err(|e| e.to_string())

@@ -195,6 +195,11 @@ where
     .await
     .map_err(HttpError::trap)?;
     let send_start_index = handle.start_index();
+    let response_body_mode = if handle.persistence_enabled() {
+        P3HttpResponseBodyMode::Durable
+    } else {
+        P3HttpResponseBodyMode::Passthrough
+    };
 
     let span = store
         .with(|mut access| {
@@ -300,6 +305,7 @@ where
                                     durable_body: None,
                                 }),
                                 body_is_placeholder: true,
+                                body_mode: response_body_mode,
                             },
                         );
                         // Spawns the demand-gated transmission recorder
@@ -717,6 +723,7 @@ where
                         durable_body: Some(physical.body.clone()),
                     }),
                     body_is_placeholder: false,
+                    body_mode: response_body_mode,
                 },
             );
             // Spawns the demand-gated transmission recorder at a

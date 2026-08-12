@@ -4869,6 +4869,72 @@ async fn oplog_replay_after_streaming_http_read(
     Ok(())
 }
 
+#[test]
+#[tracing::instrument]
+#[timeout("1m")]
+async fn p3_stream_created_in_persist_nothing_stays_non_durable(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+    use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let (port, server) = streaming_chunk_server(3, Duration::from_millis(5)).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("StreamingClient");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), port.to_string())]),
+            Vec::new(),
+        )
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "streaming_http_read_with_persist_nothing",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result, "chunk-0\nchunk-1\nchunk-2\n");
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let start_names = oplog.iter().filter_map(|entry| match &entry.entry {
+        PublicOplogEntry::Start(params) => Some(params.function_name.as_str()),
+        _ => None,
+    });
+    let (body_calls, custom_poll_calls) = start_names.fold((0, 0), |counts, name| {
+        (
+            counts.0 + usize::from(name == "http::types::response::consume-body"),
+            counts.1 + usize::from(name == "test::non-durable-http-stream-poll"),
+        )
+    });
+    assert_eq!(
+        body_calls, 0,
+        "the pass-through body must not open a durable scope"
+    );
+    assert!(
+        custom_poll_calls >= 2,
+        "logical stream polls outside PersistNothing must remain durable"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    server.abort();
+    Ok(())
+}
+
 /// A transient mid-body failure of a streaming HTTP response must route
 /// through worker-level retry and re-issue the recorded request instead of
 /// surfacing a truncated body to the guest.

@@ -20,7 +20,7 @@ use super::serialization::{deserialize_headers, serialize_headers};
 use super::*;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallHandle, Cancellable, CompletionDelivery, DeferredCallReplayOutcome,
-    DropEvent, NotCancellable,
+    DropEvent, NotCancellable, finish_span_in_memory,
 };
 use crate::durable_host::durability::{
     AsyncRetryDecision, DurabilityHost, DurableCallTrapContext, HostFailureKind,
@@ -95,6 +95,16 @@ pub(crate) struct OpenP3HttpResponseState {
     /// an empty placeholder body: the first live body read must re-issue the
     /// recorded request (via `resend`) to obtain a real body.
     pub(crate) body_is_placeholder: bool,
+    /// The response body inherits the persistence policy of the send that created it. A
+    /// pass-through body never starts durable consume-body calls, even if it is read after the
+    /// ambient worker persistence level has been restored.
+    pub(crate) body_mode: P3HttpResponseBodyMode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum P3HttpResponseBodyMode {
+    Durable,
+    Passthrough,
 }
 
 /// The send's `outgoing-http-request` invocation-context span together with
@@ -1629,6 +1639,30 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
             let mut store_ctx = store.as_context_mut();
             let ctx = durable_worker_ctx::<Ctx, U>(store_ctx.data_mut());
             ctx.state.open_p3_http_responses.remove(&res.rep())
+        };
+
+        let response_state = match response_state {
+            None => {
+                let http_store =
+                    Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
+                return <WasiHttp as types::HostResponseWithStore<U>>::consume_body(
+                    http_store, res, fut,
+                );
+            }
+            Some(state) if state.body_mode == P3HttpResponseBodyMode::Passthrough => {
+                {
+                    let mut store_ctx = store.as_context_mut();
+                    let ctx = durable_worker_ctx::<Ctx, U>(store_ctx.data_mut());
+                    finish_span_in_memory(ctx, &state.span.span_id)
+                        .map_err(wasmtime::Error::from)?;
+                }
+                let http_store =
+                    Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
+                return <WasiHttp as types::HostResponseWithStore<U>>::consume_body(
+                    http_store, res, fut,
+                );
+            }
+            Some(state) => Some(state),
         };
 
         // Delegate to the built-in implementation to wire `fut` into the body's
