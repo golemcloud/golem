@@ -200,9 +200,8 @@ mod tests {
 
     #[test]
     fn removes_replace_when_switching_to_version() {
-        let src = format!(
-            "module app\n\nrequire {MOD} v0.0.0\n\nreplace {MOD} => /abs/sdks/go/golem\n"
-        );
+        let src =
+            format!("module app\n\nrequire {MOD} v0.0.0\n\nreplace {MOD} => /abs/sdks/go/golem\n");
         let out = reconcile_sdk_dependency(&src, MOD, "v0.1.0", None);
         assert!(!out.contains("replace"));
         assert!(out.contains(&format!("require {MOD} v0.1.0")));

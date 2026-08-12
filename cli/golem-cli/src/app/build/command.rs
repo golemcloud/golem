@@ -621,10 +621,7 @@ async fn run_moon_install(app_root_dir: &Path) -> anyhow::Result<()> {
         .await
 }
 
-async fn ensure_go_dependencies(
-    ctx: &BuildContext<'_>,
-    module_root: &Path,
-) -> anyhow::Result<()> {
+async fn ensure_go_dependencies(ctx: &BuildContext<'_>, module_root: &Path) -> anyhow::Result<()> {
     let go_sum_path = module_root.join("go.sum");
     let marker_dir = ctx.application().task_result_marker_dir();
 

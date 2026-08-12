@@ -59,7 +59,10 @@ async fn go_rich_types_round_trip(
             &component,
             &agent_id,
             "describe",
-            data_value!(vec!["a".to_string(), "b".to_string()], Some("hi".to_string())),
+            data_value!(
+                vec!["a".to_string(), "b".to_string()],
+                Some("hi".to_string())
+            ),
         )
         .await?
         .into_typed::<String>()?;
@@ -79,10 +82,18 @@ async fn go_rich_types_round_trip(
 
     // list out.
     let repeated = executor
-        .invoke_and_await_agent(&component, &agent_id, "repeat", data_value!("x".to_string(), 3i64))
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "repeat",
+            data_value!("x".to_string(), 3i64),
+        )
         .await?
         .into_typed::<Vec<String>>()?;
-    assert_eq!(repeated, vec!["x".to_string(), "x".to_string(), "x".to_string()]);
+    assert_eq!(
+        repeated,
+        vec!["x".to_string(), "x".to_string(), "x".to_string()]
+    );
 
     Ok(())
 }
