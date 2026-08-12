@@ -38,7 +38,7 @@ inherit_test_dep!(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn go_rpc_call_and_async(
+async fn go_rpc_sync_and_async_calls(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,

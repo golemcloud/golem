@@ -38,7 +38,7 @@ inherit_test_dep!(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn go_reads_agent_config(
+async fn go_agent_config_read(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,

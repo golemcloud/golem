@@ -103,7 +103,7 @@ async fn go_counter_survives_restart(
 #[ignore = "flaky: after an executor restart, replaying a blocking outbound-HTTP call intermittently hangs or hits an oplog mismatch on monotonic_clock::now — needs executor/runtime investigation"]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn go_durable_http_replays_not_reruns(
+async fn go_outgoing_http_replayed_without_network(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
