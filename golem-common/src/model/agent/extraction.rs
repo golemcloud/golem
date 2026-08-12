@@ -98,9 +98,10 @@ impl<'de> Deserialize<'de> for ExtractedComponentMetadata {
 /// Extracts the agent types and tools implemented by the given WASM component
 /// using a single component instantiation.
 ///
-/// Agent types come from `golem:agent/guest.discover-agent-types`; if the
-/// component does not export that interface the extraction either fails
-/// (`fail_on_missing_discover_method`) or yields an empty agent type list.
+/// Agent types come from `golem:agent/guest.discover-agent-types`. When tool
+/// extraction is enabled, `fail_on_missing_discover_method` requires at least
+/// one of the agent or tool discovery interfaces, so tools-only components are
+/// valid. Agent-type-only extraction still requires the agent interface.
 /// Tools come from `golem:tool/guest.discover-tools` and are always optional:
 /// components without the tool guest interface yield an empty tool list.
 ///
@@ -122,6 +123,23 @@ pub async fn extract_component_metadata_with_streams(
         fail_on_missing_discover_method,
         enable_fs_cache,
         true,
+    )
+    .await
+}
+
+/// Same as [`extract_component_metadata_with_streams`], but inherits stdout and
+/// stderr from the current process.
+pub async fn extract_component_metadata(
+    wasm_path: &Path,
+    fail_on_missing_discover_method: bool,
+    enable_fs_cache: bool,
+) -> anyhow::Result<ExtractedComponentMetadata> {
+    extract_component_metadata_with_streams(
+        wasm_path,
+        None::<pipe::MemoryOutputPipe>,
+        None::<pipe::MemoryOutputPipe>,
+        fail_on_missing_discover_method,
+        enable_fs_cache,
     )
     .await
 }
@@ -206,29 +224,41 @@ async fn extract_component_metadata_impl(
     debug!("Instantiating component");
     let instance = linker.instantiate_async(&mut store, &component).await?;
 
-    let agent_types = if let Some(func) = find_exported_function(
+    let agent_discover = find_exported_function(
         &mut store,
         &instance,
         AGENT_INTERFACE_NAME,
         AGENT_FUNCTION_NAME,
-    ) {
+    );
+    let tool_discover = include_tools
+        .then(|| {
+            find_exported_function(
+                &mut store,
+                &instance,
+                TOOL_INTERFACE_NAME,
+                TOOL_FUNCTION_NAME,
+            )
+        })
+        .flatten();
+
+    if fail_on_missing_discover_method && agent_discover.is_none() && tool_discover.is_none() {
+        let expected = if include_tools {
+            format!(
+                "Function {AGENT_FUNCTION_NAME} in interface {AGENT_INTERFACE_NAME} or function {TOOL_FUNCTION_NAME} in interface {TOOL_INTERFACE_NAME}"
+            )
+        } else {
+            format!("Function {AGENT_FUNCTION_NAME} in interface {AGENT_INTERFACE_NAME}")
+        };
+        return Err(anyhow!("{expected} not found"));
+    }
+
+    let agent_types = if let Some(func) = agent_discover {
         discover_agent_types(&mut store, func).await?
-    } else if fail_on_missing_discover_method {
-        return Err(anyhow!(
-            "Function {AGENT_FUNCTION_NAME} not found in interface {AGENT_INTERFACE_NAME}"
-        ));
     } else {
         Vec::new()
     };
 
-    let tools = if !include_tools {
-        Vec::new()
-    } else if let Some(func) = find_exported_function(
-        &mut store,
-        &instance,
-        TOOL_INTERFACE_NAME,
-        TOOL_FUNCTION_NAME,
-    ) {
+    let tools = if let Some(func) = tool_discover {
         discover_tools(&mut store, func).await?
     } else {
         Vec::new()

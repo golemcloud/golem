@@ -212,6 +212,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "DeploymentSummary",
                 "golem_common::model::deployment::DeploymentSummary",
             ),
+            (
+                "DeployedRegisteredTool",
+                "golem_common::model::tool::DeployedRegisteredTool",
+            ),
             // domain_registration
             (
                 "DomainRegistration",

@@ -30,7 +30,8 @@ Path|Method|Protected
           "agentGuestInterface": "string",
           "saveSnapshotInterface": "string",
           "loadSnapshotInterface": "string",
-          "oplogProcessorInterface": "string"
+          "oplogProcessorInterface": "string",
+          "toolGuestInterface": "string"
         },
         "producers": [
           {
@@ -57,7 +58,8 @@ Path|Method|Protected
         "rootPackageName": "string",
         "rootPackageVersion": "string",
         "agentTypes": [],
-        "agentTypeProvisionConfigs": {}
+        "agentTypeProvisionConfigs": {},
+        "tools": {}
       },
       "createdAt": "2019-08-24T14:15:22Z",
       "wasmHash": "string"
@@ -84,7 +86,9 @@ The request body is encoded as multipart/form-data containing metadata and the W
 {
   "componentName": "string",
   "agentTypes": [],
-  "agentTypeProvisionConfigs": {}
+  "agentTypeProvisionConfigs": {},
+  "tools": [],
+  "toolDeploymentConfigs": {}
 }
 ```
 
@@ -109,7 +113,8 @@ The request body is encoded as multipart/form-data containing metadata and the W
       "agentGuestInterface": "string",
       "saveSnapshotInterface": "string",
       "loadSnapshotInterface": "string",
-      "oplogProcessorInterface": "string"
+      "oplogProcessorInterface": "string",
+      "toolGuestInterface": "string"
     },
     "producers": [
       {
@@ -136,7 +141,8 @@ The request body is encoded as multipart/form-data containing metadata and the W
     "rootPackageName": "string",
     "rootPackageVersion": "string",
     "agentTypes": [],
-    "agentTypeProvisionConfigs": {}
+    "agentTypeProvisionConfigs": {},
+    "tools": {}
   },
   "createdAt": "2019-08-24T14:15:22Z",
   "wasmHash": "string"
@@ -171,7 +177,8 @@ Path|Method|Protected
       "agentGuestInterface": "string",
       "saveSnapshotInterface": "string",
       "loadSnapshotInterface": "string",
-      "oplogProcessorInterface": "string"
+      "oplogProcessorInterface": "string",
+      "toolGuestInterface": "string"
     },
     "producers": [
       {
@@ -198,7 +205,8 @@ Path|Method|Protected
     "rootPackageName": "string",
     "rootPackageVersion": "string",
     "agentTypes": [],
-    "agentTypeProvisionConfigs": {}
+    "agentTypeProvisionConfigs": {},
+    "tools": {}
   },
   "createdAt": "2019-08-24T14:15:22Z",
   "wasmHash": "string"
@@ -235,7 +243,8 @@ Path|Method|Protected
           "agentGuestInterface": "string",
           "saveSnapshotInterface": "string",
           "loadSnapshotInterface": "string",
-          "oplogProcessorInterface": "string"
+          "oplogProcessorInterface": "string",
+          "toolGuestInterface": "string"
         },
         "producers": [
           {
@@ -262,7 +271,8 @@ Path|Method|Protected
         "rootPackageName": "string",
         "rootPackageVersion": "string",
         "agentTypes": [],
-        "agentTypeProvisionConfigs": {}
+        "agentTypeProvisionConfigs": {},
+        "tools": {}
       },
       "createdAt": "2019-08-24T14:15:22Z",
       "wasmHash": "string"
@@ -299,7 +309,8 @@ Path|Method|Protected
       "agentGuestInterface": "string",
       "saveSnapshotInterface": "string",
       "loadSnapshotInterface": "string",
-      "oplogProcessorInterface": "string"
+      "oplogProcessorInterface": "string",
+      "toolGuestInterface": "string"
     },
     "producers": [
       {
@@ -326,7 +337,8 @@ Path|Method|Protected
     "rootPackageName": "string",
     "rootPackageVersion": "string",
     "agentTypes": [],
-    "agentTypeProvisionConfigs": {}
+    "agentTypeProvisionConfigs": {},
+    "tools": {}
   },
   "createdAt": "2019-08-24T14:15:22Z",
   "wasmHash": "string"
@@ -361,7 +373,8 @@ Path|Method|Protected
       "agentGuestInterface": "string",
       "saveSnapshotInterface": "string",
       "loadSnapshotInterface": "string",
-      "oplogProcessorInterface": "string"
+      "oplogProcessorInterface": "string",
+      "toolGuestInterface": "string"
     },
     "producers": [
       {
@@ -388,7 +401,8 @@ Path|Method|Protected
     "rootPackageName": "string",
     "rootPackageVersion": "string",
     "agentTypes": [],
-    "agentTypeProvisionConfigs": {}
+    "agentTypeProvisionConfigs": {},
+    "tools": {}
   },
   "createdAt": "2019-08-24T14:15:22Z",
   "wasmHash": "string"
@@ -926,6 +940,551 @@ The request body is encoded as multipart/form-data containing metadata and the W
       "filePermissionUpdates": {}
     }
   },
+  "tools": [
+    {
+      "version": "string",
+      "commands": {
+        "nodes": [
+          {
+            "name": "string",
+            "aliases": [
+              "string"
+            ],
+            "doc": {
+              "summary": "string",
+              "description": "string",
+              "examples": [
+                {
+                  "title": "string",
+                  "body": "string"
+                }
+              ]
+            },
+            "globals": {
+              "options": [
+                {
+                  "long": "string",
+                  "short": null,
+                  "aliases": [
+                    "string"
+                  ],
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "value_name": "string",
+                  "shape": {
+                    "kind": "scalar",
+                    "value": {
+                      "kind": "ref",
+                      "value": {
+                        "id": "string",
+                        "metadata": {
+                          "doc": "string",
+                          "aliases": [
+                            "string"
+                          ],
+                          "examples": [
+                            "string"
+                          ],
+                          "deprecated": "string",
+                          "role": {
+                            "tag": "multimodal"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "default": {
+                    "kind": "bool",
+                    "value": true
+                  },
+                  "required": true,
+                  "env_var": "string"
+                }
+              ],
+              "flags": [
+                {
+                  "long": "string",
+                  "short": null,
+                  "aliases": [
+                    "string"
+                  ],
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "shape": {
+                    "kind": "bool-flag",
+                    "value": {
+                      "default": true,
+                      "negatable": true
+                    }
+                  },
+                  "env_var": "string"
+                }
+              ]
+            },
+            "subcommands": [
+              0
+            ],
+            "body": {
+              "positionals": {
+                "fixed": [
+                  {
+                    "name": "string",
+                    "doc": {
+                      "summary": "string",
+                      "description": "string",
+                      "examples": [
+                        {
+                          "title": "string",
+                          "body": "string"
+                        }
+                      ]
+                    },
+                    "value_name": "string",
+                    "type_": {
+                      "kind": "ref",
+                      "value": {
+                        "id": "string",
+                        "metadata": {
+                          "doc": "string",
+                          "aliases": [
+                            "string"
+                          ],
+                          "examples": [
+                            "string"
+                          ],
+                          "deprecated": "string",
+                          "role": {
+                            "tag": "multimodal"
+                          }
+                        }
+                      }
+                    },
+                    "default": {
+                      "kind": "bool",
+                      "value": true
+                    },
+                    "required": true,
+                    "accepts_stdio": true
+                  }
+                ],
+                "tail": {
+                  "name": "string",
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "value_name": "string",
+                  "item_type": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  },
+                  "min": 0,
+                  "max": 0,
+                  "separator": "string",
+                  "verbatim": true,
+                  "accepts_stdio": true
+                }
+              },
+              "options": [
+                {
+                  "long": "string",
+                  "short": null,
+                  "aliases": [
+                    "string"
+                  ],
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "value_name": "string",
+                  "shape": {
+                    "kind": "scalar",
+                    "value": {
+                      "kind": "ref",
+                      "value": {
+                        "id": "string",
+                        "metadata": {
+                          "doc": "string",
+                          "aliases": [
+                            "string"
+                          ],
+                          "examples": [
+                            "string"
+                          ],
+                          "deprecated": "string",
+                          "role": {
+                            "tag": "multimodal"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "default": {
+                    "kind": "bool",
+                    "value": true
+                  },
+                  "required": true,
+                  "env_var": "string"
+                }
+              ],
+              "flags": [
+                {
+                  "long": "string",
+                  "short": null,
+                  "aliases": [
+                    "string"
+                  ],
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "shape": {
+                    "kind": "bool-flag",
+                    "value": {
+                      "default": true,
+                      "negatable": true
+                    }
+                  },
+                  "env_var": "string"
+                }
+              ],
+              "constraints": [
+                {
+                  "kind": "requires-all",
+                  "value": [
+                    {
+                      "kind": "present",
+                      "value": "string"
+                    }
+                  ]
+                }
+              ],
+              "stdin": {
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "mime": [
+                  "string"
+                ],
+                "required": true
+              },
+              "stdout": {
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "mime": [
+                  "string"
+                ],
+                "required": true
+              },
+              "result": {
+                "type_": {
+                  "kind": "ref",
+                  "value": {
+                    "id": "string",
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
+                      }
+                    }
+                  }
+                },
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "formatters": [
+                  {
+                    "name": "string",
+                    "doc": {
+                      "summary": "string",
+                      "description": "string",
+                      "examples": [
+                        {
+                          "title": "string",
+                          "body": "string"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "default_formatter": "string"
+              },
+              "errors": [
+                {
+                  "name": "string",
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "kind": "usage-error",
+                  "exit_code": 0,
+                  "payload": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "annotations": {
+                "read_only": true,
+                "destructive": true,
+                "idempotent": true,
+                "open_world": true
+              }
+            }
+          }
+        ]
+      },
+      "schema": {
+        "defs": [
+          {
+            "id": "string",
+            "name": "string",
+            "body": {
+              "kind": "ref",
+              "value": {
+                "id": "string",
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "root": {
+          "kind": "ref",
+          "value": {
+            "id": "string",
+            "metadata": {
+              "doc": "string",
+              "aliases": [
+                "string"
+              ],
+              "examples": [
+                "string"
+              ],
+              "deprecated": "string",
+              "role": {
+                "tag": "multimodal"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "toolDeploymentConfigUpdates": {
+    "property1": {
+      "provision": {
+        "config": {},
+        "env": {
+          "property1": "string",
+          "property2": "string"
+        },
+        "pluginUpdates": [],
+        "filesToAddOrUpdate": {},
+        "filesToRemove": [],
+        "filePermissionUpdates": {}
+      },
+      "environmentBinding": {
+        "op": "set",
+        "value": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          }
+        }
+      },
+      "agentBindings": {
+        "property1": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          }
+        },
+        "property2": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          }
+        }
+      }
+    },
+    "property2": {
+      "provision": {
+        "config": {},
+        "env": {
+          "property1": "string",
+          "property2": "string"
+        },
+        "pluginUpdates": [],
+        "filesToAddOrUpdate": {},
+        "filesToRemove": [],
+        "filePermissionUpdates": {}
+      },
+      "environmentBinding": {
+        "op": "set",
+        "value": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          }
+        }
+      },
+      "agentBindings": {
+        "property1": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          }
+        },
+        "property2": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          }
+        }
+      }
+    }
+  },
   "allowIncompatibleConfig": false
 }
 ```
@@ -951,7 +1510,8 @@ The request body is encoded as multipart/form-data containing metadata and the W
       "agentGuestInterface": "string",
       "saveSnapshotInterface": "string",
       "loadSnapshotInterface": "string",
-      "oplogProcessorInterface": "string"
+      "oplogProcessorInterface": "string",
+      "toolGuestInterface": "string"
     },
     "producers": [
       {
@@ -978,7 +1538,8 @@ The request body is encoded as multipart/form-data containing metadata and the W
     "rootPackageName": "string",
     "rootPackageVersion": "string",
     "agentTypes": [],
-    "agentTypeProvisionConfigs": {}
+    "agentTypeProvisionConfigs": {},
+    "tools": {}
   },
   "createdAt": "2019-08-24T14:15:22Z",
   "wasmHash": "string"
@@ -1013,7 +1574,8 @@ Path|Method|Protected
       "agentGuestInterface": "string",
       "saveSnapshotInterface": "string",
       "loadSnapshotInterface": "string",
-      "oplogProcessorInterface": "string"
+      "oplogProcessorInterface": "string",
+      "toolGuestInterface": "string"
     },
     "producers": [
       {
@@ -1040,7 +1602,8 @@ Path|Method|Protected
     "rootPackageName": "string",
     "rootPackageVersion": "string",
     "agentTypes": [],
-    "agentTypeProvisionConfigs": {}
+    "agentTypeProvisionConfigs": {},
+    "tools": {}
   },
   "createdAt": "2019-08-24T14:15:22Z",
   "wasmHash": "string"

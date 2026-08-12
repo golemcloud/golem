@@ -2676,7 +2676,8 @@
         "environmentId",
         "exports",
         "agentTypes",
-        "agentTypeProvisionConfigs"
+        "agentTypeProvisionConfigs",
+        "tools"
       ],
       "properties": {
         "$type": {
@@ -2720,6 +2721,10 @@
           "additionalProperties": {
             "$ref": "#/definitions/AgentTypeProvisionConfig"
           }
+        },
+        "tools": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolDeploymentMetadata" }
         }
       },
       "additionalProperties": false
@@ -3486,7 +3491,8 @@
         "environmentId",
         "exports",
         "agentTypes",
-        "agentTypeProvisionConfigs"
+        "agentTypeProvisionConfigs",
+        "tools"
       ],
       "properties": {
         "componentName": { "type": "string" },
@@ -3498,9 +3504,84 @@
         "environmentId": { "type": "string" },
         "exports": { "type": "array", "items": { "type": "string" } },
         "agentTypes": { "type": "array", "items": { "$ref": "#/definitions/AgentType" } },
-        "agentTypeProvisionConfigs": { "type": "object", "additionalProperties": { "$ref": "#/definitions/AgentTypeProvisionConfig" } }
+        "agentTypeProvisionConfigs": { "type": "object", "additionalProperties": { "$ref": "#/definitions/AgentTypeProvisionConfig" } },
+        "tools": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolDeploymentMetadata" }
+        }
       },
       "additionalProperties": false
+    },
+    "ToolDeploymentMetadata": {
+      "type": "object",
+      "required": ["definition", "provision", "environmentBinding", "agentBindings"],
+      "properties": {
+        "definition": { "type": "object" },
+        "provision": { "$ref": "#/definitions/ToolProvisionConfig" },
+        "environmentBinding": {
+          "oneOf": [
+            { "$ref": "#/definitions/ToolBindingInput" },
+            { "type": "null" }
+          ]
+        },
+        "agentBindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolBindingInput" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ToolProvisionConfig": {
+      "type": "object",
+      "required": ["config", "env", "plugins", "files"],
+      "properties": {
+        "config": {},
+        "env": { "type": "object", "additionalProperties": { "type": "string" } },
+        "plugins": { "type": "array", "items": { "$ref": "#/definitions/InstalledPlugin" } },
+        "files": { "type": "array", "items": { "$ref": "#/definitions/InitialAgentFile" } }
+      },
+      "additionalProperties": false
+    },
+    "ToolBindingInput": {
+      "type": "object",
+      "required": [
+        "version",
+        "parameters",
+        "account",
+        "secretKeysReadable",
+        "secretKeysRevealable"
+      ],
+      "properties": {
+        "version": { "type": ["string", "null"] },
+        "parameters": {},
+        "account": { "type": ["string", "null"] },
+        "secretKeysReadable": { "$ref": "#/definitions/SecretKeyScope" },
+        "secretKeysRevealable": { "$ref": "#/definitions/SecretKeyScope" }
+      },
+      "additionalProperties": false
+    },
+    "SecretKeyScope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": { "kind": { "const": "all" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "keys"],
+          "properties": {
+            "kind": { "const": "keys" },
+            "keys": {
+              "type": "array",
+              "items": { "type": "array", "items": { "type": "string" } },
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "AgentTypeProvisionConfig": {
       "type": "object",

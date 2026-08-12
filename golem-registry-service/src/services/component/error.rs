@@ -27,6 +27,7 @@ use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
+use golem_common::model::tool::ToolName;
 use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::AuthorizationError;
 use golem_service_base::repo::RepoError;
@@ -86,6 +87,36 @@ pub enum ComponentError {
     UndeclaredAgentTypeInProvisionConfig(AgentTypeName),
     #[error("Agent type '{0}' has no provision config")]
     MissingAgentTypeProvisionConfig(AgentTypeName),
+    #[error("Tool definition has no root command name")]
+    MissingToolName,
+    #[error("Invalid tool name '{name}': {message}")]
+    InvalidToolName { name: String, message: String },
+    #[error("Multiple tools with the same name: {0}")]
+    DuplicateToolName(ToolName),
+    #[error("Invalid tool '{tool}': {errors}", errors = errors.join(", "))]
+    InvalidTool { tool: String, errors: Vec<String> },
+    #[error("Components with tools must export golem:tool/guest@0.1.0 (found {found:?})")]
+    ToolsRequireSupportedGuestExport { found: Option<String> },
+    #[error("Tool '{0}' is referenced in deployment config but not defined by the component")]
+    UndeclaredToolInDeploymentConfig(ToolName),
+    #[error("Tool '{0}' has no deployment config")]
+    MissingToolDeploymentConfig(ToolName),
+    #[error(
+        "Tool deployment metadata key '{key}' does not match definition root name '{definition_name}'"
+    )]
+    ToolDefinitionNameMismatch {
+        key: ToolName,
+        definition_name: String,
+    },
+    #[error(
+        "Tool file with archive path '{archive_path}' not found in the uploaded archive (tool: {tool})"
+    )]
+    ToolFileNotFoundInArchive {
+        tool: ToolName,
+        archive_path: ArchiveFilePath,
+    },
+    #[error("Multiple files target '{target_path}' for tool '{tool}'")]
+    ConflictingToolFileTarget { tool: ToolName, target_path: String },
     #[error(
         "Update introducing new agent type '{0}' is missing initial permissions in its provision config"
     )]
@@ -167,6 +198,16 @@ impl SafeDisplay for ComponentError {
             Self::DuplicateAgentTypeName(_) => self.to_string(),
             Self::UndeclaredAgentTypeInProvisionConfig(_) => self.to_string(),
             Self::MissingAgentTypeProvisionConfig(_) => self.to_string(),
+            Self::MissingToolName => self.to_string(),
+            Self::InvalidToolName { .. } => self.to_string(),
+            Self::DuplicateToolName(_) => self.to_string(),
+            Self::InvalidTool { .. } => self.to_string(),
+            Self::ToolsRequireSupportedGuestExport { .. } => self.to_string(),
+            Self::UndeclaredToolInDeploymentConfig(_) => self.to_string(),
+            Self::MissingToolDeploymentConfig(_) => self.to_string(),
+            Self::ToolDefinitionNameMismatch { .. } => self.to_string(),
+            Self::ToolFileNotFoundInArchive { .. } => self.to_string(),
+            Self::ConflictingToolFileTarget { .. } => self.to_string(),
             Self::NewAgentTypeMissingInitialPermissions(_) => self.to_string(),
             Self::InvalidAgentInitialPermissionCard { .. } => self.to_string(),
             Self::AgentConfigNotDeclared { .. } => self.to_string(),

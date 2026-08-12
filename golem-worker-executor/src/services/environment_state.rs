@@ -20,6 +20,7 @@ use golem_common::model::agent_secret::{
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
+use golem_common::model::tool::{CompiledToolBinding, RegisteredTool, ToolName};
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::AgentDeploymentDetails;
@@ -56,6 +57,23 @@ pub trait EnvironmentStateService: Send + Sync {
         &self,
         environment_id: EnvironmentId,
     ) -> Result<Vec<NamedRetryPolicy>, WorkerExecutorError>;
+
+    async fn get_registered_tool(
+        &self,
+        _environment_id: EnvironmentId,
+        _tool_name: &ToolName,
+    ) -> Result<Option<RegisteredTool>, WorkerExecutorError> {
+        Ok(None)
+    }
+
+    async fn get_agent_tool_binding(
+        &self,
+        _environment_id: EnvironmentId,
+        _agent_type: &AgentTypeName,
+        _tool_name: &ToolName,
+    ) -> Result<Option<CompiledToolBinding>, WorkerExecutorError> {
+        Ok(None)
+    }
 
     async fn invalidate_environment(&self, _environment_id: EnvironmentId) {}
     async fn invalidate_all(&self) {}
@@ -154,6 +172,34 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
     ) -> Result<Vec<NamedRetryPolicy>, WorkerExecutorError> {
         let environment_state = self.get_environment_state(environment_id).await?;
         Ok(environment_state.retry_policies.clone())
+    }
+
+    async fn get_registered_tool(
+        &self,
+        environment_id: EnvironmentId,
+        tool_name: &ToolName,
+    ) -> Result<Option<RegisteredTool>, WorkerExecutorError> {
+        let environment_state = self.get_environment_state(environment_id).await?;
+        Ok(environment_state
+            .tool_deployment
+            .as_ref()
+            .and_then(|deployment| deployment.registered_tools.get(tool_name))
+            .cloned())
+    }
+
+    async fn get_agent_tool_binding(
+        &self,
+        environment_id: EnvironmentId,
+        agent_type: &AgentTypeName,
+        tool_name: &ToolName,
+    ) -> Result<Option<CompiledToolBinding>, WorkerExecutorError> {
+        let environment_state = self.get_environment_state(environment_id).await?;
+        Ok(environment_state
+            .tool_deployment
+            .as_ref()
+            .and_then(|deployment| deployment.agent_tool_bindings.get(agent_type))
+            .and_then(|bindings| bindings.get(tool_name))
+            .cloned())
     }
 
     async fn invalidate_environment(&self, environment_id: EnvironmentId) {

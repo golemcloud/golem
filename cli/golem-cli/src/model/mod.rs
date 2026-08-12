@@ -31,6 +31,7 @@ pub mod plugin_manifest;
 pub mod repl;
 pub mod template;
 pub mod text;
+pub mod tool_deployment;
 pub mod worker;
 
 use crate::app::template::AppTemplate;

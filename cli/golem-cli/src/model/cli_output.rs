@@ -942,6 +942,7 @@ mod tests {
 
     #[test]
     fn component_get_and_list_structured_outputs_mask_secret_payloads() {
+        // PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
         let component = sample_component_view();
 
         let get = hidden_structured_output(crate::model::text::component::ComponentGetView(
@@ -958,6 +959,8 @@ mod tests {
                     "component-env-secret",
                     "component-config-secret",
                     "component-plugin-secret",
+                    "tool-env-secret",
+                    "tool-config-secret",
                 ],
             );
             assert!(value.to_string().contains("***"));
@@ -1056,6 +1059,7 @@ mod tests {
 
     fn sample_component_view() -> crate::model::component::ComponentView {
         let agent_type_name = golem_common::model::agent::AgentTypeName("agent".to_string());
+        let tool_name = golem_common::model::tool::ToolName::try_from("grep").unwrap();
         crate::model::component::ComponentView {
             component_name: golem_common::model::component::ComponentName("component".to_string()),
             component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
@@ -1108,6 +1112,38 @@ mod tests {
                         created_at: fixed_datetime(),
                         expires_at: None,
                     },
+                },
+            )]),
+            tools: BTreeMap::from([(
+                tool_name,
+                golem_common::model::tool::ToolDeploymentMetadata {
+                    definition: golem_common::schema::tool::Tool {
+                        version: "1.0.0".to_string(),
+                        commands: golem_common::schema::tool::CommandTree {
+                            nodes: vec![golem_common::schema::tool::CommandNode {
+                                name: "grep".to_string(),
+                                aliases: Vec::new(),
+                                doc: golem_common::schema::tool::Doc::default(),
+                                globals: golem_common::schema::tool::Globals::default(),
+                                subcommands: Vec::new(),
+                                body: None,
+                            }],
+                        },
+                        schema: golem_common::schema::SchemaGraph::empty(),
+                    },
+                    provision: golem_common::model::tool::ToolProvisionConfig {
+                        config: golem_common::model::json::NormalizedJsonValue::new(json!({
+                            "apiToken": "tool-config-secret"
+                        })),
+                        env: BTreeMap::from([(
+                            "TOOL_TOKEN".to_string(),
+                            "tool-env-secret".to_string(),
+                        )]),
+                        plugins: Vec::new(),
+                        files: Vec::new(),
+                    },
+                    environment_binding: None,
+                    agent_bindings: BTreeMap::new(),
                 },
             )]),
         }
@@ -1230,6 +1266,7 @@ mod tests {
                         "deploy-config-secret-old",
                     )),
                 )]),
+                tool_deployment_configs: BTreeMap::new(),
             }),
         );
         new.components.insert(
@@ -1243,6 +1280,7 @@ mod tests {
                         "deploy-config-secret-new",
                     )),
                 )]),
+                tool_deployment_configs: BTreeMap::new(),
             }),
         );
 
@@ -4471,6 +4509,7 @@ mod tests {
                         exports,
                         agent_types,
                         agent_type_provision_configs,
+                        tools: BTreeMap::new(),
                     }
                 },
             )
@@ -4698,6 +4737,7 @@ mod tests {
                             },
                         ),
                     )]),
+                    tool_deployment_configs: BTreeMap::new(),
                 };
 
                 let new_component = golem_common::model::diff::Component {
@@ -4730,6 +4770,7 @@ mod tests {
                             },
                         ),
                     )]),
+                    tool_deployment_configs: BTreeMap::new(),
                 };
 
                 current.components.insert(

@@ -25,6 +25,7 @@ use crate::model::repl::{ReplAgentMetadata, ReplMetadata};
 use anyhow::bail;
 use camino::Utf8PathBuf;
 use golem_common::model::component::ComponentName;
+use golem_common::model::tool::ToolName;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -652,7 +653,7 @@ async fn collect_dependency_guest_bridge_targets(
             let Some(tool_name) = tool.name() else {
                 continue;
             };
-            let Ok(tool_dependency_name) = crate::model::app::ToolName::try_from(tool_name) else {
+            let Ok(tool_dependency_name) = ToolName::try_from(tool_name) else {
                 continue;
             };
             let dependency = ComponentDependency::Tool {
@@ -1097,7 +1098,7 @@ mod tests {
         };
         let tool_dependency = ComponentDependency::Tool {
             component_name,
-            tool_name: crate::model::app::ToolName::try_from("tool").unwrap(),
+            tool_name: ToolName::try_from("tool").unwrap(),
         };
 
         for language in GuestLanguage::iter() {

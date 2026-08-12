@@ -75,7 +75,7 @@ fn split_agent_config_path_and_value(input: &str) -> anyhow::Result<(&str, &str)
     Err(anyhow!("expected unescaped '=' separating key and value"))
 }
 
-fn parse_agent_config_path(input: &str) -> anyhow::Result<Vec<String>> {
+pub(crate) fn parse_agent_config_path(input: &str) -> anyhow::Result<Vec<String>> {
     let mut keys = Vec::new();
     let mut buf = String::new();
 

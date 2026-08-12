@@ -34,8 +34,10 @@ use golem_common::model::component::{
 };
 use golem_common::model::component::{AgentFilePermissions, ComponentName};
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::tool::{ToolDeploymentMetadata, ToolName};
 use golem_common::schema::agent::{AgentTypeSchema, FieldSource, InputSchema, OutputSchema};
 use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::tool::Tool;
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -161,6 +163,7 @@ pub struct ComponentView {
     pub exports: Vec<String>,
     pub agent_types: Vec<AgentTypeSchema>,
     pub agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
+    pub tools: BTreeMap<ToolName, ToolDeploymentMetadata>,
 }
 
 impl Masked for ComponentView {
@@ -198,6 +201,13 @@ impl Masked for ComponentView {
             }
         }
 
+        for tool in self.tools.values_mut() {
+            tool.provision.env = mask_sensitive_map(config, &tool.provision.env);
+            for plugin in &mut tool.provision.plugins {
+                plugin.parameters = mask_sensitive_map(config, &plugin.parameters);
+            }
+        }
+
         Ok(self)
     }
 }
@@ -218,6 +228,7 @@ impl ComponentView {
             exports,
             agent_types,
             agent_type_provision_configs: value.metadata.agent_type_provision_configs().clone(),
+            tools: value.metadata.tools().clone(),
         }
     }
 }
@@ -290,7 +301,24 @@ pub fn initial_permission_from_manifest_card(
 pub struct ComponentDeployProperties {
     pub wasm_path: PathBuf,
     pub agent_types: Vec<AgentTypeSchema>,
+    pub tools: Vec<Tool>,
     pub agent_type_configs: BTreeMap<AgentTypeName, AgentTypeManifestProvisionConfig>,
+    pub tool_deployment_configs: BTreeMap<ToolName, ToolManifestDeploymentConfig>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ToolManifestProvisionConfig {
+    pub config: golem_common::model::json::NormalizedJsonValue,
+    pub env: BTreeMap<String, String>,
+    pub files: Vec<crate::model::app::ToolProvisionFile>,
+    pub plugins: Vec<app_raw::PluginInstallation>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ToolManifestDeploymentConfig {
+    pub provision: ToolManifestProvisionConfig,
+    pub environment_binding: Option<golem_common::model::tool::ToolBindingInput>,
+    pub agent_bindings: BTreeMap<AgentTypeName, golem_common::model::tool::ToolBindingInput>,
 }
 
 pub fn initial_permission_recipient_context(

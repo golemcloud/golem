@@ -21,9 +21,11 @@ use super::model::deployment::{
     ResolvedAgentTypeRecord,
 };
 use super::model::deployment::{
-    DeploymentCompiledRouteRecord, DeploymentComponentRevisionRecord,
-    DeploymentHttpApiDeploymentRevisionRecord, DeploymentMcpDeploymentRevisionRecord,
-    DeploymentRegisteredAgentTypeRecord, DeploymentRegisteredAgentTypeScopedRecord,
+    DeploymentAgentToolBindingRecord, DeploymentCompiledRouteRecord,
+    DeploymentComponentRevisionRecord, DeploymentHttpApiDeploymentRevisionRecord,
+    DeploymentMcpDeploymentRevisionRecord, DeploymentRegisteredAgentTypeRecord,
+    DeploymentRegisteredAgentTypeScopedRecord, DeploymentRegisteredToolRecord,
+    ToolDeploymentStateRecord,
 };
 use super::model::resource_definition::ResourceDefinitionRepoError;
 use super::model::retry_policy::RetryPolicyRepoError;
@@ -131,6 +133,30 @@ pub trait DeploymentRepo: Send + Sync {
         environment_id: Uuid,
         deployment_revision_id: i64,
     ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeScopedRecord>>;
+
+    async fn get_deployment_registered_tool(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+        tool_name: &str,
+    ) -> RepoResult<Option<DeploymentRegisteredToolRecord>>;
+
+    async fn list_deployment_registered_tools(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> RepoResult<Vec<DeploymentRegisteredToolRecord>>;
+
+    async fn get_tool_deployment_state(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> RepoResult<ToolDeploymentStateRecord>;
+
+    async fn get_current_tool_deployment_state(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Option<ToolDeploymentStateRecord>>;
 
     async fn get_deployed_agent_type(
         &self,
@@ -388,6 +414,61 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
                 environment_id = %environment_id,
                 deployment_revision_id
             ))
+            .await
+    }
+
+    async fn get_deployment_registered_tool(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+        tool_name: &str,
+    ) -> RepoResult<Option<DeploymentRegisteredToolRecord>> {
+        self.repo
+            .get_deployment_registered_tool(environment_id, deployment_revision_id, tool_name)
+            .instrument(info_span!(
+                SPAN_NAME,
+                environment_id = %environment_id,
+                deployment_revision_id,
+                tool_name
+            ))
+            .await
+    }
+
+    async fn list_deployment_registered_tools(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> RepoResult<Vec<DeploymentRegisteredToolRecord>> {
+        self.repo
+            .list_deployment_registered_tools(environment_id, deployment_revision_id)
+            .instrument(Self::span_env_and_revision(
+                environment_id,
+                deployment_revision_id,
+            ))
+            .await
+    }
+
+    async fn get_tool_deployment_state(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> RepoResult<ToolDeploymentStateRecord> {
+        self.repo
+            .get_tool_deployment_state(environment_id, deployment_revision_id)
+            .instrument(Self::span_env_and_revision(
+                environment_id,
+                deployment_revision_id,
+            ))
+            .await
+    }
+
+    async fn get_current_tool_deployment_state(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Option<ToolDeploymentStateRecord>> {
+        self.repo
+            .get_current_tool_deployment_state(environment_id)
+            .instrument(Self::span_env(environment_id))
             .await
     }
 
@@ -761,6 +842,14 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     for registered_agent_type in &deployment_creation.registered_agent_types {
                         Self::create_deployment_registered_agent_type(tx, registered_agent_type)
                             .await?;
+                    }
+
+                    for registered_tool in &deployment_creation.registered_tools {
+                        Self::create_deployment_registered_tool(tx, registered_tool).await?;
+                    }
+
+                    for agent_tool_binding in &deployment_creation.agent_tool_bindings {
+                        Self::create_deployment_agent_tool_binding(tx, agent_tool_binding).await?;
                     }
 
                     for compiled_mcp in &deployment_creation.compiled_mcp {
@@ -1150,6 +1239,144 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 .bind(deployment_revision_id),
             )
             .await
+    }
+
+    async fn get_deployment_registered_tool(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+        tool_name: &str,
+    ) -> RepoResult<Option<DeploymentRegisteredToolRecord>> {
+        self.with_ro("get_deployment_registered_tool")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT
+                        r.environment_id,
+                        r.deployment_revision_id,
+                        r.tool_name,
+                        r.component_id,
+                        r.component_revision_id,
+                        c.name AS component_name,
+                        a.account_id AS owner_account_id,
+                        ac.email AS owner_account_email,
+                        r.tool_definition,
+                        r.tool_provision_config,
+                        r.metadata_version
+                    FROM deployment_registered_tools r
+                    JOIN components c
+                        ON c.component_id = r.component_id
+                        AND c.environment_id = r.environment_id
+                    JOIN environments e
+                        ON e.environment_id = r.environment_id
+                    JOIN applications a
+                        ON a.application_id = e.application_id
+                    JOIN accounts ac
+                        ON ac.account_id = a.account_id
+                    WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
+                        AND r.tool_name = $3
+                "#})
+                .bind(environment_id)
+                .bind(deployment_revision_id)
+                .bind(tool_name),
+            )
+            .await
+    }
+
+    async fn list_deployment_registered_tools(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> RepoResult<Vec<DeploymentRegisteredToolRecord>> {
+        self.with_ro("list_deployment_registered_tools")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT
+                        r.environment_id,
+                        r.deployment_revision_id,
+                        r.tool_name,
+                        r.component_id,
+                        r.component_revision_id,
+                        c.name AS component_name,
+                        a.account_id AS owner_account_id,
+                        ac.email AS owner_account_email,
+                        r.tool_definition,
+                        r.tool_provision_config,
+                        r.metadata_version
+                    FROM deployment_registered_tools r
+                    JOIN components c
+                        ON c.component_id = r.component_id
+                        AND c.environment_id = r.environment_id
+                    JOIN environments e
+                        ON e.environment_id = r.environment_id
+                    JOIN applications a
+                        ON a.application_id = e.application_id
+                    JOIN accounts ac
+                        ON ac.account_id = a.account_id
+                    WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
+                    ORDER BY r.tool_name
+                "#})
+                .bind(environment_id)
+                .bind(deployment_revision_id),
+            )
+            .await
+    }
+
+    async fn get_tool_deployment_state(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> RepoResult<ToolDeploymentStateRecord> {
+        let registered_tools = self
+            .list_deployment_registered_tools(environment_id, deployment_revision_id)
+            .await?;
+        let agent_tool_bindings = self
+            .with_ro("list_deployment_agent_tool_bindings")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT environment_id, deployment_revision_id, agent_type_name,
+                           tool_name, compiled_binding
+                    FROM deployment_agent_tool_bindings
+                    WHERE environment_id = $1 AND deployment_revision_id = $2
+                    ORDER BY agent_type_name, tool_name
+                "#})
+                .bind(environment_id)
+                .bind(deployment_revision_id),
+            )
+            .await?;
+        Ok(ToolDeploymentStateRecord {
+            deployment_revision_id,
+            registered_tools,
+            agent_tool_bindings,
+        })
+    }
+
+    async fn get_current_tool_deployment_state(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Option<ToolDeploymentStateRecord>> {
+        let row = self
+            .with_ro("get_current_tool_deployment_revision")
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                    SELECT cdr.deployment_revision_id
+                    FROM current_deployments cd
+                    JOIN current_deployment_revisions cdr
+                        ON cdr.environment_id = cd.environment_id
+                        AND cdr.revision_id = cd.current_revision_id
+                    WHERE cd.environment_id = $1
+                "#})
+                .bind(environment_id),
+            )
+            .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let deployment_revision_id = row
+            .try_get("deployment_revision_id")
+            .map_err(RepoError::from)?;
+        self.get_tool_deployment_state(environment_id, deployment_revision_id)
+            .await
+            .map(Some)
     }
 
     async fn get_deployed_agent_type(
@@ -1548,6 +1775,16 @@ trait DeploymentRepoInternal: DeploymentRepo {
         registered_agent_type: &DeploymentRegisteredAgentTypeRecord,
     ) -> RepoResult<()>;
 
+    async fn create_deployment_registered_tool(
+        tx: &mut Self::Tx,
+        registered_tool: &DeploymentRegisteredToolRecord,
+    ) -> RepoResult<()>;
+
+    async fn create_deployment_agent_tool_binding(
+        tx: &mut Self::Tx,
+        agent_tool_binding: &DeploymentAgentToolBindingRecord,
+    ) -> RepoResult<()>;
+
     async fn set_current_deployment_internal(
         tx: &mut Self::Tx,
         user_account_id: Uuid,
@@ -1805,6 +2042,54 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             .bind(registered_agent_type.component_revision_id)
             .bind(&registered_agent_type.webhook_prefix_authority_and_path)
             .bind(&registered_agent_type.agent_type),
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    async fn create_deployment_registered_tool(
+        tx: &mut Self::Tx,
+        registered_tool: &DeploymentRegisteredToolRecord,
+    ) -> RepoResult<()> {
+        tx.execute(
+            sqlx::query(indoc! { r#"
+                INSERT INTO deployment_registered_tools
+                    (environment_id, deployment_revision_id, tool_name,
+                     component_id, component_revision_id,
+                     tool_definition, tool_provision_config, metadata_version)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#})
+            .bind(registered_tool.environment_id)
+            .bind(registered_tool.deployment_revision_id)
+            .bind(&registered_tool.tool_name)
+            .bind(registered_tool.component_id)
+            .bind(registered_tool.component_revision_id)
+            .bind(&registered_tool.tool_definition)
+            .bind(&registered_tool.tool_provision_config)
+            .bind(&registered_tool.metadata_version),
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    async fn create_deployment_agent_tool_binding(
+        tx: &mut Self::Tx,
+        agent_tool_binding: &DeploymentAgentToolBindingRecord,
+    ) -> RepoResult<()> {
+        tx.execute(
+            sqlx::query(indoc! { r#"
+                INSERT INTO deployment_agent_tool_bindings
+                    (environment_id, deployment_revision_id, agent_type_name,
+                     tool_name, compiled_binding)
+                VALUES ($1, $2, $3, $4, $5)
+            "#})
+            .bind(agent_tool_binding.environment_id)
+            .bind(agent_tool_binding.deployment_revision_id)
+            .bind(&agent_tool_binding.agent_type_name)
+            .bind(&agent_tool_binding.tool_name)
+            .bind(&agent_tool_binding.compiled_binding),
         )
         .await?;
 
