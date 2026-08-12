@@ -734,10 +734,7 @@ description = "Runs all CLI integration tests with dev-release golem and golem-c
 env = { "GOLEM_CLI_TEST_BIN_PROFILE" = "dev-release" }
 run_task = "cli-integration-tests"
 
-# CI shards: the it-cli tests are split by module-level test-r tag (see the it-cli matrix in
-# .github/workflows/ci.yaml). `agents` and `bridge_gen` modules are tagged (tests/lib.rs,
-# tests/app/mod.rs); the `core` shard runs everything untagged (`:tag:`), so the three are
-# disjoint and cover every test.
+# it-cli CI shards, split by module-level test-r tag (see the it-cli matrix in ci.yaml).
 [tasks.cli-integration-tests-agents]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
 description = "Runs the it-cli 'agents' shard (app::agents)"

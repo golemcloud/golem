@@ -23,9 +23,7 @@ test_r::enable!();
 mod app;
 mod bridge_gen;
 
-// CI shards the it-cli integration tests by module-level tag (see .github/workflows/ci.yaml
-// it-cli matrix): `bridge_gen` and `app::agents` (tagged in tests/app/mod.rs) run in their own
-// shards, everything else runs untagged (`:tag:`) in the `core` shard.
+// Tag for the it-cli `bridge_gen` CI shard (see the it-cli matrix in ci.yaml).
 tag_suite!(bridge_gen, bridge_gen);
 
 #[derive(Debug)]

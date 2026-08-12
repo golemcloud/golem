@@ -294,9 +294,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
   it-cli:
-    # Explicit, stable check-context name per shard (e.g. "it-cli (agents)") so branch-protection
-    # required checks have a fixed name to target — otherwise GitHub derives it from the whole matrix
-    # object, which is fragile.
     name: it-cli (${{ matrix.group.shard }})
     env:
       CARGO_BUILD_JOBS: 10
@@ -351,9 +348,7 @@ jobs:
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
 
-      # Warm the coursier/ivy cache: the bridge shard resolves the Scala SDK deps from ~/.ivy2/local
-      # (restored below) plus transitive deps that otherwise download cold, since the SDK publish that
-      # used to warm this in-job moved to build-golem-scala.
+      # Warm the coursier cache for the bridge shard's Scala deps.
       - name: Cache scala dependencies
         uses: coursier/cache-action@v8
 
@@ -598,10 +593,8 @@ jobs:
         working-directory: sdks/scala
         run: sbt "++2.12.21!; sbtPlugin/compile"
 
-      # Publish the Scala SDK + build the agent_guest.wasm once here so the it-cli shards restore
-      # them from cache instead of each rebuilding (~2.5 min of setup). agent_guest.wasm is already
-      # built above (into the sbt plugin's resources) and gets embedded in the plugin jar by
-      # publishLocal, so publish must run after it.
+      # Published for the it-cli shards to restore. Must run after agent_guest.wasm is built, since
+      # the sbt plugin jar embeds it.
       - name: Publish Scala SDK locally
         working-directory: sdks/scala
         run: |
