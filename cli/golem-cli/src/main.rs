@@ -38,12 +38,18 @@ mod hooks {
             _ctx: Arc<Context>,
             _subcommand: ServerSubcommand,
         ) -> anyhow::Result<()> {
-            unimplemented!()
+            anyhow::bail!(
+                "This build of golem-cli does not include a bundled local server. \
+                 Use the 'golem' binary to run 'server' commands."
+            )
         }
 
         #[cfg(feature = "server-commands")]
         async fn run_server() -> anyhow::Result<()> {
-            unimplemented!()
+            anyhow::bail!(
+                "This build of golem-cli does not include a bundled local server. \
+                 Use the 'golem' binary to start a local server."
+            )
         }
 
         #[cfg(feature = "server-commands")]

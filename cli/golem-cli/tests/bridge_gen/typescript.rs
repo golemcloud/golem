@@ -26,7 +26,7 @@ use golem_cli::bridge_gen::typescript::{
 use golem_cli::bridge_gen::{
     BridgeGenerator, BridgeMode, bridge_client_directory_name, tool_bridge_client_directory_name,
 };
-use golem_cli::model::GuestLanguage;
+use golem_cli::model::language::GuestLanguage;
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, PathDirection, PathKind, PathSpec, ResultSpec,

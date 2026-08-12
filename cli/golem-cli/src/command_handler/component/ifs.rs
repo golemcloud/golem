@@ -580,7 +580,9 @@ impl FileProcessor<HashedFile> for FileHasher {
     }
 }
 
-// TODO: add this to manifest validation (too or instead of doing it here)?
+// Backstop for duplicate IFS targets that only appear after directory sources are
+// expanded at build time. Literal duplicate targets are also caught earlier during
+// manifest validation (see `AppBuilder::validate_unique_file_targets` in `model/app.rs`).
 fn validate_unique_targets(component_files: &[InitialComponentFile]) -> anyhow::Result<()> {
     let non_unique_target_paths = component_files
         .iter()

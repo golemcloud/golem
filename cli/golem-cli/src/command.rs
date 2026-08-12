@@ -34,13 +34,13 @@ use crate::command::shared_args::{
 use crate::command::worker::AgentSubcommand;
 use crate::config::ProfileName;
 use crate::error::ShowClapHelpTarget;
-use crate::model::GuestLanguage;
+use crate::model::agent::{AgentUpdateMode, RawAgentId};
 use crate::model::app::ComponentPresetName;
 use crate::model::cli_command_metadata::{CliCommandMetadata, CliMetadataFilter};
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
+use crate::model::language::GuestLanguage;
 use crate::model::repl::ReplLanguage;
-use crate::model::worker::{AgentUpdateMode, RawAgentId};
 use crate::{command_name, version};
 use anyhow::{Context as AnyhowContext, anyhow};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
@@ -55,6 +55,7 @@ use lenient_bool::LenientBool;
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// Golem Command Line Interface
 #[derive(Debug, Parser)]
@@ -83,7 +84,6 @@ impl GolemCliCommand {
             &CliMetadataFilter {
                 command_path_prefix_exclude: vec![
                     vec!["account"],
-                    vec!["api"], // TODO: recheck after code-first routes is implemented
                     vec!["api-token"],
                     vec!["clean"],
                     vec!["completion"],
@@ -222,6 +222,9 @@ pub struct GolemCliGlobalFlags {
     http_parallelism: Option<usize>,
 
     #[arg(skip)]
+    agent_stream_ping_interval: Option<Duration>,
+
+    #[arg(skip)]
     pub auth_token: Option<String>,
 
     #[arg(skip)]
@@ -294,6 +297,10 @@ impl GolemCliGlobalFlags {
             })?)
         }
 
+        if let Ok(interval) = std::env::var("GOLEM_AGENT_STREAM_PING_INTERVAL") {
+            self.agent_stream_ping_interval = Some(parse_agent_stream_ping_interval(&interval)?);
+        }
+
         if let Ok(auth_token) = std::env::var("GOLEM_AUTH_TOKEN") {
             self.auth_token = Some(
                 auth_token
@@ -333,9 +340,31 @@ impl GolemCliGlobalFlags {
         self.http_parallelism.unwrap_or(4)
     }
 
+    pub fn agent_stream_ping_interval(&self) -> Duration {
+        self.agent_stream_ping_interval
+            .unwrap_or_else(|| Duration::from_secs(1))
+    }
+
     pub fn verbosity(&self) -> clap_verbosity_flag::Verbosity {
         self.verbosity.as_clap_verbosity_flag()
     }
+}
+
+/// Parses `GOLEM_AGENT_STREAM_PING_INTERVAL` (an ISO-8601 duration) and rejects a
+/// non-positive value: streaming feeds this into `tokio::time::interval`, which panics
+/// on a zero duration, so a zero here must surface as a clean CLI configuration error.
+fn parse_agent_stream_ping_interval(value: &str) -> anyhow::Result<Duration> {
+    let duration: Duration = iso8601::duration(value)
+        .map_err(|err| {
+            anyhow!("Failed to parse GOLEM_AGENT_STREAM_PING_INTERVAL ({value}): {err}")
+        })?
+        .into();
+    if duration.is_zero() {
+        return Err(anyhow!(
+            "GOLEM_AGENT_STREAM_PING_INTERVAL must be a positive duration, got {value}"
+        ));
+    }
+    Ok(duration)
 }
 
 #[derive(Debug, Default, Parser)]
@@ -511,7 +540,7 @@ impl GolemCliCommand {
                 missing_positional_arg: "function_name",
                 to_partial_match: |args| {
                     GolemCliCommandPartialMatch::AgentInvokeMissingFunctionName {
-                        agent_name: args[0].clone().into(),
+                        agent_id: args[0].clone().into(),
                     }
                 },
             },
@@ -613,7 +642,7 @@ pub enum GolemCliCommandPartialMatch {
     ComponentHelp,
     ComponentMissingSubcommandHelp,
     AgentHelp,
-    AgentInvokeMissingFunctionName { agent_name: RawAgentId },
+    AgentInvokeMissingFunctionName { agent_id: RawAgentId },
     AgentInvokeMissingAgentName,
     ProfileSwitchMissingProfileName,
 }
@@ -919,9 +948,9 @@ pub enum GolemCliSubcommand {
 }
 
 pub mod shared_args {
-    use crate::model::GuestLanguage;
+    use crate::model::agent::{AgentUpdateMode, RawAgentId};
     use crate::model::app::AppBuildStep;
-    use crate::model::worker::{AgentUpdateMode, RawAgentId};
+    use crate::model::language::GuestLanguage;
     use clap::Args;
     use golem_common::model::account::AccountId;
     use golem_common::model::component::ComponentName;
@@ -1148,7 +1177,7 @@ pub mod environment {
 
 pub mod component {
     use crate::command::shared_args::{OptionalComponentName, OptionalComponentNames};
-    use crate::model::worker::AgentUpdateMode;
+    use crate::model::agent::AgentUpdateMode;
     use clap::Subcommand;
     use golem_common::model::component::ComponentRevision;
 
@@ -1260,7 +1289,7 @@ pub mod worker {
     use crate::command::shared_args::{
         AgentFunctionArgument, AgentFunctionName, AgentIdArgs, PostDeployArgs, StreamArgs,
     };
-    use crate::model::worker::{AgentListMode, AgentUpdateMode};
+    use crate::model::agent::{AgentListMode, AgentUpdateMode};
     use chrono::{DateTime, Utc};
     use clap::Subcommand;
     use golem_client::model::ScanCursor;
@@ -1288,7 +1317,6 @@ pub mod worker {
             #[arg(short, long, value_parser = parse_agent_config, verbatim_doc_comment)]
             config: Vec<AgentConfigEntryDto>,
         },
-        // TODO: json args
         /// Invoke (or enqueue invocation for) agent
         #[command(after_help = crate::command_examples::AGENT_INVOKE)]
         Invoke {
@@ -1521,7 +1549,7 @@ pub mod worker {
         #[command(after_help = crate::command_examples::AGENT_FILES)]
         Files {
             #[command(flatten)]
-            agent_name: AgentIdArgs,
+            agent_id: AgentIdArgs,
             /// Absolute path inside the agent's guest filesystem (e.g. `/`,
             /// `/data`). Always starts with `/`.
             #[arg(default_value = "/")]
@@ -1536,7 +1564,7 @@ pub mod worker {
         #[command(after_help = crate::command_examples::AGENT_FILE_CONTENTS)]
         FileContents {
             #[command(flatten)]
-            agent_name: AgentIdArgs,
+            agent_id: AgentIdArgs,
             /// Absolute path inside the agent's guest filesystem (e.g.
             /// `/data/state.json`). Always starts with `/`.
             path: String,
@@ -1728,9 +1756,30 @@ pub mod api {
     }
 
     pub mod security_scheme {
-        use crate::model::ProviderKindArg;
-        use clap::Subcommand;
-        use golem_common::model::security_scheme::SecuritySchemeName;
+        use clap::{Subcommand, ValueEnum};
+        use golem_common::model::security_scheme::{ProviderKind, SecuritySchemeName};
+
+        #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+        #[clap(rename_all = "lower")]
+        pub enum ProviderKindArg {
+            Google,
+            Facebook,
+            Microsoft,
+            Gitlab,
+            Custom,
+        }
+
+        impl From<ProviderKindArg> for ProviderKind {
+            fn from(value: ProviderKindArg) -> Self {
+                match value {
+                    ProviderKindArg::Google => ProviderKind::Google,
+                    ProviderKindArg::Facebook => ProviderKind::Facebook,
+                    ProviderKindArg::Microsoft => ProviderKind::Microsoft,
+                    ProviderKindArg::Gitlab => ProviderKind::Gitlab,
+                    ProviderKindArg::Custom => ProviderKind::Custom,
+                }
+            }
+        }
 
         #[derive(Debug, Subcommand)]
         pub enum ApiSecuritySchemeSubcommand {
@@ -1858,9 +1907,53 @@ pub mod api {
 }
 
 pub mod resource_definition {
-    use crate::model::EnforcementActionArg;
-    use clap::Subcommand;
-    use golem_common::model::quota::ResourceDefinitionId;
+    use clap::{Subcommand, ValueEnum};
+    use golem_common::model::quota::{EnforcementAction, ResourceDefinitionId};
+    use std::fmt::{Display, Formatter};
+    use std::str::FromStr;
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+    #[clap(rename_all = "kebab-case")]
+    pub enum EnforcementActionArg {
+        Throttle,
+        Reject,
+        Terminate,
+    }
+
+    impl Display for EnforcementActionArg {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            match self {
+                EnforcementActionArg::Throttle => write!(f, "throttle"),
+                EnforcementActionArg::Reject => write!(f, "reject"),
+                EnforcementActionArg::Terminate => write!(f, "terminate"),
+            }
+        }
+    }
+
+    impl FromStr for EnforcementActionArg {
+        type Err = String;
+
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            match s {
+                "throttle" => Ok(Self::Throttle),
+                "reject" => Ok(Self::Reject),
+                "terminate" => Ok(Self::Terminate),
+                _ => Err(format!(
+                    "Unknown enforcement actions: {s}. Expected one of \"throttle\", \"reject\", \"terminate\""
+                )),
+            }
+        }
+    }
+
+    impl From<EnforcementActionArg> for EnforcementAction {
+        fn from(value: EnforcementActionArg) -> Self {
+            match value {
+                EnforcementActionArg::Throttle => Self::Throttle,
+                EnforcementActionArg::Terminate => Self::Terminate,
+                EnforcementActionArg::Reject => Self::Reject,
+            }
+        }
+    }
 
     #[derive(Debug, Subcommand)]
     pub enum ResourceDefinitionSubcommand {
@@ -2036,7 +2129,7 @@ pub mod retry_policy {
 }
 
 pub mod plugin {
-    use crate::model::PathBufOrStdin;
+    use crate::model::input::PathBufOrStdin;
     use clap::Subcommand;
     use uuid::Uuid;
 
@@ -2074,8 +2167,16 @@ pub mod profile {
     use crate::command::profile::config::ProfileConfigSubcommand;
     use crate::config::ProfileName;
     use crate::model::format::Format;
-    use clap::Subcommand;
+    use clap::{Subcommand, ValueEnum};
     use url::Url;
+
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
+    #[clap(rename_all = "kebab-case")]
+    pub enum ProfileAuthMode {
+        #[value(name = "oauth2")]
+        OAuth2,
+        Static,
+    }
 
     #[allow(clippy::large_enum_variant)]
     #[derive(Debug, Subcommand)]
@@ -2097,8 +2198,14 @@ pub mod profile {
             /// Default output format for this profile
             #[arg(long, default_value_t = Format::Text)]
             default_format: Format,
-            /// Token to use for authenticating against Golem. If not provided an OAuth2 flow will be performed when authentication is needed for the first time.
-            #[arg(long)]
+            /// How the profile authenticates: `oauth2` (interactive browser login,
+            /// the default) or `static` (a pre-issued token). Defaults to `static`
+            /// when `--static-token` is given.
+            #[arg(long, value_enum, verbatim_doc_comment)]
+            auth: Option<ProfileAuthMode>,
+            /// Static authentication token (implies `--auth static`). With
+            /// `--auth static` and no token given, you are prompted for it.
+            #[arg(long, verbatim_doc_comment)]
             static_token: Option<String>,
             /// Accept invalid certificates.
             ///
@@ -2396,7 +2503,7 @@ pub mod account {
 
 pub mod card {
     use crate::command::shared_args::AccountIdOptionalArg;
-    use crate::model::worker::RawAgentId;
+    use crate::model::agent::RawAgentId;
     use clap::Subcommand;
     use golem_common::model::card::CardId;
 
@@ -2496,7 +2603,7 @@ pub mod server {
 
         /// Use deterministic agent filesystem directories rooted at the given
         /// path instead of random temp directories. The directory layout is:
-        ///   <root>/<environment_id>/<component_id>/<agent_name>/
+        ///   <root>/<environment_id>/<component_id>/<agent_id>/
         #[clap(long)]
         pub agent_filesystem_root: Option<PathBuf>,
     }
@@ -2567,16 +2674,29 @@ mod test {
     use crate::command::shared_args::PostDeployArgs;
     use crate::command::{
         GolemCliCommand, GolemCliSubcommand, builtin_exec_subcommands,
-        help_target_to_subcommand_names,
+        help_target_to_subcommand_names, parse_agent_stream_ping_interval,
     };
     use crate::error::ShowClapHelpTarget;
-    use crate::model::worker::AgentUpdateMode;
+    use crate::model::agent::AgentUpdateMode;
     use clap::builder::StyledStr;
     use clap::{Command, CommandFactory, Parser};
     use itertools::Itertools;
     use std::collections::{BTreeMap, BTreeSet};
     use strum::IntoEnumIterator;
     use test_r::test;
+
+    #[test]
+    fn agent_stream_ping_interval_rejects_zero_duration() {
+        // A syntactically valid ISO-8601 zero would panic `tokio::time::interval`; it must
+        // surface as a configuration error instead of crashing streaming.
+        assert!(parse_agent_stream_ping_interval("PT0S").is_err());
+        assert!(parse_agent_stream_ping_interval("PT0H0M0S").is_err());
+
+        let parsed = parse_agent_stream_ping_interval("PT2S").expect("PT2S is a valid interval");
+        assert_eq!(parsed, std::time::Duration::from_secs(2));
+
+        assert!(parse_agent_stream_ping_interval("not-a-duration").is_err());
+    }
 
     #[test]
     fn command_debug_assert() {
@@ -2794,7 +2914,7 @@ mod test {
 
     #[test]
     fn update_agents_accepts_auto_as_update_mode_alias() {
-        use crate::model::worker::AgentUpdateMode;
+        use crate::model::agent::AgentUpdateMode;
         use clap::Parser;
 
         let result =
@@ -2815,7 +2935,8 @@ mod test {
 
     #[test]
     fn update_agents_accepts_automatic_as_update_mode() {
-        use crate::model::worker::AgentUpdateMode;
+        use crate::model::agent::AgentUpdateMode;
+        use clap::Parser;
 
         let result = GolemCliCommand::try_parse_from([
             "golem",
