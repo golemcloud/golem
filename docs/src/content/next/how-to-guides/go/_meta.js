@@ -34,5 +34,5 @@ export default {
   "golem-add-mysql-go": "Using MySQL from a Go Agent",
   "golem-add-postgres-go": "Using PostgreSQL from a Go Agent",
   "golem-add-webhook-go": "Using Webhooks in a Go Golem Agent",
-  "golem-wait-for-external-input-go": "Waiting for External Input with Golem Promises (Go)"
-};
+  "golem-wait-for-external-input-go": "Waiting for External Input with Golem Promises (Go)",
+}
