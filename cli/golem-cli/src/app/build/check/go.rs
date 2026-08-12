@@ -16,7 +16,7 @@ use crate::app::build::check::DependencyFixStep;
 use crate::app::context::BuildContext;
 use crate::app::edit;
 use crate::fs;
-use crate::model::GuestLanguage;
+use crate::model::language::GuestLanguage;
 use crate::sdk_overrides::{GO_SDK_MODULE, SdkOverrides};
 
 /// Reconcile each Go component's `go.mod` SDK dependency with the active SDK

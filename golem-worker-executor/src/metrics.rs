@@ -71,6 +71,14 @@ const SCHEDULER_LAG_BUCKETS: &[f64; 22] = &[
     10.0, 30.0, 60.0, 300.0, 600.0,
 ];
 
+/// Admission-wait buckets. A worker normally clears admission in milliseconds, but
+/// under memory pressure a single phase can block for minutes, so the tail reaches
+/// well past the scheduler buckets.
+const ADMISSION_WAIT_BUCKETS: &[f64; 18] = &[
+    0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0,
+    1800.0, 3600.0,
+];
+
 /// Tick-duration buckets for the scheduler. Values are dense at low latencies
 /// because slow ticks directly add scheduling delay.
 const SCHEDULER_TICK_DURATION_BUCKETS: &[f64; 24] = &[
@@ -291,6 +299,7 @@ pub mod workers {
     use lazy_static::lazy_static;
     use prometheus::core::Number;
     use prometheus::*;
+    use std::time::Duration;
 
     lazy_static! {
         static ref WORKER_EXECUTOR_CALL_TOTAL: CounterVec = register_counter_vec!(
@@ -328,6 +337,13 @@ pub mod workers {
             &["executor_id"]
         )
         .unwrap();
+        pub static ref WORKER_ADMISSION_WAIT_SECONDS: HistogramVec = register_histogram_vec!(
+            "worker_admission_wait_seconds",
+            "Time a starting worker spent blocked in one phase of admission before it could become resident, labelled by phase (resolve_component_charge, concurrency_slot, memory, filesystem_storage). Observed once per phase per worker start. Sum across phases for the total wait; read per phase to see which resource is the constraint. worker_waiting_for_memory_count says how many workers are waiting, this says for how long",
+            &["executor_id", "phase"],
+            crate::metrics::ADMISSION_WAIT_BUCKETS.to_vec()
+        )
+        .unwrap();
         pub static ref WORKER_STORE_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
             "golem_worker_store_alive_count",
             "Live wasmtime Store contexts on this executor, counted by the Store's own lifetime: incremented when a worker's Store is constructed and decremented when it is dropped. Diverging above the resident-worker count means Stores are retained after the owning worker was deleted",
@@ -359,6 +375,12 @@ pub mod workers {
             &["executor_id"]
         )
         .unwrap();
+        static ref WORKER_MEMORY_POOL_TOTAL_BYTES_GAUGE: Gauge = WORKER_MEMORY_POOL_TOTAL_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()]);
+        static ref WORKER_MEMORY_POOL_USED_BYTES_GAUGE: Gauge = WORKER_MEMORY_POOL_USED_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()]);
+        static ref WORKER_ADMISSION_RSS_BYTES_GAUGE: Gauge = WORKER_ADMISSION_RSS_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()]);
         pub static ref WORKER_MEMORY_GROW_REJECTED_TOTAL: CounterVec = register_counter_vec!(
             "golem_worker_memory_grow_rejected_total",
             "Invocations interrupted because a worker's linear-memory grow could not be admitted by the gate (out-of-memory trap, retried via reacquire)",
@@ -414,24 +436,20 @@ pub mod workers {
 
     /// Sets the gate's usable memory ceiling gauge.
     pub fn record_worker_memory_ceiling(bytes: u64) {
-        WORKER_MEMORY_POOL_TOTAL_BYTES
-            .with_label_values(&[crate::metrics::storage::executor_id()])
-            .set(bytes as f64);
+        WORKER_MEMORY_POOL_TOTAL_BYTES_GAUGE.set(bytes as f64);
     }
 
-    /// Sets the gauge of total memory granted to live workers (the gate's
-    /// reservation).
-    pub fn record_worker_memory_granted(bytes: u64) {
-        WORKER_MEMORY_POOL_USED_BYTES
-            .with_label_values(&[crate::metrics::storage::executor_id()])
-            .set(bytes as f64);
+    pub fn increase_worker_memory_granted(bytes: u64) {
+        WORKER_MEMORY_POOL_USED_BYTES_GAUGE.add(bytes as f64);
+    }
+
+    pub fn decrease_worker_memory_granted(bytes: u64) {
+        WORKER_MEMORY_POOL_USED_BYTES_GAUGE.sub(bytes as f64);
     }
 
     /// Sets the gauge of measured resident memory last read by the gate.
     pub fn record_worker_admission_rss(bytes: u64) {
-        WORKER_ADMISSION_RSS_BYTES
-            .with_label_values(&[crate::metrics::storage::executor_id()])
-            .set(bytes as f64);
+        WORKER_ADMISSION_RSS_BYTES_GAUGE.set(bytes as f64);
     }
 
     pub fn record_agent_status_flush(reason: &'static str) {
@@ -526,6 +544,34 @@ pub mod workers {
         WORKER_STORE_ALIVE_COUNT
             .with_label_values(&[crate::metrics::storage::executor_id()])
             .dec();
+    }
+
+    /// Phases a starting worker waits through before it can become resident. Each is
+    /// a separate blocking acquisition, so recording them apart shows which resource
+    /// a stalled start is actually waiting on.
+    #[derive(Debug, Clone, Copy)]
+    pub enum AdmissionPhase {
+        ResolveComponentCharge,
+        ConcurrencySlot,
+        Memory,
+        FilesystemStorage,
+    }
+
+    impl AdmissionPhase {
+        fn as_str(self) -> &'static str {
+            match self {
+                AdmissionPhase::ResolveComponentCharge => "resolve_component_charge",
+                AdmissionPhase::ConcurrencySlot => "concurrency_slot",
+                AdmissionPhase::Memory => "memory",
+                AdmissionPhase::FilesystemStorage => "filesystem_storage",
+            }
+        }
+    }
+
+    pub fn record_worker_admission_wait(phase: AdmissionPhase, elapsed: Duration) {
+        WORKER_ADMISSION_WAIT_SECONDS
+            .with_label_values(&[crate::metrics::storage::executor_id(), phase.as_str()])
+            .observe(elapsed.as_secs_f64());
     }
 
     pub fn inc_worker_waiting_for_memory() {
@@ -814,9 +860,9 @@ pub mod wasm {
             crate::metrics::MEMORY_SIZE_BUCKETS.to_vec()
         )
         .unwrap();
-        static ref WORKER_RESIDENT_LINEAR_MEMORY_BYTES: Histogram = register_histogram!(
-            "worker_resident_linear_memory_bytes",
-            "Per-worker cumulative linear-memory grant (total_linear_memory_size = sum of memory.grow deltas) sampled when the worker is admitted. This is the linear memory the admission gate reserves for the worker; it is an upper bound on resident RSS, not measured resident memory, since grown pages are largely demand-paged. Compare to container_memory_working_set_bytes for the gap.",
+        static ref WORKER_ALLOCATED_LINEAR_MEMORY_BYTES: Histogram = register_histogram!(
+            "worker_allocated_linear_memory_bytes",
+            "Per-worker allocated linear-memory total sampled after instance reconciliation. This is the sum of current data_size values for unique linear-memory backings, not measured resident memory.",
             crate::metrics::MEMORY_SIZE_BUCKETS.to_vec()
         )
         .unwrap();
@@ -893,8 +939,8 @@ pub mod wasm {
         ALLOCATED_MEMORY_BYTES.observe(amount as f64);
     }
 
-    pub fn record_worker_resident_linear_memory(bytes: u64) {
-        WORKER_RESIDENT_LINEAR_MEMORY_BYTES.observe(bytes as f64);
+    pub fn record_worker_allocated_linear_memory(bytes: u64) {
+        WORKER_ALLOCATED_LINEAR_MEMORY_BYTES.observe(bytes as f64);
     }
 }
 
@@ -978,6 +1024,12 @@ pub mod resources {
             &["account_id", "agent_mode"]
         )
         .unwrap();
+        static ref MEMORY_GB_SECONDS_TOTAL: CounterVec = register_counter_vec!(
+            "memory_gb_seconds_total",
+            "Allocated linear-memory GB-seconds delivered to the registry, by account and agent mode",
+            &["account_id", "agent_mode"]
+        )
+        .unwrap();
         static ref RESOURCE_USAGE_BATCH_UPDATE_FAILURE_TOTAL: Counter = register_counter!(
             "resource_usage_batch_update_failure_total",
             "Number of resource usage batches dropped after registry update failures"
@@ -997,16 +1049,32 @@ pub mod resources {
         EPHEMERAL_OVERDRAFT_FUEL_TOTAL.inc_by(amount as f64);
     }
 
+    fn agent_mode_label(mode: AgentMode) -> &'static str {
+        match mode {
+            AgentMode::Durable => "durable",
+            AgentMode::Ephemeral => "ephemeral",
+        }
+    }
+
     pub fn record_storage_byte_seconds(account_id: &str, mode: AgentMode, amount: i64) {
         // Lower-cased here rather than via `Display`, which renders for humans and is
         // free to change; label values are a query interface and must stay stable.
-        let agent_mode = match mode {
-            AgentMode::Durable => "durable",
-            AgentMode::Ephemeral => "ephemeral",
-        };
         STORAGE_BYTE_SECONDS_TOTAL
-            .with_label_values(&[account_id, agent_mode])
+            .with_label_values(&[account_id, agent_mode_label(mode)])
             .inc_by(amount as f64);
+    }
+
+    pub fn record_memory_gb_seconds(account_id: &str, mode: AgentMode, amount: i64) {
+        MEMORY_GB_SECONDS_TOTAL
+            .with_label_values(&[account_id, agent_mode_label(mode)])
+            .inc_by(amount as f64);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn memory_gb_seconds_total(account_id: &str, mode: AgentMode) -> f64 {
+        MEMORY_GB_SECONDS_TOTAL
+            .with_label_values(&[account_id, agent_mode_label(mode)])
+            .get()
     }
 
     pub fn record_resource_usage_batch_update_failure() {

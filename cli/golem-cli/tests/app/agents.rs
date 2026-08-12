@@ -10,7 +10,7 @@ use anyhow::Context;
 
 use goldenfile::Mint;
 use golem_cli::fs;
-use golem_cli::model::GuestLanguage;
+use golem_cli::model::language::GuestLanguage;
 use golem_cli::versions;
 use indoc::{formatdoc, indoc};
 use std::io::Write;
@@ -710,7 +710,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(&ctx, "fun_enum_with_only_literals", &["A"]).await;
 
-    // TODO: Re-enable once CLI WAVE argument parsing supports multimodal/unstructured types
+    // TODO: Re-enable once the CLI's argument parsing supports multimodal/unstructured types
     // run_and_assert(
     //     &ctx,
     //     "fun_multi_modal",
@@ -1807,10 +1807,8 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
             environments:
               local:
                 server: local
-                componentPresets: debug
               cloud:
                 server: cloud
-                componentPresets: release
 
             components:
               long-agent-id-rejected:ts-main:
@@ -1950,10 +1948,8 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
             environments:
               local:
                 server: local
-                componentPresets: debug
               cloud:
                 server: cloud
-                componentPresets: release
 
             components:
               ts-code-first:ts-main:
@@ -2078,7 +2074,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     // Union that has only literals
     run_and_assert(&ctx, "funUnionWithOnlyLiterals", &[r#""foo""#]).await;
 
-    // TODO: Re-enable once CLI WAVE argument parsing supports multimodal/unstructured types
+    // TODO: Re-enable once the CLI's argument parsing supports multimodal/unstructured types
     // // Unstructured text type
     // run_and_assert(&ctx, "funUnstructuredText", &["url(\"foo\")"]).await;
     //
@@ -2524,7 +2520,7 @@ async fn list_agent_names(ctx: &TestContext, mode: &str) -> Vec<String> {
         .into_iter()
         .next()
         .unwrap_or_else(|| panic!("`agent list --mode {mode}` produced no JSON output"));
-    response.agents.into_iter().map(|a| a.agent_name).collect()
+    response.agents.into_iter().map(|a| a.agent_id).collect()
 }
 
 // Scaffolds a fresh Rust app with two agent types: `DurableListAgent` (durable
@@ -2848,7 +2844,7 @@ async fn test_agent_list_mode_filter_in_ts_repl() {
 }
 
 // JSON view of the `agent list` structured output. We only need the `agents`
-// array and the rendered `agentName` field; serde ignores the `outputType`
+// array and the rendered `agentId` field; serde ignores the `outputType`
 // discriminator injected by the CLI's structured-output wrapper.
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -2859,7 +2855,7 @@ struct AgentListResponseView {
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentListView {
-    agent_name: String,
+    agent_id: String,
 }
 
 // Use UPDATE_GOLDENFILES=1 or `cargo make cli-integration-tests-update-golden-files` to update files

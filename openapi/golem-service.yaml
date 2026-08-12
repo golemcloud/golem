@@ -3015,6 +3015,428 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/accounts/{account_id}/resource-overrides/max-memory-per-agent:
+    get:
+      tags:
+      - RegistryService
+      - Account
+      summary: Get the effective maximum linear memory per agent.
+      operationId: get_account_max_memory_override
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MemoryLimit'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    put:
+      tags:
+      - RegistryService
+      - Account
+      summary: Set the maximum linear memory per agent. Setting an expiry requires an admin token.
+      operationId: set_account_max_memory_override
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/SetMemoryLimit'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MemoryLimit'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - RegistryService
+      - Account
+      summary: Clear the maximum linear memory per-agent override.
+      operationId: clear_account_max_memory_override
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MemoryLimit'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/accounts/{account_id}/resource-overrides/monthly-memory-gb-seconds:
+    get:
+      tags:
+      - RegistryService
+      - Account
+      summary: Get the effective monthly memory GB-seconds allowance.
+      operationId: get_account_monthly_memory_override
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MemoryLimit'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    put:
+      tags:
+      - RegistryService
+      - Account
+      summary: Set the monthly memory GB-seconds allowance. Setting an expiry requires an admin token.
+      operationId: set_account_monthly_memory_override
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/SetMemoryLimit'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MemoryLimit'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - RegistryService
+      - Account
+      summary: Clear the monthly memory GB-seconds allowance override.
+      operationId: clear_account_monthly_memory_override
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MemoryLimit'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/envs/{environment_id}/agent-secrets:
     get:
       tags:
@@ -18199,6 +18621,10 @@ components:
           description: Optional maximal size of the linear memory in bytes
           type: integer
           format: uint64
+        shared:
+          description: Whether the linear memory is shared between WebAssembly threads
+          default: false
+          type: boolean
       required:
       - initial
     LiteralSegment:
@@ -18274,6 +18700,29 @@ components:
             $ref: '#/components/schemas/McpDeploymentAgentOptions'
       required:
       - currentRevision
+    MemoryLimit:
+      title: MemoryLimit
+      type: object
+      properties:
+        effectiveValue:
+          type: integer
+          format: uint64
+        planDefault:
+          type: integer
+          format: uint64
+        overrideValue:
+          type: integer
+          format: uint64
+        ceiling:
+          type: integer
+          format: uint64
+        userConfigurable:
+          type: boolean
+      required:
+      - effectiveValue
+      - planDefault
+      - ceiling
+      - userConfigurable
     NamedField:
       type: object
       properties:
@@ -18786,6 +19235,19 @@ components:
         maxMemoryPerWorker:
           type: integer
           format: uint64
+        maxMemoryPerWorkerCeiling:
+          type: integer
+          format: uint64
+        maxMemoryPerWorkerUserConfigurable:
+          type: boolean
+        monthlyMemoryGbSeconds:
+          type: integer
+          format: uint64
+        monthlyMemoryGbSecondsCeiling:
+          type: integer
+          format: uint64
+        monthlyMemoryGbSecondsUserConfigurable:
+          type: boolean
         maxTableElementsPerWorker:
           type: integer
           format: uint64
@@ -18826,6 +19288,11 @@ components:
       - monthlyGasLimit
       - monthlyUploadLimit
       - maxMemoryPerWorker
+      - maxMemoryPerWorkerCeiling
+      - maxMemoryPerWorkerUserConfigurable
+      - monthlyMemoryGbSeconds
+      - monthlyMemoryGbSecondsCeiling
+      - monthlyMemoryGbSecondsUserConfigurable
       - maxTableElementsPerWorker
       - maxDiskSpacePerWorker
       - maxDiskSpacePerWorkerCeiling
@@ -19444,6 +19911,18 @@ components:
             type: string
       required:
       - currentRevision
+    SetMemoryLimit:
+      title: SetMemoryLimit
+      type: object
+      properties:
+        value:
+          type: integer
+          format: uint64
+        expiresAt:
+          type: string
+          format: date-time
+      required:
+      - value
     SetStorageLimit:
       title: SetStorageLimit
       type: object
@@ -19595,12 +20074,18 @@ components:
           $ref: '#/components/schemas/StorageUsageMetrics'
         maxStoragePerAgent:
           $ref: '#/components/schemas/StorageLimit'
+        maxMemoryPerAgent:
+          $ref: '#/components/schemas/MemoryLimit'
+        monthlyMemoryGbSeconds:
+          $ref: '#/components/schemas/MemoryLimit'
       required:
       - accountId
       - planId
       - planName
       - usage
       - maxStoragePerAgent
+      - maxMemoryPerAgent
+      - monthlyMemoryGbSeconds
     StorageUsageHistory:
       title: StorageUsageHistory
       type: object
@@ -19622,6 +20107,9 @@ components:
         computeGcu:
           type: number
           format: double
+        memoryGbSeconds:
+          type: integer
+          format: uint64
         durableStorageGbMonth:
           type: number
           format: double
@@ -19631,6 +20119,7 @@ components:
       required:
       - period
       - computeGcu
+      - memoryGbSeconds
       - durableStorageGbMonth
       - ephemeralStorageGbMonth
     StorageUsagePeriod:

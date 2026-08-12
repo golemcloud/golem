@@ -108,6 +108,7 @@ tree-sitter-typescript = { workspace = true }
 tree-sitter-yaml = { workspace = true }
 strip-ansi-escapes = { workspace = true }
 unicode-segmentation = { workspace = true }
+unicode-width = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 version-compare = { workspace = true }

@@ -38,10 +38,15 @@
  *     `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`.
  *   • Subcommand names + aliases are pairwise unique among siblings.
  *   • Within a `command-body`: option long-names + flag long-names +
- *     positional names + aliases + short forms are pairwise unique,
- *     AND unique against globals inherited from any ancestor command.
- *   • Constraint `ref` names resolve against body-declared options /
- *     flags / positionals AND globals inherited from any ancestor.
+ *     positional names + aliases are pairwise unique, AND unique against
+ *     the long-names + aliases of globals inherited from any ancestor.
+ *   • Option and flag short forms occupy a separate `char` namespace:
+ *     they are pairwise unique with other short forms in the body and with
+ *     inherited global short forms. A string name or alias such as `"f"`
+ *     does not collide with the short form `'f'`.
+ *   • Constraint `ref` string names resolve against body-declared long-names,
+ *     positional names, aliases, and globals inherited from any ancestor;
+ *     short forms do not participate in constraint resolution.
  *   • For `ref::value-is(name, lit)`, the literal must be a valid value
  *     for the declared type node of `name` in `tool.schema`.
  *   • `default-formatter` resolves to a name in `formatters`.

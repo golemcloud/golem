@@ -339,12 +339,15 @@ impl From<AccountResourceOverrideError> for ApiError {
     fn from(value: AccountResourceOverrideError) -> Self {
         let error = value.to_safe_string();
         match value {
-            AccountResourceOverrideError::NotUserConfigurable => Self::bad_request(
+            AccountResourceOverrideError::NotUserConfigurable(_) => Self::bad_request(
                 api::error_code::RESOURCE_OVERRIDE_NOT_USER_CONFIGURABLE,
                 error,
             ),
-            AccountResourceOverrideError::ExceedsPlanCeiling(_) => {
+            AccountResourceOverrideError::ExceedsPlanCeiling(_, _) => {
                 Self::limit_exceeded(api::error_code::LIMIT_EXCEEDED, error)
+            }
+            AccountResourceOverrideError::BelowPlanDefault(_, _) => {
+                Self::bad_request(api::error_code::LIMIT_EXCEEDED, error)
             }
             AccountResourceOverrideError::ExpiryRequiresAdmin => {
                 Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
@@ -1147,11 +1150,16 @@ mod tests {
     #[test]
     fn resource_override_errors_use_distinct_http_statuses() {
         assert!(matches!(
-            ApiError::from(AccountResourceOverrideError::NotUserConfigurable),
+            ApiError::from(AccountResourceOverrideError::NotUserConfigurable(
+                "Storage limit",
+            )),
             ApiError::BadRequest(_)
         ));
         assert!(matches!(
-            ApiError::from(AccountResourceOverrideError::ExceedsPlanCeiling(10)),
+            ApiError::from(AccountResourceOverrideError::ExceedsPlanCeiling(
+                "Storage limit",
+                10,
+            )),
             ApiError::LimitExceeded(_)
         ));
         assert!(matches!(

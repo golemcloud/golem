@@ -32,7 +32,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.4.0"
+  WASM_RQUICKJS_VERSION: "0.4.1"
   MOONBIT_INSTALL_VERSION: "0.10.1+a46be2066"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
@@ -285,7 +285,6 @@ jobs:
       - name: ${{ matrix.group.description }}
         env:
           QUIET: true
-          GOLEM_PRESET: quick
         run: cargo make --profile ci ${{ matrix.group.name }}
         timeout-minutes: 45
       - uses: ./.github/actions/publish-test-report
@@ -295,7 +294,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
   it-cli:
-    name: it-cli
+    name: it-cli (${{ matrix.group.shard }})
     env:
       CARGO_BUILD_JOBS: 10
       GOLEM_CLI_TEST_BIN_PROFILE: dev-release-ci
@@ -304,7 +303,15 @@ jobs:
       - build-and-store
       - build-golem-ts
       - build-cli-test-bins
+      - build-golem-scala
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        group:
+          - { name: cli-integration-tests-agents, shard: agents }
+          - { name: cli-integration-tests-bridge, shard: bridge_gen }
+          - { name: cli-integration-tests-core, shard: core }
     steps:
       - uses: actions/checkout@v5
         with:
@@ -341,6 +348,10 @@ jobs:
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
 
+      # Warm the coursier cache for the bridge shard's Scala deps.
+      - name: Cache scala dependencies
+        uses: coursier/cache-action@v8
+
       - name: Setup MoonBit
         uses: hustcer/setup-moonbit@v1
         with:
@@ -376,14 +387,22 @@ jobs:
       - name: Sync WIT dependencies
         run: cargo make wit
 
-      - name: Build agent_guest.wasm
-        working-directory: sdks/scala
-        run: ./scripts/generate-agent-guest-wasm.sh
+      - name: Restore agent_guest.wasm (built by build-golem-scala)
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            sdks/scala/sbt/src/main/resources/golem/wasm/agent_guest.wasm
+            sdks/scala/mill/resources/golem/wasm/agent_guest.wasm
+            sdks/scala/wit/dts
+          key: agent-guest-wasm-${{ github.run_id }}
+          fail-on-cache-miss: true
 
-      - name: Publish Scala SDK locally
-        working-directory: sdks/scala
-        run: |
-          sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; ++2.12.21; codegen/publishLocal; sbtPlugin/publishLocal'
+      - name: Restore Scala SDK ivy local repo (published by build-golem-scala)
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/.ivy2/local
+          key: scala-sdk-ivy-local-${{ github.run_id }}
+          fail-on-cache-miss: true
 
       - name: Restore built TS SDK
         uses: actions/cache/restore@v5
@@ -418,16 +437,15 @@ jobs:
           cp tmp/golem-cli-test-binaries/* target/dev-release-ci/
           chmod +x target/dev-release-ci/*
 
-      - name: CLI integration tests
+      - name: it-cli ${{ matrix.group.shard }}
         env:
           QUIET: true
-          GOLEM_PRESET: quick
-        run: cargo make --profile ci cli-integration-tests
+        run: cargo make --profile ci ${{ matrix.group.name }}
         timeout-minutes: 30
       - uses: ./.github/actions/publish-test-report
         if: always()
         with:
-          artifact-name: it-cli-report
+          artifact-name: '${{ matrix.group.name }}-report'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
   scala-sdk-integration-tests:
@@ -596,6 +614,28 @@ jobs:
       - name: Compile sbt plugin
         working-directory: sdks/scala
         run: sbt "++2.12.21!; sbtPlugin/compile"
+
+      # Published for the it-cli shards to restore. Must run after agent_guest.wasm is built, since
+      # the sbt plugin jar embeds it.
+      - name: Publish Scala SDK locally
+        working-directory: sdks/scala
+        run: |
+          sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; ++2.12.21; codegen/publishLocal; sbtPlugin/publishLocal'
+
+      - name: Cache agent_guest.wasm for it-cli
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            sdks/scala/sbt/src/main/resources/golem/wasm/agent_guest.wasm
+            sdks/scala/mill/resources/golem/wasm/agent_guest.wasm
+            sdks/scala/wit/dts
+          key: agent-guest-wasm-${{ github.run_id }}
+
+      - name: Cache Scala SDK ivy local repo for it-cli
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.ivy2/local
+          key: scala-sdk-ivy-local-${{ github.run_id }}
 
   build-golem-moonbit:
     runs-on: blacksmith

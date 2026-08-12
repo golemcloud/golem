@@ -19,10 +19,10 @@ use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
 use crate::log::log_error;
-use crate::model::GuestLanguage;
 use crate::model::environment::EnvironmentResolveMode;
-use crate::model::text::secret::{
-    SecretCreateView, SecretDeleteView, SecretGetView, SecretListView, SecretUpdateView,
+use crate::model::language::GuestLanguage;
+use crate::model::secret::{
+    SecretCreateView, SecretDeleteView, SecretGetView, SecretListView, SecretUpdateView, SecretView,
 };
 use anyhow::bail;
 use golem_client::api::AgentSecretsClient;
@@ -237,7 +237,7 @@ impl SecretCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_output(SecretDeleteView(result.into()))?;
+            .log_output(SecretDeleteView::from(SecretView::from(result)))?;
 
         Ok(())
     }

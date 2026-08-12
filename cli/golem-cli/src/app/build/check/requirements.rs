@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::GuestLanguage;
+use crate::model::language::GuestLanguage;
 use crate::versions;
 
 #[derive(Clone, Copy, Debug)]

@@ -47,9 +47,10 @@ pub struct GolemConfig {
     /// hot paths such as promise and worker status updates from crashing the executor under load.
     #[serde(default = "default_key_value_storage_retry")]
     pub key_value_storage_retry: RetryConfig,
-    /// Retry policy applied to SQL-backed scheduler storage operations when the connection pool
-    /// is briefly exhausted (a pool acquisition timeout). The scheduler background loop panics
-    /// on exhaustion because its `schedule`/`cancel` entry points cannot propagate errors.
+    /// Retry policy applied when scheduling or cancelling hits a briefly exhausted connection
+    /// pool (a pool acquisition timeout). Those two panic once it is exhausted, because their
+    /// entry points return no error for a caller to act on; the tick's own storage calls
+    /// propagate their errors instead.
     #[serde(default = "default_scheduler_storage_retry")]
     pub scheduler_storage_retry: RetryConfig,
     /// Retry policy applied to SQL-backed indexed storage (oplog) operations when the connection
@@ -1138,7 +1139,6 @@ fn default_indexed_storage_postgres_drop_prefix_delete_batch_size() -> u64 {
 pub struct MemoryConfig {
     pub system_memory_override: Option<u64>,
     pub worker_memory_ratio: f64,
-    pub worker_estimate_coefficient: f64,
     /// Multiplier applied to a component's `component_size` when reserving its
     /// compiled-module memory with the admission gate, charged once per resident
     /// component (shared across all its workers) rather than per worker.
@@ -1177,11 +1177,6 @@ impl SafeDisplay for MemoryConfig {
             &mut result,
             "worker memory ratio: {}",
             self.worker_memory_ratio
-        );
-        let _ = writeln!(
-            &mut result,
-            "worker estimate coefficient: {}",
-            self.worker_estimate_coefficient
         );
         let _ = writeln!(
             &mut result,
@@ -1767,7 +1762,6 @@ impl Default for MemoryConfig {
         Self {
             system_memory_override: None,
             worker_memory_ratio: 0.8,
-            worker_estimate_coefficient: 1.1,
             component_size_coefficient: 2.0,
             enable_measured_admission: true,
             acquire_retry_delay: Duration::from_millis(500),

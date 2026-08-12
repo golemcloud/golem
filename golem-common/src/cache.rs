@@ -23,7 +23,6 @@ use std::time::Duration;
 
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
-use tracing::Instrument;
 
 use crate::metrics::caching::{
     record_cache_capacity, record_cache_eviction, record_cache_hit, record_cache_miss,
@@ -440,8 +439,12 @@ impl<
                             if eviction_needed {
                                 self_clone.evict().await;
                             }
-                        }
-                        .in_current_span(),
+                        }, // NOT `.in_current_span()`: this owner outlives the caller by
+                           // design, so cloning the caller's span would hold it open for
+                           // the owner's whole life. Callers that want the work traced
+                           // must instrument the future they hand in - see the
+                           // `read_only_invocation` span in the worker executor for the
+                           // shape: capture a `TraceOrigin` and link, do not nest.
                     );
                 } else {
                     record_cache_hit(self.name);
@@ -508,44 +511,43 @@ impl<
                         let pending_value_clone = pending_value.clone();
                         let self_clone = self.clone();
 
-                        tokio::task::spawn(
-                            async move {
-                                let value = f2(&pending_value_clone).await;
-                                if let Ok(success_value) = &value {
-                                    self_clone
-                                        .state
-                                        .items
-                                        .upsert_async(
-                                            key_clone.clone(),
-                                            Item::Cached {
-                                                value: success_value.clone(),
-                                                last_access: Instant::now(),
-                                            },
-                                        )
-                                        .await;
-                                    let old_count =
-                                        self_clone.state.count.fetch_add(1, Ordering::Relaxed);
-                                    let new_count = old_count.saturating_add(1);
+                        // Same as `get_or_insert_spawned` above: no `.in_current_span()`,
+                        // because this owner outlives the caller that started it.
+                        tokio::task::spawn(async move {
+                            let value = f2(&pending_value_clone).await;
+                            if let Ok(success_value) = &value {
+                                self_clone
+                                    .state
+                                    .items
+                                    .upsert_async(
+                                        key_clone.clone(),
+                                        Item::Cached {
+                                            value: success_value.clone(),
+                                            last_access: Instant::now(),
+                                        },
+                                    )
+                                    .await;
+                                let old_count =
+                                    self_clone.state.count.fetch_add(1, Ordering::Relaxed);
+                                let new_count = old_count.saturating_add(1);
 
-                                    record_cache_size(self_clone.name, new_count);
+                                record_cache_size(self_clone.name, new_count);
 
-                                    if self_clone
-                                        .capacity
-                                        .is_some_and(|capacity| new_count > capacity)
-                                    {
-                                        self_clone.evict().await;
-                                    }
-                                } else {
-                                    self_clone.state.items.remove_async(&key_clone).await;
+                                if self_clone
+                                    .capacity
+                                    .is_some_and(|capacity| new_count > capacity)
+                                {
+                                    self_clone.evict().await;
                                 }
-                                // `send_replace` instead of `send`: a plain `send`
-                                // fails without storing the value when no waiter
-                                // has subscribed yet, and later subscribers would
-                                // then wait forever.
-                                tx_clone.send_replace(Some(value.clone()));
+                            } else {
+                                self_clone.state.items.remove_async(&key_clone).await;
                             }
-                            .in_current_span(),
-                        );
+                            // `send_replace` instead of `send`: a plain `send`
+                            // fails without storing the value when no waiter
+                            // has subscribed yet, and later subscribers would
+                            // then wait forever.
+                            tx_clone.send_replace(Some(value.clone()));
+                        });
                     }
 
                     Ok(PendingOrFinal::Pending(pending_value))

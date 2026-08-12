@@ -334,9 +334,9 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     /// proceeds once headroom recovers rather than failing under momentary
     /// pressure. With measured admission disabled the worker is admitted
     /// immediately with an inert grant.
-    async fn acquire_memory(&self, memory: u64) -> MemoryGrant {
+    pub(crate) async fn acquire_memory(&self, memory: u64) -> MemoryGrant {
         let Some(admission) = &self.admission else {
-            return MemoryGrant::inert();
+            return MemoryGrant::inert(memory);
         };
         loop {
             // Evicts idle-then-warm when real headroom is short; rejects (and we
@@ -399,7 +399,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     /// always admitted with an inert grant.
     pub(crate) async fn try_acquire(&self, memory: u64) -> Option<MemoryGrant> {
         let Some(admission) = &self.admission else {
-            return Some(MemoryGrant::inert());
+            return Some(MemoryGrant::inert(memory));
         };
         match admission.admit(memory, &self.eviction_source()).await {
             Some(grant) => Some(grant),

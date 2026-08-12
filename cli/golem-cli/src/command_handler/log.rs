@@ -16,7 +16,7 @@ use crate::context::Context;
 use crate::model::cli_output::{StructuredOutput, to_structured_output_value_masked};
 use crate::model::format::Format;
 use crate::model::masking::MaskingConfig;
-use crate::model::text::fmt::{
+use crate::model::text_format::{
     DecoratedIndent, TextOutput, TruncatableTextOutput, to_colored_json, to_colored_yaml,
     truncate_rendered,
 };

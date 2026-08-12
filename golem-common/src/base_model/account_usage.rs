@@ -34,6 +34,7 @@ declare_structs! {
     pub struct StorageUsageMetrics {
         pub period: StorageUsagePeriod,
         pub compute_gcu: f64,
+        pub memory_gb_seconds: u64,
         pub durable_storage_gb_month: f64,
         pub ephemeral_storage_gb_month: f64,
     }
@@ -44,6 +45,8 @@ declare_structs! {
         pub plan_name: PlanName,
         pub usage: StorageUsageMetrics,
         pub max_storage_per_agent: StorageLimit,
+        pub max_memory_per_agent: MemoryLimit,
+        pub monthly_memory_gb_seconds: MemoryLimit,
     }
 
     pub struct StorageUsageHistory {
@@ -61,6 +64,20 @@ declare_structs! {
     }
 
     pub struct SetStorageLimit {
+        pub value: u64,
+        pub expires_at: Option<DateTime<Utc>>,
+    }
+
+    #[derive(Eq)]
+    pub struct MemoryLimit {
+        pub effective_value: u64,
+        pub plan_default: u64,
+        pub override_value: Option<u64>,
+        pub ceiling: u64,
+        pub user_configurable: bool,
+    }
+
+    pub struct SetMemoryLimit {
         pub value: u64,
         pub expires_at: Option<DateTime<Utc>>,
     }
@@ -83,6 +100,23 @@ impl StorageUsagePeriod {
 }
 
 impl StorageLimit {
+    pub fn resolve(
+        plan_default: u64,
+        override_value: Option<u64>,
+        ceiling: u64,
+        user_configurable: bool,
+    ) -> Self {
+        Self {
+            effective_value: override_value.unwrap_or(plan_default).min(ceiling),
+            plan_default,
+            override_value,
+            ceiling,
+            user_configurable,
+        }
+    }
+}
+
+impl MemoryLimit {
     pub fn resolve(
         plan_default: u64,
         override_value: Option<u64>,
@@ -125,7 +159,7 @@ impl FromStr for StorageUsagePeriod {
 
 #[cfg(test)]
 mod tests {
-    use super::StorageUsagePeriod;
+    use super::{MemoryLimit, StorageUsagePeriod};
     use std::str::FromStr;
     use test_r::test;
 
@@ -145,6 +179,20 @@ mod tests {
         assert_eq!(
             StorageUsagePeriod::from_str("2026-13").unwrap_err(),
             "period month must be between 01 and 12"
+        );
+    }
+
+    #[test]
+    fn memory_limit_resolves_override_and_clamps_to_ceiling() {
+        assert_eq!(
+            MemoryLimit::resolve(100, Some(300), 200, true),
+            MemoryLimit {
+                effective_value: 200,
+                plan_default: 100,
+                override_value: Some(300),
+                ceiling: 200,
+                user_configurable: true,
+            }
         );
     }
 }

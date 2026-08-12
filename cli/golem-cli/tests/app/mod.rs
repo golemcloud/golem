@@ -24,6 +24,10 @@ mod plugins;
 
 inherit_test_dep!(Tracing);
 
+// Tag for the it-cli `agents` CI shard. Must live in the `app` module so the tag's module-path
+// prefix resolves to `app::agents`.
+tag_suite!(agents, agents);
+
 use crate::{Tracing, crate_path, workspace_path};
 use anyhow::Context;
 use colored::Colorize;
@@ -50,7 +54,7 @@ use std::str::FromStr;
 use std::thread::sleep;
 use std::time::Duration;
 use tempfile::TempDir;
-use test_r::inherit_test_dep;
+use test_r::{inherit_test_dep, tag_suite};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
@@ -611,6 +615,7 @@ impl TestContext {
             Command::new(&self.golem_path)
                 .args(&args)
                 .current_dir(&self.working_dir)
+                .envs(&self.env)
                 .spawn()
                 .unwrap(),
         );
