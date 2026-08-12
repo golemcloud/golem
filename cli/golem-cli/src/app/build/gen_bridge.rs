@@ -1049,9 +1049,16 @@ mod tests {
     }
 
     #[test]
-    fn validate_supported_bridge_targets_accepts_guest_targets_for_all_current_languages() {
-        // Go has no bridge generation yet (see BridgeSdkTargetKind::supports).
-        for language in GuestLanguage::iter().filter(|l| *l != GuestLanguage::Go) {
+    fn validate_supported_bridge_targets_accepts_supported_guest_targets() {
+        for language in GuestLanguage::iter() {
+            // Only languages whose guest agent and tool bridges are both supported
+            // should validate (e.g. Go has no bridge generation yet).
+            if !(BridgeSdkTargetKind::Agent.supports(BridgeMode::Guest, language)
+                && BridgeSdkTargetKind::Tool.supports(BridgeMode::Guest, language))
+            {
+                continue;
+            }
+
             let agent_target = bridge_sdk_target_with_mode(
                 "AlphaAgent",
                 language,
@@ -1075,6 +1082,14 @@ mod tests {
 
     #[test]
     fn bridge_sdk_support_matrix_matches_current_capabilities() {
+        // Bridge generation exists for these languages; Go has none yet
+        // (no src/bridge_gen/go), so it is unsupported for every kind and mode.
+        let bridge_languages = [
+            GuestLanguage::TypeScript,
+            GuestLanguage::Rust,
+            GuestLanguage::Scala,
+            GuestLanguage::MoonBit,
+        ];
         let capabilities = [
             (BridgeSdkTargetKind::Agent, BridgeMode::External, true),
             (BridgeSdkTargetKind::Agent, BridgeMode::Guest, true),
@@ -1084,12 +1099,7 @@ mod tests {
 
         for (kind, mode, expected) in capabilities {
             for language in GuestLanguage::iter() {
-                // Go has no bridge generation yet, so it is unsupported across the matrix.
-                let expected = if language == GuestLanguage::Go {
-                    false
-                } else {
-                    expected
-                };
+                let expected = expected && bridge_languages.contains(&language);
                 assert_eq!(
                     kind.supports(mode, language),
                     expected,
@@ -1118,7 +1128,7 @@ mod tests {
     }
 
     #[test]
-    fn dependency_guest_bridge_support_accepts_all_current_languages_for_agents_and_tools() {
+    fn dependency_guest_bridge_support_matches_matrix_for_agents_and_tools() {
         let component_name = ComponentName("component".to_string());
         let agent_dependency = ComponentDependency::Agent {
             component_name: component_name.clone(),
@@ -1129,27 +1139,29 @@ mod tests {
             tool_name: crate::model::app::ToolName::try_from("tool").unwrap(),
         };
 
-        // Go has no bridge generation yet.
-        for language in GuestLanguage::iter().filter(|l| *l != GuestLanguage::Go) {
-            assert!(supported_dependency_guest_bridge_target_language(
-                &agent_dependency,
-                language
-            ));
-            assert!(supported_dependency_guest_bridge_target_language(
-                &tool_dependency,
-                language
-            ));
+        // The dependency helper maps each dependency kind to its bridge target kind,
+        // so its answer must track BridgeSdkTargetKind::supports for every language.
+        for language in GuestLanguage::iter() {
+            assert_eq!(
+                supported_dependency_guest_bridge_target_language(&agent_dependency, language),
+                BridgeSdkTargetKind::Agent.supports(BridgeMode::Guest, language),
+            );
+            assert_eq!(
+                supported_dependency_guest_bridge_target_language(&tool_dependency, language),
+                BridgeSdkTargetKind::Tool.supports(BridgeMode::Guest, language),
+            );
         }
     }
 
     #[test]
-    fn tool_guest_bridge_supported_language_names_match_all_current_languages() {
+    fn tool_guest_bridge_supported_language_names_match_supported_languages() {
+        let expected = GuestLanguage::iter()
+            .filter(|language| BridgeSdkTargetKind::Tool.supports(BridgeMode::Guest, *language))
+            .map(|language| language.to_string())
+            .join(", ");
         assert_eq!(
             BridgeSdkTargetKind::Tool.supported_language_names(BridgeMode::Guest),
-            GuestLanguage::iter()
-                .filter(|l| *l != GuestLanguage::Go) // Go has no bridge generation yet
-                .map(|language| language.to_string())
-                .join(", ")
+            expected
         );
     }
 
