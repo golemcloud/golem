@@ -25,7 +25,7 @@ use crate::model::app_raw;
 use crate::model::component::initial_permission_recipient_context;
 use crate::model::component::{AgentTypeManifestProvisionConfig, ComponentDeployProperties};
 use crate::model::environment::ResolvedEnvironmentIdentity;
-use crate::model::text::plugin::PluginNameAndVersion;
+use crate::model::plugin::PluginNameAndVersion;
 use anyhow::{Context as AnyhowContext, anyhow};
 use golem_client::model::EnvironmentPluginGrantWithDetails;
 use golem_common::model::agent::AgentTypeName;
@@ -525,13 +525,13 @@ impl<'a> ComponentStager<'a> {
         // Compute permissions-only updates per agent type
         let mut file_permission_updates_per_agent = BTreeMap::new();
         for (agent_type_str, agent_diff) in self.diff.file_changes_per_agent() {
-            let agent_name = golem_common::model::agent::AgentTypeName(agent_type_str.to_string());
+            let agent_id = golem_common::model::agent::AgentTypeName(agent_type_str.to_string());
             let manifest_files = match self
                 .component_deploy_properties
                 .agent_type_configs
-                .get(&agent_name)
+                .get(&agent_id)
             {
-                Some(_) => self.manifest_files_for_agent(&agent_name).await?,
+                Some(_) => self.manifest_files_for_agent(&agent_id).await?,
                 None => Vec::new(),
             };
             let manifest_files: std::collections::HashMap<_, _> = manifest_files
@@ -559,7 +559,7 @@ impl<'a> ComponentStager<'a> {
                 }
             }
             if !perm_updates.is_empty() {
-                file_permission_updates_per_agent.insert(agent_name, perm_updates);
+                file_permission_updates_per_agent.insert(agent_id, perm_updates);
             }
         }
 
@@ -1299,7 +1299,7 @@ mod tests {
     use golem_common::model::diff::Hash;
     use test_r::test;
 
-    fn agent_name() -> AgentTypeName {
+    fn agent_id() -> AgentTypeName {
         AgentTypeName("Cart".to_string())
     }
 
@@ -1383,7 +1383,7 @@ mod tests {
 
     #[test]
     fn value_diff_without_plugin_changes_emits_no_plugin_actions() {
-        let agent_name = agent_name();
+        let agent_id = agent_id();
         let agent_diff = empty_agent_diff();
         let agent_change =
             diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff { diff: agent_diff });
@@ -1391,7 +1391,7 @@ mod tests {
         let plugins = vec![plugin_installation(grant_id)];
 
         let updates = ComponentStager::plugin_updates_for_agent_change(
-            &agent_name,
+            &agent_id,
             Some(&agent_change),
             &plugins,
         )
@@ -1402,12 +1402,12 @@ mod tests {
 
     #[test]
     fn create_provision_config_installs_manifest_plugins() {
-        let agent_name = agent_name();
+        let agent_id = agent_id();
         let grant_id = uuid::Uuid::from_u128(1);
         let plugins = vec![plugin_installation(grant_id)];
 
         let updates = ComponentStager::plugin_updates_for_agent_change(
-            &agent_name,
+            &agent_id,
             Some(&diff::BTreeMapDiffValue::Create),
             &plugins,
         )
@@ -1423,14 +1423,14 @@ mod tests {
 
     #[test]
     fn plugin_hash_diff_error_names_plugin_action_context() {
-        let agent_name = agent_name();
+        let agent_id = agent_id();
         let agent_change = diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::HashDiff {
             new_hash: Hash::empty(),
             current_hash: Hash::new(blake3::hash(b"current")),
         });
 
         let err =
-            ComponentStager::plugin_updates_for_agent_change(&agent_name, Some(&agent_change), &[])
+            ComponentStager::plugin_updates_for_agent_change(&agent_id, Some(&agent_change), &[])
                 .unwrap_err();
 
         assert!(
@@ -1442,7 +1442,7 @@ mod tests {
 
     #[test]
     fn plugin_diff_emits_targeted_actions() {
-        let agent_name = agent_name();
+        let agent_id = agent_id();
         let install_grant_id = uuid::Uuid::from_u128(1);
         let uninstall_grant_id = uuid::Uuid::from_u128(2);
         let update_grant_id = uuid::Uuid::from_u128(3);
@@ -1469,7 +1469,7 @@ mod tests {
         ];
 
         let updates = ComponentStager::plugin_updates_for_agent_change(
-            &agent_name,
+            &agent_id,
             Some(&agent_change),
             &plugins,
         )

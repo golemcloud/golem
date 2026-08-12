@@ -24,7 +24,10 @@ use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
 use crate::log::{LogColorize, LogIndent, log_action, log_error, log_warn_action, logln};
-use crate::model::GuestLanguage;
+use crate::model::agent::AgentUpdateMode;
+use crate::model::agent::action_result::{
+    AgentDeleteAllView, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
+};
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::app_raw;
@@ -35,26 +38,22 @@ use crate::model::component::{
     ToolManifestProvisionConfig, initial_permission_from_manifest_card,
     initial_permission_recipient_context,
 };
+use crate::model::component::{ComponentGetView, ComponentListView, ComponentManifestTraceView};
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
 use crate::model::deploy::{
-    DeployConfig, TryUpdateAllWorkersResult, UpdateStagedComponentError,
-    UpdateStagedComponentResult,
+    DeployConfig, TryUpdateAllWorkersView, UpdateStagedComponentError, UpdateStagedComponentResult,
 };
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
-use crate::model::text::action_result::AgentRedeployResult;
-use crate::model::text::component::{
-    ComponentGetView, ComponentListView, ComponentManifestTraceView,
-};
-use crate::model::text::fmt::log_text_view;
-use crate::model::text::help::ComponentNameHelp;
-use crate::model::text::plugin::PluginNameAndVersion;
+use crate::model::help::ComponentNameHelp;
+use crate::model::language::GuestLanguage;
+use crate::model::plugin::PluginNameAndVersion;
+use crate::model::text_format::log_text_view;
 use crate::model::tool_deployment::{
     DiscoveredToolImplementation, ToolEntityPath, ToolImplementationSource, ToolValidationCode,
     ToolValidationIssue, ToolValidationPhase, add_tool_issues,
 };
-use crate::model::worker::AgentUpdateMode;
 use crate::validation::ValidationBuilder;
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use futures_util::future::OptionFuture;
@@ -111,7 +110,7 @@ impl ComponentCommandHandler {
                     r#await,
                     disable_wakeup,
                 } => {
-                    self.cmd_update_workers(
+                    self.cmd_update_agents(
                         component_name.component_name,
                         update_mode,
                         r#await,
@@ -120,7 +119,7 @@ impl ComponentCommandHandler {
                     .await
                 }
                 ComponentSubcommand::RedeployAgents { component_name } => {
-                    self.cmd_redeploy_workers(component_name.component_name)
+                    self.cmd_redeploy_agents(component_name.component_name)
                         .await
                 }
                 ComponentSubcommand::ManifestTrace { component_name } => {
@@ -254,7 +253,7 @@ impl ComponentCommandHandler {
         Ok(())
     }
 
-    async fn cmd_update_workers(
+    async fn cmd_update_agents(
         &self,
         component_name: Option<ComponentName>,
         update_mode: AgentUpdateMode,
@@ -262,18 +261,18 @@ impl ComponentCommandHandler {
         disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         let components = self.components_for_deploy_args(component_name).await?;
-        self.update_workers_by_components(&components, update_mode, await_update, disable_wakeup)
+        self.update_agents_by_components(&components, update_mode, await_update, disable_wakeup)
             .await?;
 
         Ok(())
     }
 
-    async fn cmd_redeploy_workers(
+    async fn cmd_redeploy_agents(
         &self,
         component_name: Option<ComponentName>,
     ) -> anyhow::Result<()> {
         let components = self.components_for_deploy_args(component_name).await?;
-        self.redeploy_workers_by_components(&components).await?;
+        self.redeploy_agents_by_components(&components).await?;
 
         Ok(())
     }
@@ -358,7 +357,7 @@ impl ComponentCommandHandler {
         Ok(())
     }
 
-    pub async fn update_workers_by_components(
+    pub async fn update_agents_by_components(
         &self,
         components: &[ComponentDto],
         update: AgentUpdateMode,
@@ -372,12 +371,12 @@ impl ComponentCommandHandler {
         log_action("Updating", format!("existing agents using {update} mode"));
         let _indent = LogIndent::new();
 
-        let mut update_results = TryUpdateAllWorkersResult::default();
+        let mut update_results = TryUpdateAllWorkersView::default();
         for component in components {
             let result = self
                 .ctx
-                .worker_handler()
-                .update_component_workers(
+                .agent_handler()
+                .update_component_agents(
                     &component.component_name,
                     &component.id,
                     update,
@@ -389,16 +388,18 @@ impl ComponentCommandHandler {
             update_results.extend(result);
         }
 
-        self.ctx.log_handler().log_output(update_results.clone())?;
+        let has_errors = !update_results.errors.is_empty();
 
-        if !update_results.failed.is_empty() {
-            bail!(NonSuccessfulExit)
-        } else {
-            Ok(())
+        self.ctx.log_handler().log_output(update_results)?;
+
+        if has_errors {
+            bail!(NonSuccessfulExit);
         }
+
+        Ok(())
     }
 
-    pub async fn redeploy_workers_by_components(
+    pub async fn redeploy_agents_by_components(
         &self,
         components: &[ComponentDto],
     ) -> anyhow::Result<()> {
@@ -409,54 +410,78 @@ impl ComponentCommandHandler {
         log_action("Redeploying", "existing agents");
         let _indent = LogIndent::new();
 
+        // TODO: unlike updating, redeploy is short-circuiting, should we normalize?
+        let mut agents = Vec::new();
         for component in components {
-            self.ctx
-                .worker_handler()
-                .redeploy_component_workers(&component.component_name, &component.id)
+            let redeployed = self
+                .ctx
+                .agent_handler()
+                .redeploy_component_agents(&component.component_name, &component.id)
                 .await?;
+            let version = component.metadata.root_package_version().clone();
+            for (agent_id, from_revision) in redeployed {
+                let from_version = self
+                    .component_version_at(&component.id, from_revision)
+                    .await;
+                agents.push(AgentRedeploymentMeta {
+                    component_name: component.component_name.clone(),
+                    agent_id,
+                    from_revision,
+                    revision: component.revision,
+                    from_version,
+                    version: version.clone(),
+                });
+            }
         }
 
-        // TODO: unlike updating, redeploy is short-circuiting, should we normalize?
         self.ctx.log_handler().log_output(AgentRedeployResult {
             redeployed: true,
-            components: components
-                .iter()
-                .map(|component| component.component_name.clone())
-                .collect(),
+            agents,
         })?;
 
         Ok(())
     }
 
-    pub async fn delete_workers(&self, components: &[ComponentDto]) -> anyhow::Result<()> {
+    pub async fn delete_agents(&self, components: &[ComponentDto]) -> anyhow::Result<()> {
         if components.is_empty() {
             return Ok(());
         }
 
-        log_action("Deleting", "existing workers");
+        log_action("Deleting", "existing agents");
         let _indent = LogIndent::new();
 
         // NOTE: for now we naively keep deleting in a loop until we do not find any more agents,
         //       we do so to help a bit with pending invocations or currently running worker creations,
         //       but this is not a 100% guarantee.
+        let mut agents = Vec::new();
         let mut found_any = true;
         let mut first_round = true;
         while found_any {
             found_any = false;
             for component in components {
-                let deleted_count = self
+                let deleted = self
                     .ctx
-                    .worker_handler()
-                    .delete_component_workers(&component.component_name, &component.id, first_round)
+                    .agent_handler()
+                    .delete_component_agents(&component.component_name, &component.id, first_round)
                     .await?;
-                if deleted_count > 0 {
+                if !deleted.is_empty() {
                     found_any = true;
+                }
+                for agent_id in deleted {
+                    agents.push(AgentDeletionMeta {
+                        component_name: component.component_name.clone(),
+                        agent_id,
+                    });
                 }
             }
             first_round = false;
         }
 
-        // TODO: json / yaml output?
+        self.ctx.log_handler().log_output(AgentDeleteAllView {
+            deleted: true,
+            agents,
+        })?;
+
         Ok(())
     }
 
@@ -679,7 +704,6 @@ impl ComponentCommandHandler {
                         "Component {} not found, and not part of the current application",
                         component_name.0.log_color_highlight()
                     ));
-                    // TODO: fuzzy match from service to list components?
 
                     let app_ctx = self.ctx.app_context_lock().await;
                     if let Some(app_ctx) = app_ctx.opt()? {
@@ -749,10 +773,10 @@ impl ComponentCommandHandler {
         match (component, component_revision_selection) {
             (Some(component), Some(component_revision_selection)) => {
                 let revision = match component_revision_selection {
-                    ComponentRevisionSelection::ByAgentName(agent_name) => self
+                    ComponentRevisionSelection::ByAgentId(agent_id) => self
                         .ctx
-                        .worker_handler()
-                        .worker_metadata(component.id.0, &component.component_name, agent_name)
+                        .agent_handler()
+                        .agent_metadata(component.id.0, &component.component_name, agent_id)
                         .await?
                         .map(|worker_metadata| worker_metadata.component_revision),
                     ComponentRevisionSelection::ByExplicitRevision(revision) => Some(revision),
@@ -784,7 +808,7 @@ impl ComponentCommandHandler {
             (
                 app.component_names().into_iter().collect::<Vec<_>>(),
                 app.application()
-                    .agent_names()
+                    .agent_ids()
                     .cloned()
                     .collect::<BTreeSet<_>>(),
             )
@@ -1217,12 +1241,12 @@ impl ComponentCommandHandler {
         }
 
         if !unused_config_by_agent.is_empty() {
-            for (agent_name, unused_keys) in &unused_config_by_agent {
+            for (agent_id, unused_keys) in &unused_config_by_agent {
                 log_warn_action(
                     "Ignoring unused config keys",
                     format!(
                         "for agent {}: {}",
-                        agent_name.0.log_color_highlight(),
+                        agent_id.0.log_color_highlight(),
                         unused_keys.join(", ")
                     ),
                 );
@@ -1252,7 +1276,6 @@ impl ComponentCommandHandler {
         component_name: &ComponentName,
         properties: &ComponentDeployProperties,
     ) -> anyhow::Result<diff::Component> {
-        // TODO: atomic: cache it with a TaskResultMarker?
         let component_binary_hash = {
             log_action(
                 "Calculating hash",
@@ -1718,6 +1741,19 @@ impl ComponentCommandHandler {
                 },
             )
             .await
+    }
+
+    /// Best-effort, cached lookup of a component's user-facing release version string at a given
+    /// revision. Returns `None` if the revision can't be fetched or has no version set.
+    pub async fn component_version_at(
+        &self,
+        component_id: &ComponentId,
+        revision: ComponentRevision,
+    ) -> Option<String> {
+        self.get_component_revision_by_id(component_id, revision)
+            .await
+            .ok()
+            .and_then(|component| component.metadata.root_package_version().clone())
     }
 
     pub async fn get_component_revision_by_id(

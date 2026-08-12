@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::text::fmt::format_stderr;
+use crate::model::text_format::format_stderr;
 use anyhow::anyhow;
 use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use itertools::Itertools;

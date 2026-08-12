@@ -27,7 +27,6 @@ impl<L: Layer> Default for Store<L> {
     }
 }
 
-// TODO: check for circular parents (either on add or on get, or have a separate validation step)
 impl<L: Layer> Store<L> {
     pub fn new() -> Store<L> {
         Self {
@@ -62,26 +61,36 @@ impl<L: Layer> Store<L> {
             return Err(StoreGetValueError::LayerNotFound(id.clone()));
         };
 
-        fn apply_layer<L: Layer>(
-            store: &Store<L>,
+        fn apply_layer<'a, L: Layer>(
+            store: &'a Store<L>,
             ctx: &L::ApplyContext,
             selector: &L::Selector,
-            layer: &L,
+            layer: &'a L,
             value: &mut L::Value,
+            path: &mut Vec<&'a L::Id>,
         ) -> Result<(), StoreGetValueError<L>> {
-            for layer_id in layer.parent_layers() {
-                let Some(layer) = store.layers.get(layer_id) else {
-                    return Err(StoreGetValueError::LayerNotFound(layer_id.clone()));
+            let layer_id = layer.id();
+            if path.contains(&layer_id) {
+                let mut chain = path.iter().map(|id| (*id).clone()).collect::<Vec<_>>();
+                chain.push(layer_id.clone());
+                return Err(StoreGetValueError::CircularParents(chain));
+            }
+            path.push(layer_id);
+            for parent_id in layer.parent_layers() {
+                let Some(parent) = store.layers.get(parent_id) else {
+                    return Err(StoreGetValueError::LayerNotFound(parent_id.clone()));
                 };
-                apply_layer(store, ctx, selector, layer, value)?;
+                apply_layer(store, ctx, selector, parent, value, path)?;
             }
             if let Some(err) = layer.apply_onto_parent(ctx, selector, value).err() {
                 return Err(StoreGetValueError::LayerApplyError(layer.id().clone(), err));
             };
+            path.pop();
             Ok(())
         }
         let mut value = L::Value::default();
-        apply_layer(self, ctx, selector, layer, &mut value)?;
+        let mut path = Vec::new();
+        apply_layer(self, ctx, selector, layer, &mut value, &mut path)?;
         Ok(value)
     }
 }
@@ -89,6 +98,7 @@ impl<L: Layer> Store<L> {
 #[cfg(test)]
 mod test {
     use super::Store;
+    use crate::model::cascade::error::StoreGetValueError;
     use crate::model::cascade::layer::Layer;
     use test_r::test;
 
@@ -149,5 +159,49 @@ mod test {
 
         let value = store.value(&"leaf".to_string(), &(), &()).unwrap();
         assert_eq!(value, vec!["base", "mid", "leaf"]);
+    }
+
+    fn add(store: &mut Store<TestLayer>, id: &str, parents: &[&str]) {
+        store
+            .add_layer(TestLayer {
+                id: id.to_string(),
+                parents: parents.iter().map(|p| p.to_string()).collect(),
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn value_detects_circular_parents_instead_of_overflowing() {
+        let mut store = Store::<TestLayer>::new();
+        add(&mut store, "a", &["b"]);
+        add(&mut store, "b", &["a"]);
+
+        let err = store.value(&"a".to_string(), &(), &()).unwrap_err();
+        assert!(
+            matches!(err, StoreGetValueError::CircularParents(_)),
+            "expected CircularParents, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn value_detects_self_referencing_parent() {
+        let mut store = Store::<TestLayer>::new();
+        add(&mut store, "a", &["a"]);
+
+        let err = store.value(&"a".to_string(), &(), &()).unwrap_err();
+        assert!(matches!(err, StoreGetValueError::CircularParents(_)));
+    }
+
+    #[test]
+    fn value_allows_diamond_shaped_parents() {
+        // a -> {b, c} -> d : d is reachable via two paths but is not a cycle.
+        let mut store = Store::<TestLayer>::new();
+        add(&mut store, "d", &[]);
+        add(&mut store, "b", &["d"]);
+        add(&mut store, "c", &["d"]);
+        add(&mut store, "a", &["b", "c"]);
+
+        let value = store.value(&"a".to_string(), &(), &()).unwrap();
+        assert_eq!(value, vec!["d", "b", "d", "c", "a"]);
     }
 }

@@ -19,7 +19,7 @@ use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
 use crate::log::log_error;
 use crate::model::environment::EnvironmentResolveMode;
-use crate::model::text::resource_definition::{
+use crate::model::resource_definition::{
     ResourceDefinitionCreateView, ResourceDefinitionDeleteView, ResourceDefinitionGetView,
     ResourceDefinitionListView, ResourceDefinitionUpdateView,
 };
@@ -227,7 +227,7 @@ impl ResourceDefinitionCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_output(ResourceDefinitionDeleteView(resource))?;
+            .log_output(ResourceDefinitionDeleteView::from(resource))?;
 
         Ok(())
     }

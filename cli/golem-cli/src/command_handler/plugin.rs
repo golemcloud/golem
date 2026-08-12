@@ -16,14 +16,14 @@ use crate::command::plugin::PluginSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::MapServiceError;
-use crate::log::{LogColorize, LogIndent, log_action, log_warn_action};
-use crate::model::PathBufOrStdin;
+use crate::log::{LogColorize, LogIndent, log_action};
 use crate::model::environment::EnvironmentResolveMode;
-use crate::model::plugin_manifest::{PluginManifest, PluginTypeSpecificManifest};
-use crate::model::text::plugin::{
+use crate::model::input::PathBufOrStdin;
+use crate::model::plugin::{
     PluginListEntry, PluginListView, PluginRegistrationGetView, PluginRegistrationRegisterView,
-    PluginSource, PluginUnregisterResult,
+    PluginSource, PluginUnregisterView,
 };
+use crate::model::plugin::{PluginManifest, PluginTypeSpecificManifest};
 use anyhow::{Context as AnyhowContext, anyhow};
 use golem_client::api::PluginClient;
 use golem_client::model::PluginRegistrationCreation;
@@ -189,16 +189,7 @@ impl PluginCommandHandler {
             .await
             .map_service_error()?;
 
-        log_warn_action(
-            "Unregistered",
-            format!(
-                "plugin: {}/{}",
-                result.name.log_color_highlight(),
-                result.version.log_color_highlight()
-            ),
-        );
-
-        self.ctx.log_handler().log_output(PluginUnregisterResult {
+        self.ctx.log_handler().log_output(PluginUnregisterView {
             unregistered: true,
             plugin_id: id,
             name: result.name,

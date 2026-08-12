@@ -16,17 +16,20 @@ use crate::error::NonSuccessfulExit;
 use crate::fs;
 use crate::log::log_error;
 use crate::log::{LogColorize, LogIndent, log_action, log_skipping_up_to_date, logln};
-use crate::model::GuestLanguage;
 use crate::model::app::{
     BridgeSdkTarget, BridgeSdkTargetKind, BridgeSdkTargetSubject, ComponentDependency,
     CustomBridgeSdkTarget,
 };
+use crate::model::cli_output::StructuredOutput;
+use crate::model::language::GuestLanguage;
 use crate::model::repl::{ReplAgentMetadata, ReplMetadata};
+use crate::model::text_format::{NoTextOutput, TextOutput};
 use anyhow::bail;
 use camino::Utf8PathBuf;
 use golem_common::model::component::ComponentName;
 use golem_common::model::tool::ToolName;
 use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Default)]
@@ -976,6 +979,19 @@ pub(crate) fn validate_supported_bridge_targets(targets: &[BridgeSdkTarget]) -> 
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateBridgeResult {
+    pub generated: bool,
+}
+
+impl NoTextOutput for GenerateBridgeResult {}
+impl TextOutput for GenerateBridgeResult {}
+
+impl StructuredOutput for GenerateBridgeResult {
+    const KIND: &'static str = "generate-bridge";
 }
 
 #[cfg(test)]
