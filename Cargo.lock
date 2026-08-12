@@ -5116,9 +5116,9 @@ checksum = "cd62e6b5e86ea8eeeb8db1de02880a6abc01a397b2ebb64b5d74ac255318f5cb"
 
 [[package]]
 name = "ignite-client-derive"
-version = "1.0.0"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55c55466d40f5dd7586c04cdb1e55ff71f811c0f49d69319a13d69a2e521bb7f"
+checksum = "ef4b2b5328dd09a3ad9463b92025433714038fbdd2b5a7707ae7c3671c3939d2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5127,9 +5127,9 @@ dependencies = [
 
 [[package]]
 name = "ignite-v2-client"
-version = "1.0.0"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c0e9faec2d6944067d84757ea9b768653536892ee174655ea912a6d4b347bb0"
+checksum = "8d1c226d32672e2795e7b5a5489c269175428f25edaaee78d6979a8996dbf995"
 dependencies = [
  "async-trait",
  "bigdecimal",
@@ -10132,7 +10132,6 @@ dependencies = [
  "bytes",
  "libc",
  "mio 1.1.1",
- "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2 0.6.2",
