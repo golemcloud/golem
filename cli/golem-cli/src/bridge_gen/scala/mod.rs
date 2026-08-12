@@ -3568,6 +3568,7 @@ mod tests {
         let target_path =
             Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
         let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.mode = AgentMode::Durable;
         agent_type.source_language = "scala".to_string();
         agent_type.methods.push(AgentMethodSchema {
             name: "echo".to_string(),
@@ -3653,6 +3654,7 @@ mod tests {
         let target_path =
             Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
         let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.mode = AgentMode::Durable;
         agent_type.source_language = "scala".to_string();
         agent_type.methods.push(AgentMethodSchema {
             name: "echo".to_string(),
