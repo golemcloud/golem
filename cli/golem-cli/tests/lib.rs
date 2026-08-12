@@ -16,12 +16,15 @@ use golem_cli::fs;
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use test_r::test_dep;
+use test_r::{tag_suite, test_dep};
 
 test_r::enable!();
 
 mod app;
 mod bridge_gen;
+
+// Tag for the it-cli `bridge_gen` CI shard (see the it-cli matrix in ci.yaml).
+tag_suite!(bridge_gen, bridge_gen);
 
 #[derive(Debug)]
 pub struct Tracing;

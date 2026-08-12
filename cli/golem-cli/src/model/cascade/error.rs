@@ -20,6 +20,8 @@ pub enum StoreGetValueError<L: Layer> {
     LayerNotFound(L::Id),
     #[error("layer ({0}) apply error: {1}")]
     LayerApplyError(L::Id, L::ApplyError),
+    #[error("circular parent layers detected: {0:?}")]
+    CircularParents(Vec<L::Id>),
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -346,6 +346,50 @@ fn generated_project_layout_is_correct() {
     assert!(build_sbt.contains("counter-agent-client"));
 }
 
+/// Guest-only implementation temporaries must not rename public parameters in
+/// the external REST generator.
+#[test]
+fn guest_only_temporary_parameter_names_are_mode_scoped() {
+    let agent_type = agent(
+        "ExternalAgent",
+        "scala",
+        vec![],
+        vec![method(
+            "echo",
+            vec![
+                field("__decoded", SchemaType::string()),
+                field("__invocation", SchemaType::string()),
+            ],
+            Some(SchemaType::string()),
+        )],
+        vec![],
+        AgentMode::Durable,
+    );
+    let pkg = GeneratedPackage::new(agent_type.clone());
+    let client_path = pkg
+        .package_dir()
+        .join("src/main/scala/golem/bridge/client/external_agent/ExternalAgentClient.scala");
+    let client = std::fs::read_to_string(client_path).unwrap();
+
+    assert!(
+        client.contains(
+            "def apply(__decoded: _root_.scala.Predef.String, __invocation: _root_.scala.Predef.String)"
+        ),
+        "ExternalRest public parameters were renamed:\n{client}"
+    );
+
+    let guest = GeneratedPackage::new_with_mode(agent_type, ScalaBridgeMode::GuestWasmRpc);
+    let guest_client = std::fs::read_to_string(
+        guest
+            .package_dir()
+            .join("src/main/scala/golem/bridge/client/external_agent/ExternalAgentClient.scala"),
+    )
+    .unwrap();
+    assert!(guest_client.contains(
+        "def apply(__decoded_2: _root_.scala.Predef.String, __invocation_2: _root_.scala.Predef.String)"
+    ));
+}
+
 /// Guest Scala bridge projects skip embedding the external REST runtime and
 /// depend on the Scala SDK's guest runtime instead, so the generated client must
 /// not refer to the external-only `golem.bridge.runtime` package.
@@ -385,7 +429,7 @@ fn guest_wasm_rpc_does_not_emit_external_rest_runtime_references() {
 
 /// Guest agent bridges expose the Scala SDK RPC surface: constructors resolve
 /// remote agents through `RemoteAgentClient`, methods invoke Wasm RPC via
-/// `asyncInvokeAndAwait`, and the generated Scala.js build is ready for a real
+/// `invokeAndAwait`, and the generated Scala.js build is ready for a real
 /// compile once the in-tree Scala SDK has been published locally.
 #[test]
 fn guest_agent_client_surface_targets_scala_sdk_rpc() {
@@ -415,7 +459,7 @@ fn guest_agent_client_surface_targets_scala_sdk_rpc() {
     assert!(client_source.contains("_root_.scala.Either"));
     assert!(client_source.contains("CounterAgentRemote"));
     assert!(client_source.contains("_root_.golem.runtime.rpc.RemoteAgentClient.resolve"));
-    assert!(client_source.contains("resolved.asyncInvokeAndAwait"));
+    assert!(client_source.contains("resolved.invokeAndAwait"));
     assert!(client_source.contains("resolved.cancelableAsyncInvokeAndAwait"));
     assert!(client_source.contains("_root_.golem.runtime.rpc.CancellationToken"));
     assert!(client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.encodeValue"));
@@ -432,21 +476,23 @@ fn guest_agent_client_surface_targets_scala_sdk_rpc() {
     compile_guest_if_enabled(dir.as_path());
 }
 
-/// Ephemeral guest agents omit the parameter-addressable `get` constructor, but
-/// still expose phantom constructors. Constructor errors are surfaced as
-/// `Either[String, …]`, not thrown futures, because guest RPC resolution is
-/// synchronous at the SDK boundary.
+/// Ephemeral guest agents expose a local metadata-bearing proxy without a fixed
+/// phantom identity, matching the SDK-generated client.
 #[test]
-fn guest_ephemeral_agent_omits_get_and_returns_either_constructors() {
+fn guest_ephemeral_agent_uses_per_invocation_identity() {
     let pkg = GeneratedPackage::new_with_mode(
-        agent(
-            "EphemeralAgent",
-            "scala",
-            vec![field("name", SchemaType::string())],
-            vec![method("ping", vec![], None)],
-            vec![],
-            AgentMode::Ephemeral,
-        ),
+        {
+            let mut agent_type = agent(
+                "EphemeralAgent",
+                "scala",
+                vec![field("name", SchemaType::string())],
+                vec![method("ping", vec![], None)],
+                vec![],
+                AgentMode::Ephemeral,
+            );
+            agent_type.config = vec![local_config(vec!["region"], SchemaType::string())];
+            agent_type
+        },
         ScalaBridgeMode::GuestWasmRpc,
     );
     let dir = pkg.package_dir();
@@ -459,11 +505,58 @@ fn guest_ephemeral_agent_omits_get_and_returns_either_constructors() {
         !client_source.contains("def get("),
         "ephemeral guest agent must not expose get:\n{client_source}"
     );
-    assert!(client_source.contains("def getPhantom(name: _root_.scala.Predef.String"));
-    assert!(client_source.contains("phantom: _root_.golem.Uuid"));
+    assert!(!client_source.contains("def getPhantom("));
     assert!(client_source.contains("def newPhantom(name: _root_.scala.Predef.String)"));
-    assert!(client_source.contains("_root_.scala.Either"));
+    assert!(client_source.contains("def newPhantomWithConfig("));
+    assert!(client_source.contains("constructorPayload, _root_.scala.None, agentConfig"));
+    assert!(!client_source.contains("Future[EphemeralAgentRemote]"));
+    assert!(!client_source.contains("generateIdempotencyKey"));
+    assert!(!client_source.contains("def agentId:"));
+    assert!(client_source.contains("_root_.golem.runtime.rpc.InvocationResult[_root_.scala.Unit]"));
+    assert!(
+        client_source
+            .contains("_root_.golem.runtime.rpc.CancelableAsyncInvocation[_root_.scala.Unit]")
+    );
+    assert!(client_source.contains("resolved.invokeAndAwaitWithMetadata("));
+    assert!(client_source.contains("resolved.invokeWithMetadata("));
+    assert!(client_source.contains("resolved.scheduleInvocationWithMetadata("));
+    assert!(client_source.contains("resolved.scheduleCancelableInvocationWithMetadata("));
     assert!(client_source.contains("EphemeralAgentRemote"));
+
+    compile_guest_if_enabled(dir.as_path());
+}
+
+#[test]
+fn guest_durable_phantom_constructors_use_replay_safe_identity() {
+    let pkg = GeneratedPackage::new_with_mode(
+        {
+            let mut agent_type = agent(
+                "DurableAgent",
+                "scala",
+                vec![field("name", SchemaType::string())],
+                vec![method("ping", vec![], None)],
+                vec![],
+                AgentMode::Durable,
+            );
+            agent_type.config = vec![local_config(vec!["region"], SchemaType::string())];
+            agent_type
+        },
+        ScalaBridgeMode::GuestWasmRpc,
+    );
+    let dir = pkg.package_dir();
+    let client_source = std::fs::read_to_string(
+        dir.join("src/main/scala/golem/bridge/client/durable_agent/DurableAgentClient.scala"),
+    )
+    .unwrap();
+
+    assert!(
+        client_source.contains("getPhantom(name, _root_.golem.HostApi.generateIdempotencyKey())")
+    );
+    assert!(
+        client_source.contains("_root_.scala.Some(_root_.golem.HostApi.generateIdempotencyKey())")
+    );
+    assert!(client_source.contains("_root_.scala.Some(phantom)"));
+    assert!(!client_source.contains("_root_.golem.Uuid.random()"));
 
     compile_guest_if_enabled(dir.as_path());
 }
