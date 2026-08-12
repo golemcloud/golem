@@ -1858,14 +1858,19 @@ impl AgentCommandHandler {
         }
 
         if await_update {
-            for agent in agents_to_update {
-                let _ = self
+            for agent in &agents_to_update {
+                if let Err(error) = self
                     .await_update_result(
                         &agent.agent_id.component_id,
                         &agent.agent_id.agent_id,
                         target_revision,
                     )
-                    .await;
+                    .await
+                {
+                    update_results
+                        .errors
+                        .insert(agent.agent_id.agent_id.clone(), error.to_string());
+                }
             }
         }
 
@@ -1987,36 +1992,46 @@ impl AgentCommandHandler {
             if pending_count > 0 {
                 log_action("Agent update", "is still pending");
                 tokio::time::sleep(Duration::from_secs(2)).await;
-            } else if let Some(success) = latest_success {
-                log_action(
-                    "Agent update",
-                    format!(
-                        "to revision {} succeeded at {}",
-                        success.target_revision.to_string().log_color_highlight(),
-                        success.timestamp.to_string().log_color_highlight()
-                    ),
-                );
-                return Ok(());
-            } else if let Some(failure) = latest_failure {
-                let error = failure.details.unwrap_or("unknown reason".to_string());
-                log_error_action(
-                    "Agent update",
-                    format!(
-                        "to revision {} failed at {}: {}",
-                        failure.target_revision.to_string().log_color_highlight(),
-                        failure.timestamp.to_string().log_color_highlight(),
-                        error
-                    ),
-                );
-                return Err(anyhow!(error));
             } else {
-                log_error_action(
-                    "Agent update",
-                    "is not pending anymore, but no outcome has been found",
-                );
-                return Err(anyhow!(
-                    "Unexpected agent state: update is not pending anymore, but no outcome has been found"
-                ));
+                // An agent can be re-updated to the same revision, so a success and a failure can both
+                // exist for it — report whichever happened last.
+                let report_failure = match (&latest_success, &latest_failure) {
+                    (Some(success), Some(failure)) => failure.timestamp > success.timestamp,
+                    (None, Some(_)) => true,
+                    _ => false,
+                };
+                if report_failure {
+                    let failure = latest_failure.expect("report_failure implies a failure exists");
+                    let error = failure.details.unwrap_or("unknown reason".to_string());
+                    log_error_action(
+                        "Agent update",
+                        format!(
+                            "to revision {} failed at {}: {}",
+                            failure.target_revision.to_string().log_color_highlight(),
+                            failure.timestamp.to_string().log_color_highlight(),
+                            error
+                        ),
+                    );
+                    return Err(anyhow!(error));
+                } else if let Some(success) = latest_success {
+                    log_action(
+                        "Agent update",
+                        format!(
+                            "to revision {} succeeded at {}",
+                            success.target_revision.to_string().log_color_highlight(),
+                            success.timestamp.to_string().log_color_highlight()
+                        ),
+                    );
+                    return Ok(());
+                } else {
+                    log_error_action(
+                        "Agent update",
+                        "is not pending anymore, but no outcome has been found",
+                    );
+                    return Err(anyhow!(
+                        "Unexpected agent state: update is not pending anymore, but no outcome has been found"
+                    ));
+                }
             }
         }
     }

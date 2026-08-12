@@ -156,6 +156,12 @@ impl ProfileCommandHandler {
                 );
                 bail!(NonSuccessfulExit);
             }
+            (Some(ProfileAuthMode::Static) | None, Some(token)) if token.trim().is_empty() => {
+                log_error(
+                    "--static-token was empty. Provide a non-empty token (a shell variable such as $GOLEM_API_TOKEN may have resolved to an empty string).",
+                );
+                bail!(NonSuccessfulExit);
+            }
             (Some(ProfileAuthMode::Static) | None, Some(token)) => {
                 Ok(AuthenticationConfig::static_token(token))
             }
