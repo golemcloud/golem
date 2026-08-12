@@ -198,7 +198,7 @@ impl AccountUsageView {
 
 impl MessageWithFields for AccountUsageView {
     fn message(&self) -> String {
-        format!("Storage usage for {}", self.period)
+        format!("Account usage for {}", self.period)
     }
 
     fn fields(&self) -> Vec<(String, String)> {
@@ -561,6 +561,13 @@ mod tests {
                 ("Ephemeral storage".to_string(), "3.5 GB-month".to_string()),
             ]
         );
+    }
+
+    /// The view reports compute, memory and both storage kinds, so the heading names the
+    /// account rather than any single one of them.
+    #[test]
+    fn account_usage_heading_names_the_account_and_period() {
+        assert_eq!(sample_usage().message(), "Account usage for 2026-04");
     }
 
     proptest! {
