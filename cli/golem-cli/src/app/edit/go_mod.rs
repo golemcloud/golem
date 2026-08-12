@@ -136,13 +136,13 @@ fn set_replace_directive(lines: &mut Vec<String>, module: &str, replace_path: Op
     }
 
     // Append a fresh directive if wanted but none existed.
-    if let Some(path) = replace_path {
-        if !updated {
-            if !lines.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
-                lines.push(String::new());
-            }
-            lines.push(format!("replace {module} => {path}"));
+    if let Some(path) = replace_path
+        && !updated
+    {
+        if !lines.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
+            lines.push(String::new());
         }
+        lines.push(format!("replace {module} => {path}"));
     }
 }
 

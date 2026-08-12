@@ -88,18 +88,18 @@ fn collect_import_specs(source: &str, tree: &Tree, out: &mut BTreeMap<String, St
     let mut cursor = root.walk();
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
-        if node.kind() == "import_spec" {
-            if let Some(path_node) = node.child_by_field_name("path") {
-                let path = &source[path_node.start_byte()..path_node.end_byte()];
-                let spec = match node.child_by_field_name("name") {
-                    Some(name_node) => {
-                        let name = &source[name_node.start_byte()..name_node.end_byte()];
-                        format!("{name} {path}")
-                    }
-                    None => path.to_string(),
-                };
-                out.insert(path.to_string(), spec);
-            }
+        if node.kind() == "import_spec"
+            && let Some(path_node) = node.child_by_field_name("path")
+        {
+            let path = &source[path_node.start_byte()..path_node.end_byte()];
+            let spec = match node.child_by_field_name("name") {
+                Some(name_node) => {
+                    let name = &source[name_node.start_byte()..name_node.end_byte()];
+                    format!("{name} {path}")
+                }
+                None => path.to_string(),
+            };
+            out.insert(path.to_string(), spec);
         }
         for child in node.named_children(&mut cursor) {
             stack.push(child);
