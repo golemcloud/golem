@@ -89,25 +89,18 @@ async fn go_counter_survives_restart(
 /// oplog after a restart rather than re-fetched: the external counter advances
 /// once per *live* call, so the second invocation sees "1-b", not "2-b".
 ///
-/// IGNORED — root-caused, pending a core-team executor/runtime fix (G35/T48).
-/// The first (live) call records correctly ("0-a"), but replay after a restart
-/// fails with "Unexpected oplog entry during replay: expected Start {
-/// monotonic_clock::now, ReadLocal, request }". Cause: while blocked on the P3
-/// `wasi:http` send (which yields to the component event loop), the Go runtime
-/// (scheduler/GC/netpoll) issues ~22 `monotonic_clock::now` reads, each journaled
-/// as a strict durable op; their interleaving with the HTTP call's own durable
-/// sub-ops differs between record and replay, so the replay cursor finds no
-/// matching Start. HTTP itself is host-durablized and replays fine — only the
-/// runtime clock chatter breaks it. Not fixable in the guest SDK: naive executor
-/// clock-leniency turns the crash into an intermittent hang (breaks Go's monotonic
-/// invariant), and dropping monotonic-clock journaling breaks the deliberate
-/// `monotonic_clock_now_replay_parity` guarantee (durability.rs). The converged
-/// fix (pending review) is clock classification: make the runtime's ambient
-/// `monotonic-clock::now` non-durable while user `time.Now()` reads a separate
-/// durable clock, so user-observed time still replays exactly. Pure-state replay
-/// (go_counter_survives_restart) works, isolating this to the blocking-host-call path.
+/// IGNORED — flaky on replay after an executor restart; needs an executor/runtime
+/// investigation. The first (live) call records correctly ("0-a"). After the restart,
+/// replaying that first invocation intermittently either hangs (the worker never
+/// finishes replay and the test times out) or crashes with "Unexpected oplog entry
+/// during replay: expected Start { monotonic_clock::now, ReadLocal, ... }". Observed:
+/// while the guest is blocked on the outbound `wasi:http` call, the Go runtime issues
+/// a number of `monotonic_clock::now` reads that is not reproduced on replay, so the
+/// replayed reads no longer line up with the recorded oplog. A pure-state restart
+/// (go_counter_survives_restart) replays fine — the failure is specific to replaying
+/// a blocking host call.
 #[test]
-#[ignore = "G35/T48: Go runtime monotonic-clock reads during blocking host calls corrupt positional replay"]
+#[ignore = "flaky: after an executor restart, replaying a blocking outbound-HTTP call intermittently hangs or hits an oplog mismatch on monotonic_clock::now — needs executor/runtime investigation"]
 #[tracing::instrument]
 #[timeout("2m")]
 async fn go_durable_http_replays_not_reruns(
