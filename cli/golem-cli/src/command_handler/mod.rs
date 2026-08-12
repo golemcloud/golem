@@ -23,6 +23,7 @@ use crate::command::{
     GolemCliSubcommand,
 };
 use crate::command_handler::account::AccountCommandHandler;
+use crate::command_handler::agent::AgentCommandHandler;
 use crate::command_handler::api::ApiCommandHandler;
 use crate::command_handler::api::deployment::ApiDeploymentCommandHandler;
 use crate::command_handler::api::domain::ApiDomainCommandHandler;
@@ -41,7 +42,6 @@ use crate::command_handler::plugin::PluginCommandHandler;
 use crate::command_handler::profile::ProfileCommandHandler;
 use crate::command_handler::profile::config::ProfileConfigCommandHandler;
 use crate::command_handler::repl::ReplHandler;
-use crate::command_handler::worker::WorkerCommandHandler;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, PipedExitCode};
 use crate::log::{Output, log_anyhow_error, logln, set_log_output};
@@ -60,6 +60,7 @@ use std::sync::Arc;
 use tracing::{Level, debug};
 
 mod account;
+mod agent;
 mod api;
 mod api_token;
 mod app;
@@ -77,7 +78,6 @@ mod resource_definition;
 mod retry_policy;
 mod secret;
 pub(crate) mod template;
-mod worker;
 
 // NOTE: We are explicitly not using #[async_trait] here to be able to NOT have a Send bound
 // on the `handler_server_commands` method. Having a Send bound there causes "Send is not generic enough"
@@ -350,7 +350,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     ctx.get_or_init()
                         .await?
                         .app_handler()
-                        .cmd_update_workers(
+                        .cmd_update_agents(
                             component_name.component_name,
                             update_mode,
                             r#await,
@@ -362,7 +362,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     ctx.get_or_init()
                         .await?
                         .app_handler()
-                        .cmd_redeploy_workers(component_name.component_name)
+                        .cmd_redeploy_agents(component_name.component_name)
                         .await
                 }
                 GolemCliSubcommand::Exec { subcommand } => {
@@ -391,7 +391,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 GolemCliSubcommand::Agent { subcommand } => {
                     ctx.get_or_init()
                         .await?
-                        .worker_handler()
+                        .agent_handler()
                         .handle_command(subcommand)
                         .await
                 }
@@ -592,7 +592,7 @@ pub trait Handlers {
     fn profile_config_handler(&self) -> ProfileConfigCommandHandler;
     fn profile_handler(&self) -> ProfileCommandHandler;
     fn repl_handler(&self) -> ReplHandler;
-    fn worker_handler(&self) -> WorkerCommandHandler;
+    fn agent_handler(&self) -> AgentCommandHandler;
 }
 
 impl Handlers for Arc<Context> {
@@ -687,8 +687,8 @@ impl Handlers for Arc<Context> {
         ReplHandler::new(self.clone())
     }
 
-    fn worker_handler(&self) -> WorkerCommandHandler {
-        WorkerCommandHandler::new(self.clone())
+    fn agent_handler(&self) -> AgentCommandHandler {
+        AgentCommandHandler::new(self.clone())
     }
 }
 

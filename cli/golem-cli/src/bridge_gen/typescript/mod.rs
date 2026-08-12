@@ -922,9 +922,9 @@ impl TypeScriptBridgeGenerator {
             "ReturnType<base.RemoteAgentHandle['scheduleCancelable']>"
         };
         let schedule_result = if ephemeral {
-            "ReturnType<base.RemoteAgentHandle['scheduleWithMetadata']>"
+            "ReturnType<base.RemoteAgentHandle['scheduleCancelableWithMetadata']>"
         } else {
-            "void"
+            "ReturnType<base.RemoteAgentHandle['scheduleCancelable']>"
         };
         let await_call = if ephemeral {
             format!(
@@ -949,10 +949,10 @@ impl TypeScriptBridgeGenerator {
         };
         let schedule_call = if ephemeral {
             format!(
-                "return this.resolved.scheduleWithMetadata(at, {method_name}, __encode(__args));"
+                "return this.resolved.scheduleCancelableWithMetadata(at, {method_name}, __encode(__args));"
             )
         } else {
-            format!("this.resolved.schedule(at, {method_name}, __encode(__args));")
+            format!("return this.resolved.scheduleCancelable(at, {method_name}, __encode(__args));")
         };
         writer.write_doc(&method.description);
         writer.write_line(formatdoc! {"
