@@ -26,11 +26,12 @@
 //! encode/decode code; there is no longer any dependency on the legacy
 //! `AnalysedType` / `IntoValue` / `FromValue` surface.
 
-pub(crate) mod json;
 pub mod moonbit;
 pub mod parameter_naming;
 pub mod rust;
 pub mod scala;
+#[cfg(test)]
+mod schema_graph_test_fixture;
 pub mod tool_common;
 pub mod type_naming;
 pub mod typescript;
