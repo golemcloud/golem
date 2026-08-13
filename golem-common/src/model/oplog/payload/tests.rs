@@ -15,6 +15,7 @@
 use test_r::test;
 
 use crate::model::Timestamp;
+use crate::model::component::ComponentId;
 use crate::model::invocation_context::{AttributeValue, SpanId};
 use crate::model::oplog::raw_types::SpanData;
 use crate::model::oplog::types::{
@@ -28,21 +29,24 @@ use crate::model::oplog::types::{
     SerializableResponseHeaders, SerializableStreamError,
 };
 use crate::model::oplog::{
-    HostPayloadPair, HostRequest, HostRequestFileSystemPath, HostRequestKVCacheKey,
-    HostRequestKVCacheKeyAndTtl, HostRequestKVCacheKeyValueAndTtl,
+    HostPayloadPair, HostRequest, HostRequestFileSystemPath, HostRequestGolemToolGetTool,
+    HostRequestKVCacheKey, HostRequestKVCacheKeyAndTtl, HostRequestKVCacheKeyValueAndTtl,
     HostRequestMonotonicClockDuration, HostRequestMonotonicClockTimestamp, HostRequestNoInput,
     HostRequestP3HttpClientRequestBodyFrame, HostRequestP3HttpClientSend,
-    HostRequestP3SocketsUdpSend, HostRequestRandomBytes, HostResponse, HostResponseKVDelete,
-    HostResponseKVGet, HostResponseKVUnit, HostResponseMonotonicClockTimestamp,
-    HostResponseP3BlobstoreIncomingValueStream, HostResponseP3FileSystemStat,
-    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
-    HostResponseP3HttpClientRequestBodyTransmission, HostResponseP3HttpClientSendResult,
-    HostResponseP3KeyvalueIncomingValueStream, HostResponseP3MonotonicClockUnit,
-    HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
-    HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
-    HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseRandomBytes,
-    HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock, host_functions,
+    HostRequestP3SocketsUdpSend, HostRequestRandomBytes, HostResponse, HostResponseGolemToolTool,
+    HostResponseGolemToolTools, HostResponseKVDelete, HostResponseKVGet, HostResponseKVUnit,
+    HostResponseMonotonicClockTimestamp, HostResponseP3BlobstoreIncomingValueStream,
+    HostResponseP3FileSystemStat, HostResponseP3HttpClientConsumeBodyChunk,
+    HostResponseP3HttpClientConsumeBodyResult, HostResponseP3HttpClientRequestBodyTransmission,
+    HostResponseP3HttpClientSendResult, HostResponseP3KeyvalueIncomingValueStream,
+    HostResponseP3MonotonicClockUnit, HostResponseP3SocketsTcpAcquire,
+    HostResponseP3SocketsTcpReceive, HostResponseP3SocketsTcpReceiveChunk,
+    HostResponseP3SocketsTcpSend, HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend,
+    HostResponseRandomBytes, HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock,
+    host_functions,
 };
+use crate::schema::tool::{CommandNode, CommandTree, DiscoveredTool, Doc, Globals, Tool};
+use crate::schema::{IntoTypedSchemaValue, SchemaGraph};
 use http::Version;
 use iso8601_timestamp as iso_ts;
 use proptest::collection::vec;
@@ -817,6 +821,121 @@ where
     let function_name_roundtrip: host_functions::HostFunctionName =
         desert_rust::deserialize(&function_name_bytes).unwrap();
     assert_eq!(function_name_roundtrip, Pair::HOST_FUNCTION_NAME);
+}
+
+fn assert_host_payload_pair_schema_roundtrip<Pair>(request: Pair::Req, response: Pair::Resp)
+where
+    Pair: HostPayloadPair,
+    Pair::Req: Clone
+        + std::fmt::Debug
+        + PartialEq
+        + TryFrom<HostRequest, Error = String>
+        + IntoTypedSchemaValue,
+    Pair::Resp: Clone + std::fmt::Debug + PartialEq + IntoTypedSchemaValue,
+{
+    let request_value = request.clone().into_typed_schema_value().unwrap();
+    let request_roundtrip =
+        host_functions::host_request_from_typed_schema_value(Pair::FQFN, request_value).unwrap();
+    assert_eq!(Pair::Req::try_from(request_roundtrip).unwrap(), request);
+
+    let response_value = response.clone().into_typed_schema_value().unwrap();
+    let response_roundtrip =
+        host_functions::host_response_from_typed_schema_value(Pair::FQFN, response_value).unwrap();
+    assert_eq!(Pair::Resp::try_from(response_roundtrip).unwrap(), response);
+}
+
+fn discovered_tool(name: &str) -> DiscoveredTool {
+    DiscoveredTool {
+        definition: Tool {
+            version: "1.0.0".to_string(),
+            commands: CommandTree {
+                nodes: vec![CommandNode {
+                    name: name.to_string(),
+                    aliases: Vec::new(),
+                    doc: Doc::default(),
+                    globals: Globals::default(),
+                    subcommands: Vec::new(),
+                    body: None,
+                }],
+            },
+            schema: SchemaGraph::empty(),
+        },
+        implemented_by: ComponentId::new(),
+    }
+}
+
+#[test]
+fn tool_discovery_host_payload_pairs_roundtrip() {
+    let tool = discovered_tool("grep");
+
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolGetAllTools>(
+        HostRequestNoInput {},
+        HostResponseGolemToolTools {
+            result: Ok(vec![tool.clone()]),
+        },
+    );
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolGetAllTools>(
+        HostRequestNoInput {},
+        HostResponseGolemToolTools {
+            result: Ok(vec![tool.clone()]),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolGetAllTools>(
+        HostRequestNoInput {},
+        HostResponseGolemToolTools {
+            result: Err("registry unavailable".to_string()),
+        },
+    );
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolGetAllTools>(
+        HostRequestNoInput {},
+        HostResponseGolemToolTools {
+            result: Err("registry unavailable".to_string()),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolGetTool>(
+        HostRequestGolemToolGetTool {
+            name: "grep".to_string(),
+        },
+        HostResponseGolemToolTool {
+            result: Ok(Some(tool.clone())),
+        },
+    );
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolGetTool>(
+        HostRequestGolemToolGetTool {
+            name: "grep".to_string(),
+        },
+        HostResponseGolemToolTool {
+            result: Ok(Some(tool)),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolGetTool>(
+        HostRequestGolemToolGetTool {
+            name: "missing".to_string(),
+        },
+        HostResponseGolemToolTool { result: Ok(None) },
+    );
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolGetTool>(
+        HostRequestGolemToolGetTool {
+            name: "missing".to_string(),
+        },
+        HostResponseGolemToolTool { result: Ok(None) },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolGetTool>(
+        HostRequestGolemToolGetTool {
+            name: "grep".to_string(),
+        },
+        HostResponseGolemToolTool {
+            result: Err("registry unavailable".to_string()),
+        },
+    );
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolGetTool>(
+        HostRequestGolemToolGetTool {
+            name: "grep".to_string(),
+        },
+        HostResponseGolemToolTool {
+            result: Err("registry unavailable".to_string()),
+        },
+    );
 }
 
 #[test]

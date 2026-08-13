@@ -19,11 +19,17 @@ use golem_common::model::agent_secret::{
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
+use golem_common::model::tool::{RegisteredTool, ToolDeploymentState, ToolName};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::AgentDeploymentDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
-use golem_worker_executor::services::environment_state::EnvironmentStateService;
+use golem_worker_executor::services::environment_state::{
+    EnvironmentStateService, ToolDiscoveryError, get_accessible_tool_from_snapshot,
+    get_accessible_tools_from_snapshot,
+};
 use std::collections::HashMap;
+use std::sync::RwLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct DisabledEnvironmentStateService;
 
@@ -102,5 +108,94 @@ impl EnvironmentStateService for ConfiguredRetryPoliciesEnvironmentStateService 
         _environment_id: EnvironmentId,
     ) -> Result<Vec<NamedRetryPolicy>, WorkerExecutorError> {
         Ok(self.policies.clone())
+    }
+}
+
+#[derive(Default)]
+pub struct TestEnvironmentStateService {
+    tool_deployments: RwLock<HashMap<EnvironmentId, ToolDeploymentState>>,
+    accessible_tools_calls: AtomicUsize,
+    accessible_tool_calls: AtomicUsize,
+}
+
+impl TestEnvironmentStateService {
+    pub fn set_tool_deployment(
+        &self,
+        environment_id: EnvironmentId,
+        deployment: Option<ToolDeploymentState>,
+    ) {
+        let mut deployments = self.tool_deployments.write().unwrap();
+        match deployment {
+            Some(deployment) => {
+                deployments.insert(environment_id, deployment);
+            }
+            None => {
+                deployments.remove(&environment_id);
+            }
+        }
+    }
+
+    pub fn accessible_tools_calls(&self) -> usize {
+        self.accessible_tools_calls.load(Ordering::SeqCst)
+    }
+
+    pub fn accessible_tool_calls(&self) -> usize {
+        self.accessible_tool_calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl EnvironmentStateService for TestEnvironmentStateService {
+    async fn get_agent_deployment(
+        &self,
+        _environment_id: EnvironmentId,
+        _agent_type: &AgentTypeName,
+    ) -> Result<Option<AgentDeploymentDetails>, WorkerExecutorError> {
+        Ok(None)
+    }
+
+    async fn get_agent_secrets(
+        &self,
+        _environment_id: EnvironmentId,
+    ) -> Result<HashMap<CanonicalAgentSecretPath, AgentSecret>, WorkerExecutorError> {
+        Ok(HashMap::new())
+    }
+
+    async fn get_agent_secret_revision(
+        &self,
+        _environment_id: EnvironmentId,
+        _agent_secret_id: AgentSecretId,
+        _path: CanonicalAgentSecretPath,
+        _revision: AgentSecretRevision,
+    ) -> Result<Option<AgentSecret>, WorkerExecutorError> {
+        Ok(None)
+    }
+
+    async fn get_retry_policies(
+        &self,
+        _environment_id: EnvironmentId,
+    ) -> Result<Vec<NamedRetryPolicy>, WorkerExecutorError> {
+        Ok(Vec::new())
+    }
+
+    async fn get_accessible_tools(
+        &self,
+        environment_id: EnvironmentId,
+        agent_type: &AgentTypeName,
+    ) -> Result<Vec<RegisteredTool>, ToolDiscoveryError> {
+        self.accessible_tools_calls.fetch_add(1, Ordering::SeqCst);
+        let deployments = self.tool_deployments.read().unwrap();
+        get_accessible_tools_from_snapshot(deployments.get(&environment_id), agent_type)
+    }
+
+    async fn get_accessible_tool(
+        &self,
+        environment_id: EnvironmentId,
+        agent_type: &AgentTypeName,
+        tool_name: &ToolName,
+    ) -> Result<Option<RegisteredTool>, ToolDiscoveryError> {
+        self.accessible_tool_calls.fetch_add(1, Ordering::SeqCst);
+        let deployments = self.tool_deployments.read().unwrap();
+        get_accessible_tool_from_snapshot(deployments.get(&environment_id), agent_type, tool_name)
     }
 }

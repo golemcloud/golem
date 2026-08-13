@@ -985,6 +985,7 @@ pub struct TestExecutorOverrides {
     pub wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
     pub wrap_rpc: Option<Arc<WrapRpcFn>>,
     pub create_direct_invocation_auth: Option<Arc<CreateDirectInvocationAuthFn>>,
+    pub environment_state_service: Option<Arc<dyn EnvironmentStateService>>,
     /// Named retry policies that the executor's `EnvironmentStateService`
     /// should expose to running agents (mirrors `retryPolicyDefaults` in
     /// `golem.yaml`).  When `None`, an empty policy list is used.
@@ -1933,11 +1934,14 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         _config: &EnvironmentStateServiceConfig,
         _registry_service: Arc<dyn RegistryService>,
     ) -> Arc<dyn EnvironmentStateService> {
-        match &self.overrides.retry_policies {
-            Some(policies) => Arc::new(ConfiguredRetryPoliciesEnvironmentStateService {
+        if let Some(service) = &self.overrides.environment_state_service {
+            service.clone()
+        } else if let Some(policies) = &self.overrides.retry_policies {
+            Arc::new(ConfiguredRetryPoliciesEnvironmentStateService {
                 policies: policies.clone(),
-            }),
-            None => Arc::new(DisabledEnvironmentStateService),
+            })
+        } else {
+            Arc::new(DisabledEnvironmentStateService)
         }
     }
 

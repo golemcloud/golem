@@ -44,6 +44,7 @@ use crate::model::{
     AgentFingerprint, AgentId, ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId,
 };
 use crate::oplog_payload;
+use crate::schema::tool::DiscoveredTool;
 use crate::schema::{RegisteredAgentTypeSchema, SchemaGraph, SchemaValue, TypedSchemaValue};
 use crate::serialization::serialize;
 use desert_rust::{
@@ -271,6 +272,9 @@ oplog_payload! {
         SecretReveal {
             secret_id: Uuid,
             expected_type: SchemaGraph
+        },
+        GolemToolGetTool {
+            name: String
         },
     }
 }
@@ -540,6 +544,12 @@ oplog_payload! {
         },
         GolemApiInstallCard {
             result: Result<(), CardInstallFailure>,
+        },
+        GolemToolTools {
+            result: Result<Vec<DiscoveredTool>, String>
+        },
+        GolemToolTool {
+            result: Result<Option<DiscoveredTool>, String>
         }
     }
 }
@@ -706,7 +716,9 @@ pub mod host_functions {
         (GolemApiInstallCard => "golem::api", "install-card", GolemApiCard, GolemApiInstallCard),
         (FilesystemInputStreamRead => "filesystem::input_stream", "read", NoInput, StreamSkip),
         (FilesystemInputStreamSkip => "filesystem::input_stream", "skip", NoInput, StreamSkip),
-        (FilesystemOutputStreamCheckWrite => "filesystem::output_stream", "check_write", NoInput, StreamCheckWrite)
+        (FilesystemOutputStreamCheckWrite => "filesystem::output_stream", "check_write", NoInput, StreamCheckWrite),
+        (GolemToolGetAllTools => "golem::tool::host", "get_all_tools", NoInput, GolemToolTools),
+        (GolemToolGetTool => "golem::tool::host", "get_tool", GolemToolGetTool, GolemToolTool)
     }
 }
 
