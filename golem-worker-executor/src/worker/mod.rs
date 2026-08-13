@@ -2217,7 +2217,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     Err(anyhow!(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage))
                 }
             }
-            _ => Ok(None),
+            _ => Err(anyhow!(
+                "cannot acquire filesystem storage while worker is not running"
+            )),
         }
     }
 

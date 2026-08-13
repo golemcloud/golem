@@ -85,6 +85,10 @@ impl FilesystemStoragePermitBank {
             state.generation.is_none(),
             "filesystem storage permit bank is already installed"
         );
+        assert!(
+            state.permit.is_none(),
+            "filesystem storage permit bank contains unregistered capacity"
+        );
         state.permit = permit;
         state.generation = Some(generation.clone());
         FilesystemStoragePermitRegistration {
@@ -334,11 +338,11 @@ impl AgentStorageMeter {
     }
 
     pub fn on_acquire(&self, bytes: u64, now: Instant) {
-        self.inner.update_bytes(bytes, true, now);
+        self.inner.acquire_bytes(bytes, now);
     }
 
     pub fn on_release(&self, bytes: u64, now: Instant) {
-        self.inner.update_bytes(bytes, false, now);
+        self.inner.release_bytes(bytes, now);
         self.reconcile_capacity();
     }
 
@@ -430,16 +434,21 @@ impl Inner {
         result
     }
 
-    fn update_bytes(&self, bytes: u64, acquire: bool, now: Instant) {
+    fn acquire_bytes(&self, bytes: u64, now: Instant) {
         self.transition(now, |state| {
             if state.stopped {
                 return;
             }
-            state.bytes = if acquire {
-                state.bytes.saturating_add(bytes)
-            } else {
-                state.bytes.saturating_sub(bytes)
-            };
+            state.bytes = state.bytes.saturating_add(bytes);
+        });
+    }
+
+    fn release_bytes(&self, bytes: u64, now: Instant) {
+        self.transition(now, |state| {
+            if state.stopped {
+                return;
+            }
+            state.bytes = state.bytes.saturating_sub(bytes);
         });
     }
 
@@ -677,17 +686,8 @@ mod tests {
         }
     }
 
-    fn merge_current_capacity(
-        capacity: &FilesystemStoragePermitBank,
-        permit: Option<FilesystemStoragePermit>,
-    ) {
-        capacity.merge(&capacity.generation(), permit);
-    }
-
     fn current_capacity_bytes(capacity: &FilesystemStoragePermitBank) -> u64 {
-        capacity
-            .held_bytes_for(&capacity.generation())
-            .expect("capacity generation must remain current")
+        capacity.held_bytes()
     }
 
     #[test]
@@ -704,6 +704,24 @@ mod tests {
 
         drop(second_generation);
         assert_eq!(semaphore.available_bytes(), 1024);
+    }
+
+    #[test]
+    #[should_panic(expected = "filesystem storage permit bank contains unregistered capacity")]
+    async fn install_rejects_capacity_banked_without_a_generation() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let semaphore = FilesystemStorageSemaphore::new(1024, Duration::from_millis(1));
+        let capacity = Arc::new(FilesystemStoragePermitBank::default());
+        let meter = AgentStorageMeter::new_with_capacity_bank(
+            AgentMode::Durable,
+            0,
+            entry,
+            Instant::now(),
+            capacity.clone(),
+        );
+        assert!(meter.merge_capacity(semaphore.try_acquire(1).await));
+
+        let _registration = capacity.install(None);
     }
 
     #[test]
@@ -738,7 +756,7 @@ mod tests {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let semaphore = FilesystemStorageSemaphore::new(2 * 1024, Duration::from_millis(1));
         let capacity = Arc::new(FilesystemStoragePermitBank::default());
-        merge_current_capacity(&capacity, semaphore.try_acquire(500).await);
+        let _registration = capacity.install(semaphore.try_acquire(500).await);
         let meter = AgentStorageMeter::new_with_capacity_bank(
             AgentMode::Durable,
             500,
@@ -761,7 +779,7 @@ mod tests {
         let now = Instant::now();
         let semaphore = FilesystemStorageSemaphore::new(3 * 1024, Duration::from_millis(1));
         let capacity = Arc::new(FilesystemStoragePermitBank::default());
-        merge_current_capacity(&capacity, semaphore.try_acquire(500).await);
+        let _registration = capacity.install(semaphore.try_acquire(500).await);
         let meter = AgentStorageMeter::new_with_capacity_bank(
             AgentMode::Durable,
             500,
@@ -792,7 +810,7 @@ mod tests {
         let now = Instant::now();
         let semaphore = FilesystemStorageSemaphore::new(3 * 1024, Duration::from_millis(1));
         let capacity = Arc::new(FilesystemStoragePermitBank::default());
-        merge_current_capacity(&capacity, semaphore.try_acquire(1025).await);
+        let _registration = capacity.install(semaphore.try_acquire(1025).await);
         let meter = AgentStorageMeter::new_with_capacity_bank(
             AgentMode::Durable,
             1025,
@@ -815,7 +833,7 @@ mod tests {
         let now = Instant::now();
         let semaphore = FilesystemStorageSemaphore::new(2 * 1024, Duration::from_millis(1));
         let capacity = Arc::new(FilesystemStoragePermitBank::default());
-        merge_current_capacity(&capacity, semaphore.try_acquire(1025).await);
+        let _registration = capacity.install(semaphore.try_acquire(1025).await);
         let meter = AgentStorageMeter::new_with_capacity_bank(
             AgentMode::Durable,
             1025,
@@ -838,7 +856,7 @@ mod tests {
         let now = Instant::now();
         let semaphore = FilesystemStorageSemaphore::new(3 * 1024, Duration::from_millis(1));
         let capacity = Arc::new(FilesystemStoragePermitBank::default());
-        merge_current_capacity(&capacity, semaphore.try_acquire(1025).await);
+        let _registration = capacity.install(semaphore.try_acquire(1025).await);
         let meter = AgentStorageMeter::new_with_capacity_bank(
             AgentMode::Durable,
             1025,
@@ -919,8 +937,8 @@ mod tests {
         let now = Instant::now();
 
         for _ in 0..2 {
-            let meter = AgentStorageMeter::new(AgentMode::Durable, 0, entry.clone(), now);
-            meter.inner.state.lock().unwrap().pending_byte_nanoseconds = 600_000_000;
+            let meter = AgentStorageMeter::new(AgentMode::Durable, 1, entry.clone(), now);
+            meter.flush(now + Duration::from_millis(600));
             drop(meter);
         }
 

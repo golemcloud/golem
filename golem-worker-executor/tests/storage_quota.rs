@@ -2024,14 +2024,13 @@ async fn executor_pool_idle_worker_evicted_when_pool_full(
         })
     );
 
-    assert_ne!(
-        executor
-            .worker_eviction_class(&OwnedAgentId::new(
+    assert!(
+        !executor
+            .worker_is_loaded(&OwnedAgentId::new(
                 context.default_environment_id,
                 &worker_a,
             ))
             .await,
-        Some(EvictionClass::LoadedIdle),
         "Worker A must no longer be resident after freeing the full pool for Worker B"
     );
 

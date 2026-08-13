@@ -56,7 +56,7 @@ pub struct AtomicResourceEntry {
     in_flight_durable_memory_gb_seconds_delta: AtomicI64,
     in_flight_ephemeral_memory_gb_seconds_delta: AtomicI64,
     memory_usage_transition: Mutex<()>,
-    memory_remainder: Mutex<u128>,
+    memory_remainders: Mutex<ModeRemainders>,
     memory_meters: Arc<scc::HashMap<OwnedAgentId, AgentMemoryMeter>>,
     // Current (cached) value of the account level worker memory limits
     max_memory: AtomicUsize,
@@ -215,7 +215,7 @@ impl AtomicResourceEntry {
             in_flight_durable_memory_gb_seconds_delta: AtomicI64::new(0),
             in_flight_ephemeral_memory_gb_seconds_delta: AtomicI64::new(0),
             memory_usage_transition: Mutex::new(()),
-            memory_remainder: Mutex::new(0),
+            memory_remainders: Mutex::new(ModeRemainders::default()),
             memory_meters: Arc::new(scc::HashMap::new()),
             max_memory: AtomicUsize::new(max_memory),
             max_table_elements: AtomicUsize::new(max_table_elements),
@@ -506,11 +506,14 @@ impl AtomicResourceEntry {
 
     pub fn record_memory_remainder(&self, mode: AgentMode, remainder: u128) {
         let _transition = self.memory_usage_transition.lock().unwrap();
-        let units = record_remainder(
-            &mut self.memory_remainder.lock().unwrap(),
-            remainder,
-            BYTE_NANOSECONDS_PER_GB_SECOND,
-        );
+        let units = {
+            let mut remainders = self.memory_remainders.lock().unwrap();
+            record_remainder(
+                remainders.for_mode(mode),
+                remainder,
+                BYTE_NANOSECONDS_PER_GB_SECOND,
+            )
+        };
         self.record_memory_gb_seconds_locked(mode, units);
     }
 

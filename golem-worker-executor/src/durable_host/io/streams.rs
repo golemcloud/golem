@@ -18,7 +18,8 @@ use wasmtime_wasi::StreamError;
 use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::filesystem::durable::{
-    DurableFileOutputStream, FilesystemWriteCompletion,
+    DurableFileOutputStream, FilesystemWriteCompletion, SettledFilesystemWrite,
+    filesystem_file_size,
 };
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
@@ -1646,22 +1647,48 @@ async fn reserve_filesystem_stream_growth<Ctx: WorkerCtx>(
 
     let mutation_guard = ctx.filesystem_mutation_lock().lock_owned().await;
 
-    if snapshot.has_pending_write || !ctx.filesystem.pending_stream_reps().is_empty() {
-        reconcile_all_pending_filesystem_streams_locked(ctx).await?;
+    if snapshot.has_pending_write {
+        let filesystem = ctx.filesystem.clone();
+        let settled = filesystem.settle_pending_write(stream_rep).await;
+        finish_filesystem_stream_settlements(ctx, settled).await?;
     }
 
     if ctx.state.is_replay() {
         return Ok(Some(mutation_guard));
     }
 
-    let (is_unlinked, current_size) = ctx
+    let object_id = match snapshot.object_id {
+        Some(object_id) => Some(object_id),
+        None => ctx
+            .filesystem
+            .file_accounting_snapshot(snapshot.file.clone())
+            .await
+            .map_err(|error| StreamError::Trap(wasmtime::Error::new(error)))?
+            .object_id,
+    };
+    ctx.filesystem
+        .set_output_stream_object_id(stream_rep, object_id);
+
+    if !ctx.filesystem.pending_stream_reps().is_empty() {
+        let filesystem = ctx.filesystem.clone();
+        let settled = match object_id {
+            Some(object_id) => filesystem.settle_pending_writes_for_object(object_id).await,
+            None => filesystem.settle_all_pending_writes().await,
+        };
+        finish_filesystem_stream_settlements(ctx, settled).await?;
+    }
+
+    let accounting = ctx
         .filesystem
         .file_accounting_snapshot(snapshot.file.clone())
         .await
         .map_err(|error| StreamError::Trap(wasmtime::Error::new(error)))?;
-    if is_unlinked {
+    ctx.filesystem
+        .set_output_stream_object_id(stream_rep, accounting.object_id);
+    if accounting.is_unlinked {
         return Ok(Some(mutation_guard));
     }
+    let current_size = accounting.size;
 
     let requested_end = match snapshot.position {
         Some(position) => position.saturating_add(write_len),
@@ -1703,9 +1730,7 @@ async fn filesystem_input_stream_remaining<Ctx: WorkerCtx>(
         .open_filesystem_input_streams
         .get(&stream_rep)
         .map(|state| (state.file.clone(), state.position))?;
-    let current_size = crate::durable_host::filesystem::durable::filesystem_file_size(file)
-        .await
-        .unwrap_or(0);
+    let current_size = filesystem_file_size(file).await.unwrap_or(0);
     Some(current_size.saturating_sub(position))
 }
 
@@ -1745,7 +1770,7 @@ async fn reconcile_reserved_filesystem_stream_write<Ctx: WorkerCtx>(
     let base_size = ctx.filesystem.pending_reservation_base_size(stream_rep);
     let measurement = match base_size {
         Some(base_size) => {
-            crate::durable_host::filesystem::durable::filesystem_file_size(snapshot.file)
+            filesystem_file_size(snapshot.file)
                 .await
                 .map(|size| Some(size.saturating_sub(base_size)))
         }
@@ -1766,7 +1791,7 @@ async fn reconcile_reserved_filesystem_stream_write<Ctx: WorkerCtx>(
     })
 }
 
-pub(crate) async fn reconcile_pending_filesystem_streams_for_path_locked<Ctx: WorkerCtx>(
+async fn reconcile_pending_filesystem_streams_for_path_locked<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     mutation_path: &std::path::Path,
 ) -> Result<(), StreamError> {
@@ -1785,7 +1810,7 @@ pub(crate) async fn reconcile_all_pending_filesystem_streams_locked<Ctx: WorkerC
 
 async fn finish_filesystem_stream_settlements<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-    settled: Vec<crate::durable_host::filesystem::durable::SettledFilesystemWrite>,
+    settled: Vec<SettledFilesystemWrite>,
 ) -> Result<(), StreamError> {
     let mut first_error = None;
     for settlement in ctx.filesystem.prepare_write_settlements(settled) {

@@ -54,9 +54,11 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
-    AgentMode, InvocationFreshnessDisposition, ParsedAgentId, Principal,
+    AgentMode, AgentTypeName, InvocationFreshnessDisposition, ParsedAgentId, Principal,
 };
-use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
+use golem_common::model::component::{
+    CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::AgentMetadataForGuests;
@@ -2192,26 +2194,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map(golem_common::model::oplog::OplogEntry::try_from)
             .collect::<Result<Vec<_>, _>>()
             .map_err(WorkerExecutorError::invalid_request)?;
-        if entries
-            .iter()
-            .any(|entry| matches!(entry, OplogEntry::Create { .. }))
-        {
-            let component = self
-                .component_service()
-                .get_metadata(
-                    owned_agent_id.agent_id.component_id,
-                    Some(component_revision),
+        let component_service = self.component_service();
+        restore_imported_initial_filesystem_storage_usage(
+            &owned_agent_id,
+            component_revision,
+            &mut entries,
+            move |component_id, component_revision, agent_type| async move {
+                let component = component_service
+                    .get_metadata(component_id, Some(component_revision))
+                    .await?;
+                Ok::<_, WorkerExecutorError>(
+                    component
+                        .metadata
+                        .initial_filesystem_storage_usage(agent_type.as_ref()),
                 )
-                .await?;
-            let agent_type =
-                ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
-            restore_initial_filesystem_storage_usage(
-                &mut entries,
-                component
-                    .metadata
-                    .initial_filesystem_storage_usage(agent_type.as_ref()),
-            );
-        }
+            },
+        )
+        .await?;
 
         let first_entry_index = OplogIndex::from_u64(request.first_entry_index);
 
@@ -3389,10 +3388,39 @@ fn restore_initial_filesystem_storage_usage(entries: &mut [OplogEntry], baseline
     }
 }
 
+async fn restore_imported_initial_filesystem_storage_usage<E, F, Fut>(
+    owned_agent_id: &OwnedAgentId,
+    component_revision: ComponentRevision,
+    entries: &mut [OplogEntry],
+    load_baseline: F,
+) -> Result<(), E>
+where
+    F: FnOnce(ComponentId, ComponentRevision, Option<AgentTypeName>) -> Fut,
+    Fut: std::future::Future<Output = Result<u64, E>>,
+{
+    if !entries
+        .iter()
+        .any(|entry| matches!(entry, OplogEntry::Create { .. }))
+    {
+        return Ok(());
+    }
+
+    let agent_type = ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+    let baseline = load_baseline(
+        owned_agent_id.agent_id.component_id,
+        component_revision,
+        agent_type,
+    )
+    .await?;
+    restore_initial_filesystem_storage_usage(entries, baseline);
+    Ok(())
+}
+
 #[cfg(test)]
 mod freshness_tests {
     use super::{
-        decode_invocation_freshness_disposition, restore_initial_filesystem_storage_usage,
+        decode_invocation_freshness_disposition,
+        restore_imported_initial_filesystem_storage_usage,
     };
     use golem_common::model::AgentId;
     use golem_common::model::account::AccountId;
@@ -3427,12 +3455,18 @@ mod freshness_tests {
     }
 
     #[test]
-    fn oplog_import_restores_create_filesystem_baseline_from_component_metadata() {
-        let mut entries = vec![OplogEntry::create(
-            AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "baseline-import".to_string(),
+    async fn oplog_import_restores_create_filesystem_baseline_from_component_metadata() {
+        let component_id = ComponentId::new();
+        let component_revision = ComponentRevision::new(7).unwrap();
+        let owned_agent_id = golem_common::model::OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id,
+                agent_id: "BaselineImport()".to_string(),
             },
+        );
+        let mut entries = vec![OplogEntry::create(
+            owned_agent_id.agent_id.clone(),
             AgentMode::Durable,
             ComponentRevision::INITIAL,
             vec![],
@@ -3448,7 +3482,19 @@ mod freshness_tests {
             Uuid::new_v4(),
         )];
 
-        restore_initial_filesystem_storage_usage(&mut entries, 123);
+        restore_imported_initial_filesystem_storage_usage(
+            &owned_agent_id,
+            component_revision,
+            &mut entries,
+            |loaded_component_id, loaded_revision, agent_type| async move {
+                assert_eq!(loaded_component_id, component_id);
+                assert_eq!(loaded_revision, component_revision);
+                assert_eq!(agent_type.map(|name| name.0), Some("BaselineImport".to_string()));
+                Ok::<_, ()>(123)
+            },
+        )
+        .await
+        .unwrap();
 
         assert!(matches!(
             entries.as_slice(),

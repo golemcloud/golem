@@ -58,23 +58,6 @@ fn descriptor_path(descriptor: &Descriptor) -> &std::path::Path {
 
 async fn filesystem_mutation_guard<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-    _path: &std::path::Path,
-) -> Result<tokio::sync::OwnedMutexGuard<()>, FsError> {
-    let guard = ctx.filesystem_mutation_lock().lock_owned().await;
-    reconcile_all_pending_filesystem_streams_locked(ctx)
-        .await
-        .map_err(|err| {
-            FsError::trap(wasmtime::Error::msg(format!(
-                "failed to complete pending filesystem stream write: {err:?}"
-            )))
-        })?;
-    Ok(guard)
-}
-
-async fn filesystem_rename_guards<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    _old_path: &std::path::Path,
-    _new_path: &std::path::Path,
 ) -> Result<tokio::sync::OwnedMutexGuard<()>, FsError> {
     let guard = ctx.filesystem_mutation_lock().lock_owned().await;
     reconcile_all_pending_filesystem_streams_locked(ctx)
@@ -197,11 +180,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
     async fn set_size(&mut self, fd: Resource<Descriptor>, size: Filesize) -> Result<(), FsError> {
         self.fail_if_read_only(&fd)?;
-        let (mutation_path, file) = match self.table().get(&fd)? {
-            Descriptor::File(file) => (file.path.clone(), file.file.clone()),
+        let file = match self.table().get(&fd)? {
+            Descriptor::File(file) => file.file.clone(),
             Descriptor::Dir(_) => return Err(FsError::from(ErrorCode::IsDirectory)),
         };
-        let _mutation_guard = filesystem_mutation_guard(self, &mutation_path).await?;
+        let _mutation_guard = filesystem_mutation_guard(self).await?;
         let account_storage =
             !self.state.is_replay() && !self.filesystem.is_file_unlinked(file.clone()).await;
 
@@ -291,11 +274,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         offset: Filesize,
     ) -> Result<Filesize, FsError> {
         self.fail_if_read_only(&fd)?;
-        let (mutation_path, file) = match self.table().get(&fd)? {
-            Descriptor::File(file) => (file.path.clone(), file.file.clone()),
+        let file = match self.table().get(&fd)? {
+            Descriptor::File(file) => file.file.clone(),
             Descriptor::Dir(_) => return Err(FsError::from(ErrorCode::IsDirectory)),
         };
-        let _mutation_guard = filesystem_mutation_guard(self, &mutation_path).await?;
+        let _mutation_guard = filesystem_mutation_guard(self).await?;
         let account_storage =
             !self.state.is_replay() && !self.filesystem.is_file_unlinked(file.clone()).await;
 
@@ -375,8 +358,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self_: Resource<Descriptor>,
         path: String,
     ) -> Result<(), FsError> {
-        let target = descriptor_path(self.table().get(&self_)?).join(&path);
-        let _mutation_guard = filesystem_mutation_guard(self, &target).await?;
+        let _mutation_guard = filesystem_mutation_guard(self).await?;
         self.observe_function_call("filesystem::types::descriptor", "create_directory_at");
         let mut view = self.as_wasi_view();
         HostDescriptor::create_directory_at(&mut view.filesystem(), self_, path).await
@@ -564,9 +546,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         new_descriptor: Resource<Descriptor>,
         new_path: String,
     ) -> Result<(), FsError> {
-        let old_target = descriptor_path(self.table().get(&self_)?).join(&old_path);
-        let new_target = descriptor_path(self.table().get(&new_descriptor)?).join(&new_path);
-        let _mutation_guards = filesystem_rename_guards(self, &old_target, &new_target).await?;
+        let _mutation_guard = filesystem_mutation_guard(self).await?;
         self.observe_function_call("filesystem::types::descriptor", "link_at");
         let mut view = self.as_wasi_view();
         HostDescriptor::link_at(
@@ -588,8 +568,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         open_flags: OpenFlags,
         flags: DescriptorFlags,
     ) -> Result<Resource<Descriptor>, FsError> {
-        let mutation_path = descriptor_path(self.table().get(&self_)?).join(&path);
-        let _mutation_guard = filesystem_mutation_guard(self, &mutation_path).await?;
+        let _mutation_guard = filesystem_mutation_guard(self).await?;
         let truncated_size = if open_flags.contains(OpenFlags::TRUNCATE) && !self.state.is_replay()
         {
             let fd_borrow = Resource::new_borrow(self_.rep());
@@ -666,8 +645,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self_: Resource<Descriptor>,
         path: String,
     ) -> Result<(), FsError> {
-        let target = descriptor_path(self.table().get(&self_)?).join(&path);
-        let _mutation_guard = filesystem_mutation_guard(self, &target).await?;
+        let _mutation_guard = filesystem_mutation_guard(self).await?;
         self.observe_function_call("filesystem::types::descriptor", "remove_directory_at");
         let mut view = self.as_wasi_view();
         HostDescriptor::remove_directory_at(&mut view.filesystem(), self_, path.clone()).await
@@ -696,9 +674,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             Descriptor::Dir(directory) => Some(directory.clone()),
             Descriptor::File(_) => None,
         };
-        let _mutation_guards = filesystem_rename_guards(self, &old_target, &new_target).await?;
-        let (replaced_size, replaced_identity) = if self.state.is_replay() {
-            (0, None)
+        let _mutation_guard = filesystem_mutation_guard(self).await?;
+        let replaced = if self.state.is_replay() {
+            Default::default()
         } else {
             let old_fd_ref = Resource::new_borrow(old_fd.rep());
             let mut view = self.as_wasi_view();
@@ -739,7 +717,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
                         },
                     )
                 }
-                _ => (0, None),
+                _ => Default::default(),
             }
         };
 
@@ -756,7 +734,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             .await
         };
         if result.is_ok() {
-            self.filesystem.mark_object_unlinked(replaced_identity);
+            self.filesystem.mark_object_unlinked(replaced.object_id);
             self.rename_open_filesystem_stream_paths(&old_target, &new_target);
             let descriptor_reps = self.filesystem.descriptor_reps(FilesystemPreview::P2);
             for descriptor_rep in descriptor_reps {
@@ -769,8 +747,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
                     rewrite_descendant_path(path, &old_target, &new_target);
                 }
             }
-            if replaced_size > 0 {
-                self.release_filesystem_storage_space(replaced_size).await;
+            if replaced.bytes > 0 {
+                self.release_filesystem_storage_space(replaced.bytes).await;
             }
         }
         result
@@ -783,8 +761,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         new_path: String,
     ) -> Result<(), FsError> {
         self.fail_if_read_only(&fd)?;
-        let target = descriptor_path(self.table().get(&fd)?).join(&new_path);
-        let _mutation_guard = filesystem_mutation_guard(self, &target).await?;
+        let _mutation_guard = filesystem_mutation_guard(self).await?;
 
         self.observe_function_call("filesystem::types::descriptor", "symlink_at");
         let mut view = self.as_wasi_view();
@@ -797,17 +774,16 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<(), FsError> {
         self.fail_if_read_only(&fd)?;
-        let mutation_path = descriptor_path(self.table().get(&fd)?).join(&path);
         let directory = match self.table().get(&fd)? {
             Descriptor::Dir(directory) => Some(directory.clone()),
             Descriptor::File(_) => None,
         };
-        let _mutation_guard = filesystem_mutation_guard(self, &mutation_path).await?;
+        let _mutation_guard = filesystem_mutation_guard(self).await?;
 
         // Stat the target file before unlinking to know how many bytes to release.
         // Use the upstream (non-durable) stat_at to avoid oplog side effects.
-        let (file_size, target_identity) = if self.state.is_replay() {
-            (0, None)
+        let released = if self.state.is_replay() {
+            Default::default()
         } else {
             let target_identity = match directory {
                 Some(directory) => directory_entry_identity(directory, path.clone().into())
@@ -833,7 +809,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
                     link_count: stat.link_count,
                 }
                 .released_by_unlink(),
-                _ => (0, None),
+                _ => Default::default(),
             }
         };
 
@@ -845,8 +821,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         // Only release permits if the unlink actually succeeded.
         if result.is_ok() {
-            self.filesystem.mark_object_unlinked(target_identity);
-            self.release_filesystem_storage_space(file_size).await;
+            self.filesystem.mark_object_unlinked(released.object_id);
+            self.release_filesystem_storage_space(released.bytes).await;
         }
 
         result

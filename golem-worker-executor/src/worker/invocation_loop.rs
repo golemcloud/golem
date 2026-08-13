@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::{ReadFileResult, TrapType};
+use crate::durable_host::io::streams::reconcile_all_pending_filesystem_streams;
 use crate::services::agent_storage_meter::AgentStorageMeter;
 use crate::services::events::Event;
 use crate::services::golem_config::SnapshotPolicy;
@@ -508,11 +509,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             // even though normal invocation success/failure already does so, because interrupts,
             // recovery failures, and shutdown can leave a started blocking file write in flight.
             let mut store_guard = store.lock().await;
-            if let Err(error) =
-                crate::durable_host::io::streams::reconcile_all_pending_filesystem_streams(
-                    store_guard.data_mut().durable_ctx_mut(),
-                )
-                .await
+            if let Err(error) = reconcile_all_pending_filesystem_streams(
+                store_guard.data_mut().durable_ctx_mut(),
+            )
+            .await
             {
                 error!("failed to reconcile filesystem streams before suspending worker: {error}");
             }

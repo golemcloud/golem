@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
+use std::time::Instant;
 
 use bytes::Bytes;
 use cap_std::fs::FileExt;
@@ -46,7 +47,7 @@ pub(crate) struct DurableFilesystem {
 
 #[derive(Default)]
 struct DurableFilesystemState {
-    tracked_objects: HashMap<(u64, u64), TrackedFilesystemObject>,
+    tracked_objects: HashMap<FilesystemObjectId, TrackedFilesystemObject>,
     output_streams: HashMap<u32, FilesystemOutputStreamState>,
     p2_descriptors: HashSet<u32>,
     p3_descriptors: HashSet<u32>,
@@ -77,6 +78,7 @@ pub(crate) struct FilesystemOutputStreamState {
     pub position: Option<u64>,
     pub pending_write: bool,
     pub pending_reservation: Option<PendingFilesystemReservation>,
+    object_id: Option<FilesystemObjectId>,
     completion: Option<FilesystemWriteCompletion>,
 }
 
@@ -85,6 +87,7 @@ pub(crate) struct FilesystemOutputStreamSnapshot {
     pub file: Arc<cap_std::fs::File>,
     pub position: Option<u64>,
     pub has_pending_write: bool,
+    pub object_id: Option<FilesystemObjectId>,
 }
 
 impl FilesystemOutputStreamState {
@@ -99,6 +102,7 @@ impl FilesystemOutputStreamState {
             position,
             pending_write: false,
             pending_reservation: None,
+            object_id: None,
             completion: None,
         }
     }
@@ -127,43 +131,64 @@ impl FilesystemSizeChange {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct FilesystemObjectId(u64, u64);
+
 pub(crate) struct FilesystemEntryStorage {
-    pub identity: Option<(u64, u64)>,
+    pub identity: Option<FilesystemObjectId>,
     pub size: u64,
     pub is_regular_file: bool,
     pub link_count: u64,
 }
 
 impl FilesystemEntryStorage {
-    pub(crate) fn released_by_unlink(self) -> (u64, Option<(u64, u64)>) {
+    pub(crate) fn released_by_unlink(self) -> ReleasedFilesystemStorage {
         if self.identity.is_some() && self.is_regular_file && self.link_count == 1 {
-            (self.size, self.identity)
+            ReleasedFilesystemStorage {
+                bytes: self.size,
+                object_id: self.identity,
+            }
         } else {
-            (0, None)
+            ReleasedFilesystemStorage::default()
         }
     }
 }
 
+#[derive(Debug, Default, Eq, PartialEq)]
+pub(crate) struct ReleasedFilesystemStorage {
+    pub bytes: u64,
+    pub object_id: Option<FilesystemObjectId>,
+}
+
+pub(crate) struct FilesystemFileAccountingSnapshot {
+    pub object_id: Option<FilesystemObjectId>,
+    pub is_unlinked: bool,
+    pub size: u64,
+}
+
 pub(crate) fn replaced_file_storage(
-    source_identity: Option<(u64, u64)>,
+    source_identity: Option<FilesystemObjectId>,
     destination: FilesystemEntryStorage,
-) -> (u64, Option<(u64, u64)>) {
+) -> ReleasedFilesystemStorage {
     match (source_identity, destination.identity) {
         (Some(source), Some(destination_identity))
             if source != destination_identity
                 && destination.is_regular_file
                 && destination.link_count == 1 =>
         {
-            (destination.size, Some(destination_identity))
+            ReleasedFilesystemStorage {
+                bytes: destination.size,
+                object_id: Some(destination_identity),
+            }
         }
-        _ => (0, None),
+        _ => ReleasedFilesystemStorage::default(),
     }
 }
 
 pub(crate) async fn directory_entry_identity(
     directory: wasmtime_wasi::filesystem::Dir,
     path: PathBuf,
-) -> std::io::Result<Option<(u64, u64)>> {
+) -> std::io::Result<Option<FilesystemObjectId>> {
     let directory = directory.dir;
     tokio::task::spawn_blocking(move || {
         directory
@@ -175,22 +200,22 @@ pub(crate) async fn directory_entry_identity(
 }
 
 #[cfg(unix)]
-fn metadata_object_identity(metadata: &cap_std::fs::Metadata) -> Option<(u64, u64)> {
+fn metadata_object_identity(metadata: &cap_std::fs::Metadata) -> Option<FilesystemObjectId> {
     use cap_std::fs::MetadataExt;
-    Some((metadata.dev(), metadata.ino()))
+    Some(FilesystemObjectId(metadata.dev(), metadata.ino()))
 }
 
 #[cfg(windows)]
-fn metadata_object_identity(metadata: &cap_std::fs::Metadata) -> Option<(u64, u64)> {
+fn metadata_object_identity(metadata: &cap_std::fs::Metadata) -> Option<FilesystemObjectId> {
     use cap_std::fs::MetadataExt;
     metadata
         .volume_serial_number()
         .zip(metadata.file_index())
-        .map(|(volume, index)| (u64::from(volume), index))
+        .map(|(volume, index)| FilesystemObjectId(u64::from(volume), index))
 }
 
 #[cfg(not(any(unix, windows)))]
-fn metadata_object_identity(_metadata: &cap_std::fs::Metadata) -> Option<(u64, u64)> {
+fn metadata_object_identity(_metadata: &cap_std::fs::Metadata) -> Option<FilesystemObjectId> {
     None
 }
 
@@ -315,16 +340,16 @@ impl<Ctx: WorkerCtx> FilesystemStorageAccounting<Ctx> {
             reservation.storage_meter.commit_reservation(
                 reservation.logical_bytes,
                 0,
-                std::time::Instant::now(),
+                Instant::now(),
             );
             reservation.logical_bytes = 0;
             return;
         }
-        self.persist_bytes(committed_bytes, true).await;
+        self.persist_acquired_bytes(committed_bytes).await;
         reservation.storage_meter.commit_reservation(
             reservation.logical_bytes,
             committed_bytes,
-            std::time::Instant::now(),
+            Instant::now(),
         );
         reservation.logical_bytes = 0;
     }
@@ -335,39 +360,40 @@ impl<Ctx: WorkerCtx> FilesystemStorageAccounting<Ctx> {
         if freed_bytes == 0 {
             return;
         }
-        self.persist_bytes(freed_bytes, false).await;
+        self.persist_released_bytes(freed_bytes).await;
         self.storage_meter
-            .on_release(freed_bytes, std::time::Instant::now());
+            .on_release(freed_bytes, Instant::now());
     }
 
-    async fn persist_bytes(&self, bytes: u64, acquire: bool) {
+    async fn persist_acquired_bytes(&self, bytes: u64) {
+        self.persist_delta_chunks(bytes, false).await;
+        record_storage_bytes_written(
+            STORAGE_TYPE_FILESYSTEM,
+            &self.account_id.to_string(),
+            &self.environment_id.to_string(),
+            bytes,
+        );
+    }
+
+    async fn persist_released_bytes(&self, bytes: u64) {
+        self.persist_delta_chunks(bytes, true).await;
+        record_storage_bytes_deleted(
+            STORAGE_TYPE_FILESYSTEM,
+            &self.account_id.to_string(),
+            &self.environment_id.to_string(),
+            bytes,
+        );
+    }
+
+    async fn persist_delta_chunks(&self, bytes: u64, negate: bool) {
         let mut remaining = bytes;
         while remaining > 0 {
             let chunk = remaining.min(i64::MAX as u64);
-            let delta = if acquire {
-                chunk as i64
-            } else {
-                -(chunk as i64)
-            };
+            let delta = if negate { -(chunk as i64) } else { chunk as i64 };
             self.worker
                 .add_to_oplog(OplogEntry::filesystem_storage_usage_update(delta))
                 .await;
             remaining -= chunk;
-        }
-        if acquire {
-            record_storage_bytes_written(
-                STORAGE_TYPE_FILESYSTEM,
-                &self.account_id.to_string(),
-                &self.environment_id.to_string(),
-                bytes,
-            );
-        } else {
-            record_storage_bytes_deleted(
-                STORAGE_TYPE_FILESYSTEM,
-                &self.account_id.to_string(),
-                &self.environment_id.to_string(),
-                bytes,
-            );
         }
     }
 }
@@ -517,7 +543,7 @@ impl DurableFilesystem {
         self.storage_meter.clone()
     }
 
-    pub(crate) fn mark_object_unlinked(&self, identity: Option<(u64, u64)>) {
+    pub(crate) fn mark_object_unlinked(&self, identity: Option<FilesystemObjectId>) {
         if let Some(identity) = identity {
             let mut state = self.state.lock().unwrap();
             prune_tracked_objects(&mut state);
@@ -547,13 +573,13 @@ impl DurableFilesystem {
     pub(crate) async fn is_file_unlinked(&self, file: Arc<cap_std::fs::File>) -> bool {
         self.file_accounting_snapshot(file)
             .await
-            .is_ok_and(|snapshot| snapshot.0)
+            .is_ok_and(|snapshot| snapshot.is_unlinked)
     }
 
     pub(crate) async fn file_accounting_snapshot(
         &self,
         file: Arc<cap_std::fs::File>,
-    ) -> std::io::Result<(bool, u64)> {
+    ) -> std::io::Result<FilesystemFileAccountingSnapshot> {
         let handle = Arc::downgrade(&file);
         let snapshot = tokio::task::spawn_blocking(move || {
             file.metadata()
@@ -573,7 +599,11 @@ impl DurableFilesystem {
                         .any(|existing| existing.ptr_eq(&handle))
             })
         });
-        Ok((unlinked, size))
+        Ok(FilesystemFileAccountingSnapshot {
+            object_id: identity,
+            is_unlinked: unlinked,
+            size,
+        })
     }
 
     pub(crate) fn normalized_path(path: &Path) -> PathBuf {
@@ -677,7 +707,18 @@ impl DurableFilesystem {
                 file: stream.file.clone(),
                 position: stream.position,
                 has_pending_write: stream.pending_write || stream.pending_reservation.is_some(),
+                object_id: stream.object_id,
             })
+    }
+
+    pub(crate) fn set_output_stream_object_id(
+        &self,
+        stream_rep: u32,
+        object_id: Option<FilesystemObjectId>,
+    ) {
+        if let Some(stream) = self.state.lock().unwrap().output_streams.get_mut(&stream_rep) {
+            stream.object_id = object_id;
+        }
     }
 
     pub(crate) fn pending_write_is_ready(&self, stream_rep: u32) -> bool {
@@ -825,26 +866,42 @@ impl DurableFilesystem {
         mutation_path: &Path,
     ) -> Vec<SettledFilesystemWrite> {
         let mutation_path = Self::normalized_path(mutation_path);
-        self.settle_pending_writes_matching(|stream_path| stream_path == mutation_path)
+        self.settle_pending_writes_matching(|_, stream| stream.mutation_path == mutation_path)
+            .await
+    }
+
+    pub(crate) async fn settle_pending_write(
+        &self,
+        stream_rep: u32,
+    ) -> Vec<SettledFilesystemWrite> {
+        self.settle_pending_writes_matching(|candidate, _| candidate == stream_rep)
+            .await
+    }
+
+    pub(crate) async fn settle_pending_writes_for_object(
+        &self,
+        object_id: FilesystemObjectId,
+    ) -> Vec<SettledFilesystemWrite> {
+        self.settle_pending_writes_matching(|_, stream| stream.object_id == Some(object_id))
             .await
     }
 
     pub(crate) async fn settle_all_pending_writes(&self) -> Vec<SettledFilesystemWrite> {
-        self.settle_pending_writes_matching(|_| true).await
+        self.settle_pending_writes_matching(|_, _| true).await
     }
 
     async fn settle_pending_writes_matching(
         &self,
-        matches: impl Fn(&Path) -> bool,
+        matches: impl Fn(u32, &FilesystemOutputStreamState) -> bool,
     ) -> Vec<SettledFilesystemWrite> {
         let pending = {
             let state = self.state.lock().unwrap();
             let mut pending = state
                 .output_streams
                 .iter()
-                .filter(|(_, stream)| {
+                .filter(|(stream_rep, stream)| {
                     (stream.pending_write || stream.pending_reservation.is_some())
-                        && matches(&stream.mutation_path)
+                        && matches(**stream_rep, stream)
                 })
                 .map(|(stream_rep, stream)| {
                     (
@@ -907,7 +964,10 @@ impl DurableFilesystem {
             .unwrap()
             .output_streams
             .iter()
-            .filter_map(|(stream_rep, stream)| stream.pending_write.then_some(*stream_rep))
+            .filter_map(|(stream_rep, stream)| {
+                (stream.pending_write || stream.pending_reservation.is_some())
+                    .then_some(*stream_rep)
+            })
             .collect::<Vec<_>>();
         pending.sort_unstable();
         pending
@@ -940,7 +1000,7 @@ fn prune_tracked_objects(state: &mut DurableFilesystemState) {
     });
 }
 
-async fn file_object_identity(file: Arc<cap_std::fs::File>) -> Option<(u64, u64)> {
+async fn file_object_identity(file: Arc<cap_std::fs::File>) -> Option<FilesystemObjectId> {
     tokio::task::spawn_blocking(move || {
         file.metadata()
             .ok()
@@ -951,9 +1011,10 @@ async fn file_object_identity(file: Arc<cap_std::fs::File>) -> Option<(u64, u64)
     .flatten()
 }
 
-// Wasmtime's P2 file stream does not expose write completion or the resulting file size. Durable
-// accounting needs both before committing reserved growth, so this wrapper preserves the upstream
-// nonblocking stream contract while making the actual write outcome observable.
+// Wasmtime exposes P2 write completion only through the table-owned stream's readiness. Accounting
+// must retain completion independently so stream drop, namespace mutation, invocation completion,
+// and suspension can settle actual growth after the table resource is no longer available. This
+// wrapper preserves the upstream nonblocking contract while making that outcome shareable.
 pub(crate) struct DurableFileOutputStream {
     file: Arc<cap_std::fs::File>,
     mode: FilesystemWriteMode,
@@ -1228,51 +1289,57 @@ mod tests {
     fn replacing_same_object_does_not_release_storage() {
         assert_eq!(
             replaced_file_storage(
-                Some((1, 2)),
+                Some(FilesystemObjectId(1, 2)),
                 FilesystemEntryStorage {
-                    identity: Some((1, 2)),
+                    identity: Some(FilesystemObjectId(1, 2)),
                     size: 8,
                     is_regular_file: true,
                     link_count: 1,
                 }
             ),
-            (0, None)
+            ReleasedFilesystemStorage::default()
         );
         assert_eq!(
             replaced_file_storage(
-                Some((1, 2)),
+                Some(FilesystemObjectId(1, 2)),
                 FilesystemEntryStorage {
-                    identity: Some((3, 4)),
+                    identity: Some(FilesystemObjectId(3, 4)),
                     size: 8,
                     is_regular_file: true,
                     link_count: 1,
                 }
             ),
-            (8, Some((3, 4)))
+            ReleasedFilesystemStorage {
+                bytes: 8,
+                object_id: Some(FilesystemObjectId(3, 4)),
+            }
         );
         assert_eq!(
             replaced_file_storage(
-                Some((1, 2)),
+                Some(FilesystemObjectId(1, 2)),
                 FilesystemEntryStorage {
-                    identity: Some((3, 4)),
+                    identity: Some(FilesystemObjectId(3, 4)),
                     size: 0,
                     is_regular_file: true,
                     link_count: 1,
                 }
             ),
-            (0, Some((3, 4)))
+            ReleasedFilesystemStorage {
+                bytes: 0,
+                object_id: Some(FilesystemObjectId(3, 4)),
+            }
         );
         assert_eq!(
             replaced_file_storage(
                 None,
                 FilesystemEntryStorage {
-                    identity: Some((3, 4)),
+                    identity: Some(FilesystemObjectId(3, 4)),
                     size: 8,
                     is_regular_file: true,
                     link_count: 1,
                 }
             ),
-            (0, None)
+            ReleasedFilesystemStorage::default()
         );
     }
 
@@ -1593,6 +1660,76 @@ mod tests {
     }
 
     #[test]
+    async fn settling_one_object_does_not_wait_for_another_object() {
+        let directory = tempfile::tempdir().unwrap();
+        let filesystem = test_filesystem();
+        filesystem.register_output_stream(
+            1,
+            FilesystemOutputStreamState::new(
+                PathBuf::from("first.bin"),
+                test_file(&directory.path().join("first.bin")),
+                Some(0),
+            ),
+        );
+        filesystem.register_output_stream(
+            2,
+            FilesystemOutputStreamState::new(
+                PathBuf::from("second.bin"),
+                test_file(&directory.path().join("second.bin")),
+                Some(0),
+            ),
+        );
+        filesystem.set_output_stream_object_id(1, Some(FilesystemObjectId(1, 1)));
+        filesystem.set_output_stream_object_id(2, Some(FilesystemObjectId(1, 2)));
+        filesystem.mark_write_enqueued(1, 0, completed_write(0));
+        let blocked = FilesystemWriteCompletion::from_writer_task(tokio::spawn(async {
+            std::future::pending::<FilesystemWriteOutcome>().await
+        }));
+        filesystem.mark_write_enqueued(2, 0, blocked);
+
+        let settled = filesystem
+            .settle_pending_writes_for_object(FilesystemObjectId(1, 1))
+            .await;
+
+        assert_eq!(settled.len(), 1);
+        assert_eq!(settled[0].stream_rep, 1);
+    }
+
+    #[test]
+    async fn pending_stream_reps_include_parked_reservations() {
+        let directory = tempfile::tempdir().unwrap();
+        let filesystem = test_filesystem();
+        let meter = filesystem.storage_meter();
+        assert_eq!(meter.reserve(8, 8), Some(1024));
+        filesystem.register_output_stream(
+            1,
+            FilesystemOutputStreamState::new(
+                PathBuf::from("reserved.bin"),
+                test_file(&directory.path().join("reserved.bin")),
+                Some(0),
+            ),
+        );
+        filesystem.set_pending_reservation(
+            1,
+            PendingFilesystemReservation {
+                base_size: 0,
+                reservation: Some(FilesystemStorageReservation {
+                    logical_bytes: 8,
+                    storage_meter: meter.clone(),
+                }),
+            },
+        );
+
+        assert_eq!(filesystem.pending_stream_reps(), vec![1]);
+        let settled = filesystem.settle_all_pending_writes().await;
+        let prepared = filesystem.prepare_write_settlements(settled);
+        assert_eq!(prepared.len(), 1);
+        assert!(!filesystem.output_stream_snapshot(1).unwrap().has_pending_write);
+        drop(prepared);
+        assert_eq!(meter.reserve(8, 8), Some(1024));
+    }
+
+    #[test]
     fn failed_measurement_finishes_pending_settlement_and_rolls_back_reservation() {
         let directory = tempfile::tempdir().unwrap();
         let filesystem = test_filesystem();
@@ -1652,8 +1789,6 @@ mod tests {
         let second = test_file(&directory.path().join("second.bin"));
         filesystem.mark_file_linked(second.clone()).await;
 
-        let state = filesystem.state.lock().unwrap();
-        assert_eq!(state.tracked_objects.len(), 1);
-        assert!(!state.tracked_objects.values().next().unwrap().unlinked);
+        assert!(!filesystem.is_file_unlinked(second).await);
     }
 }

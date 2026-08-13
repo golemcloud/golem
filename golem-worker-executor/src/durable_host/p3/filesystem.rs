@@ -550,7 +550,6 @@ where
 
 async fn filesystem_mutation_guard<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
-    _path: &std::path::Path,
 ) -> wasmtime::Result<tokio::sync::OwnedMutexGuard<()>>
 where
     Ctx: WorkerCtx,
@@ -560,29 +559,6 @@ where
         durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_mutation_lock()
     });
     let guard = mutation_lock.lock_owned().await;
-    let filesystem = accessor.with(|mut access| {
-        durable_worker_ctx::<Ctx, U>(access.data_mut())
-            .filesystem
-            .clone()
-    });
-    let settled = filesystem.settle_all_pending_writes().await;
-    finish_filesystem_write_settlements(accessor, settled).await?;
-    Ok(guard)
-}
-
-async fn filesystem_rename_guards<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    _old_path: &std::path::Path,
-    _new_path: &std::path::Path,
-) -> wasmtime::Result<tokio::sync::OwnedMutexGuard<()>>
-where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    let lock = accessor.with(|mut access| {
-        durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_mutation_lock()
-    });
-    let guard = lock.lock_owned().await;
     let filesystem = accessor.with(|mut access| {
         durable_worker_ctx::<Ctx, U>(access.data_mut())
             .filesystem
@@ -693,19 +669,19 @@ where
                 None => FilesystemWriteMode::Append,
             };
             let write_len = chunk.contents.len() as u64;
-            let _mutation_guard = filesystem_mutation_guard(accessor, &file.path).await?;
+            let _mutation_guard = filesystem_mutation_guard(accessor).await?;
             let is_replay = is_replay_from_accessor::<Ctx, U>(accessor);
             let filesystem = accessor.with(|mut access| {
                 durable_worker_ctx::<Ctx, U>(access.data_mut())
                     .filesystem
                     .clone()
             });
-            let (is_unlinked, file_size) = filesystem
+            let accounting = filesystem
                 .file_accounting_snapshot(Arc::clone(&file.file))
                 .await
                 .map_err(wasmtime::Error::new)?;
-            let account_storage = !is_replay && !is_unlinked;
-            let current_size = if !account_storage { 0 } else { file_size };
+            let account_storage = !is_replay && !accounting.is_unlinked;
+            let current_size = if !account_storage { 0 } else { accounting.size };
             let requested_growth = match chunk_mode {
                 FilesystemWriteMode::At(offset) => offset
                     .saturating_add(write_len)
@@ -987,9 +963,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             )
         });
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
-        let path = descriptor_path_from_accessor::<Ctx, U>(accessor, &fd)
-            .map_err(FilesystemError::trap)?;
-        let _mutation_guard = filesystem_mutation_guard(accessor, &path)
+        let _mutation_guard = filesystem_mutation_guard(accessor)
             .await
             .map_err(FilesystemError::trap)?;
         let file = accessor
@@ -1146,9 +1120,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         path: String,
     ) -> FilesystemResult<()> {
-        let target = descriptor_path_at_from_accessor::<Ctx, U>(accessor, &fd, &path)
-            .map_err(FilesystemError::trap)?;
-        let _mutation_guard = filesystem_mutation_guard(accessor, &target)
+        let _mutation_guard = filesystem_mutation_guard(accessor)
             .await
             .map_err(FilesystemError::trap)?;
         accessor.with(|mut access| {
@@ -1280,11 +1252,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         new_fd: Resource<Descriptor>,
         new_path: String,
     ) -> FilesystemResult<()> {
-        let old_target = descriptor_path_at_from_accessor::<Ctx, U>(accessor, &fd, &old_path)
-            .map_err(FilesystemError::trap)?;
-        let new_target = descriptor_path_at_from_accessor::<Ctx, U>(accessor, &new_fd, &new_path)
-            .map_err(FilesystemError::trap)?;
-        let _mutation_guards = filesystem_rename_guards(accessor, &old_target, &new_target)
+        let _mutation_guard = filesystem_mutation_guard(accessor)
             .await
             .map_err(FilesystemError::trap)?;
         accessor.with(|mut access| {
@@ -1321,10 +1289,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "open-at",
             )
         });
-        let target_path = descriptor_path_from_accessor::<Ctx, U>(accessor, &fd)
-            .map_err(FilesystemError::trap)?
-            .join(&path);
-        let _mutation_guard = filesystem_mutation_guard(accessor, &target_path)
+        let _mutation_guard = filesystem_mutation_guard(accessor)
             .await
             .map_err(FilesystemError::trap)?;
         // Opening with TRUNCATE discards the existing file contents, so credit
@@ -1412,9 +1377,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         path: String,
     ) -> FilesystemResult<()> {
-        let target = descriptor_path_at_from_accessor::<Ctx, U>(accessor, &fd, &path)
-            .map_err(FilesystemError::trap)?;
-        let _mutation_guard = filesystem_mutation_guard(accessor, &target)
+        let _mutation_guard = filesystem_mutation_guard(accessor)
             .await
             .map_err(FilesystemError::trap)?;
         accessor.with(|mut access| {
@@ -1446,11 +1409,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             &descriptor_path_at_from_accessor::<Ctx, U>(accessor, &new_fd, &new_path)
                 .map_err(FilesystemError::trap)?,
         );
-        let _mutation_guards = filesystem_rename_guards(accessor, &old_target, &new_target)
+        let _mutation_guard = filesystem_mutation_guard(accessor)
             .await
             .map_err(FilesystemError::trap)?;
-        let (replaced_size, replaced_identity) = if is_replay_from_accessor::<Ctx, U>(accessor) {
-            (0, None)
+        let replaced = if is_replay_from_accessor::<Ctx, U>(accessor) {
+            Default::default()
         } else {
             let old_directory = accessor
                 .with(|mut access| dir_result_from_access::<Ctx, U>(&mut access, &fd))
@@ -1500,7 +1463,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                         },
                     )
                 }
-                _ => (0, None),
+                _ => Default::default(),
             }
         };
         accessor.with(|mut access| {
@@ -1519,7 +1482,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             accessor.with(|mut access| {
                 durable_worker_ctx::<Ctx, U>(access.data_mut())
                     .filesystem
-                    .mark_object_unlinked(replaced_identity);
+                    .mark_object_unlinked(replaced.object_id);
             });
             let descriptor_reps = accessor.with(|mut access| {
                 durable_worker_ctx::<Ctx, U>(access.data_mut())
@@ -1546,8 +1509,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 durable_worker_ctx::<Ctx, U>(access.data_mut())
                     .rename_open_filesystem_stream_paths(&old_target, &new_target);
             });
-            if replaced_size > 0 {
-                release_filesystem_write_storage::<Ctx, U>(accessor, replaced_size)
+            if replaced.bytes > 0 {
+                release_filesystem_write_storage::<Ctx, U>(accessor, replaced.bytes)
                     .await
                     .map_err(FilesystemError::trap)?;
             }
@@ -1562,9 +1525,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         new_path: String,
     ) -> FilesystemResult<()> {
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
-        let target = descriptor_path_at_from_accessor::<Ctx, U>(accessor, &fd, &new_path)
-            .map_err(FilesystemError::trap)?;
-        let _mutation_guard = filesystem_mutation_guard(accessor, &target)
+        let _mutation_guard = filesystem_mutation_guard(accessor)
             .await
             .map_err(FilesystemError::trap)?;
         accessor.with(|mut access| {
@@ -1587,10 +1548,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         path: String,
     ) -> FilesystemResult<()> {
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
-        let target_path = descriptor_path_from_accessor::<Ctx, U>(accessor, &fd)
-            .map_err(FilesystemError::trap)?
-            .join(&path);
-        let _mutation_guard = filesystem_mutation_guard(accessor, &target_path)
+        let _mutation_guard = filesystem_mutation_guard(accessor)
             .await
             .map_err(FilesystemError::trap)?;
         let directory = accessor
@@ -1601,8 +1559,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         // to the storage quota on success, matching WASI P2. The release helper
         // is a no-op during replay.
         let is_replay = is_replay_from_accessor::<Ctx, U>(accessor);
-        let (file_size, target_identity) = if is_replay {
-            (0, None)
+        let released = if is_replay {
+            Default::default()
         } else {
             let target_identity = match directory {
                 Some(directory) => directory_entry_identity(directory, path.clone().into())
@@ -1627,7 +1585,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                     link_count: stat.link_count,
                 }
                 .released_by_unlink(),
-                _ => (0, None),
+                _ => Default::default(),
             }
         };
 
@@ -1648,10 +1606,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             accessor.with(|mut access| {
                 durable_worker_ctx::<Ctx, U>(access.data_mut())
                     .filesystem
-                    .mark_object_unlinked(target_identity);
+                    .mark_object_unlinked(released.object_id);
             });
-            if file_size > 0 {
-                release_filesystem_write_storage::<Ctx, U>(accessor, file_size)
+            if released.bytes > 0 {
+                release_filesystem_write_storage::<Ctx, U>(accessor, released.bytes)
                     .await
                     .map_err(FilesystemError::trap)?;
             }

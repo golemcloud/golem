@@ -334,7 +334,10 @@ mod tests {
     #[test]
     #[timeout("2m")]
     async fn durable_suspension_pauses_storage_billing() -> anyhow::Result<()> {
-        let deps = create_deps(1024, Duration::from_secs(1)).await;
+        const SUSPEND_AFTER: Duration = Duration::from_secs(1);
+        const ACTIVE_WINDOW: Duration = Duration::from_millis(500);
+        const FILE_BYTES: i64 = 45_310;
+        let deps = create_deps(64 * 1024, SUSPEND_AFTER).await;
         let user = deps.user().await?;
         let (_, env) = user.app_and_env().await?;
         let component = user
@@ -343,7 +346,7 @@ mod tests {
             .with_files(
                 "GolemHostApi",
                 &[IFSEntry {
-                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    source_path: PathBuf::from("host-api-tests/Cargo.lock"),
                     target_path: CanonicalFilePath::from_abs_str("/metered.txt").unwrap(),
                     permissions: AgentFilePermissions::ReadWrite,
                 }],
@@ -352,6 +355,42 @@ mod tests {
             .await?;
         let agent = agent_id!("GolemHostApi", "storage-billing-suspension");
         let worker = user.start_agent(&component.id, agent.clone()).await?;
+
+        let active_promise_value = user
+            .invoke_and_await_agent(&component, &agent, "create_promise", data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow::anyhow!("expected active promise id"))?;
+        let active_promise_id = PromiseId::from_value(&active_promise_value)
+            .map_err(|error| anyhow::anyhow!(error))?;
+        let active_invocation = {
+            let user = user.clone();
+            let component = component.clone();
+            let agent = agent.clone();
+            let promise_id = active_promise_id.clone();
+            tokio::spawn(async move {
+                user.invoke_and_await_agent(
+                    &component,
+                    &agent,
+                    "await_promise",
+                    data_value!(promise_id),
+                )
+                .await
+            })
+        };
+        let active_start = wait_for_durable_billing_to_settle(&deps, &user).await?;
+        tokio::time::sleep(ACTIVE_WINDOW).await;
+        user.complete_promise(&active_promise_id, vec![42]).await?;
+        active_invocation.await??;
+        let active_end =
+            wait_for_durable_billing_increase_to_settle(&deps, &user, active_start).await?;
+        assert_billing_window(
+            active_end - active_start,
+            FILE_BYTES / 4,
+            FILE_BYTES,
+            "permit-retaining promise wait",
+        );
+
         let promise_value = user
             .invoke_and_await_agent(&component, &agent, "create_promise", data_value!())
             .await?
@@ -397,7 +436,10 @@ mod tests {
     #[timeout("2m")]
     async fn p2_and_p3_mutations_produce_matching_billing() -> anyhow::Result<()> {
         const FILE_BYTES: usize = 1024 * 1024;
-        let deps = create_deps(2 * FILE_BYTES as u64, Duration::from_secs(5)).await;
+        const SUSPEND_AFTER: Duration = Duration::from_secs(5);
+        const MEASURED_WAIT: Duration = Duration::from_millis(500);
+        assert!(MEASURED_WAIT < SUSPEND_AFTER);
+        let deps = create_deps(2 * FILE_BYTES as u64, SUSPEND_AFTER).await;
         let user = deps.user().await?;
         let (_, env) = user.app_and_env().await?;
         let p2_component = user
@@ -420,7 +462,12 @@ mod tests {
         )
         .await?;
         let p2_start = wait_for_durable_billing_to_settle(&deps, &user).await?;
-        user.invoke_and_await_agent(&p2_component, &p2_agent, "sleep_for", data_value!(0.5f64))
+        user.invoke_and_await_agent(
+            &p2_component,
+            &p2_agent,
+            "sleep_for",
+            data_value!(MEASURED_WAIT.as_secs_f64()),
+        )
             .await?;
         let p2_end = wait_for_durable_billing_increase_to_settle(&deps, &user, p2_start).await?;
         let p2_billing = p2_end - p2_start;
@@ -434,7 +481,12 @@ mod tests {
         )
         .await?;
         let p3_start = wait_for_durable_billing_to_settle(&deps, &user).await?;
-        user.invoke_and_await_agent(&p3_component, &p3_agent, "sleep_for", data_value!(0.5f64))
+        user.invoke_and_await_agent(
+            &p3_component,
+            &p3_agent,
+            "sleep_for",
+            data_value!(MEASURED_WAIT.as_secs_f64()),
+        )
             .await?;
         let p3_end = wait_for_durable_billing_increase_to_settle(&deps, &user, p3_start).await?;
         let p3_billing = p3_end - p3_start;

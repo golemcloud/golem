@@ -120,29 +120,6 @@ where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
     Fut: std::future::Future<Output = Option<AgentStatusRecord>>,
 {
-    calculate_last_known_status_with_checkpoint_reader_and_baseline(
-        this,
-        owned_agent_id,
-        agent_mode,
-        last_known,
-        read_checkpoint,
-        AgentStatusRecord::default(),
-    )
-    .await
-}
-
-pub async fn calculate_last_known_status_with_checkpoint_reader_and_baseline<T, Fut>(
-    this: &T,
-    owned_agent_id: &OwnedAgentId,
-    agent_mode: AgentMode,
-    last_known: Option<AgentStatusRecord>,
-    read_checkpoint: impl FnOnce() -> Fut,
-    full_recompute_baseline: AgentStatusRecord,
-) -> Option<AgentStatusRecord>
-where
-    T: HasOplogService + HasConfig + HasComponentService + Sync,
-    Fut: std::future::Future<Output = Option<AgentStatusRecord>>,
-{
     // 1. Try folding forward from the live cached status.
     if let Some(last_known) = last_known
         && let Some(status) =
@@ -163,8 +140,13 @@ where
     }
 
     // 3. Fall back to a full recompute from the start of the oplog.
-    let status =
-        try_fold_status_from(this, owned_agent_id, agent_mode, full_recompute_baseline).await;
+    let status = try_fold_status_from(
+        this,
+        owned_agent_id,
+        agent_mode,
+        AgentStatusRecord::default(),
+    )
+    .await;
     if status.is_some() {
         crate::metrics::workers::record_agent_status_recompute("full");
     }
@@ -2090,6 +2072,34 @@ mod test {
             read_starts.contains(&1),
             "expected a full recompute from idx 1, got {read_starts:?}"
         );
+    }
+
+    #[test]
+    async fn legacy_origin_checkpoint_preserves_filesystem_baseline_after_jump() {
+        let (test_case, _checkpoint, stale_live, mut final_expected) = jump_repair_fixture();
+        let baseline_bytes = 1024 * 1024;
+        let origin_checkpoint = AgentStatusRecord {
+            current_filesystem_storage_usage: baseline_bytes,
+            ..AgentStatusRecord::default()
+        };
+        final_expected.current_filesystem_storage_usage = baseline_bytes;
+
+        let repaired = calculate_last_known_status_with_checkpoint_reader(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            Some(stale_live),
+            || async { Some(origin_checkpoint) },
+        )
+        .await;
+
+        assert_eq!(
+            repaired
+                .as_ref()
+                .map(|status| status.current_filesystem_storage_usage),
+            Some(baseline_bytes)
+        );
+        assert_eq!(repaired, Some(final_expected));
     }
 
     struct TestCaseBuilder {

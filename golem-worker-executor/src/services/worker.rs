@@ -21,6 +21,7 @@ use crate::services::shard::ShardService;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
+use crate::worker::status::calculate_last_known_status_with_checkpoint_reader;
 use async_trait::async_trait;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
@@ -102,6 +103,10 @@ fn compute_status_field_writes(
     let mut dels: Vec<String> = Vec::new();
 
     sets.push((STATUS_CORE_FIELD.to_string(), serialize(core)?));
+    sets.push((
+        STATUS_FORMAT_FIELD.to_string(),
+        serialize(&STATUS_FORMAT_VERSION)?,
+    ));
 
     let regions_changed = match previous {
         Some(previous) => {
@@ -218,6 +223,10 @@ fn cached_status_has_current_filesystem_baseline(
 ) -> bool {
     !needs_legacy_filesystem_baseline_repair
         || format_version.is_some_and(|version| version >= STATUS_FORMAT_VERSION)
+}
+
+fn has_current_status_format(format_version: Option<u8>) -> bool {
+    format_version.is_some_and(|version| version >= STATUS_FORMAT_VERSION)
 }
 
 #[derive(Debug, Clone)]
@@ -438,16 +447,6 @@ impl DefaultWorkerService {
     ///
     /// `agent_mode` is `#[transient]` and not part of `core`, so the returned record carries the
     /// `Durable` deserialization default; callers must restore it from the authoritative source.
-    async fn read_split_status(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        namespace: KeyValueStorageNamespace,
-    ) -> Option<AgentStatusRecord> {
-        self.read_split_status_with_format(owned_agent_id, namespace)
-            .await
-            .map(|cached| cached.status)
-    }
-
     async fn read_split_status_with_format(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -525,16 +524,10 @@ impl DefaultWorkerService {
             Vec::new()
         };
 
-        let (mut sets, dels) =
+        let (sets, dels) =
             compute_status_field_writes(previous_status, &existing_fields, core, parts).map_err(
                 |err| format!("failed to serialize agent status for {owned_agent_id}: {err}"),
             )?;
-        sets.push((
-            STATUS_FORMAT_FIELD.to_string(),
-            serialize(&STATUS_FORMAT_VERSION).map_err(|err| {
-                format!("failed to serialize agent status format for {owned_agent_id}: {err}")
-            })?,
-        ));
 
         // Delete stale fields first, dropping `core` along with them so the cache reads as a miss
         // until the final `set_many` re-establishes it (see atomicity note above).
@@ -796,9 +789,23 @@ impl WorkerService for DefaultWorkerService {
                         // format marker. Those states are indistinguishable, so adding the baseline
                         // in place could double it. Recompute once from the metadata-derived Create
                         // baseline, then persist the versioned result below.
-                        let (cached_status, checkpoint) = if needs_legacy_filesystem_baseline_repair
-                        {
-                            (None, None)
+                        let (cached_status, checkpoint) = if needs_legacy_filesystem_baseline_repair {
+                            // Replace any stale pre-baseline checkpoint with an origin checkpoint.
+                            // Its index can never be covered by a later jump/revert, so every status
+                            // reconstruction path retains the metadata-derived filesystem seed.
+                            let checkpoint = self
+                                .write_status_checkpoint(
+                                    owned_agent_id,
+                                    None,
+                                    initial_worker_metadata.last_known_status.clone(),
+                                )
+                                .await
+                                .unwrap_or_else(|err| {
+                                    panic!(
+                                        "failed to repair status checkpoint for {owned_agent_id}: {err}"
+                                    )
+                                });
+                            (None, Some(checkpoint))
                         } else {
                             let cached_status = cached_status.map(|mut cached| {
                                 cached.status.agent_mode = agent_mode;
@@ -809,13 +816,12 @@ impl WorkerService for DefaultWorkerService {
                                 .await;
                             (cached_status, checkpoint)
                         };
-                        let last_known_status = crate::worker::status::calculate_last_known_status_with_checkpoint_reader_and_baseline(
+                        let last_known_status = calculate_last_known_status_with_checkpoint_reader(
                             self,
                             owned_agent_id,
                             agent_mode,
                             cached_status,
                             || async { checkpoint },
-                            initial_worker_metadata.last_known_status.clone(),
                         )
                         .await
                         .expect("Failed to recompute worker status for existing worker");
@@ -961,15 +967,18 @@ impl WorkerService for DefaultWorkerService {
     ) -> Option<AgentStatusRecord> {
         record_worker_call("read_status_checkpoint");
 
-        let mut status = self
-            .read_split_status(
+        let mut cached = self
+            .read_split_status_with_format(
                 owned_agent_id,
                 Self::checkpoint_namespace(&owned_agent_id.agent_id),
             )
             .await?;
+        if !has_current_status_format(cached.format_version) {
+            return None;
+        }
         // `agent_mode` is transient (not part of `core`); restore the authoritative value.
-        status.agent_mode = agent_mode;
-        Some(status)
+        cached.status.agent_mode = agent_mode;
+        Some(cached.status)
     }
 
     async fn write_status_checkpoint(
@@ -1140,8 +1149,13 @@ mod tests {
         assert!(dels.is_empty());
 
         let mut store = HashMap::new();
+        let format = sets
+            .iter()
+            .find(|(name, _)| name == STATUS_FORMAT_FIELD)
+            .map(|(_, bytes)| deserialize::<u8>(bytes).unwrap());
         let reassembled = apply_and_reassemble(&mut store, sets, dels).unwrap();
 
+        assert_eq!(format, Some(STATUS_FORMAT_VERSION));
         // `agent_mode` is transient and defaults to `Durable`; `full` uses the default.
         assert_eq!(reassembled, full);
     }
@@ -1154,6 +1168,8 @@ mod tests {
             Some(STATUS_FORMAT_VERSION)
         ));
         assert!(cached_status_has_current_filesystem_baseline(false, None));
+        assert!(!has_current_status_format(None));
+        assert!(has_current_status_format(Some(STATUS_FORMAT_VERSION)));
     }
 
     #[test]
