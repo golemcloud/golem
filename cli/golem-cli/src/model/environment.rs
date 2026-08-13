@@ -16,7 +16,8 @@ use crate::error::HintError;
 use crate::log::log_warn;
 use crate::log::{LogColorize, logln};
 use crate::model::app_raw::Environment;
-use crate::model::text::environment::format_resolved_environment_identity;
+use crate::model::cli_output::StructuredOutput;
+use crate::model::text_format::*;
 use anyhow::bail;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{ApplicationId, ApplicationName};
@@ -25,6 +26,7 @@ use golem_common::model::environment::{
     EnvironmentCurrentDeploymentView, EnvironmentId, EnvironmentName, EnvironmentWithDetails,
 };
 use indoc::formatdoc;
+use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::str::FromStr;
@@ -273,4 +275,98 @@ pub struct SelectedManifestEnvironment {
     pub application_name: ApplicationName,
     pub environment_name: EnvironmentName,
     pub environment: Environment,
+}
+
+pub fn format_resolved_environment_identity(environment: &ResolvedEnvironmentIdentity) -> String {
+    match &environment.source {
+        ResolvedEnvironmentIdentitySource::Reference(environment_reference) => {
+            match environment_reference {
+                EnvironmentReference::Environment { environment_name } => {
+                    format!(
+                        "{}/{}",
+                        environment.application_name.0.log_color_highlight(),
+                        environment_name.0.log_color_highlight()
+                    )
+                }
+                EnvironmentReference::ApplicationEnvironment {
+                    application_name,
+                    environment_name,
+                } => {
+                    format!(
+                        "{}/{}",
+                        application_name.0.log_color_highlight(),
+                        environment_name.0.log_color_highlight()
+                    )
+                }
+                EnvironmentReference::AccountApplicationEnvironment {
+                    account_email,
+                    application_name,
+                    environment_name,
+                } => {
+                    format!(
+                        "{}/{}/{}",
+                        account_email.log_color_highlight(),
+                        application_name.0.log_color_highlight(),
+                        environment_name.0.log_color_highlight()
+                    )
+                }
+            }
+        }
+        ResolvedEnvironmentIdentitySource::DefaultFromManifest => format!(
+            "{}/{}",
+            environment.application_name.0.log_color_highlight(),
+            environment.environment_name.0.log_color_highlight(),
+        ),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentListView {
+    pub environments: Vec<EnvironmentWithDetails>,
+}
+
+impl StructuredOutput for EnvironmentListView {
+    const KIND: &'static str = "environment.list";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentSyncDeploymentOptionsResult {
+    pub updated: bool,
+}
+
+impl StructuredOutput for EnvironmentSyncDeploymentOptionsResult {
+    const KIND: &'static str = "environment.sync-deployment-options";
+}
+
+impl NoTextOutput for EnvironmentSyncDeploymentOptionsResult {}
+impl TextOutput for EnvironmentSyncDeploymentOptionsResult {}
+
+impl TextOutput for EnvironmentListView {
+    fn log(&self) {
+        let mut table = new_table_full_condensed(vec![
+            Column::new("Application Name"),
+            Column::new("Environment Name"),
+            Column::new("Deployment Revision").fixed_right(),
+            Column::new("Deployment Version").fixed(),
+        ]);
+        for env in &self.environments {
+            table.add_row(vec![
+                env.application.name.0.clone(),
+                env.environment.name.0.clone(),
+                env.environment
+                    .current_deployment
+                    .as_ref()
+                    .map(|d| d.deployment_revision.get().to_string())
+                    .unwrap_or_default(),
+                env.environment
+                    .current_deployment
+                    .as_ref()
+                    .map(|d| d.deployment_version.0.clone())
+                    .unwrap_or_default(),
+            ]);
+        }
+        log_table(table);
+    }
 }

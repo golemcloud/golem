@@ -21,7 +21,5 @@ components:
 environments:
   local:
     server: local
-    componentPresets: debug
   cloud:
     server: cloud
-    componentPresets: release
