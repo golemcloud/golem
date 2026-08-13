@@ -35,6 +35,7 @@ use crate::model::language::GuestLanguage;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use golem_common::model::component::ComponentName;
+use golem_common::model::tool::ToolName;
 use itertools::Itertools;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -477,7 +478,7 @@ fn component_guest_bridge_dependencies_provided_by_metadata(
     );
     dependencies.extend(metadata.tools.iter().filter_map(|tool| {
         tool.name()
-            .and_then(|name| crate::model::app::ToolName::try_from(name).ok())
+            .and_then(|name| ToolName::try_from(name).ok())
             .map(|tool_name| ComponentDependency::Tool {
                 component_name: component_name.clone(),
                 tool_name,

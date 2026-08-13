@@ -103,9 +103,65 @@ impl ComponentDto {
                 })
                 .collect::<Result<_, _>>()?;
 
+        let tool_deployment_configs = self
+            .metadata
+            .tools()
+            .iter()
+            .map(|(name, metadata)| {
+                (
+                    name.as_str().to_string(),
+                    diff::ToolDeploymentConfig {
+                        definition: metadata.definition.clone(),
+                        config: metadata.provision.config.clone(),
+                        env: metadata.provision.env.clone(),
+                        files_by_path: metadata
+                            .provision
+                            .files
+                            .iter()
+                            .map(|file| {
+                                (
+                                    file.path.to_abs_string(),
+                                    diff::AgentFile {
+                                        hash: file.content_hash.0,
+                                        permissions: file.permissions,
+                                    }
+                                    .into(),
+                                )
+                            })
+                            .collect(),
+                        plugins_by_grant_id: metadata
+                            .provision
+                            .plugins
+                            .iter()
+                            .map(|plugin| {
+                                (
+                                    plugin.environment_plugin_grant_id.0,
+                                    diff::PluginInstallation {
+                                        priority: plugin.priority.0,
+                                        name: plugin.plugin_name.clone(),
+                                        version: plugin.plugin_version.clone(),
+                                        grant_id: plugin.environment_plugin_grant_id.0,
+                                        parameters: plugin.parameters.clone(),
+                                    },
+                                )
+                            })
+                            .collect(),
+                        environment_binding: metadata.environment_binding.clone(),
+                        agent_bindings: metadata
+                            .agent_bindings
+                            .iter()
+                            .map(|(agent_name, binding)| (agent_name.0.clone(), binding.clone()))
+                            .collect(),
+                    }
+                    .into(),
+                )
+            })
+            .collect();
+
         Ok(diff::Component {
             wasm_hash: self.wasm_hash,
             agent_type_provision_configs,
+            tool_deployment_configs,
         })
     }
 }
@@ -113,6 +169,92 @@ impl ComponentDto {
 impl InitialAgentFile {
     pub fn is_read_only(&self) -> bool {
         self.permissions == AgentFilePermissions::ReadOnly
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ComponentDto, ComponentId, ComponentName, ComponentRevision};
+    use crate::model::account::AccountId;
+    use crate::model::application::ApplicationId;
+    use crate::model::component_metadata::{ComponentMetadata, KnownExports};
+    use crate::model::diff;
+    use crate::model::diff::Hashable;
+    use crate::model::environment::EnvironmentId;
+    use crate::model::json::NormalizedJsonValue;
+    use crate::model::tool::{ToolDeploymentMetadata, ToolName, ToolProvisionConfig};
+    use crate::schema::SchemaGraph;
+    use crate::schema::tool::{CommandTree, Tool};
+    use std::collections::BTreeMap;
+    use test_r::test;
+
+    #[test]
+    fn component_dto_tool_state_uses_the_same_canonical_diff_hash_shape() {
+        let tool_name = ToolName::try_from("grep").unwrap();
+        let definition = Tool {
+            version: "1.0.0".to_string(),
+            commands: CommandTree { nodes: Vec::new() },
+            schema: SchemaGraph::empty(),
+        };
+        let config = NormalizedJsonValue::new(serde_json::json!({"root": "/workspace"}));
+        let metadata = ComponentMetadata::from_parts_with_tools(
+            KnownExports::default(),
+            Vec::new(),
+            None,
+            None,
+            Vec::new(),
+            BTreeMap::new(),
+            BTreeMap::from([(
+                tool_name.clone(),
+                ToolDeploymentMetadata {
+                    definition: definition.clone(),
+                    provision: ToolProvisionConfig {
+                        config: config.clone(),
+                        env: BTreeMap::from([("RUST_LOG".to_string(), "info".to_string())]),
+                        plugins: Vec::new(),
+                        files: Vec::new(),
+                    },
+                    environment_binding: None,
+                    agent_bindings: BTreeMap::new(),
+                },
+            )]),
+        );
+        let wasm_hash = diff::Hash::empty();
+        let dto = ComponentDto {
+            id: ComponentId::new(),
+            revision: ComponentRevision::new(1).unwrap(),
+            environment_id: EnvironmentId::new(),
+            component_name: ComponentName("app:main".to_string()),
+            hash: diff::Hash::empty(),
+            application_id: ApplicationId::new(),
+            account_id: AccountId::new(),
+            component_size: 0,
+            metadata,
+            created_at: chrono::Utc::now(),
+            wasm_hash,
+        };
+        let expected = diff::Component {
+            wasm_hash,
+            agent_type_provision_configs: BTreeMap::new(),
+            tool_deployment_configs: BTreeMap::from([(
+                tool_name.as_str().to_string(),
+                diff::ToolDeploymentConfig {
+                    definition,
+                    config,
+                    env: BTreeMap::from([("RUST_LOG".to_string(), "info".to_string())]),
+                    files_by_path: BTreeMap::new(),
+                    plugins_by_grant_id: BTreeMap::new(),
+                    environment_binding: None,
+                    agent_bindings: BTreeMap::new(),
+                }
+                .into(),
+            )]),
+        };
+
+        assert_eq!(
+            dto.to_diffable().unwrap().hash().unwrap(),
+            expected.hash().unwrap()
+        );
     }
 }
 

@@ -41,3 +41,4 @@ pub mod secret;
 pub mod template_render;
 pub mod text_format;
 pub mod token;
+pub mod tool_deployment;

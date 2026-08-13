@@ -407,6 +407,11 @@ async fn test_http_api_deployment_stage(#[dimension(postgres_variant)] deps: &De
 }
 
 #[test]
+async fn test_deployment_tool_snapshot_and_rollback(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_deployment_tool_snapshot_and_rollback(deps).await;
+}
+
+#[test]
 async fn test_account_usage(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_account_usage(deps).await;
 }

@@ -289,6 +289,51 @@ fn native_wire_round_trip_is_lossless() {
     assert_eq!(tool, back);
 }
 
+#[test]
+fn protobuf_round_trip_is_lossless() {
+    let tool = kitchen_sink_tool();
+    let protobuf: golem_api_grpc::proto::golem::tool::Tool = tool.clone().into();
+    let back = Tool::try_from(protobuf).expect("protobuf -> native should succeed");
+    assert_eq!(tool, back);
+}
+
+#[test]
+fn protobuf_rejects_formatter_without_required_doc() {
+    let tool = kitchen_sink_tool();
+    let mut protobuf: golem_api_grpc::proto::golem::tool::Tool = tool.into();
+    protobuf.commands.as_mut().unwrap().nodes[0]
+        .body
+        .as_mut()
+        .unwrap()
+        .result
+        .as_mut()
+        .unwrap()
+        .formatters[0]
+        .doc = None;
+
+    assert!(Tool::try_from(protobuf).is_err());
+}
+
+#[test]
+fn binary_round_trip_is_lossless() {
+    let tool = kitchen_sink_tool();
+    let bytes =
+        crate::serialization::serialize(&tool).expect("binary serialization should succeed");
+    let back: Tool =
+        crate::serialization::deserialize(&bytes).expect("binary deserialization should succeed");
+    assert_eq!(tool, back);
+}
+
+#[test]
+fn openapi_json_round_trip_is_lossless() {
+    use poem_openapi::types::{ParseFromJSON, ToJSON};
+
+    let tool = kitchen_sink_tool();
+    let json = tool.to_json();
+    let back = Tool::parse_from_json(json).expect("OpenAPI JSON parsing should succeed");
+    assert_eq!(tool, back);
+}
+
 // --- validation: happy path ---
 
 #[test]

@@ -300,6 +300,8 @@ async fn get_component_version_from_previous_deployment(
                         ..Default::default()
                     },
                 )])),
+                tools: None,
+                tool_deployment_config_updates: None,
                 allow_incompatible_config: false,
             },
             None::<Vec<u8>>,
@@ -561,6 +563,8 @@ async fn filter_deployments_by_version(deps: &EnvBasedTestDependencies) -> anyho
                         ..Default::default()
                     },
                 )])),
+                tools: None,
+                tool_deployment_config_updates: None,
                 allow_incompatible_config: false,
             },
             None::<Vec<u8>>,
