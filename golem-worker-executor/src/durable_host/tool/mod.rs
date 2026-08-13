@@ -30,15 +30,14 @@ use crate::preview2::golem::tool::host::{
 use crate::services::environment_state::ToolDiscoveryError;
 use crate::workerctx::WorkerCtx;
 use anyhow::{Context, anyhow};
-use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
 use golem_common::model::oplog::host_functions::{GolemToolGetAllTools, GolemToolGetTool};
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequestGolemToolGetTool, HostRequestNoInput,
+    DurableFunctionType, HostRequestGolemToolGetTool, HostRequestNoInput,
     HostResponseGolemToolTool, HostResponseGolemToolTools,
 };
-use golem_common::model::tool::{RegisteredTool, ToolName, ToolSource};
+use golem_common::model::tool::ToolName;
 use golem_common::schema::tool::DiscoveredTool;
-use golem_common::schema::tool::wit::encode_tool;
+use golem_common::schema::tool::wit::wire::Tool as WitTool;
 use wasmtime::component::{Accessor, HasSelf, Resource, StreamReader};
 
 const NOT_IMPLEMENTED: &str = "golem:tool/host is not yet implemented";
@@ -52,36 +51,23 @@ pub struct ToolRpcEntry;
 /// runtime is implemented.
 pub struct FutureInvokeResultEntry;
 
-fn discover_registered_tool(registered_tool: RegisteredTool) -> DiscoveredTool {
-    let RegisteredTool {
-        definition, source, ..
-    } = registered_tool;
-    let implemented_by = match source {
-        ToolSource::Component { component_id, .. } => component_id,
-    };
+impl TryFrom<&DiscoveredTool> for WitRegisteredTool {
+    type Error = anyhow::Error;
 
-    DiscoveredTool {
-        definition,
-        implemented_by,
+    fn try_from(value: &DiscoveredTool) -> Result<Self, Self::Error> {
+        let name = value.definition.name().unwrap_or("<unnamed tool>");
+        let definition = WitTool::try_from(&value.definition).with_context(|| {
+            format!(
+                "failed to encode discovered tool '{name}' implemented by component {}",
+                value.implemented_by
+            )
+        })?;
+
+        Ok(Self {
+            definition,
+            implemented_by: value.implemented_by.into(),
+        })
     }
-}
-
-fn encode_discovered_tool(discovered_tool: &DiscoveredTool) -> anyhow::Result<WitRegisteredTool> {
-    let name = discovered_tool
-        .definition
-        .name()
-        .unwrap_or("<unnamed tool>");
-    let definition = encode_tool(&discovered_tool.definition).with_context(|| {
-        format!(
-            "failed to encode discovered tool '{name}' implemented by component {}",
-            discovered_tool.implemented_by
-        )
-    })?;
-
-    Ok(WitRegisteredTool {
-        definition,
-        implemented_by: discovered_tool.implemented_by.into(),
-    })
 }
 
 fn classify_tool_discovery_error(error: &ToolDiscoveryError) -> HostFailureKind {
@@ -98,19 +84,9 @@ fn terminal_tool_discovery_error(message: String) -> anyhow::Error {
     })
 }
 
-fn tool_discovery_principal(parsed_agent_id: Option<ParsedAgentId>) -> Option<AgentTypeName> {
-    parsed_agent_id.map(|agent_id| agent_id.agent_type)
-}
-
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) async fn get_all_tools_model(&mut self) -> anyhow::Result<Vec<DiscoveredTool>> {
-        let Some(agent_type) = tool_discovery_principal(self.parsed_agent_id()) else {
-            self.observe_function_call(
-                <GolemToolGetAllTools as HostPayloadPair>::INTERFACE,
-                <GolemToolGetAllTools as HostPayloadPair>::FUNCTION,
-            );
-            return Ok(Vec::new());
-        };
+        let agent_type = self.parsed_agent_id().map(|agent_id| agent_id.agent_type);
         let environment_id = self.state.owned_agent_id.environment_id;
 
         let mut handle = CallHandle::<GolemToolGetAllTools, NotCancellable>::start(
@@ -128,25 +104,29 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
 
-            let result = loop {
-                let result = self
-                    .state
-                    .environment_state_service
-                    .get_accessible_tools(environment_id, &agent_type)
-                    .await
-                    .map(|tools| {
-                        tools
-                            .into_iter()
-                            .map(discover_registered_tool)
-                            .collect::<Vec<_>>()
-                    });
-                match handle
-                    .try_trigger_retry_or_loop(self, &result, classify_tool_discovery_error)
-                    .await?
-                {
-                    InternalRetryResult::Persist => break result,
-                    InternalRetryResult::RetryInternally => continue,
+            let result = if let Some(agent_type) = &agent_type {
+                loop {
+                    let result = self
+                        .state
+                        .environment_state_service
+                        .get_accessible_tools(environment_id, agent_type)
+                        .await
+                        .map(|tools| {
+                            tools
+                                .into_iter()
+                                .map(DiscoveredTool::from)
+                                .collect::<Vec<_>>()
+                        });
+                    match handle
+                        .try_trigger_retry_or_loop(self, &result, classify_tool_discovery_error)
+                        .await?
+                    {
+                        InternalRetryResult::Persist => break result,
+                        InternalRetryResult::RetryInternally => continue,
+                    }
                 }
+            } else {
+                Ok(Vec::new())
             };
 
             handle
@@ -160,30 +140,28 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
 
         response.result.map_err(|error| {
+            let agent_type = agent_type
+                .as_ref()
+                .map_or("<missing>", |agent_type| agent_type.0.as_str());
             terminal_tool_discovery_error(format!(
                 "failed to discover tools for agent type '{}' in environment '{environment_id}': {error}",
-                agent_type.0
+                agent_type
             ))
         })
     }
 
     pub(crate) async fn get_tool_model(
         &mut self,
-        tool_name: ToolName,
+        tool_name: String,
     ) -> anyhow::Result<Option<DiscoveredTool>> {
-        let Some(agent_type) = tool_discovery_principal(self.parsed_agent_id()) else {
-            self.observe_function_call(
-                <GolemToolGetTool as HostPayloadPair>::INTERFACE,
-                <GolemToolGetTool as HostPayloadPair>::FUNCTION,
-            );
-            return Ok(None);
-        };
+        let agent_type = self.parsed_agent_id().map(|agent_id| agent_id.agent_type);
+        let valid_tool_name = ToolName::try_from(tool_name.as_str()).ok();
         let environment_id = self.state.owned_agent_id.environment_id;
 
         let mut handle = CallHandle::<GolemToolGetTool, NotCancellable>::start(
             self,
             HostRequestGolemToolGetTool {
-                name: tool_name.as_str().to_string(),
+                name: tool_name.clone(),
             },
             DurableFunctionType::ReadRemote,
         )
@@ -197,20 +175,26 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
 
-            let result = loop {
-                let result = self
-                    .state
-                    .environment_state_service
-                    .get_accessible_tool(environment_id, &agent_type, &tool_name)
-                    .await
-                    .map(|tool| tool.map(discover_registered_tool));
-                match handle
-                    .try_trigger_retry_or_loop(self, &result, classify_tool_discovery_error)
-                    .await?
-                {
-                    InternalRetryResult::Persist => break result,
-                    InternalRetryResult::RetryInternally => continue,
+            let result = if let (Some(agent_type), Some(valid_tool_name)) =
+                (&agent_type, &valid_tool_name)
+            {
+                loop {
+                    let result = self
+                        .state
+                        .environment_state_service
+                        .get_accessible_tool(environment_id, agent_type, valid_tool_name)
+                        .await
+                        .map(|tool| tool.map(DiscoveredTool::from));
+                    match handle
+                        .try_trigger_retry_or_loop(self, &result, classify_tool_discovery_error)
+                        .await?
+                    {
+                        InternalRetryResult::Persist => break result,
+                        InternalRetryResult::RetryInternally => continue,
+                    }
                 }
+            } else {
+                Ok(None)
             };
 
             handle
@@ -224,9 +208,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
 
         response.result.map_err(|error| {
+            let agent_type = agent_type
+                .as_ref()
+                .map_or("<missing>", |agent_type| agent_type.0.as_str());
             terminal_tool_discovery_error(format!(
                 "failed to discover tool '{}' for agent type '{}' in environment '{environment_id}': {error}",
-                tool_name, agent_type.0
+                tool_name, agent_type
             ))
         })
     }
@@ -237,23 +224,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.get_all_tools_model()
             .await?
             .iter()
-            .map(encode_discovered_tool)
+            .map(WitRegisteredTool::try_from)
             .collect()
     }
 
     async fn get_tool(&mut self, name: String) -> anyhow::Result<Option<WitRegisteredTool>> {
-        let Ok(tool_name) = ToolName::try_from(name) else {
-            self.observe_function_call(
-                <GolemToolGetTool as HostPayloadPair>::INTERFACE,
-                <GolemToolGetTool as HostPayloadPair>::FUNCTION,
-            );
-            return Ok(None);
-        };
-
-        self.get_tool_model(tool_name)
+        self.get_tool_model(name)
             .await?
             .as_ref()
-            .map(encode_discovered_tool)
+            .map(WitRegisteredTool::try_from)
             .transpose()
     }
 }
@@ -347,20 +326,16 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        classify_tool_discovery_error, discover_registered_tool, encode_discovered_tool,
-        terminal_tool_discovery_error, tool_discovery_principal,
-    };
+    use super::{WitRegisteredTool, classify_tool_discovery_error, terminal_tool_discovery_error};
     use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use crate::services::environment_state::ToolDiscoveryError;
     use golem_common::model::account::{AccountEmail, AccountId};
-    use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
     use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
     use golem_common::model::deployment::DeploymentRevision;
     use golem_common::model::tool::{RegisteredTool, ToolProvisionConfig, ToolSource};
-    use golem_common::schema::tool::wit::decode_tool;
     use golem_common::schema::tool::{
-        CommandBody, CommandNode, CommandTree, Doc, Globals, Positional, Positionals, Tool,
+        CommandBody, CommandNode, CommandTree, DiscoveredTool, Doc, Globals, Positional,
+        Positionals, Tool,
     };
     use golem_common::schema::{MetadataEnvelope, SchemaGraph, SchemaType, SchemaTypeDef, TypeId};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -431,35 +406,19 @@ mod tests {
     }
 
     #[test]
-    fn tool_discovery_principal_fails_closed_without_parsed_agent_id() {
-        assert_eq!(tool_discovery_principal(None), None);
-
-        let agent_type = AgentTypeName("AgentA".to_string());
-        let parsed_agent_id = ParsedAgentId::new(
-            agent_type.clone(),
-            golem_common::schema::TypedSchemaValue::new(
-                SchemaGraph::empty(),
-                golem_common::schema::SchemaValue::Record { fields: Vec::new() },
-            ),
-            None,
-        );
-        assert_eq!(
-            tool_discovery_principal(Some(parsed_agent_id)),
-            Some(agent_type)
-        );
-    }
-
-    #[test]
     fn registered_component_tool_converts_to_discovery_wit_record() {
         let (registered, component_id) = registered_tool();
         let expected_definition = registered.definition.clone();
 
-        let discovered = discover_registered_tool(registered);
+        let discovered = DiscoveredTool::from(registered);
         assert_eq!(discovered.definition, expected_definition);
         assert_eq!(discovered.implemented_by, component_id);
 
-        let wit = encode_discovered_tool(&discovered).unwrap();
-        assert_eq!(decode_tool(&wit.definition).unwrap(), expected_definition);
+        let wit = WitRegisteredTool::try_from(&discovered).unwrap();
+        assert_eq!(
+            Tool::try_from(&wit.definition).unwrap(),
+            expected_definition
+        );
         assert_eq!(ComponentId::from(wit.implemented_by), component_id);
     }
 
@@ -492,7 +451,7 @@ mod tests {
     #[test]
     fn discovered_tool_wit_encoding_error_has_tool_and_source_context() {
         let (registered, component_id) = registered_tool();
-        let mut discovered = discover_registered_tool(registered);
+        let mut discovered = DiscoveredTool::from(registered);
         let duplicate_id = TypeId::new("duplicate");
         let duplicate_definition = SchemaTypeDef {
             id: duplicate_id,
@@ -502,7 +461,7 @@ mod tests {
         discovered.definition.schema.defs =
             vec![duplicate_definition.clone(), duplicate_definition];
 
-        let error = match encode_discovered_tool(&discovered) {
+        let error = match WitRegisteredTool::try_from(&discovered) {
             Ok(_) => panic!("duplicate schema definitions must fail WIT encoding"),
             Err(error) => error,
         };

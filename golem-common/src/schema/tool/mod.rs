@@ -21,6 +21,7 @@
 //! ([`wit`]), which depend on host-side types.
 
 use crate::model::component::ComponentId;
+use crate::model::tool::{RegisteredTool, ToolSource};
 use serde::{Deserialize, Serialize};
 
 pub use golem_schema::schema::tool::*;
@@ -39,6 +40,22 @@ pub use golem_schema::schema::tool::*;
 pub struct DiscoveredTool {
     pub definition: Tool,
     pub implemented_by: ComponentId,
+}
+
+impl From<RegisteredTool> for DiscoveredTool {
+    fn from(value: RegisteredTool) -> Self {
+        let RegisteredTool {
+            definition, source, ..
+        } = value;
+        let implemented_by = match source {
+            ToolSource::Component { component_id, .. } => component_id,
+        };
+
+        Self {
+            definition,
+            implemented_by,
+        }
+    }
 }
 
 #[cfg(feature = "full")]
