@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use crate::app::template::AppTemplateName;
-use crate::config::{AuthSecret, AuthenticationConfig, Profile, ProfileConfig, ProfileName};
+use crate::config::{AuthenticationConfig, Profile, ProfileConfig, ProfileName};
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::{LogColorize, log_error, log_warn, log_warn_action, logln};
+use crate::model::agent::RawAgentId;
 use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
-use crate::model::worker::RawAgentId;
 use anyhow::bail;
 use colored::Colorize;
 use golem_client::model::Account;
@@ -32,7 +32,9 @@ use golem_common::model::environment::EnvironmentName;
 use indoc::formatdoc;
 use inquire::error::InquireResult;
 use inquire::validator::{ErrorMessage, Validation};
-use inquire::{Confirm, CustomType, InquireError, MultiSelect, Select, Text};
+use inquire::{
+    Confirm, CustomType, InquireError, MultiSelect, Password, PasswordDisplayMode, Select, Text,
+};
 use itertools::Itertools;
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
@@ -128,8 +130,19 @@ impl InteractiveHandler {
         )
     }
 
-    pub fn confirm_staging_next_step(&self) -> anyhow::Result<bool> {
-        self.confirm(true, "Continue with the next staging step?", None)
+    pub fn confirm_staging_next_step(
+        &self,
+        operation: &str,
+        name: impl AsRef<str>,
+    ) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            format!(
+                "Continue with staging step ({operation} {})?",
+                name.as_ref()
+            ),
+            None,
+        )
     }
 
     pub fn confirm_auto_deploy_component(
@@ -288,22 +301,21 @@ impl InteractiveHandler {
     pub fn confirm_update_to_current(
         &self,
         component_name: &ComponentName,
-        agent_name: &RawAgentId,
+        agent_id: &RawAgentId,
         parsed_agent_id: Option<&golem_common::model::agent::ParsedAgentId>,
         source_language: &crate::agent_id_display::SourceLanguage,
         target_revision: ComponentRevision,
     ) -> anyhow::Result<bool> {
-        let rendered_agent_name = match parsed_agent_id {
-            Some(parsed) if source_language.is_known() => {
-                crate::agent_id_display::render_agent_id(parsed, source_language)
-            }
-            _ => agent_name.0.clone(),
-        };
+        let rendered_agent_id = crate::agent_id_display::render_agent_id_or_raw(
+            parsed_agent_id,
+            source_language,
+            &agent_id.0,
+        );
         self.confirm(
             true,
             format!("Agent {}/{} will be updated to the current component revision: {}. Do you want to continue?",
                     component_name.0.log_color_highlight(),
-                    rendered_agent_name.log_color_highlight(),
+                    rendered_agent_id.log_color_highlight(),
                     target_revision.to_string().log_color_highlight()
             ),
             None,
@@ -404,16 +416,17 @@ impl InteractiveHandler {
                 .with_starting_cursor(2)
                 .prompt()?;
 
-        let static_token = CustomType::<OptionalAuthSecret>::new(
-            "Static token for authentication (empty to use interactive authentication via OAuth2):",
-        )
-        .prompt()?
-        .0;
+        let static_token =
+            Password::new("Static token for authentication (leave empty for OAuth2):")
+                .with_display_mode(PasswordDisplayMode::Masked)
+                .without_confirmation()
+                .with_help_message("Mainly for testing or custom servers")
+                .prompt()?;
 
-        let auth = if let Some(static_token) = static_token {
-            AuthenticationConfig::static_token(static_token.0)
-        } else {
+        let auth = if static_token.is_empty() {
             AuthenticationConfig::empty_oauth2()
+        } else {
+            AuthenticationConfig::static_token(static_token)
         };
 
         let profile = Profile {
@@ -429,6 +442,38 @@ impl InteractiveHandler {
             .prompt()?;
 
         Ok((profile_name.into(), profile, set_as_active))
+    }
+
+    /// Prompts (masked) for a required static authentication token, used when a
+    /// profile is created with `--auth static` but no `--static-token`. In a
+    /// non-interactive environment there is no way to ask, so it fails with a
+    /// hint to pass the token directly.
+    pub fn prompt_static_token(&self) -> anyhow::Result<String> {
+        let token = Password::new("Static authentication token:")
+            .with_display_mode(PasswordDisplayMode::Masked)
+            .without_confirmation()
+            .with_help_message("Mainly for testing or custom servers")
+            .with_validator(|value: &str| {
+                if value.trim().is_empty() {
+                    Ok(Validation::Invalid(ErrorMessage::from(
+                        "A static token is required with --auth static",
+                    )))
+                } else {
+                    Ok(Validation::Valid)
+                }
+            })
+            .prompt()
+            .none_if_not_interactive()?;
+
+        match token {
+            Some(token) => Ok(token),
+            None => {
+                log_error(
+                    "Cannot prompt for a static token in a non-interactive environment. Pass --static-token <TOKEN> instead.",
+                );
+                bail!(NonSuccessfulExit)
+            }
+        }
     }
 
     pub fn select_repl_language(
@@ -650,30 +695,6 @@ impl FromStr for OptionalUrl {
             Ok(OptionalUrl(None))
         } else {
             Ok(OptionalUrl(Some(Url::from_str(s)?)))
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct OptionalAuthSecret(Option<AuthSecret>);
-
-impl Display for OptionalAuthSecret {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match &self.0 {
-            None => Ok(()),
-            Some(value) => write!(f, "{value}"),
-        }
-    }
-}
-
-impl FromStr for OptionalAuthSecret {
-    type Err = uuid::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.trim().is_empty() {
-            Ok(Self(None))
-        } else {
-            Ok(Self(Some(AuthSecret(s.to_string()))))
         }
     }
 }

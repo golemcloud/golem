@@ -246,7 +246,11 @@ impl Config {
             )
         })?;
 
-        // TODO: atomic: check and override urls, if necessary (and save)
+        // Built-in `local`/`cloud` URLs should be fixed (`builtin_local_url()` /
+        // `DEFAULT_CLOUD_URL`), but a `custom_url` hand-edited into their config
+        // entry is still honoured in non-manifest mode — a migration leftover.
+        // Making them authoritative and rewriting stale stored values is a deferred
+        // behaviour change; for now the stored value is left as-is.
         Ok(config.with_local_and_cloud_profiles())
     }
 
@@ -374,7 +378,6 @@ pub struct ClientConfig {
     pub worker_url: Url,
     pub service_http_client_config: HttpClientConfig,
     pub invoke_http_client_config: HttpClientConfig,
-    pub health_check_http_client_config: HttpClientConfig,
     pub file_download_http_client_config: HttpClientConfig,
 }
 
@@ -394,7 +397,6 @@ impl From<&Profile> for ClientConfig {
             worker_url,
             service_http_client_config: HttpClientConfig::new_for_service_calls(allow_insecure),
             invoke_http_client_config: HttpClientConfig::new_for_invoke(allow_insecure),
-            health_check_http_client_config: HttpClientConfig::new_for_health_check(allow_insecure),
             file_download_http_client_config: HttpClientConfig::new_for_file_download(
                 allow_insecure,
             ),
@@ -453,7 +455,6 @@ impl ClientConfig {
             worker_url,
             service_http_client_config: HttpClientConfig::new_for_service_calls(allow_insecure),
             invoke_http_client_config: HttpClientConfig::new_for_invoke(allow_insecure),
-            health_check_http_client_config: HttpClientConfig::new_for_health_check(allow_insecure),
             file_download_http_client_config: HttpClientConfig::new_for_file_download(
                 allow_insecure,
             ),
@@ -573,16 +574,6 @@ impl HttpClientConfig {
             read_timeout: None,
         }
         .with_env_overrides("GOLEM_HTTP_INVOKE")
-    }
-
-    pub fn new_for_health_check(allow_insecure: bool) -> Self {
-        Self {
-            allow_insecure,
-            timeout: Some(Duration::from_secs(2)),
-            connect_timeout: Some(Duration::from_secs(1)),
-            read_timeout: Some(Duration::from_secs(1)),
-        }
-        .with_env_overrides("GOLEM_HTTP_HEALTHCHECK")
     }
 
     pub fn new_for_file_download(allow_insecure: bool) -> Self {

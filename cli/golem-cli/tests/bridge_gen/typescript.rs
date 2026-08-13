@@ -26,7 +26,7 @@ use golem_cli::bridge_gen::typescript::{
 use golem_cli::bridge_gen::{
     BridgeGenerator, BridgeMode, bridge_client_directory_name, tool_bridge_client_directory_name,
 };
-use golem_cli::model::GuestLanguage;
+use golem_cli::model::language::GuestLanguage;
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, PathDirection, PathKind, PathSpec, ResultSpec,
@@ -537,7 +537,8 @@ fn guest_durable_generation_uses_sdk_runtime_surface() {
     assert!(source.contains("invokeAndAwait("));
     assert!(source.contains("abortable(signal: AbortSignal"));
     assert!(source.contains("this.resolved.invoke("));
-    assert!(source.contains("this.resolved.schedule("));
+    assert!(!source.contains("this.resolved.schedule("));
+    assert!(source.contains("return this.resolved.scheduleCancelable("));
     assert!(source.contains("this.resolved.scheduleCancelable("));
     assert!(source.contains("base.typedSchemaValueFromJson("));
     assert!(source.contains("reachable-config"));
@@ -757,7 +758,7 @@ fn guest_ephemeral_generation_uses_metadata_runtime_calls() {
     assert!(!source.contains("static getPhantom("));
     assert!(source.contains("invokeAndAwaitWithMetadata("));
     assert!(source.contains("invokeWithMetadata("));
-    assert!(source.contains("scheduleWithMetadata("));
+    assert!(!source.contains("scheduleWithMetadata("));
     assert!(source.contains("scheduleCancelableWithMetadata("));
     assert!(source.contains("const phantomId = undefined;"));
     assert!(!source.contains("base.Uuid.generate()"));

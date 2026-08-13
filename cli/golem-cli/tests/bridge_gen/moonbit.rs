@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::bridge_gen::fixtures::{
-    agent, def, field, method, multi_agent_wrapper_2_types, named_field, ref_to,
+    agent, def, field, local_config, method, multi_agent_wrapper_2_types, named_field, ref_to,
     single_agent_wrapper_types, variant_case,
 };
 use crate::bridge_gen::type_naming::test_type_naming;
@@ -27,7 +27,7 @@ use golem_cli::bridge_gen::moonbit::{
     MoonBitBridgeGenerator, MoonBitBridgeMode, MoonBitTypeName, emit_schema_graph_literal,
 };
 use golem_cli::bridge_gen::type_naming::TypeName;
-use golem_cli::model::GuestLanguage;
+use golem_cli::model::language::GuestLanguage;
 use golem_cli::sdk_overrides::workspace_root;
 use golem_common::model::agent::{AgentConfigSource, AgentMode};
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
@@ -811,23 +811,56 @@ fn guest_mode_accepts_numeric_agent_type_names() {
 
 #[test]
 fn ephemeral_guest_client_omits_get_and_scoped() {
-    let guest = generate_without_check(
-        agent(
-            "EphemeralAgent",
-            "moonbit",
-            vec![],
-            vec![method("ping", vec![], None)],
-            vec![],
-            AgentMode::Ephemeral,
-        ),
-        MoonBitBridgeMode::GuestWasmRpc,
+    let mut agent_type = agent(
+        "EphemeralAgent",
+        "moonbit",
+        vec![],
+        vec![
+            method("ping", vec![], None),
+            method(
+                "echo",
+                vec![field("message", SchemaType::string())],
+                Some(SchemaType::string()),
+            ),
+        ],
+        vec![],
+        AgentMode::Ephemeral,
     );
+    agent_type.config = vec![local_config(vec!["region"], SchemaType::string())];
+    let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
     let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
 
     assert!(!source.contains("pub fn EphemeralAgentClient::get("));
     assert!(!source.contains("pub fn[T] EphemeralAgentClient::scoped("));
     assert!(source.contains("pub fn EphemeralAgentClient::new_phantom("));
-    assert!(source.contains("pub fn EphemeralAgentClient::get_phantom("));
+    assert!(!source.contains("pub fn EphemeralAgentClient::get_phantom("));
+    assert!(!source.contains("pub fn EphemeralAgentClient::get_agent_id("));
+    assert!(!source.contains("pub fn EphemeralAgentClient::phantom_id("));
+    assert!(source.contains("@rpc.AgentClient::ephemeral("));
+    assert!(source.contains("@rpc.AgentClient::ephemeral_with_config("));
+    assert!(source.contains("-> @rpc.InvocationResult[Unit]"));
+    assert!(source.contains("-> @rpc.InvocationResult[String]"));
+    assert!(source.contains("-> @rpc.InvocationMetadata"));
+    assert!(source.contains("-> @rpc.ScheduledInvocationReceipt"));
+    assert!(source.contains("-> @rpc.CancelableScheduledInvocationReceipt"));
+    assert!(source.contains("{ metadata: response.metadata, value: () }"));
+    assert!(source.contains("let decoded ="));
+    assert!(source.contains("{ metadata: response.metadata, value: decoded }"));
+
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("check")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    assert!(
+        output.status.success(),
+        "guest moon check failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
