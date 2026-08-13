@@ -1183,6 +1183,56 @@ fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
 }
 
 #[test]
+fn cli_output_schema_rejects_invalid_tool_definition() {
+    let schema = load_command_output_schema();
+    let validator = jsonschema::options()
+        .build(&schema)
+        .expect("command output schema must be a valid JSON schema");
+    let mut output = to_structured_output_value(crate::model::component::ComponentGetView(
+        sample_component_view(),
+    ))
+    .expect("component.get should serialize");
+
+    *output
+        .pointer_mut("/tools/grep/definition")
+        .expect("component.get should contain the sample tool definition") = json!({});
+
+    assert!(
+        !validator.is_valid(&output),
+        "schema must reject an untyped tool definition"
+    );
+}
+
+// PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
+#[test]
+fn cli_output_schema_rejects_out_of_range_tool_command_index() {
+    let schema = load_command_output_schema();
+    let validator = jsonschema::options()
+        .build(&schema)
+        .expect("command output schema must be a valid JSON schema");
+    let mut output = to_structured_output_value(crate::model::component::ComponentGetView(
+        sample_component_view(),
+    ))
+    .expect("component.get should serialize");
+
+    *output
+        .pointer_mut("/tools/grep/definition/commands/nodes/0/subcommands")
+        .expect("component.get should contain the sample tool command") = json!([2147483648_u64]);
+
+    assert!(
+        serde_json::from_value::<golem_common::schema::tool::Tool>(
+            output["tools"]["grep"]["definition"].clone()
+        )
+        .is_err(),
+        "fixture must exceed the typed CommandIndex range"
+    );
+    assert!(
+        !validator.is_valid(&output),
+        "schema must reject a command index that cannot deserialize as i32"
+    );
+}
+
+#[test]
 fn cli_output_schema_validates_discriminated_documents() {
     let schema = load_command_output_schema();
     let validator = jsonschema::options()

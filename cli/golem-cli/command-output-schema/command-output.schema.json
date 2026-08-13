@@ -3535,7 +3535,7 @@
       "type": "object",
       "required": ["definition", "provision", "environmentBinding", "agentBindings"],
       "properties": {
-        "definition": { "type": "object" },
+        "definition": { "$ref": "#/definitions/Tool" },
         "provision": { "$ref": "#/definitions/ToolProvisionConfig" },
         "environmentBinding": {
           "oneOf": [
@@ -3548,6 +3548,368 @@
           "additionalProperties": { "$ref": "#/definitions/ToolBindingInput" }
         }
       },
+      "additionalProperties": false
+    },
+    "Tool": {
+      "type": "object",
+      "required": ["version", "commands", "schema"],
+      "properties": {
+        "version": { "type": "string" },
+        "commands": { "$ref": "#/definitions/CommandTree" },
+        "schema": { "$ref": "#/definitions/SchemaGraph" }
+      },
+      "additionalProperties": false
+    },
+    "CommandTree": {
+      "type": "object",
+      "required": ["nodes"],
+      "properties": {
+        "nodes": { "type": "array", "items": { "$ref": "#/definitions/CommandNode" } }
+      },
+      "additionalProperties": false
+    },
+    "CommandNode": {
+      "type": "object",
+      "required": ["name", "aliases", "doc", "globals", "subcommands", "body"],
+      "properties": {
+        "name": { "type": "string" },
+        "aliases": { "type": "array", "items": { "type": "string" } },
+        "doc": { "$ref": "#/definitions/ToolDoc" },
+        "globals": { "$ref": "#/definitions/ToolGlobals" },
+        "subcommands": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647 }
+        },
+        "body": { "oneOf": [{ "$ref": "#/definitions/CommandBody" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "ToolGlobals": {
+      "type": "object",
+      "required": ["options", "flags"],
+      "properties": {
+        "options": { "type": "array", "items": { "$ref": "#/definitions/ToolOptionSpec" } },
+        "flags": { "type": "array", "items": { "$ref": "#/definitions/ToolFlagSpec" } }
+      },
+      "additionalProperties": false
+    },
+    "CommandBody": {
+      "type": "object",
+      "required": ["positionals", "options", "flags", "constraints", "stdin", "stdout", "result", "errors", "annotations"],
+      "properties": {
+        "positionals": { "$ref": "#/definitions/ToolPositionals" },
+        "options": { "type": "array", "items": { "$ref": "#/definitions/ToolOptionSpec" } },
+        "flags": { "type": "array", "items": { "$ref": "#/definitions/ToolFlagSpec" } },
+        "constraints": { "type": "array", "items": { "$ref": "#/definitions/ToolConstraint" } },
+        "stdin": { "oneOf": [{ "$ref": "#/definitions/ToolStreamSpec" }, { "type": "null" }] },
+        "stdout": { "oneOf": [{ "$ref": "#/definitions/ToolStreamSpec" }, { "type": "null" }] },
+        "result": { "oneOf": [{ "$ref": "#/definitions/ToolResultSpec" }, { "type": "null" }] },
+        "errors": { "type": "array", "items": { "$ref": "#/definitions/ToolErrorCase" } },
+        "annotations": { "oneOf": [{ "$ref": "#/definitions/CommandAnnotations" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "CommandAnnotations": {
+      "type": "object",
+      "required": ["read_only", "destructive", "idempotent", "open_world"],
+      "properties": {
+        "read_only": { "type": "boolean" },
+        "destructive": { "type": "boolean" },
+        "idempotent": { "type": "boolean" },
+        "open_world": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "ToolPositionals": {
+      "type": "object",
+      "required": ["fixed", "tail"],
+      "properties": {
+        "fixed": { "type": "array", "items": { "$ref": "#/definitions/ToolPositional" } },
+        "tail": { "oneOf": [{ "$ref": "#/definitions/ToolTailPositional" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "ToolPositional": {
+      "type": "object",
+      "required": ["name", "doc", "value_name", "type_", "default", "required", "accepts_stdio"],
+      "properties": {
+        "name": { "type": "string" },
+        "doc": { "$ref": "#/definitions/ToolDoc" },
+        "value_name": { "type": ["string", "null"] },
+        "type_": { "$ref": "#/definitions/SchemaType" },
+        "default": { "oneOf": [{ "$ref": "#/definitions/SchemaValue" }, { "type": "null" }] },
+        "required": { "type": "boolean" },
+        "accepts_stdio": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "ToolTailPositional": {
+      "type": "object",
+      "required": ["name", "doc", "value_name", "item_type", "min", "max", "separator", "verbatim", "accepts_stdio"],
+      "properties": {
+        "name": { "type": "string" },
+        "doc": { "$ref": "#/definitions/ToolDoc" },
+        "value_name": { "type": ["string", "null"] },
+        "item_type": { "$ref": "#/definitions/SchemaType" },
+        "min": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "max": { "type": ["integer", "null"], "minimum": 0, "maximum": 4294967295 },
+        "separator": { "type": ["string", "null"] },
+        "verbatim": { "type": "boolean" },
+        "accepts_stdio": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "ToolOptionSpec": {
+      "type": "object",
+      "required": ["long", "short", "aliases", "doc", "value_name", "shape", "default", "required", "env_var"],
+      "properties": {
+        "long": { "type": "string" },
+        "short": { "type": ["string", "null"], "minLength": 1, "maxLength": 1 },
+        "aliases": { "type": "array", "items": { "type": "string" } },
+        "doc": { "$ref": "#/definitions/ToolDoc" },
+        "value_name": { "type": ["string", "null"] },
+        "shape": { "$ref": "#/definitions/ToolOptionShape" },
+        "default": { "oneOf": [{ "$ref": "#/definitions/SchemaValue" }, { "type": "null" }] },
+        "required": { "type": "boolean" },
+        "env_var": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "ToolOptionShape": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": { "kind": { "enum": ["scalar", "optional-scalar"] }, "value": { "$ref": "#/definitions/SchemaType" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": { "kind": { "const": "repeatable-list" }, "value": { "$ref": "#/definitions/RepeatableListShape" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": { "kind": { "const": "repeatable-map" }, "value": { "$ref": "#/definitions/RepeatableMapShape" } },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "RepeatableListShape": {
+      "type": "object",
+      "required": ["repetition", "item_type"],
+      "properties": {
+        "repetition": { "$ref": "#/definitions/ToolRepetition" },
+        "item_type": { "$ref": "#/definitions/SchemaType" }
+      },
+      "additionalProperties": false
+    },
+    "RepeatableMapShape": {
+      "type": "object",
+      "required": ["repetition", "map_type", "duplicate_key_policy"],
+      "properties": {
+        "repetition": { "$ref": "#/definitions/ToolRepetition" },
+        "map_type": { "$ref": "#/definitions/SchemaType" },
+        "duplicate_key_policy": { "enum": ["reject", "last-wins"] }
+      },
+      "additionalProperties": false
+    },
+    "ToolRepetition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": { "kind": { "const": "repeated" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "enum": ["delimited", "either"] },
+            "value": { "type": "string", "minLength": 1, "maxLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ToolFlagSpec": {
+      "type": "object",
+      "required": ["long", "short", "aliases", "doc", "shape", "env_var"],
+      "properties": {
+        "long": { "type": "string" },
+        "short": { "type": ["string", "null"], "minLength": 1, "maxLength": 1 },
+        "aliases": { "type": "array", "items": { "type": "string" } },
+        "doc": { "$ref": "#/definitions/ToolDoc" },
+        "shape": { "$ref": "#/definitions/ToolFlagShape" },
+        "env_var": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "ToolFlagShape": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": { "kind": { "const": "bool-flag" }, "value": { "$ref": "#/definitions/BoolFlagShape" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "const": "count-flag" },
+            "value": { "type": ["integer", "null"], "minimum": 0, "maximum": 4294967295 }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "BoolFlagShape": {
+      "type": "object",
+      "required": ["default", "negatable"],
+      "properties": { "default": { "type": "boolean" }, "negatable": { "type": "boolean" } },
+      "additionalProperties": false
+    },
+    "ToolRef": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": { "kind": { "const": "present" }, "value": { "type": "string" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": { "kind": { "const": "value-is" }, "value": { "$ref": "#/definitions/ValueIsRef" } },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ValueIsRef": {
+      "type": "object",
+      "required": ["name", "value"],
+      "properties": { "name": { "type": "string" }, "value": { "$ref": "#/definitions/SchemaValue" } },
+      "additionalProperties": false
+    },
+    "ToolConstraint": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "enum": ["requires-all", "all-or-none", "requires-any"] },
+            "value": { "type": "array", "items": { "$ref": "#/definitions/ToolRef" } }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "const": "mutex-groups" },
+            "value": { "type": "array", "items": { "$ref": "#/definitions/RefGroup" } }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": { "kind": { "const": "implies" }, "value": { "$ref": "#/definitions/ImpliesConstraint" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": { "kind": { "const": "forbids" }, "value": { "$ref": "#/definitions/ForbidsConstraint" } },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "RefGroup": {
+      "type": "object",
+      "required": ["refs"],
+      "properties": { "refs": { "type": "array", "items": { "$ref": "#/definitions/ToolRef" } } },
+      "additionalProperties": false
+    },
+    "ImpliesConstraint": {
+      "type": "object",
+      "required": ["lhs_quant", "lhs", "rhs_quant", "rhs"],
+      "properties": {
+        "lhs_quant": { "$ref": "#/definitions/ToolQuantifier" },
+        "lhs": { "type": "array", "items": { "$ref": "#/definitions/ToolRef" } },
+        "rhs_quant": { "$ref": "#/definitions/ToolQuantifier" },
+        "rhs": { "type": "array", "items": { "$ref": "#/definitions/ToolRef" } }
+      },
+      "additionalProperties": false
+    },
+    "ForbidsConstraint": {
+      "type": "object",
+      "required": ["lhs_quant", "lhs", "rhs"],
+      "properties": {
+        "lhs_quant": { "$ref": "#/definitions/ToolQuantifier" },
+        "lhs": { "type": "array", "items": { "$ref": "#/definitions/ToolRef" } },
+        "rhs": { "type": "array", "items": { "$ref": "#/definitions/ToolRef" } }
+      },
+      "additionalProperties": false
+    },
+    "ToolQuantifier": { "type": "string", "enum": ["all", "any"] },
+    "ToolStreamSpec": {
+      "type": "object",
+      "required": ["doc", "mime", "required"],
+      "properties": {
+        "doc": { "$ref": "#/definitions/ToolDoc" },
+        "mime": { "type": "array", "items": { "type": "string" } },
+        "required": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "ToolResultSpec": {
+      "type": "object",
+      "required": ["type_", "doc", "formatters", "default_formatter"],
+      "properties": {
+        "type_": { "$ref": "#/definitions/SchemaType" },
+        "doc": { "$ref": "#/definitions/ToolDoc" },
+        "formatters": { "type": "array", "items": { "$ref": "#/definitions/ToolFormatter" } },
+        "default_formatter": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "ToolFormatter": {
+      "type": "object",
+      "required": ["name", "doc"],
+      "properties": { "name": { "type": "string" }, "doc": { "$ref": "#/definitions/ToolDoc" } },
+      "additionalProperties": false
+    },
+    "ToolErrorCase": {
+      "type": "object",
+      "required": ["name", "doc", "kind", "exit_code", "payload"],
+      "properties": {
+        "name": { "type": "string" },
+        "doc": { "$ref": "#/definitions/ToolDoc" },
+        "kind": { "enum": ["usage-error", "runtime-error"] },
+        "exit_code": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "payload": { "oneOf": [{ "$ref": "#/definitions/SchemaType" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "ToolDoc": {
+      "type": "object",
+      "required": ["summary", "description", "examples"],
+      "properties": {
+        "summary": { "type": "string" },
+        "description": { "type": "string" },
+        "examples": { "type": "array", "items": { "$ref": "#/definitions/ToolExample" } }
+      },
+      "additionalProperties": false
+    },
+    "ToolExample": {
+      "type": "object",
+      "required": ["title", "body"],
+      "properties": { "title": { "type": "string" }, "body": { "type": "string" } },
       "additionalProperties": false
     },
     "ToolProvisionConfig": {
