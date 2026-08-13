@@ -4,8 +4,11 @@ package golem.registry;
 
 import "golem/component/agent.proto";
 import "golem/component/component_id.proto";
+import "golem/component/component_metadata.proto";
+import "golem/common/account_id.proto";
 import "golem/registry/agent.proto";
 import "golem/registry/agent_secret.proto";
+import "golem/tool/tool.proto";
 import "golem/worker/retry_policy.proto";
 
 message AgentDeploymentDetails {
@@ -17,4 +20,41 @@ message EnvironmentState {
   repeated AgentDeploymentDetails agent_deployment_details = 1;
   repeated AgentSecret agent_secrets = 2;
   repeated golem.worker.retry.NamedRetryPolicy retry_policies = 3;
+  optional ToolDeploymentState tool_deployment = 4;
+}
+
+message ComponentToolSource {
+  golem.component.ComponentId component_id = 1;
+  uint64 component_revision = 2;
+  string component_name = 3;
+}
+
+message RegisteredTool {
+  uint64 deployment_revision = 1;
+  golem.tool.Tool definition = 2;
+  golem.component.ToolProvisionConfig provision = 3;
+  ComponentToolSource source = 4;
+  golem.common.AccountId owner_account_id = 5;
+  string owner_account_email = 6;
+  string metadata_version = 7;
+}
+
+message CompiledToolBinding {
+  uint64 deployment_revision = 1;
+  string agent_type_name = 2;
+  string tool_name = 3;
+  string version = 4;
+  golem.common.AccountId account_id = 5;
+  string account_email = 6;
+  string parameters_json = 7;
+  golem.component.SecretKeyScope secret_keys_readable = 8;
+  golem.component.SecretKeyScope secret_keys_revealable = 9;
+  ComponentToolSource source = 10;
+  string metadata_version = 11;
+}
+
+message ToolDeploymentState {
+  uint64 deployment_revision = 1;
+  repeated RegisteredTool registered_tools = 2;
+  repeated CompiledToolBinding agent_tool_bindings = 3;
 }

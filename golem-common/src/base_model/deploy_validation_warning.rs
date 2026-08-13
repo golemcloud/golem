@@ -21,6 +21,7 @@
 
 use super::agent::{AgentTypeName, HttpMethod};
 use super::component::ComponentId;
+use super::tool::ToolName;
 use crate::{declare_structs, declare_unions};
 use std::fmt;
 
@@ -35,7 +36,11 @@ declare_unions! {
         /// zero seconds. `Cache-Control: max-age=0` will be emitted, meaning
         /// every downstream request will revalidate via `ETag`. Likely not
         /// what the author intended.
-        HttpApiReadOnlyTtlBelowOneSecond(HttpApiReadOnlyTtlBelowOneSecond)
+        HttpApiReadOnlyTtlBelowOneSecond(HttpApiReadOnlyTtlBelowOneSecond),
+
+        /// Revealable secret keys requested by a tool binding were outside
+        /// its effective readable scope and were removed during compilation.
+        ToolRevealableSecretKeysDropped(ToolRevealableSecretKeysDropped)
     }
 }
 
@@ -53,6 +58,11 @@ declare_structs! {
         pub agent_type: AgentTypeName,
         pub method_name: String,
         pub ttl_nanos: u64,
+    }
+
+    pub struct ToolRevealableSecretKeysDropped {
+        pub agent_type: AgentTypeName,
+        pub tool_name: ToolName,
     }
 }
 
@@ -73,6 +83,12 @@ impl fmt::Display for DeployValidationWarning {
                 method_name = w.method_name,
                 agent_type = w.agent_type,
                 ttl_nanos = w.ttl_nanos,
+            ),
+            DeployValidationWarning::ToolRevealableSecretKeysDropped(w) => write!(
+                f,
+                "Tool `{tool_name}` binding for agent `{agent_type}` requested revealable secret keys outside its effective readable scope; those keys were dropped.",
+                tool_name = w.tool_name,
+                agent_type = w.agent_type,
             ),
         }
     }

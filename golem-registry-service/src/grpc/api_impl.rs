@@ -522,6 +522,7 @@ impl RegistryServiceGrpcApi {
                         .map(|secret| (secret.path.clone(), secret))
                         .collect(),
                     retry_policies: Vec::new(),
+                    tool_deployment: None,
                 }
                 .into(),
             ),

@@ -40,10 +40,17 @@ use crate::schema::schema_value::SchemaValue;
 use serde::{Deserialize, Serialize};
 
 pub mod canonical;
+#[cfg(feature = "full")]
+mod protobuf;
 pub mod validation;
 
 /// Index into [`CommandTree::nodes`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(transparent))]
 #[serde(transparent)]
 pub struct CommandIndex(pub i32);
 
@@ -56,6 +63,11 @@ impl CommandIndex {
 
 /// Top-level tool metadata record.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct Tool {
     pub version: String,
     pub commands: CommandTree,
@@ -80,6 +92,11 @@ impl Tool {
 
 /// Flattened command hierarchy. Always non-empty; the root command is at index 0.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct CommandTree {
     pub nodes: Vec<CommandNode>,
 }
@@ -88,6 +105,11 @@ pub struct CommandTree {
 /// both. Globals declared here apply to this command's own body and to every
 /// descendant subcommand body.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct CommandNode {
     pub name: String,
     pub aliases: Vec<String>,
@@ -98,12 +120,22 @@ pub struct CommandNode {
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct Globals {
     pub options: Vec<OptionSpec>,
     pub flags: Vec<FlagSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct CommandBody {
     pub positionals: Positionals,
     pub options: Vec<OptionSpec>,
@@ -119,6 +151,11 @@ pub struct CommandBody {
 /// Behavioral hints surfaced to MCP and other LLM-facing surfaces, following
 /// the MCP convention.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct CommandAnnotations {
     pub read_only: bool,
     pub destructive: bool,
@@ -127,12 +164,22 @@ pub struct CommandAnnotations {
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct Positionals {
     pub fixed: Vec<Positional>,
     pub tail: Option<TailPositional>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct Positional {
     pub name: String,
     pub doc: Doc,
@@ -147,6 +194,11 @@ pub struct Positional {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct TailPositional {
     pub name: String,
     pub doc: Doc,
@@ -164,6 +216,11 @@ pub struct TailPositional {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct OptionSpec {
     pub long: String,
     pub short: Option<char>,
@@ -178,6 +235,12 @@ pub struct OptionSpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
 pub enum OptionShape {
     /// Required value: `--opt VALUE` or `--opt=VALUE`.
     Scalar(SchemaType),
@@ -192,6 +255,11 @@ pub enum OptionShape {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct RepeatableListShape {
     pub repetition: Repetition,
     /// Schema of a single collected element.
@@ -199,6 +267,11 @@ pub struct RepeatableListShape {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct RepeatableMapShape {
     pub repetition: Repetition,
     /// A [`SchemaType::Map`] node; the collected value is this map.
@@ -209,6 +282,12 @@ pub struct RepeatableMapShape {
 
 /// Resolution policy for a repeated key in a [`OptionShape::RepeatableMap`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "kebab-case")]
 pub enum DuplicateKeyPolicy {
     /// A repeated key is a usage error.
     Reject,
@@ -217,6 +296,12 @@ pub enum DuplicateKeyPolicy {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
 pub enum Repetition {
     /// `--inc a --inc b`
     Repeated,
@@ -227,6 +312,11 @@ pub enum Repetition {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct FlagSpec {
     pub long: String,
     pub short: Option<char>,
@@ -237,6 +327,12 @@ pub struct FlagSpec {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
 pub enum FlagShape {
     BoolFlag(BoolFlagShape),
     /// Counted flag (`-vvv`); optional max count.
@@ -244,6 +340,11 @@ pub enum FlagShape {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct BoolFlagShape {
     pub default: bool,
     /// If true, `--no-<name>` is auto-synthesized.
@@ -251,12 +352,23 @@ pub struct BoolFlagShape {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
 pub enum Ref {
     Present(String),
     ValueIs(ValueIsRef),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct ValueIsRef {
     pub name: String,
     /// Literal value, interpreted against the declared type of `name`.
@@ -264,6 +376,12 @@ pub struct ValueIsRef {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
 pub enum Constraint {
     RequiresAll(Vec<Ref>),
     AllOrNone(Vec<Ref>),
@@ -274,11 +392,21 @@ pub enum Constraint {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct RefGroup {
     pub refs: Vec<Ref>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct ImpliesC {
     pub lhs_quant: Quantifier,
     pub lhs: Vec<Ref>,
@@ -287,6 +415,11 @@ pub struct ImpliesC {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct ForbidsC {
     pub lhs_quant: Quantifier,
     pub lhs: Vec<Ref>,
@@ -294,12 +427,23 @@ pub struct ForbidsC {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "kebab-case")]
 pub enum Quantifier {
     All,
     Any,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSpec {
     pub doc: Doc,
     pub mime: Vec<String>,
@@ -307,6 +451,12 @@ pub struct StreamSpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename = "ToolResultSpec")]
 pub struct ResultSpec {
     /// Schema of the result value.
     pub type_: SchemaType,
@@ -316,12 +466,22 @@ pub struct ResultSpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct Formatter {
     pub name: String,
     pub doc: Doc,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct ErrorCase {
     pub name: String,
     pub doc: Doc,
@@ -332,12 +492,23 @@ pub struct ErrorCase {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "kebab-case")]
 pub enum ErrorKind {
     UsageError,
     RuntimeError,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct Doc {
     pub summary: String,
     pub description: String,
@@ -345,6 +516,11 @@ pub struct Doc {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct Example {
     pub title: String,
     pub body: String,

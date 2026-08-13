@@ -33,7 +33,9 @@ declare_transparent_newtypes! {
     pub struct AgentSecretPath(pub Vec<String>);
 
     /// Canonical representation of an agent secret path (segments are each camelCase)
-    #[derive(Eq, Hash)]
+    #[derive(Eq, Hash, PartialOrd, Ord)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(transparent))]
     #[cfg_attr(feature = "full", oai(to_header = false))]
     pub struct CanonicalAgentSecretPath(pub Vec<String>);
 }

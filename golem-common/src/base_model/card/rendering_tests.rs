@@ -681,6 +681,7 @@ fn permission_strategy() -> BoxedStrategy<PolymorphicPermissionPattern> {
                 EnvironmentVerb::ViewDeployment,
                 EnvironmentVerb::ViewDeploymentPlan,
                 EnvironmentVerb::ViewAgentTypes,
+                EnvironmentVerb::ViewTools,
                 EnvironmentVerb::WriteDeploymentRecord
             ]),
             prop_oneof![
