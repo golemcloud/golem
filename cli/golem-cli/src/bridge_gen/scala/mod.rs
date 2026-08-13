@@ -34,12 +34,12 @@
 #[allow(clippy::module_inception)]
 pub mod scala;
 pub mod scala_writer;
+mod schema_graph;
 pub mod tool;
 pub mod type_name;
 
 pub use type_name::{RemappedType, ScalaTypeName};
 
-use crate::bridge_gen::json::stringify_precision_sensitive_numbers;
 use crate::bridge_gen::scala::scala::{
     escape_scala_ident, is_scala_keyword, to_scala_term_ident, to_scala_type_ident, unique_idents,
     unique_idents_with_reserved,
@@ -66,6 +66,7 @@ use golem_common::schema::{
 use heck::{ToLowerCamelCase, ToSnakeCase, ToUpperCamelCase};
 use include_dir::{Dir, include_dir};
 use indoc::formatdoc;
+use std::cell::RefCell;
 
 /// Static runtime sources emitted verbatim into every generated project under
 /// `src/main/scala`. Each file already carries its `golem/bridge/runtime/...`
@@ -405,6 +406,7 @@ pub struct ScalaBridgeGenerator {
     /// `list<variant<…>>`), so the discovery order only affects the generated
     /// Scala API surface, never the bytes on the wire.
     multimodals: Vec<NamedMultimodal>,
+    schema_graphs: RefCell<schema_graph::SchemaGraphRegistry>,
 }
 
 impl BridgeGenerator for ScalaBridgeGenerator {
@@ -500,6 +502,9 @@ impl ScalaBridgeGenerator {
             .chain(std::iter::once(ScalaTypeName::Derived(
                 CODECS_OBJECT.to_string(),
             )))
+            .chain(std::iter::once(ScalaTypeName::Derived(
+                schema_graph::REGISTRY_OBJECT.to_string(),
+            )))
             // The generated multimodal sealed traits live in the client package
             // too, so a user type must not be assigned one of their names.
             .chain(
@@ -519,6 +524,7 @@ impl ScalaBridgeGenerator {
             same_language,
             type_naming,
             multimodals,
+            schema_graphs: RefCell::new(schema_graph::SchemaGraphRegistry::default()),
         })
     }
 
@@ -728,8 +734,16 @@ impl ScalaBridgeGenerator {
         self.write_multimodal_definitions(&mut writer)?;
         self.write_codecs(&mut writer)?;
         self.write_guest_client_object(&mut writer)?;
+        self.write_schema_graphs(&mut writer);
 
         Ok(self.rewrite_guest_runtime_refs(writer.finish()))
+    }
+
+    fn write_schema_graphs(&self, writer: &mut ScalaWriter) {
+        if let Some(definition) = self.schema_graphs.borrow().definition() {
+            writer.blank();
+            writer.line(definition);
+        }
     }
 
     fn rewrite_guest_runtime_refs(&self, source: String) -> String {
@@ -1287,12 +1301,12 @@ impl ScalaBridgeGenerator {
                 &config.value_type,
                 0,
             )?);
-            let graph_json = self.config_schema_graph_json_literal(&config.value_type)?;
+            let graph = self.config_schema_graph(&config.value_type);
             writer.line(format!("{name}.map {{ value =>"));
             writer.indent();
             writer.line(format!("val configValue = {enc}"));
             writer.line(format!(
-                "val typedConfigValue = {GUEST_CODEC}.typedSchemaValueFromSchemaGraphJson({graph_json}, configValue)"
+                "val typedConfigValue = _root_.golem.schema.TypedSchemaValue({graph}, configValue)"
             ));
             writer.line(format!(
                 "{GUEST_AGENT_CONFIG_ENTRY}({LIST}({path_lit}), typedConfigValue)"
@@ -1305,17 +1319,12 @@ impl ScalaBridgeGenerator {
         Ok(())
     }
 
-    fn config_schema_graph_json_literal(&self, typ: &SchemaType) -> anyhow::Result<String> {
+    fn config_schema_graph(&self, typ: &SchemaType) -> String {
         let graph = SchemaGraph {
             defs: reachable_defs(self.type_naming.graph(), typ),
             root: typ.clone(),
         };
-        let mut value =
-            serde_json::to_value(&graph).context("failed to serialize config schema graph")?;
-        stringify_precision_sensitive_numbers(&mut value);
-        let json =
-            serde_json::to_string(&value).context("failed to serialize config schema graph")?;
-        Ok(scala_string_literal(&json))
+        self.schema_graphs.borrow_mut().intern(graph)
     }
 
     fn write_guest_resolve_body(
@@ -3916,10 +3925,12 @@ mod tests {
         )
         .unwrap();
         assert!(client_source.contains("_root_.golem.schema.SchemaValue.PathValue(value)"));
+        assert!(client_source.contains("private object __GolemSchemaGraphs"));
+        assert!(client_source.contains("_root_.golem.schema.SchemaTypeBody.PathType("));
         assert!(client_source.contains(
-            "_root_.golem.runtime.rpc.SchemaRpcCodec.typedSchemaValueFromSchemaGraphJson("
+            "_root_.golem.schema.TypedSchemaValue(__GolemSchemaGraphs.graph0, configValue)"
         ));
-        assert!(!client_source.contains("_root_.golem.schema.SchemaTypeBody."));
+        assert!(!client_source.contains("typedSchemaValueFromSchemaGraphJson"));
         assert!(
             !client_source.contains(
                 "_root_.golem.schema.TypedSchemaValue(_root_.golem.schema.SchemaGraph(_root_.scala.collection.immutable.ListMap(), _root_.golem.schema.t.string), configValue)"
@@ -3958,9 +3969,9 @@ mod tests {
         )
         .unwrap();
         assert!(client_source.contains("_root_.golem.bridge.client.alpha_agent.UnstructuredText"));
-        assert!(client_source.contains(
-            "_root_.golem.runtime.rpc.SchemaRpcCodec.typedSchemaValueFromSchemaGraphJson("
-        ));
+        assert!(client_source.contains("private object __GolemSchemaGraphs"));
+        assert!(client_source.contains("_root_.golem.schema.Role.UnstructuredText"));
+        assert!(!client_source.contains("typedSchemaValueFromSchemaGraphJson"));
     }
 
     #[test]
@@ -4000,12 +4011,12 @@ mod tests {
                 .join("src/main/scala/golem/bridge/client/alpha_agent/AlphaAgentClient.scala"),
         )
         .unwrap();
-        assert!(client_source.contains(
-            "_root_.golem.runtime.rpc.SchemaRpcCodec.typedSchemaValueFromSchemaGraphJson("
-        ));
-        assert!(client_source.contains("\\\"restrictions\\\""));
-        assert!(client_source.contains("\\\"unit\\\":\\\"attempts\\\""));
-        assert!(client_source.contains("\\\"value\\\":\\\"5\\\""));
+        assert!(client_source.contains("private object __GolemSchemaGraphs"));
+        assert!(client_source.contains("_root_.golem.schema.SchemaTypeBody.U32Type("));
+        assert!(client_source.contains("_root_.golem.schema.NumericBound.Unsigned(1L)"));
+        assert!(client_source.contains("_root_.golem.schema.NumericBound.Unsigned(5L)"));
+        assert!(client_source.contains("_root_.scala.Some(\"attempts\")"));
+        assert!(!client_source.contains("typedSchemaValueFromSchemaGraphJson"));
         assert!(
             !client_source.contains(
                 "_root_.golem.schema.TypedSchemaValue(_root_.golem.schema.SchemaGraph(_root_.scala.collection.immutable.ListMap(), _root_.golem.schema.t.u32), configValue)"
@@ -4052,7 +4063,8 @@ mod tests {
                 .join("src/main/scala/golem/bridge/client/alpha_agent/AlphaAgentClient.scala"),
         )
         .unwrap();
-        assert!(client_source.contains("typedSchemaValueFromSchemaGraphJson"));
+        assert!(client_source.contains("private object __GolemSchemaGraphs"));
+        assert!(!client_source.contains("typedSchemaValueFromSchemaGraphJson"));
         assert!(!client_source.contains("unused-future"));
     }
 

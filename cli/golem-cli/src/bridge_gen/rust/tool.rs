@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::schema_graph::{self, SchemaGraphRegistry};
 use super::{GolemDependencySource, RustBridgeGenerator, RustBridgeMode, RustRuntimeConfig, dep};
 use crate::bridge_gen::parameter_naming::ParameterNaming;
 use crate::bridge_gen::tool_bridge_client_directory_name;
@@ -55,6 +56,7 @@ pub struct RustToolBridgeGenerator {
     inner: RustBridgeGenerator,
     clients: BTreeMap<usize, ClientNode>,
     error_names: BTreeMap<usize, String>,
+    schema_graphs: SchemaGraphRegistry,
 }
 
 impl RustToolBridgeGenerator {
@@ -81,6 +83,7 @@ impl RustToolBridgeGenerator {
             inner,
             clients,
             error_names,
+            schema_graphs: SchemaGraphRegistry::default(),
         })
     }
 
@@ -123,7 +126,6 @@ impl RustToolBridgeGenerator {
         doc["dependencies"]["golem-rust"] =
             golem_source.dep_item("sdks/rust/golem-rust", &["export_golem_agentic", "macro"])?;
         doc["dependencies"]["serde"] = dep("1", &["derive"]);
-        doc["dependencies"]["serde_json"] = dep("1", &[]);
         doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);
 
         std::fs::write(path, doc.to_string())
@@ -148,6 +150,7 @@ impl RustToolBridgeGenerator {
         let multimodals = self.inner.multimodals()?;
         let languages = self.inner.languages_module();
         let mimetypes = self.inner.mimetypes_module();
+        let schema_graphs = self.schema_graphs.definitions();
 
         Ok(quote! {
             #![allow(unused)]
@@ -155,6 +158,8 @@ impl RustToolBridgeGenerator {
             #![allow(clippy::all)]
 
             #runtime_prelude
+
+            #schema_graphs
 
             #(#client_items)*
 
@@ -326,7 +331,8 @@ impl RustToolBridgeGenerator {
             self.leaf_fields(command_index, &client.provided)?;
         let mut all_fields = provided_fields.clone();
         all_fields.extend(remaining_fields.clone());
-        let schema_json = self.record_schema_json(&all_fields)?;
+        let schema = self.record_schema(&all_fields)?;
+        let schema = schema_graph::graph_clone(self.schema_graphs.intern(schema));
 
         let mut naming = ParameterNaming::new();
         naming.reserve_many(["self", "stdin"]);
@@ -370,8 +376,7 @@ impl RustToolBridgeGenerator {
         Ok(quote! {
             #(#doc)*
             pub async fn #method_ident(&self, #(#param_defs),*) -> #return_type {
-                let __schema: golem_rust::SchemaGraph = serde_json::from_str(#schema_json)
-                    .map_err(|e| golem_rust::agentic::tool_protocol_error(format!("failed to parse embedded tool input schema: {e}")))?;
+                let __schema: golem_rust::SchemaGraph = #schema;
                 let mut __fields: Vec<crate::__golem_bridge_runtime::schema::SchemaValue> = self.inherited.clone();
                 #(#field_encodes)*
                 let __input = golem_rust::TypedSchemaValue::new(
@@ -546,7 +551,7 @@ impl RustToolBridgeGenerator {
         Ok((provided_fields, remaining))
     }
 
-    fn record_schema_json(&self, fields: &[CanonicalInputField]) -> anyhow::Result<String> {
+    fn record_schema(&self, fields: &[CanonicalInputField]) -> anyhow::Result<SchemaGraph> {
         let field_graphs = fields
             .iter()
             .map(|field| FieldGraph {
@@ -557,11 +562,8 @@ impl RustToolBridgeGenerator {
                 },
             })
             .collect::<Vec<_>>();
-        let schema = record_schema_from_field_graphs(
-            field_graphs.iter().map(|f| (f.name.as_str(), &f.graph)),
-        )
-        .map_err(|e| anyhow!("failed to build tool input record schema: {e}"))?;
-        serde_json::to_string(&schema).context("failed to serialize embedded tool input schema")
+        record_schema_from_field_graphs(field_graphs.iter().map(|f| (f.name.as_str(), &f.graph)))
+            .map_err(|e| anyhow!("failed to build tool input record schema: {e}"))
     }
 
     fn error_items(&mut self) -> anyhow::Result<Vec<TokenStream>> {
