@@ -26,15 +26,11 @@ use self::agent_config::{
     ensure_required_agent_secrets_are_configured, parse_worker_creation_agent_config,
 };
 use crate::durable_host::{agent_effective_surface_from_component_metadata, recover_stderr_logs};
-use crate::metrics::storage::{STORAGE_TYPE_FILESYSTEM, record_storage_bytes_written};
+use crate::metrics::storage::record_filesystem_pool_released;
 use crate::metrics::workers::AdmissionPhase;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::active_workers::{
     FilesystemStoragePermit, MemoryGrant, RegisteredConcurrentAccount, WorkerComponentCharge,
-    bytes_to_filesystem_storage_permits,
-};
-use crate::services::agent_storage_meter::{
-    FilesystemStoragePermitBank, FilesystemStoragePermitRegistration,
 };
 use crate::services::card_interest::CardInterestIndex;
 use crate::services::events::{Event, EventsSubscription};
@@ -115,29 +111,6 @@ struct ReadOnlyContext {
     principal: Principal,
     cfg: golem_common::base_model::agent::ReadOnlyConfig,
     component_revision: ComponentRevision,
-}
-
-struct DesiredFilesystemStorage {
-    bytes: u64,
-    accepting_retries: bool,
-}
-
-impl DesiredFilesystemStorage {
-    fn record_retry(&mut self, bytes: u64) {
-        if self.accepting_retries {
-            self.bytes = self.bytes.max(bytes);
-        }
-    }
-
-    fn stop_retrying(&mut self) {
-        self.bytes = 0;
-        self.accepting_retries = false;
-    }
-
-    fn worker_started(&mut self) {
-        self.bytes = 0;
-        self.accepting_retries = true;
-    }
 }
 
 /// `Ttl(0)` is folded in as it is equivalent to `NoCache`.
@@ -353,7 +326,6 @@ pub struct Worker<Ctx: WorkerCtx> {
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
     instance: Arc<Mutex<WorkerInstance>>,
     linear_memory_grant: StdMutex<Option<Arc<StdMutex<MemoryGrant>>>>,
-    filesystem_storage_permits: Arc<FilesystemStoragePermitBank>,
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
     /// until the worker stops so permit reacquisition cannot lose it between `RunningWorker`s.
     interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
@@ -362,10 +334,11 @@ pub struct Worker<Ctx: WorkerCtx> {
 
     last_resume_request: Mutex<Timestamp>,
     pub(crate) snapshot_recovery_disabled: AtomicBool,
-    /// Stable capacity shortfall observed by a failed filesystem reservation. A waiting worker
-    /// consumes the latest value before using the blocking eviction path, ensuring enough idle
-    /// workers are evicted for the pending write without retaining stale restart demand.
-    desired_extra_filesystem_storage: StdMutex<DesiredFilesystemStorage>,
+    /// Bytes that triggered the last `NodeOutOfFilesystemStorage` trap. Set by
+    /// `acquire_filesystem_space` on failure so `WaitingWorker::new` can request
+    /// at least that many bytes from the blocking eviction path, ensuring
+    /// enough idle workers are evicted to satisfy the pending write.
+    desired_extra_filesystem_storage: AtomicU64,
     startup_linear_memory_bytes: AtomicU64,
     memory_growth: StdMutex<Arc<PendingMemoryGrowth>>,
     memory_limit_interrupt_queued: AtomicBool,
@@ -776,7 +749,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }),
             instance,
             linear_memory_grant: StdMutex::new(None),
-            filesystem_storage_permits: Arc::new(FilesystemStoragePermitBank::default()),
             interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
             execution_status,
             initial_worker_metadata,
@@ -792,10 +764,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             status_checkpointer,
             last_resume_request: Mutex::new(Timestamp::now_utc()),
             snapshot_recovery_disabled: AtomicBool::new(false),
-            desired_extra_filesystem_storage: StdMutex::new(DesiredFilesystemStorage {
-                bytes: 0,
-                accepting_retries: true,
-            }),
+            desired_extra_filesystem_storage: AtomicU64::new(0),
             startup_linear_memory_bytes: AtomicU64::new(0),
             memory_growth: StdMutex::new(Arc::new(PendingMemoryGrowth::default())),
             memory_limit_interrupt_queued: AtomicBool::new(false),
@@ -1092,23 +1061,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         interrupt_kind: InterruptKind,
         reacquire_permits: bool,
     ) -> bool {
-        let is_terminal = !matches!(
-            &interrupt_kind,
-            InterruptKind::Restart | InterruptKind::Jump
-        );
         let mut state = self.interrupt_signal.lock().await;
-        let queued = state.queue(PendingWorkerInterrupt {
+        state.queue(PendingWorkerInterrupt {
             kind: interrupt_kind,
             reacquire_permits,
-        });
-        drop(state);
-        if queued && is_terminal {
-            self.desired_extra_filesystem_storage
-                .lock()
-                .unwrap()
-                .stop_retrying();
-        }
-        queued
+        })
     }
 
     pub async fn resume_replay(&self) -> Result<(), WorkerExecutorError> {
@@ -2015,14 +1972,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
                 let has_interrupt = running.interrupt_signal.lock().await.has_interrupt();
 
+                // Non-evictable if actively executing or has non-durable in-memory work
+                if !waiting_for_command
+                    || has_queued_internal_work
+                    || has_resume_replay
+                    || has_interrupt
+                {
+                    return None;
+                }
+
                 let has_pending_invocations = !self.pending_invocations().await.is_empty();
-                classify_worker_for_eviction(RunningWorkerState {
-                    waiting_for_command,
-                    has_queued_internal_work,
-                    has_resume_replay,
-                    has_interrupt,
-                    has_pending_invocations,
-                })
+                if has_pending_invocations {
+                    Some(EvictionClass::WarmRunnable)
+                } else {
+                    Some(EvictionClass::LoadedIdle)
+                }
             }
             _ => None,
         }
@@ -2031,8 +1995,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Stop this worker if it matches the given eviction class.
     ///
     /// Re-checks the eviction classification under the instance lock to avoid
-    /// races. Returns the filesystem capacity released if the worker was stopped.
-    pub async fn stop_if_evictable(&self, target_class: EvictionClass) -> Option<u64> {
+    /// races. Returns `true` if the worker was actually stopped.
+    pub async fn stop_if_evictable(&self, target_class: EvictionClass) -> bool {
         let mut instance_guard = self.lock_non_stopping_worker().await;
         let should_stop = match &*instance_guard {
             WorkerInstance::Running(running) => {
@@ -2041,23 +2005,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
                 let has_interrupt = running.interrupt_signal.lock().await.has_interrupt();
 
-                let has_pending_invocations = !self.pending_invocations().await.is_empty();
-                classify_worker_for_eviction(RunningWorkerState {
-                    waiting_for_command,
-                    has_queued_internal_work,
-                    has_resume_replay,
-                    has_interrupt,
-                    has_pending_invocations,
-                })
-                .is_some_and(|current_class| {
+                if !waiting_for_command
+                    || has_queued_internal_work
+                    || has_resume_replay
+                    || has_interrupt
+                {
+                    false
+                } else {
+                    let has_pending_invocations = !self.pending_invocations().await.is_empty();
+                    let current_class = if has_pending_invocations {
+                        EvictionClass::WarmRunnable
+                    } else {
+                        EvictionClass::LoadedIdle
+                    };
                     current_class.eviction_priority() <= target_class.eviction_priority()
-                })
+                }
             }
             _ => false,
         };
 
         if should_stop {
-            let filesystem_storage_capacity = self.filesystem_storage_permits.held_bytes();
             let stop_result = self
                 .stop_internal_locked(
                     &mut instance_guard,
@@ -2070,10 +2037,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
             drop(instance_guard);
             self.handle_stop_result(stop_result).await;
-            Some(filesystem_storage_capacity)
+            true
         } else {
             drop(instance_guard);
-            None
+            false
         }
     }
 
@@ -2181,45 +2148,104 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.startup_linear_memory_bytes.load(Ordering::Acquire)
     }
 
-    pub(crate) fn filesystem_storage_permit_bank(&self) -> Arc<FilesystemStoragePermitBank> {
-        self.filesystem_storage_permits.clone()
+    /// Return `freed_bytes` to the storage semaphore pool.
+    /// Called from `DurableWorkerCtx::release_filesystem_space` when a file is
+    /// deleted or truncated. Should only be called from the invocation loop.
+    ///
+    /// The permits are returned by splitting them off `RunningWorker.filesystem_storage_permit`
+    /// and dropping the split portion. This correctly reduces the permit count held
+    /// by the `RunningWorker`, preventing double-return when it later drops.
+    pub async fn release_filesystem_storage_space(&self, freed_bytes: u64) {
+        let permits_to_release =
+            crate::services::active_workers::bytes_to_filesystem_storage_permits(freed_bytes);
+        if permits_to_release == 0 {
+            return;
+        }
+        if let WorkerInstance::Running(running) = &mut *self.instance.lock().await
+            && let Some(ref mut permit) = running.filesystem_storage_permit
+        {
+            // Split off `permits_to_release` permits and drop them.
+            // Dropping the split permit returns its permits to the semaphore
+            // automatically — no separate add_permits needed.
+            let n = permits_to_release as usize;
+            let actual_n = n.min(permit.num_permits());
+            let to_drop = permit.split(actual_n);
+            let released_bytes =
+                crate::services::active_workers::filesystem_storage_permits_to_bytes(
+                    actual_n as u32,
+                );
+            record_filesystem_pool_released(released_bytes);
+            drop(to_drop); // returns permits to the semaphore
+        }
     }
 
-    pub(crate) fn held_filesystem_storage_bytes(&self) -> u64 {
-        self.filesystem_storage_permits.held_bytes()
-    }
-
-    pub(crate) fn record_desired_extra_filesystem_storage(&self, bytes: u64) {
-        self.desired_extra_filesystem_storage
-            .lock()
-            .unwrap()
-            .record_retry(bytes);
-    }
-
-    /// Reserve storage semaphore permits for a write operation.
-    /// The returned permit releases itself unless a successful filesystem mutation commits it.
+    /// Acquire storage semaphore permits for a write operation.
+    /// Called from `DurableWorkerCtx::acquire_filesystem_space` in live mode only.
     /// Returns `NodeOutOfFilesystemStorage` if the executor pool is exhausted.
     ///
     /// Should only be called from the invocation loop.
-    pub async fn acquire_filesystem_storage_space(
-        &self,
-        new_bytes: u64,
-    ) -> anyhow::Result<Option<FilesystemStoragePermit>> {
+    pub async fn acquire_filesystem_storage_space(&self, new_bytes: u64) -> anyhow::Result<()> {
         match &mut *self.instance.lock().await {
-            WorkerInstance::Running(_) => {
+            WorkerInstance::Running(running) => {
                 if let Some(permit) = self
                     .active_workers()
                     .try_acquire_filesystem_storage(new_bytes)
                     .await
                 {
-                    Ok(Some(permit))
+                    running.merge_extra_filesystem_storage_permits(permit);
+                    // Success — clear any pending desired_extra_filesystem_storage.
+                    self.desired_extra_filesystem_storage
+                        .store(0, Ordering::Relaxed);
+                    Ok(())
                 } else {
+                    // Record the requested size so WaitingWorker can evict enough
+                    // idle workers to satisfy this write on the next restart.
+                    self.desired_extra_filesystem_storage
+                        .store(new_bytes, Ordering::Relaxed);
                     Err(anyhow!(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage))
                 }
             }
-            _ => Err(anyhow!(
-                "cannot acquire filesystem storage while worker is not running"
-            )),
+            // Worker is stopping/unloaded — no-op; the current invocation will
+            // fail anyway and permits will be re-acquired on restart.
+            _ => Ok(()),
+        }
+    }
+
+    /// Acquire storage semaphore permits for the total size of all initial
+    /// component files. Called once from `DurableWorkerCtx::create` after
+    /// `prepare_filesystem` has loaded the files. Merges the acquired permits
+    /// into the running worker's `filesystem_storage_permit` so they are released
+    /// automatically when the worker stops.
+    ///
+    /// Uses the non-blocking priority path (`try_acquire_storage`). If the
+    /// semaphore pool is full, idle workers are evicted by the semaphore's own
+    /// logic; the permit is returned as `None` and the caller should propagate
+    /// a retriable `NodeOutOfFilesystemStorage` error.
+    ///
+    /// Should only be called from the invocation loop.
+    pub async fn acquire_initial_filesystem_storage(
+        &self,
+        total_bytes: u64,
+    ) -> Result<(), GolemSpecificWasmTrap> {
+        if total_bytes == 0 {
+            return Ok(());
+        }
+        match &mut *self.instance.lock().await {
+            WorkerInstance::Running(running) => {
+                if let Some(permit) = self
+                    .active_workers()
+                    .try_acquire_filesystem_storage(total_bytes)
+                    .await
+                {
+                    running.merge_extra_filesystem_storage_permits(permit);
+                    Ok(())
+                } else {
+                    Err(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage)
+                }
+            }
+            // Worker stopped between create and acquire — no-op, permits will be
+            // re-acquired on next startup from AgentStatusRecord.
+            _ => Ok(()),
         }
     }
 
@@ -3011,7 +3037,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     // register and admit the replacement generation without overlapping
                     // the old generation's grant.
                     self.release_linear_memory_grant();
-                    self.filesystem_storage_permits.clear();
                     **instance_guard = final_state.into_instance();
                     if let WorkerInstance::Unloaded { startup_failure } = &**instance_guard {
                         self.resolve_pending_readiness_awaiters_on_stop(startup_failure.as_ref())
@@ -3386,10 +3411,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // at runtime in get_environment
                 let worker_env: Vec<(String, String)> = worker_env.unwrap_or_default();
                 let created_at = Timestamp::now_utc();
-                let initial_filesystem_storage_usage =
-                    component.metadata.initial_filesystem_storage_usage(
-                        agent_id.as_ref().map(|agent_id| &agent_id.agent_type),
-                    );
 
                 // Note: Keep this in sync with the logic in crate::services::worker::WorkerService::get
                 let initial_status = AgentStatusRecord {
@@ -3397,7 +3418,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     component_revision_for_replay: component.revision,
                     component_size: component.component_size,
                     total_linear_memory_size: component.metadata.initial_linear_memory_bytes(),
-                    current_filesystem_storage_usage: initial_filesystem_storage_usage,
                     active_plugins: agent_id
                         .as_ref()
                         .and_then(|agent_id| {
@@ -3462,9 +3482,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .total_linear_memory_size,
                     initial_worker_metadata
                         .last_known_status
-                        .current_filesystem_storage_usage,
-                    initial_worker_metadata
-                        .last_known_status
                         .active_plugins
                         .clone(),
                     local_agent_config,
@@ -3499,15 +3516,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         )
                         .await
                 };
-
-                if initial_filesystem_storage_usage > 0 {
-                    record_storage_bytes_written(
-                        STORAGE_TYPE_FILESYSTEM,
-                        &component.account_id.to_string(),
-                        &component.environment_id.to_string(),
-                        initial_filesystem_storage_usage,
-                    );
-                }
 
                 {
                     let mut status = initial_status.load_full().as_ref().clone();
@@ -3555,10 +3563,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::WaitingForPermit(waiting_worker)
                 if waiting_worker.start_attempt == start_attempt =>
             {
-                let filesystem_storage_permit_registration = this
-                    .filesystem_storage_permits
-                    .install(filesystem_storage_permit);
-                let running = RunningWorker::new(
+                let mut running = RunningWorker::new(
                     this.owned_agent_id.clone(),
                     this.queue.clone(),
                     this.clone(),
@@ -3567,15 +3572,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     concurrent_agent_permit,
                     oom_retry_count,
                     worker_trace,
-                    filesystem_storage_permit_registration,
                 )
                 .await;
+                if let Some(sp) = filesystem_storage_permit {
+                    running.merge_extra_filesystem_storage_permits(sp);
+                }
                 crate::metrics::workers::dec_worker_waiting_for_memory();
                 crate::metrics::workers::inc_worker_memory_resident();
-                this.desired_extra_filesystem_storage
-                    .lock()
-                    .unwrap()
-                    .worker_started();
                 *instance_guard = WorkerInstance::Running(running);
             }
             _ => {
@@ -3647,28 +3650,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             debug!("Forced status flush failed (will retry in background): {err}");
         }
-    }
-}
-
-struct RunningWorkerState {
-    waiting_for_command: bool,
-    has_queued_internal_work: bool,
-    has_resume_replay: bool,
-    has_interrupt: bool,
-    has_pending_invocations: bool,
-}
-
-fn classify_worker_for_eviction(state: RunningWorkerState) -> Option<EvictionClass> {
-    if !state.waiting_for_command
-        || state.has_queued_internal_work
-        || state.has_resume_replay
-        || state.has_interrupt
-    {
-        None
-    } else if state.has_pending_invocations {
-        Some(EvictionClass::WarmRunnable)
-    } else {
-        Some(EvictionClass::LoadedIdle)
     }
 }
 
@@ -3877,8 +3858,9 @@ impl WaitingWorker {
             // We need to acquire `filesystem_storage_requirement + desired_extra` total:
             // - `filesystem_storage_requirement`: bytes to hold as the pre-acquired permit
             //   for replay (mirrors what the worker held before being evicted).
-            //   The previous permit-bank registration already returned these bytes to the pool,
-            //   so the blocking acquire will usually find them without evicting another worker.
+            //   The old RunningWorker already returned these bytes to the pool
+            //   when it dropped, so the pool likely already has them — the
+            //   blocking acquire will find them without needing to evict anyone.
             // - `desired_extra`: bytes for the write that triggered NodeOutOfFilesystemStorage.
             //   The pool may not have these yet, so the blocking acquire will
             //   evict idle workers only for the missing portion.
@@ -3887,15 +3869,13 @@ impl WaitingWorker {
             // it is available for the pending write to re-acquire at runtime.
             //
             // Example: prior writes = 3 KB, failing write needs 1 KB extra.
-            //   Previous permit-bank registration drops → 3 KB returned to pool.
+            //   Old RunningWorker drops → 3 KB returned to pool.
             //   acquire_bytes = 4 KB. Pool has 3 KB → 1 KB gap → evict 1 KB.
             //   Hold 3 KB as filesystem_storage_permit, release 1 KB → pool has 1 KB free.
             //   Pending write re-acquires 1 KB → succeeds.
             let desired_extra = parent
                 .desired_extra_filesystem_storage
-                .lock()
-                .unwrap()
-                .bytes;
+                .load(Ordering::Relaxed);
             let acquire_bytes = filesystem_storage_requirement + desired_extra;
             let filesystem_storage_permit = if acquire_bytes > 0 {
                 let phase_start = std::time::Instant::now();
@@ -3916,7 +3896,10 @@ impl WaitingWorker {
                 );
                 // Release the `desired_extra` portion back to the pool.
                 if desired_extra > 0 {
-                    let extra_permits = bytes_to_filesystem_storage_permits(desired_extra) as usize;
+                    let extra_permits =
+                        crate::services::active_workers::bytes_to_filesystem_storage_permits(
+                            desired_extra,
+                        ) as usize;
                     if let Some(extra) = permit.split(extra_permits) {
                         drop(extra); // returns to semaphore
                     }
@@ -4047,6 +4030,11 @@ struct RunningWorker {
     handle: Option<JoinHandle<()>>,
     sender: UnboundedSender<WorkerCommand>,
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
+    /// Storage semaphore permits held by this worker. `None` until storage
+    /// space is first acquired (at startup or on first write). Dropped
+    /// automatically when `RunningWorker` is dropped, returning storage
+    /// permits to the pool.
+    filesystem_storage_permit: Option<FilesystemStoragePermit>,
     waiting_for_command: Arc<AtomicBool>,
     interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
     /// `ResumeReplay` is signalled directly through the command channel rather
@@ -4082,6 +4070,19 @@ impl<Ctx: WorkerCtx> Drop for LinearMemoryGrantRegistration<Ctx> {
             .is_some_and(|grant| Arc::ptr_eq(grant, &self.grant))
         {
             registered.take();
+        }
+    }
+}
+
+impl Drop for RunningWorker {
+    fn drop(&mut self) {
+        if let Some(ref permit) = self.filesystem_storage_permit {
+            let bytes = crate::services::active_workers::filesystem_storage_permits_to_bytes(
+                permit.num_permits() as u32,
+            );
+            if bytes > 0 {
+                record_filesystem_pool_released(bytes);
+            }
         }
     }
 }
@@ -4179,7 +4180,6 @@ impl RunningWorker {
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
         worker_trace: WorkerTrace,
-        filesystem_storage_permit_registration: FilesystemStoragePermitRegistration,
     ) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         sender.send(WorkerCommand::WorkAvailable).unwrap();
@@ -4195,6 +4195,7 @@ impl RunningWorker {
         let memory_grant = Arc::new(StdMutex::new(memory_grant));
         let memory_grant_registration =
             LinearMemoryGrantRegistration::new(parent.clone(), memory_grant);
+
         let handle = tokio::task::spawn(async move {
             RunningWorker::invocation_loop(
                 receiver,
@@ -4209,20 +4210,30 @@ impl RunningWorker {
                 worker_trace,
             )
             .await;
-            drop((
-                memory_grant_registration,
-                filesystem_storage_permit_registration,
-                component_charge,
-            ));
+            drop((memory_grant_registration, component_charge));
         });
 
         RunningWorker {
             handle: Some(handle),
             sender,
             queue,
+            filesystem_storage_permit: None,
             waiting_for_command,
             interrupt_signal,
             resume_replay_pending,
+        }
+    }
+
+    /// Merge additional storage permits into this worker's storage permit. If
+    /// the worker does not yet hold a storage permit, the given permit becomes
+    /// the initial one. Additional calls merge into that initial permit.
+    pub fn merge_extra_filesystem_storage_permits(
+        &mut self,
+        extra_permit: FilesystemStoragePermit,
+    ) {
+        match &mut self.filesystem_storage_permit {
+            Some(existing) => existing.merge(extra_permit),
+            None => self.filesystem_storage_permit = Some(extra_permit),
         }
     }
 
@@ -4750,64 +4761,6 @@ mod tests {
     use super::*;
     use golem_common::model::oplog::AgentError;
     use test_r::test;
-
-    #[test]
-    fn eviction_classification_covers_idle_warm_and_non_evictable_states() {
-        assert_eq!(
-            classify_worker_for_eviction(RunningWorkerState {
-                waiting_for_command: true,
-                has_queued_internal_work: false,
-                has_resume_replay: false,
-                has_interrupt: false,
-                has_pending_invocations: false,
-            }),
-            Some(EvictionClass::LoadedIdle)
-        );
-        assert_eq!(
-            classify_worker_for_eviction(RunningWorkerState {
-                waiting_for_command: true,
-                has_queued_internal_work: false,
-                has_resume_replay: false,
-                has_interrupt: false,
-                has_pending_invocations: true,
-            }),
-            Some(EvictionClass::WarmRunnable)
-        );
-        for state in [
-            (false, false, false, false),
-            (true, true, false, false),
-            (true, false, true, false),
-            (true, false, false, true),
-        ] {
-            assert_eq!(
-                classify_worker_for_eviction(RunningWorkerState {
-                    waiting_for_command: state.0,
-                    has_queued_internal_work: state.1,
-                    has_resume_replay: state.2,
-                    has_interrupt: state.3,
-                    has_pending_invocations: false,
-                }),
-                None
-            );
-        }
-    }
-
-    #[test]
-    fn terminal_interrupt_rejects_late_filesystem_storage_retry_demand() {
-        let mut desired = DesiredFilesystemStorage {
-            bytes: 0,
-            accepting_retries: true,
-        };
-
-        desired.record_retry(1024);
-        desired.stop_retrying();
-        desired.record_retry(2048);
-        assert_eq!(desired.bytes, 0);
-
-        desired.worker_started();
-        desired.record_retry(4096);
-        assert_eq!(desired.bytes, 4096);
-    }
 
     #[test]
     fn allocated_memory_sums_unique_untouched_backings() -> anyhow::Result<()> {

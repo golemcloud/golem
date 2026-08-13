@@ -13,8 +13,6 @@
 // limitations under the License.
 
 use crate::model::{ReadFileResult, TrapType};
-use crate::durable_host::io::streams::reconcile_all_pending_filesystem_streams;
-use crate::services::agent_storage_meter::AgentStorageMeter;
 use crate::services::events::Event;
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::linear_memory::LinearMemoryTracker;
@@ -56,7 +54,7 @@ use std::collections::VecDeque;
 use std::ops::DerefMut;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
@@ -201,14 +199,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             }
 
             if final_decision.is_none() {
-                let resource_meters = {
-                    let store = store.lock().await;
-                    let durable_ctx = store.data().durable_ctx();
-                    AgentResourceMeters::new(
-                        durable_ctx.linear_memory_tracker(),
-                        durable_ctx.storage_meter(),
-                    )
-                };
+                let linear_memory = store
+                    .lock()
+                    .await
+                    .data()
+                    .durable_ctx()
+                    .linear_memory_tracker();
                 let mut inner_loop = InnerInvocationLoop {
                     receiver: &mut self.receiver,
                     active: self.active.clone(),
@@ -218,7 +214,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     interrupt_signal: self.interrupt_signal.clone(),
                     instance: &instance,
                     store: &store,
-                    resource_meters,
+                    linear_memory,
                     invocations_since_snapshot: 0,
                     idle_snapshot_task: None,
                     concurrent_agent_permit: &mut self.concurrent_agent_permit,
@@ -505,25 +501,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// Suspends the worker after the invocation loop exited
     async fn suspend_worker(&self, store: &Mutex<Store<Ctx>>) {
         async {
-            // This is the final async boundary before the store can be discarded. Reconcile here
-            // even though normal invocation success/failure already does so, because interrupts,
-            // recovery failures, and shutdown can leave a started blocking file write in flight.
-            let mut store_guard = store.lock().await;
-            if let Err(error) = reconcile_all_pending_filesystem_streams(
-                store_guard.data_mut().durable_ctx_mut(),
-            )
-            .await
-            {
-                error!("failed to reconcile filesystem streams before suspending worker: {error}");
-            }
-
             // Marking the worker as suspended
-            store_guard.data().set_suspended();
+            store.lock().await.data().set_suspended();
 
             // Making sure all pending commits are flushed
             // Make sure all pending commits are done
-            let worker = store_guard.data().get_public_state().worker();
-            drop(store_guard);
+            let worker = store.lock().await.data().get_public_state().worker();
             worker
                 .commit_oplog_and_update_state(CommitLevel::Always)
                 .await;
@@ -553,7 +536,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     interrupt_signal: Arc<Mutex<WorkerInterruptState>>,
     instance: &'a Instance,
     store: &'a Mutex<Store<Ctx>>,
-    resource_meters: AgentResourceMeters,
+    linear_memory: LinearMemoryTracker,
     invocations_since_snapshot: u64,
     idle_snapshot_task: Option<JoinHandle<()>>,
     /// Mutable reference to the concurrent-agent permit held by the outer
@@ -715,7 +698,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// Called when the agent enters idle state. No-op if already released.
     fn release_concurrent_agent_permit(&mut self) {
         if let Some(permit) = self.concurrent_agent_permit.take() {
-            self.resource_meters.pause();
+            self.linear_memory.pause(std::time::Instant::now());
             debug!(agent_id = %self.owned_agent_id.agent_id, "Releasing concurrent-agent permit (entering idle)");
             drop(permit);
         }
@@ -737,7 +720,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             .instrument(span)
             .await;
             *self.concurrent_agent_permit = Some(permit);
-            self.resource_meters.resume();
+            self.linear_memory.resume(std::time::Instant::now());
         }
     }
 
@@ -1010,38 +993,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// Performs an interrupt request
     async fn interrupt(&self, interrupt: PendingWorkerInterrupt) -> CommandOutcome {
         CommandOutcome::BreakInnerLoop(interrupt.retry_decision())
-    }
-}
-
-struct AgentResourceMeters {
-    linear_memory: LinearMemoryTracker,
-    storage: AgentStorageMeter,
-}
-
-impl AgentResourceMeters {
-    fn new(linear_memory: LinearMemoryTracker, storage: AgentStorageMeter) -> Self {
-        Self {
-            linear_memory,
-            storage,
-        }
-    }
-
-    fn pause(&self) {
-        self.pause_at(Instant::now());
-    }
-
-    fn pause_at(&self, now: Instant) {
-        self.linear_memory.pause(now);
-        self.storage.pause(now);
-    }
-
-    fn resume(&self) {
-        self.resume_at(Instant::now());
-    }
-
-    fn resume_at(&self, now: Instant) {
-        self.linear_memory.resume(now);
-        self.storage.resume(now);
     }
 }
 
@@ -1874,14 +1825,10 @@ fn snapshot_action_at(
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentResourceMeters, CommandOutcome, PeriodicSnapshotAction,
-        failed_agent_invocation_outcome, periodic_snapshot_failure_outcome, snapshot_action_at,
-        snapshot_baseline_timestamp, successful_agent_invocation_outcome,
+        CommandOutcome, PeriodicSnapshotAction, failed_agent_invocation_outcome,
+        periodic_snapshot_failure_outcome, snapshot_action_at, snapshot_baseline_timestamp,
+        successful_agent_invocation_outcome,
     };
-    use crate::services::active_workers::MemoryGrant;
-    use crate::services::agent_storage_meter::AgentStorageMeter;
-    use crate::services::linear_memory::LinearMemoryTracker;
-    use crate::services::resource_limits::AtomicResourceEntry;
     use crate::worker::RetryDecision;
     use crate::worker::invocation::InvokeResult;
     use golem_common::model::AgentInvocationKind;
@@ -1889,9 +1836,7 @@ mod tests {
     use golem_common::model::oplog::AgentError;
     use golem_common::model::{OplogIndex, Timestamp};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
-    use std::sync::{Arc, Mutex as StdMutex};
     use std::time::Duration;
-    use std::time::Instant;
     use test_r::test;
 
     #[test]
@@ -1901,35 +1846,6 @@ mod tests {
         let baseline = snapshot_baseline_timestamp(None, created_at);
 
         assert_eq!(baseline, created_at);
-    }
-
-    #[test]
-    fn resource_meters_share_idempotent_pause_and_resume_timestamps() {
-        let entry = Arc::new(AtomicResourceEntry::new(0, usize::MAX, 0, u64::MAX, 0));
-        let initial = Instant::now();
-        let linear_memory = LinearMemoryTracker::new(
-            1024,
-            1024,
-            AgentMode::Durable,
-            false,
-            entry.clone(),
-            Arc::new(StdMutex::new(MemoryGrant::inert(0))),
-            initial,
-        );
-        let storage = AgentStorageMeter::new(AgentMode::Durable, 1024, entry, initial);
-        let meters = AgentResourceMeters::new(linear_memory.clone(), storage.clone());
-        let paused_at = initial + Duration::from_secs(2);
-        let resumed_at = initial + Duration::from_secs(5);
-
-        meters.pause_at(paused_at);
-        meters.pause_at(paused_at);
-        assert_eq!(linear_memory.last_sample(), paused_at);
-        assert_eq!(storage.last_sample(), paused_at);
-
-        meters.resume_at(resumed_at);
-        meters.resume_at(resumed_at);
-        assert_eq!(linear_memory.last_sample(), resumed_at);
-        assert_eq!(storage.last_sample(), resumed_at);
     }
 
     #[test]

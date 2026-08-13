@@ -1069,7 +1069,6 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 parent: params.parent.map(golem_common::model::AgentId::from),
                 component_size: params.component_size,
                 initial_total_linear_memory_size: params.initial_total_linear_memory_size,
-                initial_filesystem_storage_usage: 0,
                 initial_active_plugins: params
                     .initial_active_plugins
                     .into_iter()
@@ -1770,7 +1769,6 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 parent,
                 component_size,
                 initial_total_linear_memory_size,
-                initial_filesystem_storage_usage: _,
                 initial_active_plugins,
                 local_agent_config,
                 original_phantom_id,

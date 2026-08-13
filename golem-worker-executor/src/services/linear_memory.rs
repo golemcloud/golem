@@ -265,11 +265,6 @@ impl LinearMemoryTracker {
     pub fn meter(&self) -> &AgentMemoryMeter {
         &self.inner.meter
     }
-
-    #[cfg(test)]
-    pub(crate) fn last_sample(&self) -> Instant {
-        self.inner.meter.last_sample()
-    }
 }
 
 pub fn desired_total_after_growth(

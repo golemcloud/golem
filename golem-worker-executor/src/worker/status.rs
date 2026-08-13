@@ -989,37 +989,30 @@ fn calculate_total_linear_memory_size(
 /// when a worker restarts.
 ///
 /// Mirrors `calculate_total_linear_memory_size`: entries in skipped regions
-/// are excluded, and `Create` resets the counter to the provisioned-filesystem
-/// baseline persisted with the worker. Legacy `Create` entries decode the added
-/// baseline field as zero, so a nonzero baseline re-derived from component metadata
-/// remains authoritative when folding those entries.
+/// are excluded, and `Create` resets the counter to zero (a newly created worker
+/// has no written files yet).
 fn calculate_current_filesystem_storage_usage(
     current: u64,
     skipped_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> u64 {
-    let mut result = current as i128;
+    let mut result = current as i64;
     for (idx, entry) in entries {
         if skipped_regions.is_in_deleted_region(*idx) {
             continue;
         }
 
         match entry {
-            OplogEntry::Create {
-                initial_filesystem_storage_usage,
-                ..
-            } => {
-                if *initial_filesystem_storage_usage != 0 || result == 0 {
-                    result = *initial_filesystem_storage_usage as i128;
-                }
+            OplogEntry::Create { .. } => {
+                result = 0;
             }
             OplogEntry::FilesystemStorageUsageUpdate { delta, .. } => {
-                result = result.saturating_add(*delta as i128);
+                result = result.saturating_add(*delta);
             }
             _ => {}
         }
     }
-    result.clamp(0, u64::MAX as i128) as u64
+    result.max(0) as u64
 }
 
 fn collect_resources(
@@ -2074,34 +2067,6 @@ mod test {
         );
     }
 
-    #[test]
-    async fn legacy_origin_checkpoint_preserves_filesystem_baseline_after_jump() {
-        let (test_case, _checkpoint, stale_live, mut final_expected) = jump_repair_fixture();
-        let baseline_bytes = 1024 * 1024;
-        let origin_checkpoint = AgentStatusRecord {
-            current_filesystem_storage_usage: baseline_bytes,
-            ..AgentStatusRecord::default()
-        };
-        final_expected.current_filesystem_storage_usage = baseline_bytes;
-
-        let repaired = calculate_last_known_status_with_checkpoint_reader(
-            &test_case,
-            &test_case.owned_agent_id,
-            AgentMode::Durable,
-            Some(stale_live),
-            || async { Some(origin_checkpoint) },
-        )
-        .await;
-
-        assert_eq!(
-            repaired
-                .as_ref()
-                .map(|status| status.current_filesystem_storage_usage),
-            Some(baseline_bytes)
-        );
-        assert_eq!(repaired, Some(final_expected));
-    }
-
     struct TestCaseBuilder {
         entries: Vec<TestEntry>,
         previous_status_record: AgentStatusRecord,
@@ -2134,7 +2099,6 @@ mod test {
                         None,
                         100,
                         200,
-                        0,
                         HashSet::new(),
                         Vec::new(),
                         None,
@@ -3176,10 +3140,7 @@ mod test {
         )
     }
 
-    fn make_create_entry(
-        idx: u64,
-        initial_filesystem_storage_usage: u64,
-    ) -> (OplogIndex, OplogEntry) {
+    fn make_create_entry(idx: u64) -> (OplogIndex, OplogEntry) {
         use golem_common::base_model::account::AccountId;
         use golem_common::base_model::component::{ComponentId, ComponentRevision};
         use golem_common::base_model::environment::EnvironmentId;
@@ -3200,31 +3161,12 @@ mod test {
                 None,
                 0,
                 0,
-                initial_filesystem_storage_usage,
                 Default::default(),
                 vec![],
                 None,
                 Uuid::now_v7(),
             ),
         )
-    }
-
-    #[test]
-    fn filesystem_storage_usage_create_baseline_plus_deltas_recomputes_exactly() {
-        let entries = BTreeMap::from([
-            make_create_entry(1, 4096),
-            make_fs_entry(2, 1024),
-            make_fs_entry(3, -512),
-        ]);
-
-        assert_eq!(
-            super::calculate_current_filesystem_storage_usage(
-                0,
-                &DeletedRegions::default(),
-                &entries,
-            ),
-            4608
-        );
     }
 
     /// `FilesystemStorageUsageUpdate` entries inside a deleted (skipped) region
@@ -3253,23 +3195,23 @@ mod test {
         );
     }
 
-    /// A `Create` entry mid-oplog resets `current_filesystem_storage_usage` to its
-    /// persisted baseline, discarding usage accumulated before it (including the seed).
+    /// A `Create` entry mid-oplog resets `current_filesystem_storage_usage` to zero,
+    /// discarding usage accumulated before it (including the seed).
     #[test]
-    fn filesystem_storage_usage_reset_to_create_baseline() {
+    fn filesystem_storage_usage_reset_to_zero_on_create() {
         let deleted = DeletedRegions::default();
 
         let entries: BTreeMap<OplogIndex, OplogEntry> = BTreeMap::from([
-            make_fs_entry(1, 1024),     // before Create → should be wiped
-            make_create_entry(2, 2048), // resets counter to the persisted baseline
-            make_fs_entry(3, 512),      // after Create → counts
+            make_fs_entry(1, 1024), // before Create → should be wiped
+            make_create_entry(2),   // resets counter to 0
+            make_fs_entry(3, 512),  // after Create → counts
         ]);
 
         // Seed with prior usage to confirm Create overrides the seed too.
         let result = super::calculate_current_filesystem_storage_usage(999, &deleted, &entries);
         assert_eq!(
-            result, 2560,
-            "Create must restore its baseline before accumulating post-Create deltas"
+            result, 512,
+            "Create must reset usage to 0 before accumulating post-Create deltas"
         );
     }
 
@@ -3283,55 +3225,6 @@ mod test {
 
         let result = super::calculate_current_filesystem_storage_usage(1024, &deleted, &entries);
         assert_eq!(result, 1536, "seed + delta");
-    }
-
-    #[test]
-    fn filesystem_storage_usage_preserves_rederived_legacy_baseline() {
-        let entries = BTreeMap::from([make_create_entry(1, 0), make_fs_entry(2, 512)]);
-
-        let result = super::calculate_current_filesystem_storage_usage(
-            4096,
-            &DeletedRegions::default(),
-            &entries,
-        );
-
-        assert_eq!(result, 4608);
-    }
-
-    #[test]
-    fn filesystem_storage_usage_clamps_only_after_folding_all_deltas() {
-        let entries = BTreeMap::from([make_fs_entry(1, -10), make_fs_entry(2, 10)]);
-
-        assert_eq!(
-            super::calculate_current_filesystem_storage_usage(
-                0,
-                &DeletedRegions::default(),
-                &entries,
-            ),
-            0
-        );
-        assert_eq!(
-            super::calculate_current_filesystem_storage_usage(
-                5,
-                &DeletedRegions::default(),
-                &entries,
-            ),
-            5
-        );
-    }
-
-    #[test]
-    fn filesystem_storage_usage_saturates_at_u64_max_after_fold() {
-        let entries = BTreeMap::from([make_fs_entry(1, i64::MAX), make_fs_entry(2, i64::MAX)]);
-
-        assert_eq!(
-            super::calculate_current_filesystem_storage_usage(
-                u64::MAX,
-                &DeletedRegions::default(),
-                &entries,
-            ),
-            u64::MAX
-        );
     }
 
     #[test]

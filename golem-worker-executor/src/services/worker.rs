@@ -46,10 +46,6 @@ const STATUS_REGIONS_FIELD: &str = "regions";
 const STATUS_UPDATES_FIELD: &str = "updates";
 /// Prefix for per-idempotency-key invocation result fields (`ir:{idempotency_key}` -> `OplogIndex`).
 const STATUS_INVOCATION_RESULT_PREFIX: &str = "ir:";
-/// Version of the cached status semantics. Version 1 records that legacy filesystem baselines have
-/// already been incorporated into the cached total.
-const STATUS_FORMAT_FIELD: &str = "format";
-const STATUS_FORMAT_VERSION: u8 = 1;
 
 fn status_invocation_result_field(key: &IdempotencyKey) -> String {
     format!("{STATUS_INVOCATION_RESULT_PREFIX}{}", key.value)
@@ -103,10 +99,6 @@ fn compute_status_field_writes(
     let mut dels: Vec<String> = Vec::new();
 
     sets.push((STATUS_CORE_FIELD.to_string(), serialize(core)?));
-    sets.push((
-        STATUS_FORMAT_FIELD.to_string(),
-        serialize(&STATUS_FORMAT_VERSION)?,
-    ));
 
     let regions_changed = match previous {
         Some(previous) => {
@@ -210,23 +202,6 @@ fn reassemble_cached_status(
     }
     status.invocation_results = invocation_results;
     Some(status)
-}
-
-struct CachedStatus {
-    status: AgentStatusRecord,
-    format_version: Option<u8>,
-}
-
-fn cached_status_has_current_filesystem_baseline(
-    needs_legacy_filesystem_baseline_repair: bool,
-    format_version: Option<u8>,
-) -> bool {
-    !needs_legacy_filesystem_baseline_repair
-        || format_version.is_some_and(|version| version >= STATUS_FORMAT_VERSION)
-}
-
-fn has_current_status_format(format_version: Option<u8>) -> bool {
-    format_version.is_some_and(|version| version >= STATUS_FORMAT_VERSION)
 }
 
 #[derive(Debug, Clone)]
@@ -433,8 +408,8 @@ impl DefaultWorkerService {
     ///
     /// `agent_mode` is `#[transient]` and not part of `core`, so the returned record carries the
     /// `Durable` deserialization default; callers must restore it from the authoritative source.
-    async fn read_cached_status(&self, owned_agent_id: &OwnedAgentId) -> Option<CachedStatus> {
-        self.read_split_status_with_format(
+    async fn read_cached_status(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentStatusRecord> {
+        self.read_split_status(
             owned_agent_id,
             Self::status_namespace(&owned_agent_id.agent_id),
         )
@@ -447,11 +422,11 @@ impl DefaultWorkerService {
     ///
     /// `agent_mode` is `#[transient]` and not part of `core`, so the returned record carries the
     /// `Durable` deserialization default; callers must restore it from the authoritative source.
-    async fn read_split_status_with_format(
+    async fn read_split_status(
         &self,
         owned_agent_id: &OwnedAgentId,
         namespace: KeyValueStorageNamespace,
-    ) -> Option<CachedStatus> {
+    ) -> Option<AgentStatusRecord> {
         // Single atomic read of every field of the per-agent status hash (`core`, `regions`,
         // `updates`, `ir:{key}`). This is one round-trip (Redis `HGETALL`, a single
         // `SELECT ... WHERE namespace`, or one locked scan in memory) that observes a consistent
@@ -474,16 +449,7 @@ impl DefaultWorkerService {
             return None;
         }
 
-        let format_version = fields.iter().find_map(|(name, bytes)| {
-            (name == STATUS_FORMAT_FIELD)
-                .then(|| deserialize::<u8>(bytes).ok())
-                .flatten()
-        });
-        let status = reassemble_cached_status(fields)?;
-        Some(CachedStatus {
-            status,
-            format_version,
-        })
+        reassemble_cached_status(fields)
     }
 
     /// Writes the split status fields for an agent, sending only the parts that changed.
@@ -700,7 +666,6 @@ impl WorkerService for DefaultWorkerService {
                     parent,
                     component_size,
                     initial_total_linear_memory_size,
-                    initial_filesystem_storage_usage: persisted_filesystem_storage_usage,
                     initial_active_plugins,
                     local_agent_config,
                     original_phantom_id,
@@ -734,11 +699,7 @@ impl WorkerService for DefaultWorkerService {
                     .unwrap_or_else(|err| {
                         panic!("failed enriching local agent config for {owned_agent_id}: {err}")
                     });
-                let initial_filesystem_storage_usage = component_metadata
-                    .metadata
-                    .initial_filesystem_storage_usage(agent_type_name.as_ref());
-                let needs_legacy_filesystem_baseline_repair =
-                    persisted_filesystem_storage_usage == 0 && initial_filesystem_storage_usage > 0;
+
                 let initial_worker_metadata = AgentMetadata {
                     agent_id,
                     env,
@@ -753,7 +714,6 @@ impl WorkerService for DefaultWorkerService {
                         component_revision_for_replay: component_revision,
                         component_size,
                         total_linear_memory_size: initial_total_linear_memory_size,
-                        current_filesystem_storage_usage: initial_filesystem_storage_usage,
                         active_plugins: initial_active_plugins,
                         agent_mode,
                         ..AgentStatusRecord::default()
@@ -763,65 +723,25 @@ impl WorkerService for DefaultWorkerService {
                     agent_mode,
                 };
 
-                let cached_status = self.read_cached_status(owned_agent_id).await;
-                let cache_has_current_filesystem_baseline =
-                    cached_status.as_ref().is_some_and(|cached| {
-                        cached_status_has_current_filesystem_baseline(
-                            needs_legacy_filesystem_baseline_repair,
-                            cached.format_version,
-                        )
-                    });
-                let last_known_status = match cached_status {
-                    Some(mut cached) if cache_has_current_filesystem_baseline => {
+                let last_known_status = match self.read_cached_status(owned_agent_id).await {
+                    Some(mut status) => {
                         // `agent_mode` is `#[transient]` and therefore not part of the status
                         // blob; restore it from the authoritative value resolved above so the
                         // returned record carries the correct mode instead of the `Durable`
                         // deserialization default.
-                        cached.status.agent_mode = agent_mode;
-                        Some(cached.status)
+                        status.agent_mode = agent_mode;
+                        Some(status)
                     }
                     // No cached status (cache miss, missing for ephemeral workers, or stale
                     // format) -> recompute from oplog, preferring to fold forward from the clean
                     // checkpoint (if any) over a full re-read.
-                    cached_status => {
-                        // An unversioned legacy cache may either predate filesystem baselines or
-                        // have been repaired by an earlier implementation that did not write the
-                        // format marker. Those states are indistinguishable, so adding the baseline
-                        // in place could double it. Recompute once from the metadata-derived Create
-                        // baseline, then persist the versioned result below.
-                        let (cached_status, checkpoint) = if needs_legacy_filesystem_baseline_repair {
-                            // Replace any stale pre-baseline checkpoint with an origin checkpoint.
-                            // Its index can never be covered by a later jump/revert, so every status
-                            // reconstruction path retains the metadata-derived filesystem seed.
-                            let checkpoint = self
-                                .write_status_checkpoint(
-                                    owned_agent_id,
-                                    None,
-                                    initial_worker_metadata.last_known_status.clone(),
-                                )
-                                .await
-                                .unwrap_or_else(|err| {
-                                    panic!(
-                                        "failed to repair status checkpoint for {owned_agent_id}: {err}"
-                                    )
-                                });
-                            (None, Some(checkpoint))
-                        } else {
-                            let cached_status = cached_status.map(|mut cached| {
-                                cached.status.agent_mode = agent_mode;
-                                cached.status
-                            });
-                            let checkpoint = self
-                                .read_status_checkpoint(owned_agent_id, agent_mode)
-                                .await;
-                            (cached_status, checkpoint)
-                        };
+                    None => {
                         let last_known_status = calculate_last_known_status_with_checkpoint_reader(
                             self,
                             owned_agent_id,
                             agent_mode,
-                            cached_status,
-                            || async { checkpoint },
+                            None,
+                            || self.read_status_checkpoint(owned_agent_id, agent_mode),
                         )
                         .await
                         .expect("Failed to recompute worker status for existing worker");
@@ -967,18 +887,15 @@ impl WorkerService for DefaultWorkerService {
     ) -> Option<AgentStatusRecord> {
         record_worker_call("read_status_checkpoint");
 
-        let mut cached = self
-            .read_split_status_with_format(
+        let mut status = self
+            .read_split_status(
                 owned_agent_id,
                 Self::checkpoint_namespace(&owned_agent_id.agent_id),
             )
             .await?;
-        if !has_current_status_format(cached.format_version) {
-            return None;
-        }
         // `agent_mode` is transient (not part of `core`); restore the authoritative value.
-        cached.status.agent_mode = agent_mode;
-        Some(cached.status)
+        status.agent_mode = agent_mode;
+        Some(status)
     }
 
     async fn write_status_checkpoint(
@@ -1149,27 +1066,10 @@ mod tests {
         assert!(dels.is_empty());
 
         let mut store = HashMap::new();
-        let format = sets
-            .iter()
-            .find(|(name, _)| name == STATUS_FORMAT_FIELD)
-            .map(|(_, bytes)| deserialize::<u8>(bytes).unwrap());
         let reassembled = apply_and_reassemble(&mut store, sets, dels).unwrap();
 
-        assert_eq!(format, Some(STATUS_FORMAT_VERSION));
         // `agent_mode` is transient and defaults to `Durable`; `full` uses the default.
         assert_eq!(reassembled, full);
-    }
-
-    #[test]
-    fn legacy_filesystem_baseline_repair_requires_a_versioned_cache() {
-        assert!(!cached_status_has_current_filesystem_baseline(true, None));
-        assert!(cached_status_has_current_filesystem_baseline(
-            true,
-            Some(STATUS_FORMAT_VERSION)
-        ));
-        assert!(cached_status_has_current_filesystem_baseline(false, None));
-        assert!(!has_current_status_format(None));
-        assert!(has_current_status_format(Some(STATUS_FORMAT_VERSION)));
     }
 
     #[test]

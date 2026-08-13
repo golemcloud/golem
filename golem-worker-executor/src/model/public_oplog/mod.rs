@@ -264,7 +264,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 parent,
                 component_size,
                 initial_total_linear_memory_size,
-                initial_filesystem_storage_usage: _,
                 initial_active_plugins,
                 local_agent_config,
                 original_phantom_id,

@@ -28,6 +28,7 @@ use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tracing::debug;
 
+use crate::metrics::storage::record_filesystem_pool_released;
 use crate::services::active_workers::{FilesystemStoragePermit, FilesystemStorageSemaphore};
 
 // Opaque token for read-only files. This is used to ensure that the file is not deleted while it is in use.
@@ -88,7 +89,7 @@ impl FileLoader {
         &self,
         environment_id: EnvironmentId,
         key: AgentFileContentHash,
-        target: &Path,
+        target: &PathBuf,
         file_size: u64,
     ) -> Result<FileUseToken, WorkerExecutorError> {
         self.get_read_only_to_impl(environment_id, key, target, file_size)
@@ -106,7 +107,7 @@ impl FileLoader {
         &self,
         environment_id: EnvironmentId,
         key: AgentFileContentHash,
-        target: &Path,
+        target: &PathBuf,
     ) -> Result<(), WorkerExecutorError> {
         self.get_read_write_to_impl(environment_id, key, target)
             .await
@@ -122,7 +123,7 @@ impl FileLoader {
         &self,
         environment_id: EnvironmentId,
         key: AgentFileContentHash,
-        target: &Path,
+        target: &PathBuf,
         file_size: u64,
     ) -> Result<FileUseToken, anyhow::Error> {
         if let Some(parent) = target.parent() {
@@ -160,7 +161,7 @@ impl FileLoader {
         &self,
         environment_id: EnvironmentId,
         key: AgentFileContentHash,
-        target: &Path,
+        target: &PathBuf,
     ) -> Result<(), anyhow::Error> {
         if let Some(parent) = target.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -192,7 +193,7 @@ impl FileLoader {
                     cache_entry_path.display(),
                     target.display()
                 );
-                copy_file_atomically(&cache_entry_path, target).await?;
+                tokio::fs::copy(&cache_entry_path, target).await?;
                 return Ok(());
             }
         }
@@ -273,6 +274,16 @@ impl FileLoader {
                         // we successfully downloaded the file and set it to read-only, set the cache entry to the file
                         *prelocked_entry = Ok(InitializedCacheEntry {
                             path: path.clone(),
+                            filesystem_storage_permit_bytes: if filesystem_storage_permit.is_some()
+                            {
+                                // Round up to permit granularity (1 permit = 1 KB) so the
+                                // released byte count matches what was actually acquired.
+                                crate::services::active_workers::filesystem_storage_bytes_rounded_up(
+                                    file_size,
+                                )
+                            } else {
+                                0
+                            },
                             filesystem_storage_permit,
                         });
                     }
@@ -318,7 +329,15 @@ impl FileLoader {
             .map_err(|e| anyhow!(e))?
             .ok_or_else(|| anyhow!("File not found"))?;
 
-        write_stream_atomically(path, &mut data).await
+        let file = tokio::fs::File::create(path).await?;
+        let mut writer = tokio::io::BufWriter::new(file);
+
+        while let Some(chunk) = data.try_next().await.map_err(|e| anyhow!(e))? {
+            writer.write_all(&chunk).await?;
+        }
+
+        writer.flush().await?;
+        Ok(())
     }
 
     async fn set_path_read_only(&self, path: &Path) -> Result<(), anyhow::Error> {
@@ -327,75 +346,6 @@ impl FileLoader {
         tokio::fs::set_permissions(path, perms).await?;
         Ok(())
     }
-}
-
-async fn write_stream_atomically<S, B, E>(path: &Path, data: &mut S) -> Result<(), anyhow::Error>
-where
-    S: futures::TryStream<Ok = B, Error = E> + Unpin,
-    B: AsRef<[u8]>,
-    E: std::fmt::Display,
-{
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow!("Initial file target has no parent directory"))?;
-    let (file, temporary) = temporary_writable_file_in(parent).await?;
-    let mut writer = tokio::io::BufWriter::new(file);
-
-    while let Some(chunk) = data
-        .try_next()
-        .await
-        .map_err(|error| anyhow!(error.to_string()))?
-    {
-        writer.write_all(chunk.as_ref()).await?;
-    }
-
-    writer.flush().await?;
-    writer.into_inner().sync_all().await?;
-    persist_temporary_file(temporary, path).await?;
-    Ok(())
-}
-
-async fn copy_file_atomically(source: &Path, target: &Path) -> Result<(), anyhow::Error> {
-    let parent = target
-        .parent()
-        .ok_or_else(|| anyhow!("Initial file target has no parent directory"))?;
-    let temporary = temporary_file_in(parent).await?;
-    tokio::fs::copy(source, &temporary).await?;
-    persist_temporary_file(temporary, target).await?;
-    Ok(())
-}
-
-async fn temporary_file_in(parent: &Path) -> Result<tempfile::TempPath, anyhow::Error> {
-    let parent = parent.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        tempfile::NamedTempFile::new_in(parent).map(tempfile::NamedTempFile::into_temp_path)
-    })
-    .await
-    .map_err(std::io::Error::other)?
-    .map_err(Into::into)
-}
-
-async fn temporary_writable_file_in(
-    parent: &Path,
-) -> Result<(tokio::fs::File, tempfile::TempPath), anyhow::Error> {
-    let parent = parent.to_path_buf();
-    let (file, path) = tokio::task::spawn_blocking(move || {
-        tempfile::NamedTempFile::new_in(parent).map(tempfile::NamedTempFile::into_parts)
-    })
-    .await
-    .map_err(std::io::Error::other)??;
-    Ok((tokio::fs::File::from_std(file), path))
-}
-
-async fn persist_temporary_file(
-    temporary: tempfile::TempPath,
-    target: &Path,
-) -> Result<(), anyhow::Error> {
-    let target = target.to_path_buf();
-    tokio::task::spawn_blocking(move || temporary.persist(target).map(|_| ()))
-        .await
-        .map_err(std::io::Error::other)?
-        .map_err(|error| error.error.into())
 }
 
 // Scary type, let's break it down:
@@ -418,14 +368,21 @@ struct InitializedCacheEntry {
     /// configured. Only returned to the executor pool if the file is
     /// successfully deleted
     filesystem_storage_permit: Option<FilesystemStoragePermit>,
+    /// Byte count corresponding to `filesystem_storage_permit`, for metrics.
+    filesystem_storage_permit_bytes: u64,
 }
 
 impl InitializedCacheEntry {
     #[cfg(test)]
-    fn new_for_test(path: PathBuf, permit: Option<FilesystemStoragePermit>) -> Self {
+    fn new_for_test(
+        path: PathBuf,
+        permit: Option<FilesystemStoragePermit>,
+        permit_bytes: u64,
+    ) -> Self {
         Self {
             path,
             filesystem_storage_permit: permit,
+            filesystem_storage_permit_bytes: permit_bytes,
         }
     }
 }
@@ -436,6 +393,9 @@ impl Drop for InitializedCacheEntry {
         std::fs::remove_file(&self.path).expect("Failed to remove cached component file — executor filesystem is in an inconsistent state");
         // File deleted successfully — disk space is freed, return permits to the pool.
         let permit = self.filesystem_storage_permit.take();
+        if permit.is_some() && self.filesystem_storage_permit_bytes > 0 {
+            record_filesystem_pool_released(self.filesystem_storage_permit_bytes);
+        }
         drop(permit);
     }
 }
@@ -555,31 +515,6 @@ mod tests {
         );
     }
 
-    #[test]
-    async fn concurrent_ro_first_loads_share_one_cache_permit() {
-        let content = b"hello world";
-        let pool_bytes = 1024;
-        let (loader, semaphore, hash, env_id) = setup(pool_bytes, content).await;
-        let dir = tempfile::tempdir().unwrap();
-        let first_path = dir.path().join("first.txt");
-        let second_path = dir.path().join("second.txt");
-
-        let (first, second) = tokio::join!(
-            loader.get_read_only_to(env_id, hash, &first_path, content.len() as u64),
-            loader.get_read_only_to(env_id, hash, &second_path, content.len() as u64),
-        );
-        let first = first.unwrap();
-        let second = second.unwrap();
-
-        assert_eq!(semaphore.available_bytes(), 0);
-        assert_eq!(tokio::fs::read(&first_path).await.unwrap(), content);
-        assert_eq!(tokio::fs::read(&second_path).await.unwrap(), content);
-        drop(first);
-        assert_eq!(semaphore.available_bytes(), 0);
-        drop(second);
-        assert_eq!(semaphore.available_bytes(), pool_bytes as u64);
-    }
-
     /// When all `FileUseToken`s for a cached entry are dropped, the semaphore
     /// permits are returned to the pool.
     #[test]
@@ -628,7 +563,7 @@ mod tests {
         let result = std::panic::catch_unwind(|| {
             let nonexistent =
                 std::path::PathBuf::from("/tmp/golem-test-nonexistent-file-12345.wasm");
-            let entry = InitializedCacheEntry::new_for_test(nonexistent, None);
+            let entry = InitializedCacheEntry::new_for_test(nonexistent, None, 0);
             drop(entry);
         });
         assert!(
@@ -643,62 +578,24 @@ mod tests {
     #[test]
     async fn ro_load_fails_and_cleans_up_when_pool_exhausted() {
         let content = b"hello world";
-        let pool_bytes = 1024;
+        let pool_bytes = 0; // 0 bytes → 0 permits → all acquires fail immediately
         let (loader, semaphore, hash, env_id) = setup(pool_bytes, content).await;
-        let dir = tempfile::tempdir().unwrap();
-        let blocking_permit = semaphore
-            .try_acquire(content.len() as u64)
-            .await
-            .expect("test must acquire the only storage permit");
 
+        let dir = tempfile::tempdir().unwrap();
+
+        // Load must fail because the pool is empty.
         let result = loader
             .get_read_only_to(
                 env_id,
                 hash,
-                &dir.path().join("failed.txt"),
+                &dir.path().join("f.txt"),
                 content.len() as u64,
             )
             .await;
         assert!(result.is_err(), "expected failure when pool is exhausted");
 
-        drop(blocking_permit);
-        let retry_path = dir.path().join("retry.txt");
-        let token = loader
-            .get_read_only_to(env_id, hash, &retry_path, content.len() as u64)
-            .await
-            .expect("retry after freeing the pool must download a fresh cache entry");
-        assert_eq!(tokio::fs::read(retry_path).await.unwrap(), content);
+        // The failed load must have cleaned up the stale cache entry so the
+        // pool is still at 0 permits (no leak).
         assert_eq!(semaphore.available_bytes(), 0);
-        drop(token);
-        assert_eq!(semaphore.available_bytes(), pool_bytes as u64);
-    }
-
-    #[test]
-    async fn failed_download_does_not_publish_partial_target() {
-        let directory = tempfile::tempdir().unwrap();
-        let target = directory.path().join("target.bin");
-        tokio::fs::write(&target, b"original").await.unwrap();
-        let mut chunks = futures::stream::iter([
-            Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"partial")),
-            Err(std::io::Error::other("download failed")),
-        ]);
-
-        let result = write_stream_atomically(&target, &mut chunks).await;
-
-        assert_eq!(result.unwrap_err().to_string(), "download failed");
-        assert_eq!(tokio::fs::read(target).await.unwrap(), b"original");
-    }
-
-    #[test]
-    async fn cached_copy_atomically_replaces_the_target() {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("source.bin");
-        let target = directory.path().join("target.bin");
-        tokio::fs::write(&source, b"complete").await.unwrap();
-        tokio::fs::write(&target, b"old").await.unwrap();
-
-        copy_file_atomically(&source, &target).await.unwrap();
-
-        assert_eq!(tokio::fs::read(target).await.unwrap(), b"complete");
     }
 }

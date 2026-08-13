@@ -153,11 +153,6 @@ impl AgentMemoryMeter {
         };
         self.inner.record(units);
     }
-
-    #[cfg(test)]
-    pub(crate) fn last_sample(&self) -> Instant {
-        self.inner.state.lock().unwrap().last_sample
-    }
 }
 
 impl Inner {
@@ -299,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    fn account_remainders_do_not_cross_agent_modes() {
+    fn account_remainder_crosses_agent_modes() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
 
@@ -315,27 +310,6 @@ mod tests {
         ephemeral.stop(now + Duration::from_secs(1));
 
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 0);
-        assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Ephemeral), 0);
-
-        let durable = AgentMemoryMeter::new(
-            AgentMode::Durable,
-            gib(1),
-            true,
-            entry.clone(),
-            now + Duration::from_secs(1),
-        );
-        durable.stop(now + Duration::from_millis(1600));
-        assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 1);
-        assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Ephemeral), 0);
-
-        let ephemeral = AgentMemoryMeter::new(
-            AgentMode::Ephemeral,
-            gib(1),
-            true,
-            entry.clone(),
-            now + Duration::from_millis(1600),
-        );
-        ephemeral.stop(now + Duration::from_secs(2));
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Ephemeral), 1);
     }
 

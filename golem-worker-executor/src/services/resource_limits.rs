@@ -18,7 +18,7 @@ use crate::metrics::resources::{
     record_storage_byte_seconds,
 };
 use crate::services::agent_memory_meter::{AgentMemoryMeter, BYTE_NANOSECONDS_PER_GB_SECOND};
-use crate::services::agent_storage_meter::{AgentStorageMeter, NANOSECONDS_PER_SECOND};
+use crate::services::agent_storage_meter::AgentStorageMeter;
 use crate::services::golem_config::ResourceLimitsConfig;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -47,7 +47,6 @@ pub struct AtomicResourceEntry {
     in_flight_delta: AtomicI64,
     durable_byte_seconds_delta: AtomicI64,
     ephemeral_byte_seconds_delta: AtomicI64,
-    storage_remainders: Mutex<ModeRemainders>,
     storage_meters: Arc<scc::HashMap<OwnedAgentId, AgentStorageMeter>>,
     memory_gb_seconds_delta: AtomicI64,
     in_flight_memory_gb_seconds_delta: AtomicI64,
@@ -56,7 +55,7 @@ pub struct AtomicResourceEntry {
     in_flight_durable_memory_gb_seconds_delta: AtomicI64,
     in_flight_ephemeral_memory_gb_seconds_delta: AtomicI64,
     memory_usage_transition: Mutex<()>,
-    memory_remainders: Mutex<ModeRemainders>,
+    memory_remainder: Mutex<u128>,
     memory_meters: Arc<scc::HashMap<OwnedAgentId, AgentMemoryMeter>>,
     // Current (cached) value of the account level worker memory limits
     max_memory: AtomicUsize,
@@ -96,32 +95,6 @@ pub struct AtomicResourceEntry {
     // UNLIMITED_OPLOG_WRITES_PER_SECOND (10^18) means no rate limiting.
     // Refreshed via update_last_known_limits when batch sync responses arrive.
     oplog_writes_per_second: AtomicU64,
-}
-
-#[derive(Debug, Default)]
-struct ModeRemainders {
-    durable: u128,
-    ephemeral: u128,
-}
-
-impl ModeRemainders {
-    fn for_mode(&mut self, mode: AgentMode) -> &mut u128 {
-        match mode {
-            AgentMode::Durable => &mut self.durable,
-            AgentMode::Ephemeral => &mut self.ephemeral,
-        }
-    }
-}
-
-fn record_remainder(account_remainder: &mut u128, remainder: u128, divisor: u128) -> i64 {
-    if remainder == 0 {
-        return 0;
-    }
-
-    *account_remainder = account_remainder.saturating_add(remainder);
-    let units = *account_remainder / divisor;
-    *account_remainder %= divisor;
-    units.min(i64::MAX as u128) as i64
 }
 
 struct CapturedUsageUpdate {
@@ -206,7 +179,6 @@ impl AtomicResourceEntry {
             in_flight_delta: AtomicI64::new(0),
             durable_byte_seconds_delta: AtomicI64::new(0),
             ephemeral_byte_seconds_delta: AtomicI64::new(0),
-            storage_remainders: Mutex::new(ModeRemainders::default()),
             storage_meters: Arc::new(scc::HashMap::new()),
             memory_gb_seconds_delta: AtomicI64::new(0),
             in_flight_memory_gb_seconds_delta: AtomicI64::new(0),
@@ -215,7 +187,7 @@ impl AtomicResourceEntry {
             in_flight_durable_memory_gb_seconds_delta: AtomicI64::new(0),
             in_flight_ephemeral_memory_gb_seconds_delta: AtomicI64::new(0),
             memory_usage_transition: Mutex::new(()),
-            memory_remainders: Mutex::new(ModeRemainders::default()),
+            memory_remainder: Mutex::new(0),
             memory_meters: Arc::new(scc::HashMap::new()),
             max_memory: AtomicUsize::new(max_memory),
             max_table_elements: AtomicUsize::new(max_table_elements),
@@ -361,14 +333,6 @@ impl AtomicResourceEntry {
         delta.fetch_add(amount, Ordering::Relaxed);
     }
 
-    pub fn record_storage_remainder(&self, mode: AgentMode, remainder: u128) {
-        let units = {
-            let mut remainders = self.storage_remainders.lock().unwrap();
-            record_remainder(remainders.for_mode(mode), remainder, NANOSECONDS_PER_SECOND)
-        };
-        self.record_storage_byte_seconds(mode, units);
-    }
-
     pub(crate) fn register_memory_meter(
         &self,
         owned_agent_id: OwnedAgentId,
@@ -505,14 +469,16 @@ impl AtomicResourceEntry {
     }
 
     pub fn record_memory_remainder(&self, mode: AgentMode, remainder: u128) {
+        if remainder == 0 {
+            return;
+        }
         let _transition = self.memory_usage_transition.lock().unwrap();
         let units = {
-            let mut remainders = self.memory_remainders.lock().unwrap();
-            record_remainder(
-                remainders.for_mode(mode),
-                remainder,
-                BYTE_NANOSECONDS_PER_GB_SECOND,
-            )
+            let mut account_remainder = self.memory_remainder.lock().unwrap();
+            *account_remainder = account_remainder.saturating_add(remainder);
+            let units = *account_remainder / BYTE_NANOSECONDS_PER_GB_SECOND;
+            *account_remainder %= BYTE_NANOSECONDS_PER_GB_SECOND;
+            units.min(i64::MAX as u128) as i64
         };
         self.record_memory_gb_seconds_locked(mode, units);
     }

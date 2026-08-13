@@ -140,44 +140,6 @@ fn create_serialization_poem_serde_equivalence() {
 }
 
 #[test]
-fn raw_create_filesystem_baseline_roundtrips() {
-    use crate::model::agent::AgentMode;
-    use crate::model::component::ComponentRevision;
-    use crate::model::environment::EnvironmentId;
-    use golem_api_grpc::proto::golem::worker::RawOplogEntry;
-
-    let entry = OplogEntry::create(
-        AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "legacy".to_string(),
-        },
-        AgentMode::Durable,
-        ComponentRevision::INITIAL,
-        vec![],
-        EnvironmentId::new(),
-        AccountId::new(),
-        None,
-        0,
-        0,
-        123,
-        Default::default(),
-        vec![],
-        None,
-        Uuid::new_v4(),
-    );
-    let proto = RawOplogEntry::try_from(entry).unwrap();
-    let decoded = OplogEntry::try_from(proto).unwrap();
-
-    assert!(matches!(
-        decoded,
-        OplogEntry::Create {
-            initial_filesystem_storage_usage: 123,
-            ..
-        }
-    ));
-}
-
-#[test]
 fn start_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::Start(StartParams {
         timestamp: Timestamp::now_utc().rounded(),

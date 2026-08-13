@@ -42,13 +42,12 @@ pub mod websocket;
 
 use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::durability::collect_named_retry_policies;
-use crate::durable_host::filesystem::durable::DurableFilesystem;
-pub(crate) use crate::durable_host::filesystem::durable::{
-    FilesystemStorageAccounting, FilesystemStorageReservation, PendingFilesystemReservation,
-};
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
 use crate::metrics::ephemeral::record_non_suspending_failure;
+use crate::metrics::storage::{
+    STORAGE_TYPE_FILESYSTEM, record_storage_bytes_deleted, record_storage_bytes_written,
+};
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
@@ -380,7 +379,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
     linear_memory: LinearMemoryTracker,
-    filesystem: DurableFilesystem,
+    storage_meter: AgentStorageMeter,
     /// Per-instance cache of resolved typed guest export handles, populated
     /// lazily on first use during invocation dispatch.
     agent_export_funcs: AgentExportFuncs,
@@ -418,14 +417,12 @@ pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
 
 impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
     fn drop(&mut self) {
-        let now = Instant::now();
-        self.linear_memory.stop(now);
+        self.linear_memory.stop(Instant::now());
         self.resource_limits
             .unregister_memory_meter(&self.owned_agent_id, self.linear_memory.meter());
-        let storage_meter = self.filesystem.storage_meter();
-        storage_meter.stop(now);
+        self.storage_meter.flush(Instant::now());
         self.resource_limits
-            .unregister_storage_meter(&self.owned_agent_id, &storage_meter);
+            .unregister_storage_meter(&self.owned_agent_id, &self.storage_meter);
     }
 }
 
@@ -565,7 +562,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         component_service: Arc<dyn ComponentService>,
         resource_limits: Arc<AtomicResourceEntry>,
         config: Arc<GolemConfig>,
-        worker_config: AgentConfig,
+        mut worker_config: AgentConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         worker_fork: Arc<dyn WorkerForkService>,
@@ -646,7 +643,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .get(&agent_id.agent_type)
                 .cloned()
         });
-        let initial_filesystem_storage_usage = worker_config.current_filesystem_storage_usage;
+        let initial_read_write_file_bytes: u64 = agent_type_provision_configs
+            .as_ref()
+            .map(|c| c.files.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .filter(|f| f.permissions == AgentFilePermissions::ReadWrite)
+            .map(|f| f.size)
+            .fold(0u64, u64::saturating_add);
+        let initial_filesystem_storage_usage = worker_config
+            .current_filesystem_storage_usage
+            .saturating_add(initial_read_write_file_bytes);
         if initial_filesystem_storage_usage > resource_limits.max_disk_space_limit() {
             return Err(WorkerExecutorError::worker_creation_failed(
                 owned_agent_id.agent_id.clone(),
@@ -667,6 +674,26 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .unwrap_or_default(),
         )
         .await?;
+
+        // Acquire storage semaphore permits for read-write initial component files.
+        //
+        // Read-only files are hardlinked from the FileLoader shared cache, so
+        // they occupy disk space only once per unique content hash regardless of
+        // how many workers reference them. FileLoader acquires the semaphore
+        // permit on the first cache miss and releases it when the last
+        // FileUseToken for that entry is dropped — no per-worker charge here.
+        //
+        // Read-write files are copied per-worker (each worker gets its own
+        // private inode and data blocks), so they must be charged individually.
+        if let Some(worker) = invocation_queue.upgrade()
+            && initial_read_write_file_bytes > 0
+        {
+            worker
+                .acquire_initial_filesystem_storage(initial_read_write_file_bytes)
+                .await
+                .map_err(|trap| WorkerExecutorError::runtime(trap.to_string()))?;
+        }
+        worker_config.current_filesystem_storage_usage = initial_filesystem_storage_usage;
 
         let agent_config = if agent_id.is_some() {
             effective_agent_config(
@@ -703,18 +730,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             connection_pool: http_connection_pool,
             is_replay: Arc::new(AtomicBool::new(false)),
         };
-        let resource_metering_started_at = Instant::now();
-        let worker = invocation_queue
-            .upgrade()
-            .expect("worker must remain alive while creating its context");
-        let storage_meter = AgentStorageMeter::new_with_capacity_bank(
+        let storage_meter = AgentStorageMeter::new(
             execution_status.read().unwrap().agent_mode(),
             worker_config.current_filesystem_storage_usage,
             resource_limits.clone(),
-            resource_metering_started_at,
-            worker.filesystem_storage_permit_bank(),
+            Instant::now(),
         );
         resource_limits.register_storage_meter(owned_agent_id.clone(), storage_meter.clone());
+        let worker = invocation_queue
+            .upgrade()
+            .expect("worker must remain alive while creating its context");
         let retained_memory_grant = worker.linear_memory_grant();
         let canonical_startup_bytes = worker.startup_linear_memory_bytes();
         let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
@@ -725,7 +750,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             true,
             resource_limits.clone(),
             retained_memory_grant,
-            resource_metering_started_at,
+            Instant::now(),
         );
         let weak_worker = Arc::downgrade(&worker);
         let memory_meter = linear_memory.meter().clone();
@@ -758,6 +783,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             worker_proxy,
             worker_config.deleted_regions.clone(),
             component_metadata,
+            worker_config.current_filesystem_storage_usage,
             worker_config.agent_effective_surface,
             worker_fork,
             RwLock::new(compute_read_only_paths(&files)),
@@ -802,7 +828,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             execution_status,
             resource_limits,
             linear_memory,
-            filesystem: DurableFilesystem::new(storage_meter),
+            storage_meter,
             agent_export_funcs: AgentExportFuncs::default(),
             _store_alive_guard: StoreAliveGuard::new(),
         })
@@ -1345,78 +1371,188 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.linear_memory.clone()
     }
 
-    pub fn storage_meter(&self) -> AgentStorageMeter {
-        self.filesystem.storage_meter()
-    }
-
-    pub(crate) fn filesystem_mutation_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
-        self.filesystem.mutation_lock()
-    }
-
-    pub(crate) fn rename_open_filesystem_stream_paths(&mut self, old_path: &Path, new_path: &Path) {
-        self.filesystem.rename_stream_paths(old_path, new_path);
-    }
-
     async fn switch_to_live(&self) {
         self.state.replay_state.switch_to_live().await;
         self.linear_memory.switch_to_live();
     }
 
     pub fn current_filesystem_storage_usage(&self) -> u64 {
-        self.filesystem.storage_meter().current_bytes()
+        self.state.current_filesystem_storage_usage
     }
 
     pub fn max_disk_space(&self) -> u64 {
         self.resource_limits.max_disk_space_limit()
     }
 
-    pub(crate) async fn commit_filesystem_storage_reservation(
-        &mut self,
-        reservation: FilesystemStorageReservation,
-        committed_bytes: u64,
-    ) {
-        if let Some(accounting) = self.filesystem_storage_accounting() {
-            accounting.commit(reservation, committed_bytes).await;
+    /// Check whether acquiring `new_bytes` would breach the per-plan storage
+    /// limit. Returns `WorkerAgentExceededFilesystemStorageLimit` (permanent) if so.
+    /// Does NOT check the executor semaphore pool — that is done by
+    /// `acquire_filesystem_space`.
+    ///
+    /// No-op during replay.
+    pub fn check_filesystem_storage_quota(&self, new_bytes: u64) -> anyhow::Result<()> {
+        if self.state.is_replay() {
+            return Ok(());
         }
+        let after = self
+            .state
+            .current_filesystem_storage_usage
+            .saturating_add(new_bytes);
+        if after > self.resource_limits.max_disk_space_limit() {
+            Err(anyhow!(
+                GolemSpecificWasmTrap::WorkerAgentExceededFilesystemStorageLimit
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Acquire `new_bytes` of storage from the executor semaphore pool.
+    ///
+    /// - During replay: no-op (permits were pre-acquired at startup).
+    /// - During live execution: calls `Worker::acquire_filesystem_space`, which
+    ///   tries the semaphore non-blockingly. On failure returns
+    ///   `NodeOutOfFilesystemStorage` (retriable via `ReacquirePermits`).
+    ///
+    /// Call `check_filesystem_quota` before calling this to enforce the per-plan
+    /// limit (`WorkerAgentExceededFilesystemStorageLimit`). This method only checks the
+    /// executor-wide semaphore pool (`NodeOutOfFilesystemStorage`).
+    pub async fn acquire_filesystem_storage_space(&mut self, new_bytes: u64) -> anyhow::Result<()> {
+        if self.state.is_replay() {
+            return Ok(());
+        }
+        // Acquire the semaphore permit first (non-blocking try). Writing the
+        // oplog entry after a confirmed acquire ensures the oplog accurately
+        // reflects only committed storage changes — a failed acquire leaves no
+        // phantom delta that would inflate `current_filesystem_storage_usage` on restart.
+        self.public_state
+            .worker()
+            .acquire_filesystem_storage_space(new_bytes)
+            .await?;
+        self.public_state
+            .worker()
+            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
+                new_bytes as i64,
+            ))
+            .await;
+        self.storage_meter.on_acquire(new_bytes, Instant::now());
+        self.state.current_filesystem_storage_usage += new_bytes;
+        let account_id = self.created_by().to_string();
+        let environment_id = self.state.owned_agent_id.environment_id().to_string();
+        record_storage_bytes_written(
+            STORAGE_TYPE_FILESYSTEM,
+            &account_id,
+            &environment_id,
+            new_bytes,
+        );
+        Ok(())
     }
 
     /// Release `freed_bytes` back to the executor semaphore pool.
     /// Called when files are deleted or truncated.
     /// During replay this is a no-op.
     pub async fn release_filesystem_storage_space(&mut self, freed_bytes: u64) {
-        if freed_bytes > 0
-            && let Some(accounting) = self.filesystem_storage_accounting()
-        {
-            accounting.release(freed_bytes).await;
+        if self.state.is_replay() {
+            return;
         }
+        let freed_bytes = freed_bytes.min(self.state.current_filesystem_storage_usage);
+        if freed_bytes == 0 {
+            return;
+        }
+        self.public_state
+            .worker()
+            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
+                -(freed_bytes as i64),
+            ))
+            .await;
+        self.public_state
+            .worker()
+            .release_filesystem_storage_space(freed_bytes)
+            .await;
+        self.storage_meter.on_release(freed_bytes, Instant::now());
+        self.state.current_filesystem_storage_usage -= freed_bytes;
+        let account_id = self.created_by().to_string();
+        let environment_id = self.state.owned_agent_id.environment_id().to_string();
+        record_storage_bytes_deleted(
+            STORAGE_TYPE_FILESYSTEM,
+            &account_id,
+            &environment_id,
+            freed_bytes,
+        );
     }
 
-    pub(crate) async fn reserve_filesystem_storage(
+    /// Check the per-agent storage quota and acquire permits from the
+    /// executor-wide semaphore pool in a single step.
+    ///
+    /// This combines `check_filesystem_storage_quota` (per-plan limit) and
+    /// `acquire_filesystem_storage_space` (executor semaphore) — the two must
+    /// always be called together in this order.
+    pub async fn reserve_filesystem_storage(&mut self, new_bytes: u64) -> anyhow::Result<()> {
+        self.check_filesystem_storage_quota(new_bytes)?;
+        self.acquire_filesystem_storage_space(new_bytes).await
+    }
+
+    pub(crate) fn prepare_filesystem_storage_reservation(
         &mut self,
         new_bytes: u64,
-    ) -> anyhow::Result<Option<FilesystemStorageReservation>> {
+    ) -> anyhow::Result<Option<Arc<Worker<Ctx>>>> {
         if new_bytes == 0 || self.state.is_replay() {
             return Ok(None);
         }
-        let accounting = self
-            .filesystem_storage_accounting()
-            .expect("live filesystem reservation must have accounting context");
-        let reservation = accounting
-            .reserve(new_bytes, self.resource_limits.max_disk_space_limit())
-            .await?;
-        Ok(Some(reservation))
+        self.check_filesystem_storage_quota(new_bytes)?;
+        self.state.current_filesystem_storage_usage += new_bytes;
+        Ok(Some(self.public_state.worker()))
     }
 
-    pub(crate) fn filesystem_storage_accounting(&self) -> Option<FilesystemStorageAccounting<Ctx>> {
-        if self.state.is_replay() {
+    pub(crate) fn rollback_filesystem_storage_reservation(&mut self, new_bytes: u64) {
+        if new_bytes == 0 || self.state.is_replay() {
+            return;
+        }
+        self.state.current_filesystem_storage_usage -= new_bytes;
+    }
+
+    pub(crate) fn finish_filesystem_storage_reservation(&mut self, new_bytes: u64) {
+        if new_bytes == 0 || self.state.is_replay() {
+            return;
+        }
+        let account_id = self.created_by().to_string();
+        let environment_id = self.state.owned_agent_id.environment_id().to_string();
+        record_storage_bytes_written(
+            STORAGE_TYPE_FILESYSTEM,
+            &account_id,
+            &environment_id,
+            new_bytes,
+        );
+    }
+
+    pub(crate) fn prepare_filesystem_storage_release(
+        &mut self,
+        freed_bytes: u64,
+    ) -> Option<(Arc<Worker<Ctx>>, u64)> {
+        if freed_bytes == 0 || self.state.is_replay() {
             return None;
         }
-        Some(FilesystemStorageAccounting::new(
-            self.public_state.worker(),
-            self.filesystem.storage_meter(),
-            self.created_by(),
-            self.state.owned_agent_id.environment_id,
-        ))
+        let freed_bytes = freed_bytes.min(self.state.current_filesystem_storage_usage);
+        if freed_bytes == 0 {
+            None
+        } else {
+            self.state.current_filesystem_storage_usage -= freed_bytes;
+            Some((self.public_state.worker(), freed_bytes))
+        }
+    }
+
+    pub(crate) fn finish_filesystem_storage_release(&mut self, freed_bytes: u64) {
+        if freed_bytes == 0 || self.state.is_replay() {
+            return;
+        }
+        let account_id = self.created_by().to_string();
+        let environment_id = self.state.owned_agent_id.environment_id().to_string();
+        record_storage_bytes_deleted(
+            STORAGE_TYPE_FILESYSTEM,
+            &account_id,
+            &environment_id,
+            freed_bytes,
+        );
     }
 
     pub fn increase_memory(&mut self, delta: u64) {
@@ -3331,60 +3467,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
 
         {
-            let storage_growth = {
-                let current_files = self.state.files.read().await;
-                filesystem_update_storage_growth(
-                    &current_files,
-                    self.worker_dir.path(),
-                    new_agent_type_provision_configs
-                        .as_ref()
-                        .map(|c| c.files.as_slice())
-                        .unwrap_or_default(),
-                )
-                .await?
-            };
-            let reservation = if storage_growth == 0 {
-                None
-            } else {
-                self.reserve_filesystem_storage(storage_growth).await?
-            };
-            let update_result = {
-                let mut current_files = self.state.files.write().await;
-                let update_result = update_filesystem(
-                    &mut current_files,
-                    &self.state.file_loader,
-                    self.owned_agent_id.environment_id,
-                    self.worker_dir.path(),
-                    new_agent_type_provision_configs
-                        .as_ref()
-                        .map(|c| c.files.as_slice())
-                        .unwrap_or_default(),
-                )
-                .await;
-                if update_result.is_ok() {
-                    let mut read_only_paths = self.state.read_only_paths.write().unwrap();
-                    *read_only_paths = compute_read_only_paths(&current_files);
-                }
-                update_result
-            };
-            match update_result {
-                Ok(committed_growth) => {
-                    if let Some(reservation) = reservation {
-                        self.commit_filesystem_storage_reservation(reservation, committed_growth)
-                            .await;
-                    }
-                }
-                Err(update_error) => {
-                    if let Some(reservation) = reservation {
-                        self.commit_filesystem_storage_reservation(
-                            reservation,
-                            update_error.committed_growth,
-                        )
-                        .await;
-                    }
-                    return Err(update_error.error);
-                }
-            }
+            let mut current_files = self.state.files.write().await;
+            update_filesystem(
+                &mut current_files,
+                &self.state.file_loader,
+                self.owned_agent_id.environment_id,
+                self.worker_dir.path(),
+                new_agent_type_provision_configs
+                    .as_ref()
+                    .map(|c| c.files.as_slice())
+                    .unwrap_or_default(),
+            )
+            .await?;
+
+            let mut read_only_paths = self.state.read_only_paths.write().unwrap();
+            *read_only_paths = compute_read_only_paths(&current_files);
         }
 
         if let Some((updated_agent_config, agent_effective_surface, initial_wallet_cards)) =
@@ -3580,17 +3677,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     ) -> RetryDecision {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
-        if self.state.is_live() && self.state.snapshotting_mode.is_none() {
-            if let Err(err) = io::streams::reconcile_all_pending_filesystem_streams(self).await {
-                error!("failed to reconcile filesystem streams before invocation failure: {err}");
-                return RetryDecision::None;
-            }
-            if let Err(err) = concurrent::drain_queued_dropped_call_events(self).await {
-                error!(
-                    "failed to drain dropped durable calls before invocation failure entry: {err}"
-                );
-                return RetryDecision::None;
-            }
+        if self.state.is_live()
+            && self.state.snapshotting_mode.is_none()
+            && let Err(err) = concurrent::drain_queued_dropped_call_events(self).await
+        {
+            error!("failed to drain dropped durable calls before invocation failure entry: {err}");
+            return RetryDecision::None;
         }
 
         if let TrapType::Error { error, .. } = trap_type {
@@ -3730,9 +3822,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         if is_live {
             if self.state.snapshotting_mode.is_none() {
-                io::streams::reconcile_all_pending_filesystem_streams(self)
-                    .await
-                    .map_err(|err| WorkerExecutorError::runtime(err.to_string()))?;
                 concurrent::drain_queued_dropped_call_events(self)
                     .await
                     .map_err(|err| err.source)?;
@@ -6105,10 +6194,17 @@ struct ActiveDurableScope {
     opened_in_persist_nothing_zone: bool,
 }
 
-#[derive(Debug)]
-pub(crate) struct FilesystemInputStreamState {
-    pub file: Arc<cap_std::fs::File>,
-    pub position: u64,
+#[derive(Debug, Clone)]
+pub(crate) struct FilesystemOutputStreamState {
+    pub descriptor_rep: u32,
+    pub position: Option<u64>,
+    pub pending_reservation: Option<PendingFilesystemReservation>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PendingFilesystemReservation {
+    pub base_size: u64,
+    pub reserved_growth: u64,
 }
 
 /// Direction of a P3 TCP one-shot stream acquisition (`send` vs `receive`).
@@ -6240,10 +6336,14 @@ struct PrivateDurableWorkerState {
     /// before outgoing_handler::handle() is called and the HttpRequestState is created.
     pending_http_outgoing_request_body: HashMap<u32, u32>,
 
+    /// Tracks file-backed wasi output streams so quota charging can be based on
+    /// actual file growth instead of requested write size.
+    open_filesystem_output_streams: HashMap<u32, FilesystemOutputStreamState>,
+
     /// Reps of file-backed wasi input streams created by `read_via_stream`. Used together with
     /// [`Self::file_stream_pollables`] to identify pollables whose backing operation re-executes
     /// during replay.
-    open_filesystem_input_streams: HashMap<u32, FilesystemInputStreamState>,
+    open_filesystem_input_streams: HashSet<u32>,
 
     /// Reps of pollables subscribed to file-backed input/output streams. Reads/writes on file
     /// streams are not persisted — they re-execute against the restored filesystem during replay —
@@ -6288,6 +6388,11 @@ struct PrivateDurableWorkerState {
     agent_effective_surface: golem_common::model::card::EffectiveSurface,
     agent_wallet_cards: BTreeMap<CardId, StoredCard>,
     card_event_boundary_scan: Option<CardEventBoundaryScan>,
+
+    /// Running total of storage bytes acquired from the executor semaphore pool
+    /// by this worker since it last started. Incremented on every successful
+    /// write; decremented when files are deleted or truncated.
+    current_filesystem_storage_usage: u64,
 
     invocation_context: InvocationContext,
     current_span_id: SpanId,
@@ -6498,6 +6603,7 @@ impl PrivateDurableWorkerState {
         worker_proxy: Arc<dyn WorkerProxy>,
         deleted_regions: DeletedRegions,
         component_metadata: Component,
+        current_filesystem_storage_usage: u64,
         _agent_effective_surface: golem_common::model::card::EffectiveSurface,
         worker_fork: Arc<dyn WorkerForkService>,
         read_only_paths: RwLock<HashSet<PathBuf>>,
@@ -6604,7 +6710,8 @@ impl PrivateDurableWorkerState {
             pending_http_outgoing_request_body: HashMap::new(),
             pending_http_outgoing_body_stream: HashMap::new(),
             pending_http_retry_eligibility: HashMap::new(),
-            open_filesystem_input_streams: HashMap::new(),
+            open_filesystem_output_streams: HashMap::new(),
+            open_filesystem_input_streams: HashSet::new(),
             file_stream_pollables: HashSet::new(),
             tcp_taken_streams: HashMap::new(),
             snapshotting_mode: None,
@@ -6614,6 +6721,7 @@ impl PrivateDurableWorkerState {
             agent_effective_surface,
             agent_wallet_cards,
             card_event_boundary_scan: None,
+            current_filesystem_storage_usage,
             replay_state,
             invocation_context,
             current_span_id,
@@ -7504,26 +7612,17 @@ async fn prepare_filesystem(
     Ok(HashMap::from_iter(try_join_all(futures).await?))
 }
 
-struct UpdateFilesystemError {
-    error: WorkerExecutorError,
-    committed_growth: u64,
-}
-
 async fn update_filesystem(
     current_state: &mut HashMap<PathBuf, IFSWorkerFile>,
     file_loader: &Arc<FileLoader>,
     environment_id: EnvironmentId,
     root: &Path,
     files: &[InitialAgentFile],
-) -> Result<u64, UpdateFilesystemError> {
+) -> Result<(), WorkerExecutorError> {
     enum UpdateFileSystemResult {
         NoChanges,
         Remove(PathBuf),
-        Replace {
-            path: PathBuf,
-            value: IFSWorkerFile,
-            storage_growth: u64,
-        },
+        Replace { path: PathBuf, value: IFSWorkerFile },
     }
 
     let desired_paths: HashSet<PathBuf> = HashSet::from_iter(
@@ -7582,7 +7681,7 @@ async fn update_filesystem(
                         .get_read_only_to(environment_id, file.content_hash, &path, file.size)
                         .await?;
 
-                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token }, storage_growth: 0 })
+                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
                 }
                 (AgentFilePermissions::ReadOnly, Some(IFSWorkerFile::Ro { file: existing_file, .. })) => {
                     if existing_file.content_hash == file.content_hash {
@@ -7598,7 +7697,7 @@ async fn update_filesystem(
                         let token = file_loader
                             .get_read_only_to(environment_id, file.content_hash, &path, file.size)
                             .await?;
-                        Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token }, storage_growth: 0 })
+                        Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
                     }
                 }
                 (AgentFilePermissions::ReadOnly, Some(IFSWorkerFile::Rw)) => {
@@ -7620,22 +7719,23 @@ async fn update_filesystem(
                             }
                         )?;
 
-                        if !metadata.is_file() {
-                            // Try removing it if it's an empty directory, this will fail otherwise,
-                            // and we can report the error.
-                            tokio::fs::remove_dir(&path).await.map_err(|e|
-                                WorkerExecutorError::FileSystemError {
-                                    path: file.path.to_rel_string(),
-                                    reason: format!("Tried replacing an existing non-empty path with rw file during update: {e}"),
-                                }
-                            )?;
+                        if metadata.is_file() {
+                            return Ok(UpdateFileSystemResult::NoChanges);
                         }
+
+                        // Try removing it if it's an empty directory, this will fail otherwise, and we can report the error.
+                        tokio::fs::remove_dir(&path).await.map_err(|e|
+                            WorkerExecutorError::FileSystemError {
+                                path: file.path.to_rel_string(),
+                                reason: format!("Tried replacing an existing non-empty path with rw file during update: {e}"),
+                            }
+                        )?;
                     }
 
                     file_loader
                         .get_read_write_to(environment_id, file.content_hash, &path)
                         .await?;
-                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw, storage_growth: file.size })
+                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
                 }
                 (AgentFilePermissions::ReadWrite, Some(IFSWorkerFile::Ro { .. })) => {
                     debug!("Updating ro file to rw {}", path.display());
@@ -7648,7 +7748,7 @@ async fn update_filesystem(
                     file_loader
                         .get_read_write_to(environment_id, file.content_hash, &path)
                         .await?;
-                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw, storage_growth: file.size })
+                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
                 }
                 (AgentFilePermissions::ReadWrite, Some(IFSWorkerFile::Rw)) => {
                     debug!("Updating rw file {}", path.display());
@@ -7658,72 +7758,22 @@ async fn update_filesystem(
         }
     });
 
-    let mut results =
-        try_join_all(futures_phase_1)
-            .await
-            .map_err(|error| UpdateFilesystemError {
-                error,
-                committed_growth: 0,
-            })?;
-    let phase_2_results = futures::future::join_all(futures_phase_2).await;
-    let mut first_error = None;
-    for result in phase_2_results {
-        match result {
-            Ok(result) => results.push(result),
-            Err(error) if first_error.is_none() => first_error = Some(error),
-            Err(_) => {}
-        }
-    }
+    let mut results = try_join_all(futures_phase_1).await?;
+    results.extend(try_join_all(futures_phase_2).await?);
 
-    let mut committed_growth = 0u64;
     for result in results {
         match result {
             UpdateFileSystemResult::NoChanges => {}
             UpdateFileSystemResult::Remove(path) => {
                 current_state.remove(&path);
             }
-            UpdateFileSystemResult::Replace {
-                path,
-                value,
-                storage_growth,
-            } => {
+            UpdateFileSystemResult::Replace { path, value } => {
                 current_state.insert(path, value);
-                committed_growth = committed_growth.saturating_add(storage_growth);
             }
         }
     }
 
-    if let Some(error) = first_error {
-        Err(UpdateFilesystemError {
-            error,
-            committed_growth,
-        })
-    } else {
-        Ok(committed_growth)
-    }
-}
-
-async fn filesystem_update_storage_growth(
-    current_state: &HashMap<PathBuf, IFSWorkerFile>,
-    root: &Path,
-    files: &[InitialAgentFile],
-) -> Result<u64, WorkerExecutorError> {
-    let mut growth = 0u64;
-    for file in files {
-        if file.permissions != AgentFilePermissions::ReadWrite {
-            continue;
-        }
-
-        let path = root.join(PathBuf::from(file.path.to_rel_string()));
-        match current_state.get(&path) {
-            Some(IFSWorkerFile::Rw) => {}
-            Some(IFSWorkerFile::Ro { .. }) => growth = growth.saturating_add(file.size),
-            // An untracked path can be a partial file left by an interrupted older provisioner.
-            // Replace it atomically and account the declared file size instead of trusting it.
-            None => growth = growth.saturating_add(file.size),
-        }
-    }
-    Ok(growth)
+    Ok(())
 }
 
 fn compute_read_only_paths(files: &HashMap<PathBuf, IFSWorkerFile>) -> HashSet<PathBuf> {

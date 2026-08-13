@@ -16,7 +16,7 @@ pub use super::parsed_function_name::{
     ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
 };
 use crate::SafeDisplay;
-use crate::base_model::component::{AgentFilePermissions, InitialAgentFile};
+use crate::base_model::component::InitialAgentFile;
 pub use crate::base_model::component_metadata::*;
 use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::component_introspection::metadata::Producers as IntrospectionProducers;
@@ -140,20 +140,6 @@ impl ComponentMetadata {
             .iter()
             .map(|memory| memory.initial)
             .fold(0, u64::saturating_add)
-    }
-
-    pub fn initial_filesystem_storage_usage(&self, agent_type_name: Option<&AgentTypeName>) -> u64 {
-        agent_type_name
-            .and_then(|name| self.agent_type_provision_config(name))
-            .map(|config| {
-                config
-                    .files
-                    .iter()
-                    .filter(|file| file.permissions == AgentFilePermissions::ReadWrite)
-                    .map(|file| file.size)
-                    .fold(0u64, u64::saturating_add)
-            })
-            .unwrap_or(0)
     }
 
     pub fn has_shared_linear_memory(&self) -> bool {

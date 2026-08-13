@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::metrics::storage::{
-    record_filesystem_pool_acquired, record_filesystem_pool_released, record_filesystem_pool_total,
-};
+use crate::metrics::storage::{record_filesystem_pool_acquired, record_filesystem_pool_total};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
@@ -76,7 +74,6 @@ impl FilesystemStoragePermit {
 impl Drop for FilesystemStoragePermit {
     fn drop(&mut self) {
         let permits = self.num_permits() as u32;
-        record_filesystem_pool_released(filesystem_storage_permits_to_bytes(permits));
         crate::metrics::workers::inc_filesystem_semaphore_available(
             filesystem_storage_permits_to_bytes(permits),
         );
@@ -118,7 +115,7 @@ impl FilesystemStorageSemaphore {
         try_free_up: F,
     ) -> FilesystemStoragePermit
     where
-        F: Fn(u64) -> Fut,
+        F: Fn() -> Fut,
         Fut: std::future::Future<Output = bool>,
     {
         let permits = bytes_to_filesystem_storage_permits(storage_bytes);
@@ -143,15 +140,12 @@ impl FilesystemStorageSemaphore {
                 }
                 Err(TryAcquireError::Closed) => panic!("worker storage semaphore has been closed"),
                 Err(TryAcquireError::NoPermits) => {
-                    let available = self.semaphore.available_permits() as u32;
-                    let shortfall = permits.saturating_sub(available);
                     debug!(
-                        requested_permits = permits,
-                        available_permits = available,
-                        shortfall_permits = shortfall,
-                        "Not enough filesystem storage permits; trying to free capacity"
+                        "Not enough storage to allocate {} permits (available: {}), trying to free some up",
+                        permits,
+                        self.semaphore.available_permits()
                     );
-                    if try_free_up(filesystem_storage_permits_to_bytes(shortfall)).await {
+                    if try_free_up().await {
                         debug!("Freed up some storage, retrying");
                         continue;
                     } else {

@@ -149,9 +149,6 @@ message RawCreateParameters {
   optional golem.common.UUID original_phantom_id = 11;
   optional golem.common.UUID instance_id = 12;
   golem.component.AgentMode agent_mode = 13;
-  // Additive internal compatibility field. Older payloads omit it and are repaired from component
-  // metadata; no public agent API or WIT schema depends on this raw-oplog representation.
-  uint64 initial_filesystem_storage_usage = 14;
 }
 
 message RawStartParameters {
