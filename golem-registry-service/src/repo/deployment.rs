@@ -158,6 +158,13 @@ pub trait DeploymentRepo: Send + Sync {
         environment_id: Uuid,
     ) -> RepoResult<Option<ToolDeploymentStateRecord>>;
 
+    async fn get_latest_tool_deployment_state_by_component_revision(
+        &self,
+        environment_id: &Uuid,
+        component_id: &Uuid,
+        component_revision_id: i64,
+    ) -> RepoResult<Option<ToolDeploymentStateRecord>>;
+
     async fn get_deployed_agent_type(
         &self,
         environment_id: Uuid,
@@ -469,6 +476,27 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         self.repo
             .get_current_tool_deployment_state(environment_id)
             .instrument(Self::span_env(environment_id))
+            .await
+    }
+
+    async fn get_latest_tool_deployment_state_by_component_revision(
+        &self,
+        environment_id: &Uuid,
+        component_id: &Uuid,
+        component_revision_id: i64,
+    ) -> RepoResult<Option<ToolDeploymentStateRecord>> {
+        self.repo
+            .get_latest_tool_deployment_state_by_component_revision(
+                environment_id,
+                component_id,
+                component_revision_id,
+            )
+            .instrument(info_span!(
+                SPAN_NAME,
+                environment_id = %environment_id,
+                component_id = %component_id,
+                component_revision_id,
+            ))
             .await
     }
 
@@ -1375,6 +1403,40 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .try_get("deployment_revision_id")
             .map_err(RepoError::from)?;
         self.get_tool_deployment_state(environment_id, deployment_revision_id)
+            .await
+            .map(Some)
+    }
+
+    async fn get_latest_tool_deployment_state_by_component_revision(
+        &self,
+        environment_id: &Uuid,
+        component_id: &Uuid,
+        component_revision_id: i64,
+    ) -> RepoResult<Option<ToolDeploymentStateRecord>> {
+        let row = self
+            .with_ro("get_latest_tool_deployment_revision_by_component_revision")
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                    SELECT deployment_revision_id
+                    FROM deployment_component_revisions
+                    WHERE environment_id = $1
+                        AND component_id = $2
+                        AND component_revision_id = $3
+                    ORDER BY deployment_revision_id DESC
+                    LIMIT 1
+                "#})
+                .bind(environment_id)
+                .bind(component_id)
+                .bind(component_revision_id),
+            )
+            .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let deployment_revision_id = row
+            .try_get("deployment_revision_id")
+            .map_err(RepoError::from)?;
+        self.get_tool_deployment_state(*environment_id, deployment_revision_id)
             .await
             .map(Some)
     }

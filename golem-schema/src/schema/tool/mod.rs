@@ -45,7 +45,20 @@ mod protobuf;
 pub mod validation;
 
 /// Index into [`CommandTree::nodes`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -62,7 +75,15 @@ impl CommandIndex {
 }
 
 /// Top-level tool metadata record.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -91,7 +112,15 @@ impl Tool {
 }
 
 /// Flattened command hierarchy. Always non-empty; the root command is at index 0.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -104,7 +133,15 @@ pub struct CommandTree {
 /// A node in the command tree. May dispatch to subcommands, run its own body, or
 /// both. Globals declared here apply to this command's own body and to every
 /// descendant subcommand body.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -119,7 +156,16 @@ pub struct CommandNode {
     pub body: Option<CommandBody>,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Default,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -130,7 +176,15 @@ pub struct Globals {
     pub flags: Vec<FlagSpec>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -150,7 +204,17 @@ pub struct CommandBody {
 
 /// Behavioral hints surfaced to MCP and other LLM-facing surfaces, following
 /// the MCP convention.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -163,7 +227,16 @@ pub struct CommandAnnotations {
     pub open_world: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Default,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -174,7 +247,15 @@ pub struct Positionals {
     pub tail: Option<TailPositional>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -193,7 +274,15 @@ pub struct Positional {
     pub accepts_stdio: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -215,7 +304,15 @@ pub struct TailPositional {
     pub accepts_stdio: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -234,7 +331,15 @@ pub struct OptionSpec {
     pub env_var: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -254,7 +359,15 @@ pub enum OptionShape {
     RepeatableMap(RepeatableMapShape),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -266,7 +379,15 @@ pub struct RepeatableListShape {
     pub item_type: SchemaType,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -281,7 +402,17 @@ pub struct RepeatableMapShape {
 }
 
 /// Resolution policy for a repeated key in a [`OptionShape::RepeatableMap`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -295,7 +426,17 @@ pub enum DuplicateKeyPolicy {
     LastWins,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -311,7 +452,15 @@ pub enum Repetition {
     Either(char),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -326,7 +475,17 @@ pub struct FlagSpec {
     pub env_var: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -339,7 +498,17 @@ pub enum FlagShape {
     CountFlag(Option<u32>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -351,7 +520,15 @@ pub struct BoolFlagShape {
     pub negatable: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -363,7 +540,15 @@ pub enum Ref {
     ValueIs(ValueIsRef),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -375,7 +560,15 @@ pub struct ValueIsRef {
     pub value: SchemaValue,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -391,7 +584,15 @@ pub enum Constraint {
     Forbids(ForbidsC),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -401,7 +602,15 @@ pub struct RefGroup {
     pub refs: Vec<Ref>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -414,7 +623,15 @@ pub struct ImpliesC {
     pub rhs: Vec<Ref>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -426,7 +643,17 @@ pub struct ForbidsC {
     pub rhs: Vec<Ref>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -438,7 +665,16 @@ pub enum Quantifier {
     Any,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -450,7 +686,15 @@ pub struct StreamSpec {
     pub required: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -465,7 +709,16 @@ pub struct ResultSpec {
     pub default_formatter: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -476,7 +729,15 @@ pub struct Formatter {
     pub doc: Doc,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -491,7 +752,17 @@ pub struct ErrorCase {
     pub payload: Option<SchemaType>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -503,7 +774,17 @@ pub enum ErrorKind {
     RuntimeError,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
@@ -515,7 +796,16 @@ pub struct Doc {
     pub examples: Vec<Example>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)

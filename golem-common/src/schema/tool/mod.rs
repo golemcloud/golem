@@ -16,10 +16,47 @@
 //!
 //! The native tool model, its validation, and the canonical input model live
 //! in `golem-schema` so the Rust SDK and the Golem services share one
-//! implementation. This module re-exports them and keeps only the WIT wire
-//! conversions ([`wit`]), which depend on the host-side generated bindings.
+//! implementation. This module re-exports them and keeps platform-specific
+//! extensions: the durable discovery model and the WIT wire conversions
+//! ([`wit`]), which depend on host-side types.
+
+use crate::model::component::ComponentId;
+use crate::model::tool::{RegisteredTool, ToolSource};
+use serde::{Deserialize, Serialize};
 
 pub use golem_schema::schema::tool::*;
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct DiscoveredTool {
+    pub definition: Tool,
+    pub implemented_by: ComponentId,
+}
+
+impl From<RegisteredTool> for DiscoveredTool {
+    fn from(value: RegisteredTool) -> Self {
+        let RegisteredTool {
+            definition, source, ..
+        } = value;
+        let implemented_by = match source {
+            ToolSource::Component { component_id, .. } => component_id,
+        };
+
+        Self {
+            definition,
+            implemented_by,
+        }
+    }
+}
 
 #[cfg(feature = "full")]
 pub mod wit;
