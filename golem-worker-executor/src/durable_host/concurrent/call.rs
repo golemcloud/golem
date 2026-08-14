@@ -3037,7 +3037,7 @@ where
             owned_agent_id: ctx.owned_agent_id.clone(),
             agent_id: ctx.state.agent_id.clone(),
             initial_agent_config: ctx.state.initial_agent_config.clone(),
-            worker_dir: ctx.worker_dir.path().to_path_buf(),
+            worker_dir: ctx.filesystem_root.clone(),
             current_revision: ctx.state.component_metadata.revision,
         }
     });

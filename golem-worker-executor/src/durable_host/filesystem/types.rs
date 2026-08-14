@@ -31,6 +31,7 @@ use wasmtime_wasi::runtime::spawn_blocking;
 
 use crate::durable_host::concurrent::{CallHandle, NotCancellable};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, FilesystemOutputStreamState};
+use crate::services::agent_filesystem::CoordinatedFileOutputStream;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::{
     FilesystemTypesDescriptorStat, FilesystemTypesDescriptorStatAt,
@@ -65,8 +66,12 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.fail_if_read_only(&fd)?;
         self.observe_function_call("filesystem::types::descriptor", "write_via_stream");
         let descriptor_rep = fd.rep();
-        let stream =
+        let upstream =
             HostDescriptor::write_via_stream(&mut self.as_wasi_view().filesystem(), fd, offset)?;
+        let upstream = self.table().delete(upstream)?;
+        let stream = self
+            .table()
+            .push(CoordinatedFileOutputStream::new(upstream).into_dyn())?;
         self.state.open_filesystem_output_streams.insert(
             stream.rep(),
             FilesystemOutputStreamState {
@@ -85,8 +90,12 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.fail_if_read_only(&self_)?;
         self.observe_function_call("filesystem::types::descriptor", "append_via_stream");
         let descriptor_rep = self_.rep();
-        let stream =
+        let upstream =
             HostDescriptor::append_via_stream(&mut self.as_wasi_view().filesystem(), self_)?;
+        let upstream = self.table().delete(upstream)?;
+        let stream = self
+            .table()
+            .push(CoordinatedFileOutputStream::new(upstream).into_dyn())?;
         self.state.open_filesystem_output_streams.insert(
             stream.rep(),
             FilesystemOutputStreamState {
@@ -112,6 +121,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
     async fn sync_data(&mut self, self_: Resource<Descriptor>) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "sync_data");
+        let _effect = self
+            .filesystem_runtime()
+            .begin_effect()
+            .await
+            .map_err(FsError::trap)?;
         let mut view = self.as_wasi_view();
         HostDescriptor::sync_data(&mut view.filesystem(), self_).await
     }
@@ -138,6 +152,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
     async fn set_size(&mut self, fd: Resource<Descriptor>, size: Filesize) -> Result<(), FsError> {
         self.fail_if_read_only(&fd)?;
+        let _effect = self
+            .filesystem_runtime()
+            .begin_effect()
+            .await
+            .map_err(FsError::trap)?;
 
         // Determine whether this is a growth and charge the delta.
         // We borrow fd to stat before consuming it in set_size.
@@ -187,6 +206,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         data_modification_timestamp: NewTimestamp,
     ) -> Result<(), FsError> {
         self.fail_if_read_only(&fd)?;
+        let _effect = self
+            .filesystem_runtime()
+            .begin_effect()
+            .await
+            .map_err(FsError::trap)?;
 
         self.observe_function_call("filesystem::types::descriptor", "set_times");
 
@@ -218,6 +242,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         offset: Filesize,
     ) -> Result<Filesize, FsError> {
         self.fail_if_read_only(&fd)?;
+        let _effect = self
+            .filesystem_runtime()
+            .begin_effect()
+            .await
+            .map_err(FsError::trap)?;
 
         let current_size = {
             let fd_borrow = Resource::new_borrow(fd.rep());
@@ -286,6 +315,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
     async fn sync(&mut self, self_: Resource<Descriptor>) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "sync");
+        let _effect = self
+            .filesystem_runtime()
+            .begin_effect()
+            .await
+            .map_err(FsError::trap)?;
         let mut view = self.as_wasi_view();
         HostDescriptor::sync(&mut view.filesystem(), self_).await
     }
@@ -296,6 +330,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "create_directory_at");
+        let _effect = self
+            .filesystem_runtime()
+            .begin_effect()
+            .await
+            .map_err(FsError::trap)?;
         let mut view = self.as_wasi_view();
         HostDescriptor::create_directory_at(&mut view.filesystem(), self_, path).await
     }
@@ -305,6 +344,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             Descriptor::File(f) => f.path.clone(),
             Descriptor::Dir(d) => d.path.clone(),
         };
+        let _effect = self
+            .filesystem_runtime()
+            .begin_effect()
+            .await
+            .map_err(FsError::trap)?;
 
         // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
         // value), so only the file-times are made durable via `CallHandle::run`.
@@ -386,6 +430,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             Descriptor::File(f) => f.path.join(path.clone()),
             Descriptor::Dir(d) => d.path.join(path.clone()),
         };
+        let _effect = self
+            .filesystem_runtime()
+            .begin_effect()
+            .await
+            .map_err(FsError::trap)?;
 
         // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
         // value), so only the file-times are made durable via `CallHandle::run`.
@@ -466,6 +515,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         data_modification_timestamp: NewTimestamp,
     ) -> Result<(), FsError> {
         self.fail_if_read_only(&fd)?;
+        let _effect = self
+            .filesystem_runtime()
+            .begin_effect()
+            .await
+            .map_err(FsError::trap)?;
 
         self.observe_function_call("filesystem::types::descriptor", "set_times_at");
         let mut view = self.as_wasi_view();
@@ -489,6 +543,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         new_path: String,
     ) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "link_at");
+        let _effect = self
+            .filesystem_runtime()
+            .begin_effect()
+            .await
+            .map_err(FsError::trap)?;
         let mut view = self.as_wasi_view();
         HostDescriptor::link_at(
             &mut view.filesystem(),
@@ -509,6 +568,16 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         open_flags: OpenFlags,
         flags: DescriptorFlags,
     ) -> Result<Resource<Descriptor>, FsError> {
+        let _effect = if open_flags.intersects(OpenFlags::CREATE | OpenFlags::TRUNCATE) {
+            Some(
+                self.filesystem_runtime()
+                    .begin_effect()
+                    .await
+                    .map_err(FsError::trap)?,
+            )
+        } else {
+            None
+        };
         let truncated_size = if open_flags.contains(OpenFlags::TRUNCATE) {
             let fd_borrow = Resource::new_borrow(self_.rep());
             let mut view = self.as_wasi_view();
@@ -564,6 +633,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "remove_directory_at");
+        let _effect = self
+            .filesystem_runtime()
+            .begin_effect()
+            .await
+            .map_err(FsError::trap)?;
         let mut view = self.as_wasi_view();
         HostDescriptor::remove_directory_at(&mut view.filesystem(), self_, path.clone()).await
     }
@@ -577,6 +651,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     ) -> Result<(), FsError> {
         self.fail_if_read_only(&old_fd)?;
         self.fail_if_read_only(&new_fd)?;
+        let _effect = self
+            .filesystem_runtime()
+            .begin_effect()
+            .await
+            .map_err(FsError::trap)?;
 
         self.observe_function_call("filesystem::types::descriptor", "rename_at");
         let mut view = self.as_wasi_view();
@@ -597,6 +676,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         new_path: String,
     ) -> Result<(), FsError> {
         self.fail_if_read_only(&fd)?;
+        let _effect = self
+            .filesystem_runtime()
+            .begin_effect()
+            .await
+            .map_err(FsError::trap)?;
 
         self.observe_function_call("filesystem::types::descriptor", "symlink_at");
         let mut view = self.as_wasi_view();
@@ -609,6 +693,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<(), FsError> {
         self.fail_if_read_only(&fd)?;
+        let _effect = self
+            .filesystem_runtime()
+            .begin_effect()
+            .await
+            .map_err(FsError::trap)?;
 
         // Stat the target file before unlinking to know how many bytes to release.
         // Use the upstream (non-durable) stat_at to avoid oplog side effects.

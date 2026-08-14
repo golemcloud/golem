@@ -452,6 +452,8 @@ async fn initial_file_p3_parity(
         "rw_hash_parity=true".to_string(),
         "rw_set_times_p2=ok".to_string(),
         "rw_set_times_p3=ok".to_string(),
+        "p2_write_p3_read=p2-to-p3".to_string(),
+        "p3_write_p2_read=p3-to-p2".to_string(),
     ];
 
     fn as_entries(result: SchemaValue) -> Vec<String> {

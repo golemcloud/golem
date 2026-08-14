@@ -18,7 +18,6 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::OnceLock;
 use std::task::{Context, Poll};
 
 use crate::durable_host::filesystem::types::calculate_metadata_hash_parts;
@@ -48,11 +47,10 @@ use wasmtime_wasi::p3::filesystem::{FilesystemError, FilesystemResult};
 use wasmtime_wasi::runtime::spawn_blocking;
 use wasmtime_wasi::{DirPerms, FilePerms};
 
-static FILESYSTEM_APPEND_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-
 struct FilesystemWriteChunk {
     contents: Vec<u8>,
     result_tx: tokio::sync::oneshot::Sender<Result<(), types::ErrorCode>>,
+    admission: crate::services::agent_filesystem::AgentFilesystemEffectAdmission,
 }
 
 struct FilesystemWriteConsumer {
@@ -61,13 +59,18 @@ struct FilesystemWriteConsumer {
         usize,
         tokio::sync::oneshot::Receiver<Result<(), types::ErrorCode>>,
     )>,
+    filesystem_runtime: crate::services::agent_filesystem::AgentFilesystemRuntime,
 }
 
 impl FilesystemWriteConsumer {
-    fn new(chunks_tx: tokio::sync::mpsc::UnboundedSender<FilesystemWriteChunk>) -> Self {
+    fn new(
+        chunks_tx: tokio::sync::mpsc::UnboundedSender<FilesystemWriteChunk>,
+        filesystem_runtime: crate::services::agent_filesystem::AgentFilesystemRuntime,
+    ) -> Self {
         Self {
             chunks_tx: Some(chunks_tx),
             pending_chunk: None,
+            filesystem_runtime,
         }
     }
 }
@@ -120,10 +123,12 @@ impl<D> StreamConsumer<D> for FilesystemWriteConsumer {
             };
 
             let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+            let admission = self.filesystem_runtime.admit_effect()?;
             chunks_tx
                 .send(FilesystemWriteChunk {
                     contents: bytes.to_vec(),
                     result_tx,
+                    admission,
                 })
                 .map_err(|_| wasmtime::Error::msg("filesystem write task dropped"))?;
             self.pending_chunk = Some((len, result_rx));
@@ -293,6 +298,18 @@ where
     } else {
         Ok(())
     }
+}
+
+async fn begin_filesystem_effect<Ctx, U>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+) -> FilesystemResult<crate::services::agent_filesystem::AgentFilesystemEffectLease>
+where
+    Ctx: WorkerCtx,
+    U: 'static,
+{
+    let runtime = accessor
+        .with(|mut access| durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime());
+    runtime.begin_effect().await.map_err(FilesystemError::trap)
 }
 
 fn write_validation_error_from_access<Ctx: WorkerCtx, U>(
@@ -680,10 +697,13 @@ where
         FilesystemWriteMode::At(offset) => Some(offset),
         FilesystemWriteMode::Append => None,
     };
-
     // Safe park: each chunk is guest-produced stream data.
     while let Some(chunk) = activity.park(chunks_rx.recv()).await {
         if result.is_ok() {
+            let effect = match position {
+                Some(_) => chunk.admission.begin().await,
+                None => chunk.admission.begin_append().await,
+            };
             let chunk_mode = match position {
                 Some(offset) => FilesystemWriteMode::At(offset),
                 None => FilesystemWriteMode::Append,
@@ -694,7 +714,8 @@ where
                     .await?;
 
             let (written_len, write_result) =
-                run_live_filesystem_write_chunk(file.clone(), chunk_mode, chunk.contents).await;
+                run_live_filesystem_write_chunk(file.clone(), chunk_mode, chunk.contents, effect)
+                    .await;
             reconcile_filesystem_write_storage::<Ctx, U>(
                 accessor,
                 file,
@@ -718,80 +739,74 @@ async fn run_live_filesystem_write_chunk(
     file: File,
     mode: FilesystemWriteMode,
     contents: Vec<u8>,
+    effect: crate::services::agent_filesystem::AgentFilesystemEffectLease,
 ) -> (u64, Result<(), types::ErrorCode>) {
-    let _append_guard = if matches!(mode, FilesystemWriteMode::Append) {
-        Some(
-            FILESYSTEM_APPEND_LOCK
-                .get_or_init(|| tokio::sync::Mutex::new(()))
-                .lock()
-                .await,
-        )
-    } else {
-        None
-    };
     let file = Arc::clone(&file.file);
-    let (contents, written, result) = spawn_blocking(move || match mode {
-        FilesystemWriteMode::At(mut offset) => {
-            let mut written = 0;
-            while written < contents.len() {
-                match file.write_at(&contents[written..], offset) {
-                    Ok(0) => {
-                        return (
-                            contents,
-                            written,
-                            Err(std::io::Error::from(std::io::ErrorKind::WriteZero)),
-                        );
+    let (contents, written, result) = spawn_blocking(move || {
+        let _effect = effect;
+        match mode {
+            FilesystemWriteMode::At(mut offset) => {
+                let mut written = 0;
+                while written < contents.len() {
+                    match file.write_at(&contents[written..], offset) {
+                        Ok(0) => {
+                            return (
+                                contents,
+                                written,
+                                Err(std::io::Error::from(std::io::ErrorKind::WriteZero)),
+                            );
+                        }
+                        Ok(n) => {
+                            written += n;
+                            let n = match u64::try_from(n) {
+                                Ok(n) => n,
+                                Err(_) => {
+                                    return (
+                                        contents,
+                                        written,
+                                        Err(std::io::Error::from(std::io::ErrorKind::InvalidData)),
+                                    );
+                                }
+                            };
+                            offset = match offset.checked_add(n) {
+                                Some(offset) => offset,
+                                None => {
+                                    return (
+                                        contents,
+                                        written,
+                                        Err(std::io::Error::from(std::io::ErrorKind::InvalidData)),
+                                    );
+                                }
+                            };
+                        }
+                        Err(error) => return (contents, written, Err(error)),
                     }
-                    Ok(n) => {
-                        written += n;
-                        let n = match u64::try_from(n) {
-                            Ok(n) => n,
-                            Err(_) => {
-                                return (
-                                    contents,
-                                    written,
-                                    Err(std::io::Error::from(std::io::ErrorKind::InvalidData)),
-                                );
-                            }
-                        };
-                        offset = match offset.checked_add(n) {
-                            Some(offset) => offset,
-                            None => {
-                                return (
-                                    contents,
-                                    written,
-                                    Err(std::io::Error::from(std::io::ErrorKind::InvalidData)),
-                                );
-                            }
-                        };
-                    }
-                    Err(error) => return (contents, written, Err(error)),
                 }
+                (contents, written, Ok(()))
             }
-            (contents, written, Ok(()))
-        }
-        FilesystemWriteMode::Append => {
-            let mut file = file.as_ref();
-            if let Err(error) = file.seek(SeekFrom::End(0)) {
-                return (contents, 0, Err(error));
-            }
-            let mut written = 0;
-            while written < contents.len() {
-                match file.write(&contents[written..]) {
-                    Ok(0) => {
-                        return (
-                            contents,
-                            written,
-                            Err(std::io::Error::from(std::io::ErrorKind::WriteZero)),
-                        );
-                    }
-                    Ok(n) => {
-                        written += n;
-                    }
-                    Err(error) => return (contents, written, Err(error)),
+            FilesystemWriteMode::Append => {
+                let mut file = file.as_ref();
+                if let Err(error) = file.seek(SeekFrom::End(0)) {
+                    return (contents, 0, Err(error));
                 }
+                let mut written = 0;
+                while written < contents.len() {
+                    match file.write(&contents[written..]) {
+                        Ok(0) => {
+                            return (
+                                contents,
+                                written,
+                                Err(std::io::Error::from(std::io::ErrorKind::WriteZero)),
+                            );
+                        }
+                        Ok(n) => {
+                            written += n;
+                        }
+                        Err(error) => return (contents, written, Err(error)),
+                    }
+                }
+                (contents, written, Ok(()))
             }
-            (contents, written, Ok(()))
         }
     })
     .await;
@@ -872,8 +887,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
 
         let file = accessor.with(|mut store| file_from_access::<Ctx, U>(&mut store, &fd))?;
         let (chunks_tx, chunks_rx) = tokio::sync::mpsc::unbounded_channel();
-        accessor
-            .with(|mut store| data.pipe(&mut store, FilesystemWriteConsumer::new(chunks_tx)))?;
+        let filesystem_runtime = accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
+        });
+        accessor.with(|mut store| {
+            data.pipe(
+                &mut store,
+                FilesystemWriteConsumer::new(chunks_tx, filesystem_runtime),
+            )
+        })?;
 
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         accessor.with(|mut store| {
@@ -918,8 +940,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
 
         let file = accessor.with(|mut store| file_from_access::<Ctx, U>(&mut store, &fd))?;
         let (chunks_tx, chunks_rx) = tokio::sync::mpsc::unbounded_channel();
-        accessor
-            .with(|mut store| data.pipe(&mut store, FilesystemWriteConsumer::new(chunks_tx)))?;
+        let filesystem_runtime = accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
+        });
+        accessor.with(|mut store| {
+            data.pipe(
+                &mut store,
+                FilesystemWriteConsumer::new(chunks_tx, filesystem_runtime),
+            )
+        })?;
 
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         accessor.with(|mut store| {
@@ -970,6 +999,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "sync-data",
             )
         });
+        let _effect = begin_filesystem_effect::<Ctx, U>(store).await?;
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::sync_data(&store, fd).await
     }
@@ -1031,6 +1061,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             )
         });
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
+        let _effect = begin_filesystem_effect::<Ctx, U>(accessor).await?;
         // Charge growth before resizing and credit shrink afterwards, matching
         // the WASI P2 storage-quota accounting. The quota helpers are no-ops
         // during replay, so the storage usage is rebuilt purely from the oplog.
@@ -1070,6 +1101,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         data_modification_timestamp: types::NewTimestamp,
     ) -> FilesystemResult<()> {
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
+        let _effect = begin_filesystem_effect::<Ctx, U>(accessor).await?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1153,6 +1185,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "sync",
             )
         });
+        let _effect = begin_filesystem_effect::<Ctx, U>(store).await?;
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::sync(&store, fd).await
     }
@@ -1169,6 +1202,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "create-directory-at",
             )
         });
+        let _effect = begin_filesystem_effect::<Ctx, U>(store).await?;
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::create_directory_at(&store, fd, path)
             .await
@@ -1264,6 +1298,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         data_modification_timestamp: types::NewTimestamp,
     ) -> FilesystemResult<()> {
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
+        let _effect = begin_filesystem_effect::<Ctx, U>(accessor).await?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1298,6 +1333,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "link-at",
             )
         });
+        let _effect = begin_filesystem_effect::<Ctx, U>(store).await?;
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::link_at(
             &store,
@@ -1325,6 +1361,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "open-at",
             )
         });
+        let _effect =
+            if open_flags.intersects(types::OpenFlags::CREATE | types::OpenFlags::TRUNCATE) {
+                Some(begin_filesystem_effect::<Ctx, U>(accessor).await?)
+            } else {
+                None
+            };
         // Opening with TRUNCATE discards the existing file contents, so credit
         // the freed bytes back to the storage quota on success, matching WASI
         // P2. The release helper is a no-op during replay.
@@ -1385,6 +1427,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "remove-directory-at",
             )
         });
+        let _effect = begin_filesystem_effect::<Ctx, U>(store).await?;
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::remove_directory_at(&store, fd, path)
             .await
@@ -1399,6 +1442,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
     ) -> FilesystemResult<()> {
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &new_fd)?;
+        let _effect = begin_filesystem_effect::<Ctx, U>(accessor).await?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1420,6 +1464,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         new_path: String,
     ) -> FilesystemResult<()> {
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
+        let _effect = begin_filesystem_effect::<Ctx, U>(accessor).await?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1440,6 +1485,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         path: String,
     ) -> FilesystemResult<()> {
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
+        let _effect = begin_filesystem_effect::<Ctx, U>(accessor).await?;
         // Stat the file before unlinking so the freed bytes can be credited back
         // to the storage quota on success, matching WASI P2. The release helper
         // is a no-op during replay.
@@ -1593,19 +1639,25 @@ mod tests {
         let tempdir = tempfile::TempDir::new().unwrap();
         let path = tempdir.path().join("out");
         let file = test_file(path.clone());
+        let runtime = crate::services::agent_filesystem::AgentFilesystemRuntime::new();
 
         let (written, result) = run_live_filesystem_write_chunk(
             file.clone(),
             FilesystemWriteMode::At(0),
             b"hello".to_vec(),
+            runtime.begin_effect().await.unwrap(),
         )
         .await;
         assert_eq!(written, 5);
         assert!(result.is_ok());
 
-        let (written, result) =
-            run_live_filesystem_write_chunk(file, FilesystemWriteMode::At(5), b" world".to_vec())
-                .await;
+        let (written, result) = run_live_filesystem_write_chunk(
+            file,
+            FilesystemWriteMode::At(5),
+            b" world".to_vec(),
+            runtime.begin_effect().await.unwrap(),
+        )
+        .await;
         assert_eq!(written, 6);
         assert!(result.is_ok());
 
@@ -1617,12 +1669,17 @@ mod tests {
         let tempdir = tempfile::TempDir::new().unwrap();
         let path = tempdir.path().join("out");
         let file = test_file(path.clone());
+        let runtime = crate::services::agent_filesystem::AgentFilesystemRuntime::new();
 
         for chunk in [b"foo".to_vec(), b"bar".to_vec(), b"baz".to_vec()] {
             let len = chunk.len() as u64;
-            let (written, result) =
-                run_live_filesystem_write_chunk(file.clone(), FilesystemWriteMode::Append, chunk)
-                    .await;
+            let (written, result) = run_live_filesystem_write_chunk(
+                file.clone(),
+                FilesystemWriteMode::Append,
+                chunk,
+                runtime.begin_append_effect().await.unwrap(),
+            )
+            .await;
             assert_eq!(written, len);
             assert!(result.is_ok());
         }

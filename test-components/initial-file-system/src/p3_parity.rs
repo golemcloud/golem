@@ -3,6 +3,7 @@ use golem_rust::wasip3::filesystem::types as p3_types;
 use golem_rust::{agent_definition, agent_implementation};
 use wasi::filesystem::preopens as p2_preopens;
 use wasi::filesystem::types as p2_types;
+use wasip3::wit_stream;
 
 #[agent_definition]
 pub trait P3FileSystem {
@@ -109,7 +110,8 @@ impl P3FileSystem for P3FileSystemImpl {
             .expect("P3 metadata_hash (2nd) failed");
         results.push(format!(
             "ro_hash_p3_deterministic={}",
-            ro_hash_p3.lower == ro_hash_p3_again.lower && ro_hash_p3.upper == ro_hash_p3_again.upper
+            ro_hash_p3.lower == ro_hash_p3_again.lower
+                && ro_hash_p3.upper == ro_hash_p3_again.upper
         ));
 
         let ro_hash_at_p2 = root_p2
@@ -121,7 +123,8 @@ impl P3FileSystem for P3FileSystemImpl {
             .expect("P3 metadata_hash_at failed");
         results.push(format!(
             "ro_hash_at_parity={}",
-            ro_hash_at_p2.lower == ro_hash_at_p3.lower && ro_hash_at_p2.upper == ro_hash_at_p3.upper
+            ro_hash_at_p2.lower == ro_hash_at_p3.lower
+                && ro_hash_at_p2.upper == ro_hash_at_p3.upper
         ));
 
         // mutations through a read-only file descriptor must be rejected identically
@@ -239,6 +242,27 @@ impl P3FileSystem for P3FileSystemImpl {
                     .set_times(p3_types::NewTimestamp::Now, p3_types::NewTimestamp::Now)
                     .await
             )
+        ));
+
+        rw_p2.write(b"p2-to-p3", 0).expect("P2 write failed");
+        let (p3_read, p3_read_result) = rw_p3.read_via_stream(0);
+        let p3_bytes = p3_read.collect().await;
+        p3_read_result.await.expect("P3 read after P2 write failed");
+        results.push(format!(
+            "p2_write_p3_read={}",
+            String::from_utf8(p3_bytes).expect("P3 read was not UTF-8")
+        ));
+
+        let (mut p3_write, p3_write_data) = wit_stream::new();
+        let p3_write_result = rw_p3.write_via_stream(p3_write_data, 0);
+        let unwritten = p3_write.write_all(b"p3-to-p2".to_vec()).await;
+        assert!(unwritten.is_empty(), "P3 stream did not accept all bytes");
+        drop(p3_write);
+        p3_write_result.await.expect("P3 write failed");
+        let (p2_bytes, _) = rw_p2.read(8, 0).expect("P2 read after P3 write failed");
+        results.push(format!(
+            "p3_write_p2_read={}",
+            String::from_utf8(p2_bytes).expect("P2 read was not UTF-8")
         ));
 
         results

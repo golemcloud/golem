@@ -850,6 +850,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ));
                 Ok(true)
             }
+            WorkerInstance::CleanupFailed(error) => Err(error.clone()),
             WorkerInstance::WaitingForPermit(_) | WorkerInstance::Running(_) => Ok(false),
             WorkerInstance::Deleting => Err(WorkerExecutorError::invalid_request(
                 "Worker is being deleted",
@@ -906,7 +907,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             WorkerInstance::WaitingForPermit(_) => None,
             WorkerInstance::Stopping(_) => None,
-            WorkerInstance::Unloaded { .. } => None,
+            WorkerInstance::Unloaded { .. } | WorkerInstance::CleanupFailed(_) => None,
             WorkerInstance::Deleting => None,
         };
 
@@ -932,7 +933,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let error = WorkerExecutorError::invalid_request("Worker is being deleted");
         self.stop_internal(false, Some(error), FinalWorkerState::Deleting)
             .await;
-        Ok(())
+        match &*self.instance.lock().await {
+            WorkerInstance::CleanupFailed(error) => Err(error.clone()),
+            _ => Ok(()),
+        }
     }
 
     pub fn event_service(&self) -> Arc<dyn WorkerEventService + Send + Sync> {
@@ -1084,6 +1088,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     "Explicit resume is not supported for uninitialized workers",
                 ))
             }
+            WorkerInstance::CleanupFailed(error) => Err(error.clone()),
             WorkerInstance::Deleting => Err(WorkerExecutorError::invalid_request(
                 "Explicit resume is not supported for deleting workers",
             )),
@@ -1901,6 +1906,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::Unloaded { .. } => {
                 debug!(
                     "Worker {} is unloaded, cannot be used to free up memory",
+                    self.owned_agent_id
+                );
+                false
+            }
+            WorkerInstance::CleanupFailed(_) => {
+                debug!(
+                    "Worker {} has failed filesystem cleanup, cannot be used to free up memory",
                     self.owned_agent_id
                 );
                 false
@@ -2968,15 +2980,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 **instance_guard = final_state.into_instance();
                 StopResult::Stopped
             }
+            WorkerInstance::CleanupFailed(error) => {
+                if let Some(ref pending_error) = fail_pending_invocations {
+                    self.fail_pending_invocations(pending_error.clone()).await;
+                }
+                **instance_guard = WorkerInstance::CleanupFailed(error);
+                StopResult::Stopped
+            }
             WorkerInstance::WaitingForPermit(_) => {
                 if let Some(ref error) = fail_pending_invocations {
                     self.fail_pending_invocations(error.clone()).await;
                 }
                 crate::metrics::workers::dec_worker_waiting_for_memory();
                 **instance_guard = final_state.into_instance();
-                if let WorkerInstance::Unloaded { startup_failure } = &**instance_guard {
-                    self.resolve_pending_readiness_awaiters_on_stop(startup_failure.as_ref())
-                        .await;
+                match &**instance_guard {
+                    WorkerInstance::Unloaded { startup_failure } => {
+                        self.resolve_pending_readiness_awaiters_on_stop(startup_failure.as_ref())
+                            .await;
+                    }
+                    WorkerInstance::CleanupFailed(error) => {
+                        self.resolve_pending_readiness_awaiters_on_stop(Some(error))
+                            .await;
+                    }
+                    _ => {}
                 }
                 StopResult::Stopped
             }
@@ -2985,17 +3011,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // Should we return an error here?
                 StopResult::Stopped
             }
-            WorkerInstance::Stopping(_) if called_from_invocation_loop => {
-                **instance_guard = previous_instance_state;
+            WorkerInstance::Stopping(mut stopping) if called_from_invocation_loop => {
+                if let Some(ref error) = fail_pending_invocations {
+                    self.fail_pending_invocations(error.clone()).await;
+                }
+                stopping.final_state = merge_final_worker_state(stopping.final_state, final_state);
+                **instance_guard = WorkerInstance::Stopping(stopping);
                 StopResult::Stopped
             }
             WorkerInstance::Stopping(mut stopping) => {
-                // If we're stopping for deletion, upgrade the final state
-                if matches!(final_state, FinalWorkerState::Deleting) {
-                    stopping.final_state = FinalWorkerState::Deleting;
-                    if let Some(ref error) = fail_pending_invocations {
-                        self.fail_pending_invocations(error.clone()).await;
-                    }
+                let deleting = matches!(&final_state, FinalWorkerState::Deleting);
+                stopping.final_state = merge_final_worker_state(stopping.final_state, final_state);
+                if deleting && let Some(ref error) = fail_pending_invocations {
+                    self.fail_pending_invocations(error.clone()).await;
                 }
                 let notify = stopping.notify.clone();
                 **instance_guard = WorkerInstance::Stopping(stopping);
@@ -3038,9 +3066,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     // the old generation's grant.
                     self.release_linear_memory_grant();
                     **instance_guard = final_state.into_instance();
-                    if let WorkerInstance::Unloaded { startup_failure } = &**instance_guard {
-                        self.resolve_pending_readiness_awaiters_on_stop(startup_failure.as_ref())
+                    match &**instance_guard {
+                        WorkerInstance::Unloaded { startup_failure } => {
+                            self.resolve_pending_readiness_awaiters_on_stop(
+                                startup_failure.as_ref(),
+                            )
                             .await;
+                        }
+                        WorkerInstance::CleanupFailed(error) => {
+                            self.resolve_pending_readiness_awaiters_on_stop(Some(error))
+                                .await;
+                        }
+                        _ => {}
                     }
                     StopResult::Stopped
                 } else {
@@ -3105,9 +3142,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                     other => panic!("expected Stopping, got {other:?}"),
                 }
-                if let WorkerInstance::Unloaded { startup_failure } = &*instance_guard {
-                    self.resolve_pending_readiness_awaiters_on_stop(startup_failure.as_ref())
-                        .await;
+                match &*instance_guard {
+                    WorkerInstance::Unloaded { startup_failure } => {
+                        self.resolve_pending_readiness_awaiters_on_stop(startup_failure.as_ref())
+                            .await;
+                    }
+                    WorkerInstance::CleanupFailed(error) => {
+                        self.resolve_pending_readiness_awaiters_on_stop(Some(error))
+                            .await;
+                    }
+                    _ => {}
                 }
                 drop(instance_guard);
 
@@ -3713,6 +3757,7 @@ enum WorkerInstance {
     Unloaded {
         startup_failure: Option<WorkerExecutorError>,
     },
+    CleanupFailed(WorkerExecutorError),
     WaitingForPermit(WaitingWorker),
     Running(RunningWorker),
     Stopping(StoppingWorker),
@@ -3735,7 +3780,8 @@ impl WorkerInstance {
         match self {
             Self::Unloaded {
                 startup_failure: Some(err),
-            } => Some(err),
+            }
+            | Self::CleanupFailed(err) => Some(err),
             _ => None,
         }
     }
@@ -4042,6 +4088,20 @@ struct RunningWorker {
     resume_replay_pending: Arc<AtomicBool>,
 }
 
+pub(crate) struct CreateWorkerInstanceError {
+    pub(crate) error: WorkerExecutorError,
+    pub(crate) filesystem_cleanup_failed: bool,
+}
+
+impl From<WorkerExecutorError> for CreateWorkerInstanceError {
+    fn from(error: WorkerExecutorError) -> Self {
+        Self {
+            error,
+            filesystem_cleanup_failed: false,
+        }
+    }
+}
+
 struct LinearMemoryGrantRegistration<Ctx: WorkerCtx> {
     worker: Arc<Worker<Ctx>>,
     grant: Arc<StdMutex<MemoryGrant>>,
@@ -4243,7 +4303,14 @@ impl RunningWorker {
 
     async fn create_instance<Ctx: WorkerCtx>(
         parent: Arc<Worker<Ctx>>,
-    ) -> Result<(Instance, async_lock::Mutex<Store<Ctx>>), WorkerExecutorError> {
+    ) -> Result<
+        (
+            Instance,
+            async_lock::Mutex<Store<Ctx>>,
+            crate::services::agent_filesystem::AgentFilesystem,
+        ),
+        CreateWorkerInstanceError,
+    > {
         let component_id = parent.owned_agent_id.component_id();
 
         // we might have detached the worker status during the last invocation loop. Make sure it's attached and we are fully up-to-date on the oplog
@@ -4316,7 +4383,7 @@ impl RunningWorker {
         };
 
         if component_metadata.metadata.has_shared_linear_memory() {
-            return Err(shared_linear_memory_error(&parent));
+            return Err(shared_linear_memory_error(&parent).into());
         }
 
         // Refresh the snapshot used by the read-only cache key. The component
@@ -4381,7 +4448,18 @@ impl RunningWorker {
             last_snapshot_index = Some(snapshot_idx);
         }
 
-        let context = Ctx::create(
+        let filesystems = crate::services::agent_filesystem::AgentFilesystems::new(
+            &parent.config().filesystem_storage,
+        );
+        let filesystem = filesystems
+            .create_fresh(&parent.owned_agent_id)
+            .await
+            .map_err(|error| CreateWorkerInstanceError {
+                filesystem_cleanup_failed: error.cleanup_failed(),
+                error: WorkerExecutorError::runtime(error.to_string()),
+            })?;
+
+        let context = match Ctx::create(
             worker_metadata.created_by,
             OwnedAgentId::new(worker_metadata.environment_id, &worker_metadata.agent_id),
             parent.parsed_agent_id.clone(),
@@ -4405,6 +4483,8 @@ impl RunningWorker {
             parent.component_service(),
             parent.extra_deps(),
             parent.config(),
+            filesystem.path().to_path_buf(),
+            filesystem.runtime(),
             AgentConfig::new(
                 skipped_regions,
                 worker_metadata.last_known_status.total_linear_memory_size,
@@ -4431,7 +4511,13 @@ impl RunningWorker {
             pending_update,
             worker_metadata.original_phantom_id,
         )
-        .await?;
+        .await
+        {
+            Ok(context) => context,
+            Err(error) => {
+                return Err(cleanup_failed_agent_filesystem(filesystem, error).await);
+            }
+        };
 
         let engine = parent.engine();
         let mut store = Store::new(&engine, context);
@@ -4465,15 +4551,19 @@ impl RunningWorker {
                 )),
             }
         });
-        store
+        if let Err(error) = store
             .set_fuel(u64::MAX)
-            .map_err(|e| WorkerExecutorError::runtime(e.to_string()))?;
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+        {
+            drop(store);
+            return Err(cleanup_failed_agent_filesystem(filesystem, error).await);
+        }
 
         store.limiter_async(|ctx| ctx.resource_limiter());
 
         let linker = (*parent.linker()).clone(); // fresh linker
 
-        let instance_pre = linker.instantiate_pre(&component).map_err(|e| {
+        let instance_pre = match linker.instantiate_pre(&component).map_err(|e| {
             WorkerExecutorError::worker_creation_failed(
                 parent.owned_agent_id.agent_id(),
                 format!(
@@ -4481,9 +4571,15 @@ impl RunningWorker {
                     parent.owned_agent_id
                 ),
             )
-        })?;
+        }) {
+            Ok(instance_pre) => instance_pre,
+            Err(error) => {
+                drop(store);
+                return Err(cleanup_failed_agent_filesystem(filesystem, error).await);
+            }
+        };
 
-        let instance = instance_pre
+        let instance = match instance_pre
             .instantiate_async(&mut store)
             .await
             .map_err(|e| {
@@ -4502,10 +4598,19 @@ impl RunningWorker {
                         ),
                     )
                 }
-            })?;
-        Self::reconcile_linear_memories(&parent, &mut store).await?;
+            }) {
+            Ok(instance) => instance,
+            Err(error) => {
+                drop(store);
+                return Err(cleanup_failed_agent_filesystem(filesystem, error).await);
+            }
+        };
+        if let Err(error) = Self::reconcile_linear_memories(&parent, &mut store).await {
+            drop(store);
+            return Err(cleanup_failed_agent_filesystem(filesystem, error).await);
+        }
         let store = async_lock::Mutex::new(store);
-        Ok((instance, store))
+        Ok((instance, store, filesystem))
     }
 
     async fn invocation_loop<Ctx: WorkerCtx>(
@@ -4533,6 +4638,24 @@ impl RunningWorker {
             worker_trace,
         };
         invocation_loop.run().await;
+    }
+}
+
+async fn cleanup_failed_agent_filesystem(
+    filesystem: crate::services::agent_filesystem::AgentFilesystem,
+    startup_error: WorkerExecutorError,
+) -> CreateWorkerInstanceError {
+    match filesystem.close_and_delete().await {
+        Ok(()) => startup_error.into(),
+        Err(cleanup_error) => {
+            warn!(error = %cleanup_error, "Failed to clean up filesystem after worker startup failure");
+            CreateWorkerInstanceError {
+                error: WorkerExecutorError::runtime(format!(
+                    "{startup_error}; additionally failed to clean up the agent filesystem: {cleanup_error}"
+                )),
+                filesystem_cleanup_failed: true,
+            }
+        }
     }
 }
 
@@ -4576,6 +4699,7 @@ pub(crate) enum FinalWorkerState {
     Unloaded {
         startup_failure: Option<WorkerExecutorError>,
     },
+    CleanupFailed(WorkerExecutorError),
     Deleting,
 }
 
@@ -4585,8 +4709,30 @@ impl FinalWorkerState {
             FinalWorkerState::Unloaded { startup_failure } => {
                 WorkerInstance::Unloaded { startup_failure }
             }
+            FinalWorkerState::CleanupFailed(error) => WorkerInstance::CleanupFailed(error),
             FinalWorkerState::Deleting => WorkerInstance::Deleting,
         }
+    }
+}
+
+fn merge_final_worker_state(
+    current: FinalWorkerState,
+    requested: FinalWorkerState,
+) -> FinalWorkerState {
+    match (&current, &requested) {
+        (FinalWorkerState::CleanupFailed(_), _) => current,
+        (_, FinalWorkerState::CleanupFailed(_)) => requested,
+        (FinalWorkerState::Deleting, _) => current,
+        (_, FinalWorkerState::Deleting) => requested,
+        (
+            FinalWorkerState::Unloaded {
+                startup_failure: None,
+            },
+            FinalWorkerState::Unloaded {
+                startup_failure: Some(_),
+            },
+        ) => requested,
+        _ => current,
     }
 }
 
@@ -4763,6 +4909,25 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn merging_unloaded_states_preserves_startup_failure() {
+        let state = merge_final_worker_state(
+            FinalWorkerState::Unloaded {
+                startup_failure: None,
+            },
+            FinalWorkerState::Unloaded {
+                startup_failure: Some(WorkerExecutorError::runtime("startup failed")),
+            },
+        );
+
+        assert!(matches!(
+            state,
+            FinalWorkerState::Unloaded {
+                startup_failure: Some(_)
+            }
+        ));
+    }
+
+    #[test]
     fn allocated_memory_sums_unique_untouched_backings() -> anyhow::Result<()> {
         let engine = wasmtime::Engine::default();
         let module = wasmtime::Module::new(
@@ -4792,6 +4957,29 @@ mod tests {
             Some(WorkerExecutorError::InvalidRequest { details })
                 if details == "An ephemeral agent cannot accept another invocation or be resumed"
         ));
+    }
+
+    #[test]
+    fn filesystem_cleanup_failure_overrides_pending_unload() {
+        let cleanup_error = WorkerExecutorError::runtime("cleanup failed");
+        let final_state = merge_final_worker_state(
+            FinalWorkerState::Unloaded {
+                startup_failure: None,
+            },
+            FinalWorkerState::CleanupFailed(cleanup_error),
+        );
+
+        assert!(matches!(final_state, FinalWorkerState::CleanupFailed(_)));
+    }
+
+    #[test]
+    fn filesystem_cleanup_failure_prevents_successful_deletion() {
+        let final_state = merge_final_worker_state(
+            FinalWorkerState::Deleting,
+            FinalWorkerState::CleanupFailed(WorkerExecutorError::runtime("cleanup failed")),
+        );
+
+        assert!(matches!(final_state, FinalWorkerState::CleanupFailed(_)));
     }
 
     #[test]

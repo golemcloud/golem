@@ -631,12 +631,20 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             if let Some(event) = event {
                 self.emit_log_event(event).await;
                 Ok::<(), StreamError>(())
+            } else if !self.state.open_filesystem_output_streams.contains_key(&rep) {
+                HostOutputStream::write(self.table(), self_, contents).await
             } else {
                 let stream_rep = self_.rep();
                 let write_len = contents.len() as u64;
+                if filesystem_stream_effect_is_active(self, stream_rep)? {
+                    return HostOutputStream::write(self.table(), self_, contents).await;
+                }
+                let effect = begin_filesystem_stream_effect(self, stream_rep).await?;
                 reserve_filesystem_stream_growth(self, stream_rep, write_len).await?;
+                prepare_filesystem_stream_effect(self, stream_rep, effect)?;
 
                 let result = HostOutputStream::write(self.table(), self_, contents).await;
+                clear_unused_filesystem_stream_effect(self, stream_rep)?;
                 match result {
                     Ok(()) => {
                         mark_filesystem_stream_write_enqueued(self, stream_rep, write_len);
@@ -853,7 +861,9 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::output_stream", "blocking_flush");
-            HostOutputStream::blocking_flush(self.table(), self_).await
+            let result = HostOutputStream::blocking_flush(self.table(), self_).await;
+            reconcile_pending_filesystem_stream_reservation(self, rep).await;
+            result
         }
     }
 
@@ -946,11 +956,18 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     || output.as_any().downcast_ref::<ManagedStdErr>().is_some()
             };
 
-            if !is_console {
+            let is_file_stream = self.state.open_filesystem_output_streams.contains_key(&rep);
+            if !is_console && is_file_stream {
                 let stream_rep = self_.rep();
+                if filesystem_stream_effect_is_active(self, stream_rep)? {
+                    return HostOutputStream::write_zeroes(self.table(), self_, len).await;
+                }
+                let effect = begin_filesystem_stream_effect(self, stream_rep).await?;
                 reserve_filesystem_stream_growth(self, stream_rep, len).await?;
+                prepare_filesystem_stream_effect(self, stream_rep, effect)?;
 
                 let result = HostOutputStream::write_zeroes(self.table(), self_, len).await;
+                clear_unused_filesystem_stream_effect(self, stream_rep)?;
                 return match result {
                     Ok(()) => {
                         mark_filesystem_stream_write_enqueued(self, stream_rep, len);
@@ -1088,13 +1105,25 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             self.observe_function_call("io::streams::output_stream", "splice");
 
             let stream_rep = self_.rep();
+            if !self
+                .state
+                .open_filesystem_output_streams
+                .contains_key(&stream_rep)
+            {
+                return HostOutputStream::splice(self.table(), self_, src, len).await;
+            }
+            if filesystem_stream_effect_is_active(self, stream_rep)? {
+                return HostOutputStream::splice(self.table(), self_, src, len).await;
+            }
+            let effect = begin_filesystem_stream_effect(self, stream_rep).await?;
             reserve_filesystem_stream_growth(self, stream_rep, len).await?;
+            prepare_filesystem_stream_effect(self, stream_rep, effect)?;
 
             let result = HostOutputStream::splice(self.table(), self_, src, len).await;
+            clear_unused_filesystem_stream_effect(self, stream_rep)?;
             match &result {
                 Ok(spliced) => {
                     mark_filesystem_stream_write_enqueued(self, stream_rep, *spliced);
-                    reconcile_pending_filesystem_stream_reservation(self, stream_rep).await;
                 }
                 Err(_) => {
                     rollback_pending_filesystem_stream_reservation(self, stream_rep).await;
@@ -1157,9 +1186,24 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             self.observe_function_call("io::streams::output_stream", "blocking_splice");
 
             let stream_rep = self_.rep();
+            if !self
+                .state
+                .open_filesystem_output_streams
+                .contains_key(&stream_rep)
+            {
+                return HostOutputStream::blocking_splice(self.table(), self_, src, len).await;
+            }
+            if filesystem_stream_effect_is_active(self, stream_rep)? {
+                let readiness = self.table().get_mut(&self_)?.write_ready().await;
+                reconcile_pending_filesystem_stream_reservation(self, stream_rep).await;
+                readiness?;
+            }
+            let effect = begin_filesystem_stream_effect(self, stream_rep).await?;
             reserve_filesystem_stream_growth(self, stream_rep, len).await?;
+            prepare_filesystem_stream_effect(self, stream_rep, effect)?;
 
             let result = HostOutputStream::blocking_splice(self.table(), self_, src, len).await;
+            clear_unused_filesystem_stream_effect(self, stream_rep)?;
             match &result {
                 Ok(spliced) => {
                     mark_filesystem_stream_write_enqueued(self, stream_rep, *spliced);
@@ -1561,10 +1605,11 @@ async fn reserve_filesystem_stream_growth<Ctx: WorkerCtx>(
         return Ok(());
     }
 
-    let stream_state = stream_state.clone();
+    let descriptor_rep = stream_state.descriptor_rep;
+    let position = stream_state.position;
 
     let current_size = {
-        let fd_borrow = Resource::<FsDescriptor>::new_borrow(stream_state.descriptor_rep);
+        let fd_borrow = Resource::<FsDescriptor>::new_borrow(descriptor_rep);
         let mut view = ctx.as_wasi_view();
         match FsHostDescriptor::stat(&mut view.filesystem(), fd_borrow).await {
             Ok(stat) => stat.size,
@@ -1579,7 +1624,7 @@ async fn reserve_filesystem_stream_growth<Ctx: WorkerCtx>(
         }
     };
 
-    let requested_end = match stream_state.position {
+    let requested_end = match position {
         Some(position) => position.saturating_add(write_len),
         None => current_size.saturating_add(write_len),
     };
@@ -1673,4 +1718,72 @@ async fn reconcile_pending_filesystem_stream_reservation<Ctx: WorkerCtx>(
     if over_reserved > 0 {
         ctx.release_filesystem_storage_space(over_reserved).await;
     }
+}
+
+fn filesystem_stream_effect_is_active<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    stream_rep: u32,
+) -> Result<bool, StreamError> {
+    let stream = Resource::<OutputStream>::new_borrow(stream_rep);
+    let output = ctx.table().get(&stream)?;
+    Ok(output
+        .as_any()
+        .downcast_ref::<crate::services::agent_filesystem::CoordinatedFileOutputStream>()
+        .is_some_and(|stream| stream.is_active()))
+}
+
+async fn begin_filesystem_stream_effect<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    stream_rep: u32,
+) -> Result<crate::services::agent_filesystem::AgentFilesystemEffectLease, StreamError> {
+    let append = ctx
+        .state
+        .open_filesystem_output_streams
+        .get(&stream_rep)
+        .is_some_and(|state| state.position.is_none());
+    if append {
+        ctx.filesystem_runtime()
+            .begin_append_effect()
+            .await
+            .map_err(StreamError::Trap)
+    } else {
+        ctx.filesystem_runtime()
+            .begin_effect()
+            .await
+            .map_err(StreamError::Trap)
+    }
+}
+
+fn prepare_filesystem_stream_effect<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    stream_rep: u32,
+    effect: crate::services::agent_filesystem::AgentFilesystemEffectLease,
+) -> Result<(), StreamError> {
+    let stream = Resource::<OutputStream>::new_borrow(stream_rep);
+    let output = ctx.table().get(&stream)?;
+    let stream = output
+        .as_any()
+        .downcast_ref::<crate::services::agent_filesystem::CoordinatedFileOutputStream>()
+        .ok_or_else(|| {
+            StreamError::Trap(wasmtime::Error::msg(
+                "filesystem output stream is not coordinated",
+            ))
+        })?;
+    stream.prepare_effect(effect);
+    Ok(())
+}
+
+fn clear_unused_filesystem_stream_effect<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    stream_rep: u32,
+) -> Result<(), StreamError> {
+    let stream = Resource::<OutputStream>::new_borrow(stream_rep);
+    let output = ctx.table().get(&stream)?;
+    if let Some(stream) = output
+        .as_any()
+        .downcast_ref::<crate::services::agent_filesystem::CoordinatedFileOutputStream>(
+    ) {
+        stream.clear_unused_effect();
+    }
+    Ok(())
 }

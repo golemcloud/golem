@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::{ReadFileResult, TrapType};
+use crate::services::agent_filesystem::AgentFilesystem;
 use crate::services::events::Event;
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::linear_memory::LinearMemoryTracker;
@@ -23,8 +24,8 @@ use crate::worker::invocation::{
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
-    FinalWorkerState, PendingWorkerInterrupt, QueuedWorkerInvocation, RetryDecision, RunningWorker,
-    Worker, WorkerCommand, WorkerInterruptState, WorkerTrace,
+    CreateWorkerInstanceError, FinalWorkerState, PendingWorkerInterrupt, QueuedWorkerInvocation,
+    RetryDecision, RunningWorker, Worker, WorkerCommand, WorkerInterruptState, WorkerTrace,
 };
 use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
 use anyhow::anyhow;
@@ -107,6 +108,7 @@ enum CreateInstanceResult<Ctx: WorkerCtx> {
     Created {
         instance: Instance,
         store: Mutex<Store<Ctx>>,
+        filesystem: AgentFilesystem,
     },
     /// Wasm executing during instantiation trapped with an [`InterruptKind`] (e.g. a fuel
     /// suspension from the epoch deadline callback). The worker itself was created successfully.
@@ -137,8 +139,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         let mut deferred_wakeups = VecDeque::new();
 
         'outer: loop {
-            let (instance, store) = match self.create_instance().await {
-                CreateInstanceResult::Created { instance, store } => (instance, store),
+            let (instance, store, filesystem) = match self.create_instance().await {
+                CreateInstanceResult::Created {
+                    instance,
+                    store,
+                    filesystem,
+                } => (instance, store, filesystem),
                 CreateInstanceResult::Interrupted(kind) => {
                     let pending_interrupt = take_pending_interrupt(&self.interrupt_signal).await;
                     let kind = pending_interrupt
@@ -182,11 +188,17 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
             };
 
-            let mut final_decision = self.recover_instance_state(&instance, &store).await;
+            let (mut final_decision, recovery_failure) =
+                match self.recover_instance_state(&instance, &store).await {
+                    Ok(decision) => (decision, None),
+                    Err(error) => (Some(RetryDecision::None), Some(error)),
+                };
             let mut final_interrupt = None;
             let mut cleanup_ephemeral_worker = false;
 
-            if let Some((kind, decision)) = self.pending_interrupt().await {
+            if recovery_failure.is_none()
+                && let Some((kind, decision)) = self.pending_interrupt().await
+            {
                 debug!(
                     %agent_id,
                     ?decision,
@@ -241,14 +253,20 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 self.record_retry_interrupt_failure(&store, kind).await;
             }
 
+            let mut runtime = Some((instance, store, filesystem));
+
             match final_decision {
                 None | Some(RetryDecision::None) => {
+                    let cleanup_error = Self::close_runtime(&mut runtime).await;
                     debug!(
                         %agent_id,
                         "Invocation queue loop notifying parent about being stopped"
                     );
-                    self.stop_unloaded(
-                        cleanup_ephemeral_worker.then(super::inactive_ephemeral_agent_error),
+                    self.stop_closed(
+                        cleanup_error,
+                        recovery_failure.or_else(|| {
+                            cleanup_ephemeral_worker.then(super::inactive_ephemeral_agent_error)
+                        }),
                     )
                     .await;
                     if cleanup_ephemeral_worker {
@@ -259,21 +277,30 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
                 Some(RetryDecision::TryStop(ts)) => {
                     if ts < *self.parent.last_resume_request.lock().await {
+                        if let Some(error) = Self::close_runtime(&mut runtime).await {
+                            self.stop_cleanup_failed(error).await;
+                            break;
+                        }
                         debug!(
                             %agent_id,
                             "Suspend request ignored because there was a resume request since it"
                         );
                         continue;
                     } else {
+                        let cleanup_error = Self::close_runtime(&mut runtime).await;
                         debug!(
                             %agent_id,
                             "Invocation queue loop notifying parent about being stopped"
                         );
-                        self.stop_unloaded(None).await;
+                        self.stop_closed(cleanup_error, None).await;
                         break;
                     }
                 }
                 Some(RetryDecision::Immediate) => {
+                    if let Some(error) = Self::close_runtime(&mut runtime).await {
+                        self.stop_cleanup_failed(error).await;
+                        break;
+                    }
                     debug!(%agent_id, "Invocation queue loop triggering restart immediately");
                     continue;
                 }
@@ -288,6 +315,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     loop {
                         tokio::select! {
                             _ = &mut sleep => {
+                                if let Some(error) = Self::close_runtime(&mut runtime).await {
+                                    self.stop_cleanup_failed(error).await;
+                                    break 'outer;
+                                }
                                 debug!(%agent_id, "Invocation queue loop restarting after delay");
                                 continue 'outer;
                             }
@@ -295,8 +326,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 let command = match command {
                                     Some(command) => command,
                                     None => {
+                                        let cleanup_error = Self::close_runtime(&mut runtime).await;
                                         debug!(%agent_id, "Invocation queue loop command channel closed during delayed retry");
-                                        self.stop_unloaded(None).await;
+                                        self.stop_closed(cleanup_error, None).await;
                                         break 'outer;
                                     }
                                 };
@@ -304,15 +336,21 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 if let Some((kind, decision)) = self.pending_interrupt().await {
                                     debug!(%agent_id, ?decision, "Invocation queue loop interrupted during delayed retry");
                                     if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
-                                        self.record_retry_interrupt_failure(&store, kind).await;
+                                        let store = &runtime.as_ref().expect("runtime must be open").1;
+                                        self.record_retry_interrupt_failure(store, kind).await;
                                     }
                                     match decision {
                                         RetryDecision::Immediate => {
+                                            if let Some(error) = Self::close_runtime(&mut runtime).await {
+                                                self.stop_cleanup_failed(error).await;
+                                                break 'outer;
+                                            }
                                             Self::defer_wakeup(&mut deferred_wakeups, command);
                                             continue 'outer;
                                         }
                                         RetryDecision::None => {
-                                            self.stop_unloaded(None).await;
+                                            let cleanup_error = Self::close_runtime(&mut runtime).await;
+                                            self.stop_closed(cleanup_error, None).await;
                                             break 'outer;
                                         }
                                         RetryDecision::Delayed(_) | RetryDecision::TryStop(_) | RetryDecision::ReacquirePermits => {
@@ -328,11 +366,19 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     }
                                     WorkerCommand::WorkAvailable => {
                                         debug!(%agent_id, "Invocation queue loop woke up during delayed retry");
+                                        if let Some(error) = Self::close_runtime(&mut runtime).await {
+                                            self.stop_cleanup_failed(error).await;
+                                            break 'outer;
+                                        }
                                         Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::WorkAvailable);
                                         continue 'outer;
                                     }
                                     WorkerCommand::ResumeReplay => {
                                         debug!(%agent_id, "Invocation queue loop woke up for resume replay during delayed retry");
+                                        if let Some(error) = Self::close_runtime(&mut runtime).await {
+                                            self.stop_cleanup_failed(error).await;
+                                            break 'outer;
+                                        }
                                         Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::ResumeReplay);
                                         continue 'outer;
                                     }
@@ -342,6 +388,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     }
                 }
                 Some(RetryDecision::ReacquirePermits) => {
+                    if let Some(error) = Self::close_runtime(&mut runtime).await {
+                        self.stop_cleanup_failed(error).await;
+                        break;
+                    }
                     let delay = get_delay(self.parent.oom_retry_config(), self.oom_retry_count);
                     debug!(
                         %agent_id,
@@ -362,9 +412,48 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 
     async fn stop_unloaded(&self, startup_failure: Option<WorkerExecutorError>) {
+        let pending_failure = startup_failure.clone();
         self.parent
-            .stop_internal(true, None, FinalWorkerState::Unloaded { startup_failure })
+            .stop_internal(
+                true,
+                pending_failure,
+                FinalWorkerState::Unloaded { startup_failure },
+            )
             .await;
+    }
+
+    async fn stop_cleanup_failed(&self, error: WorkerExecutorError) {
+        let pending_failure = error.clone();
+        self.parent
+            .stop_internal(
+                true,
+                Some(pending_failure),
+                FinalWorkerState::CleanupFailed(error),
+            )
+            .await;
+    }
+
+    async fn stop_closed(
+        &self,
+        cleanup_error: Option<WorkerExecutorError>,
+        startup_failure: Option<WorkerExecutorError>,
+    ) {
+        match cleanup_error {
+            Some(error) => self.stop_cleanup_failed(error).await,
+            None => self.stop_unloaded(startup_failure).await,
+        }
+    }
+
+    async fn close_runtime(
+        runtime: &mut Option<(Instance, Mutex<Store<Ctx>>, AgentFilesystem)>,
+    ) -> Option<WorkerExecutorError> {
+        let (_instance, store, filesystem) = runtime.take()?;
+        filesystem.seal();
+        drop(store);
+        filesystem.close_and_delete().await.err().map(|error| {
+            error!(error = %error, "Failed to delete agent runtime filesystem");
+            WorkerExecutorError::runtime(error.to_string())
+        })
     }
 
     fn archive_ephemeral_oplog(&self) {
@@ -404,19 +493,26 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         async {
             debug!("Creating the worker instance");
             match RunningWorker::create_instance(self.parent.clone()).await {
-                Ok((instance, store)) => {
+                Ok((instance, store, filesystem)) => {
                     self.parent.events().publish(Event::WorkerLoaded {
                         agent_id: self.owned_agent_id.agent_id(),
                         result: Ok(()),
                     });
-                    CreateInstanceResult::Created { instance, store }
+                    CreateInstanceResult::Created {
+                        instance,
+                        store,
+                        filesystem,
+                    }
                 }
                 // Wasm executing during instantiation was interrupted (e.g. suspended by the fuel
                 // check in the epoch deadline callback). The worker exists — its metadata and
                 // `Create` oplog entry are already persisted — so this is not a creation failure:
                 // creation waiters are released successfully and the caller parks or restarts the
                 // worker like any other interrupt.
-                Err(WorkerExecutorError::Interrupted { kind }) => {
+                Err(CreateWorkerInstanceError {
+                    error: WorkerExecutorError::Interrupted { kind },
+                    filesystem_cleanup_failed: false,
+                }) => {
                     debug!("Worker instantiation interrupted: {kind:?}");
                     self.parent.events().publish(Event::WorkerLoaded {
                         agent_id: self.owned_agent_id.agent_id(),
@@ -424,20 +520,24 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     });
                     CreateInstanceResult::Interrupted(kind)
                 }
-                Err(err) => {
+                Err(CreateWorkerInstanceError {
+                    error: err,
+                    filesystem_cleanup_failed,
+                }) => {
                     warn!("Failed to start the worker: {err}");
                     self.parent.events().publish(Event::WorkerLoaded {
                         agent_id: self.owned_agent_id.agent_id(),
                         result: Err(err.clone()),
                     });
+                    let final_state = if filesystem_cleanup_failed {
+                        FinalWorkerState::CleanupFailed(err.clone())
+                    } else {
+                        FinalWorkerState::Unloaded {
+                            startup_failure: Some(err.clone()),
+                        }
+                    };
                     self.parent
-                        .stop_internal(
-                            true,
-                            Some(err.clone()),
-                            FinalWorkerState::Unloaded {
-                                startup_failure: Some(err),
-                            },
-                        )
+                        .stop_internal(true, Some(err), final_state)
                         .await;
                     CreateInstanceResult::Failed
                 }
@@ -454,7 +554,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         &self,
         instance: &Instance,
         store: &Mutex<Store<Ctx>>,
-    ) -> Option<RetryDecision> {
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         async {
             debug!("Preparing the worker instance");
             let mut store = store.lock().await;
@@ -475,22 +575,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             match prepare_result {
                 Ok(decision) => {
                     debug!("Recovery decision from prepare_instance: {decision:?}");
-                    decision
+                    Ok(decision)
                 }
                 Err(err) => {
                     warn!("Failed to start the worker: {err}");
                     store.data().set_suspended();
-
-                    self.parent
-                        .stop_internal(
-                            true,
-                            Some(err.clone()),
-                            FinalWorkerState::Unloaded {
-                                startup_failure: Some(err),
-                            },
-                        )
-                        .await;
-                    Some(RetryDecision::None) // early return, we can't retry this
+                    Err(err)
                 }
             }
         }

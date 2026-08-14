@@ -1817,6 +1817,9 @@ pub struct FilesystemStorageConfig {
     pub total_worker_filesystem_storage_bytes: Option<u64>,
     #[serde(with = "humantime_serde")]
     pub acquire_retry_delay: Duration,
+    /// Retry policy for deleting and verifying runtime filesystem directories.
+    /// `max_attempts` includes the initial deletion attempt.
+    pub cleanup_retry: RetryConfig,
     /// When set, use deterministic per-agent directory names rooted at this
     /// path instead of random OS temp directories. The directory structure is:
     ///
@@ -1850,6 +1853,12 @@ impl SafeDisplay for FilesystemStorageConfig {
             "acquire retry delay: {:?}",
             self.acquire_retry_delay
         );
+        let _ = writeln!(&mut result, "cleanup retry:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.cleanup_retry.to_safe_string_indented()
+        );
         if let Some(root) = &self.deterministic_root_dir {
             let _ = writeln!(&mut result, "deterministic root dir: {}", root.display());
         }
@@ -1862,6 +1871,13 @@ impl Default for FilesystemStorageConfig {
         Self {
             total_worker_filesystem_storage_bytes: None,
             acquire_retry_delay: Duration::from_millis(500),
+            cleanup_retry: RetryConfig {
+                max_attempts: 4,
+                min_delay: Duration::from_millis(25),
+                max_delay: Duration::from_millis(250),
+                multiplier: 4.0,
+                max_jitter_factor: None,
+            },
             deterministic_root_dir: None,
         }
     }

@@ -153,39 +153,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
 use std::vec;
-use tempfile::TempDir;
 use tokio::sync::RwLock as TRwLock;
-
-/// A worker's filesystem root directory. Either a random OS temp directory
-/// (the default) or a deterministic path derived from the agent id.
-///
-/// In both cases the directory is removed when this value is dropped.
-enum WorkerDir {
-    /// Random temp dir created by `tempfile`. Auto-deleted on drop.
-    Temp(TempDir),
-    /// Deterministic directory. Deleted explicitly on drop.
-    Deterministic(PathBuf),
-}
-
-impl WorkerDir {
-    fn path(&self) -> &Path {
-        match self {
-            WorkerDir::Temp(td) => td.path(),
-            WorkerDir::Deterministic(p) => p,
-        }
-    }
-}
-
-impl Drop for WorkerDir {
-    fn drop(&mut self) {
-        if let WorkerDir::Deterministic(p) = self
-            && p.exists()
-        {
-            let _ = std::fs::remove_dir_all(p);
-        }
-        // WorkerDir::Temp is dropped automatically by TempDir's own Drop impl
-    }
-}
 
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_service_base::model::auth::AuthCtx;
@@ -374,7 +342,8 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub owned_agent_id: OwnedAgentId,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
-    worker_dir: Arc<WorkerDir>,
+    filesystem_root: PathBuf,
+    filesystem_runtime: crate::services::agent_filesystem::AgentFilesystemRuntime,
     execution_status: Arc<RwLock<ExecutionStatus>>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
@@ -518,6 +487,12 @@ fn validate_unshared_memory_growth(
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    pub(crate) fn filesystem_runtime(
+        &self,
+    ) -> crate::services::agent_filesystem::AgentFilesystemRuntime {
+        self.filesystem_runtime.clone()
+    }
+
     pub(crate) fn derive_idempotency_key(&mut self, oplog_index: OplogIndex) -> IdempotencyKey {
         let current_idempotency_key = self
             .state
@@ -562,6 +537,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         component_service: Arc<dyn ComponentService>,
         resource_limits: Arc<AtomicResourceEntry>,
         config: Arc<GolemConfig>,
+        filesystem_root: PathBuf,
+        filesystem_runtime: crate::services::agent_filesystem::AgentFilesystemRuntime,
         mut worker_config: AgentConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
@@ -577,30 +554,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         per_invocation_http_call_limit: u64,
         per_invocation_rpc_call_limit: u64,
     ) -> Result<Self, WorkerExecutorError> {
-        let worker_dir = Arc::new(
-            if let Some(root) = &config.filesystem_storage.deterministic_root_dir {
-                let dir = root
-                    .join(owned_agent_id.environment_id.to_string())
-                    .join(owned_agent_id.agent_id.component_id.to_string())
-                    .join(owned_agent_id.agent_id.agent_name_encoded());
-                std::fs::create_dir_all(&dir).map_err(|e| {
-                    WorkerExecutorError::runtime(format!(
-                        "Failed to create deterministic directory {}: {e}",
-                        dir.display()
-                    ))
-                })?;
-                WorkerDir::Deterministic(dir)
-            } else {
-                WorkerDir::Temp(tempfile::Builder::new().prefix("golem").tempdir().map_err(
-                    |e| {
-                        WorkerExecutorError::runtime(format!(
-                            "Failed to create temporary directory: {e}",
-                        ))
-                    },
-                )?)
-            },
-        );
-        debug!("Created file system root at {:?}", worker_dir.path());
+        debug!("Created file system root at {:?}", filesystem_root);
 
         debug!(
             "Worker {} initialized with deleted regions {}",
@@ -667,7 +621,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let files = prepare_filesystem(
             &file_loader,
             owned_agent_id.environment_id,
-            worker_dir.path(),
+            &filesystem_root,
             agent_type_provision_configs
                 .as_ref()
                 .map(|c| c.files.as_slice())
@@ -716,7 +670,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
-            worker_dir.path().to_path_buf(),
+            filesystem_root.clone(),
             stdin.clone(),
             stdout,
             stderr,
@@ -824,7 +778,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 oplog: oplog.clone(),
             },
             state,
-            worker_dir,
+            filesystem_root,
+            filesystem_runtime,
             execution_status,
             resource_limits,
             linear_memory,
@@ -3472,7 +3427,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 &mut current_files,
                 &self.state.file_loader,
                 self.owned_agent_id.environment_id,
-                self.worker_dir.path(),
+                &self.filesystem_root,
                 new_agent_type_provision_configs
                     .as_ref()
                     .map(|c| c.files.as_slice())
@@ -5445,7 +5400,7 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
         &self,
         path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
-        let root = self.worker_dir.path();
+        let root = &self.filesystem_root;
         let target = root.join(PathBuf::from(path.to_rel_string()));
 
         {
@@ -5556,7 +5511,7 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
         &self,
         path: &CanonicalFilePath,
     ) -> Result<ReadFileResult, WorkerExecutorError> {
-        let root = self.worker_dir.path();
+        let root = &self.filesystem_root;
         let target = root.join(PathBuf::from(path.to_rel_string()));
 
         {
@@ -6194,7 +6149,7 @@ struct ActiveDurableScope {
     opened_in_persist_nothing_zone: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct FilesystemOutputStreamState {
     pub descriptor_rep: u32,
     pub position: Option<u64>,
