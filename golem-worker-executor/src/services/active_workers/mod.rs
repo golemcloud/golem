@@ -42,6 +42,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug};
 
 use crate::services::HasAll;
+use crate::services::agent_filesystem::{AgentFilesystems, FilesystemStorageError};
 use crate::services::card_interest::CardInterestIndex;
 use crate::services::golem_config::{
     AgentStatusFlushConfig, FilesystemStorageConfig, MemoryConfig,
@@ -81,6 +82,7 @@ pub struct ActiveWorkers<Ctx: WorkerCtx> {
     workers: Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
     card_interest_index: Arc<CardInterestIndex>,
     worker_filesystem_storage: Arc<FilesystemStorageSemaphore>,
+    agent_filesystems: Arc<AgentFilesystems>,
     concurrent_agents: Arc<ConcurrentAgentsScheduler>,
     acquire_retry_delay: Duration,
     /// Authoritative measured-headroom admission gate, and the sole admission
@@ -111,7 +113,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         storage_config: &FilesystemStorageConfig,
         agent_status_flush_config: &AgentStatusFlushConfig,
         shutdown_token: CancellationToken,
-    ) -> Self {
+    ) -> Result<Self, FilesystemStorageError> {
         // Build the probe once and hand it to the measured-headroom gate, which
         // bases its decision on the pod's cgroup limit when constrained (not host
         // RAM).
@@ -135,7 +137,8 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         storage_config: &FilesystemStorageConfig,
         agent_status_flush_config: &AgentStatusFlushConfig,
         shutdown_token: CancellationToken,
-    ) -> Self {
+    ) -> Result<Self, FilesystemStorageError> {
+        let agent_filesystems = Arc::new(AgentFilesystems::new(storage_config)?);
         let admission = memory_config.enable_measured_admission.then(|| {
             Arc::new(AdmissionController::new(
                 probe,
@@ -158,6 +161,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 storage_config.worker_filesystem_storage(),
                 storage_config.acquire_retry_delay,
             )),
+            agent_filesystems,
             concurrent_agents: Arc::new(ConcurrentAgentsScheduler::new()),
             acquire_retry_delay: memory_config.acquire_retry_delay,
             admission,
@@ -170,12 +174,16 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             ),
         };
         active_workers.initialize_metrics();
-        active_workers
+        Ok(active_workers)
     }
 
     /// The per-executor queue used to batch cached agent status blob writes in the background.
     pub fn status_flush_queue(&self) -> Arc<AgentStatusFlushQueue> {
         self.status_flush_queue.clone()
+    }
+
+    pub(crate) fn agent_filesystems(&self) -> Arc<AgentFilesystems> {
+        Arc::clone(&self.agent_filesystems)
     }
 
     /// Acquire (or share) the per-component module charge for a worker of the

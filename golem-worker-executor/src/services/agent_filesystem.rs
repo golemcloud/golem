@@ -20,19 +20,46 @@ use golem_common::model::{OwnedAgentId, RetryConfig};
 use golem_common::retries::RetryState;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+#[cfg(target_os = "linux")]
+use std::fs::File;
+#[cfg(target_os = "linux")]
+use std::num::NonZeroU32;
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 use std::time::Instant;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 use wasmtime_wasi::p2::{DynOutputStream, OutputStream, Pollable};
 use wasmtime_wasi::{StreamError, StreamResult};
 
+#[cfg(target_os = "linux")]
+mod xfs;
+
 static LIFECYCLE_LOCKS: OnceLock<std::sync::Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> =
     OnceLock::new();
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AgentFilesystemUsage {
+    pub allocated_bytes: u64,
+    pub filesystem_objects: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(
+    dead_code,
+    reason = "authoritative capacity observation is part of the filesystem interface"
+)]
+pub(crate) struct FilesystemCapacity {
+    pub total_bytes: u64,
+    pub available_bytes: u64,
+    pub total_filesystem_objects: u64,
+    pub available_filesystem_objects: u64,
+}
+
 #[derive(Debug)]
-pub(crate) struct FilesystemStorageError {
+pub struct FilesystemStorageError {
     operation: &'static str,
     path: PathBuf,
     source: Option<std::io::Error>,
@@ -108,14 +135,71 @@ impl std::error::Error for FilesystemStorageError {
 pub(crate) struct AgentFilesystems {
     deterministic_root: Option<PathBuf>,
     cleanup_retry: RetryConfig,
+    #[cfg(target_os = "linux")]
+    managed_xfs: Option<Arc<xfs::XfsBackend>>,
 }
 
 impl AgentFilesystems {
-    pub(crate) fn new(settings: &FilesystemStorageConfig) -> Self {
-        Self {
+    pub(crate) fn new(settings: &FilesystemStorageConfig) -> Result<Self, FilesystemStorageError> {
+        if settings.deterministic_root_dir.is_some() && settings.managed_xfs_root_dir.is_some() {
+            return Err(FilesystemStorageError::verification(
+                "select exactly one filesystem storage backend",
+                Path::new("<configuration>"),
+            ));
+        }
+
+        #[cfg(target_os = "linux")]
+        let managed_xfs = match settings.managed_xfs_root_dir.as_deref() {
+            Some(root) => Some(Arc::new(xfs::XfsBackend::new(
+                root,
+                &settings.cleanup_retry,
+            )?)),
+            None => None,
+        };
+
+        #[cfg(not(target_os = "linux"))]
+        if let Some(root) = &settings.managed_xfs_root_dir {
+            return Err(FilesystemStorageError::verification(
+                "initialize managed XFS backend on a non-Linux platform",
+                root,
+            ));
+        }
+
+        Ok(Self {
             deterministic_root: settings.deterministic_root_dir.clone(),
             cleanup_retry: settings.cleanup_retry.clone(),
+            #[cfg(target_os = "linux")]
+            managed_xfs,
+        })
+    }
+
+    #[allow(
+        dead_code,
+        reason = "authoritative capacity observation is part of the filesystem interface"
+    )]
+    pub(crate) async fn capacity(&self) -> Result<FilesystemCapacity, FilesystemStorageError> {
+        #[cfg(target_os = "linux")]
+        if let Some(backend) = &self.managed_xfs {
+            let backend = Arc::clone(backend);
+            let root = backend.root().to_path_buf();
+            return tokio::task::spawn_blocking(move || backend.capacity())
+                .await
+                .map_err(|error| {
+                    FilesystemStorageError::io(
+                        "observe managed XFS capacity",
+                        &root,
+                        std::io::Error::other(error),
+                    )
+                })?
+                .map_err(|error| {
+                    FilesystemStorageError::io("observe managed XFS capacity", &root, error)
+                });
         }
+
+        Err(FilesystemStorageError::verification(
+            "observe capacity for unmanaged filesystem storage",
+            Path::new("<unmanaged>"),
+        ))
     }
 
     pub(crate) async fn create_fresh(
@@ -123,12 +207,204 @@ impl AgentFilesystems {
         agent_id: &OwnedAgentId,
     ) -> Result<AgentFilesystem, FilesystemStorageError> {
         let started = Instant::now();
+        #[cfg(target_os = "linux")]
+        if let Some(backend) = &self.managed_xfs {
+            let result = self
+                .create_managed_filesystem(Arc::clone(backend), agent_id)
+                .await;
+            record_agent_filesystem_lifecycle("create", result.is_ok(), started.elapsed());
+            return result;
+        }
+
         let result = match &self.deterministic_root {
             Some(root) => self.create_deterministic_filesystem(root, agent_id).await,
             None => self.create_temporary_filesystem().await,
         };
         record_agent_filesystem_lifecycle("create", result.is_ok(), started.elapsed());
         result
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn create_managed_filesystem(
+        &self,
+        backend: Arc<xfs::XfsBackend>,
+        agent_id: &OwnedAgentId,
+    ) -> Result<AgentFilesystem, FilesystemStorageError> {
+        let environment = agent_id.environment_id.to_string();
+        let component = agent_id.agent_id.component_id.to_string();
+        let agent = agent_id.agent_id.agent_name_encoded();
+        let owner = PathBuf::from(&environment).join(&component).join(&agent);
+        let lifecycle = acquire_lifecycle_lock(&backend.root().join(&owner)).await;
+        let parent = backend
+            .open_agent_parent(&environment, &component)
+            .map_err(|error| {
+                FilesystemStorageError::io(
+                    "open managed runtime directory parent",
+                    &backend
+                        .root()
+                        .join(owner.parent().expect("owner must have a parent")),
+                    error,
+                )
+            })?;
+        let cleanup_path =
+            PathBuf::from(format!("/proc/self/fd/{}", parent.as_raw_fd())).join(&agent);
+
+        let disk_project = match tokio::fs::symlink_metadata(&cleanup_path).await {
+            Ok(metadata) if !metadata.file_type().is_symlink() => {
+                let backend = Arc::clone(&backend);
+                let existing_entry = backend.open_entry(&parent, &agent).map_err(|error| {
+                    FilesystemStorageError::cleanup_io(
+                        "open stale managed XFS runtime path",
+                        &cleanup_path,
+                        error,
+                    )
+                })?;
+                tokio::task::spawn_blocking(move || backend.project_id(&existing_entry))
+                    .await
+                    .map_err(|error| {
+                        FilesystemStorageError::io(
+                            "inspect stale managed XFS project",
+                            &cleanup_path,
+                            std::io::Error::other(error),
+                        )
+                    })?
+                    .map_err(|error| {
+                        FilesystemStorageError::io(
+                            "inspect stale managed XFS project",
+                            &cleanup_path,
+                            error,
+                        )
+                    })?
+            }
+            Ok(_) => None,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(FilesystemStorageError::cleanup_io(
+                    "inspect stale managed XFS runtime path",
+                    &cleanup_path,
+                    error,
+                ));
+            }
+        };
+        let reserved_project = backend.reserved_project(&owner);
+        let stale_project = match (disk_project, reserved_project) {
+            (Some(disk_project), Some(reserved_project)) if disk_project != reserved_project => {
+                return Err(FilesystemStorageError::cleanup_verification(
+                    "match stale managed XFS path and reserved project",
+                    &cleanup_path,
+                ));
+            }
+            (disk_project, reserved_project) => disk_project.or(reserved_project),
+        };
+
+        let mut stale_cleanup = if let Some(project_id) = stale_project {
+            backend
+                .reserve_existing_project(project_id, &owner)
+                .map_err(|error| {
+                    FilesystemStorageError::cleanup_io(
+                        "reserve stale managed XFS project for cleanup",
+                        &cleanup_path,
+                        error,
+                    )
+                })?;
+            Some(ManagedProjectCleanup::new(
+                Arc::clone(&backend),
+                project_id,
+                cleanup_path.clone(),
+                parent.try_clone().map_err(|error| {
+                    FilesystemStorageError::cleanup_io(
+                        "retain managed XFS runtime directory parent",
+                        &cleanup_path,
+                        error,
+                    )
+                })?,
+                self.cleanup_retry.clone(),
+            ))
+        } else {
+            None
+        };
+        remove_and_verify(
+            &cleanup_path,
+            "remove stale managed XFS runtime directory",
+            &self.cleanup_retry,
+        )
+        .await?;
+        if let Some(project_id) = stale_project {
+            finish_managed_project_cleanup(
+                Arc::clone(&backend),
+                project_id,
+                &cleanup_path,
+                &self.cleanup_retry,
+            )
+            .await?;
+            stale_cleanup
+                .as_mut()
+                .expect("stale project cleanup owner must exist")
+                .disarm();
+        }
+
+        tokio::fs::create_dir(&cleanup_path)
+            .await
+            .map_err(|error| {
+                FilesystemStorageError::io(
+                    "create fresh managed runtime directory",
+                    &cleanup_path,
+                    error,
+                )
+            })?;
+
+        let project_id = backend.reserve_project(&owner).map_err(|error| {
+            FilesystemStorageError::io("allocate managed XFS project", &cleanup_path, error)
+        });
+        let project_id = match project_id {
+            Ok(project_id) => project_id,
+            Err(error) => {
+                return Err(rollback_creation(&cleanup_path, error, &self.cleanup_retry).await);
+            }
+        };
+        let root = match backend.open_directory(&parent, &agent) {
+            Ok(root) => root,
+            Err(error) => {
+                backend.release_project(project_id);
+                return Err(rollback_creation(
+                    &cleanup_path,
+                    FilesystemStorageError::io(
+                        "open fresh managed runtime directory",
+                        &cleanup_path,
+                        error,
+                    ),
+                    &self.cleanup_retry,
+                )
+                .await);
+            }
+        };
+        let path = PathBuf::from(format!("/proc/self/fd/{}", root.as_raw_fd()));
+        let assignment_result = backend.assign_project(&root, project_id).map_err(|error| {
+            FilesystemStorageError::io("assign managed XFS project", &path, error)
+        });
+
+        let filesystem = AgentFilesystem {
+            path,
+            cleanup_path,
+            runtime: AgentFilesystemRuntime::new(),
+            cleanup_retry: self.cleanup_retry.clone(),
+            storage: AgentFilesystemStorage::Managed {
+                backend: Arc::clone(&backend),
+                project_id,
+                _parent: parent,
+                root: Some(root),
+            },
+            _lifecycle: lifecycle,
+            delete_on_drop: true,
+        };
+        if let Err(error) = assignment_result {
+            return Err(rollback_owned_filesystem(filesystem, error).await);
+        }
+        if let Err(error) = verify_fresh_open_directory(filesystem.path()).await {
+            return Err(rollback_owned_filesystem(filesystem, error).await);
+        }
+
+        Ok(filesystem)
     }
 
     async fn create_temporary_filesystem(&self) -> Result<AgentFilesystem, FilesystemStorageError> {
@@ -143,9 +419,11 @@ impl AgentFilesystems {
             .expect("new temporary filesystem lifecycle lock must be available");
         let path = directory.keep();
         let filesystem = AgentFilesystem {
+            cleanup_path: path.clone(),
             path,
             runtime: AgentFilesystemRuntime::new(),
             cleanup_retry: self.cleanup_retry.clone(),
+            storage: AgentFilesystemStorage::Unmanaged,
             _lifecycle: lifecycle,
             delete_on_drop: true,
         };
@@ -191,9 +469,11 @@ impl AgentFilesystems {
         }
 
         let filesystem = AgentFilesystem {
+            cleanup_path: path.clone(),
             path,
             runtime: AgentFilesystemRuntime::new(),
             cleanup_retry: self.cleanup_retry.clone(),
+            storage: AgentFilesystemStorage::Unmanaged,
             _lifecycle: lifecycle,
             delete_on_drop: true,
         };
@@ -208,10 +488,23 @@ impl AgentFilesystems {
 
 pub(crate) struct AgentFilesystem {
     path: PathBuf,
+    cleanup_path: PathBuf,
     runtime: AgentFilesystemRuntime,
     cleanup_retry: RetryConfig,
+    storage: AgentFilesystemStorage,
     _lifecycle: OwnedMutexGuard<()>,
     delete_on_drop: bool,
+}
+
+enum AgentFilesystemStorage {
+    Unmanaged,
+    #[cfg(target_os = "linux")]
+    Managed {
+        backend: Arc<xfs::XfsBackend>,
+        project_id: NonZeroU32,
+        _parent: File,
+        root: Option<File>,
+    },
 }
 
 impl AgentFilesystem {
@@ -227,11 +520,86 @@ impl AgentFilesystem {
         self.runtime.seal();
     }
 
+    #[allow(
+        dead_code,
+        reason = "authoritative usage observation is part of the filesystem interface"
+    )]
+    pub(crate) async fn usage(
+        &self,
+    ) -> Result<Option<AgentFilesystemUsage>, FilesystemStorageError> {
+        match &self.storage {
+            AgentFilesystemStorage::Unmanaged => Ok(None),
+            #[cfg(target_os = "linux")]
+            AgentFilesystemStorage::Managed {
+                backend,
+                project_id,
+                ..
+            } => {
+                let backend = Arc::clone(backend);
+                let project_id = *project_id;
+                let path = self.path.clone();
+                tokio::task::spawn_blocking(move || backend.usage(project_id))
+                    .await
+                    .map_err(|error| {
+                        FilesystemStorageError::io(
+                            "observe managed XFS project usage",
+                            &path,
+                            std::io::Error::other(error),
+                        )
+                    })?
+                    .map_err(|error| {
+                        FilesystemStorageError::io(
+                            "observe managed XFS project usage",
+                            &path,
+                            error,
+                        )
+                    })
+                    .map(Some)
+            }
+        }
+    }
+
     pub(crate) async fn close_and_delete(mut self) -> Result<(), FilesystemStorageError> {
         let started = Instant::now();
         self.seal();
-        let result =
-            remove_and_verify(&self.path, "delete runtime directory", &self.cleanup_retry).await;
+        self.runtime.drain().await;
+        let result = match &mut self.storage {
+            AgentFilesystemStorage::Unmanaged => {
+                remove_and_verify(
+                    &self.cleanup_path,
+                    "delete runtime directory",
+                    &self.cleanup_retry,
+                )
+                .await
+            }
+            #[cfg(target_os = "linux")]
+            AgentFilesystemStorage::Managed {
+                backend,
+                project_id,
+                root,
+                ..
+            } => {
+                root.take();
+                let path_result = remove_and_verify(
+                    &self.cleanup_path,
+                    "delete managed XFS runtime directory",
+                    &self.cleanup_retry,
+                )
+                .await;
+                match path_result {
+                    Ok(()) => {
+                        finish_managed_project_cleanup(
+                            Arc::clone(backend),
+                            *project_id,
+                            &self.cleanup_path,
+                            &self.cleanup_retry,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+        };
         // A completed explicit attempt is authoritative. The fallback is only
         // for owners dropped before explicit cleanup can finish.
         self.delete_on_drop = false;
@@ -244,7 +612,29 @@ impl Drop for AgentFilesystem {
     fn drop(&mut self) {
         if self.delete_on_drop {
             let started = Instant::now();
-            let result = remove_and_verify_blocking(&self.path);
+            if self.runtime.has_active_effects() {
+                record_agent_filesystem_lifecycle("delete_fallback", false, started.elapsed());
+                tracing::error!(path = %self.cleanup_path.display(), "Cannot delete agent runtime filesystem while effects are active");
+                return;
+            }
+            let result = match &mut self.storage {
+                AgentFilesystemStorage::Unmanaged => remove_and_verify_blocking(&self.cleanup_path),
+                #[cfg(target_os = "linux")]
+                AgentFilesystemStorage::Managed {
+                    backend,
+                    project_id,
+                    root,
+                    ..
+                } => {
+                    root.take();
+                    remove_managed_and_verify_blocking(
+                        backend,
+                        *project_id,
+                        &self.cleanup_path,
+                        &self.cleanup_retry,
+                    )
+                }
+            };
             record_agent_filesystem_lifecycle("delete_fallback", result.is_ok(), started.elapsed());
             if let Err(error) = result {
                 tracing::error!(error = %error, "Failed to delete agent runtime filesystem during fallback cleanup");
@@ -259,15 +649,20 @@ pub struct AgentFilesystemRuntime {
 }
 
 struct AgentFilesystemRuntimeInner {
-    sealed: AtomicBool,
+    state: AtomicUsize,
+    drained: tokio::sync::Notify,
     append: Arc<Mutex<()>>,
 }
+
+const FILESYSTEM_RUNTIME_SEALED: usize = 1 << (usize::BITS - 1);
+const FILESYSTEM_RUNTIME_ACTIVE_EFFECTS: usize = !FILESYSTEM_RUNTIME_SEALED;
 
 impl AgentFilesystemRuntime {
     pub(crate) fn new() -> Self {
         Self {
             inner: Arc::new(AgentFilesystemRuntimeInner {
-                sealed: AtomicBool::new(false),
+                state: AtomicUsize::new(0),
+                drained: tokio::sync::Notify::new(),
                 append: Arc::new(Mutex::new(())),
             }),
         }
@@ -284,8 +679,24 @@ impl AgentFilesystemRuntime {
     }
 
     pub(crate) fn admit_effect(&self) -> Result<AgentFilesystemEffectAdmission, wasmtime::Error> {
-        if self.inner.sealed.load(Ordering::Acquire) {
-            return Err(wasmtime::Error::msg("agent filesystem is closing"));
+        let mut state = self.inner.state.load(Ordering::Acquire);
+        loop {
+            if state & FILESYSTEM_RUNTIME_SEALED != 0 {
+                return Err(wasmtime::Error::msg("agent filesystem is closing"));
+            }
+            let active_effects = state & FILESYSTEM_RUNTIME_ACTIVE_EFFECTS;
+            let next = active_effects
+                .checked_add(1)
+                .expect("agent filesystem effect count overflowed");
+            match self.inner.state.compare_exchange_weak(
+                state,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(observed) => state = observed,
+            }
         }
         Ok(AgentFilesystemEffectAdmission {
             inner: Arc::clone(&self.inner),
@@ -293,7 +704,34 @@ impl AgentFilesystemRuntime {
     }
 
     fn seal(&self) {
-        self.inner.sealed.store(true, Ordering::Release);
+        self.inner
+            .state
+            .fetch_or(FILESYSTEM_RUNTIME_SEALED, Ordering::AcqRel);
+    }
+
+    async fn drain(&self) {
+        while self.has_active_effects() {
+            let drained = self.inner.drained.notified();
+            if !self.has_active_effects() {
+                break;
+            }
+            drained.await;
+        }
+    }
+
+    fn has_active_effects(&self) -> bool {
+        self.inner.state.load(Ordering::Acquire) & FILESYSTEM_RUNTIME_ACTIVE_EFFECTS != 0
+    }
+}
+
+impl AgentFilesystemRuntimeInner {
+    fn finish_effect(&self) {
+        let previous = self.state.fetch_sub(1, Ordering::AcqRel);
+        let previous_active = previous & FILESYSTEM_RUNTIME_ACTIVE_EFFECTS;
+        debug_assert!(previous_active > 0);
+        if previous_active == 1 {
+            self.drained.notify_waiters();
+        }
     }
 }
 
@@ -305,6 +743,12 @@ pub(crate) struct AgentFilesystemEffectLease {
 
 pub(crate) struct AgentFilesystemEffectAdmission {
     inner: Arc<AgentFilesystemRuntimeInner>,
+}
+
+impl Drop for AgentFilesystemEffectAdmission {
+    fn drop(&mut self) {
+        self.inner.finish_effect();
+    }
 }
 
 impl AgentFilesystemEffectAdmission {
@@ -563,6 +1007,84 @@ async fn verify_fresh_directory(path: &Path) -> Result<(), FilesystemStorageErro
     Ok(())
 }
 
+async fn verify_fresh_open_directory(path: &Path) -> Result<(), FilesystemStorageError> {
+    let metadata = tokio::fs::metadata(path)
+        .await
+        .map_err(|error| FilesystemStorageError::io("verify runtime directory", path, error))?;
+    if !metadata.is_dir() {
+        return Err(FilesystemStorageError::verification(
+            "verify fresh runtime directory",
+            path,
+        ));
+    }
+
+    let mut entries = tokio::fs::read_dir(path).await.map_err(|error| {
+        FilesystemStorageError::io("verify empty runtime directory", path, error)
+    })?;
+    if entries
+        .next_entry()
+        .await
+        .map_err(|error| FilesystemStorageError::io("verify empty runtime directory", path, error))?
+        .is_some()
+    {
+        return Err(FilesystemStorageError::verification(
+            "verify empty runtime directory",
+            path,
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+struct ManagedProjectCleanup {
+    backend: Arc<xfs::XfsBackend>,
+    project_id: NonZeroU32,
+    path: PathBuf,
+    _parent: File,
+    cleanup_retry: RetryConfig,
+    armed: bool,
+}
+
+#[cfg(target_os = "linux")]
+impl ManagedProjectCleanup {
+    fn new(
+        backend: Arc<xfs::XfsBackend>,
+        project_id: NonZeroU32,
+        path: PathBuf,
+        parent: File,
+        cleanup_retry: RetryConfig,
+    ) -> Self {
+        Self {
+            backend,
+            project_id,
+            path,
+            _parent: parent,
+            cleanup_retry,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for ManagedProjectCleanup {
+    fn drop(&mut self) {
+        if self.armed
+            && let Err(error) = remove_managed_and_verify_blocking(
+                &self.backend,
+                self.project_id,
+                &self.path,
+                &self.cleanup_retry,
+            )
+        {
+            tracing::error!(error = %error, "Failed to clean reserved managed XFS project");
+        }
+    }
+}
+
 async fn rollback_creation(
     path: &Path,
     creation_error: FilesystemStorageError,
@@ -581,6 +1103,45 @@ async fn rollback_owned_filesystem(
     match filesystem.close_and_delete().await {
         Ok(()) => creation_error,
         Err(cleanup_error) => cleanup_error,
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn finish_managed_project_cleanup(
+    backend: Arc<xfs::XfsBackend>,
+    project_id: NonZeroU32,
+    path: &Path,
+    cleanup_retry: &RetryConfig,
+) -> Result<(), FilesystemStorageError> {
+    let mut retry = RetryState::new(cleanup_retry);
+    loop {
+        retry.start_attempt();
+        let attempt_backend = Arc::clone(&backend);
+        let attempt =
+            tokio::task::spawn_blocking(move || attempt_backend.finish_project_cleanup(project_id))
+                .await
+                .map_err(|error| {
+                    FilesystemStorageError::cleanup_io(
+                        "verify and clear managed XFS project",
+                        path,
+                        std::io::Error::other(error),
+                    )
+                })?;
+        match attempt {
+            Ok(()) => {
+                backend.release_project(project_id);
+                return Ok(());
+            }
+            Err(error) => {
+                if !retry.failed_attempt().await {
+                    return Err(FilesystemStorageError::cleanup_io(
+                        "verify and clear managed XFS project",
+                        path,
+                        error,
+                    ));
+                }
+            }
+        }
     }
 }
 
@@ -667,6 +1228,40 @@ fn remove_and_verify_blocking(path: &Path) -> Result<(), FilesystemStorageError>
     }
 }
 
+#[cfg(target_os = "linux")]
+fn remove_managed_and_verify_blocking(
+    backend: &Arc<xfs::XfsBackend>,
+    project_id: NonZeroU32,
+    path: &Path,
+    cleanup_retry: &RetryConfig,
+) -> Result<(), FilesystemStorageError> {
+    remove_and_verify_blocking(path)?;
+    let attempts = cleanup_retry.max_attempts.max(1);
+    let mut delay = cleanup_retry.min_delay;
+    for attempt in 1..=attempts {
+        match backend.finish_project_cleanup(project_id) {
+            Ok(()) => {
+                backend.release_project(project_id);
+                return Ok(());
+            }
+            Err(error) if attempt == attempts => {
+                return Err(FilesystemStorageError::cleanup_io(
+                    "verify and clear managed XFS project",
+                    path,
+                    error,
+                ));
+            }
+            Err(_) => {
+                std::thread::sleep(delay);
+                delay = delay
+                    .mul_f64(cleanup_retry.multiplier)
+                    .min(cleanup_retry.max_delay);
+            }
+        }
+    }
+    unreachable!("managed XFS cleanup always performs at least one attempt")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -721,6 +1316,116 @@ mod tests {
         )
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn managed_backend_fails_closed_on_non_xfs() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = FilesystemStorageConfig {
+            managed_xfs_root_dir: Some(root.path().to_path_buf()),
+            ..FilesystemStorageConfig::default()
+        };
+
+        let error = match AgentFilesystems::new(&settings) {
+            Ok(_) => panic!("managed backend unexpectedly accepted a non-XFS root"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("validate managed XFS root"));
+    }
+
+    #[cfg(all(target_os = "linux", feature = "managed-xfs-tests"))]
+    #[test]
+    async fn managed_xfs_owns_observes_and_cleans_project_filesystem() {
+        let root = std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
+            .map(PathBuf::from)
+            .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
+        let settings = FilesystemStorageConfig {
+            managed_xfs_root_dir: Some(root.clone()),
+            ..FilesystemStorageConfig::default()
+        };
+        let filesystems = AgentFilesystems::new(&settings).unwrap();
+
+        let second_owner = AgentFilesystems::new(&settings);
+        assert!(second_owner.is_err());
+
+        let escaped_id = agent_id();
+        let outside = tempfile::tempdir().unwrap();
+        let environment_link = root.join(escaped_id.environment_id.to_string());
+        std::os::unix::fs::symlink(outside.path(), &environment_link).unwrap();
+        assert!(filesystems.create_fresh(&escaped_id).await.is_err());
+        assert!(std::fs::read_dir(outside.path()).unwrap().next().is_none());
+        std::fs::remove_file(environment_link).unwrap();
+
+        let stale_file_id = agent_id();
+        let backend = Arc::clone(filesystems.managed_xfs.as_ref().unwrap());
+        let environment = stale_file_id.environment_id.to_string();
+        let component = stale_file_id.agent_id.component_id.to_string();
+        let agent = stale_file_id.agent_id.agent_name_encoded();
+        let owner = PathBuf::from(&environment).join(&component).join(&agent);
+        let parent = backend.open_agent_parent(&environment, &component).unwrap();
+        let parent_path = PathBuf::from(format!("/proc/self/fd/{}", parent.as_raw_fd()));
+        let stale_file = parent_path.join(&agent);
+        let staging = parent_path.join(format!("{agent}.staging"));
+        std::fs::create_dir(&staging).unwrap();
+        let stale_project = backend.reserve_project(&owner).unwrap();
+        let staging_directory = File::open(&staging).unwrap();
+        backend
+            .assign_project(&staging_directory, stale_project)
+            .unwrap();
+        std::fs::write(staging.join("file"), b"stale").unwrap();
+        std::fs::rename(staging.join("file"), &stale_file).unwrap();
+        drop(staging_directory);
+        std::fs::remove_dir(staging).unwrap();
+        drop(parent);
+
+        let stale_file_replacement = filesystems.create_fresh(&stale_file_id).await.unwrap();
+        assert!(stale_file_replacement.path().is_dir());
+        stale_file_replacement.close_and_delete().await.unwrap();
+        assert_eq!(
+            backend.usage(stale_project).unwrap(),
+            AgentFilesystemUsage {
+                allocated_bytes: 0,
+                filesystem_objects: 0,
+            }
+        );
+
+        let capacity = filesystems.capacity().await.unwrap();
+        assert!(capacity.total_bytes > 0);
+        assert!(capacity.available_bytes <= capacity.total_bytes);
+        assert!(capacity.total_filesystem_objects > 0);
+        assert!(capacity.available_filesystem_objects <= capacity.total_filesystem_objects);
+
+        let filesystem = filesystems.create_fresh(&agent_id()).await.unwrap();
+        let path = filesystem.path().to_path_buf();
+        let (backend, project_id) = match &filesystem.storage {
+            AgentFilesystemStorage::Managed {
+                backend,
+                project_id,
+                ..
+            } => (Arc::clone(backend), *project_id),
+            AgentFilesystemStorage::Unmanaged => panic!("managed mode fell back to unmanaged"),
+        };
+        let empty_usage = filesystem.usage().await.unwrap().unwrap();
+        assert!(empty_usage.filesystem_objects >= 1);
+
+        tokio::fs::write(path.join("data"), vec![0x5a; 8192])
+            .await
+            .unwrap();
+        let written_usage = filesystem.usage().await.unwrap().unwrap();
+        assert!(written_usage.allocated_bytes >= 8192);
+        assert!(written_usage.filesystem_objects > empty_usage.filesystem_objects);
+
+        filesystem.close_and_delete().await.unwrap();
+        assert!(!path.exists());
+        assert_eq!(
+            backend.usage(project_id).unwrap(),
+            AgentFilesystemUsage {
+                allocated_bytes: 0,
+                filesystem_objects: 0,
+            }
+        );
+    }
+
     #[test]
     async fn deterministic_creation_removes_existing_garbage() {
         let root = tempfile::tempdir().unwrap();
@@ -728,10 +1433,11 @@ mod tests {
             deterministic_root_dir: Some(root.path().to_path_buf()),
             ..FilesystemStorageConfig::default()
         };
-        let filesystems = AgentFilesystems::new(&settings);
+        let filesystems = AgentFilesystems::new(&settings).unwrap();
         let id = agent_id();
 
         let filesystem = filesystems.create_fresh(&id).await.unwrap();
+        assert_eq!(filesystem.usage().await.unwrap(), None);
         let path = filesystem.path().to_path_buf();
         tokio::fs::write(path.join("garbage"), b"old")
             .await
@@ -750,7 +1456,7 @@ mod tests {
 
     #[test]
     async fn seal_rejects_new_effects_without_waiting_for_existing_effects() {
-        let filesystems = AgentFilesystems::new(&FilesystemStorageConfig::default());
+        let filesystems = AgentFilesystems::new(&FilesystemStorageConfig::default()).unwrap();
         let filesystem = filesystems.create_fresh(&agent_id()).await.unwrap();
         let runtime = filesystem.runtime();
         let effect = runtime.begin_effect().await.unwrap();
@@ -763,15 +1469,19 @@ mod tests {
     }
 
     #[test]
-    async fn close_deletes_without_waiting_for_an_existing_effect() {
-        let filesystems = AgentFilesystems::new(&FilesystemStorageConfig::default());
+    async fn close_waits_for_an_existing_effect_before_deleting() {
+        let filesystems = AgentFilesystems::new(&FilesystemStorageConfig::default()).unwrap();
         let filesystem = filesystems.create_fresh(&agent_id()).await.unwrap();
         let path = filesystem.path().to_path_buf();
         let effect = filesystem.runtime().begin_effect().await.unwrap();
 
-        filesystem.close_and_delete().await.unwrap();
-        assert!(!path.exists());
+        let close = tokio::spawn(filesystem.close_and_delete());
+        tokio::task::yield_now().await;
+        assert!(!close.is_finished());
+        assert!(path.exists());
         drop(effect);
+        close.await.unwrap().unwrap();
+        assert!(!path.exists());
     }
 
     #[test]
@@ -781,7 +1491,7 @@ mod tests {
             deterministic_root_dir: Some(root.path().to_path_buf()),
             ..FilesystemStorageConfig::default()
         };
-        let filesystems = AgentFilesystems::new(&settings);
+        let filesystems = AgentFilesystems::new(&settings).unwrap();
         let id = agent_id();
         let first = filesystems.create_fresh(&id).await.unwrap();
         tokio::fs::write(first.path().join("owned"), b"first")

@@ -4448,9 +4448,7 @@ impl RunningWorker {
             last_snapshot_index = Some(snapshot_idx);
         }
 
-        let filesystems = crate::services::agent_filesystem::AgentFilesystems::new(
-            &parent.config().filesystem_storage,
-        );
+        let filesystems = parent.active_workers().agent_filesystems();
         let filesystem = filesystems
             .create_fresh(&parent.owned_agent_id)
             .await

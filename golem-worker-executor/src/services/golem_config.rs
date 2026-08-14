@@ -1831,6 +1831,9 @@ pub struct FilesystemStorageConfig {
     /// Directories are cleaned up when the worker is dropped, just like temp
     /// dirs. When `None` (the default), random temp directories are used.
     pub deterministic_root_dir: Option<PathBuf>,
+    /// Dedicated XFS root managed through project quotas. Managed mode is
+    /// fail-closed and cannot be combined with `deterministic_root_dir`.
+    pub managed_xfs_root_dir: Option<PathBuf>,
 }
 
 impl FilesystemStorageConfig {
@@ -1862,6 +1865,9 @@ impl SafeDisplay for FilesystemStorageConfig {
         if let Some(root) = &self.deterministic_root_dir {
             let _ = writeln!(&mut result, "deterministic root dir: {}", root.display());
         }
+        if let Some(root) = &self.managed_xfs_root_dir {
+            let _ = writeln!(&mut result, "managed XFS root dir: {}", root.display());
+        }
         result
     }
 }
@@ -1879,6 +1885,7 @@ impl Default for FilesystemStorageConfig {
                 max_jitter_factor: None,
             },
             deterministic_root_dir: None,
+            managed_xfs_root_dir: None,
         }
     }
 }

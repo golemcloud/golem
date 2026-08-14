@@ -1,0 +1,38 @@
+minimumLimaVersion: 2.0.0
+
+base:
+  - template:_images/ubuntu
+
+cpus: 8
+memory: 12GiB
+disk: 80GiB
+
+containerd:
+  system: false
+  user: false
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      apt-get install -y build-essential clang cmake curl git libssl-dev pkg-config protobuf-compiler redis-server util-linux xfsprogs
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      if ! command -v cargo >/dev/null 2>&1; then
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      fi
+      . "${HOME}/.cargo/env"
+      rustup target add wasm32-wasip1 wasm32-wasip2
+
+probes:
+  - mode: readiness
+    description: XFS and Rust tooling is installed
+    script: |
+      #!/bin/bash
+      test -x /usr/sbin/mkfs.xfs
+      test -x "${HOME}/.cargo/bin/cargo"

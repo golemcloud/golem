@@ -12,6 +12,9 @@ pub trait P3FileSystem {
     /// against a read-only and a read-write initial file, and reports `name=value` entries
     /// so the host-side test can assert P2/P3 parity.
     async fn run(&self) -> Vec<String>;
+    /// Runs read-write filesystem operations through both WASI versions against
+    /// a file created by the agent.
+    async fn run_writable(&self) -> Vec<String>;
 }
 
 struct P3FileSystemImpl {
@@ -266,5 +269,58 @@ impl P3FileSystem for P3FileSystemImpl {
         ));
 
         results
+    }
+
+    async fn run_writable(&self) -> Vec<String> {
+        let (root_p2, _) = p2_preopens::get_directories()
+            .into_iter()
+            .next()
+            .expect("no P2 preopened directory");
+        let (root_p3, _) = p3_preopens::get_directories()
+            .into_iter()
+            .next()
+            .expect("no P3 preopened directory");
+
+        let file_p2 = root_p2
+            .open_at(
+                p2_types::PathFlags::empty(),
+                "managed-parity.txt",
+                p2_types::OpenFlags::CREATE | p2_types::OpenFlags::TRUNCATE,
+                p2_types::DescriptorFlags::READ | p2_types::DescriptorFlags::WRITE,
+            )
+            .expect("P2 file creation failed");
+        let file_p3 = root_p3
+            .open_at(
+                p3_types::PathFlags::empty(),
+                "managed-parity.txt".to_string(),
+                p3_types::OpenFlags::empty(),
+                p3_types::DescriptorFlags::READ | p3_types::DescriptorFlags::WRITE,
+            )
+            .await
+            .expect("P3 file open failed");
+
+        file_p2.write(b"p2-to-p3", 0).expect("P2 write failed");
+        let (p3_read, p3_read_result) = file_p3.read_via_stream(0);
+        let p3_bytes = p3_read.collect().await;
+        p3_read_result.await.expect("P3 read after P2 write failed");
+
+        let (mut p3_write, p3_write_data) = wit_stream::new();
+        let p3_write_result = file_p3.write_via_stream(p3_write_data, 0);
+        let unwritten = p3_write.write_all(b"p3-to-p2".to_vec()).await;
+        assert!(unwritten.is_empty(), "P3 stream did not accept all bytes");
+        drop(p3_write);
+        p3_write_result.await.expect("P3 write failed");
+        let (p2_bytes, _) = file_p2.read(8, 0).expect("P2 read after P3 write failed");
+
+        vec![
+            format!(
+                "p2_write_p3_read={}",
+                String::from_utf8(p3_bytes).expect("P3 read was not UTF-8")
+            ),
+            format!(
+                "p3_write_p2_read={}",
+                String::from_utf8(p2_bytes).expect("P2 read was not UTF-8")
+            ),
+        ]
     }
 }

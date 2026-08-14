@@ -11,6 +11,9 @@ license-file = "../LICENSE"
 
 autotests = false
 
+[features]
+managed-xfs-tests = []
+
 [lib]
 path = "src/lib.rs"
 harness = false
@@ -110,6 +113,11 @@ zstd = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+linux-raw-sys = { workspace = true }
+rustix = { workspace = true }
 
 [[bench]]
 name = "invocation_lowering"

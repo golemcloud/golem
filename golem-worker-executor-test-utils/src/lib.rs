@@ -627,6 +627,15 @@ impl TestWorkerExecutor {
         }
     }
 
+    pub async fn stop_worker_if_idle(&self, owned_agent_id: &OwnedAgentId) -> anyhow::Result<bool> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveWorkers"))?;
+        Ok(worker.stop_if_idle().await)
+    }
+
     /// Returns the current eviction classification for the worker shell
     /// registered in `ActiveWorkers`, or `None` if the worker is missing or
     /// non-evictable. Used by tests to wait until the worker is `LoadedIdle`
@@ -1890,7 +1899,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         &self,
         golem_config: &GolemConfig,
         shutdown_token: tokio_util::sync::CancellationToken,
-    ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
+    ) -> anyhow::Result<Arc<ActiveWorkers<TestWorkerCtx>>> {
         // The in-process test harness shares its process (and RSS) with the test
         // framework and other services, so a process-RSS probe cannot isolate
         // this executor's footprint. When a test pins a memory limit via
@@ -1900,19 +1909,19 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         // limit. The usable_ratio (worker_memory_ratio) still applies, matching
         // the pre-gate semaphore pool size of system_memory_override * ratio.
         match golem_config.memory.system_memory_override {
-            Some(limit) => Arc::new(ActiveWorkers::new_with_probe(
+            Some(limit) => Ok(Arc::new(ActiveWorkers::new_with_probe(
                 Box::new(FixedProbe::new(limit, 0)),
                 &golem_config.memory,
                 &golem_config.filesystem_storage,
                 &golem_config.agent_status_flush,
                 shutdown_token,
-            )),
-            None => Arc::new(ActiveWorkers::new(
+            )?)),
+            None => Ok(Arc::new(ActiveWorkers::new(
                 &golem_config.memory,
                 &golem_config.filesystem_storage,
                 &golem_config.agent_status_flush,
                 shutdown_token,
-            )),
+            )?)),
         }
     }
 

@@ -190,6 +190,27 @@ jobs:
           artifact-name: worker-executor-tests-${{ matrix.group.name }}-report
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+  managed-xfs-tests:
+    name: managed-xfs-tests
+    runs-on: ubuntu-24.04
+    needs:
+      - merge-test-components
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+      - uses: ./.github/actions/restore-test-components
+        with:
+          run-id: ${{ github.run_id }}
+      - name: Install XFS tools and Redis
+        run: sudo apt-get update && sudo apt-get install --yes xfsprogs redis-server
+      - name: Run managed XFS suite
+        run: sudo integration-tests/scripts/managed-filesystem/run-loopback-xfs.sh
+
   build-cli-test-bins:
     env:
       CARGO_BUILD_JOBS: 20
@@ -1020,6 +1041,7 @@ jobs:
       - unit-tests-and-checks
       - golem-schema-guest
       - worker-tests
+      - managed-xfs-tests
       - it
       - it-cli
     if: "startsWith(github.ref, 'refs/tags/v')"
