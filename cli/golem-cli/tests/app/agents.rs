@@ -871,15 +871,15 @@ async fn test_rust_tool_guest_bridge_e2e() {
         ])
         .await;
 
-    // The worker executor's `golem:tool/host` is not implemented yet:
+    // The worker executor's `golem:tool/host` invocation is not implemented yet:
     // `tool-rpc.new` traps (before `invoke-and-await` is ever reached), so the
     // invocation must fail with the stub error, proving the generated client
     // reaches the executor's tool host. Once the tool runtime lands, replace
     // this with:
     //     assert!(outputs.success_or_dump());
     //     assert!(outputs.stdout_contains("ok:echo:hello"));
-    let invocation_reached_tool_host_stub =
-        !outputs.success() && outputs.stderr_contains("golem:tool/host is not yet implemented");
+    let invocation_reached_tool_host_stub = !outputs.success()
+        && outputs.stderr_contains("golem:tool/host tool invocation is not yet implemented");
     if !invocation_reached_tool_host_stub {
         outputs.dump();
     }
@@ -1420,8 +1420,8 @@ async fn test_ts_tool_guest_bridge_e2e() {
             "\"hello\"",
         ])
         .await;
-    let reached_tool_host_stub =
-        !outputs.success() && outputs.stderr_contains("golem:tool/host is not yet implemented");
+    let reached_tool_host_stub = !outputs.success()
+        && outputs.stderr_contains("golem:tool/host tool invocation is not yet implemented");
     if !reached_tool_host_stub {
         outputs.dump();
     }
@@ -1741,8 +1741,8 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
             "\"hello\"",
         ])
         .await;
-    let reached_tool_host_stub =
-        !outputs.success() && outputs.stderr_contains("golem:tool/host is not yet implemented");
+    let reached_tool_host_stub = !outputs.success()
+        && outputs.stderr_contains("golem:tool/host tool invocation is not yet implemented");
     if !reached_tool_host_stub {
         outputs.dump();
     }
