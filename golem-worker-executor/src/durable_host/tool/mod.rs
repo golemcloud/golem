@@ -14,10 +14,9 @@
 
 //! Host implementation of `golem:tool/host@0.1.0`.
 //!
-//! The interface is wired into the linker for every component shape so that any
-//! agent or tool component may import it and instantiate. Tool discovery is
-//! implemented as a durable environment-state read; invocation operations
-//! remain placeholders until the tool runtime is implemented.
+//! The interface is wired into the linker for every agent component. Tool
+//! discovery is implemented as a durable environment-state read; tool
+//! invocation operations are currently unsupported.
 
 use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
@@ -38,17 +37,17 @@ use golem_common::model::oplog::{
 use golem_common::model::tool::ToolName;
 use golem_common::schema::tool::DiscoveredTool;
 use golem_common::schema::tool::wit::wire::Tool as WitTool;
+use std::sync::Arc;
 use wasmtime::component::{Accessor, HasSelf, Resource, StreamReader};
 
-const NOT_IMPLEMENTED: &str = "golem:tool/host is not yet implemented";
+const NOT_IMPLEMENTED: &str = "golem:tool/host tool invocation is not yet implemented";
 
 /// Host-side resource table entry backing the `golem:tool/host.tool-rpc`
-/// resource. A placeholder until the tool runtime is implemented.
+/// resource.
 pub struct ToolRpcEntry;
 
 /// Host-side resource table entry backing the
-/// `golem:tool/host.future-invoke-result` resource. A placeholder until the tool
-/// runtime is implemented.
+/// `golem:tool/host.future-invoke-result` resource.
 pub struct FutureInvokeResultEntry;
 
 impl TryFrom<&DiscoveredTool> for WitRegisteredTool {
@@ -73,7 +72,8 @@ impl TryFrom<&DiscoveredTool> for WitRegisteredTool {
 fn classify_tool_discovery_error(error: &ToolDiscoveryError) -> HostFailureKind {
     match error {
         ToolDiscoveryError::Retrieval(_) => HostFailureKind::Transient,
-        ToolDiscoveryError::InconsistentSnapshot { .. } => HostFailureKind::Permanent,
+        ToolDiscoveryError::AgentContextRequired
+        | ToolDiscoveryError::InconsistentSnapshot { .. } => HostFailureKind::Permanent,
     }
 }
 
@@ -85,9 +85,11 @@ fn terminal_tool_discovery_error(message: String) -> anyhow::Error {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    pub(crate) async fn get_all_tools_model(&mut self) -> anyhow::Result<Vec<DiscoveredTool>> {
+    pub(crate) async fn get_all_tools_model(&mut self) -> anyhow::Result<Vec<Arc<DiscoveredTool>>> {
         let agent_type = self.parsed_agent_id().map(|agent_id| agent_id.agent_type);
         let environment_id = self.state.owned_agent_id.environment_id;
+        let component_id = self.state.owned_agent_id.agent_id.component_id;
+        let component_revision = self.state.component_metadata.revision;
 
         let mut handle = CallHandle::<GolemToolGetAllTools, NotCancellable>::start(
             self,
@@ -109,14 +111,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     let result = self
                         .state
                         .environment_state_service
-                        .get_accessible_tools(environment_id, agent_type)
-                        .await
-                        .map(|tools| {
-                            tools
-                                .into_iter()
-                                .map(DiscoveredTool::from)
-                                .collect::<Vec<_>>()
-                        });
+                        .get_accessible_tools(
+                            environment_id,
+                            component_id,
+                            component_revision,
+                            agent_type,
+                        )
+                        .await;
                     match handle
                         .try_trigger_retry_or_loop(self, &result, classify_tool_discovery_error)
                         .await?
@@ -126,7 +127,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     }
                 }
             } else {
-                Ok(Vec::new())
+                Err(ToolDiscoveryError::AgentContextRequired)
             };
 
             handle
@@ -153,10 +154,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) async fn get_tool_model(
         &mut self,
         tool_name: String,
-    ) -> anyhow::Result<Option<DiscoveredTool>> {
+    ) -> anyhow::Result<Option<Arc<DiscoveredTool>>> {
         let agent_type = self.parsed_agent_id().map(|agent_id| agent_id.agent_type);
         let valid_tool_name = ToolName::try_from(tool_name.as_str()).ok();
         let environment_id = self.state.owned_agent_id.environment_id;
+        let component_id = self.state.owned_agent_id.agent_id.component_id;
+        let component_revision = self.state.component_metadata.revision;
 
         let mut handle = CallHandle::<GolemToolGetTool, NotCancellable>::start(
             self,
@@ -175,26 +178,33 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
 
-            let result = if let (Some(agent_type), Some(valid_tool_name)) =
-                (&agent_type, &valid_tool_name)
-            {
-                loop {
-                    let result = self
-                        .state
-                        .environment_state_service
-                        .get_accessible_tool(environment_id, agent_type, valid_tool_name)
-                        .await
-                        .map(|tool| tool.map(DiscoveredTool::from));
-                    match handle
-                        .try_trigger_retry_or_loop(self, &result, classify_tool_discovery_error)
-                        .await?
-                    {
-                        InternalRetryResult::Persist => break result,
-                        InternalRetryResult::RetryInternally => continue,
+            let result = if let Some(agent_type) = &agent_type {
+                if let Some(valid_tool_name) = &valid_tool_name {
+                    loop {
+                        let result = self
+                            .state
+                            .environment_state_service
+                            .get_accessible_tool(
+                                environment_id,
+                                component_id,
+                                component_revision,
+                                agent_type,
+                                valid_tool_name,
+                            )
+                            .await;
+                        match handle
+                            .try_trigger_retry_or_loop(self, &result, classify_tool_discovery_error)
+                            .await?
+                        {
+                            InternalRetryResult::Persist => break result,
+                            InternalRetryResult::RetryInternally => continue,
+                        }
                     }
+                } else {
+                    Ok(None)
                 }
             } else {
-                Ok(None)
+                Err(ToolDiscoveryError::AgentContextRequired)
             };
 
             handle
@@ -224,7 +234,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.get_all_tools_model()
             .await?
             .iter()
-            .map(WitRegisteredTool::try_from)
+            .map(|tool| WitRegisteredTool::try_from(tool.as_ref()))
             .collect()
     }
 
@@ -232,7 +242,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.get_tool_model(name)
             .await?
             .as_ref()
-            .map(WitRegisteredTool::try_from)
+            .map(|tool| WitRegisteredTool::try_from(tool.as_ref()))
             .transpose()
     }
 }
@@ -425,6 +435,7 @@ mod tests {
     #[test]
     fn tool_discovery_error_classification_preserves_integrity_semantics() {
         let retrieval = ToolDiscoveryError::Retrieval(WorkerExecutorError::runtime("offline"));
+        let agent_context_required = ToolDiscoveryError::AgentContextRequired;
         let inconsistent = ToolDiscoveryError::InconsistentSnapshot {
             details: "dangling binding".to_string(),
         };
@@ -432,6 +443,10 @@ mod tests {
         assert_eq!(
             classify_tool_discovery_error(&retrieval),
             HostFailureKind::Transient
+        );
+        assert_eq!(
+            classify_tool_discovery_error(&agent_context_required),
+            HostFailureKind::Permanent
         );
         assert_eq!(
             classify_tool_discovery_error(&inconsistent),

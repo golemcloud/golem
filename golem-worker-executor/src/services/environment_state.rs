@@ -18,32 +18,118 @@ use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::tool::{
     CompiledToolBinding, RegisteredTool, ToolDeploymentState, ToolName,
 };
+use golem_common::schema::tool::DiscoveredTool;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::AgentDeploymentDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::environment::EnvironmentState;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
+
+type ToolDiscoveryCacheKey = (EnvironmentId, ComponentId, ComponentRevision);
+
+struct ToolDiscoveryCache {
+    values: Arc<
+        Cache<ToolDiscoveryCacheKey, (), Option<Arc<ToolDiscoverySnapshot>>, WorkerExecutorError>,
+    >,
+    invalidation_guard: Arc<tokio::sync::RwLock<()>>,
+}
+
+impl ToolDiscoveryCache {
+    fn new(capacity: usize, ttl: Duration, eviction_interval: Duration) -> ToolDiscoveryCache {
+        Self {
+            values: Arc::new(Cache::new(
+                Some(capacity),
+                FullCacheEvictionMode::LeastRecentlyUsed(1),
+                BackgroundEvictionMode::OlderThan {
+                    ttl,
+                    period: eviction_interval,
+                },
+                "grpc_environment_state_service_tool_discovery",
+            )),
+            invalidation_guard: Arc::new(tokio::sync::RwLock::new(())),
+        }
+    }
+
+    async fn get_or_insert<F, Fut>(
+        &self,
+        key: &ToolDiscoveryCacheKey,
+        load: F,
+    ) -> Result<Option<Arc<ToolDiscoverySnapshot>>, WorkerExecutorError>
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = Result<Option<Arc<ToolDiscoverySnapshot>>, WorkerExecutorError>>
+            + Send
+            + 'static,
+    {
+        let guard = self.invalidation_guard.clone().read_owned().await;
+        let values = self.values.clone();
+        let key = *key;
+        tokio::spawn(async move {
+            let _guard = guard;
+            values
+                .get_or_insert_simple(&key, async move || load().await)
+                .await
+        })
+        .await
+        .map_err(|error| {
+            WorkerExecutorError::runtime(format!("Tool discovery cache task failed: {error}"))
+        })?
+    }
+
+    async fn invalidate_environment(&self, environment_id: EnvironmentId) {
+        let _guard = self.invalidation_guard.write().await;
+        let keys = self.values.keys().await;
+        for key in keys {
+            if key.0 == environment_id {
+                self.values.remove(&key).await;
+            }
+        }
+    }
+
+    async fn invalidate_all(&self) {
+        let _guard = self.invalidation_guard.write().await;
+        let keys = self.values.keys().await;
+        for key in keys {
+            self.values.remove(&key).await;
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum ToolDiscoveryError {
     Retrieval(WorkerExecutorError),
+    AgentContextRequired,
     InconsistentSnapshot { details: String },
+}
+
+impl ToolDiscoveryError {
+    fn dangling_binding(agent_type: &AgentTypeName, tool_name: &ToolName) -> Self {
+        Self::InconsistentSnapshot {
+            details: format!(
+                "binding for agent type '{}' references missing tool '{}'",
+                agent_type.0, tool_name
+            ),
+        }
+    }
 }
 
 impl Display for ToolDiscoveryError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Retrieval(error) => error.fmt(f),
+            Self::AgentContextRequired => write!(f, "Tool discovery requires an agent context"),
             Self::InconsistentSnapshot { details } => {
                 write!(f, "Inconsistent tool deployment snapshot: {details}")
             }
@@ -55,7 +141,7 @@ impl Error for ToolDiscoveryError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Retrieval(error) => Some(error),
-            Self::InconsistentSnapshot { .. } => None,
+            Self::AgentContextRequired | Self::InconsistentSnapshot { .. } => None,
         }
     }
 }
@@ -66,60 +152,76 @@ impl From<WorkerExecutorError> for ToolDiscoveryError {
     }
 }
 
+pub struct ToolDiscoverySnapshot {
+    registered_tools: BTreeMap<ToolName, Arc<DiscoveredTool>>,
+    agent_tool_bindings: BTreeMap<AgentTypeName, BTreeSet<ToolName>>,
+}
+
+impl From<ToolDeploymentState> for ToolDiscoverySnapshot {
+    fn from(value: ToolDeploymentState) -> Self {
+        let ToolDeploymentState {
+            registered_tools,
+            agent_tool_bindings,
+            ..
+        } = value;
+
+        Self {
+            registered_tools: registered_tools
+                .into_iter()
+                .map(|(name, tool)| (name, Arc::new(tool.into())))
+                .collect(),
+            agent_tool_bindings: agent_tool_bindings
+                .into_iter()
+                .map(|(agent_type, bindings)| (agent_type, bindings.into_keys().collect()))
+                .collect(),
+        }
+    }
+}
+
 pub fn get_accessible_tools_from_snapshot(
-    deployment: Option<&ToolDeploymentState>,
+    snapshot: Option<&ToolDiscoverySnapshot>,
     agent_type: &AgentTypeName,
-) -> Result<Vec<RegisteredTool>, ToolDiscoveryError> {
-    let Some(deployment) = deployment else {
+) -> Result<Vec<Arc<DiscoveredTool>>, ToolDiscoveryError> {
+    let Some(snapshot) = snapshot else {
         return Ok(Vec::new());
     };
-    let Some(bindings) = deployment.agent_tool_bindings.get(agent_type) else {
+    let Some(bindings) = snapshot.agent_tool_bindings.get(agent_type) else {
         return Ok(Vec::new());
     };
 
     bindings
-        .keys()
+        .iter()
         .map(|tool_name| {
-            deployment
+            snapshot
                 .registered_tools
                 .get(tool_name)
                 .cloned()
-                .ok_or_else(|| ToolDiscoveryError::InconsistentSnapshot {
-                    details: format!(
-                        "binding for agent type '{}' references missing tool '{}'",
-                        agent_type.0, tool_name
-                    ),
-                })
+                .ok_or_else(|| ToolDiscoveryError::dangling_binding(agent_type, tool_name))
         })
         .collect()
 }
 
 pub fn get_accessible_tool_from_snapshot(
-    deployment: Option<&ToolDeploymentState>,
+    snapshot: Option<&ToolDiscoverySnapshot>,
     agent_type: &AgentTypeName,
     tool_name: &ToolName,
-) -> Result<Option<RegisteredTool>, ToolDiscoveryError> {
-    let Some(deployment) = deployment else {
+) -> Result<Option<Arc<DiscoveredTool>>, ToolDiscoveryError> {
+    let Some(snapshot) = snapshot else {
         return Ok(None);
     };
-    let Some(bindings) = deployment.agent_tool_bindings.get(agent_type) else {
+    let Some(bindings) = snapshot.agent_tool_bindings.get(agent_type) else {
         return Ok(None);
     };
-    if !bindings.contains_key(tool_name) {
+    if !bindings.contains(tool_name) {
         return Ok(None);
     }
 
-    deployment
+    snapshot
         .registered_tools
         .get(tool_name)
         .cloned()
         .map(Some)
-        .ok_or_else(|| ToolDiscoveryError::InconsistentSnapshot {
-            details: format!(
-                "binding for agent type '{}' references missing tool '{}'",
-                agent_type.0, tool_name
-            ),
-        })
+        .ok_or_else(|| ToolDiscoveryError::dangling_binding(agent_type, tool_name))
 }
 
 #[async_trait]
@@ -170,17 +272,21 @@ pub trait EnvironmentStateService: Send + Sync {
     async fn get_accessible_tools(
         &self,
         _environment_id: EnvironmentId,
+        _component_id: ComponentId,
+        _component_revision: ComponentRevision,
         _agent_type: &AgentTypeName,
-    ) -> Result<Vec<RegisteredTool>, ToolDiscoveryError> {
+    ) -> Result<Vec<Arc<DiscoveredTool>>, ToolDiscoveryError> {
         Ok(Vec::new())
     }
 
     async fn get_accessible_tool(
         &self,
         _environment_id: EnvironmentId,
+        _component_id: ComponentId,
+        _component_revision: ComponentRevision,
         _agent_type: &AgentTypeName,
         _tool_name: &ToolName,
-    ) -> Result<Option<RegisteredTool>, ToolDiscoveryError> {
+    ) -> Result<Option<Arc<DiscoveredTool>>, ToolDiscoveryError> {
         Ok(None)
     }
 
@@ -191,6 +297,7 @@ pub trait EnvironmentStateService: Send + Sync {
 pub struct GrpcEnvironmentStateService {
     client: Arc<dyn RegistryService>,
     cached_environment_state: Cache<EnvironmentId, (), Arc<EnvironmentState>, WorkerExecutorError>,
+    cached_tool_discovery: ToolDiscoveryCache,
 }
 
 impl GrpcEnvironmentStateService {
@@ -210,6 +317,11 @@ impl GrpcEnvironmentStateService {
                     period: cache_eviction_interval,
                 },
                 "gprc_environment_statue_service_environments",
+            ),
+            cached_tool_discovery: ToolDiscoveryCache::new(
+                cache_capacity,
+                cache_ttl,
+                cache_eviction_interval,
             ),
         }
     }
@@ -233,6 +345,29 @@ impl GrpcEnvironmentStateService {
 
                     Ok(Arc::new(result))
                 })
+            })
+            .await
+    }
+
+    async fn get_tool_discovery_snapshot(
+        &self,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+    ) -> Result<Option<Arc<ToolDiscoverySnapshot>>, WorkerExecutorError> {
+        let key = (environment_id, component_id, component_revision);
+        let client = self.client.clone();
+        self.cached_tool_discovery
+            .get_or_insert(&key, move || async move {
+                client
+                    .get_tool_deployment_state(environment_id, component_id, component_revision)
+                    .await
+                    .map(|deployment| deployment.map(|deployment| Arc::new(deployment.into())))
+                    .map_err(|error| {
+                        WorkerExecutorError::runtime(format!(
+                            "Failed to get tool deployment state: {error}"
+                        ))
+                    })
             })
             .await
     }
@@ -314,28 +449,35 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
     async fn get_accessible_tools(
         &self,
         environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
         agent_type: &AgentTypeName,
-    ) -> Result<Vec<RegisteredTool>, ToolDiscoveryError> {
-        let environment_state = self.get_environment_state(environment_id).await?;
-        get_accessible_tools_from_snapshot(environment_state.tool_deployment.as_ref(), agent_type)
+    ) -> Result<Vec<Arc<DiscoveredTool>>, ToolDiscoveryError> {
+        let snapshot = self
+            .get_tool_discovery_snapshot(environment_id, component_id, component_revision)
+            .await?;
+        get_accessible_tools_from_snapshot(snapshot.as_deref(), agent_type)
     }
 
     async fn get_accessible_tool(
         &self,
         environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
         agent_type: &AgentTypeName,
         tool_name: &ToolName,
-    ) -> Result<Option<RegisteredTool>, ToolDiscoveryError> {
-        let environment_state = self.get_environment_state(environment_id).await?;
-        get_accessible_tool_from_snapshot(
-            environment_state.tool_deployment.as_ref(),
-            agent_type,
-            tool_name,
-        )
+    ) -> Result<Option<Arc<DiscoveredTool>>, ToolDiscoveryError> {
+        let snapshot = self
+            .get_tool_discovery_snapshot(environment_id, component_id, component_revision)
+            .await?;
+        get_accessible_tool_from_snapshot(snapshot.as_deref(), agent_type, tool_name)
     }
 
     async fn invalidate_environment(&self, environment_id: EnvironmentId) {
         self.cached_environment_state.remove(&environment_id).await;
+        self.cached_tool_discovery
+            .invalidate_environment(environment_id)
+            .await;
     }
 
     async fn invalidate_all(&self) {
@@ -343,13 +485,15 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
         for key in keys {
             self.cached_environment_state.remove(&key).await;
         }
+        self.cached_tool_discovery.invalidate_all().await;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        ToolDiscoveryError, get_accessible_tool_from_snapshot, get_accessible_tools_from_snapshot,
+        ToolDiscoveryCache, ToolDiscoveryError, ToolDiscoverySnapshot,
+        get_accessible_tool_from_snapshot, get_accessible_tools_from_snapshot,
     };
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::AgentTypeName;
@@ -363,7 +507,9 @@ mod tests {
     use golem_common::schema::SchemaGraph;
     use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
     use std::collections::BTreeMap;
-    use test_r::test;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use test_r::{test, timeout};
 
     fn registered_tool(name: &str, deployment_revision: DeploymentRevision) -> RegisteredTool {
         RegisteredTool {
@@ -455,12 +601,15 @@ mod tests {
     #[test]
     fn accessible_tools_join_bindings_and_registrations_in_name_order() {
         let (deployment, agent_a, agent_b) = deployment_state();
+        let alpha = ToolName::try_from("alpha").unwrap();
         let beta = ToolName::try_from("beta").unwrap();
+        let ToolSource::Component { component_id, .. } =
+            &deployment.registered_tools[&alpha].source;
+        let expected_alpha_component = *component_id;
+        let snapshot = ToolDiscoverySnapshot::from(deployment);
 
-        let agent_a_tools =
-            get_accessible_tools_from_snapshot(Some(&deployment), &agent_a).unwrap();
-        let agent_b_tools =
-            get_accessible_tools_from_snapshot(Some(&deployment), &agent_b).unwrap();
+        let agent_a_tools = get_accessible_tools_from_snapshot(Some(&snapshot), &agent_a).unwrap();
+        let agent_b_tools = get_accessible_tools_from_snapshot(Some(&snapshot), &agent_b).unwrap();
 
         assert_eq!(
             agent_a_tools
@@ -469,6 +618,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["alpha", "beta"]
         );
+        assert_eq!(agent_a_tools[0].implemented_by, expected_alpha_component);
         assert_eq!(
             agent_b_tools
                 .iter()
@@ -476,22 +626,14 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["beta"]
         );
-        assert!(
-            agent_a_tools
-                .iter()
-                .chain(&agent_b_tools)
-                .all(|tool| tool.deployment_revision == deployment.deployment_revision)
-        );
-        assert!(
-            get_accessible_tool_from_snapshot(Some(&deployment), &agent_a, &beta)
-                .unwrap()
-                .is_some()
-        );
-        assert!(
-            get_accessible_tool_from_snapshot(Some(&deployment), &agent_b, &beta)
-                .unwrap()
-                .is_some()
-        );
+        let beta_for_agent_a = get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &beta)
+            .unwrap()
+            .unwrap();
+        let beta_for_agent_b = get_accessible_tool_from_snapshot(Some(&snapshot), &agent_b, &beta)
+            .unwrap()
+            .unwrap();
+        assert!(Arc::ptr_eq(&agent_a_tools[1], &beta_for_agent_a));
+        assert!(Arc::ptr_eq(&beta_for_agent_a, &beta_for_agent_b));
     }
 
     #[test]
@@ -499,19 +641,20 @@ mod tests {
         let (deployment, agent_a, agent_b) = deployment_state();
         let alpha = ToolName::try_from("alpha").unwrap();
         let unbound = ToolName::try_from("unbound").unwrap();
+        let snapshot = ToolDiscoverySnapshot::from(deployment);
 
         assert!(
-            get_accessible_tool_from_snapshot(Some(&deployment), &agent_a, &alpha)
+            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &alpha)
                 .unwrap()
                 .is_some()
         );
         assert!(
-            get_accessible_tool_from_snapshot(Some(&deployment), &agent_b, &alpha)
+            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_b, &alpha)
                 .unwrap()
                 .is_none()
         );
         assert!(
-            get_accessible_tool_from_snapshot(Some(&deployment), &agent_a, &unbound)
+            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &unbound)
                 .unwrap()
                 .is_none()
         );
@@ -521,15 +664,16 @@ mod tests {
     fn unknown_valid_tool_name_does_not_change_accessible_set() {
         let (deployment, agent_a, _) = deployment_state();
         let unknown = ToolName::try_from("unknown").unwrap();
-        let before = get_accessible_tools_from_snapshot(Some(&deployment), &agent_a).unwrap();
+        let snapshot = ToolDiscoverySnapshot::from(deployment);
+        let before = get_accessible_tools_from_snapshot(Some(&snapshot), &agent_a).unwrap();
 
         assert!(
-            get_accessible_tool_from_snapshot(Some(&deployment), &agent_a, &unknown)
+            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &unknown)
                 .unwrap()
                 .is_none()
         );
         assert_eq!(
-            get_accessible_tools_from_snapshot(Some(&deployment), &agent_a).unwrap(),
+            get_accessible_tools_from_snapshot(Some(&snapshot), &agent_a).unwrap(),
             before
         );
     }
@@ -539,6 +683,7 @@ mod tests {
         let (deployment, _, _) = deployment_state();
         let missing_agent = AgentTypeName("MissingAgent".to_string());
         let alpha = ToolName::try_from("alpha").unwrap();
+        let snapshot = ToolDiscoverySnapshot::from(deployment);
 
         assert!(
             get_accessible_tools_from_snapshot(None, &missing_agent)
@@ -546,7 +691,7 @@ mod tests {
                 .is_empty()
         );
         assert!(
-            get_accessible_tools_from_snapshot(Some(&deployment), &missing_agent)
+            get_accessible_tools_from_snapshot(Some(&snapshot), &missing_agent)
                 .unwrap()
                 .is_empty()
         );
@@ -562,12 +707,18 @@ mod tests {
         let (mut deployment, agent_a, _) = deployment_state();
         let beta = ToolName::try_from("beta").unwrap();
         deployment.registered_tools.remove(&beta);
+        let snapshot = ToolDiscoverySnapshot::from(deployment);
 
-        let list_error =
-            get_accessible_tools_from_snapshot(Some(&deployment), &agent_a).unwrap_err();
+        let list_error = get_accessible_tools_from_snapshot(Some(&snapshot), &agent_a).unwrap_err();
         let get_error =
-            get_accessible_tool_from_snapshot(Some(&deployment), &agent_a, &beta).unwrap_err();
+            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &beta).unwrap_err();
 
+        let expected_message = concat!(
+            "Inconsistent tool deployment snapshot: binding for agent type ",
+            "'AgentA' references missing tool 'beta'"
+        );
+        assert_eq!(list_error.to_string(), expected_message);
+        assert_eq!(get_error.to_string(), expected_message);
         assert!(matches!(
             list_error,
             ToolDiscoveryError::InconsistentSnapshot { .. }
@@ -584,11 +735,192 @@ mod tests {
         let alpha = ToolName::try_from("alpha").unwrap();
         let beta = ToolName::try_from("beta").unwrap();
         deployment.registered_tools.remove(&beta);
+        let snapshot = ToolDiscoverySnapshot::from(deployment);
 
         assert!(
-            get_accessible_tool_from_snapshot(Some(&deployment), &agent_a, &alpha)
+            get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &alpha)
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn tool_discovery_invalidation_cannot_be_undone_by_an_in_flight_fill() {
+        let cache = Arc::new(ToolDiscoveryCache::new(
+            8,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+        ));
+        let environment_id = golem_common::model::environment::EnvironmentId::new();
+        let key = (
+            environment_id,
+            ComponentId::new(),
+            ComponentRevision::try_from(1_u64).unwrap(),
+        );
+        let stale_snapshot = Arc::new(ToolDiscoverySnapshot::from(deployment_state().0));
+        let fresh_snapshot = Arc::new(ToolDiscoverySnapshot::from(deployment_state().0));
+        let lookup_started = Arc::new(tokio::sync::Notify::new());
+        let release_lookup = Arc::new(tokio::sync::Notify::new());
+
+        let lookup = tokio::spawn({
+            let cache = cache.clone();
+            let stale_snapshot = stale_snapshot.clone();
+            let lookup_started = lookup_started.clone();
+            let release_lookup = release_lookup.clone();
+            async move {
+                cache
+                    .get_or_insert(&key, move || async move {
+                        lookup_started.notify_one();
+                        release_lookup.notified().await;
+                        Ok(Some(stale_snapshot))
+                    })
+                    .await
+                    .unwrap()
+                    .unwrap()
+            }
+        });
+        lookup_started.notified().await;
+
+        let invalidation_started = Arc::new(tokio::sync::Notify::new());
+        let invalidation = tokio::spawn({
+            let cache = cache.clone();
+            let invalidation_started = invalidation_started.clone();
+            async move {
+                invalidation_started.notify_one();
+                cache.invalidate_environment(environment_id).await;
+            }
+        });
+        invalidation_started.notified().await;
+        for _ in 0..100 {
+            if cache.invalidation_guard.try_read().is_err() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(cache.invalidation_guard.try_read().is_err());
+
+        release_lookup.notify_one();
+        let loaded_stale_snapshot = lookup.await.unwrap();
+        assert!(Arc::ptr_eq(&loaded_stale_snapshot, &stale_snapshot));
+        invalidation.await.unwrap();
+
+        let loaded_fresh_snapshot = cache
+            .get_or_insert(&key, {
+                let fresh_snapshot = fresh_snapshot.clone();
+                move || async move { Ok(Some(fresh_snapshot)) }
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(Arc::ptr_eq(&loaded_fresh_snapshot, &fresh_snapshot));
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn cancelled_tool_discovery_lookup_does_not_wedge_invalidation() {
+        let cache = Arc::new(ToolDiscoveryCache::new(
+            8,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+        ));
+        let environment_id = golem_common::model::environment::EnvironmentId::new();
+        let key = (
+            environment_id,
+            ComponentId::new(),
+            ComponentRevision::try_from(1_u64).unwrap(),
+        );
+        let stale_snapshot = Arc::new(ToolDiscoverySnapshot::from(deployment_state().0));
+        let fresh_snapshot = Arc::new(ToolDiscoverySnapshot::from(deployment_state().0));
+        let lookup_started = Arc::new(tokio::sync::Notify::new());
+        let release_lookup = Arc::new(tokio::sync::Notify::new());
+
+        let lookup = tokio::spawn({
+            let cache = cache.clone();
+            let lookup_started = lookup_started.clone();
+            let release_lookup = release_lookup.clone();
+            async move {
+                cache
+                    .get_or_insert(&key, move || async move {
+                        lookup_started.notify_one();
+                        release_lookup.notified().await;
+                        Ok(Some(stale_snapshot))
+                    })
+                    .await
+            }
+        });
+        lookup_started.notified().await;
+        lookup.abort();
+        let cancellation = match lookup.await {
+            Err(error) => error,
+            Ok(_) => panic!("aborted lookup completed successfully"),
+        };
+        assert!(cancellation.is_cancelled());
+
+        let invalidation_started = Arc::new(tokio::sync::Notify::new());
+        let invalidation = tokio::spawn({
+            let cache = cache.clone();
+            let invalidation_started = invalidation_started.clone();
+            async move {
+                invalidation_started.notify_one();
+                cache.invalidate_environment(environment_id).await;
+            }
+        });
+        invalidation_started.notified().await;
+        for _ in 0..100 {
+            if cache.invalidation_guard.try_read().is_err() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(cache.invalidation_guard.try_read().is_err());
+
+        release_lookup.notify_one();
+        invalidation.await.unwrap();
+
+        let loaded_fresh_snapshot = cache
+            .get_or_insert(&key, {
+                let fresh_snapshot = fresh_snapshot.clone();
+                move || async move { Ok(Some(fresh_snapshot)) }
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(Arc::ptr_eq(&loaded_fresh_snapshot, &fresh_snapshot));
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn tool_discovery_cache_retains_background_ttl_eviction() {
+        let cache = ToolDiscoveryCache::new(8, Duration::from_millis(20), Duration::from_millis(5));
+        let key = (
+            golem_common::model::environment::EnvironmentId::new(),
+            ComponentId::new(),
+            ComponentRevision::try_from(1_u64).unwrap(),
+        );
+        let stale_snapshot = Arc::new(ToolDiscoverySnapshot::from(deployment_state().0));
+        let fresh_snapshot = Arc::new(ToolDiscoverySnapshot::from(deployment_state().0));
+
+        let loaded_stale_snapshot = cache
+            .get_or_insert(&key, {
+                let stale_snapshot = stale_snapshot.clone();
+                move || async move { Ok(Some(stale_snapshot)) }
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(Arc::ptr_eq(&loaded_stale_snapshot, &stale_snapshot));
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let loaded_fresh_snapshot = cache
+            .get_or_insert(&key, {
+                let fresh_snapshot = fresh_snapshot.clone();
+                move || async move { Ok(Some(fresh_snapshot)) }
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(Arc::ptr_eq(&loaded_fresh_snapshot, &fresh_snapshot));
     }
 }

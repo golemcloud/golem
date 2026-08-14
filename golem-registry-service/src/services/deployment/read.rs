@@ -424,6 +424,24 @@ impl DeploymentService {
             .map_err(Into::into)
     }
 
+    pub async fn get_latest_tool_deployment_state_by_component_revision(
+        &self,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+    ) -> Result<Option<ToolDeploymentState>, DeploymentError> {
+        self.deployment_repo
+            .get_latest_tool_deployment_state_by_component_revision(
+                &environment_id.0,
+                &component_id.0,
+                component_revision.into(),
+            )
+            .await?
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(Into::into)
+    }
+
     pub async fn get_latest_deployed_agent_type_by_names(
         &self,
         account_id: AccountId,

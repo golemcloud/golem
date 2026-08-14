@@ -17,19 +17,21 @@ use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
-use golem_common::model::tool::{RegisteredTool, ToolDeploymentState, ToolName};
+use golem_common::model::tool::{ToolDeploymentState, ToolName};
+use golem_common::schema::tool::DiscoveredTool;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::AgentDeploymentDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_worker_executor::services::environment_state::{
-    EnvironmentStateService, ToolDiscoveryError, get_accessible_tool_from_snapshot,
-    get_accessible_tools_from_snapshot,
+    EnvironmentStateService, ToolDiscoveryError, ToolDiscoverySnapshot,
+    get_accessible_tool_from_snapshot, get_accessible_tools_from_snapshot,
 };
 use std::collections::HashMap;
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 
 pub struct DisabledEnvironmentStateService;
 
@@ -113,7 +115,9 @@ impl EnvironmentStateService for ConfiguredRetryPoliciesEnvironmentStateService 
 
 #[derive(Default)]
 pub struct TestEnvironmentStateService {
-    tool_deployments: RwLock<HashMap<EnvironmentId, ToolDeploymentState>>,
+    tool_deployments: RwLock<
+        HashMap<(EnvironmentId, ComponentId, ComponentRevision), Arc<ToolDiscoverySnapshot>>,
+    >,
     accessible_tools_calls: AtomicUsize,
     accessible_tool_calls: AtomicUsize,
 }
@@ -122,15 +126,18 @@ impl TestEnvironmentStateService {
     pub fn set_tool_deployment(
         &self,
         environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
         deployment: Option<ToolDeploymentState>,
     ) {
         let mut deployments = self.tool_deployments.write().unwrap();
+        let key = (environment_id, component_id, component_revision);
         match deployment {
             Some(deployment) => {
-                deployments.insert(environment_id, deployment);
+                deployments.insert(key, Arc::new(deployment.into()));
             }
             None => {
-                deployments.remove(&environment_id);
+                deployments.remove(&key);
             }
         }
     }
@@ -181,21 +188,35 @@ impl EnvironmentStateService for TestEnvironmentStateService {
     async fn get_accessible_tools(
         &self,
         environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
         agent_type: &AgentTypeName,
-    ) -> Result<Vec<RegisteredTool>, ToolDiscoveryError> {
+    ) -> Result<Vec<Arc<DiscoveredTool>>, ToolDiscoveryError> {
         self.accessible_tools_calls.fetch_add(1, Ordering::SeqCst);
-        let deployments = self.tool_deployments.read().unwrap();
-        get_accessible_tools_from_snapshot(deployments.get(&environment_id), agent_type)
+        let snapshot = self
+            .tool_deployments
+            .read()
+            .unwrap()
+            .get(&(environment_id, component_id, component_revision))
+            .cloned();
+        get_accessible_tools_from_snapshot(snapshot.as_deref(), agent_type)
     }
 
     async fn get_accessible_tool(
         &self,
         environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
         agent_type: &AgentTypeName,
         tool_name: &ToolName,
-    ) -> Result<Option<RegisteredTool>, ToolDiscoveryError> {
+    ) -> Result<Option<Arc<DiscoveredTool>>, ToolDiscoveryError> {
         self.accessible_tool_calls.fetch_add(1, Ordering::SeqCst);
-        let deployments = self.tool_deployments.read().unwrap();
-        get_accessible_tool_from_snapshot(deployments.get(&environment_id), agent_type, tool_name)
+        let snapshot = self
+            .tool_deployments
+            .read()
+            .unwrap()
+            .get(&(environment_id, component_id, component_revision))
+            .cloned();
+        get_accessible_tool_from_snapshot(snapshot.as_deref(), agent_type, tool_name)
     }
 }

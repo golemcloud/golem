@@ -17,6 +17,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::tool::{
     CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolDeploymentState, ToolName,
@@ -104,9 +105,10 @@ fn binding(
 
 fn deployment_state(
     agent_type: &AgentTypeName,
+    deployment_revision: u64,
     tools: &[(&str, ComponentId, bool)],
 ) -> ToolDeploymentState {
-    let deployment_revision = DeploymentRevision::try_from(1_u64).unwrap();
+    let deployment_revision = DeploymentRevision::try_from(deployment_revision).unwrap();
     let registered_tools = tools
         .iter()
         .map(|(name, component_id, _)| {
@@ -165,7 +167,7 @@ fn summary(name: &str, component_id: ComponentId) -> ToolSummary {
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn tool_discovery_host_filters_and_observes_live_environment_state(
+async fn tool_discovery_host_filters_and_uses_caller_deployment_scope(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -180,6 +182,7 @@ async fn tool_discovery_host_filters_and_observes_live_environment_state(
     let unbound_component = ComponentId::new();
     let mut initial_deployment = deployment_state(
         &agent_type,
+        1,
         &[
             ("beta", beta_component, true),
             ("unbound", unbound_component, false),
@@ -187,7 +190,6 @@ async fn tool_discovery_host_filters_and_observes_live_environment_state(
         ],
     );
     set_agent_bindings(&mut initial_deployment, &other_agent_type, &["beta"]);
-    service.set_tool_deployment(context.default_environment_id, Some(initial_deployment));
     let overrides = TestExecutorOverrides {
         environment_state_service: Some(service.clone()),
         ..Default::default()
@@ -197,9 +199,36 @@ async fn tool_discovery_host_filters_and_observes_live_environment_state(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
+    service.set_tool_deployment(
+        context.default_environment_id,
+        component.id,
+        component.revision,
+        Some(initial_deployment),
+    );
+    let other_component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .unique()
+        .store()
+        .await?;
+    assert_eq!(other_component.revision, component.revision);
+    let other_component_tool = ComponentId::new();
+    service.set_tool_deployment(
+        context.default_environment_id,
+        other_component.id,
+        other_component.revision,
+        Some(deployment_state(
+            &agent_type,
+            1,
+            &[("other-component", other_component_tool, true)],
+        )),
+    );
     let agent_id = agent_id!("GolemHostApi", "tool-discovery-live");
     executor
         .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let other_component_agent_id = agent_id!("GolemHostApi", "tool-discovery-other-component");
+    executor
+        .start_agent(&other_component.id, other_component_agent_id.clone())
         .await?;
 
     let all = executor
@@ -213,6 +242,19 @@ async fn tool_discovery_host_filters_and_observes_live_environment_state(
             summary("beta", beta_component)
         ]
     );
+    let other_component_tools = executor
+        .invoke_and_await_agent(
+            &other_component,
+            &other_component_agent_id,
+            "get_all_tools",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<ToolSummary>>()?;
+    assert_eq!(
+        other_component_tools,
+        vec![summary("other-component", other_component_tool)]
+    );
 
     let other_agent_id = agent_id!("ToolDiscoveryOther", "tool-discovery-other");
     executor
@@ -223,6 +265,47 @@ async fn tool_discovery_host_filters_and_observes_live_environment_state(
         .await?
         .into_typed::<Vec<ToolSummary>>()?;
     assert_eq!(other_tools, vec![summary("beta", beta_component)]);
+
+    let other_environment_id = EnvironmentId::new();
+    let other_environment_component = executor
+        .component_dep(&other_environment_id, host_api_tests)
+        .unique()
+        .store()
+        .await?;
+    let other_environment_tool_component = ComponentId::new();
+    service.set_tool_deployment(
+        other_environment_id,
+        other_environment_component.id,
+        other_environment_component.revision,
+        Some(deployment_state(
+            &agent_type,
+            1,
+            &[("other-environment", other_environment_tool_component, true)],
+        )),
+    );
+    let other_environment_agent_id = agent_id!("GolemHostApi", "tool-discovery-other-environment");
+    executor
+        .start_agent(
+            &other_environment_component.id,
+            other_environment_agent_id.clone(),
+        )
+        .await?;
+    let other_environment_tools = executor
+        .invoke_and_await_agent(
+            &other_environment_component,
+            &other_environment_agent_id,
+            "get_all_tools",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<ToolSummary>>()?;
+    assert_eq!(
+        other_environment_tools,
+        vec![summary(
+            "other-environment",
+            other_environment_tool_component
+        )]
+    );
 
     let alpha = executor
         .invoke_and_await_agent(
@@ -264,8 +347,11 @@ async fn tool_discovery_host_filters_and_observes_live_environment_state(
     let gamma_component = ComponentId::new();
     service.set_tool_deployment(
         context.default_environment_id,
+        component.id,
+        component.revision,
         Some(deployment_state(
             &agent_type,
+            2,
             &[("gamma", gamma_component, true)],
         )),
     );
@@ -275,13 +361,56 @@ async fn tool_discovery_host_filters_and_observes_live_environment_state(
         .into_typed::<Vec<ToolSummary>>()?;
     assert_eq!(after_update, vec![summary("gamma", gamma_component)]);
 
-    service.set_tool_deployment(context.default_environment_id, None);
+    let updated_component = executor
+        .update_component(&component.id, &host_api_tests.wasm_name)
+        .await?;
+    let epsilon_component = ComponentId::new();
+    service.set_tool_deployment(
+        context.default_environment_id,
+        updated_component.id,
+        updated_component.revision,
+        Some(deployment_state(
+            &agent_type,
+            3,
+            &[("epsilon", epsilon_component, true)],
+        )),
+    );
+    let updated_agent_id = agent_id!("GolemHostApi", "tool-discovery-updated-component");
+    executor
+        .start_agent(&updated_component.id, updated_agent_id.clone())
+        .await?;
+    let updated_tools = executor
+        .invoke_and_await_agent(
+            &updated_component,
+            &updated_agent_id,
+            "get_all_tools",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<ToolSummary>>()?;
+    assert_eq!(updated_tools, vec![summary("epsilon", epsilon_component)]);
+
+    let original_revision_tools = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_all_tools", data_value!())
+        .await?
+        .into_typed::<Vec<ToolSummary>>()?;
+    assert_eq!(
+        original_revision_tools,
+        vec![summary("gamma", gamma_component)]
+    );
+
+    service.set_tool_deployment(
+        context.default_environment_id,
+        component.id,
+        component.revision,
+        None,
+    );
     let without_deployment = executor
         .invoke_and_await_agent(&component, &agent_id, "get_all_tools", data_value!())
         .await?
         .into_typed::<Vec<ToolSummary>>()?;
     assert_eq!(without_deployment, Vec::new());
-    assert_eq!(service.accessible_tools_calls(), 4);
+    assert_eq!(service.accessible_tools_calls(), 8);
 
     Ok(())
 }
@@ -299,13 +428,6 @@ async fn tool_discovery_replay_uses_persisted_result_without_environment_lookup(
     let service = Arc::new(TestEnvironmentStateService::default());
     let agent_type = AgentTypeName("GolemHostApi".to_string());
     let alpha_component = ComponentId::new();
-    service.set_tool_deployment(
-        context.default_environment_id,
-        Some(deployment_state(
-            &agent_type,
-            &[("alpha", alpha_component, true)],
-        )),
-    );
     let overrides = TestExecutorOverrides {
         environment_state_service: Some(service.clone()),
         ..Default::default()
@@ -315,6 +437,16 @@ async fn tool_discovery_replay_uses_persisted_result_without_environment_lookup(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
+    service.set_tool_deployment(
+        context.default_environment_id,
+        component.id,
+        component.revision,
+        Some(deployment_state(
+            &agent_type,
+            1,
+            &[("alpha", alpha_component, true)],
+        )),
+    );
     let agent_id = agent_id!("GolemHostApi", "tool-discovery-replay");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
@@ -332,8 +464,11 @@ async fn tool_discovery_replay_uses_persisted_result_without_environment_lookup(
     let beta_component = ComponentId::new();
     service.set_tool_deployment(
         context.default_environment_id,
+        component.id,
+        component.revision,
         Some(deployment_state(
             &agent_type,
+            2,
             &[("beta", beta_component, true)],
         )),
     );

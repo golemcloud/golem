@@ -1703,6 +1703,14 @@ mod tests {
             )]),
         };
 
+        let mut mismatched_binding_proto: golem_api_grpc::proto::golem::registry::ToolDeploymentState =
+            state.clone().into();
+        mismatched_binding_proto.agent_tool_bindings[0].deployment_revision = 2;
+        assert!(
+            ToolDeploymentState::try_from(mismatched_binding_proto).is_err(),
+            "a coherent deployment snapshot must reject bindings from another revision"
+        );
+
         let proto: golem_api_grpc::proto::golem::registry::ToolDeploymentState =
             state.clone().into();
         let decoded = ToolDeploymentState::try_from(proto).unwrap();

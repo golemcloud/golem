@@ -546,10 +546,10 @@ oplog_payload! {
             result: Result<(), CardInstallFailure>,
         },
         GolemToolTools {
-            result: Result<Vec<DiscoveredTool>, String>
+            result: Result<Vec<Arc<DiscoveredTool>>, String>
         },
         GolemToolTool {
-            result: Result<Option<DiscoveredTool>, String>
+            result: Result<Option<Arc<DiscoveredTool>>, String>
         }
     }
 }

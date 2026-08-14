@@ -56,6 +56,7 @@ use proptest::strategy::LazyJust;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::ops::Add;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use wasmtime_wasi::StreamError;
 use wasmtime_wasi::p2::bindings::sockets::network::IpAddress;
@@ -866,7 +867,7 @@ fn discovered_tool(name: &str) -> DiscoveredTool {
 
 #[test]
 fn tool_discovery_host_payload_pairs_roundtrip() {
-    let tool = discovered_tool("grep");
+    let tool = Arc::new(discovered_tool("grep"));
 
     assert_host_payload_pair_roundtrip::<host_functions::GolemToolGetAllTools>(
         HostRequestNoInput {},
