@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{AgentFilesystemUsage, FilesystemCapacity, FilesystemStorageError};
+use super::{
+    AgentFilesystemUsage, FilesystemCapacity, FilesystemStorageError,
+    create_materialization_parent, set_initial_file_permissions,
+};
 use golem_common::model::RetryConfig;
 use rustix::fs::{
     FlockOperation, Mode, OFlags, flock, fstatfs, fstatvfs, ioctl_ficlone, mkdirat, openat,
@@ -336,6 +339,34 @@ impl XfsBackend {
             ));
         }
         Ok(())
+    }
+
+    pub(super) fn materialize_initial_file(
+        &self,
+        root: &Path,
+        project_id: NonZeroU32,
+        source: &Path,
+        target: &Path,
+        read_only: bool,
+    ) -> std::io::Result<()> {
+        let parent = create_materialization_parent(root, target)?;
+        {
+            let temporary = tempfile::NamedTempFile::new_in(parent)?;
+            let source = File::open(source)?;
+            if self.project_id(temporary.as_file())? != Some(project_id) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "managed XFS initial-file destination did not inherit its project identity",
+                ));
+            }
+            ioctl_ficlone(temporary.as_file(), &source).map_err(errno_to_io)?;
+            temporary.as_file().sync_all()?;
+            set_initial_file_permissions(temporary.as_file(), read_only)?;
+            temporary
+                .persist_noclobber(target)
+                .map_err(|error| error.error)?;
+        }
+        rustix::fs::syncfs(&self.root_fd).map_err(errno_to_io)
     }
 
     #[allow(

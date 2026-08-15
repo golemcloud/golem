@@ -800,9 +800,14 @@ pub async fn create_worker_executor_impl<
 
     let active_workers = bootstrap.create_active_workers(&golem_config, shutdown_token.clone())?;
 
+    let initial_file_cache_root = active_workers
+        .agent_filesystems()
+        .initial_file_cache_root()
+        .map(|path| path.to_path_buf());
     let file_loader = Arc::new(FileLoader::new(
         initial_files_service.clone(),
         Some(active_workers.filesystem_storage_semaphore()),
+        initial_file_cache_root.as_deref(),
     )?);
 
     let running_worker_enumeration_service = Arc::new(RunningWorkerEnumerationServiceDefault::new(

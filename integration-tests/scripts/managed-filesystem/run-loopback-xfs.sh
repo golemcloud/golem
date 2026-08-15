@@ -67,6 +67,7 @@ run_test() {
 
 build_test_binaries() {
   local manifest=$1
+  echo "Building managed XFS test binaries with ${CARGO_BUILD_JOBS:-default} Cargo jobs" >&2
   run_test timeout --kill-after=30s 20m cargo test \
     -p golem-worker-executor \
     --features managed-xfs-tests \
@@ -148,4 +149,4 @@ run_privileged_test \
 run_privileged_test \
   integration \
   "${integration_test_binary}" \
-  wasi::p2_p3_filesystem_parity_on_managed_xfs
+  wasi::initial_file_p2_p3_parity_on_managed_xfs

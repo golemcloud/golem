@@ -401,75 +401,49 @@ async fn initial_file_p3_parity(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    initial_file_p3_parity_with_backend(last_unique_id, deps, initial_file_system).await
+    initial_file_p3_parity_with_backend(last_unique_id, deps, initial_file_system, None).await
 }
 
 #[cfg(all(target_os = "linux", feature = "managed-xfs-tests"))]
 #[test]
 #[tracing::instrument]
-async fn p2_p3_filesystem_parity_on_managed_xfs(
+async fn initial_file_p2_p3_parity_on_managed_xfs(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
-
     let root = std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
         .map(PathBuf::from)
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.managed_xfs_root_dir = Some(root.clone());
-            })),
-            ..TestExecutorOverrides::default()
-        },
-    )
-    .await?;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, initial_file_system)
-        .store()
-        .await?;
-    let agent_id = agent_id!("P3FileSystem", "managed-xfs-p2-p3-parity-1");
-    let worker_id = executor
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
-
-    let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "run_writable", data_value!())
-        .await?
-        .into_typed::<Vec<String>>()?;
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-    assert_eq!(
-        result,
-        vec![
-            "p2_write_p3_read=p2-to-p3".to_string(),
-            "p3_write_p2_read=p3-to-p2".to_string(),
-        ]
-    );
-    let owned_agent_id =
-        golem_common::model::OwnedAgentId::new(context.default_environment_id, &worker_id);
-    assert!(executor.stop_worker_if_idle(&owned_agent_id).await?);
-    assert!(!executor.worker_is_loaded(&owned_agent_id).await);
-
-    Ok(())
+    initial_file_p3_parity_with_backend(last_unique_id, deps, initial_file_system, Some(root)).await
 }
 
 async fn initial_file_p3_parity_with_backend(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     initial_file_system: &PrecompiledComponent,
+    managed_xfs_root: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let executor = match managed_xfs_root {
+        Some(root) => {
+            start_with_overrides(
+                deps,
+                &context,
+                TestExecutorOverrides {
+                    configure: Some(Arc::new(move |config| {
+                        config.filesystem_storage.managed_xfs_root_dir = Some(root.clone());
+                    })),
+                    ..TestExecutorOverrides::default()
+                },
+            )
+            .await?
+        }
+        None => start(deps, &context).await?,
+    };
 
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
@@ -479,6 +453,11 @@ async fn initial_file_p3_parity_with_backend(
                 IFSEntry {
                     source_path: PathBuf::from("initial-file-system/files/foo.txt"),
                     target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/foo-copy.txt").unwrap(),
                     permissions: AgentFilePermissions::ReadOnly,
                 },
                 IFSEntry {
@@ -512,6 +491,20 @@ async fn initial_file_p3_parity_with_backend(
         "ro_symlink_at_p3=err:not-permitted".to_string(),
         "ro_unlink_file_at_p2=err:not-permitted".to_string(),
         "ro_unlink_file_at_p3=err:not-permitted".to_string(),
+        "ro_parent_open_write_p2=err:not-permitted".to_string(),
+        "ro_parent_open_write_p3=err:not-permitted".to_string(),
+        "ro_parent_unlink_p2=err:not-permitted".to_string(),
+        "ro_parent_unlink_p3=err:not-permitted".to_string(),
+        "ro_parent_rename_p2=err:not-permitted".to_string(),
+        "ro_parent_rename_p3=err:not-permitted".to_string(),
+        "ro_parent_link_p2=err:not-permitted".to_string(),
+        "ro_parent_link_p3=err:not-permitted".to_string(),
+        "ro_alias_create_p2=ok".to_string(),
+        "ro_alias_open_write_p2=err:not-permitted".to_string(),
+        "ro_alias_unlink_p2=ok".to_string(),
+        "ro_alias_create_p3=ok".to_string(),
+        "ro_alias_open_write_p3=err:not-permitted".to_string(),
+        "ro_alias_unlink_p3=ok".to_string(),
         "rw_flags_p2_write=true".to_string(),
         "rw_flags_p3_write=true".to_string(),
         "rw_hash_parity=true".to_string(),

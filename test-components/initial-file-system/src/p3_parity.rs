@@ -193,6 +193,126 @@ impl P3FileSystem for P3FileSystemImpl {
             "ro_unlink_file_at_p3={}",
             p3_result(ro_p3.unlink_file_at("x".to_string()).await)
         ));
+        results.push(format!(
+            "ro_parent_open_write_p2={}",
+            match root_p2.open_at(
+                p2_types::PathFlags::empty(),
+                "foo.txt",
+                p2_types::OpenFlags::empty(),
+                p2_types::DescriptorFlags::WRITE,
+            ) {
+                Ok(_) => "ok".to_string(),
+                Err(error) => format!("err:{}", p2_err(error)),
+            }
+        ));
+        results.push(format!(
+            "ro_parent_open_write_p3={}",
+            match root_p3
+                .open_at(
+                    p3_types::PathFlags::empty(),
+                    "foo.txt".to_string(),
+                    p3_types::OpenFlags::empty(),
+                    p3_types::DescriptorFlags::WRITE,
+                )
+                .await
+            {
+                Ok(_) => "ok".to_string(),
+                Err(error) => format!("err:{}", p3_err(error)),
+            }
+        ));
+        results.push(format!(
+            "ro_parent_unlink_p2={}",
+            p2_result(root_p2.unlink_file_at("foo.txt"))
+        ));
+        results.push(format!(
+            "ro_parent_unlink_p3={}",
+            p3_result(root_p3.unlink_file_at("foo.txt".to_string()).await)
+        ));
+        results.push(format!(
+            "ro_parent_rename_p2={}",
+            p2_result(root_p2.rename_at("foo.txt", &root_p2, "foo-moved.txt"))
+        ));
+        results.push(format!(
+            "ro_parent_rename_p3={}",
+            p3_result(
+                root_p3
+                    .rename_at(
+                        "foo.txt".to_string(),
+                        &root_p3,
+                        "foo-moved.txt".to_string(),
+                    )
+                    .await
+            )
+        ));
+        results.push(format!(
+            "ro_parent_link_p2={}",
+            p2_result(root_p2.link_at(
+                p2_types::PathFlags::empty(),
+                "foo.txt",
+                &root_p2,
+                "foo-alias.txt",
+            ))
+        ));
+        results.push(format!(
+            "ro_parent_link_p3={}",
+            p3_result(
+                root_p3
+                    .link_at(
+                        p3_types::PathFlags::empty(),
+                        "foo.txt".to_string(),
+                        &root_p3,
+                        "foo-alias.txt".to_string(),
+                    )
+                    .await
+            )
+        ));
+        results.push(format!(
+            "ro_alias_create_p2={}",
+            p2_result(root_p2.symlink_at("foo.txt", "foo-link-p2"))
+        ));
+        results.push(format!(
+            "ro_alias_open_write_p2={}",
+            match root_p2.open_at(
+                p2_types::PathFlags::SYMLINK_FOLLOW,
+                "foo-link-p2",
+                p2_types::OpenFlags::empty(),
+                p2_types::DescriptorFlags::WRITE,
+            ) {
+                Ok(_) => "ok".to_string(),
+                Err(error) => format!("err:{}", p2_err(error)),
+            }
+        ));
+        results.push(format!(
+            "ro_alias_unlink_p2={}",
+            p2_result(root_p2.unlink_file_at("foo-link-p2"))
+        ));
+        results.push(format!(
+            "ro_alias_create_p3={}",
+            p3_result(
+                root_p3
+                    .symlink_at("foo.txt".to_string(), "foo-link-p3".to_string())
+                    .await
+            )
+        ));
+        results.push(format!(
+            "ro_alias_open_write_p3={}",
+            match root_p3
+                .open_at(
+                    p3_types::PathFlags::SYMLINK_FOLLOW,
+                    "foo-link-p3".to_string(),
+                    p3_types::OpenFlags::empty(),
+                    p3_types::DescriptorFlags::WRITE,
+                )
+                .await
+            {
+                Ok(_) => "ok".to_string(),
+                Err(error) => format!("err:{}", p3_err(error)),
+            }
+        ));
+        results.push(format!(
+            "ro_alias_unlink_p3={}",
+            p3_result(root_p3.unlink_file_at("foo-link-p3".to_string()).await)
+        ));
 
         let rw_p2 = root_p2
             .open_at(

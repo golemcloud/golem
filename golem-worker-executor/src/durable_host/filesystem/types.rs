@@ -151,12 +151,12 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     }
 
     async fn set_size(&mut self, fd: Resource<Descriptor>, size: Filesize) -> Result<(), FsError> {
-        self.fail_if_read_only(&fd)?;
         let _effect = self
             .filesystem_runtime()
             .begin_effect()
             .await
             .map_err(FsError::trap)?;
+        self.fail_if_read_only(&fd)?;
 
         // Determine whether this is a growth and charge the delta.
         // We borrow fd to stat before consuming it in set_size.
@@ -205,12 +205,12 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         data_access_timestamp: NewTimestamp,
         data_modification_timestamp: NewTimestamp,
     ) -> Result<(), FsError> {
-        self.fail_if_read_only(&fd)?;
         let _effect = self
             .filesystem_runtime()
             .begin_effect()
             .await
             .map_err(FsError::trap)?;
+        self.fail_if_read_only(&fd)?;
 
         self.observe_function_call("filesystem::types::descriptor", "set_times");
 
@@ -241,12 +241,12 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         buffer: Vec<u8>,
         offset: Filesize,
     ) -> Result<Filesize, FsError> {
-        self.fail_if_read_only(&fd)?;
         let _effect = self
             .filesystem_runtime()
             .begin_effect()
             .await
             .map_err(FsError::trap)?;
+        self.fail_if_read_only(&fd)?;
 
         let current_size = {
             let fd_borrow = Resource::new_borrow(fd.rep());
@@ -332,9 +332,10 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.observe_function_call("filesystem::types::descriptor", "create_directory_at");
         let _effect = self
             .filesystem_runtime()
-            .begin_effect()
+            .begin_path_effect()
             .await
             .map_err(FsError::trap)?;
+        self.fail_if_read_only_path(&self_, &path, false)?;
         let mut view = self.as_wasi_view();
         HostDescriptor::create_directory_at(&mut view.filesystem(), self_, path).await
     }
@@ -514,12 +515,13 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         data_access_timestamp: NewTimestamp,
         data_modification_timestamp: NewTimestamp,
     ) -> Result<(), FsError> {
-        self.fail_if_read_only(&fd)?;
         let _effect = self
             .filesystem_runtime()
-            .begin_effect()
+            .begin_path_effect()
             .await
             .map_err(FsError::trap)?;
+        self.fail_if_read_only(&fd)?;
+        self.fail_if_read_only_path(&fd, &path, path_flags.contains(PathFlags::SYMLINK_FOLLOW))?;
 
         self.observe_function_call("filesystem::types::descriptor", "set_times_at");
         let mut view = self.as_wasi_view();
@@ -545,9 +547,17 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.observe_function_call("filesystem::types::descriptor", "link_at");
         let _effect = self
             .filesystem_runtime()
-            .begin_effect()
+            .begin_path_effect()
             .await
             .map_err(FsError::trap)?;
+        self.fail_if_read_only(&self_)?;
+        self.fail_if_read_only(&new_descriptor)?;
+        self.fail_if_read_only_path(
+            &self_,
+            &old_path,
+            old_path_flags.contains(PathFlags::SYMLINK_FOLLOW),
+        )?;
+        self.fail_if_read_only_path(&new_descriptor, &new_path, false)?;
         let mut view = self.as_wasi_view();
         HostDescriptor::link_at(
             &mut view.filesystem(),
@@ -568,16 +578,25 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         open_flags: OpenFlags,
         flags: DescriptorFlags,
     ) -> Result<Resource<Descriptor>, FsError> {
-        let _effect = if open_flags.intersects(OpenFlags::CREATE | OpenFlags::TRUNCATE) {
+        let mutating = open_flags.intersects(OpenFlags::CREATE | OpenFlags::TRUNCATE)
+            || flags.contains(DescriptorFlags::WRITE);
+        let _effect = if mutating {
             Some(
                 self.filesystem_runtime()
-                    .begin_effect()
+                    .begin_path_effect()
                     .await
                     .map_err(FsError::trap)?,
             )
         } else {
             None
         };
+        if open_flags.contains(OpenFlags::TRUNCATE) || flags.contains(DescriptorFlags::WRITE) {
+            self.fail_if_read_only_path(
+                &self_,
+                &path,
+                path_flags.contains(PathFlags::SYMLINK_FOLLOW),
+            )?;
+        }
         let truncated_size = if open_flags.contains(OpenFlags::TRUNCATE) {
             let fd_borrow = Resource::new_borrow(self_.rep());
             let mut view = self.as_wasi_view();
@@ -635,9 +654,10 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.observe_function_call("filesystem::types::descriptor", "remove_directory_at");
         let _effect = self
             .filesystem_runtime()
-            .begin_effect()
+            .begin_path_effect()
             .await
             .map_err(FsError::trap)?;
+        self.fail_if_contains_read_only_path(&self_, &path, false)?;
         let mut view = self.as_wasi_view();
         HostDescriptor::remove_directory_at(&mut view.filesystem(), self_, path.clone()).await
     }
@@ -649,13 +669,15 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         new_fd: Resource<Descriptor>,
         new_path: String,
     ) -> Result<(), FsError> {
-        self.fail_if_read_only(&old_fd)?;
-        self.fail_if_read_only(&new_fd)?;
         let _effect = self
             .filesystem_runtime()
-            .begin_effect()
+            .begin_path_effect()
             .await
             .map_err(FsError::trap)?;
+        self.fail_if_read_only(&old_fd)?;
+        self.fail_if_read_only(&new_fd)?;
+        self.fail_if_contains_read_only_path(&old_fd, &old_path, false)?;
+        self.fail_if_contains_read_only_path(&new_fd, &new_path, false)?;
 
         self.observe_function_call("filesystem::types::descriptor", "rename_at");
         let mut view = self.as_wasi_view();
@@ -675,12 +697,13 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         old_path: String,
         new_path: String,
     ) -> Result<(), FsError> {
-        self.fail_if_read_only(&fd)?;
         let _effect = self
             .filesystem_runtime()
-            .begin_effect()
+            .begin_path_effect()
             .await
             .map_err(FsError::trap)?;
+        self.fail_if_read_only(&fd)?;
+        self.fail_if_read_only_path(&fd, &new_path, false)?;
 
         self.observe_function_call("filesystem::types::descriptor", "symlink_at");
         let mut view = self.as_wasi_view();
@@ -692,12 +715,13 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         fd: Resource<Descriptor>,
         path: String,
     ) -> Result<(), FsError> {
-        self.fail_if_read_only(&fd)?;
         let _effect = self
             .filesystem_runtime()
-            .begin_effect()
+            .begin_path_effect()
             .await
             .map_err(FsError::trap)?;
+        self.fail_if_read_only(&fd)?;
+        self.fail_if_read_only_path(&fd, &path, false)?;
 
         // Stat the target file before unlinking to know how many bytes to release.
         // Use the upstream (non-durable) stat_at to avoid oplog side effects.

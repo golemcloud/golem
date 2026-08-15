@@ -4449,8 +4449,23 @@ impl RunningWorker {
         }
 
         let filesystems = parent.active_workers().agent_filesystems();
+        let initial_files = parent
+            .parsed_agent_id
+            .as_ref()
+            .and_then(|agent_id| {
+                component_metadata_for_replay
+                    .metadata
+                    .agent_type_provision_configs()
+                    .get(&agent_id.agent_type)
+            })
+            .map(|config| config.files.clone())
+            .unwrap_or_default();
         let filesystem = filesystems
-            .create_fresh(&parent.owned_agent_id)
+            .create_fresh(crate::services::agent_filesystem::CreateAgentFilesystem {
+                agent_id: parent.owned_agent_id.clone(),
+                initial_files,
+                file_loader: parent.file_loader(),
+            })
             .await
             .map_err(|error| CreateWorkerInstanceError {
                 filesystem_cleanup_failed: error.cleanup_failed(),

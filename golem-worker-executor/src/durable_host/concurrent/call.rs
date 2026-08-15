@@ -2926,7 +2926,7 @@ struct AccessRevisionUpdateInputs {
     owned_agent_id: golem_common::model::OwnedAgentId,
     agent_id: Option<ParsedAgentId>,
     initial_agent_config: Vec<golem_common::model::worker::TypedAgentConfigEntry>,
-    worker_dir: PathBuf,
+    filesystem_runtime: crate::services::agent_filesystem::AgentFilesystemRuntime,
     current_revision: ComponentRevision,
 }
 
@@ -2939,7 +2939,7 @@ type AccessRevisionUpdateAgentState = (
 struct AccessRevisionUpdate {
     metadata: Component,
     agent_state: Option<AccessRevisionUpdateAgentState>,
-    files: HashMap<PathBuf, IFSWorkerFile>,
+    filesystem_update: crate::services::agent_filesystem::AgentFilesystemUpdateEffectLease,
 }
 
 async fn finalize_pending_automatic_update_access<T, D, Ctx>(
@@ -3037,7 +3037,7 @@ where
             owned_agent_id: ctx.owned_agent_id.clone(),
             agent_id: ctx.state.agent_id.clone(),
             initial_agent_config: ctx.state.initial_agent_config.clone(),
-            worker_dir: ctx.filesystem_root.clone(),
+            filesystem_runtime: ctx.filesystem_runtime(),
             current_revision: ctx.state.component_metadata.revision,
         }
     });
@@ -3056,8 +3056,8 @@ where
 }
 
 async fn prepare_revision_update_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
-    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    _store: &Accessor<T, D>,
+    _get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     inputs: &AccessRevisionUpdateInputs,
     new_revision: ComponentRevision,
 ) -> Result<AccessRevisionUpdate, WorkerExecutorError>
@@ -3121,70 +3121,23 @@ where
         None
     };
 
-    let mut files = take_initial_files_access(store, get_ctx)?;
-    let update_result = super::super::update_filesystem(
-        &mut files,
-        &inputs.file_loader,
-        inputs.owned_agent_id.environment_id,
-        &inputs.worker_dir,
-        provision_config
-            .as_ref()
-            .map(|c| c.files.as_slice())
-            .unwrap_or_default(),
-    )
-    .await;
-
-    if let Err(error) = update_result {
-        restore_initial_files_access(store, get_ctx, files)?;
-        return Err(error);
-    }
+    let filesystem_update = inputs
+        .filesystem_runtime
+        .update_initial_files(
+            &inputs.file_loader,
+            inputs.owned_agent_id.environment_id,
+            provision_config
+                .as_ref()
+                .map(|c| c.files.as_slice())
+                .unwrap_or_default(),
+        )
+        .await
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
 
     Ok(AccessRevisionUpdate {
         metadata,
         agent_state,
-        files,
-    })
-}
-
-fn take_initial_files_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
-    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-) -> Result<HashMap<PathBuf, IFSWorkerFile>, WorkerExecutorError>
-where
-    T: 'static,
-    D: HasData + ?Sized,
-    Ctx: WorkerCtx,
-{
-    store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
-        let mut files = ctx.state.files.try_write().map_err(|_| {
-            WorkerExecutorError::runtime(
-                "p3 accessor durable call path cannot acquire initial-files lock",
-            )
-        })?;
-        Ok(std::mem::take(&mut *files))
-    })
-}
-
-fn restore_initial_files_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
-    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    restored: HashMap<PathBuf, IFSWorkerFile>,
-) -> Result<(), WorkerExecutorError>
-where
-    T: 'static,
-    D: HasData + ?Sized,
-    Ctx: WorkerCtx,
-{
-    store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
-        let mut files = ctx.state.files.try_write().map_err(|_| {
-            WorkerExecutorError::runtime(
-                "p3 accessor durable call path cannot restore initial-files state",
-            )
-        })?;
-        *files = restored;
-        Ok(())
+        filesystem_update,
     })
 }
 
@@ -3192,27 +3145,18 @@ fn apply_revision_update_access<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     update: AccessRevisionUpdate,
 ) {
-    let read_only_paths = super::super::compute_read_only_paths(&update.files);
-    {
-        let mut files = ctx
-            .state
-            .files
-            .try_write()
-            .expect("initial-files state was taken by this update path");
-        *files = update.files;
-    }
-    {
-        let mut read_only = ctx.state.read_only_paths.write().unwrap();
-        *read_only = read_only_paths;
-    }
-
-    if let Some((agent_config, effective_surface, initial_wallet_cards)) = update.agent_state {
+    let AccessRevisionUpdate {
+        metadata,
+        agent_state,
+        filesystem_update: _filesystem_update,
+    } = update;
+    if let Some((agent_config, effective_surface, initial_wallet_cards)) = agent_state {
         ctx.state.agent_config = agent_config;
         ctx.state.cached_agent_config_retry_policies = None;
         ctx.state.agent_effective_surface = effective_surface;
         ctx.state.agent_wallet_cards = initial_wallet_cards;
     }
-    ctx.state.component_metadata = update.metadata;
+    ctx.state.component_metadata = metadata;
 }
 
 async fn record_worker_update_failed_access<T, D, Ctx>(

@@ -45,7 +45,7 @@ use wasmtime_wasi::filesystem::{Descriptor, Dir, File, WasiFilesystem, WasiFiles
 use wasmtime_wasi::p3::bindings::filesystem::{preopens, types};
 use wasmtime_wasi::p3::filesystem::{FilesystemError, FilesystemResult};
 use wasmtime_wasi::runtime::spawn_blocking;
-use wasmtime_wasi::{DirPerms, FilePerms};
+use wasmtime_wasi::{DirPerms, FilePerms, ResourceTableError};
 
 struct FilesystemWriteChunk {
     contents: Vec<u8>,
@@ -300,6 +300,37 @@ where
     }
 }
 
+fn fail_if_read_only_path_from_accessor<Ctx, U>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+    fd: &Resource<Descriptor>,
+    path: &str,
+    include_descendants: bool,
+    follow_final_symlink: bool,
+) -> FilesystemResult<()>
+where
+    Ctx: WorkerCtx,
+    U: 'static,
+{
+    let read_only = accessor
+        .with(|mut access| {
+            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+            let target = ctx.descriptor_path(fd)?.join(path);
+            Ok::<_, ResourceTableError>(if include_descendants {
+                ctx.filesystem_runtime
+                    .contains_read_only_path(&target, follow_final_symlink)
+            } else {
+                ctx.filesystem_runtime
+                    .is_read_only_path(&target, follow_final_symlink)
+            })
+        })
+        .map_err(|error| FilesystemError::trap(wasmtime::Error::from(error)))?;
+    if read_only {
+        Err(types::ErrorCode::NotPermitted.into())
+    } else {
+        Ok(())
+    }
+}
+
 async fn begin_filesystem_effect<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
 ) -> FilesystemResult<crate::services::agent_filesystem::AgentFilesystemEffectLease>
@@ -310,6 +341,21 @@ where
     let runtime = accessor
         .with(|mut access| durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime());
     runtime.begin_effect().await.map_err(FilesystemError::trap)
+}
+
+async fn begin_filesystem_path_effect<Ctx, U>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+) -> FilesystemResult<crate::services::agent_filesystem::AgentFilesystemEffectLease>
+where
+    Ctx: WorkerCtx,
+    U: 'static,
+{
+    let runtime = accessor
+        .with(|mut access| durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime());
+    runtime
+        .begin_path_effect()
+        .await
+        .map_err(FilesystemError::trap)
 }
 
 fn write_validation_error_from_access<Ctx: WorkerCtx, U>(
@@ -1060,8 +1106,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "set-size",
             )
         });
-        fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
         let _effect = begin_filesystem_effect::<Ctx, U>(accessor).await?;
+        fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
         // Charge growth before resizing and credit shrink afterwards, matching
         // the WASI P2 storage-quota accounting. The quota helpers are no-ops
         // during replay, so the storage usage is rebuilt purely from the oplog.
@@ -1100,8 +1146,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         data_access_timestamp: types::NewTimestamp,
         data_modification_timestamp: types::NewTimestamp,
     ) -> FilesystemResult<()> {
-        fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
         let _effect = begin_filesystem_effect::<Ctx, U>(accessor).await?;
+        fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1202,7 +1248,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "create-directory-at",
             )
         });
-        let _effect = begin_filesystem_effect::<Ctx, U>(store).await?;
+        let _effect = begin_filesystem_path_effect::<Ctx, U>(store).await?;
+        fail_if_read_only_path_from_accessor::<Ctx, U>(store, &fd, &path, false, false)?;
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::create_directory_at(&store, fd, path)
             .await
@@ -1297,8 +1344,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         data_access_timestamp: types::NewTimestamp,
         data_modification_timestamp: types::NewTimestamp,
     ) -> FilesystemResult<()> {
+        let _effect = begin_filesystem_path_effect::<Ctx, U>(accessor).await?;
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
-        let _effect = begin_filesystem_effect::<Ctx, U>(accessor).await?;
+        fail_if_read_only_path_from_accessor::<Ctx, U>(
+            accessor,
+            &fd,
+            &path,
+            false,
+            path_flags.contains(types::PathFlags::SYMLINK_FOLLOW),
+        )?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1333,7 +1387,17 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "link-at",
             )
         });
-        let _effect = begin_filesystem_effect::<Ctx, U>(store).await?;
+        let _effect = begin_filesystem_path_effect::<Ctx, U>(store).await?;
+        fail_if_read_only_from_accessor::<Ctx, U>(store, &fd)?;
+        fail_if_read_only_from_accessor::<Ctx, U>(store, &new_fd)?;
+        fail_if_read_only_path_from_accessor::<Ctx, U>(
+            store,
+            &fd,
+            &old_path,
+            false,
+            old_path_flags.contains(types::PathFlags::SYMLINK_FOLLOW),
+        )?;
+        fail_if_read_only_path_from_accessor::<Ctx, U>(store, &new_fd, &new_path, false, false)?;
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::link_at(
             &store,
@@ -1361,12 +1425,24 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "open-at",
             )
         });
-        let _effect =
-            if open_flags.intersects(types::OpenFlags::CREATE | types::OpenFlags::TRUNCATE) {
-                Some(begin_filesystem_effect::<Ctx, U>(accessor).await?)
-            } else {
-                None
-            };
+        let mutating = open_flags.intersects(types::OpenFlags::CREATE | types::OpenFlags::TRUNCATE)
+            || flags.contains(types::DescriptorFlags::WRITE);
+        let _effect = if mutating {
+            Some(begin_filesystem_path_effect::<Ctx, U>(accessor).await?)
+        } else {
+            None
+        };
+        if open_flags.contains(types::OpenFlags::TRUNCATE)
+            || flags.contains(types::DescriptorFlags::WRITE)
+        {
+            fail_if_read_only_path_from_accessor::<Ctx, U>(
+                accessor,
+                &fd,
+                &path,
+                false,
+                path_flags.contains(types::PathFlags::SYMLINK_FOLLOW),
+            )?;
+        }
         // Opening with TRUNCATE discards the existing file contents, so credit
         // the freed bytes back to the storage quota on success, matching WASI
         // P2. The release helper is a no-op during replay.
@@ -1427,7 +1503,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "remove-directory-at",
             )
         });
-        let _effect = begin_filesystem_effect::<Ctx, U>(store).await?;
+        let _effect = begin_filesystem_path_effect::<Ctx, U>(store).await?;
+        fail_if_read_only_path_from_accessor::<Ctx, U>(store, &fd, &path, true, false)?;
         let store = store.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
         <WasiFilesystem as types::HostDescriptorWithStore<U>>::remove_directory_at(&store, fd, path)
             .await
@@ -1440,9 +1517,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         new_fd: Resource<Descriptor>,
         new_path: String,
     ) -> FilesystemResult<()> {
+        let _effect = begin_filesystem_path_effect::<Ctx, U>(accessor).await?;
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &new_fd)?;
-        let _effect = begin_filesystem_effect::<Ctx, U>(accessor).await?;
+        fail_if_read_only_path_from_accessor::<Ctx, U>(accessor, &fd, &old_path, true, false)?;
+        fail_if_read_only_path_from_accessor::<Ctx, U>(accessor, &new_fd, &new_path, true, false)?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1463,8 +1542,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         old_path: String,
         new_path: String,
     ) -> FilesystemResult<()> {
+        let _effect = begin_filesystem_path_effect::<Ctx, U>(accessor).await?;
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
-        let _effect = begin_filesystem_effect::<Ctx, U>(accessor).await?;
+        fail_if_read_only_path_from_accessor::<Ctx, U>(accessor, &fd, &new_path, false, false)?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1484,8 +1564,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         path: String,
     ) -> FilesystemResult<()> {
+        let _effect = begin_filesystem_path_effect::<Ctx, U>(accessor).await?;
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
-        let _effect = begin_filesystem_effect::<Ctx, U>(accessor).await?;
+        fail_if_read_only_path_from_accessor::<Ctx, U>(accessor, &fd, &path, false, false)?;
         // Stat the file before unlinking so the freed bytes can be credited back
         // to the storage quota on success, matching WASI P2. The release helper
         // is a no-op during replay.
@@ -1639,7 +1720,7 @@ mod tests {
         let tempdir = tempfile::TempDir::new().unwrap();
         let path = tempdir.path().join("out");
         let file = test_file(path.clone());
-        let runtime = crate::services::agent_filesystem::AgentFilesystemRuntime::new();
+        let runtime = crate::services::agent_filesystem::AgentFilesystemRuntime::new_for_test();
 
         let (written, result) = run_live_filesystem_write_chunk(
             file.clone(),
@@ -1669,7 +1750,7 @@ mod tests {
         let tempdir = tempfile::TempDir::new().unwrap();
         let path = tempdir.path().join("out");
         let file = test_file(path.clone());
-        let runtime = crate::services::agent_filesystem::AgentFilesystemRuntime::new();
+        let runtime = crate::services::agent_filesystem::AgentFilesystemRuntime::new_for_test();
 
         for chunk in [b"foo".to_vec(), b"bar".to_vec(), b"baz".to_vec()] {
             let len = chunk.len() as u64;

@@ -13,9 +13,13 @@
 // limitations under the License.
 
 use crate::metrics::workers::record_agent_filesystem_lifecycle;
+use crate::services::file_loader::{FileLoader, InitialFileSource};
 use crate::services::golem_config::FilesystemStorageConfig;
 use async_trait::async_trait;
 use bytes::Bytes;
+use golem_common::model::agent::AgentFileContentHash;
+use golem_common::model::component::{AgentFilePermissions, InitialAgentFile};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{OwnedAgentId, RetryConfig};
 use golem_common::retries::RetryState;
 use std::collections::HashMap;
@@ -30,7 +34,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 use std::time::Instant;
-use tokio::sync::{Mutex, OwnedMutexGuard};
+use tokio::sync::{Mutex, OwnedMutexGuard, OwnedRwLockReadGuard};
 use wasmtime_wasi::p2::{DynOutputStream, OutputStream, Pollable};
 use wasmtime_wasi::{StreamError, StreamResult};
 
@@ -139,6 +143,12 @@ pub(crate) struct AgentFilesystems {
     managed_xfs: Option<Arc<xfs::XfsBackend>>,
 }
 
+pub(crate) struct CreateAgentFilesystem {
+    pub agent_id: OwnedAgentId,
+    pub initial_files: Vec<InitialAgentFile>,
+    pub file_loader: Arc<FileLoader>,
+}
+
 impl AgentFilesystems {
     pub(crate) fn new(settings: &FilesystemStorageConfig) -> Result<Self, FilesystemStorageError> {
         if settings.deterministic_root_dir.is_some() && settings.managed_xfs_root_dir.is_some() {
@@ -202,7 +212,34 @@ impl AgentFilesystems {
         ))
     }
 
+    pub(crate) fn initial_file_cache_root(&self) -> Option<&Path> {
+        #[cfg(target_os = "linux")]
+        if let Some(backend) = &self.managed_xfs {
+            return Some(backend.root());
+        }
+        None
+    }
+
     pub(crate) async fn create_fresh(
+        &self,
+        request: CreateAgentFilesystem,
+    ) -> Result<AgentFilesystem, FilesystemStorageError> {
+        let filesystem = self.create_owned_empty(&request.agent_id).await?;
+        if let Err(error) = filesystem
+            .runtime
+            .replace_initial_files(
+                &request.file_loader,
+                request.agent_id.environment_id,
+                &request.initial_files,
+            )
+            .await
+        {
+            return Err(rollback_owned_filesystem(filesystem, error).await);
+        }
+        Ok(filesystem)
+    }
+
+    async fn create_owned_empty(
         &self,
         agent_id: &OwnedAgentId,
     ) -> Result<AgentFilesystem, FilesystemStorageError> {
@@ -384,17 +421,25 @@ impl AgentFilesystems {
         });
 
         let filesystem = AgentFilesystem {
-            path,
-            cleanup_path,
-            runtime: AgentFilesystemRuntime::new(),
+            path: path.clone(),
+            cleanup_path: cleanup_path.clone(),
+            runtime: AgentFilesystemRuntime::new(AgentFilesystemMaterializer::Managed {
+                root: path.clone(),
+                staging_parent: cleanup_path
+                    .parent()
+                    .expect("managed filesystem path must have a parent")
+                    .to_path_buf(),
+                backend: Arc::clone(&backend),
+                project_id,
+            }),
             cleanup_retry: self.cleanup_retry.clone(),
             storage: AgentFilesystemStorage::Managed {
                 backend: Arc::clone(&backend),
                 project_id,
-                _parent: parent,
+                parent: Some(parent),
                 root: Some(root),
             },
-            _lifecycle: lifecycle,
+            lifecycle: Some(lifecycle),
             delete_on_drop: true,
         };
         if let Err(error) = assignment_result {
@@ -420,11 +465,17 @@ impl AgentFilesystems {
         let path = directory.keep();
         let filesystem = AgentFilesystem {
             cleanup_path: path.clone(),
-            path,
-            runtime: AgentFilesystemRuntime::new(),
+            path: path.clone(),
+            runtime: AgentFilesystemRuntime::new(AgentFilesystemMaterializer::Unmanaged {
+                root: path.clone(),
+                staging_parent: path
+                    .parent()
+                    .expect("temporary filesystem path must have a parent")
+                    .to_path_buf(),
+            }),
             cleanup_retry: self.cleanup_retry.clone(),
             storage: AgentFilesystemStorage::Unmanaged,
-            _lifecycle: lifecycle,
+            lifecycle: Some(lifecycle),
             delete_on_drop: true,
         };
 
@@ -470,11 +521,14 @@ impl AgentFilesystems {
 
         let filesystem = AgentFilesystem {
             cleanup_path: path.clone(),
-            path,
-            runtime: AgentFilesystemRuntime::new(),
+            path: path.clone(),
+            runtime: AgentFilesystemRuntime::new(AgentFilesystemMaterializer::Unmanaged {
+                root: path.clone(),
+                staging_parent: parent.to_path_buf(),
+            }),
             cleanup_retry: self.cleanup_retry.clone(),
             storage: AgentFilesystemStorage::Unmanaged,
-            _lifecycle: lifecycle,
+            lifecycle: Some(lifecycle),
             delete_on_drop: true,
         };
 
@@ -492,7 +546,7 @@ pub(crate) struct AgentFilesystem {
     runtime: AgentFilesystemRuntime,
     cleanup_retry: RetryConfig,
     storage: AgentFilesystemStorage,
-    _lifecycle: OwnedMutexGuard<()>,
+    lifecycle: Option<OwnedMutexGuard<()>>,
     delete_on_drop: bool,
 }
 
@@ -502,7 +556,7 @@ enum AgentFilesystemStorage {
     Managed {
         backend: Arc<xfs::XfsBackend>,
         project_id: NonZeroU32,
-        _parent: File,
+        parent: Option<File>,
         root: Option<File>,
     },
 }
@@ -613,8 +667,64 @@ impl Drop for AgentFilesystem {
         if self.delete_on_drop {
             let started = Instant::now();
             if self.runtime.has_active_effects() {
-                record_agent_filesystem_lifecycle("delete_fallback", false, started.elapsed());
-                tracing::error!(path = %self.cleanup_path.display(), "Cannot delete agent runtime filesystem while effects are active");
+                self.runtime.seal();
+                let runtime = self.runtime.clone();
+                let cleanup_path = self.cleanup_path.clone();
+                let cleanup_retry = self.cleanup_retry.clone();
+                let lifecycle = self.lifecycle.take();
+                match &mut self.storage {
+                    AgentFilesystemStorage::Unmanaged => {
+                        std::thread::spawn(move || {
+                            while runtime.has_active_effects() {
+                                std::thread::sleep(std::time::Duration::from_millis(10));
+                            }
+                            let result = remove_and_verify_blocking(&cleanup_path);
+                            record_agent_filesystem_lifecycle(
+                                "delete_fallback",
+                                result.is_ok(),
+                                started.elapsed(),
+                            );
+                            if let Err(error) = result {
+                                tracing::error!(error = %error, "Failed to delete agent runtime filesystem during deferred fallback cleanup");
+                            }
+                            drop(lifecycle);
+                        });
+                    }
+                    #[cfg(target_os = "linux")]
+                    AgentFilesystemStorage::Managed {
+                        backend,
+                        project_id,
+                        parent,
+                        root,
+                    } => {
+                        let backend = Arc::clone(backend);
+                        let project_id = *project_id;
+                        let parent = parent.take();
+                        let root = root.take();
+                        std::thread::spawn(move || {
+                            while runtime.has_active_effects() {
+                                std::thread::sleep(std::time::Duration::from_millis(10));
+                            }
+                            drop(root);
+                            let result = remove_managed_and_verify_blocking(
+                                &backend,
+                                project_id,
+                                &cleanup_path,
+                                &cleanup_retry,
+                            );
+                            record_agent_filesystem_lifecycle(
+                                "delete_fallback",
+                                result.is_ok(),
+                                started.elapsed(),
+                            );
+                            if let Err(error) = result {
+                                tracing::error!(error = %error, "Failed to delete agent runtime filesystem during deferred fallback cleanup");
+                            }
+                            drop((parent, lifecycle));
+                        });
+                    }
+                }
+                self.delete_on_drop = false;
                 return;
             }
             let result = match &mut self.storage {
@@ -652,20 +762,309 @@ struct AgentFilesystemRuntimeInner {
     state: AtomicUsize,
     drained: tokio::sync::Notify,
     append: Arc<Mutex<()>>,
+    namespace: Arc<Mutex<()>>,
+    operations: Arc<tokio::sync::RwLock<()>>,
+    materializer: AgentFilesystemMaterializer,
+    initial_files: std::sync::RwLock<HashMap<PathBuf, InitialAgentFile>>,
+}
+
+enum AgentFilesystemMaterializer {
+    Unmanaged {
+        root: PathBuf,
+        staging_parent: PathBuf,
+    },
+    #[cfg(target_os = "linux")]
+    Managed {
+        root: PathBuf,
+        staging_parent: PathBuf,
+        backend: Arc<xfs::XfsBackend>,
+        project_id: NonZeroU32,
+    },
 }
 
 const FILESYSTEM_RUNTIME_SEALED: usize = 1 << (usize::BITS - 1);
 const FILESYSTEM_RUNTIME_ACTIVE_EFFECTS: usize = !FILESYSTEM_RUNTIME_SEALED;
 
 impl AgentFilesystemRuntime {
-    pub(crate) fn new() -> Self {
+    fn new(materializer: AgentFilesystemMaterializer) -> Self {
         Self {
             inner: Arc::new(AgentFilesystemRuntimeInner {
                 state: AtomicUsize::new(0),
                 drained: tokio::sync::Notify::new(),
                 append: Arc::new(Mutex::new(())),
+                namespace: Arc::new(Mutex::new(())),
+                operations: Arc::new(tokio::sync::RwLock::new(())),
+                materializer,
+                initial_files: std::sync::RwLock::new(HashMap::new()),
             }),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test() -> Self {
+        Self::new(AgentFilesystemMaterializer::Unmanaged {
+            root: PathBuf::from("<test>"),
+            staging_parent: std::env::temp_dir(),
+        })
+    }
+
+    pub(crate) fn is_read_only(&self, path: &Path) -> bool {
+        self.is_read_only_path(path, true)
+    }
+
+    pub(crate) fn is_read_only_path(&self, path: &Path, follow_final_symlink: bool) -> bool {
+        let path = resolve_policy_path(path, follow_final_symlink);
+        self.inner
+            .initial_files
+            .read()
+            .expect("initial-files policy lock poisoned")
+            .iter()
+            .any(|(initial_path, file)| {
+                file.permissions == AgentFilePermissions::ReadOnly
+                    && resolve_policy_path(initial_path, true) == path
+            })
+    }
+
+    pub(crate) fn contains_read_only_path(&self, path: &Path, follow_final_symlink: bool) -> bool {
+        let path = resolve_policy_path(path, follow_final_symlink);
+        self.inner
+            .initial_files
+            .read()
+            .expect("initial-files policy lock poisoned")
+            .iter()
+            .any(|(initial_path, file)| {
+                let initial_path = resolve_policy_path(initial_path, true);
+                file.permissions == AgentFilePermissions::ReadOnly
+                    && (initial_path == path || initial_path.starts_with(&path))
+            })
+    }
+
+    pub(crate) async fn replace_initial_files(
+        &self,
+        file_loader: &FileLoader,
+        environment_id: EnvironmentId,
+        files: &[InitialAgentFile],
+    ) -> Result<(), FilesystemStorageError> {
+        let effect = self.begin_update_effect().await.map_err(|error| {
+            FilesystemStorageError::io(
+                "admit initial-file materialization",
+                self.inner.materializer.root(),
+                std::io::Error::other(error),
+            )
+        })?;
+        let mut materialized = HashMap::new();
+        let mut sources: HashMap<AgentFileContentHash, InitialFileSource> = HashMap::new();
+        for file in files {
+            let target = self.inner.materializer.target(file);
+            let source = match sources.get(&file.content_hash) {
+                Some(source) if source.size() == file.size => source,
+                Some(_) => {
+                    return Err(FilesystemStorageError::verification(
+                        "verify consistent initial-file source size",
+                        &target,
+                    ));
+                }
+                None => {
+                    let source = file_loader
+                        .get_source(environment_id, file.content_hash, file.size)
+                        .await
+                        .map_err(|error| {
+                            FilesystemStorageError::io(
+                                "load verified initial-file source",
+                                &target,
+                                std::io::Error::other(error),
+                            )
+                        })?;
+                    sources.entry(file.content_hash).or_insert(source)
+                }
+            };
+            self.inner
+                .materializer
+                .materialize(source, file, effect.clone())
+                .await?;
+            if materialized.insert(target.clone(), file.clone()).is_some() {
+                return Err(FilesystemStorageError::verification(
+                    "materialize unique initial-file target",
+                    &target,
+                ));
+            }
+        }
+        *self
+            .inner
+            .initial_files
+            .write()
+            .expect("initial-files policy lock poisoned") = materialized;
+        Ok(())
+    }
+
+    pub(crate) async fn update_initial_files(
+        &self,
+        file_loader: &FileLoader,
+        environment_id: EnvironmentId,
+        files: &[InitialAgentFile],
+    ) -> Result<AgentFilesystemUpdateEffectLease, FilesystemStorageError> {
+        let effect = self.begin_update_effect().await.map_err(|error| {
+            FilesystemStorageError::io(
+                "admit initial-file update",
+                self.inner.materializer.root(),
+                std::io::Error::other(error),
+            )
+        })?;
+        let current = self
+            .inner
+            .initial_files
+            .read()
+            .expect("initial-files policy lock poisoned")
+            .clone();
+        let mut desired = HashMap::new();
+        for file in files {
+            let target = self.inner.materializer.target(file);
+            if desired.insert(target.clone(), file.clone()).is_some() {
+                return Err(FilesystemStorageError::verification(
+                    "materialize unique initial-file update target",
+                    &target,
+                ));
+            }
+        }
+
+        for (path, file) in &desired {
+            if current.get(path).is_some_and(|existing| {
+                existing.permissions == AgentFilePermissions::ReadWrite
+                    && file.permissions == AgentFilePermissions::ReadOnly
+            }) {
+                return Err(FilesystemStorageError::verification(
+                    "replace read-write initial file with read-only content",
+                    path,
+                ));
+            }
+        }
+
+        let staging = self
+            .inner
+            .materializer
+            .create_staging_dir()
+            .map_err(|error| {
+                FilesystemStorageError::io(
+                    "create initial-file update staging directory",
+                    self.inner.materializer.root(),
+                    error,
+                )
+            })?;
+        let mut sources: HashMap<AgentFileContentHash, InitialFileSource> = HashMap::new();
+        let mut staged = Vec::new();
+        for (path, file) in &desired {
+            match current.get(path) {
+                Some(existing)
+                    if existing.permissions == AgentFilePermissions::ReadWrite
+                        && file.permissions == AgentFilePermissions::ReadWrite => {}
+                Some(existing)
+                    if existing.permissions == AgentFilePermissions::ReadOnly
+                        && existing.content_hash == file.content_hash
+                        && file.permissions == AgentFilePermissions::ReadOnly => {}
+                None if file.permissions == AgentFilePermissions::ReadWrite
+                    && std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file()) => {
+                }
+                _ => {
+                    let source = match sources.get(&file.content_hash) {
+                        Some(source) if source.size() == file.size => source,
+                        Some(_) => {
+                            return Err(FilesystemStorageError::verification(
+                                "verify consistent initial-file update source size",
+                                path,
+                            ));
+                        }
+                        None => {
+                            let source = file_loader
+                                .get_source(environment_id, file.content_hash, file.size)
+                                .await
+                                .map_err(|error| {
+                                    FilesystemStorageError::io(
+                                        "load verified initial-file update source",
+                                        path,
+                                        std::io::Error::other(error),
+                                    )
+                                })?;
+                            sources.entry(file.content_hash).or_insert(source)
+                        }
+                    };
+                    let staged_path = staging.path().join(staged.len().to_string());
+                    self.inner
+                        .materializer
+                        .materialize_at(source, file, staging.path(), &staged_path, effect.clone())
+                        .await?;
+                    staged.push((path.clone(), staged_path));
+                }
+            }
+        }
+
+        let backup_root = staging.path().join("backups");
+        std::fs::create_dir(&backup_root).map_err(|error| {
+            FilesystemStorageError::io(
+                "create initial-file update backup directory",
+                &backup_root,
+                error,
+            )
+        })?;
+        let mut replacements: Vec<PathBuf> = staged.iter().map(|(path, _)| path.clone()).collect();
+        replacements.extend(
+            current
+                .iter()
+                .filter(|(path, existing)| {
+                    existing.permissions == AgentFilePermissions::ReadOnly
+                        && !desired.contains_key(*path)
+                })
+                .map(|(path, _)| path.clone()),
+        );
+        replacements.sort();
+        replacements.dedup();
+
+        let mut transaction = InitialFileUpdateTransaction::new(backup_root);
+        for path in &replacements {
+            if let Err(error) = transaction
+                .create_parent(self.inner.materializer.root(), path)
+                .and_then(|_| validate_replaceable_target(path))
+            {
+                return Err(transaction.fail("prepare initial-file update target", path, error));
+            }
+            let exists = std::fs::symlink_metadata(path).is_ok();
+            if exists && !current.contains_key(path) {
+                return Err(transaction.fail(
+                    "preserve existing guest filesystem target",
+                    path,
+                    std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        "initial-file update target already exists",
+                    ),
+                ));
+            }
+            if exists && let Err(error) = transaction.back_up(path) {
+                return Err(transaction.fail("stage existing initial-file target", path, error));
+            }
+        }
+
+        for (target, staged_path) in &staged {
+            if let Err(error) = transaction.install(staged_path, target) {
+                return Err(transaction.fail("install initial-file update target", target, error));
+            }
+        }
+
+        let staging_path = staging.path().to_path_buf();
+        if let Err(error) = staging.close() {
+            let error = transaction.fail(
+                "remove initial-file update staging directory",
+                &staging_path,
+                error,
+            );
+            self.seal();
+            return Err(error);
+        }
+        transaction.commit();
+        *self
+            .inner
+            .initial_files
+            .write()
+            .expect("initial-files policy lock poisoned") = desired;
+        Ok(effect)
     }
 
     pub(crate) async fn begin_effect(&self) -> Result<AgentFilesystemEffectLease, wasmtime::Error> {
@@ -676,6 +1075,25 @@ impl AgentFilesystemRuntime {
         &self,
     ) -> Result<AgentFilesystemEffectLease, wasmtime::Error> {
         Ok(self.admit_effect()?.begin_append().await)
+    }
+
+    pub(crate) async fn begin_path_effect(
+        &self,
+    ) -> Result<AgentFilesystemEffectLease, wasmtime::Error> {
+        Ok(self.admit_effect()?.begin_path().await)
+    }
+
+    async fn begin_update_effect(
+        &self,
+    ) -> Result<AgentFilesystemUpdateEffectLease, wasmtime::Error> {
+        let admission = self.admit_effect()?;
+        let operation_guard = Arc::clone(&self.inner.operations).write_owned().await;
+        Ok(AgentFilesystemUpdateEffectLease {
+            _inner: Arc::new(AgentFilesystemUpdateEffectLeaseInner {
+                _admission: admission,
+                _operation_guard: operation_guard,
+            }),
+        })
     }
 
     pub(crate) fn admit_effect(&self) -> Result<AgentFilesystemEffectAdmission, wasmtime::Error> {
@@ -724,6 +1142,371 @@ impl AgentFilesystemRuntime {
     }
 }
 
+impl AgentFilesystemMaterializer {
+    fn root(&self) -> &Path {
+        match self {
+            Self::Unmanaged { root, .. } => root,
+            #[cfg(target_os = "linux")]
+            Self::Managed { root, .. } => root,
+        }
+    }
+
+    fn create_staging_dir(&self) -> std::io::Result<tempfile::TempDir> {
+        let staging_parent = match self {
+            Self::Unmanaged { staging_parent, .. } => staging_parent,
+            #[cfg(target_os = "linux")]
+            Self::Managed { staging_parent, .. } => staging_parent,
+        };
+        let staging = tempfile::Builder::new()
+            .prefix(".golem-initial-files-update-")
+            .tempdir_in(staging_parent)?;
+        #[cfg(target_os = "linux")]
+        if let Self::Managed {
+            backend,
+            project_id,
+            ..
+        } = self
+        {
+            let directory = File::open(staging.path())?;
+            backend.assign_project(&directory, *project_id)?;
+        }
+        Ok(staging)
+    }
+
+    fn target(&self, file: &InitialAgentFile) -> PathBuf {
+        self.root().join(file.path.to_rel_string())
+    }
+
+    async fn materialize(
+        &self,
+        source: &InitialFileSource,
+        file: &InitialAgentFile,
+        effect: AgentFilesystemUpdateEffectLease,
+    ) -> Result<(), FilesystemStorageError> {
+        let target = self.target(file);
+        self.materialize_at(source, file, self.root(), &target, effect)
+            .await
+    }
+
+    async fn materialize_at(
+        &self,
+        source: &InitialFileSource,
+        file: &InitialAgentFile,
+        materialization_root: &Path,
+        target: &Path,
+        effect: AgentFilesystemUpdateEffectLease,
+    ) -> Result<(), FilesystemStorageError> {
+        let target = target.to_path_buf();
+        let source = source.clone();
+        let read_only = file.permissions == AgentFilePermissions::ReadOnly;
+        match self {
+            Self::Unmanaged { .. } => {
+                let root = materialization_root.to_path_buf();
+                let operation_target = target.clone();
+                tokio::task::spawn_blocking(move || {
+                    let _effect = effect;
+                    materialize_unmanaged(&root, source.path(), &operation_target, read_only)
+                })
+                .await
+                .map_err(|error| {
+                    FilesystemStorageError::io(
+                        "materialize unmanaged initial file",
+                        &target,
+                        std::io::Error::other(error),
+                    )
+                })?
+                .map_err(|error| {
+                    FilesystemStorageError::io("materialize unmanaged initial file", &target, error)
+                })
+            }
+            #[cfg(target_os = "linux")]
+            Self::Managed {
+                backend,
+                project_id,
+                ..
+            } => {
+                let root = materialization_root.to_path_buf();
+                let backend = Arc::clone(backend);
+                let project_id = *project_id;
+                let operation_target = target.clone();
+                tokio::task::spawn_blocking(move || {
+                    let _effect = effect;
+                    backend.materialize_initial_file(
+                        &root,
+                        project_id,
+                        source.path(),
+                        &operation_target,
+                        read_only,
+                    )
+                })
+                .await
+                .map_err(|error| {
+                    FilesystemStorageError::io(
+                        "reflink managed XFS initial file",
+                        &target,
+                        std::io::Error::other(error),
+                    )
+                })?
+                .map_err(|error| {
+                    FilesystemStorageError::io("reflink managed XFS initial file", &target, error)
+                })
+            }
+        }
+    }
+}
+
+fn materialize_unmanaged(
+    root: &Path,
+    source: &Path,
+    target: &Path,
+    read_only: bool,
+) -> std::io::Result<()> {
+    let parent = create_materialization_parent(root, target)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    let mut source = std::fs::File::open(source)?;
+    std::io::copy(&mut source, &mut temporary)?;
+    temporary.as_file().sync_all()?;
+    set_initial_file_permissions(temporary.as_file(), read_only)?;
+    temporary
+        .persist_noclobber(target)
+        .map_err(|error| error.error)?;
+    Ok(())
+}
+
+pub(super) fn create_materialization_parent<'a>(
+    root: &Path,
+    target: &'a Path,
+) -> std::io::Result<&'a Path> {
+    let parent = target.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "initial-file target has no parent",
+        )
+    })?;
+    let relative = parent.strip_prefix(root).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "initial-file target escapes the agent filesystem",
+        )
+    })?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(component) = component else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "initial-file target contains an invalid path component",
+            ));
+        };
+        current.push(component);
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "initial-file parent is not a directory",
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&current)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(parent)
+}
+
+pub(super) fn set_initial_file_permissions(
+    file: &std::fs::File,
+    read_only: bool,
+) -> std::io::Result<()> {
+    let mut permissions = file.metadata()?.permissions();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        permissions.set_mode(if read_only { 0o444 } else { 0o644 });
+    }
+    #[cfg(not(unix))]
+    permissions.set_readonly(read_only);
+    file.set_permissions(permissions)
+}
+
+fn validate_replaceable_target(path: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() || metadata.file_type().is_symlink() => Ok(()),
+        Ok(metadata) if metadata.is_dir() => {
+            if std::fs::read_dir(path)?.next().is_some() {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::DirectoryNotEmpty,
+                    "initial-file target directory is not empty",
+                ))
+            } else {
+                Ok(())
+            }
+        }
+        Ok(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "initial-file target is not replaceable",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+struct InitialFileUpdateTransaction {
+    backup_root: PathBuf,
+    backups: Vec<(PathBuf, PathBuf)>,
+    installed: Vec<PathBuf>,
+    created_directories: Vec<PathBuf>,
+    committed: bool,
+}
+
+impl InitialFileUpdateTransaction {
+    fn new(backup_root: PathBuf) -> Self {
+        Self {
+            backup_root,
+            backups: Vec::new(),
+            installed: Vec::new(),
+            created_directories: Vec::new(),
+            committed: false,
+        }
+    }
+
+    fn create_parent(&mut self, root: &Path, target: &Path) -> std::io::Result<()> {
+        let parent = target.parent().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "initial-file target has no parent",
+            )
+        })?;
+        let relative = parent.strip_prefix(root).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "initial-file target escapes the agent filesystem",
+            )
+        })?;
+        let mut current = root.to_path_buf();
+        for component in relative.components() {
+            let std::path::Component::Normal(component) = component else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "initial-file target contains an invalid path component",
+                ));
+            };
+            current.push(component);
+            match std::fs::symlink_metadata(&current) {
+                Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+                Ok(_) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "initial-file parent is not a directory",
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    std::fs::create_dir(&current)?;
+                    self.created_directories.push(current.clone());
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+
+    fn back_up(&mut self, path: &Path) -> std::io::Result<()> {
+        let backup = self.backup_root.join(self.backups.len().to_string());
+        std::fs::rename(path, &backup)?;
+        self.backups.push((path.to_path_buf(), backup));
+        Ok(())
+    }
+
+    fn install(&mut self, staged: &Path, target: &Path) -> std::io::Result<()> {
+        std::fs::rename(staged, target)?;
+        self.installed.push(target.to_path_buf());
+        Ok(())
+    }
+
+    fn fail(
+        &mut self,
+        operation: &'static str,
+        path: &Path,
+        error: std::io::Error,
+    ) -> FilesystemStorageError {
+        match self.rollback() {
+            Ok(()) => FilesystemStorageError::io(operation, path, error),
+            Err((rollback_path, rollback_error)) => FilesystemStorageError::cleanup_io(
+                "roll back failed initial-file update",
+                &rollback_path,
+                rollback_error,
+            ),
+        }
+    }
+
+    fn rollback(&mut self) -> Result<(), (PathBuf, std::io::Error)> {
+        let mut failure = None;
+        for path in self.installed.drain(..).rev() {
+            let result = match std::fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.is_dir() => std::fs::remove_dir(&path),
+                Ok(_) => std::fs::remove_file(&path),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error),
+            };
+            if let Err(error) = result {
+                failure = Some((path, error));
+            }
+        }
+        for (original, backup) in self.backups.drain(..).rev() {
+            if let Err(error) = std::fs::rename(&backup, &original) {
+                failure = Some((original, error));
+            }
+        }
+        for path in self.created_directories.drain(..).rev() {
+            if let Err(error) = std::fs::remove_dir(&path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                failure = Some((path, error));
+            }
+        }
+        self.committed = true;
+        failure.map_or(Ok(()), Err)
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for InitialFileUpdateTransaction {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = self.rollback();
+        }
+    }
+}
+
+fn resolve_policy_path(path: &Path, follow_final_symlink: bool) -> PathBuf {
+    if !follow_final_symlink && let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
+        return resolve_policy_path(parent, true).join(name);
+    }
+    let mut unresolved = Vec::new();
+    let mut current = path;
+    loop {
+        match std::fs::canonicalize(current) {
+            Ok(mut resolved) => {
+                for component in unresolved.iter().rev() {
+                    resolved.push(component);
+                }
+                return resolved;
+            }
+            Err(_) => match (current.parent(), current.file_name()) {
+                (Some(parent), Some(name)) => {
+                    unresolved.push(name.to_os_string());
+                    current = parent;
+                }
+                _ => return path.to_path_buf(),
+            },
+        }
+    }
+}
+
 impl AgentFilesystemRuntimeInner {
     fn finish_effect(&self) {
         let previous = self.state.fetch_sub(1, Ordering::AcqRel);
@@ -738,7 +1521,19 @@ impl AgentFilesystemRuntimeInner {
 #[derive(Debug)]
 pub(crate) struct AgentFilesystemEffectLease {
     _admission: AgentFilesystemEffectAdmission,
+    _operation_guard: OwnedRwLockReadGuard<()>,
     _append_guard: Option<OwnedMutexGuard<()>>,
+    _namespace_guard: Option<OwnedMutexGuard<()>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct AgentFilesystemUpdateEffectLease {
+    _inner: Arc<AgentFilesystemUpdateEffectLeaseInner>,
+}
+
+struct AgentFilesystemUpdateEffectLeaseInner {
+    _admission: AgentFilesystemEffectAdmission,
+    _operation_guard: tokio::sync::OwnedRwLockWriteGuard<()>,
 }
 
 pub(crate) struct AgentFilesystemEffectAdmission {
@@ -753,17 +1548,34 @@ impl Drop for AgentFilesystemEffectAdmission {
 
 impl AgentFilesystemEffectAdmission {
     pub(crate) async fn begin(self) -> AgentFilesystemEffectLease {
+        let operation_guard = Arc::clone(&self.inner.operations).read_owned().await;
         AgentFilesystemEffectLease {
             _admission: self,
+            _operation_guard: operation_guard,
             _append_guard: None,
+            _namespace_guard: None,
         }
     }
 
     pub(crate) async fn begin_append(self) -> AgentFilesystemEffectLease {
         let guard = Arc::clone(&self.inner.append).lock_owned().await;
+        let operation_guard = Arc::clone(&self.inner.operations).read_owned().await;
         AgentFilesystemEffectLease {
             _admission: self,
+            _operation_guard: operation_guard,
             _append_guard: Some(guard),
+            _namespace_guard: None,
+        }
+    }
+
+    pub(crate) async fn begin_path(self) -> AgentFilesystemEffectLease {
+        let operation_guard = Arc::clone(&self.inner.operations).read_owned().await;
+        let namespace_guard = Arc::clone(&self.inner.namespace).lock_owned().await;
+        AgentFilesystemEffectLease {
+            _admission: self,
+            _operation_guard: operation_guard,
+            _append_guard: None,
+            _namespace_guard: Some(namespace_guard),
         }
     }
 }
@@ -1265,9 +2077,13 @@ fn remove_managed_and_verify_blocking(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::component::ComponentId;
+    use golem_common::model::component::{AgentFilePath, ComponentId};
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::{AgentId, OwnedAgentId};
+    use golem_common::widen_infallible;
+    use golem_service_base::replayable_stream::ReplayableStream as _;
+    use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use test_r::test;
 
     struct DelayedOutputStream {
@@ -1316,6 +2132,47 @@ mod tests {
         )
     }
 
+    async fn file_loader_with_content(
+        environment_id: EnvironmentId,
+        cache_parent: Option<&Path>,
+        content: &[u8],
+    ) -> (
+        Arc<FileLoader>,
+        golem_common::model::agent::AgentFileContentHash,
+    ) {
+        let service = Arc::new(InitialAgentFilesService::new(Arc::new(
+            InMemoryBlobStorage::new(),
+        )));
+        let hash = service
+            .put_if_not_exists(
+                environment_id,
+                content
+                    .to_vec()
+                    .map_error(widen_infallible::<anyhow::Error>)
+                    .map_item(|item| item.map_err(widen_infallible::<anyhow::Error>)),
+            )
+            .await
+            .unwrap();
+        (
+            Arc::new(FileLoader::new(service, None, cache_parent).unwrap()),
+            hash,
+        )
+    }
+
+    fn initial_file(
+        content_hash: golem_common::model::agent::AgentFileContentHash,
+        path: &str,
+        permissions: AgentFilePermissions,
+        size: u64,
+    ) -> InitialAgentFile {
+        InitialAgentFile {
+            content_hash,
+            path: AgentFilePath::from_abs_str(path).unwrap(),
+            permissions,
+            size,
+        }
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn managed_backend_fails_closed_on_non_xfs() {
@@ -1352,7 +2209,7 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         let environment_link = root.join(escaped_id.environment_id.to_string());
         std::os::unix::fs::symlink(outside.path(), &environment_link).unwrap();
-        assert!(filesystems.create_fresh(&escaped_id).await.is_err());
+        assert!(filesystems.create_owned_empty(&escaped_id).await.is_err());
         assert!(std::fs::read_dir(outside.path()).unwrap().next().is_none());
         std::fs::remove_file(environment_link).unwrap();
 
@@ -1378,7 +2235,10 @@ mod tests {
         std::fs::remove_dir(staging).unwrap();
         drop(parent);
 
-        let stale_file_replacement = filesystems.create_fresh(&stale_file_id).await.unwrap();
+        let stale_file_replacement = filesystems
+            .create_owned_empty(&stale_file_id)
+            .await
+            .unwrap();
         assert!(stale_file_replacement.path().is_dir());
         stale_file_replacement.close_and_delete().await.unwrap();
         assert_eq!(
@@ -1395,7 +2255,41 @@ mod tests {
         assert!(capacity.total_filesystem_objects > 0);
         assert!(capacity.available_filesystem_objects <= capacity.total_filesystem_objects);
 
-        let filesystem = filesystems.create_fresh(&agent_id()).await.unwrap();
+        let materialized_id = agent_id();
+        let content = vec![0x5a; 8192];
+        let (file_loader, content_hash) = file_loader_with_content(
+            materialized_id.environment_id,
+            filesystems.initial_file_cache_root(),
+            &content,
+        )
+        .await;
+        let filesystem = filesystems
+            .create_fresh(CreateAgentFilesystem {
+                agent_id: materialized_id.clone(),
+                initial_files: vec![
+                    initial_file(
+                        content_hash,
+                        "/immutable-a",
+                        AgentFilePermissions::ReadOnly,
+                        content.len() as u64,
+                    ),
+                    initial_file(
+                        content_hash,
+                        "/immutable-b",
+                        AgentFilePermissions::ReadOnly,
+                        content.len() as u64,
+                    ),
+                    initial_file(
+                        content_hash,
+                        "/writable",
+                        AgentFilePermissions::ReadWrite,
+                        content.len() as u64,
+                    ),
+                ],
+                file_loader: Arc::clone(&file_loader),
+            })
+            .await
+            .unwrap();
         let path = filesystem.path().to_path_buf();
         let (backend, project_id) = match &filesystem.storage {
             AgentFilesystemStorage::Managed {
@@ -1405,15 +2299,51 @@ mod tests {
             } => (Arc::clone(backend), *project_id),
             AgentFilesystemStorage::Unmanaged => panic!("managed mode fell back to unmanaged"),
         };
-        let empty_usage = filesystem.usage().await.unwrap().unwrap();
-        assert!(empty_usage.filesystem_objects >= 1);
+        let materialized_usage = filesystem.usage().await.unwrap().unwrap();
+        assert!(materialized_usage.allocated_bytes >= 3 * 8192);
+        assert!(materialized_usage.filesystem_objects >= 4);
+        assert_eq!(std::fs::read(path.join("immutable-a")).unwrap(), content);
+        assert_eq!(std::fs::read(path.join("immutable-b")).unwrap(), content);
+        assert_eq!(std::fs::read(path.join("writable")).unwrap(), content);
+        let immutable_a = File::open(path.join("immutable-a")).unwrap();
+        let immutable_b = File::open(path.join("immutable-b")).unwrap();
+        assert_eq!(backend.project_id(&immutable_a).unwrap(), Some(project_id));
+        assert_eq!(backend.project_id(&immutable_b).unwrap(), Some(project_id));
+        drop((immutable_a, immutable_b));
 
-        tokio::fs::write(path.join("data"), vec![0x5a; 8192])
+        filesystem
+            .runtime()
+            .update_initial_files(
+                &file_loader,
+                materialized_id.environment_id,
+                &[
+                    initial_file(
+                        content_hash,
+                        "/immutable-a",
+                        AgentFilePermissions::ReadOnly,
+                        content.len() as u64,
+                    ),
+                    initial_file(
+                        content_hash,
+                        "/immutable-c",
+                        AgentFilePermissions::ReadOnly,
+                        content.len() as u64,
+                    ),
+                    initial_file(
+                        content_hash,
+                        "/writable",
+                        AgentFilePermissions::ReadWrite,
+                        content.len() as u64,
+                    ),
+                ],
+            )
             .await
             .unwrap();
-        let written_usage = filesystem.usage().await.unwrap().unwrap();
-        assert!(written_usage.allocated_bytes >= 8192);
-        assert!(written_usage.filesystem_objects > empty_usage.filesystem_objects);
+        assert!(!path.join("immutable-b").exists());
+        assert_eq!(std::fs::read(path.join("immutable-c")).unwrap(), content);
+        let immutable_c = File::open(path.join("immutable-c")).unwrap();
+        assert_eq!(backend.project_id(&immutable_c).unwrap(), Some(project_id));
+        drop(immutable_c);
 
         filesystem.close_and_delete().await.unwrap();
         assert!(!path.exists());
@@ -1426,6 +2356,330 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    async fn unmanaged_materialization_creates_distinct_owned_files() {
+        use std::os::unix::fs::MetadataExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let settings = FilesystemStorageConfig {
+            deterministic_root_dir: Some(root.path().to_path_buf()),
+            ..FilesystemStorageConfig::default()
+        };
+        let filesystems = AgentFilesystems::new(&settings).unwrap();
+        let id = agent_id();
+        let content = b"shared initial content";
+        let (file_loader, content_hash) =
+            file_loader_with_content(id.environment_id, None, content).await;
+        let filesystem = filesystems
+            .create_fresh(CreateAgentFilesystem {
+                agent_id: id,
+                initial_files: vec![
+                    initial_file(
+                        content_hash,
+                        "/first/immutable",
+                        AgentFilePermissions::ReadOnly,
+                        content.len() as u64,
+                    ),
+                    initial_file(
+                        content_hash,
+                        "/second/immutable",
+                        AgentFilePermissions::ReadOnly,
+                        content.len() as u64,
+                    ),
+                    initial_file(
+                        content_hash,
+                        "/writable",
+                        AgentFilePermissions::ReadWrite,
+                        content.len() as u64,
+                    ),
+                ],
+                file_loader,
+            })
+            .await
+            .unwrap();
+
+        let first = filesystem.path().join("first/immutable");
+        let second = filesystem.path().join("second/immutable");
+        let writable = filesystem.path().join("writable");
+        assert_eq!(std::fs::read(&first).unwrap(), content);
+        assert_eq!(std::fs::read(&second).unwrap(), content);
+        assert_eq!(std::fs::read(&writable).unwrap(), content);
+        assert_ne!(
+            first.metadata().unwrap().ino(),
+            second.metadata().unwrap().ino()
+        );
+        assert_ne!(
+            first.metadata().unwrap().ino(),
+            writable.metadata().unwrap().ino()
+        );
+        assert!(filesystem.runtime().is_read_only(&first));
+        assert!(filesystem.runtime().is_read_only(&second));
+        assert!(!filesystem.runtime().is_read_only(&writable));
+        assert!(
+            filesystem
+                .runtime()
+                .is_read_only(&filesystem.path().join("first/../first/immutable"))
+        );
+        std::os::unix::fs::symlink(&first, filesystem.path().join("immutable-link")).unwrap();
+        assert!(
+            filesystem
+                .runtime()
+                .is_read_only(&filesystem.path().join("immutable-link"))
+        );
+        assert!(
+            !filesystem
+                .runtime()
+                .is_read_only_path(&filesystem.path().join("immutable-link"), false,)
+        );
+        tokio::fs::write(&writable, b"changed").await.unwrap();
+
+        let path = filesystem.path().to_path_buf();
+        filesystem.close_and_delete().await.unwrap();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    async fn failed_initial_file_update_preserves_current_files() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = FilesystemStorageConfig {
+            deterministic_root_dir: Some(root.path().to_path_buf()),
+            ..FilesystemStorageConfig::default()
+        };
+        let filesystems = AgentFilesystems::new(&settings).unwrap();
+        let id = agent_id();
+        let content = b"initial content";
+        let (file_loader, content_hash) =
+            file_loader_with_content(id.environment_id, None, content).await;
+        let filesystem = filesystems
+            .create_fresh(CreateAgentFilesystem {
+                agent_id: id.clone(),
+                initial_files: vec![initial_file(
+                    content_hash,
+                    "/current",
+                    AgentFilePermissions::ReadOnly,
+                    content.len() as u64,
+                )],
+                file_loader: Arc::clone(&file_loader),
+            })
+            .await
+            .unwrap();
+
+        let result = filesystem
+            .runtime()
+            .update_initial_files(
+                &file_loader,
+                id.environment_id,
+                &[
+                    initial_file(
+                        content_hash,
+                        "/new",
+                        AgentFilePermissions::ReadOnly,
+                        content.len() as u64,
+                    ),
+                    initial_file(
+                        content_hash,
+                        "/invalid",
+                        AgentFilePermissions::ReadOnly,
+                        content.len() as u64 + 1,
+                    ),
+                ],
+            )
+            .await;
+
+        assert!(result.is_err());
+        let current = filesystem.path().join("current");
+        assert_eq!(std::fs::read(&current).unwrap(), content);
+        assert!(filesystem.runtime().is_read_only(&current));
+        assert!(!filesystem.path().join("new").exists());
+        assert!(!filesystem.path().join("invalid").exists());
+        filesystem.close_and_delete().await.unwrap();
+    }
+
+    #[test]
+    async fn initial_file_update_commits_staged_files_and_policy_together() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = FilesystemStorageConfig {
+            deterministic_root_dir: Some(root.path().to_path_buf()),
+            ..FilesystemStorageConfig::default()
+        };
+        let filesystems = AgentFilesystems::new(&settings).unwrap();
+        let id = agent_id();
+        let content = b"initial content";
+        let (file_loader, content_hash) =
+            file_loader_with_content(id.environment_id, None, content).await;
+        let filesystem = filesystems
+            .create_fresh(CreateAgentFilesystem {
+                agent_id: id.clone(),
+                initial_files: vec![initial_file(
+                    content_hash,
+                    "/old",
+                    AgentFilePermissions::ReadOnly,
+                    content.len() as u64,
+                )],
+                file_loader: Arc::clone(&file_loader),
+            })
+            .await
+            .unwrap();
+
+        filesystem
+            .runtime()
+            .update_initial_files(
+                &file_loader,
+                id.environment_id,
+                &[
+                    initial_file(
+                        content_hash,
+                        "/new",
+                        AgentFilePermissions::ReadOnly,
+                        content.len() as u64,
+                    ),
+                    initial_file(
+                        content_hash,
+                        "/writable",
+                        AgentFilePermissions::ReadWrite,
+                        content.len() as u64,
+                    ),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let new = filesystem.path().join("new");
+        let writable = filesystem.path().join("writable");
+        assert!(!filesystem.path().join("old").exists());
+        assert_eq!(std::fs::read(&new).unwrap(), content);
+        assert_eq!(std::fs::read(&writable).unwrap(), content);
+        assert!(filesystem.runtime().is_read_only(&new));
+        assert!(!filesystem.runtime().is_read_only(&writable));
+        filesystem.close_and_delete().await.unwrap();
+    }
+
+    #[test]
+    async fn initial_file_updates_are_exclusive_with_filesystem_effects() {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let effect = runtime.begin_effect().await.unwrap();
+        let update_runtime = runtime.clone();
+        let update =
+            tokio::spawn(async move { update_runtime.begin_update_effect().await.unwrap() });
+        tokio::task::yield_now().await;
+        assert!(!update.is_finished());
+
+        drop(effect);
+        let update = update.await.unwrap();
+        let effect_runtime = runtime.clone();
+        let next_effect = tokio::spawn(async move { effect_runtime.begin_effect().await.unwrap() });
+        tokio::task::yield_now().await;
+        assert!(!next_effect.is_finished());
+
+        drop(update);
+        drop(next_effect.await.unwrap());
+    }
+
+    #[test]
+    fn dropped_initial_file_transaction_restores_backups() {
+        let root = tempfile::tempdir().unwrap();
+        let live = root.path().join("live");
+        let staged = root.path().join("staged");
+        let backup = root.path().join("backups");
+        std::fs::write(&live, b"old").unwrap();
+        std::fs::write(&staged, b"new").unwrap();
+        std::fs::create_dir(&backup).unwrap();
+
+        {
+            let mut transaction = InitialFileUpdateTransaction::new(backup);
+            transaction.back_up(&live).unwrap();
+            transaction.install(&staged, &live).unwrap();
+        }
+
+        assert_eq!(std::fs::read(&live).unwrap(), b"old");
+    }
+
+    #[test]
+    async fn initial_file_update_rejects_guest_file_collision() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = FilesystemStorageConfig {
+            deterministic_root_dir: Some(root.path().to_path_buf()),
+            ..FilesystemStorageConfig::default()
+        };
+        let filesystems = AgentFilesystems::new(&settings).unwrap();
+        let id = agent_id();
+        let content = b"initial content";
+        let (file_loader, content_hash) =
+            file_loader_with_content(id.environment_id, None, content).await;
+        let filesystem = filesystems
+            .create_fresh(CreateAgentFilesystem {
+                agent_id: id.clone(),
+                initial_files: Vec::new(),
+                file_loader: Arc::clone(&file_loader),
+            })
+            .await
+            .unwrap();
+        let collision = filesystem.path().join("collision");
+        std::fs::write(&collision, b"guest data").unwrap();
+
+        let result = filesystem
+            .runtime()
+            .update_initial_files(
+                &file_loader,
+                id.environment_id,
+                &[initial_file(
+                    content_hash,
+                    "/collision",
+                    AgentFilePermissions::ReadOnly,
+                    content.len() as u64,
+                )],
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(collision).unwrap(), b"guest data");
+        filesystem.close_and_delete().await.unwrap();
+    }
+
+    #[test]
+    async fn initial_file_update_preserves_guest_file_for_read_write_target() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = FilesystemStorageConfig {
+            deterministic_root_dir: Some(root.path().to_path_buf()),
+            ..FilesystemStorageConfig::default()
+        };
+        let filesystems = AgentFilesystems::new(&settings).unwrap();
+        let id = agent_id();
+        let content = b"initial content";
+        let (file_loader, content_hash) =
+            file_loader_with_content(id.environment_id, None, content).await;
+        let filesystem = filesystems
+            .create_fresh(CreateAgentFilesystem {
+                agent_id: id.clone(),
+                initial_files: Vec::new(),
+                file_loader: Arc::clone(&file_loader),
+            })
+            .await
+            .unwrap();
+        let collision = filesystem.path().join("collision");
+        std::fs::write(&collision, b"guest data").unwrap();
+
+        let update = filesystem
+            .runtime()
+            .update_initial_files(
+                &file_loader,
+                id.environment_id,
+                &[initial_file(
+                    content_hash,
+                    "/collision",
+                    AgentFilePermissions::ReadWrite,
+                    content.len() as u64,
+                )],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(collision).unwrap(), b"guest data");
+        drop(update);
+        filesystem.close_and_delete().await.unwrap();
+    }
+
     #[test]
     async fn deterministic_creation_removes_existing_garbage() {
         let root = tempfile::tempdir().unwrap();
@@ -1436,7 +2690,7 @@ mod tests {
         let filesystems = AgentFilesystems::new(&settings).unwrap();
         let id = agent_id();
 
-        let filesystem = filesystems.create_fresh(&id).await.unwrap();
+        let filesystem = filesystems.create_owned_empty(&id).await.unwrap();
         assert_eq!(filesystem.usage().await.unwrap(), None);
         let path = filesystem.path().to_path_buf();
         tokio::fs::write(path.join("garbage"), b"old")
@@ -1448,7 +2702,7 @@ mod tests {
             .await
             .unwrap();
 
-        let filesystem = filesystems.create_fresh(&id).await.unwrap();
+        let filesystem = filesystems.create_owned_empty(&id).await.unwrap();
         assert!(!filesystem.path().join("garbage").exists());
         filesystem.close_and_delete().await.unwrap();
         assert!(!path.exists());
@@ -1457,7 +2711,7 @@ mod tests {
     #[test]
     async fn seal_rejects_new_effects_without_waiting_for_existing_effects() {
         let filesystems = AgentFilesystems::new(&FilesystemStorageConfig::default()).unwrap();
-        let filesystem = filesystems.create_fresh(&agent_id()).await.unwrap();
+        let filesystem = filesystems.create_owned_empty(&agent_id()).await.unwrap();
         let runtime = filesystem.runtime();
         let effect = runtime.begin_effect().await.unwrap();
 
@@ -1471,7 +2725,7 @@ mod tests {
     #[test]
     async fn close_waits_for_an_existing_effect_before_deleting() {
         let filesystems = AgentFilesystems::new(&FilesystemStorageConfig::default()).unwrap();
-        let filesystem = filesystems.create_fresh(&agent_id()).await.unwrap();
+        let filesystem = filesystems.create_owned_empty(&agent_id()).await.unwrap();
         let path = filesystem.path().to_path_buf();
         let effect = filesystem.runtime().begin_effect().await.unwrap();
 
@@ -1485,6 +2739,38 @@ mod tests {
     }
 
     #[test]
+    async fn dropped_owner_defers_cleanup_and_retains_lifecycle_until_effects_finish() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = FilesystemStorageConfig {
+            deterministic_root_dir: Some(root.path().to_path_buf()),
+            ..FilesystemStorageConfig::default()
+        };
+        let filesystems = AgentFilesystems::new(&settings).unwrap();
+        let id = agent_id();
+        let filesystem = filesystems.create_owned_empty(&id).await.unwrap();
+        let path = filesystem.path().to_path_buf();
+        let effect = filesystem.runtime().begin_effect().await.unwrap();
+        drop(filesystem);
+
+        let replacement = tokio::spawn({
+            let filesystems = filesystems.clone();
+            let id = id.clone();
+            async move { filesystems.create_owned_empty(&id).await }
+        });
+        tokio::task::yield_now().await;
+        assert!(!replacement.is_finished());
+        assert!(path.exists());
+
+        drop(effect);
+        let replacement = tokio::time::timeout(std::time::Duration::from_secs(5), replacement)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        replacement.close_and_delete().await.unwrap();
+    }
+
+    #[test]
     async fn deterministic_creation_is_exclusive_for_the_full_owner_lifetime() {
         let root = tempfile::tempdir().unwrap();
         let settings = FilesystemStorageConfig {
@@ -1493,7 +2779,7 @@ mod tests {
         };
         let filesystems = AgentFilesystems::new(&settings).unwrap();
         let id = agent_id();
-        let first = filesystems.create_fresh(&id).await.unwrap();
+        let first = filesystems.create_owned_empty(&id).await.unwrap();
         tokio::fs::write(first.path().join("owned"), b"first")
             .await
             .unwrap();
@@ -1501,7 +2787,7 @@ mod tests {
         let second = tokio::spawn({
             let filesystems = filesystems.clone();
             let id = id.clone();
-            async move { filesystems.create_fresh(&id).await }
+            async move { filesystems.create_owned_empty(&id).await }
         });
         tokio::task::yield_now().await;
         assert!(!second.is_finished());
@@ -1515,7 +2801,7 @@ mod tests {
 
     #[test]
     async fn append_effect_ends_at_native_completion_without_waiting_for_guest_polling() {
-        let runtime = AgentFilesystemRuntime::new();
+        let runtime = AgentFilesystemRuntime::new_for_test();
         let ready = Arc::new(tokio::sync::Semaphore::new(0));
         let cancelled = Arc::new(AtomicBool::new(false));
         let mut stream = CoordinatedFileOutputStream::new(Box::new(DelayedOutputStream {
@@ -1542,7 +2828,7 @@ mod tests {
 
     #[test]
     async fn positioned_effect_does_not_wait_for_active_append() {
-        let runtime = AgentFilesystemRuntime::new();
+        let runtime = AgentFilesystemRuntime::new_for_test();
         let append = runtime.begin_append_effect().await.unwrap();
 
         let positioned = runtime.begin_effect().await.unwrap();
@@ -1553,7 +2839,7 @@ mod tests {
 
     #[test]
     async fn cancelling_p2_stream_forwards_cancellation_and_releases_the_effect() {
-        let runtime = AgentFilesystemRuntime::new();
+        let runtime = AgentFilesystemRuntime::new_for_test();
         let cancelled = Arc::new(AtomicBool::new(false));
         let mut stream = CoordinatedFileOutputStream::new(Box::new(DelayedOutputStream {
             ready: Arc::new(tokio::sync::Semaphore::new(0)),
@@ -1578,7 +2864,7 @@ mod tests {
 
     #[test]
     async fn dropping_p2_stream_requests_cancellation() {
-        let runtime = AgentFilesystemRuntime::new();
+        let runtime = AgentFilesystemRuntime::new_for_test();
         let cancelled = Arc::new(AtomicBool::new(false));
         let mut stream = CoordinatedFileOutputStream::new(Box::new(DelayedOutputStream {
             ready: Arc::new(tokio::sync::Semaphore::new(0)),
