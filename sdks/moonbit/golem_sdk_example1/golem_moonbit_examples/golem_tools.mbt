@@ -401,6 +401,65 @@ pub impl @tool.ToolErrorSchema for CanonicalStashError with from_error_payload_v
 }
 
 ///|
+fn[T] __golem_tool_concat_array(left : Array[T], right : Array[T]) -> Array[T] {
+  let result = left.copy()
+  for value in right {
+    result.push(value)
+  }
+  result
+}
+
+///|
+fn __golem_tool_concat_globals(
+  left : @tool.GlobalsDef,
+  right : @tool.GlobalsDef,
+) -> @tool.GlobalsDef {
+  {
+    options: __golem_tool_concat_array(left.options, right.options),
+    flags: __golem_tool_concat_array(left.flags, right.flags),
+  }
+}
+
+///|
+fn __golem_tool_rebase_node(node : @tool.CommandNodeDef, offset : Int) -> @tool.CommandNodeDef {
+  {
+    name: node.name,
+    aliases: node.aliases,
+    doc: node.doc,
+    globals: node.globals,
+    subcommands: node.subcommands.map(index => index + offset),
+    body: node.body,
+  }
+}
+
+///|
+fn __golem_tool_extract_prepared(def : @tool.ToolDef) -> @tool.ToolDef {
+  {
+    version: def.version,
+    commands: def.commands[1:].map(node => __golem_tool_rebase_node(node, -1)),
+  }
+}
+
+///|
+fn __golem_tool_append_prepared(def : @tool.ToolDef, child : @tool.ToolDef) -> @tool.ToolDef {
+  let offset = def.commands.length()
+  let commands = def.commands.copy()
+  let root = commands[0]
+  commands[0] =  {
+    name: root.name,
+    aliases: root.aliases,
+    doc: root.doc,
+    globals: root.globals,
+    subcommands: __golem_tool_concat_array(root.subcommands, [offset]),
+    body: root.body,
+  }
+  for node in child.commands {
+    commands.push(__golem_tool_rebase_node(node, offset))
+  }
+  { version: def.version, commands }
+}
+
+///|
 fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
   try {
     let def :@tool.ToolDef = {
@@ -739,9 +798,54 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
 }
 
 ///|
+fn __golem_tool_def_prepare_CanonicalGrep(
+  strict_ancestors : @tool.GlobalsDef,
+  parent_globals : @tool.GlobalsDef,
+  override_name : String?,
+  override_doc : @toolCommon.Doc?,
+  override_aliases : Array[String]?,
+) -> @tool.ToolDef {
+  try {
+    let carrier :@tool.ToolDef = {
+      version: "2.0.0",
+      commands: [
+        {
+          name: "__golem_ancestry",
+          aliases: [],
+          doc: { summary: "", description: "", examples: [] },
+          globals: strict_ancestors,
+          subcommands: [],
+          body: None,
+        },
+      ],
+    }
+    let prepared = __golem_tool_extract_prepared(
+      carrier.graft_subtree(
+        __golem_tool_def_raw_CanonicalGrep(),
+        "canonical-grep",
+        parent_globals,
+        override_name,
+        override_doc,
+        override_aliases,
+      ),
+    )
+    let def = prepared
+    def
+  } catch{
+    error => abort("invalid generated prepared tool definition: " + repr(error))
+  }
+}
+
+///|
 fn __golem_tool_def_CanonicalGrep() -> @tool.ToolDef {
   try {
-    __golem_tool_def_raw_CanonicalGrep().normalize_inherited_globals()
+    __golem_tool_def_prepare_CanonicalGrep(
+      { options: [], flags: [] },
+      { options: [], flags: [] },
+      None,
+      None,
+      None,
+    ).normalize_inherited_globals()
   } catch{
     error => abort("invalid generated tool definition: " + repr(error))
   }
@@ -1458,9 +1562,51 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
         },
       ],
     }
-    let def = def.graft_subtree(
-      __golem_tool_def_raw_CanonicalRemote(),
-      "remote",
+    def
+  } catch{
+    error => abort("invalid generated raw tool definition: " + repr(error))
+  }
+}
+
+///|
+fn __golem_tool_def_prepare_CanonicalGit(
+  strict_ancestors : @tool.GlobalsDef,
+  parent_globals : @tool.GlobalsDef,
+  override_name : String?,
+  override_doc : @toolCommon.Doc?,
+  override_aliases : Array[String]?,
+) -> @tool.ToolDef {
+  try {
+    let carrier :@tool.ToolDef = {
+      version: "0.0.0",
+      commands: [
+        {
+          name: "__golem_ancestry",
+          aliases: [],
+          doc: { summary: "", description: "", examples: [] },
+          globals: strict_ancestors,
+          subcommands: [],
+          body: None,
+        },
+      ],
+    }
+    let prepared = __golem_tool_extract_prepared(
+      carrier.graft_subtree(
+        __golem_tool_def_raw_CanonicalGit(),
+        "canonical-git",
+        parent_globals,
+        override_name,
+        override_doc,
+        override_aliases,
+      ),
+    )
+    let descendant_ancestors = __golem_tool_concat_globals(
+      strict_ancestors,
+      prepared.commands[0].globals,
+    )
+    let def = prepared
+    let child = __golem_tool_def_prepare_CanonicalRemote(
+      descendant_ancestors,
       {
         options: [
           {
@@ -1543,9 +1689,9 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
       }),
       Some(["rmt"]),
     )
-    let def = def.graft_subtree(
-      __golem_tool_def_raw_CanonicalStash(),
-      "stash",
+    let def = __golem_tool_append_prepared(def, child)
+    let child = __golem_tool_def_prepare_CanonicalStash(
+      descendant_ancestors,
       {
         options: [
           {
@@ -1600,16 +1746,23 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
       }),
       None,
     )
+    let def = __golem_tool_append_prepared(def, child)
     def
   } catch{
-    error => abort("invalid generated raw tool definition: " + repr(error))
+    error => abort("invalid generated prepared tool definition: " + repr(error))
   }
 }
 
 ///|
 fn __golem_tool_def_CanonicalGit() -> @tool.ToolDef {
   try {
-    __golem_tool_def_raw_CanonicalGit().normalize_inherited_globals()
+    __golem_tool_def_prepare_CanonicalGit(
+      { options: [], flags: [] },
+      { options: [], flags: [] },
+      None,
+      None,
+      None,
+    ).normalize_inherited_globals()
   } catch{
     error => abort("invalid generated tool definition: " + repr(error))
   }
@@ -2262,9 +2415,54 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
 }
 
 ///|
+fn __golem_tool_def_prepare_CanonicalRemote(
+  strict_ancestors : @tool.GlobalsDef,
+  parent_globals : @tool.GlobalsDef,
+  override_name : String?,
+  override_doc : @toolCommon.Doc?,
+  override_aliases : Array[String]?,
+) -> @tool.ToolDef {
+  try {
+    let carrier :@tool.ToolDef = {
+      version: "0.0.0",
+      commands: [
+        {
+          name: "__golem_ancestry",
+          aliases: [],
+          doc: { summary: "", description: "", examples: [] },
+          globals: strict_ancestors,
+          subcommands: [],
+          body: None,
+        },
+      ],
+    }
+    let prepared = __golem_tool_extract_prepared(
+      carrier.graft_subtree(
+        __golem_tool_def_raw_CanonicalRemote(),
+        "remote",
+        parent_globals,
+        override_name,
+        override_doc,
+        override_aliases,
+      ),
+    )
+    let def = prepared
+    def
+  } catch{
+    error => abort("invalid generated prepared tool definition: " + repr(error))
+  }
+}
+
+///|
 fn __golem_tool_def_CanonicalRemote() -> @tool.ToolDef {
   try {
-    __golem_tool_def_raw_CanonicalRemote().normalize_inherited_globals()
+    __golem_tool_def_prepare_CanonicalRemote(
+      { options: [], flags: [] },
+      { options: [], flags: [] },
+      None,
+      None,
+      None,
+    ).normalize_inherited_globals()
   } catch{
     error => abort("invalid generated tool definition: " + repr(error))
   }
@@ -2731,9 +2929,54 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
 }
 
 ///|
+fn __golem_tool_def_prepare_CanonicalStash(
+  strict_ancestors : @tool.GlobalsDef,
+  parent_globals : @tool.GlobalsDef,
+  override_name : String?,
+  override_doc : @toolCommon.Doc?,
+  override_aliases : Array[String]?,
+) -> @tool.ToolDef {
+  try {
+    let carrier :@tool.ToolDef = {
+      version: "0.0.0",
+      commands: [
+        {
+          name: "__golem_ancestry",
+          aliases: [],
+          doc: { summary: "", description: "", examples: [] },
+          globals: strict_ancestors,
+          subcommands: [],
+          body: None,
+        },
+      ],
+    }
+    let prepared = __golem_tool_extract_prepared(
+      carrier.graft_subtree(
+        __golem_tool_def_raw_CanonicalStash(),
+        "stash",
+        parent_globals,
+        override_name,
+        override_doc,
+        override_aliases,
+      ),
+    )
+    let def = prepared
+    def
+  } catch{
+    error => abort("invalid generated prepared tool definition: " + repr(error))
+  }
+}
+
+///|
 fn __golem_tool_def_CanonicalStash() -> @tool.ToolDef {
   try {
-    __golem_tool_def_raw_CanonicalStash().normalize_inherited_globals()
+    __golem_tool_def_prepare_CanonicalStash(
+      { options: [], flags: [] },
+      { options: [], flags: [] },
+      None,
+      None,
+      None,
+    ).normalize_inherited_globals()
   } catch{
     error => abort("invalid generated tool definition: " + repr(error))
   }
@@ -2993,9 +3236,54 @@ fn __golem_tool_def_raw_CanonicalBigBound() -> @tool.ToolDef {
 }
 
 ///|
+fn __golem_tool_def_prepare_CanonicalBigBound(
+  strict_ancestors : @tool.GlobalsDef,
+  parent_globals : @tool.GlobalsDef,
+  override_name : String?,
+  override_doc : @toolCommon.Doc?,
+  override_aliases : Array[String]?,
+) -> @tool.ToolDef {
+  try {
+    let carrier :@tool.ToolDef = {
+      version: "0.0.0",
+      commands: [
+        {
+          name: "__golem_ancestry",
+          aliases: [],
+          doc: { summary: "", description: "", examples: [] },
+          globals: strict_ancestors,
+          subcommands: [],
+          body: None,
+        },
+      ],
+    }
+    let prepared = __golem_tool_extract_prepared(
+      carrier.graft_subtree(
+        __golem_tool_def_raw_CanonicalBigBound(),
+        "canonical-big-bound",
+        parent_globals,
+        override_name,
+        override_doc,
+        override_aliases,
+      ),
+    )
+    let def = prepared
+    def
+  } catch{
+    error => abort("invalid generated prepared tool definition: " + repr(error))
+  }
+}
+
+///|
 fn __golem_tool_def_CanonicalBigBound() -> @tool.ToolDef {
   try {
-    __golem_tool_def_raw_CanonicalBigBound().normalize_inherited_globals()
+    __golem_tool_def_prepare_CanonicalBigBound(
+      { options: [], flags: [] },
+      { options: [], flags: [] },
+      None,
+      None,
+      None,
+    ).normalize_inherited_globals()
   } catch{
     error => abort("invalid generated tool definition: " + repr(error))
   }

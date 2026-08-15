@@ -153,7 +153,8 @@ impl Display for SchemaError {
             ),
             SchemaError::UnionStringRuleOnNonStringBody { tag } => write!(
                 f,
-                "union branch `{tag}` uses a string-pattern rule but body is not string-shaped"
+                "union branch `{tag}` uses a string-pattern rule but its body's canonical raw \
+                 JSON representation is not a string"
             ),
             SchemaError::UnionFieldRuleOnNonRecordBody { tag } => write!(
                 f,
@@ -162,7 +163,7 @@ impl Display for SchemaError {
             SchemaError::UnionFieldEqualsLiteralOnNonStringField { tag, field_name } => write!(
                 f,
                 "union branch `{tag}` references field `{field_name}` for a literal comparison \
-                 but the field is not string-shaped"
+                 but the field's canonical raw JSON representation is not a string"
             ),
             SchemaError::UnionFieldRuleMissingField { tag, field_name } => write!(
                 f,
@@ -609,7 +610,9 @@ fn validate_union(
         for j in (i + 1)..spec.branches.len() {
             let a = &spec.branches[i];
             let b = &spec.branches[j];
-            if let Some(reason) = discriminators_overlap(&a.discriminator, &b.discriminator) {
+            if let DiscriminatorPairClassification::Reject(reason) =
+                classify_discriminator_pair(&a.discriminator, &b.discriminator)
+            {
                 errors.push(SchemaError::UnionAmbiguousDiscriminators {
                     tag_a: a.tag.clone(),
                     tag_b: b.tag.clone(),
@@ -699,101 +702,143 @@ fn check_union_branch(graph: &SchemaGraph, branch: &UnionBranch, errors: &mut Ve
     }
 }
 
-/// Returns `Some(reason)` if rules `a` and `b` can structurally overlap on
-/// at least one value, `None` otherwise. Regex overlap is undecidable in
-/// general; only byte-equal patterns are reported.
-fn discriminators_overlap(a: &DiscriminatorRule, b: &DiscriminatorRule) -> Option<String> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DiscriminatorPairClassification {
+    Reject(String),
+    Disjoint,
+    Indeterminate,
+}
+
+fn classify_discriminator_pair(
+    a: &DiscriminatorRule,
+    b: &DiscriminatorRule,
+) -> DiscriminatorPairClassification {
     match (a, b) {
         (DiscriminatorRule::Prefix { prefix: pa }, DiscriminatorRule::Prefix { prefix: pb }) => {
-            if pa.is_empty() && pb.is_empty() {
-                return Some("both prefixes are empty".to_string());
-            }
-            if pa.is_empty() {
-                return Some(format!("empty prefix overlaps any other prefix `{pb}`"));
-            }
-            if pb.is_empty() {
-                return Some(format!("empty prefix overlaps any other prefix `{pa}`"));
-            }
             if pa.starts_with(pb.as_str()) || pb.starts_with(pa.as_str()) {
-                return Some(format!("prefix `{pa}` and prefix `{pb}` overlap"));
+                DiscriminatorPairClassification::Reject(format!(
+                    "prefix `{pa}` and prefix `{pb}` overlap"
+                ))
+            } else {
+                DiscriminatorPairClassification::Disjoint
             }
-            None
         }
         (DiscriminatorRule::Suffix { suffix: sa }, DiscriminatorRule::Suffix { suffix: sb }) => {
-            if sa.is_empty() && sb.is_empty() {
-                return Some("both suffixes are empty".to_string());
-            }
-            if sa.is_empty() {
-                return Some(format!("empty suffix overlaps any other suffix `{sb}`"));
-            }
-            if sb.is_empty() {
-                return Some(format!("empty suffix overlaps any other suffix `{sa}`"));
-            }
             if sa.ends_with(sb.as_str()) || sb.ends_with(sa.as_str()) {
-                return Some(format!("suffix `{sa}` and suffix `{sb}` overlap"));
+                DiscriminatorPairClassification::Reject(format!(
+                    "suffix `{sa}` and suffix `{sb}` overlap"
+                ))
+            } else {
+                DiscriminatorPairClassification::Disjoint
             }
-            None
+        }
+        (DiscriminatorRule::Prefix { prefix }, DiscriminatorRule::Suffix { suffix })
+        | (DiscriminatorRule::Suffix { suffix }, DiscriminatorRule::Prefix { prefix }) => {
+            DiscriminatorPairClassification::Reject(format!(
+                "prefix `{prefix}` and suffix `{suffix}` overlap"
+            ))
+        }
+        (DiscriminatorRule::Prefix { prefix }, DiscriminatorRule::Contains { substring })
+        | (DiscriminatorRule::Contains { substring }, DiscriminatorRule::Prefix { prefix }) => {
+            DiscriminatorPairClassification::Reject(format!(
+                "prefix `{prefix}` and contains `{substring}` overlap"
+            ))
+        }
+        (DiscriminatorRule::Suffix { suffix }, DiscriminatorRule::Contains { substring })
+        | (DiscriminatorRule::Contains { substring }, DiscriminatorRule::Suffix { suffix }) => {
+            DiscriminatorPairClassification::Reject(format!(
+                "suffix `{suffix}` and contains `{substring}` overlap"
+            ))
         }
         (
             DiscriminatorRule::Contains { substring: ca },
             DiscriminatorRule::Contains { substring: cb },
-        ) => {
-            if ca.is_empty() || cb.is_empty() {
-                return Some("empty contains substring matches every string".to_string());
-            }
-            None
-        }
-        (DiscriminatorRule::Prefix { prefix }, _) | (_, DiscriminatorRule::Prefix { prefix })
-            if prefix.is_empty() =>
-        {
-            Some("empty prefix matches every string".to_string())
-        }
-        (DiscriminatorRule::Suffix { suffix }, _) | (_, DiscriminatorRule::Suffix { suffix })
-            if suffix.is_empty() =>
-        {
-            Some("empty suffix matches every string".to_string())
-        }
-        (DiscriminatorRule::Contains { substring }, _)
-        | (_, DiscriminatorRule::Contains { substring })
-            if substring.is_empty() =>
-        {
-            Some("empty contains substring matches every string".to_string())
-        }
+        ) => DiscriminatorPairClassification::Reject(format!(
+            "contains `{ca}` and contains `{cb}` overlap"
+        )),
         (DiscriminatorRule::Regex { regex: ra }, DiscriminatorRule::Regex { regex: rb }) => {
             if ra == rb {
-                Some(format!("both branches share regex `{ra}`"))
+                DiscriminatorPairClassification::Reject(format!("both branches share regex `{ra}`"))
             } else {
-                None
+                DiscriminatorPairClassification::Indeterminate
             }
         }
+        (
+            DiscriminatorRule::Regex { .. },
+            DiscriminatorRule::Prefix { .. }
+            | DiscriminatorRule::Suffix { .. }
+            | DiscriminatorRule::Contains { .. },
+        )
+        | (
+            DiscriminatorRule::Prefix { .. }
+            | DiscriminatorRule::Suffix { .. }
+            | DiscriminatorRule::Contains { .. },
+            DiscriminatorRule::Regex { .. },
+        ) => DiscriminatorPairClassification::Indeterminate,
+        (
+            DiscriminatorRule::Prefix { .. }
+            | DiscriminatorRule::Suffix { .. }
+            | DiscriminatorRule::Contains { .. }
+            | DiscriminatorRule::Regex { .. },
+            DiscriminatorRule::FieldEquals(_) | DiscriminatorRule::FieldAbsent { .. },
+        )
+        | (
+            DiscriminatorRule::FieldEquals(_) | DiscriminatorRule::FieldAbsent { .. },
+            DiscriminatorRule::Prefix { .. }
+            | DiscriminatorRule::Suffix { .. }
+            | DiscriminatorRule::Contains { .. }
+            | DiscriminatorRule::Regex { .. },
+        ) => DiscriminatorPairClassification::Disjoint,
         (DiscriminatorRule::FieldEquals(fa), DiscriminatorRule::FieldEquals(fb)) => {
             if fa.field_name != fb.field_name {
-                return None;
+                return DiscriminatorPairClassification::Reject(format!(
+                    "field-equals on `{}` and `{}` can match the same object",
+                    fa.field_name, fb.field_name
+                ));
             }
             match (&fa.literal, &fb.literal) {
-                (None, _) | (_, None) => Some(format!(
+                (None, _) | (_, None) => DiscriminatorPairClassification::Reject(format!(
                     "field-equals on `{}` without literal overlaps another field-equals on the \
                      same field",
                     fa.field_name
                 )),
-                (Some(la), Some(lb)) if la == lb => Some(format!(
-                    "two field-equals on `{}` share literal `{la}`",
-                    fa.field_name
-                )),
-                _ => None,
+                (Some(la), Some(lb)) if la == lb => {
+                    DiscriminatorPairClassification::Reject(format!(
+                        "two field-equals on `{}` share literal `{la}`",
+                        fa.field_name
+                    ))
+                }
+                _ => DiscriminatorPairClassification::Disjoint,
             }
         }
         (
             DiscriminatorRule::FieldAbsent { field_name: fa },
             DiscriminatorRule::FieldAbsent { field_name: fb },
+        ) => DiscriminatorPairClassification::Reject(format!(
+            "field-absent on `{fa}` and `{fb}` can match the same object"
+        )),
+        (
+            DiscriminatorRule::FieldEquals(field_equals),
+            DiscriminatorRule::FieldAbsent {
+                field_name: field_absent,
+            },
+        )
+        | (
+            DiscriminatorRule::FieldAbsent {
+                field_name: field_absent,
+            },
+            DiscriminatorRule::FieldEquals(field_equals),
         ) => {
-            if fa == fb {
-                Some(format!("two field-absent rules share field `{fa}`"))
+            if field_equals.field_name == *field_absent {
+                DiscriminatorPairClassification::Disjoint
             } else {
-                None
+                DiscriminatorPairClassification::Reject(format!(
+                    "field-equals on `{}` and field-absent on `{field_absent}` can match the same \
+                     object",
+                    field_equals.field_name
+                ))
             }
         }
-        _ => None,
     }
 }
 
@@ -863,10 +908,9 @@ fn resolved_shape<'a>(
                 None => BodyShape::Unresolved,
             }
         }
-        SchemaType::String { .. }
-        | SchemaType::Text { .. }
-        | SchemaType::Url { .. }
-        | SchemaType::Path { .. } => BodyShape::String,
+        SchemaType::String { .. } | SchemaType::Url { .. } | SchemaType::Path { .. } => {
+            BodyShape::String
+        }
         SchemaType::Record { fields, .. } => BodyShape::Record(
             fields
                 .iter()
@@ -874,5 +918,321 @@ fn resolved_shape<'a>(
                 .collect::<Vec<_>>(),
         ),
         _ => BodyShape::Other,
+    }
+}
+
+#[cfg(test)]
+mod discriminator_pair_tests {
+    use super::{DiscriminatorPairClassification, classify_discriminator_pair};
+    use crate::schema::schema_type::{DiscriminatorRule, FieldDiscriminator};
+    use test_r::test;
+
+    #[derive(Clone, Copy, Debug)]
+    enum ExpectedClassification {
+        Reject,
+        Disjoint,
+        Indeterminate,
+    }
+
+    struct ClassificationCase {
+        name: &'static str,
+        left: DiscriminatorRule,
+        right: DiscriminatorRule,
+        expected: ExpectedClassification,
+    }
+
+    fn prefix(value: &str) -> DiscriminatorRule {
+        DiscriminatorRule::Prefix {
+            prefix: value.to_string(),
+        }
+    }
+
+    fn suffix(value: &str) -> DiscriminatorRule {
+        DiscriminatorRule::Suffix {
+            suffix: value.to_string(),
+        }
+    }
+
+    fn contains(value: &str) -> DiscriminatorRule {
+        DiscriminatorRule::Contains {
+            substring: value.to_string(),
+        }
+    }
+
+    fn regex(value: &str) -> DiscriminatorRule {
+        DiscriminatorRule::Regex {
+            regex: value.to_string(),
+        }
+    }
+
+    fn field_equals(field_name: &str, literal: Option<&str>) -> DiscriminatorRule {
+        DiscriminatorRule::FieldEquals(FieldDiscriminator {
+            field_name: field_name.to_string(),
+            literal: literal.map(str::to_string),
+        })
+    }
+
+    fn field_absent(field_name: &str) -> DiscriminatorRule {
+        DiscriminatorRule::FieldAbsent {
+            field_name: field_name.to_string(),
+        }
+    }
+
+    #[test]
+    fn discriminator_pair_classification_matches_portable_matrix() {
+        use ExpectedClassification::{Disjoint, Indeterminate, Reject};
+
+        let cases = vec![
+            ClassificationCase {
+                name: "prefix_prefix_nested_reject",
+                left: prefix("a"),
+                right: prefix("ab"),
+                expected: Reject,
+            },
+            ClassificationCase {
+                name: "prefix_prefix_disjoint",
+                left: prefix("a"),
+                right: prefix("b"),
+                expected: Disjoint,
+            },
+            ClassificationCase {
+                name: "empty_prefix_prefix_reject",
+                left: prefix(""),
+                right: prefix("a"),
+                expected: Reject,
+            },
+            ClassificationCase {
+                name: "suffix_suffix_nested_reject",
+                left: suffix("ing"),
+                right: suffix("ng"),
+                expected: Reject,
+            },
+            ClassificationCase {
+                name: "suffix_suffix_disjoint",
+                left: suffix("a"),
+                right: suffix("b"),
+                expected: Disjoint,
+            },
+            ClassificationCase {
+                name: "empty_suffix_suffix_reject",
+                left: suffix(""),
+                right: suffix("a"),
+                expected: Reject,
+            },
+            ClassificationCase {
+                name: "prefix_suffix_reject",
+                left: prefix("a"),
+                right: suffix("b"),
+                expected: Reject,
+            },
+            ClassificationCase {
+                name: "prefix_contains_reject",
+                left: prefix("a"),
+                right: contains("b"),
+                expected: Reject,
+            },
+            ClassificationCase {
+                name: "suffix_contains_reject",
+                left: suffix("a"),
+                right: contains("b"),
+                expected: Reject,
+            },
+            ClassificationCase {
+                name: "contains_contains_reject",
+                left: contains("a"),
+                right: contains("b"),
+                expected: Reject,
+            },
+            ClassificationCase {
+                name: "regex_regex_identical_reject",
+                left: regex("a.*"),
+                right: regex("a.*"),
+                expected: Reject,
+            },
+            ClassificationCase {
+                name: "regex_regex_distinct_indeterminate",
+                left: regex("a.*"),
+                right: regex(".*a"),
+                expected: Indeterminate,
+            },
+            ClassificationCase {
+                name: "regex_prefix_indeterminate",
+                left: regex("^a"),
+                right: prefix("a"),
+                expected: Indeterminate,
+            },
+            ClassificationCase {
+                name: "regex_empty_prefix_indeterminate",
+                left: regex("^a"),
+                right: prefix(""),
+                expected: Indeterminate,
+            },
+            ClassificationCase {
+                name: "regex_suffix_indeterminate",
+                left: regex("a$"),
+                right: suffix("a"),
+                expected: Indeterminate,
+            },
+            ClassificationCase {
+                name: "regex_empty_suffix_indeterminate",
+                left: regex("a$"),
+                right: suffix(""),
+                expected: Indeterminate,
+            },
+            ClassificationCase {
+                name: "regex_contains_indeterminate",
+                left: regex("a"),
+                right: contains("a"),
+                expected: Indeterminate,
+            },
+            ClassificationCase {
+                name: "regex_empty_contains_indeterminate",
+                left: regex("a"),
+                right: contains(""),
+                expected: Indeterminate,
+            },
+            ClassificationCase {
+                name: "prefix_field_equals_disjoint",
+                left: prefix("a"),
+                right: field_equals("kind", Some("a")),
+                expected: Disjoint,
+            },
+            ClassificationCase {
+                name: "prefix_field_absent_disjoint",
+                left: prefix("a"),
+                right: field_absent("kind"),
+                expected: Disjoint,
+            },
+            ClassificationCase {
+                name: "suffix_field_equals_disjoint",
+                left: suffix("a"),
+                right: field_equals("kind", Some("a")),
+                expected: Disjoint,
+            },
+            ClassificationCase {
+                name: "suffix_field_absent_disjoint",
+                left: suffix("a"),
+                right: field_absent("kind"),
+                expected: Disjoint,
+            },
+            ClassificationCase {
+                name: "contains_field_equals_disjoint",
+                left: contains("a"),
+                right: field_equals("kind", Some("a")),
+                expected: Disjoint,
+            },
+            ClassificationCase {
+                name: "contains_field_absent_disjoint",
+                left: contains("a"),
+                right: field_absent("kind"),
+                expected: Disjoint,
+            },
+            ClassificationCase {
+                name: "regex_field_equals_disjoint",
+                left: regex("a"),
+                right: field_equals("kind", Some("a")),
+                expected: Disjoint,
+            },
+            ClassificationCase {
+                name: "regex_field_absent_disjoint",
+                left: regex("a"),
+                right: field_absent("kind"),
+                expected: Disjoint,
+            },
+            ClassificationCase {
+                name: "field_equals_same_field_different_literals_disjoint",
+                left: field_equals("kind", Some("a")),
+                right: field_equals("kind", Some("b")),
+                expected: Disjoint,
+            },
+            ClassificationCase {
+                name: "field_equals_same_field_same_literal_reject",
+                left: field_equals("kind", Some("a")),
+                right: field_equals("kind", Some("a")),
+                expected: Reject,
+            },
+            ClassificationCase {
+                name: "field_equals_same_field_one_literal_absent_reject",
+                left: field_equals("kind", None),
+                right: field_equals("kind", Some("a")),
+                expected: Reject,
+            },
+            ClassificationCase {
+                name: "field_equals_same_field_both_literals_absent_reject",
+                left: field_equals("kind", None),
+                right: field_equals("kind", None),
+                expected: Reject,
+            },
+            ClassificationCase {
+                name: "field_equals_different_fields_reject",
+                left: field_equals("left", Some("a")),
+                right: field_equals("right", Some("b")),
+                expected: Reject,
+            },
+            ClassificationCase {
+                name: "field_absent_same_field_reject",
+                left: field_absent("kind"),
+                right: field_absent("kind"),
+                expected: Reject,
+            },
+            ClassificationCase {
+                name: "field_absent_different_fields_reject",
+                left: field_absent("left"),
+                right: field_absent("right"),
+                expected: Reject,
+            },
+            ClassificationCase {
+                name: "field_equals_field_absent_same_field_disjoint",
+                left: field_equals("kind", Some("a")),
+                right: field_absent("kind"),
+                expected: Disjoint,
+            },
+            ClassificationCase {
+                name: "field_equals_field_absent_different_fields_reject",
+                left: field_equals("left", Some("a")),
+                right: field_absent("right"),
+                expected: Reject,
+            },
+        ];
+
+        for case in cases {
+            assert_classification(
+                case.name,
+                "forward",
+                classify_discriminator_pair(&case.left, &case.right),
+                case.expected,
+            );
+            assert_classification(
+                case.name,
+                "reverse",
+                classify_discriminator_pair(&case.right, &case.left),
+                case.expected,
+            );
+        }
+    }
+
+    fn assert_classification(
+        name: &str,
+        order: &str,
+        actual: DiscriminatorPairClassification,
+        expected: ExpectedClassification,
+    ) {
+        let matches = matches!(
+            (&actual, expected),
+            (
+                DiscriminatorPairClassification::Reject(_),
+                ExpectedClassification::Reject
+            ) | (
+                DiscriminatorPairClassification::Disjoint,
+                ExpectedClassification::Disjoint
+            ) | (
+                DiscriminatorPairClassification::Indeterminate,
+                ExpectedClassification::Indeterminate
+            )
+        );
+        assert!(
+            matches,
+            "{name} ({order}): expected {expected:?}, got {actual:?}"
+        );
     }
 }

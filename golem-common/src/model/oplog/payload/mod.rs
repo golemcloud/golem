@@ -44,6 +44,7 @@ use crate::model::{
     AgentFingerprint, AgentId, ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId,
 };
 use crate::oplog_payload;
+use crate::schema::tool::DiscoveredTool;
 use crate::schema::{RegisteredAgentTypeSchema, SchemaGraph, SchemaValue, TypedSchemaValue};
 use crate::serialization::serialize;
 use desert_rust::{
@@ -287,6 +288,9 @@ oplog_payload! {
         SecretReveal {
             secret_id: Uuid,
             expected_type: SchemaGraph
+        },
+        GolemToolGetTool {
+            name: String
         },
     }
 }
@@ -563,6 +567,12 @@ oplog_payload! {
         },
         GolemApiInstallCard {
             result: Result<(), CardInstallFailure>,
+        },
+        GolemToolTools {
+            result: Result<Vec<Arc<DiscoveredTool>>, String>
+        },
+        GolemToolTool {
+            result: Result<Option<Arc<DiscoveredTool>>, String>
         }
     }
 }
@@ -733,7 +743,9 @@ pub mod host_functions {
         (GolemPermissionsDerivePersist => "golem::permissions::derive", "persist-derived-card", PermissionCardDerive, PermissionCardDerived),
         (GolemPermissionsRevokePersist => "golem::permissions::revoke", "persist-revoked-cards", PermissionCardRevoke, PermissionCardsRevoked),
         (GolemPermissionsInstallChildPersist => "golem::permissions::wallet", "persist-installed-child-card", PermissionCardDerive, PermissionCardDerived),
-        (GolemPermissionsInstallTransfer => "golem::permissions::wallet", "install-card-transfer", PermissionCardTransfer, PermissionCardTransferComplete)
+        (GolemPermissionsInstallTransfer => "golem::permissions::wallet", "install-card-transfer", PermissionCardTransfer, PermissionCardTransferComplete),
+        (GolemToolGetAllTools => "golem::tool::host", "get_all_tools", NoInput, GolemToolTools),
+        (GolemToolGetTool => "golem::tool::host", "get_tool", GolemToolGetTool, GolemToolTool)
     }
 }
 

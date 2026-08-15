@@ -1265,6 +1265,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 )
                 .map_err(|e| e.to_string())?,
                 new_component_size: params.new_component_size,
+                new_total_linear_memory_size: None,
                 new_active_plugins: params
                     .new_active_plugins
                     .into_iter()
@@ -1997,6 +1998,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 timestamp,
                 target_revision,
                 new_component_size,
+                new_total_linear_memory_size: _,
                 new_active_plugins,
             } => Ok(Self::SuccessfulUpdate(
                 oplog::RawSuccessfulUpdateParameters {

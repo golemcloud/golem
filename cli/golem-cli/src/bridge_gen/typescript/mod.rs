@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod javascript;
+mod schema_graph;
 pub mod tool;
 #[allow(dead_code)]
 mod ts_writer;
@@ -20,7 +21,6 @@ mod type_name;
 
 pub use type_name::TypeScriptTypeName;
 
-use crate::bridge_gen::json::stringify_precision_sensitive_numbers;
 use crate::bridge_gen::parameter_naming::ParameterNaming;
 use crate::bridge_gen::type_naming::{TypeNaming, user_supplied_fields};
 use crate::bridge_gen::typescript::javascript::escape_js_ident;
@@ -47,6 +47,7 @@ use golem_common::schema::unstructured::{
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use indoc::formatdoc;
 use serde_json::json;
+use std::cell::RefCell;
 
 /// User-supplied input shape for a constructor or method, derived from an
 /// [`InputSchema`]. Multimodal input (a single user field whose schema is the
@@ -105,6 +106,7 @@ pub struct TypeScriptBridgeGenerator {
     testing: bool,
     same_language: bool,
     mode: TypeScriptBridgeMode,
+    schema_graphs: RefCell<schema_graph::SchemaGraphRegistry>,
 }
 
 impl BridgeGenerator for TypeScriptBridgeGenerator {
@@ -188,6 +190,12 @@ impl TypeScriptBridgeGenerator {
             .eq_ignore_ascii_case("typescript")
             || agent_type.source_language.eq_ignore_ascii_case("ts");
         reserved.push(agent_type.type_name.0.clone());
+        let schema_graph_registry_name = {
+            let mut naming = ParameterNaming::new();
+            naming.reserve_many(reserved.iter().cloned());
+            naming.fresh("__golemSchemaGraphs")
+        };
+        reserved.push(schema_graph_registry_name.clone());
         Ok(Self {
             target_path: target_path.to_path_buf(),
             type_naming: TypeNaming::new_with_reserved_names(
@@ -199,6 +207,9 @@ impl TypeScriptBridgeGenerator {
             testing,
             same_language,
             mode,
+            schema_graphs: RefCell::new(schema_graph::SchemaGraphRegistry::new(
+                schema_graph_registry_name,
+            )),
         })
     }
 
@@ -644,20 +655,27 @@ impl TypeScriptBridgeGenerator {
     /// Generates the client module
     fn generate_ts(&self, path: &Utf8Path) -> anyhow::Result<()> {
         let mut writer = TsWriter::new();
+        let mut body = TsWriter::new();
 
         let config_var = self.global_config_var_name();
 
         self.generate_ts_imports(&mut writer);
         if self.mode == TypeScriptBridgeMode::ExternalRest {
-            self.generate_ts_config_global(&mut writer, &config_var);
+            self.generate_ts_config_global(&mut body, &config_var);
         }
-        self.generate_ts_type_definitions(&mut writer)?;
+        self.generate_ts_type_definitions(&mut body)?;
         if self.mode == TypeScriptBridgeMode::ExternalRest {
-            self.generate_ts_class(&mut writer, &config_var)?;
-            self.generate_ts_configure_function(&mut writer, &config_var);
+            self.generate_ts_class(&mut body, &config_var)?;
+            self.generate_ts_configure_function(&mut body, &config_var);
         } else {
-            self.generate_guest_ts_class(&mut writer)?;
+            self.generate_guest_ts_class(&mut body)?;
         }
+        let schema_graphs = self.schema_graphs.borrow().definitions();
+        if !schema_graphs.is_empty() {
+            writer.write_line("");
+            writer.write_line(schema_graphs);
+        }
+        writer.write_line(body.finish_string());
 
         writer.finish(path)
     }
@@ -869,11 +887,11 @@ impl TypeScriptBridgeGenerator {
         for (config, param_name) in local_configs.iter().zip(parameter_names) {
             let path = serde_json::to_string(&config.path)?;
             let encoded = self.encode_schema_value(param_name, &config.value_type)?;
-            let graph = self.config_schema_graph_json_literal(&config.value_type)?;
+            let graph = self.config_schema_graph(&config.value_type);
             writer.write_line(format!("if ({param_name} !== undefined) {{"));
             writer.indent();
             writer.write_line(format!(
-                "{agent_config_name}.push({{ path: {path}, value: base.typedSchemaValueFromJson({graph}, {encoded}) }});"
+                "{agent_config_name}.push({{ path: {path}, value: {{ graph: {graph}, value: {encoded} }} }});"
             ));
             writer.unindent();
             writer.write_line("}");
@@ -881,14 +899,12 @@ impl TypeScriptBridgeGenerator {
         Ok(())
     }
 
-    fn config_schema_graph_json_literal(&self, typ: &SchemaType) -> anyhow::Result<String> {
+    fn config_schema_graph(&self, typ: &SchemaType) -> String {
         let graph = SchemaGraph {
             defs: reachable_defs(self.type_naming.graph(), typ),
             root: typ.clone(),
         };
-        let mut value = serde_json::to_value(graph)?;
-        stringify_precision_sensitive_numbers(&mut value);
-        Ok(serde_json::to_string(&serde_json::to_string(&value)?)?)
+        self.schema_graphs.borrow_mut().intern(graph)
     }
 
     fn generate_guest_remote_method(
@@ -922,9 +938,9 @@ impl TypeScriptBridgeGenerator {
             "ReturnType<base.RemoteAgentHandle['scheduleCancelable']>"
         };
         let schedule_result = if ephemeral {
-            "ReturnType<base.RemoteAgentHandle['scheduleWithMetadata']>"
+            "ReturnType<base.RemoteAgentHandle['scheduleCancelableWithMetadata']>"
         } else {
-            "void"
+            "ReturnType<base.RemoteAgentHandle['scheduleCancelable']>"
         };
         let await_call = if ephemeral {
             format!(
@@ -949,10 +965,10 @@ impl TypeScriptBridgeGenerator {
         };
         let schedule_call = if ephemeral {
             format!(
-                "return this.resolved.scheduleWithMetadata(at, {method_name}, __encode(__args));"
+                "return this.resolved.scheduleCancelableWithMetadata(at, {method_name}, __encode(__args));"
             )
         } else {
-            format!("this.resolved.schedule(at, {method_name}, __encode(__args));")
+            format!("return this.resolved.scheduleCancelable(at, {method_name}, __encode(__args));")
         };
         writer.write_doc(&method.description);
         writer.write_line(formatdoc! {"

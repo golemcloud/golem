@@ -41,6 +41,7 @@ service RegistryService {
   // agent types api
   rpc GetAllAgentTypes (GetAllAgentTypesRequest) returns (GetAllAgentTypesResponse);
   rpc GetAgentType (GetAgentTypeRequest) returns (GetAgentTypeResponse);
+  rpc GetToolDeploymentState (GetToolDeploymentStateRequest) returns (GetToolDeploymentStateResponse);
   rpc ResolveAgentTypeByNames(ResolveAgentTypeByNamesRequest)
       returns (ResolveAgentTypeByNamesResponse);
 
@@ -303,6 +304,23 @@ message GetAgentTypeResponse {
 
 message GetAgentTypeSuccessResponse {
   RegisteredAgentType agent_type = 1;
+}
+
+message GetToolDeploymentStateRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  golem.component.ComponentId component_id = 2;
+  uint64 component_revision = 3;
+}
+
+message GetToolDeploymentStateResponse {
+  oneof result {
+    GetToolDeploymentStateSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetToolDeploymentStateSuccessResponse {
+  optional ToolDeploymentState tool_deployment = 1;
 }
 
 message ResolveAgentTypeByNamesRequest {

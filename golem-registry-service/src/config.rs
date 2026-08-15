@@ -178,6 +178,11 @@ impl Default for RegistryServiceConfig {
                 monthly_gas_limit: 1000000000000000000,
                 monthly_upload_limit: 1000000000,
                 max_memory_per_worker: 1024 * 1024 * 1024, // 1 GB
+                max_memory_per_worker_ceiling: default_unlimited(),
+                max_memory_per_worker_user_configurable: false,
+                monthly_memory_gb_seconds: default_unlimited(),
+                monthly_memory_gb_seconds_ceiling: default_unlimited(),
+                monthly_memory_gb_seconds_user_configurable: false,
                 max_table_elements_per_worker: 16_384,
                 max_disk_space_per_worker: 1024 * 1024 * 1024, // 1 GB
                 max_disk_space_per_worker_ceiling: None,       // tracks the limit above
@@ -489,6 +494,16 @@ pub struct PrecreatedPlan {
     pub monthly_gas_limit: u64,
     pub monthly_upload_limit: u64,
     pub max_memory_per_worker: u64,
+    #[serde(default = "default_unlimited")]
+    pub max_memory_per_worker_ceiling: u64,
+    #[serde(default)]
+    pub max_memory_per_worker_user_configurable: bool,
+    #[serde(default = "default_unlimited")]
+    pub monthly_memory_gb_seconds: u64,
+    #[serde(default = "default_unlimited")]
+    pub monthly_memory_gb_seconds_ceiling: u64,
+    #[serde(default)]
+    pub monthly_memory_gb_seconds_user_configurable: bool,
     #[serde(default = "default_max_table_elements_per_worker")]
     pub max_table_elements_per_worker: u64,
     #[serde(default = "default_max_disk_space_per_worker")]
@@ -599,6 +614,24 @@ mod tests {
         assert_eq!(
             plan.resolved_max_disk_space_per_worker_ceiling(),
             2 * 1024 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    pub fn memory_plan_fields_default_to_unlimited() {
+        let plan = RegistryServiceConfig::default()
+            .initial_plans
+            .remove("default")
+            .expect("default plan must exist");
+
+        assert_eq!(
+            plan.max_memory_per_worker_ceiling,
+            1_000_000_000_000_000_000
+        );
+        assert_eq!(plan.monthly_memory_gb_seconds, 1_000_000_000_000_000_000);
+        assert_eq!(
+            plan.monthly_memory_gb_seconds_ceiling,
+            1_000_000_000_000_000_000
         );
     }
 }

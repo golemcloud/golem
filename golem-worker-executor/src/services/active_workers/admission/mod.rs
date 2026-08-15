@@ -54,9 +54,10 @@
 //! trait so its decision logic can be exercised in isolation with synthetic
 //! probes and candidate sets.
 
-use super::memory_probe::MemoryProbe;
+use super::memory_probe::{MemoryProbe, MemorySnapshot};
 use async_trait::async_trait;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Why an eviction candidate is worth evicting, in priority order. Lower
 /// variants are evicted first.
@@ -83,6 +84,17 @@ pub(crate) trait EvictionSource: Send + Sync {
     async fn evict_at_most(&self, priority: EvictionPriority, needed_bytes: u64) -> u64;
 }
 
+#[cfg(test)]
+pub(crate) struct NoEvictionSource;
+
+#[cfg(test)]
+#[async_trait]
+impl EvictionSource for NoEvictionSource {
+    async fn evict_at_most(&self, _priority: EvictionPriority, _needed_bytes: u64) -> u64 {
+        0
+    }
+}
+
 /// The outcome of an admission attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AdmissionDecision {
@@ -107,67 +119,68 @@ pub(crate) struct AdmissionPolicy {
 }
 
 /// Decides admission against measured headroom, evicting resident idle/warm
-/// work as needed. Holds its policy and probe; live usage is read fresh from the
-/// probe on each call. The only retained state is `granted`: the total linear
-/// memory granted to live workers, maintained across admit and unload, which the
-/// gate reserves so a worker cannot OOM the node by faulting in granted pages.
+/// work as needed. Holds its policy and probe; live usage is read from the
+/// probe's last coherent snapshot on each call. The only retained state is
+/// `granted`: the total linear memory granted to live workers, maintained across
+/// admit and unload, which the gate reserves so a worker cannot OOM the node by
+/// faulting in granted pages.
 pub(crate) struct AdmissionController {
     probe: Box<dyn MemoryProbe>,
     policy: AdmissionPolicy,
-    granted: Mutex<u64>,
+    granted: AtomicU64,
 }
 
 impl AdmissionController {
     pub fn new(probe: Box<dyn MemoryProbe>, policy: AdmissionPolicy) -> Self {
-        let ceiling = (probe.snapshot().limit_bytes as f64 * policy.usable_ratio) as u64;
+        let snapshot = probe.snapshot();
+        let ceiling = snapshot.usable_limit_bytes(policy.usable_ratio);
         crate::metrics::workers::record_worker_memory_ceiling(ceiling);
+
         Self {
             probe,
             policy,
-            granted: Mutex::new(0),
+            granted: AtomicU64::new(0),
         }
-    }
-
-    /// Bytes available for a new admission: the usable ceiling minus the larger
-    /// of measured RSS and the total memory granted to live workers. Saturating —
-    /// never underflows when already over the ceiling.
-    ///
-    /// A worker can fault in any page of the virtual memory it was granted at any
-    /// time, with no admission call to intercept it, so the gate must reserve the
-    /// full granted total even before it is resident. Measured RSS is only larger
-    /// than the granted total transiently (host/runtime overhead the grant does
-    /// not cover), so taking the maximum keeps the gate safe against both the
-    /// grant a worker may yet fault in and any usage the grant does not capture.
-    fn admissible_headroom(&self) -> u64 {
-        let granted = *self.granted.lock().unwrap();
-        self.headroom_with_granted(granted)
-    }
-
-    /// Computes admissible headroom for an already-read `granted` value. Reads
-    /// the probe and emits the ceiling/RSS metrics. Kept separate from the lock
-    /// acquisition so the decision-and-reserve sequence can hold the lock across
-    /// both steps (see [`Self::try_reserve_locked`]).
-    fn headroom_with_granted(&self, granted: u64) -> u64 {
-        let snapshot = self.probe.snapshot();
-        let ceiling = (snapshot.limit_bytes as f64 * self.policy.usable_ratio) as u64;
-        crate::metrics::workers::record_worker_memory_ceiling(ceiling);
-        crate::metrics::workers::record_worker_admission_rss(snapshot.current_bytes);
-        ceiling.saturating_sub(snapshot.current_bytes.max(granted))
     }
 
     /// Atomically admits `request_bytes` if the headroom computed against the
     /// current granted total covers it: reads `granted`, computes headroom, and
-    /// adds the reservation all under one lock so two concurrent admissions
-    /// cannot both pass the check against the same headroom and overshoot the
-    /// ceiling. Returns whether the request was admitted.
-    fn try_reserve_locked(&self, request_bytes: u64) -> bool {
-        let mut granted = self.granted.lock().unwrap();
-        if self.headroom_with_granted(*granted) >= request_bytes {
-            *granted += request_bytes;
-            crate::metrics::workers::record_worker_memory_granted(*granted);
-            true
-        } else {
-            false
+    /// reserves with an atomic compare-and-exchange so concurrent admissions
+    /// cannot both pass against the same granted total and overshoot the ceiling.
+    fn try_reserve(&self, request_bytes: u64) -> Result<(), u64> {
+        let snapshot = self.probe.snapshot();
+        self.try_reserve_with_snapshot(request_bytes, snapshot)
+    }
+
+    fn try_reserve_with_snapshot(
+        &self,
+        request_bytes: u64,
+        snapshot: MemorySnapshot,
+    ) -> Result<(), u64> {
+        let ceiling = snapshot.usable_limit_bytes(self.policy.usable_ratio);
+        crate::metrics::workers::record_worker_memory_ceiling(ceiling);
+        crate::metrics::workers::record_worker_admission_rss(snapshot.current_bytes);
+        let mut granted = self.granted.load(Ordering::Acquire);
+        loop {
+            let headroom = ceiling.saturating_sub(snapshot.current_bytes.max(granted));
+            if headroom < request_bytes {
+                return Err(headroom);
+            }
+            let Some(new_granted) = granted.checked_add(request_bytes) else {
+                return Err(headroom);
+            };
+            match self.granted.compare_exchange_weak(
+                granted,
+                new_granted,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    crate::metrics::workers::increase_worker_memory_granted(request_bytes);
+                    return Ok(());
+                }
+                Err(current) => granted = current,
+            }
         }
     }
 
@@ -175,9 +188,12 @@ impl AdmissionController {
     /// gate reserves this until the worker unloads, because the worker may fault
     /// the granted pages in at any later time.
     fn reserve(&self, request_bytes: u64) {
-        let mut granted = self.granted.lock().unwrap();
-        *granted += request_bytes;
-        crate::metrics::workers::record_worker_memory_granted(*granted);
+        self.granted
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |granted| {
+                granted.checked_add(request_bytes)
+            })
+            .expect("committed memory reservation overflowed");
+        crate::metrics::workers::increase_worker_memory_granted(request_bytes);
     }
 
     /// Reserve memory for a cost that is a committed consequence of an already
@@ -195,17 +211,22 @@ impl AdmissionController {
     /// not releasing it would permanently shrink admissible headroom as workers
     /// come and go.
     pub(crate) fn release(&self, reserved_bytes: u64) {
-        let mut granted = self.granted.lock().unwrap();
-        *granted = granted.saturating_sub(reserved_bytes);
-        crate::metrics::workers::record_worker_memory_granted(*granted);
-    }
-
-    /// Pre-register grant bytes for workers that were already live when the
-    /// controller was created. Test-only: production registers every worker's
-    /// grant through admission.
-    #[cfg(test)]
-    pub fn seed_granted(&self, bytes: u64) {
-        *self.granted.lock().unwrap() += bytes;
+        let previously_granted = self
+            .granted
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |granted| {
+                Some(granted.saturating_sub(reserved_bytes))
+            })
+            .expect("memory reservation release must always produce a value");
+        if previously_granted < reserved_bytes {
+            tracing::error!(
+                granted_bytes = previously_granted,
+                released_bytes = reserved_bytes,
+                "Released memory exceeds the committed reservation"
+            );
+        }
+        crate::metrics::workers::decrease_worker_memory_granted(
+            reserved_bytes.min(previously_granted),
+        );
     }
 
     /// Decide whether `request_bytes` can be admitted, evicting from `source` if
@@ -222,12 +243,15 @@ impl AdmissionController {
         source: &dyn EvictionSource,
     ) -> AdmissionDecision {
         // Fast path: atomically admit if there is already enough real headroom.
-        if self.try_reserve_locked(request_bytes) {
-            return AdmissionDecision::Admit;
-        }
+        let headroom = match self.try_reserve(request_bytes) {
+            Ok(()) => {
+                return AdmissionDecision::Admit;
+            }
+            Err(headroom) => headroom,
+        };
 
         // Reclaim resident, idle-then-warm work up to the shortfall.
-        let shortfall = request_bytes.saturating_sub(self.admissible_headroom());
+        let shortfall = request_bytes.saturating_sub(headroom);
         let mut remaining = shortfall;
 
         for priority in [EvictionPriority::Idle, EvictionPriority::Warm] {
@@ -242,7 +266,7 @@ impl AdmissionController {
         // the probe is the authority, and other activity may have moved usage
         // in either direction while we were evicting. The check-and-reserve is
         // atomic so a concurrent admission cannot slip in between.
-        if self.try_reserve_locked(request_bytes) {
+        if self.try_reserve(request_bytes).is_ok() {
             AdmissionDecision::Admit
         } else {
             AdmissionDecision::Reject
@@ -250,10 +274,14 @@ impl AdmissionController {
     }
 
     /// The current admissible headroom. Used by tests to assert the gate's
-    /// accounting; production reads headroom indirectly through admission.
+    /// accounting without publishing production metrics. Production reads
+    /// headroom indirectly through admission.
     #[cfg(test)]
     pub(crate) fn headroom_bytes(&self) -> u64 {
-        self.admissible_headroom()
+        let snapshot = self.probe.snapshot();
+        let ceiling = snapshot.usable_limit_bytes(self.policy.usable_ratio);
+        let granted = self.granted.load(Ordering::Acquire);
+        ceiling.saturating_sub(snapshot.current_bytes.max(granted))
     }
 
     /// Admit `request_bytes`, evicting resident idle-then-warm work if needed,
@@ -274,9 +302,17 @@ impl AdmissionController {
             AdmissionDecision::Admit => Some(MemoryGrant {
                 controller: Some(self.clone()),
                 bytes: request_bytes,
+                reserved_bytes: request_bytes,
             }),
             AdmissionDecision::Reject => None,
         }
+    }
+}
+
+impl Drop for AdmissionController {
+    fn drop(&mut self) {
+        let granted = self.granted.swap(0, Ordering::AcqRel);
+        crate::metrics::workers::decrease_worker_memory_granted(granted);
     }
 }
 
@@ -290,15 +326,37 @@ impl AdmissionController {
 pub(crate) struct MemoryGrant {
     controller: Option<Arc<AdmissionController>>,
     bytes: u64,
+    reserved_bytes: u64,
 }
 
 impl MemoryGrant {
-    /// An inert grant for when measured admission is disabled: holds no
-    /// reservation and releases nothing on drop.
-    pub(crate) fn inert() -> Self {
+    pub(crate) fn bytes(&self) -> u64 {
+        self.bytes
+    }
+
+    pub(crate) fn is_tracked(&self) -> bool {
+        self.controller.is_some()
+    }
+
+    pub(crate) fn shrink_to(&mut self, bytes: u64) {
+        let released = self.bytes.saturating_sub(bytes);
+        self.bytes -= released;
+        let released_reservation = released.min(self.reserved_bytes);
+        self.reserved_bytes -= released_reservation;
+        if released_reservation > 0
+            && let Some(controller) = &self.controller
+        {
+            controller.release(released_reservation);
+        }
+    }
+
+    /// An inert grant for when measured admission is disabled: tracks the
+    /// worker's bytes without reserving global headroom or releasing on drop.
+    pub(crate) fn inert(bytes: u64) -> Self {
         Self {
             controller: None,
-            bytes: 0,
+            bytes,
+            reserved_bytes: 0,
         }
     }
 
@@ -307,17 +365,19 @@ impl MemoryGrant {
     /// grant is consumed and its reservation transferred here; the combined total
     /// is released exactly once when this grant drops.
     pub(crate) fn merge(&mut self, mut other: MemoryGrant) {
+        self.bytes += other.bytes;
+        self.reserved_bytes += other.reserved_bytes;
         if other.controller.is_some() {
             // Adopt the controller so a merged grant acquired while admission was
             // enabled still releases, even if `self` started inert.
             if self.controller.is_none() {
                 self.controller = other.controller.take();
             }
-            self.bytes += other.bytes;
         }
         // Neutralize the absorbed grant so its drop does not release the bytes
         // now owned by `self`.
         other.bytes = 0;
+        other.reserved_bytes = 0;
         other.controller = None;
     }
 }
@@ -333,7 +393,7 @@ impl std::fmt::Debug for MemoryGrant {
 impl Drop for MemoryGrant {
     fn drop(&mut self) {
         if let Some(controller) = &self.controller {
-            controller.release(self.bytes);
+            controller.release(self.reserved_bytes);
         }
     }
 }

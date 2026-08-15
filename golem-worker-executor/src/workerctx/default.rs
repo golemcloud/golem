@@ -15,7 +15,8 @@
 use super::LogEventEmitBehaviour;
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::durable_host::{
-    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState, SnapshotBoundaryBlocker,
+    DurableResourceLimiter, DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
+    SnapshotBoundaryBlocker,
 };
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
@@ -466,6 +467,12 @@ impl InvocationHooks for Context {
     }
 }
 
+impl DurableResourceLimiter<Context> for Context {
+    fn durable_worker_ctx(&mut self) -> &mut DurableWorkerCtx<Context> {
+        &mut self.durable_ctx
+    }
+}
+
 #[async_trait]
 impl ResourceLimiterAsync for Context {
     async fn memory_growing(
@@ -474,29 +481,25 @@ impl ResourceLimiterAsync for Context {
         desired: usize,
         maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
-        let limit = self.get_max_memory();
         debug!(
             "memory_growing: current={}, desired={}, maximum={:?}, account limit={}",
-            current, desired, maximum, limit
+            current,
+            desired,
+            maximum,
+            self.get_max_memory()
         );
 
-        if desired > limit || maximum.map(|m| desired > m).unwrap_or_default() {
-            Err(GolemSpecificWasmTrap::WorkerExceededMemoryLimit)?;
-        };
+        self.durable_memory_growing(current, desired, maximum).await
+    }
 
-        let current_known = self.durable_ctx.total_linear_memory_size();
-        let delta = (desired as u64).saturating_sub(current_known);
-
-        if delta > 0 {
-            // Request more permits from the host on a detached task; if that fails
-            // the worker gets restarted and reacquires memory on startup.
-            self.durable_ctx
-                .increase_memory(delta)
-                .map_err(wasmtime::Error::from_anyhow)?;
-            record_allocated_memory(desired);
+    fn memory_grown(&mut self, current: usize, desired: usize) {
+        if self.durable_memory_grown(current, desired) {
+            record_allocated_memory(self.durable_ctx.total_linear_memory_size() as usize);
         }
+    }
 
-        Ok(true)
+    fn memory_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
+        self.durable_memory_grow_failed()
     }
 
     async fn table_growing(

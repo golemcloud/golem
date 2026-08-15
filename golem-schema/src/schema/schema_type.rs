@@ -1153,6 +1153,13 @@ pub struct QuantitySpec {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
+/// An inferred-tag sum governed by the canonical portable pair-classification
+/// contract.
+///
+/// Under that contract, all guaranteed non-regex overlaps and byte-identical
+/// regex text are rejected. Other regex-containing string-rule pairs are
+/// accepted as indeterminate because SDK regex dialects differ; runtime
+/// decoding still rejects a value that matches multiple branches.
 pub struct UnionSpec {
     pub branches: Vec<UnionBranch>,
 }
@@ -1189,7 +1196,8 @@ pub enum DiscriminatorRule {
     Suffix { suffix: String },
     /// String value contains this substring.
     Contains { substring: String },
-    /// String value matches this anchored regex.
+    /// String value has a match for this regex. Include anchors in the pattern
+    /// when whole-string matching is required.
     Regex { regex: String },
     /// Record-shaped value where the named field is present, and — if
     /// `literal` is set — has the given literal string value.

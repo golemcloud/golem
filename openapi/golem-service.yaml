@@ -3015,6 +3015,428 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/accounts/{account_id}/resource-overrides/max-memory-per-agent:
+    get:
+      tags:
+      - RegistryService
+      - Account
+      summary: Get the effective maximum linear memory per agent.
+      operationId: get_account_max_memory_override
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MemoryLimit'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    put:
+      tags:
+      - RegistryService
+      - Account
+      summary: Set the maximum linear memory per agent. Setting an expiry requires an admin token.
+      operationId: set_account_max_memory_override
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/SetMemoryLimit'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MemoryLimit'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - RegistryService
+      - Account
+      summary: Clear the maximum linear memory per-agent override.
+      operationId: clear_account_max_memory_override
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MemoryLimit'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/accounts/{account_id}/resource-overrides/monthly-memory-gb-seconds:
+    get:
+      tags:
+      - RegistryService
+      - Account
+      summary: Get the effective monthly memory GB-seconds allowance.
+      operationId: get_account_monthly_memory_override
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MemoryLimit'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    put:
+      tags:
+      - RegistryService
+      - Account
+      summary: Set the monthly memory GB-seconds allowance. Setting an expiry requires an admin token.
+      operationId: set_account_monthly_memory_override
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/SetMemoryLimit'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MemoryLimit'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - RegistryService
+      - Account
+      summary: Clear the monthly memory GB-seconds allowance override.
+      operationId: clear_account_monthly_memory_override
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MemoryLimit'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/envs/{environment_id}/agent-secrets:
     get:
       tags:
@@ -6420,6 +6842,170 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/DeployedRegisteredAgentType'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_id}/tools:
+    get:
+      tags:
+      - RegistryService
+      - Environment
+      summary: List all registered tools in a deployment
+      operationId: list_deployment_registered_tools
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_id
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_DeployedRegisteredTool'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_id}/tools/{tool_name}:
+    get:
+      tags:
+      - RegistryService
+      - Environment
+      summary: Get a registered tool in a deployment
+      operationId: get_deployment_registered_tool
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_id
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: path
+        name: tool_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeployedRegisteredTool'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -17509,6 +18095,16 @@ components:
       type: string
       enum:
       - principal
+    BoolFlagShape:
+      type: object
+      properties:
+        default:
+          type: boolean
+        negatable:
+          type: boolean
+      required:
+      - default
+      - negatable
     CachePolicy:
       discriminator:
         propertyName: type
@@ -17554,6 +18150,107 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
+    CommandAnnotations:
+      type: object
+      properties:
+        read_only:
+          type: boolean
+        destructive:
+          type: boolean
+        idempotent:
+          type: boolean
+        open_world:
+          type: boolean
+      required:
+      - read_only
+      - destructive
+      - idempotent
+      - open_world
+    CommandBody:
+      type: object
+      properties:
+        positionals:
+          $ref: '#/components/schemas/Positionals'
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/OptionSpec'
+        flags:
+          type: array
+          items:
+            $ref: '#/components/schemas/FlagSpec'
+        constraints:
+          type: array
+          items:
+            $ref: '#/components/schemas/Constraint'
+        stdin:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/StreamSpec'
+          - nullable: true
+        stdout:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/StreamSpec'
+          - nullable: true
+        result:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/ToolResultSpec'
+          - nullable: true
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ErrorCase'
+        annotations:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/CommandAnnotations'
+          - nullable: true
+      required:
+      - positionals
+      - options
+      - flags
+      - constraints
+      - errors
+    CommandNode:
+      type: object
+      properties:
+        name:
+          type: string
+        aliases:
+          type: array
+          items:
+            type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        globals:
+          $ref: '#/components/schemas/Globals'
+        subcommands:
+          type: array
+          items:
+            type: integer
+            format: int32
+        body:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/CommandBody'
+          - nullable: true
+      required:
+      - name
+      - aliases
+      - doc
+      - globals
+      - subcommands
+    CommandTree:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommandNode'
+      required:
+      - nodes
     ComponentCreation:
       title: ComponentCreation
       type: object
@@ -17570,6 +18267,16 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/AgentTypeProvisionConfigCreation'
+        tools:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/Tool'
+        toolDeploymentConfigs:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolDeploymentConfigCreation'
       required:
       - componentName
     ComponentDto:
@@ -17650,6 +18357,12 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/AgentTypeProvisionConfig'
+        tools:
+          description: Complete deployment input for every tool implemented by this component.
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolDeploymentMetadata'
       required:
       - knownExports
       - producers
@@ -17669,11 +18382,96 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/AgentTypeProvisionConfigUpdate'
+        tools:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tool'
+        toolDeploymentConfigUpdates:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolDeploymentConfigUpdate'
         allowIncompatibleConfig:
           default: false
           type: boolean
       required:
       - currentRevision
+    Constraint:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - requires-all
+          value:
+            type: array
+            items:
+              $ref: '#/components/schemas/Ref'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - all-or-none
+          value:
+            type: array
+            items:
+              $ref: '#/components/schemas/Ref'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - requires-any
+          value:
+            type: array
+            items:
+              $ref: '#/components/schemas/Ref'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - mutex-groups
+          value:
+            type: array
+            items:
+              $ref: '#/components/schemas/RefGroup'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - implies
+          value:
+            $ref: '#/components/schemas/ImpliesC'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - forbids
+          value:
+            $ref: '#/components/schemas/ForbidsC'
+        required:
+        - kind
+        - value
     CorsOptions:
       title: CorsOptions
       type: object
@@ -17742,10 +18540,12 @@ components:
         mapping:
           HttpApiReadOnlyMethodBoundToNonGetVerb: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
           HttpApiReadOnlyTtlBelowOneSecond: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond'
+          ToolRevealableSecretKeysDropped: '#/components/schemas/DeployValidationWarning_ToolRevealableSecretKeysDropped'
       type: object
       oneOf:
       - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
       - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond'
+      - $ref: '#/components/schemas/DeployValidationWarning_ToolRevealableSecretKeysDropped'
     DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb:
       allOf:
       - type: object
@@ -17770,6 +18570,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/HttpApiReadOnlyTtlBelowOneSecond'
+    DeployValidationWarning_ToolRevealableSecretKeysDropped:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ToolRevealableSecretKeysDropped
+            type: string
+            enum:
+            - ToolRevealableSecretKeysDropped
+        required:
+        - type
+      - $ref: '#/components/schemas/ToolRevealableSecretKeysDropped'
     DeployedRegisteredAgentType:
       title: DeployedRegisteredAgentType
       description: |-
@@ -17786,6 +18598,31 @@ components:
       required:
       - agentType
       - implementedBy
+    DeployedRegisteredTool:
+      title: DeployedRegisteredTool
+      type: object
+      properties:
+        deploymentRevision:
+          type: integer
+          format: uint64
+        definition:
+          $ref: '#/components/schemas/Tool'
+        source:
+          $ref: '#/components/schemas/ToolSource'
+        ownerAccountId:
+          type: string
+          format: uuid
+        ownerAccountEmail:
+          type: string
+        metadataVersion:
+          type: string
+      required:
+      - deploymentRevision
+      - definition
+      - source
+      - ownerAccountId
+      - ownerAccountEmail
+      - metadataVersion
     Deployment:
       title: Deployment
       type: object
@@ -18004,6 +18841,21 @@ components:
       - components
       - httpApiDeployments
       - mcpDeployments
+    Doc:
+      type: object
+      properties:
+        summary:
+          type: string
+        description:
+          type: string
+        examples:
+          type: array
+          items:
+            $ref: '#/components/schemas/Example'
+      required:
+      - summary
+      - description
+      - examples
     DomainRegistration:
       title: DomainRegistration
       type: object
@@ -18028,6 +18880,11 @@ components:
           type: string
       required:
       - domain
+    DuplicateKeyPolicy:
+      type: string
+      enum:
+      - reject
+      - last-wins
     EnforcementAction:
       type: string
       enum:
@@ -18247,6 +19104,43 @@ components:
       - environment
       - application
       - account
+    ErrorCase:
+      type: object
+      properties:
+        name:
+          type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        kind:
+          $ref: '#/components/schemas/ErrorKind'
+        exit_code:
+          type: integer
+          format: uint8
+        payload:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/SchemaType'
+          - nullable: true
+      required:
+      - name
+      - doc
+      - kind
+      - exit_code
+    ErrorKind:
+      type: string
+      enum:
+      - usage-error
+      - runtime-error
+    Example:
+      type: object
+      properties:
+        title:
+          type: string
+        body:
+          type: string
+      required:
+      - title
+      - body
     FieldSource:
       type: object
       oneOf:
@@ -18269,6 +19163,98 @@ components:
         required:
         - tag
         - value
+    FlagShape:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - bool-flag
+          value:
+            $ref: '#/components/schemas/BoolFlagShape'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - count-flag
+          value:
+            nullable: true
+            type: integer
+            format: uint32
+        required:
+        - kind
+        - value
+    FlagSpec:
+      type: object
+      properties:
+        long:
+          type: string
+        short:
+          nullable: true
+          type: char
+        aliases:
+          type: array
+          items:
+            type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        shape:
+          $ref: '#/components/schemas/FlagShape'
+        env_var:
+          nullable: true
+          type: string
+      required:
+      - long
+      - aliases
+      - doc
+      - shape
+    ForbidsC:
+      type: object
+      properties:
+        lhs_quant:
+          $ref: '#/components/schemas/Quantifier'
+        lhs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
+        rhs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
+      required:
+      - lhs_quant
+      - lhs
+      - rhs
+    Formatter:
+      type: object
+      properties:
+        name:
+          type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+      required:
+      - name
+      - doc
+    Globals:
+      type: object
+      properties:
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/OptionSpec'
+        flags:
+          type: array
+          items:
+            $ref: '#/components/schemas/FlagSpec'
+      required:
+      - options
+      - flags
     HeaderVariable:
       title: HeaderVariable
       type: object
@@ -18543,6 +19529,26 @@ components:
       - phantomAgent
       - corsOptions
       - webhookSuffix
+    ImpliesC:
+      type: object
+      properties:
+        lhs_quant:
+          $ref: '#/components/schemas/Quantifier'
+        lhs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
+        rhs_quant:
+          $ref: '#/components/schemas/Quantifier'
+        rhs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
+      required:
+      - lhs_quant
+      - lhs
+      - rhs_quant
+      - rhs
     InitialAgentFile:
       title: InitialAgentFile
       type: object
@@ -18636,6 +19642,9 @@ components:
         oplogProcessorInterface:
           description: Exact exported interface name for `golem:api/oplog-processor`
           type: string
+        toolGuestInterface:
+          description: Exact exported interface name for `golem:tool/guest`, e.g. `golem:tool/guest@0.1.0`
+          type: string
     LinearMemory:
       title: LinearMemory
       type: object
@@ -18648,6 +19657,10 @@ components:
           description: Optional maximal size of the linear memory in bytes
           type: integer
           format: uint64
+        shared:
+          description: Whether the linear memory is shared between WebAssembly threads
+          default: false
+          type: boolean
       required:
       - initial
     LiteralSegment:
@@ -18723,6 +19736,29 @@ components:
             $ref: '#/components/schemas/McpDeploymentAgentOptions'
       required:
       - currentRevision
+    MemoryLimit:
+      title: MemoryLimit
+      type: object
+      properties:
+        effectiveValue:
+          type: integer
+          format: uint64
+        planDefault:
+          type: integer
+          format: uint64
+        overrideValue:
+          type: integer
+          format: uint64
+        ceiling:
+          type: integer
+          format: uint64
+        userConfigurable:
+          type: boolean
+      required:
+      - effectiveValue
+      - planDefault
+      - ceiling
+      - userConfigurable
     NamedField:
       type: object
       properties:
@@ -18827,6 +19863,88 @@ components:
       required:
       - componentId
       - componentRevision
+    OptionShape:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - scalar
+          value:
+            $ref: '#/components/schemas/SchemaType'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - optional-scalar
+          value:
+            $ref: '#/components/schemas/SchemaType'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - repeatable-list
+          value:
+            $ref: '#/components/schemas/RepeatableListShape'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - repeatable-map
+          value:
+            $ref: '#/components/schemas/RepeatableMapShape'
+        required:
+        - kind
+        - value
+    OptionSpec:
+      type: object
+      properties:
+        long:
+          type: string
+        short:
+          nullable: true
+          type: char
+        aliases:
+          type: array
+          items:
+            type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        value_name:
+          nullable: true
+          type: string
+        shape:
+          $ref: '#/components/schemas/OptionShape'
+        default:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/SchemaValue'
+          - nullable: true
+        required:
+          type: boolean
+        env_var:
+          nullable: true
+          type: string
+      required:
+      - long
+      - aliases
+      - doc
+      - shape
+      - required
     OptionalFieldUpdate_SchemaValue:
       discriminator:
         propertyName: op
@@ -18850,6 +19968,37 @@ components:
       - op
       - value
     OptionalFieldUpdate_SchemaValue_Unset:
+      type: object
+      properties:
+        op:
+          type: string
+          enum:
+          - unset
+      required:
+      - op
+    OptionalFieldUpdate_ToolBindingInput:
+      discriminator:
+        propertyName: op
+        mapping:
+          set: '#/components/schemas/OptionalFieldUpdate_ToolBindingInput_Set'
+          unset: '#/components/schemas/OptionalFieldUpdate_ToolBindingInput_Unset'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/OptionalFieldUpdate_ToolBindingInput_Set'
+      - $ref: '#/components/schemas/OptionalFieldUpdate_ToolBindingInput_Unset'
+    OptionalFieldUpdate_ToolBindingInput_Set:
+      type: object
+      properties:
+        op:
+          type: string
+          enum:
+          - set
+        value:
+          $ref: '#/components/schemas/ToolBindingInput'
+      required:
+      - op
+      - value
+    OptionalFieldUpdate_ToolBindingInput_Unset:
       type: object
       properties:
         op:
@@ -18928,6 +20077,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeployedRegisteredAgentType'
+      required:
+      - values
+    Page_DeployedRegisteredTool:
+      title: Page_DeployedRegisteredTool
+      type: object
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeployedRegisteredTool'
       required:
       - values
     Page_Deployment:
@@ -19235,6 +20394,19 @@ components:
         maxMemoryPerWorker:
           type: integer
           format: uint64
+        maxMemoryPerWorkerCeiling:
+          type: integer
+          format: uint64
+        maxMemoryPerWorkerUserConfigurable:
+          type: boolean
+        monthlyMemoryGbSeconds:
+          type: integer
+          format: uint64
+        monthlyMemoryGbSecondsCeiling:
+          type: integer
+          format: uint64
+        monthlyMemoryGbSecondsUserConfigurable:
+          type: boolean
         maxTableElementsPerWorker:
           type: integer
           format: uint64
@@ -19275,6 +20447,11 @@ components:
       - monthlyGasLimit
       - monthlyUploadLimit
       - maxMemoryPerWorker
+      - maxMemoryPerWorkerCeiling
+      - maxMemoryPerWorkerUserConfigurable
+      - monthlyMemoryGbSeconds
+      - monthlyMemoryGbSecondsCeiling
+      - monthlyMemoryGbSecondsUserConfigurable
       - maxTableElementsPerWorker
       - maxDiskSpacePerWorker
       - maxDiskSpacePerWorkerCeiling
@@ -19461,6 +20638,47 @@ components:
           format: uuid
       required:
       - environmentPluginGrantId
+    Positional:
+      type: object
+      properties:
+        name:
+          type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        value_name:
+          nullable: true
+          type: string
+        type_:
+          $ref: '#/components/schemas/SchemaType'
+        default:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/SchemaValue'
+          - nullable: true
+        required:
+          type: boolean
+        accepts_stdio:
+          type: boolean
+      required:
+      - name
+      - doc
+      - type_
+      - required
+      - accepts_stdio
+    Positionals:
+      type: object
+      properties:
+        fixed:
+          type: array
+          items:
+            $ref: '#/components/schemas/Positional'
+        tail:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/TailPositional'
+          - nullable: true
+      required:
+      - fixed
     ProducerField:
       title: ProducerField
       type: object
@@ -19524,6 +20742,11 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
+    Quantifier:
+      type: string
+      enum:
+      - all
+      - any
     QueryVariable:
       title: QueryVariable
       type: object
@@ -19546,6 +20769,40 @@ components:
       required:
       - cachePolicy
       - usesPrincipal
+    Ref:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - present
+          value:
+            type: string
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - value-is
+          value:
+            $ref: '#/components/schemas/ValueIsRef'
+        required:
+        - kind
+        - value
+    RefGroup:
+      type: object
+      properties:
+        refs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
+      required:
+      - refs
     RegisteredAgentTypeImplementer:
       title: RegisteredAgentTypeImplementer
       type: object
@@ -19569,6 +20826,62 @@ components:
       - componentName
       - accountId
       - accountEmail
+    RepeatableListShape:
+      type: object
+      properties:
+        repetition:
+          $ref: '#/components/schemas/Repetition'
+        item_type:
+          $ref: '#/components/schemas/SchemaType'
+      required:
+      - repetition
+      - item_type
+    RepeatableMapShape:
+      type: object
+      properties:
+        repetition:
+          $ref: '#/components/schemas/Repetition'
+        map_type:
+          $ref: '#/components/schemas/SchemaType'
+        duplicate_key_policy:
+          $ref: '#/components/schemas/DuplicateKeyPolicy'
+      required:
+      - repetition
+      - map_type
+      - duplicate_key_policy
+    Repetition:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - repeated
+        required:
+        - kind
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - delimited
+          value:
+            type: char
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - either
+          value:
+            type: char
+        required:
+        - kind
+        - value
     ResourceCapacityLimit:
       title: ResourceCapacityLimit
       type: object
@@ -19802,6 +21115,33 @@ components:
             format: uuid
       required:
       - revokedCardIds
+    SecretKeyScope:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - all
+        required:
+        - kind
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - keys
+          keys:
+            type: array
+            items:
+              title: Canonical representation of an agent secret path (segments are each camelCase)
+              type: array
+              items:
+                type: string
+        required:
+        - kind
+        - keys
     SecuritySchemeAgentSecurity:
       title: SecuritySchemeAgentSecurity
       description: |-
@@ -19893,6 +21233,18 @@ components:
             type: string
       required:
       - currentRevision
+    SetMemoryLimit:
+      title: SetMemoryLimit
+      type: object
+      properties:
+        value:
+          type: integer
+          format: uint64
+        expiresAt:
+          type: string
+          format: date-time
+      required:
+      - value
     SetStorageLimit:
       title: SetStorageLimit
       type: object
@@ -20044,12 +21396,18 @@ components:
           $ref: '#/components/schemas/StorageUsageMetrics'
         maxStoragePerAgent:
           $ref: '#/components/schemas/StorageLimit'
+        maxMemoryPerAgent:
+          $ref: '#/components/schemas/MemoryLimit'
+        monthlyMemoryGbSeconds:
+          $ref: '#/components/schemas/MemoryLimit'
       required:
       - accountId
       - planId
       - planName
       - usage
       - maxStoragePerAgent
+      - maxMemoryPerAgent
+      - monthlyMemoryGbSeconds
     StorageUsageHistory:
       title: StorageUsageHistory
       type: object
@@ -20071,6 +21429,9 @@ components:
         computeGcu:
           type: number
           format: double
+        memoryGbSeconds:
+          type: integer
+          format: uint64
         durableStorageGbMonth:
           type: number
           format: double
@@ -20080,6 +21441,7 @@ components:
       required:
       - period
       - computeGcu
+      - memoryGbSeconds
       - durableStorageGbMonth
       - ephemeralStorageGbMonth
     StorageUsagePeriod:
@@ -20095,6 +21457,21 @@ components:
       required:
       - year
       - month
+    StreamSpec:
+      type: object
+      properties:
+        doc:
+          $ref: '#/components/schemas/Doc'
+        mime:
+          type: array
+          items:
+            type: string
+        required:
+          type: boolean
+      required:
+      - doc
+      - mime
+      - required
     SystemVariable:
       type: string
       enum:
@@ -20108,6 +21485,39 @@ components:
           $ref: '#/components/schemas/SystemVariable'
       required:
       - value
+    TailPositional:
+      type: object
+      properties:
+        name:
+          type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        value_name:
+          nullable: true
+          type: string
+        item_type:
+          $ref: '#/components/schemas/SchemaType'
+        min:
+          type: integer
+          format: uint32
+        max:
+          nullable: true
+          type: integer
+          format: uint32
+        separator:
+          nullable: true
+          type: string
+        verbatim:
+          type: boolean
+        accepts_stdio:
+          type: boolean
+      required:
+      - name
+      - doc
+      - item_type
+      - min
+      - verbatim
+      - accepts_stdio
     TestSessionHeaderAgentSecurity:
       title: TestSessionHeaderAgentSecurity
       description: |-
@@ -20184,9 +21594,225 @@ components:
       - accountId
       - createdAt
       - expiresAt
+    Tool:
+      type: object
+      properties:
+        version:
+          type: string
+        commands:
+          $ref: '#/components/schemas/CommandTree'
+        schema:
+          $ref: '#/components/schemas/SchemaGraph'
+      required:
+      - version
+      - commands
+    ToolBindingInput:
+      title: ToolBindingInput
+      type: object
+      properties:
+        version:
+          type: string
+        parameters:
+          $ref: '#/components/schemas/NormalizedJsonValue'
+        account:
+          type: string
+        secretKeysReadable:
+          $ref: '#/components/schemas/SecretKeyScope'
+        secretKeysRevealable:
+          $ref: '#/components/schemas/SecretKeyScope'
+      required:
+      - parameters
+      - secretKeysReadable
+      - secretKeysRevealable
+    ToolDeploymentConfigCreation:
+      title: ToolDeploymentConfigCreation
+      type: object
+      properties:
+        provision:
+          $ref: '#/components/schemas/ToolProvisionConfigCreation'
+        environmentBinding:
+          $ref: '#/components/schemas/ToolBindingInput'
+        agentBindings:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
+      required:
+      - provision
+    ToolDeploymentConfigUpdate:
+      title: ToolDeploymentConfigUpdate
+      type: object
+      properties:
+        provision:
+          $ref: '#/components/schemas/ToolProvisionConfigUpdate'
+        environmentBinding:
+          allOf:
+          - $ref: '#/components/schemas/OptionalFieldUpdate_ToolBindingInput'
+          - {}
+        agentBindings:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
+    ToolDeploymentMetadata:
+      title: ToolDeploymentMetadata
+      type: object
+      properties:
+        definition:
+          $ref: '#/components/schemas/Tool'
+        provision:
+          $ref: '#/components/schemas/ToolProvisionConfig'
+        environmentBinding:
+          $ref: '#/components/schemas/ToolBindingInput'
+        agentBindings:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
+      required:
+      - definition
+      - provision
+    ToolProvisionConfig:
+      title: ToolProvisionConfig
+      type: object
+      properties:
+        config:
+          $ref: '#/components/schemas/NormalizedJsonValue'
+        env:
+          default: {}
+          type: object
+          additionalProperties:
+            type: string
+        plugins:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/InstalledPlugin'
+        files:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/InitialAgentFile'
+      required:
+      - config
+    ToolProvisionConfigCreation:
+      title: ToolProvisionConfigCreation
+      type: object
+      properties:
+        config:
+          $ref: '#/components/schemas/NormalizedJsonValue'
+        env:
+          default: {}
+          type: object
+          additionalProperties:
+            type: string
+        pluginInstallations:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallation'
+        files:
+          description: key = source path inside uploaded archive; value specifies target path + permissions
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/AgentFileOptions'
+      required:
+      - config
+    ToolProvisionConfigUpdate:
+      title: ToolProvisionConfigUpdate
+      type: object
+      properties:
+        config:
+          $ref: '#/components/schemas/NormalizedJsonValue'
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        pluginUpdates:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallationAction'
+        filesToAddOrUpdate:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/AgentFileOptions'
+        filesToRemove:
+          default: []
+          type: array
+          items:
+            description: Absolute path in an agent's filesystem.
+            type: string
+        filePermissionUpdates:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/AgentFilePermissions'
+    ToolResultSpec:
+      type: object
+      properties:
+        type_:
+          $ref: '#/components/schemas/SchemaType'
+        doc:
+          $ref: '#/components/schemas/Doc'
+        formatters:
+          type: array
+          items:
+            $ref: '#/components/schemas/Formatter'
+        default_formatter:
+          type: string
+      required:
+      - type_
+      - doc
+      - formatters
+      - default_formatter
+    ToolRevealableSecretKeysDropped:
+      title: ToolRevealableSecretKeysDropped
+      type: object
+      properties:
+        agentType:
+          type: string
+        toolName:
+          type: string
+      required:
+      - agentType
+      - toolName
+    ToolSource:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - component
+          componentId:
+            type: string
+            format: uuid
+          componentRevision:
+            type: integer
+            format: uint64
+          componentName:
+            type: string
+        required:
+        - kind
+        - componentId
+        - componentRevision
+        - componentName
     UntypedJsonBody:
       description: A json body without a static schema
       type: object
+    ValueIsRef:
+      type: object
+      properties:
+        name:
+          type: string
+        value:
+          $ref: '#/components/schemas/SchemaValue'
+      required:
+      - name
+      - value
     VersionedName:
       title: VersionedName
       type: object

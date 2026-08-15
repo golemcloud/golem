@@ -54,6 +54,7 @@ pub mod rpc;
 pub mod scalability;
 pub mod scope_cards;
 pub mod storage_quota;
+pub mod tool_discovery;
 pub mod transactions;
 pub mod wasi;
 pub mod websocket;
@@ -115,6 +116,7 @@ tag_suite!(rdbms_service, rdbms_service);
 tag_suite!(resource_limits, group1);
 tag_suite!(oplog_metrics, group1);
 tag_suite!(storage_quota, group1);
+tag_suite!(tool_discovery, group1);
 
 sequential_suite!(key_value_storage);
 sequential_suite!(namespace_routed_key_value_storage);

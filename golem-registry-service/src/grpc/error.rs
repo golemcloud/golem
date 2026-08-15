@@ -296,6 +296,11 @@ impl From<DeploymentError> for GrpcApiError {
                 code: api::error_code::AGENT_TYPE_NOT_FOUND.to_string(),
                 cause: None,
             }),
+            DeploymentError::ToolNotFound(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::TOOL_NOT_FOUND.to_string(),
+                cause: None,
+            }),
 
             DeploymentError::Unauthorized(inner) => inner.into(),
 

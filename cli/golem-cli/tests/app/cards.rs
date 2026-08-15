@@ -1,6 +1,6 @@
 use crate::Tracing;
 use crate::app::{TestContext, cmd, flag};
-use golem_cli::model::text::card::{CardGetView, CardListView, CardRevokeResult};
+use golem_cli::model::card::{CardGetView, CardListView, CardRevokeView};
 use golem_client::model::StoredCard;
 use test_r::{inherit_test_dep, test, timeout};
 use uuid::Uuid;
@@ -105,7 +105,7 @@ async fn card_management_works_against_a_live_server(_tracing: &Tracing) {
         .await;
     assert!(output.success_or_dump());
     let revoked = output
-        .stdout_json::<CardRevokeResult>()
+        .stdout_json::<CardRevokeView>()
         .into_iter()
         .next()
         .expect("card revoke produced no JSON output");

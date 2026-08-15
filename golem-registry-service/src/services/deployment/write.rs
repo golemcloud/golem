@@ -293,6 +293,9 @@ impl DeploymentWriteService {
             &mut errors,
         );
 
+        let compiled_tools =
+            deployment_context.compile_tools(next_deployment_revision, &mut errors, &mut warnings);
+
         let (new_agent_secrets, updated_agent_secrets, replaced_agent_secrets) = deployment_context
             .deployment_agent_secret_creations_and_updates(
                 agent_secrets_in_environment,
@@ -346,6 +349,8 @@ impl DeploymentWriteService {
                 .into_values()
                 .map(DeployedRegisteredAgentType::from)
                 .collect(),
+            compiled_tools.registered_tools,
+            compiled_tools.agent_tool_bindings,
             new_agent_secrets,
             updated_agent_secrets,
             replaced_agent_secrets,

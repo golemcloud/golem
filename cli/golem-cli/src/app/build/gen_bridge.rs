@@ -16,16 +16,20 @@ use crate::error::NonSuccessfulExit;
 use crate::fs;
 use crate::log::log_error;
 use crate::log::{LogColorize, LogIndent, log_action, log_skipping_up_to_date, logln};
-use crate::model::GuestLanguage;
 use crate::model::app::{
     BridgeSdkTarget, BridgeSdkTargetKind, BridgeSdkTargetSubject, ComponentDependency,
     CustomBridgeSdkTarget,
 };
+use crate::model::cli_output::StructuredOutput;
+use crate::model::language::GuestLanguage;
 use crate::model::repl::{ReplAgentMetadata, ReplMetadata};
+use crate::model::text_format::{NoTextOutput, TextOutput};
 use anyhow::bail;
 use camino::Utf8PathBuf;
 use golem_common::model::component::ComponentName;
+use golem_common::model::tool::ToolName;
 use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Default)]
@@ -652,7 +656,7 @@ async fn collect_dependency_guest_bridge_targets(
             let Some(tool_name) = tool.name() else {
                 continue;
             };
-            let Ok(tool_dependency_name) = crate::model::app::ToolName::try_from(tool_name) else {
+            let Ok(tool_dependency_name) = ToolName::try_from(tool_name) else {
                 continue;
             };
             let dependency = ComponentDependency::Tool {
@@ -977,6 +981,19 @@ pub(crate) fn validate_supported_bridge_targets(targets: &[BridgeSdkTarget]) -> 
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateBridgeResult {
+    pub generated: bool,
+}
+
+impl NoTextOutput for GenerateBridgeResult {}
+impl TextOutput for GenerateBridgeResult {}
+
+impl StructuredOutput for GenerateBridgeResult {
+    const KIND: &'static str = "generate-bridge";
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1097,7 +1114,7 @@ mod tests {
         };
         let tool_dependency = ComponentDependency::Tool {
             component_name,
-            tool_name: crate::model::app::ToolName::try_from("tool").unwrap(),
+            tool_name: ToolName::try_from("tool").unwrap(),
         };
 
         for language in GuestLanguage::iter() {

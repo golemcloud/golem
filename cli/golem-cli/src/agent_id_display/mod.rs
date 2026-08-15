@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod highlight;
 mod lexer;
 mod parse_common;
 mod parse_moonbit;
@@ -36,6 +37,7 @@ use golem_common::schema::graph::{SchemaGraph, TypedSchemaValue, reachable_defs}
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::SchemaValue;
 
+pub use highlight::format_agent_id_for_terminal;
 pub use parse_common::ParseError;
 
 /// Represents the source language of an agent component, used to select
@@ -132,6 +134,20 @@ pub fn render_schema_value(
         SourceLanguage::TypeScript | SourceLanguage::Other(_) => {
             render_ts::render_value_ts(graph, ty, value)
         }
+    }
+}
+
+/// Renders an agent ID in its source-language notation when a parsed form and a
+/// known source language are both available, falling back to the raw canonical
+/// id otherwise.
+pub fn render_agent_id_or_raw(
+    parsed: Option<&ParsedAgentId>,
+    source_language: &SourceLanguage,
+    raw: &str,
+) -> String {
+    match parsed {
+        Some(parsed) if source_language.is_known() => render_agent_id(parsed, source_language),
+        _ => raw.to_string(),
     }
 }
 

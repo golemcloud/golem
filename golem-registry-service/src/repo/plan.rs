@@ -112,7 +112,10 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                 tx.execute(
                     sqlx::query(indoc! { r#"
                         INSERT INTO plans (
-                            plan_id, name, max_memory_per_worker, max_table_elements_per_worker, max_disk_space_per_worker,
+                            plan_id, name, max_memory_per_worker,
+                            max_memory_per_worker_ceiling, max_memory_per_worker_user_configurable,
+                            monthly_memory_gb_seconds, monthly_memory_gb_seconds_ceiling, monthly_memory_gb_seconds_user_configurable,
+                            max_table_elements_per_worker, max_disk_space_per_worker,
                             max_disk_space_per_worker_ceiling, max_disk_space_per_worker_user_configurable,
                             max_concurrent_agents_per_executor,
                             total_app_count, total_env_count, total_component_count,
@@ -122,31 +125,41 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                             monthly_http_call_limit, monthly_rpc_call_limit,
                             oplog_writes_per_second
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
                         ON CONFLICT (plan_id) DO UPDATE SET
                             name = $2,
                             max_memory_per_worker = $3,
-                            max_table_elements_per_worker = $4,
-                            max_disk_space_per_worker = $5,
-                            max_disk_space_per_worker_ceiling = $6,
-                            max_disk_space_per_worker_user_configurable = $7,
-                            max_concurrent_agents_per_executor = $8,
-                            total_app_count = $9,
-                            total_env_count = $10,
-                            total_component_count = $11,
-                            total_worker_connection_count = $12,
-                            total_component_storage_bytes = $13,
-                            monthly_gas_limit = $14,
-                            monthly_component_upload_limit_bytes = $15,
-                            per_invocation_http_call_limit = $16,
-                            per_invocation_rpc_call_limit = $17,
-                            monthly_http_call_limit = $18,
-                            monthly_rpc_call_limit = $19,
-                            oplog_writes_per_second = $20
+                            max_memory_per_worker_ceiling = $4,
+                            max_memory_per_worker_user_configurable = $5,
+                            monthly_memory_gb_seconds = $6,
+                            monthly_memory_gb_seconds_ceiling = $7,
+                            monthly_memory_gb_seconds_user_configurable = $8,
+                            max_table_elements_per_worker = $9,
+                            max_disk_space_per_worker = $10,
+                            max_disk_space_per_worker_ceiling = $11,
+                            max_disk_space_per_worker_user_configurable = $12,
+                            max_concurrent_agents_per_executor = $13,
+                            total_app_count = $14,
+                            total_env_count = $15,
+                            total_component_count = $16,
+                            total_worker_connection_count = $17,
+                            total_component_storage_bytes = $18,
+                            monthly_gas_limit = $19,
+                            monthly_component_upload_limit_bytes = $20,
+                            per_invocation_http_call_limit = $21,
+                            per_invocation_rpc_call_limit = $22,
+                            monthly_http_call_limit = $23,
+                            monthly_rpc_call_limit = $24,
+                            oplog_writes_per_second = $25
                     "#})
                     .bind(plan.plan_id)
                     .bind(plan.name)
                     .bind(plan.max_memory_per_worker)
+                    .bind(plan.max_memory_per_worker_ceiling)
+                    .bind(plan.max_memory_per_worker_user_configurable)
+                    .bind(plan.monthly_memory_gb_seconds)
+                    .bind(plan.monthly_memory_gb_seconds_ceiling)
+                    .bind(plan.monthly_memory_gb_seconds_user_configurable)
                     .bind(plan.max_table_elements_per_worker)
                     .bind(plan.max_disk_space_per_worker)
                     .bind(plan.max_disk_space_per_worker_ceiling)
@@ -180,7 +193,10 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
-                        plan_id, name, max_memory_per_worker, max_table_elements_per_worker, max_disk_space_per_worker,
+                        plan_id, name, max_memory_per_worker,
+                        max_memory_per_worker_ceiling, max_memory_per_worker_user_configurable,
+                        monthly_memory_gb_seconds, monthly_memory_gb_seconds_ceiling, monthly_memory_gb_seconds_user_configurable,
+                        max_table_elements_per_worker, max_disk_space_per_worker,
                         max_disk_space_per_worker_ceiling, max_disk_space_per_worker_user_configurable,
                         max_concurrent_agents_per_executor,
                         total_app_count, total_env_count, total_component_count,
@@ -207,7 +223,10 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
             .with_ro("list")
             .fetch_all_as(sqlx::query_as(indoc! { r#"
                 SELECT
-                    plan_id, name, max_memory_per_worker, max_table_elements_per_worker, max_disk_space_per_worker,
+                    plan_id, name, max_memory_per_worker,
+                    max_memory_per_worker_ceiling, max_memory_per_worker_user_configurable,
+                    monthly_memory_gb_seconds, monthly_memory_gb_seconds_ceiling, monthly_memory_gb_seconds_user_configurable,
+                    max_table_elements_per_worker, max_disk_space_per_worker,
                     max_disk_space_per_worker_ceiling, max_disk_space_per_worker_user_configurable,
                     max_concurrent_agents_per_executor,
                     total_app_count, total_env_count, total_component_count,

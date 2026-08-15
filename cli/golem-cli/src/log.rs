@@ -14,7 +14,6 @@
 
 use crate::app::error::AppValidationError;
 use crate::error::{HintError, NonSuccessfulExit, PipedExitCode};
-use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use colored::{ColoredString, Colorize};
@@ -29,7 +28,13 @@ use tracing::debug;
 static LOG_STATE: LazyLock<RwLock<LogState>> = LazyLock::new(RwLock::default);
 static LOG_STATE_BUFFER: LazyLock<RwLock<Vec<String>>> = LazyLock::new(RwLock::default);
 static TERMINAL_WIDTH: OnceLock<Option<usize>> = OnceLock::new();
-static WRAP_PADDING: usize = 2;
+/// Columns kept free at the right edge when wrapping logged text. Callers that
+/// pre-format multi-line output must reserve it too, else their lines re-wrap.
+pub static WRAP_PADDING: usize = 2;
+
+/// One level of log indentation. Callers that pre-format multi-line output reuse
+/// it to reproduce the same geometry (see `text::fmt::field_value_width`).
+pub const INDENT: &str = "  ";
 
 /// Returns the terminal width as `Some(width)` or `None` if not detectable.
 /// Cached via `OnceLock` — read once at startup for use in `LogState` text-wrapping.
@@ -94,10 +99,10 @@ impl LogState {
     }
 
     fn regen_indent_prefix(&mut self) {
-        self.calculated_indent = String::with_capacity(self.indents.len() * 2);
+        self.calculated_indent = String::with_capacity(self.indents.len() * INDENT.len());
         for indent in &self.indents {
             self.calculated_indent
-                .push_str(indent.as_ref().map(|s| s.as_str()).unwrap_or("  "))
+                .push_str(indent.as_ref().map(|s| s.as_str()).unwrap_or(INDENT))
         }
         self.max_width =
             terminal_width_opt().map(|w| w - WRAP_PADDING - self.calculated_indent.len());
@@ -380,92 +385,6 @@ pub fn log_skipping_up_to_date(subject: impl AsRef<str>) {
             "UP-TO-DATE".log_color_ok_highlight()
         ),
     );
-}
-
-pub fn log_action_plan(action: &OverwriteSafeAction, plan: OverwriteSafeActionPlan) {
-    match plan {
-        OverwriteSafeActionPlan::Create => match action {
-            OverwriteSafeAction::CopyFile { source, target } => {
-                log_action(
-                    "Copying",
-                    format!(
-                        "{} to {}",
-                        source.log_color_highlight(),
-                        target.log_color_highlight()
-                    ),
-                );
-            }
-            OverwriteSafeAction::CopyFileTransformed { source, target, .. } => {
-                log_action(
-                    "Copying",
-                    format!(
-                        "{} to {} transformed",
-                        source.log_color_highlight(),
-                        target.log_color_highlight()
-                    ),
-                );
-            }
-            OverwriteSafeAction::WriteFile { target, .. } => {
-                log_action("Creating", format!("{}", target.log_color_highlight()));
-            }
-        },
-        OverwriteSafeActionPlan::Overwrite => match action {
-            OverwriteSafeAction::CopyFile { source, target } => {
-                log_warn_action(
-                    "Overwriting",
-                    format!(
-                        "{} with {}",
-                        target.log_color_highlight(),
-                        source.log_color_highlight()
-                    ),
-                );
-            }
-            OverwriteSafeAction::CopyFileTransformed { source, target, .. } => {
-                log_warn_action(
-                    "Overwriting",
-                    format!(
-                        "{} with {} transformed",
-                        target.log_color_highlight(),
-                        source.log_color_highlight()
-                    ),
-                );
-            }
-            OverwriteSafeAction::WriteFile { content: _, target } => {
-                log_warn_action("Overwriting", format!("{}", target.log_color_highlight()));
-            }
-        },
-        OverwriteSafeActionPlan::SkipSameContent => match action {
-            OverwriteSafeAction::CopyFile { source, target } => {
-                log_warn_action(
-                    "Skipping",
-                    format!(
-                        "copying {} to {}, content already up-to-date",
-                        source.log_color_highlight(),
-                        target.log_color_highlight(),
-                    ),
-                );
-            }
-            OverwriteSafeAction::CopyFileTransformed { source, target, .. } => {
-                log_warn_action(
-                    "Skipping",
-                    format!(
-                        "copying {} to {} transformed, content already up-to-date",
-                        source.log_color_highlight(),
-                        target.log_color_highlight()
-                    ),
-                );
-            }
-            OverwriteSafeAction::WriteFile { content: _, target } => {
-                log_warn_action(
-                    "Skipping",
-                    format!(
-                        "generating {}, content already up-to-date",
-                        target.log_color_highlight()
-                    ),
-                );
-            }
-        },
-    }
 }
 
 pub trait LogColorize {

@@ -1048,7 +1048,13 @@ fn calculate_total_linear_memory_size(
                 result = *initial_total_linear_memory_size;
             }
             OplogEntry::GrowMemory { delta, .. } => {
-                result += *delta;
+                result = result.saturating_add(*delta);
+            }
+            OplogEntry::SuccessfulUpdate {
+                new_total_linear_memory_size: Some(new_total),
+                ..
+            } => {
+                result = *new_total;
             }
             _ => {}
         }
@@ -1296,7 +1302,7 @@ mod test {
     use crate::worker::status::{
         calculate_last_known_status, calculate_last_known_status_for_existing_worker,
         calculate_last_known_status_with_checkpoint_reader, calculate_oplog_processor_checkpoints,
-        try_fold_status_from,
+        calculate_total_linear_memory_size, try_fold_status_from,
     };
     use async_trait::async_trait;
     use golem_common::base_model::OplogIndex;
@@ -1331,6 +1337,27 @@ mod test {
     use std::sync::Arc;
     use test_r::test;
     use uuid::Uuid;
+
+    #[test]
+    fn successful_update_resets_total_linear_memory_size() {
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::successful_update(
+                    ComponentRevision::new(2).unwrap(),
+                    100,
+                    Some(32),
+                    HashSet::new(),
+                ),
+            ),
+            (OplogIndex::from_u64(3), OplogEntry::grow_memory(8)),
+        ]);
+
+        assert_eq!(
+            calculate_total_linear_memory_size(64, &DeletedRegions::new(), &entries),
+            40
+        );
+    }
 
     #[test]
     async fn empty() {
@@ -2458,6 +2485,7 @@ mod test {
             let entry = OplogEntry::successful_update(
                 *update_description.target_revision(),
                 new_component_size,
+                None,
                 new_active_plugins.clone(),
             )
             .rounded();
@@ -3015,6 +3043,7 @@ mod test {
                     timestamp: Timestamp::now_utc(),
                     target_revision: ComponentRevision::new(2).unwrap(),
                     new_component_size: 200,
+                    new_total_linear_memory_size: None,
                     new_active_plugins: HashSet::from([new_grant]),
                 },
             ),

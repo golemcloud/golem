@@ -54,6 +54,7 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::{
     AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
 };
+use crate::services::active_workers::MemoryGrant;
 use crate::services::agent_storage_meter::AgentStorageMeter;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
@@ -65,6 +66,9 @@ use crate::services::environment_state::EnvironmentStateService;
 use crate::services::file_loader::{FileLoader, FileUseToken};
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
+use crate::services::linear_memory::{
+    LinearMemoryTracker, SHARED_LINEAR_MEMORY_ERROR, UnsharedMemoryGrowth,
+};
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::quota::QuotaService;
@@ -77,7 +81,9 @@ use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration};
+use crate::services::{
+    HasActiveWorkers, HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration,
+};
 use crate::services::{HasComponentService, HasOplogService, HasWorkerService};
 use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
@@ -377,6 +383,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     execution_status: Arc<RwLock<ExecutionStatus>>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
+    linear_memory: LinearMemoryTracker,
     storage_meter: AgentStorageMeter,
     /// Per-instance cache of resolved typed guest export handles, populated
     /// lazily on first use during invocation dispatch.
@@ -384,8 +391,40 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     _store_alive_guard: StoreAliveGuard,
 }
 
+pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
+    fn durable_worker_ctx(&mut self) -> &mut DurableWorkerCtx<Ctx>;
+
+    fn durable_memory_growing(
+        &mut self,
+        current: usize,
+        desired: usize,
+        maximum: Option<usize>,
+    ) -> impl Future<Output = wasmtime::Result<bool>> + Send {
+        self.durable_worker_ctx()
+            .admit_unshared_memory_growth(current, desired, maximum)
+    }
+
+    fn durable_memory_grown(&mut self, current: usize, desired: usize) -> bool {
+        let delta = desired.saturating_sub(current) as u64;
+        if delta > 0 {
+            self.durable_worker_ctx().increase_memory(delta);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn durable_memory_grow_failed(&mut self) -> wasmtime::Result<()> {
+        self.durable_worker_ctx().unshared_memory_growth_failed();
+        Ok(())
+    }
+}
+
 impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
     fn drop(&mut self) {
+        self.linear_memory.stop(Instant::now());
+        self.resource_limits
+            .unregister_memory_meter(&self.owned_agent_id, self.linear_memory.meter());
         self.storage_meter.flush(Instant::now());
         self.resource_limits
             .unregister_storage_meter(&self.owned_agent_id, &self.storage_meter);
@@ -515,6 +554,18 @@ impl Drop for TailWorkDeadline {
         }
         self.latch.store(false, Ordering::Release);
     }
+}
+
+fn validate_unshared_memory_growth(
+    growth: Option<UnsharedMemoryGrowth>,
+    worker_limit: u64,
+    desired: usize,
+    memory_maximum: Option<usize>,
+) -> Option<UnsharedMemoryGrowth> {
+    growth.filter(|growth| {
+        growth.protected_total <= worker_limit
+            && memory_maximum.is_none_or(|maximum| desired <= maximum)
+    })
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -670,6 +721,24 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )
             .await?;
 
+        if component_metadata.metadata.has_shared_linear_memory() {
+            return Err(WorkerExecutorError::worker_creation_failed(
+                owned_agent_id.agent_id.clone(),
+                SHARED_LINEAR_MEMORY_ERROR,
+            ));
+        }
+
+        let initial_linear_memory = component_metadata.metadata.initial_linear_memory_bytes();
+        if initial_linear_memory > resource_limits.max_memory_limit() as u64 {
+            return Err(WorkerExecutorError::worker_creation_failed(
+                owned_agent_id.agent_id.clone(),
+                format!(
+                    "Linear memories require {initial_linear_memory} bytes, exceeding the per-agent limit of {} bytes",
+                    resource_limits.max_memory_limit()
+                ),
+            ));
+        }
+
         let agent_type_provision_configs = agent_id.as_ref().and_then(|agent_id| {
             component_metadata
                 .metadata
@@ -771,6 +840,76 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Instant::now(),
         );
         resource_limits.register_storage_meter(owned_agent_id.clone(), storage_meter.clone());
+        let worker = invocation_queue
+            .upgrade()
+            .expect("worker must remain alive while creating its context");
+        let retained_memory_grant = worker.linear_memory_grant();
+        let canonical_startup_bytes = worker.startup_linear_memory_bytes();
+        let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
+        let linear_memory = LinearMemoryTracker::new(
+            canonical_startup_bytes,
+            admitted_startup_bytes,
+            execution_status.read().unwrap().agent_mode(),
+            true,
+            resource_limits.clone(),
+            retained_memory_grant,
+            Instant::now(),
+        );
+        let weak_worker = Arc::downgrade(&worker);
+        let memory_meter = linear_memory.meter().clone();
+        linear_memory.set_limit_exceeded_callback(Arc::new(move || {
+            if let Some(worker) = weak_worker.upgrade() {
+                worker.request_memory_limit_interrupt(memory_meter.clone());
+            }
+        }));
+        let state = PrivateDurableWorkerState::new(
+            agent_id,
+            oplog_service,
+            oplog.clone(),
+            promise_service.clone(),
+            scheduler_service,
+            worker_service,
+            worker_enumeration_service,
+            key_value_service,
+            blob_store_service,
+            rdbms_service,
+            quota_service,
+            card_service,
+            card_interest_index,
+            component_service,
+            agent_types_service,
+            environment_state_service,
+            agent_webhooks_service,
+            config.clone(),
+            owned_agent_id.clone(),
+            rpc,
+            worker_proxy,
+            worker_config.deleted_regions.clone(),
+            component_metadata,
+            worker_config.current_filesystem_storage_usage,
+            worker_config.agent_effective_surface,
+            worker_fork,
+            RwLock::new(compute_read_only_paths(&files)),
+            TRwLock::new(files),
+            file_loader,
+            worker_config.created_by,
+            worker_config.created_by_email,
+            worker_config.initial_agent_config,
+            agent_config,
+            shard_service,
+            pending_update,
+            original_phantom_id,
+            worker_config.last_snapshot_index,
+            per_invocation_http_call_limit,
+            per_invocation_rpc_call_limit,
+            resource_limits.clone(),
+        )
+        .await?;
+        if state.is_live() {
+            linear_memory.switch_to_live();
+        }
+        resource_limits
+            .register_memory_meter(owned_agent_id.clone(), linear_memory.meter().clone());
 
         Ok(DurableWorkerCtx {
             table: Arc::new(Mutex::new(table)),
@@ -787,53 +926,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 invocation_queue,
                 oplog: oplog.clone(),
             },
-            state: PrivateDurableWorkerState::new(
-                agent_id,
-                oplog_service,
-                oplog,
-                promise_service,
-                scheduler_service,
-                worker_service,
-                worker_enumeration_service,
-                key_value_service,
-                blob_store_service,
-                rdbms_service,
-                quota_service,
-                card_service,
-                card_interest_index,
-                component_service,
-                agent_types_service,
-                environment_state_service,
-                agent_webhooks_service,
-                config.clone(),
-                owned_agent_id.clone(),
-                rpc,
-                worker_proxy,
-                worker_config.deleted_regions.clone(),
-                component_metadata,
-                worker_config.total_linear_memory_size,
-                worker_config.current_filesystem_storage_usage,
-                worker_config.agent_effective_surface,
-                worker_fork,
-                RwLock::new(compute_read_only_paths(&files)),
-                TRwLock::new(files),
-                file_loader,
-                worker_config.created_by,
-                worker_config.created_by_email,
-                worker_config.initial_agent_config,
-                agent_config,
-                shard_service,
-                pending_update,
-                original_phantom_id,
-                worker_config.last_snapshot_index,
-                per_invocation_http_call_limit,
-                per_invocation_rpc_call_limit,
-                resource_limits.clone(),
-            )
-            .await?,
+            state,
             worker_dir,
             execution_status,
             resource_limits,
+            linear_memory,
             storage_meter,
             agent_export_funcs: AgentExportFuncs::default(),
             _store_alive_guard: StoreAliveGuard::new(),
@@ -1589,7 +1686,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn total_linear_memory_size(&self) -> u64 {
-        self.state.total_linear_memory_size
+        self.linear_memory.current_bytes()
+    }
+
+    pub fn max_linear_memory_size(&self) -> u64 {
+        self.resource_limits.max_memory_limit() as u64
+    }
+
+    pub fn linear_memory_tracker(&self) -> LinearMemoryTracker {
+        self.linear_memory.clone()
+    }
+
+    async fn switch_to_live(&self) {
+        self.state.replay_state.switch_to_live().await;
+        self.linear_memory.switch_to_live();
     }
 
     pub fn current_filesystem_storage_usage(&self) -> u64 {
@@ -1771,23 +1881,59 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         );
     }
 
-    pub fn increase_memory(&mut self, delta: u64) -> anyhow::Result<()> {
-        if self.state.is_replay() {
-            // The increased amount was already recorded in live mode, so our worker
-            // was initialized with the correct amount of memory.
-            Ok(())
-        } else {
+    pub fn increase_memory(&mut self, delta: u64) {
+        let (_, reconciling) = self.linear_memory.grow(delta, Instant::now());
+        if self.state.is_live() && !reconciling {
             // This is called from the `memory.grow` async resource limiter, which
             // Wasmtime runs through a blocking libcall on the store's fiber. While
             // that libcall waits, the store cannot make progress, so nothing may be
             // awaited here (see https://github.com/bytecodealliance/wasmtime/issues/11869).
-            // The oplog hint and the global memory admission run as a fire-and-forget
-            // job on the worker-state actor's lifecycle queue; see
-            // `Worker::request_memory_grow` for the admission-failure semantics.
-            self.state.total_linear_memory_size += delta;
+            // The oplog hint runs as a fire-and-forget job on the worker-state
+            // actor. Host-capacity admission completed before Wasmtime committed
+            // this growth.
             self.public_state.worker().request_memory_grow(delta);
-            Ok(())
         }
+    }
+
+    pub(crate) async fn try_acquire_linear_memory(&self, delta: u64) -> Option<MemoryGrant> {
+        self.public_state
+            .worker()
+            .active_workers()
+            .try_acquire(delta)
+            .await
+    }
+
+    pub async fn admit_unshared_memory_growth(
+        &self,
+        current: usize,
+        desired: usize,
+        maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        let tracker = &self.linear_memory;
+        let growth = tracker.prepare_unshared_growth(current, desired);
+        let Some(growth) = validate_unshared_memory_growth(
+            growth,
+            self.max_linear_memory_size(),
+            desired,
+            maximum,
+        ) else {
+            tracker.memory_grow_failed();
+            return Err(GolemSpecificWasmTrap::WorkerExceededMemoryLimit.into());
+        };
+
+        if growth.admission_delta > 0 {
+            let Some(grant) = self.try_acquire_linear_memory(growth.admission_delta).await else {
+                tracker.memory_grow_failed();
+                crate::metrics::workers::record_worker_memory_grow_rejected();
+                return Err(GolemSpecificWasmTrap::WorkerOutOfMemory.into());
+            };
+            tracker.retain_growth_grant(grant);
+        }
+        Ok(true)
+    }
+
+    pub fn unshared_memory_growth_failed(&self) {
+        self.linear_memory.memory_grow_failed();
     }
 
     /// Returns the deterministic, policy-independent recovery decision for a
@@ -2139,7 +2285,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .await;
                     if end_index.is_none() {
                         // Must switch to live mode before failing to be able to commit an Error entry
-                        self.state.replay_state.switch_to_live().await;
+                        self.switch_to_live().await;
                         Err(WorkerExecutorError::runtime(
                             "Non-idempotent remote write operation was not completed, cannot retry",
                         ))
@@ -2174,7 +2320,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             violates_for_all: true,
                         } => {
                             // Must switch to live mode before failing to be able to commit an Error entry
-                            self.state.replay_state.switch_to_live().await;
+                            self.switch_to_live().await;
                             Err(WorkerExecutorError::runtime(
                                 "Non-idempotent remote write operation was not completed, cannot retry",
                             ))
@@ -2183,7 +2329,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             violates_for_all: false,
                         } if self.state.assume_idempotence => {
                             // We need to jump to the end of the oplog
-                            self.state.replay_state.switch_to_live().await;
+                            self.switch_to_live().await;
 
                             // But this is not enough, because if the retried batched write operation succeeds,
                             // and later we replay it, we need to skip the first attempt and only replay the second.
@@ -2208,7 +2354,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         OplogEntryLookupResult::NotFound { .. } => {
                             // assume_idempotence is false and the operation was not completed —
                             // we cannot safely retry a non-idempotent batched write.
-                            self.state.replay_state.switch_to_live().await;
+                            self.switch_to_live().await;
                             Err(WorkerExecutorError::runtime(
                                 "Non-idempotent remote write operation was not completed, cannot retry",
                             ))
@@ -2586,7 +2732,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             violates_for_all: true,
                         } => {
                             // Must switch to live mode before failing to be able to commit an Error entry
-                            self.state.replay_state.switch_to_live().await;
+                            self.switch_to_live().await;
                             return Err(WorkerExecutorError::runtime(
                                 "Transaction overlapped with other side effects was not completed, cannot retry",
                             ).into());
@@ -2602,7 +2748,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     violates_for_all: true,
                 } => {
                     // Must switch to live mode before failing to be able to commit an Error entry
-                    self.state.replay_state.switch_to_live().await;
+                    self.switch_to_live().await;
                     return Err(WorkerExecutorError::runtime(
                         "Transaction overlapped with other side effects was not completed, cannot retry",
                     ).into());
@@ -2611,7 +2757,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             let (result, tx) = if should_restart {
                 // We need to jump to the end of the oplog
-                self.state.replay_state.switch_to_live().await;
+                self.switch_to_live().await;
 
                 if !assume_idempotence {
                     Err(WorkerExecutorError::runtime(
@@ -3628,6 +3774,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");
+                    self.linear_memory.switch_to_live();
                     let pending_update = self.state.pending_update.lock().await.take();
                     if let Some(pending_update) = pending_update {
                         match pending_update.description {
@@ -4415,12 +4562,15 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         >,
     ) {
         info!("Worker update to {} finished successfully", target_revision);
-        let entry = OplogEntry::successful_update(
-            target_revision,
-            new_component_size,
-            new_active_plugins.clone(),
-        );
-        self.public_state.worker().add_and_commit_oplog(entry).await;
+        let worker = self.public_state.worker();
+        worker
+            .persist_successful_update(
+                &self.linear_memory,
+                target_revision,
+                new_component_size,
+                new_active_plugins,
+            )
+            .await;
     }
 }
 
@@ -5394,6 +5544,29 @@ mod tests {
     use test_r::test;
     use test_r::timeout;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn aggregate_memory_growth_over_worker_limit_is_rejected() {
+        let now = Instant::now();
+        let tracker = LinearMemoryTracker::new(
+            60,
+            60,
+            AgentMode::Durable,
+            false,
+            Arc::new(AtomicResourceEntry::new(0, 100, 0, 0, 0)),
+            Arc::new(Mutex::new(MemoryGrant::inert(60))),
+            now,
+        );
+        tracker.reconcile(60, now);
+
+        let second_memory_growth = tracker.prepare_unshared_growth(0, 60);
+
+        assert_eq!(
+            validate_unshared_memory_growth(second_memory_growth, 100, 60, Some(100)),
+            None,
+            "two individually valid 60-byte memories must not bypass the 100-byte aggregate cap"
+        );
+    }
 
     #[test]
     fn snapshot_boundary_all_clear_has_no_blocker() {
@@ -7952,7 +8125,6 @@ struct PrivateDurableWorkerState {
     wallet_generation: u64,
     card_event_boundary_scan: Option<CardEventBoundaryScan>,
 
-    total_linear_memory_size: u64,
     /// Running total of storage bytes acquired from the executor semaphore pool
     /// by this worker since it last started. Incremented on every successful
     /// write; decremented when files are deleted or truncated.
@@ -8170,7 +8342,6 @@ impl PrivateDurableWorkerState {
         worker_proxy: Arc<dyn WorkerProxy>,
         deleted_regions: DeletedRegions,
         component_metadata: Component,
-        total_linear_memory_size: u64,
         current_filesystem_storage_usage: u64,
         _agent_effective_surface: golem_common::model::card::EffectiveSurface,
         worker_fork: Arc<dyn WorkerForkService>,
@@ -8311,7 +8482,6 @@ impl PrivateDurableWorkerState {
             wallet_id_hash,
             wallet_generation,
             card_event_boundary_scan: None,
-            total_linear_memory_size,
             current_filesystem_storage_usage,
             replay_state,
             invocation_context,

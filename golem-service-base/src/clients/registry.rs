@@ -30,8 +30,8 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
     GetComponentMetadataRequest, GetCurrentEnvironmentStateRequest,
     GetDeployedComponentMetadataRequest, GetResourceDefinitionByIdRequest,
-    GetResourceDefinitionByNameRequest, GetResourceLimitsRequest, ResolveAgentTypeByNamesRequest,
-    ResolveComponentRequest, RevokeCardRequest, RuntimeCardData,
+    GetResourceDefinitionByNameRequest, GetResourceLimitsRequest, GetToolDeploymentStateRequest,
+    ResolveAgentTypeByNamesRequest, ResolveComponentRequest, RevokeCardRequest, RuntimeCardData,
     UpdateWorkerConnectionLimitRequest, authenticate_token_response, batch_get_cards_response,
     batch_get_existing_cards_response, batch_update_resource_usage_response,
     create_runtime_card_response, download_component_response, get_active_mcp_for_domain_response,
@@ -40,8 +40,9 @@ use golem_api_grpc::proto::golem::registry::v1::{
     get_all_deployed_component_revisions_response, get_component_metadata_response,
     get_current_environment_state_response, get_deployed_component_metadata_response,
     get_resource_definition_by_id_response, get_resource_definition_by_name_response,
-    get_resource_limits_response, resolve_agent_type_by_names_response, resolve_component_response,
-    revoke_card_response, update_worker_connection_limit_response,
+    get_resource_limits_response, get_tool_deployment_state_response,
+    resolve_agent_type_by_names_response, resolve_component_response, revoke_card_response,
+    update_worker_connection_limit_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::AgentId;
@@ -60,6 +61,7 @@ use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevis
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
+use golem_common::model::tool::ToolDeploymentState;
 use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
 use http::Uri;
 use serde::{Deserialize, Serialize};
@@ -85,6 +87,7 @@ pub struct ResourceUsageUpdate {
     pub rpc_call_count_delta: u64,
     pub durable_storage_byte_seconds_delta: i64,
     pub ephemeral_storage_byte_seconds_delta: i64,
+    pub memory_gb_seconds_delta: i64,
 }
 
 #[async_trait]
@@ -197,6 +200,17 @@ pub trait RegistryService: Send + Sync {
         component_revision: ComponentRevision,
         name: &AgentTypeName,
     ) -> Result<RegisteredAgentType, RegistryServiceError>;
+
+    async fn get_tool_deployment_state(
+        &self,
+        _environment_id: EnvironmentId,
+        _component_id: ComponentId,
+        _component_revision: ComponentRevision,
+    ) -> Result<Option<ToolDeploymentState>, RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "get_tool_deployment_state is not supported by this registry service",
+        ))
+    }
 
     async fn resolve_agent_type_by_names(
         &self,
@@ -574,6 +588,7 @@ impl RegistryService for GrpcRegistryService {
                 rpc_call_count_delta: v.rpc_call_count_delta,
                 durable_storage_byte_seconds_delta: v.durable_storage_byte_seconds_delta,
                 ephemeral_storage_byte_seconds_delta: v.ephemeral_storage_byte_seconds_delta,
+                memory_gb_seconds_delta: v.memory_gb_seconds_delta,
             })
             .collect();
 
@@ -999,6 +1014,36 @@ impl RegistryService for GrpcRegistryService {
                 Ok(converted)
             }
             Some(get_agent_type_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn get_tool_deployment_state(
+        &self,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+    ) -> Result<Option<ToolDeploymentState>, RegistryServiceError> {
+        let response = self
+            .client
+            .call("get_tool_deployment_state", move |client| {
+                let request = GetToolDeploymentStateRequest {
+                    environment_id: Some(environment_id.into()),
+                    component_id: Some(component_id.into()),
+                    component_revision: component_revision.into(),
+                };
+                Box::pin(client.get_tool_deployment_state(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(get_tool_deployment_state_response::Result::Success(payload)) => payload
+                .tool_deployment
+                .map(TryInto::try_into)
+                .transpose()
+                .map_err(Into::into),
+            Some(get_tool_deployment_state_response::Result::Error(error)) => Err(error.into()),
         }
     }
 

@@ -52,21 +52,24 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetResourceDefinitionByIdSuccessResponse, GetResourceDefinitionByNameRequest,
     GetResourceDefinitionByNameResponse, GetResourceDefinitionByNameSuccessResponse,
     GetResourceLimitsRequest, GetResourceLimitsResponse, GetResourceLimitsSuccessResponse,
-    RegistryInvalidationEvent, RegistryServiceError, ResolveAgentTypeByNamesRequest,
-    ResolveAgentTypeByNamesResponse, ResolveAgentTypeByNamesSuccessResponse,
-    ResolveComponentRequest, ResolveComponentResponse, ResolveComponentSuccessResponse,
-    RevokeCardRequest, RevokeCardResponse, RevokeCardSuccessResponse, RuntimeCardData,
-    SubscribeRegistryInvalidationsRequest, UpdateWorkerConnectionLimitRequest,
-    UpdateWorkerConnectionLimitResponse, authenticate_token_response, batch_get_cards_response,
-    batch_get_existing_cards_response, batch_update_resource_usage_response,
-    create_runtime_card_response, download_component_response, get_active_mcp_for_domain_response,
+    GetToolDeploymentStateRequest, GetToolDeploymentStateResponse,
+    GetToolDeploymentStateSuccessResponse, RegistryInvalidationEvent, RegistryServiceError,
+    ResolveAgentTypeByNamesRequest, ResolveAgentTypeByNamesResponse,
+    ResolveAgentTypeByNamesSuccessResponse, ResolveComponentRequest, ResolveComponentResponse,
+    ResolveComponentSuccessResponse, RevokeCardRequest, RevokeCardResponse,
+    RevokeCardSuccessResponse, RuntimeCardData, SubscribeRegistryInvalidationsRequest,
+    UpdateWorkerConnectionLimitRequest, UpdateWorkerConnectionLimitResponse,
+    authenticate_token_response, batch_get_cards_response, batch_get_existing_cards_response,
+    batch_update_resource_usage_response, create_runtime_card_response,
+    download_component_response, get_active_mcp_for_domain_response,
     get_active_routes_for_domain_response, get_agent_secret_revision_response,
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_component_metadata_response,
     get_current_environment_state_response, get_deployed_component_metadata_response,
     get_resource_definition_by_id_response, get_resource_definition_by_name_response,
-    get_resource_limits_response, registry_service_error, resolve_agent_type_by_names_response,
-    resolve_component_response, revoke_card_response, update_worker_connection_limit_response,
+    get_resource_limits_response, get_tool_deployment_state_response, registry_service_error,
+    resolve_agent_type_by_names_response, resolve_component_response, revoke_card_response,
+    update_worker_connection_limit_response,
 };
 use golem_common::base_model::api;
 use golem_common::model::account::AccountId;
@@ -214,6 +217,7 @@ impl RegistryServiceGrpcApi {
                         durable_storage_byte_seconds_delta: u.durable_storage_byte_seconds_delta,
                         ephemeral_storage_byte_seconds_delta: u
                             .ephemeral_storage_byte_seconds_delta,
+                        memory_gb_seconds_delta: u.memory_gb_seconds_delta,
                     },
                 ))
             })
@@ -518,6 +522,34 @@ impl RegistryServiceGrpcApi {
         })
     }
 
+    async fn get_tool_deployment_state_internal(
+        &self,
+        request: GetToolDeploymentStateRequest,
+    ) -> Result<GetToolDeploymentStateSuccessResponse, GrpcApiError> {
+        let environment_id: EnvironmentId = request
+            .environment_id
+            .ok_or("missing environment_id field")?
+            .try_into()?;
+        let component_id: ComponentId = request
+            .component_id
+            .ok_or("missing component_id field")?
+            .try_into()?;
+        let component_revision: ComponentRevision = request.component_revision.try_into()?;
+
+        let tool_deployment = self
+            .deployment_service
+            .get_latest_tool_deployment_state_by_component_revision(
+                environment_id,
+                component_id,
+                component_revision,
+            )
+            .await?;
+
+        Ok(GetToolDeploymentStateSuccessResponse {
+            tool_deployment: tool_deployment.map(Into::into),
+        })
+    }
+
     async fn get_active_routes_for_domain_internal(
         &self,
         request: GetActiveRoutesForDomainRequest,
@@ -602,6 +634,7 @@ impl RegistryServiceGrpcApi {
                         .map(|secret| (secret.path.clone(), secret))
                         .collect(),
                     retry_policies: Vec::new(),
+                    tool_deployment: None,
                 }
                 .into(),
             ),
@@ -1083,6 +1116,33 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(GetAgentTypeResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn get_tool_deployment_state(
+        &self,
+        request: Request<GetToolDeploymentStateRequest>,
+    ) -> Result<Response<GetToolDeploymentStateResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_tool_deployment_state",
+            environment_id = EnvironmentId::render_proto(request.environment_id),
+            component_id = ComponentId::render_proto(request.component_id),
+            component_revision = request.component_revision,
+        );
+
+        let response = match self
+            .get_tool_deployment_state_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => get_tool_deployment_state_response::Result::Success(result),
+            Err(error) => get_tool_deployment_state_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(GetToolDeploymentStateResponse {
             result: Some(response),
         }))
     }

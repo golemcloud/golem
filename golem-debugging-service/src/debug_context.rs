@@ -36,7 +36,8 @@ use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorEr
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::component::Component;
 use golem_worker_executor::durable_host::{
-    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState, SnapshotBoundaryBlocker,
+    DurableResourceLimiter, DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
+    SnapshotBoundaryBlocker,
 };
 use golem_worker_executor::model::{
     AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType,
@@ -357,24 +358,29 @@ impl FileSystemReading for DebugContext {
     }
 }
 
+impl DurableResourceLimiter<DebugContext> for DebugContext {
+    fn durable_worker_ctx(&mut self) -> &mut DurableWorkerCtx<DebugContext> {
+        &mut self.durable_ctx
+    }
+}
+
 #[async_trait]
 impl ResourceLimiterAsync for DebugContext {
     async fn memory_growing(
         &mut self,
-        _current: usize,
+        current: usize,
         desired: usize,
-        _maximum: Option<usize>,
+        maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
-        let current_known = self.durable_ctx.total_linear_memory_size();
-        let delta = (desired as u64).saturating_sub(current_known);
-        if delta > 0 {
-            self.durable_ctx
-                .increase_memory(delta)
-                .map_err(wasmtime::Error::from_anyhow)?;
-            Ok(true)
-        } else {
-            Ok(true)
-        }
+        self.durable_memory_growing(current, desired, maximum).await
+    }
+
+    fn memory_grown(&mut self, current: usize, desired: usize) {
+        self.durable_memory_grown(current, desired);
+    }
+
+    fn memory_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
+        self.durable_memory_grow_failed()
     }
 
     async fn table_growing(

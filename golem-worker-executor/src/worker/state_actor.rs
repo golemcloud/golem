@@ -39,11 +39,10 @@
 //!   instance lock await status jobs (e.g. `Worker::add_and_commit_oplog_internal`), so taking
 //!   that lock here would deadlock. It only performs oplog-actor roundtrips, storage/network IO,
 //!   and lock-free status publication.
-//! * The **lifecycle queue** runs fire-and-forget jobs that *may* take the `instance` lock
-//!   (invocation-loop notification, memory-grow admission, worker restart). Nothing ever awaits
-//!   a lifecycle job's completion, so this task waiting on the instance lock cannot form a
-//!   cycle: every instance-lock holder completes without needing the lifecycle queue to
-//!   progress.
+//! * The **lifecycle queue** runs notification and memory-accounting jobs. Jobs that take the
+//!   `instance` lock are fire-and-forget. Ordered oplog entries are awaitable but never take that
+//!   lock, so an instance-lock holder never waits on a lifecycle operation that needs the same
+//!   lock.
 //!
 //! The status task is also the **only writer** of the worker's published status
 //! (`last_known_status`, an `ArcSwap`) and its `detached` flag; every other component reads them
@@ -51,7 +50,8 @@
 
 use super::status::{calculate_last_known_status_with_checkpoint, update_status_with_new_entries};
 use super::status_flusher::{AgentStatusFlusher, FlushReason};
-use super::{Worker, WorkerCommand, WorkerInstance, WorkerStatusMetric};
+use super::{PendingMemoryGrowth, Worker, WorkerCommand, WorkerInstance, WorkerStatusMetric};
+use crate::services::agent_memory_meter::AgentMemoryMeter;
 use crate::services::oplog::{CommitLevel, Oplog};
 use crate::services::{All, HasConfig, HasSchedulerService};
 use crate::workerctx::WorkerCtx;
@@ -60,17 +60,21 @@ use chrono::Utc;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{AgentStatus, AgentStatusRecord, OwnedAgentId, ScheduledAction};
+use golem_common::model::{
+    AgentStatus, AgentStatusRecord, OwnedAgentId, ScheduledAction, Timestamp,
+};
+use golem_service_base::error::worker_executor::InterruptKind;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Mutex, mpsc, oneshot};
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Handle to the worker-state actor's two job queues. Owned by [`Worker`]; dropping it aborts
 /// both tasks.
 pub(super) struct WorkerStateActor<Ctx: WorkerCtx> {
     status_jobs: mpsc::UnboundedSender<StatusJob>,
     lifecycle_jobs: mpsc::UnboundedSender<LifecycleJob<Ctx>>,
+    notification_queued: Arc<AtomicBool>,
     status_task: tokio::task::JoinHandle<()>,
     lifecycle_task: tokio::task::JoinHandle<()>,
     owned_agent_id: OwnedAgentId,
@@ -102,19 +106,25 @@ enum StatusJob {
     Reattach { done: oneshot::Sender<()> },
 }
 
-/// A fire-and-forget request processed by the lifecycle task. These jobs may take the worker's
-/// `instance` lock; no caller ever awaits their completion (see the module docs for why both
-/// properties are required together).
+/// A request processed by the lifecycle task. Notifications and ordinary growth persistence are
+/// fire-and-forget. Ordered oplog entries await a reply but never take the worker's `instance`
+/// lock, so it remains safe for store-polled callers.
 enum LifecycleJob<Ctx: WorkerCtx> {
     /// Wakes the invocation loop after a commit changed the published status.
     NotifyStatusChanged,
-    /// Records a `GrowMemory` oplog hint and runs the global memory admission for a
-    /// `memory.grow` executed by the guest. On admission failure the worker is restarted, which
-    /// re-acquires its full (now larger) memory reservation through the startup admission path —
-    /// the same net effect as failing the grow with `WorkerOutOfMemory`.
+    /// Records a `GrowMemory` oplog hint after a guest growth has committed.
     GrowMemory {
         worker: Arc<Worker<Ctx>>,
-        delta: u64,
+        growth: Arc<PendingMemoryGrowth>,
+    },
+    OrderedOplogEntry {
+        worker: Arc<Worker<Ctx>>,
+        entry: Box<OplogEntry>,
+        done: oneshot::Sender<()>,
+    },
+    MemoryLimitExceeded {
+        worker: Arc<Worker<Ctx>>,
+        meter: AgentMemoryMeter,
     },
 }
 
@@ -138,9 +148,9 @@ struct StatusState<Ctx: WorkerCtx> {
 impl<Ctx: WorkerCtx> Drop for WorkerStateActor<Ctx> {
     fn drop(&mut self) {
         // In-flight status jobs borrow the owning `Worker`, so at this point no caller can be
-        // awaiting a reply anymore. Queued lifecycle jobs are fire-and-forget; a pending
-        // `GrowMemory` holds a strong `Arc<Worker>` and therefore cannot be pending here, and a
-        // dropped `NotifyStatusChanged` is harmless for a worker that is going away.
+        // awaiting a reply anymore. Lifecycle jobs that need the worker hold a strong
+        // `Arc<Worker>` and therefore cannot be pending here; a dropped `NotifyStatusChanged` is
+        // harmless for a worker that is going away.
         self.status_task.abort();
         self.lifecycle_task.abort();
     }
@@ -197,24 +207,38 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             }
         });
 
+        let notification_queued = Arc::new(AtomicBool::new(false));
+        let notification_queued_task = notification_queued.clone();
         let (lifecycle_jobs, mut lifecycle_rx) = mpsc::unbounded_channel::<LifecycleJob<Ctx>>();
         let lifecycle_task = tokio::spawn(async move {
             while let Some(job) = lifecycle_rx.recv().await {
                 match job {
                     LifecycleJob::NotifyStatusChanged => {
                         let instance_guard = instance.lock().await;
+                        notification_queued_task.store(false, Ordering::Release);
                         if let WorkerInstance::Running(running) = &*instance_guard {
                             let _ = running.sender.send(WorkerCommand::InternalStatusChanged);
                         }
                     }
-                    LifecycleJob::GrowMemory { worker, delta } => {
-                        worker.add_to_oplog(OplogEntry::grow_memory(delta)).await;
-                        if let Err(error) = worker.increase_memory(delta).await {
-                            warn!(
-                                agent_id = %worker.owned_agent_id.agent_id,
-                                "Failed to acquire {delta} bytes of additional memory: {error}; restarting the worker after releasing its memory permits"
-                            );
-                            worker.interrupt_for_permit_reacquire().await;
+                    LifecycleJob::GrowMemory { worker, growth } => {
+                        worker.persist_pending_memory_growth(growth).await;
+                    }
+                    LifecycleJob::OrderedOplogEntry {
+                        worker,
+                        entry,
+                        done,
+                    } => {
+                        worker.add_and_commit_oplog(*entry).await;
+                        let _ = done.send(());
+                    }
+                    LifecycleJob::MemoryLimitExceeded { worker, meter } => {
+                        worker
+                            .memory_limit_interrupt_queued
+                            .store(false, Ordering::Release);
+                        if meter.exceeds_current_limit() {
+                            worker
+                                .set_interrupting(InterruptKind::Suspend(Timestamp::now_utc()))
+                                .await;
                         }
                     }
                 }
@@ -224,6 +248,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         Self {
             status_jobs,
             lifecycle_jobs,
+            notification_queued,
             status_task,
             lifecycle_task,
             owned_agent_id,
@@ -260,16 +285,23 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     /// forget: never blocks, and safe to call from store-polled futures and store-keeping
     /// fibers alike, because the instance lock is only taken on the lifecycle task.
     pub fn notify_status_changed(&self) {
-        let _ = self.lifecycle_jobs.send(LifecycleJob::NotifyStatusChanged);
+        if !self.notification_queued.swap(true, Ordering::AcqRel)
+            && self
+                .lifecycle_jobs
+                .send(LifecycleJob::NotifyStatusChanged)
+                .is_err()
+        {
+            self.notification_queued.store(false, Ordering::Release);
+        }
     }
 
-    /// Asks the lifecycle task to record and admit a guest `memory.grow` of `delta` bytes. Fire
+    /// Asks the lifecycle task to record a committed guest `memory.grow` of `delta` bytes. Fire
     /// and forget: called from the `memory.grow` resource limiter, which runs on a store-keeping
     /// fiber and must not await anything.
-    pub fn grow_memory(&self, worker: Arc<Worker<Ctx>>, delta: u64) {
+    pub fn grow_memory(&self, worker: Arc<Worker<Ctx>>, growth: Arc<PendingMemoryGrowth>) {
         if self
             .lifecycle_jobs
-            .send(LifecycleJob::GrowMemory { worker, delta })
+            .send(LifecycleJob::GrowMemory { worker, growth })
             .is_err()
         {
             panic!(
@@ -277,6 +309,42 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                 self.owned_agent_id
             );
         }
+    }
+
+    pub fn memory_limit_exceeded(&self, worker: Arc<Worker<Ctx>>, meter: AgentMemoryMeter) {
+        if self
+            .lifecycle_jobs
+            .send(LifecycleJob::MemoryLimitExceeded { worker, meter })
+            .is_err()
+        {
+            panic!(
+                "Worker state actor for {} terminated unexpectedly",
+                self.owned_agent_id
+            );
+        }
+    }
+
+    pub fn queue_ordered_oplog_entry(
+        &self,
+        worker: Arc<Worker<Ctx>>,
+        entry: OplogEntry,
+    ) -> oneshot::Receiver<()> {
+        let (done, done_rx) = oneshot::channel();
+        if self
+            .lifecycle_jobs
+            .send(LifecycleJob::OrderedOplogEntry {
+                worker,
+                entry: Box::new(entry),
+                done,
+            })
+            .is_err()
+        {
+            panic!(
+                "Worker state actor for {} terminated unexpectedly",
+                self.owned_agent_id
+            );
+        }
+        done_rx
     }
 
     /// Sends a job to the status task and waits for its reply.

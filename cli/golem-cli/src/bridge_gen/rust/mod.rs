@@ -53,6 +53,7 @@ use tracing::debug;
 
 #[allow(clippy::module_inception)]
 mod rust;
+mod schema_graph;
 pub mod tool;
 mod type_name;
 
@@ -196,6 +197,7 @@ pub struct RustBridgeGenerator {
     /// Distinct multimodal modality sets discovered while generating, each
     /// mapped to the generated `crate::Multimodal*` enum name.
     known_multimodals: Vec<(Vec<(String, SchemaType)>, String)>,
+    schema_graphs: schema_graph::SchemaGraphRegistry,
 }
 
 impl BridgeGenerator for RustBridgeGenerator {
@@ -297,6 +299,7 @@ impl RustBridgeGenerator {
             generated_language_enums: Vec::new(),
             generated_mimetypes_enums: Vec::new(),
             known_multimodals: Vec::new(),
+            schema_graphs: schema_graph::SchemaGraphRegistry::default(),
         })
     }
 
@@ -336,7 +339,9 @@ impl RustBridgeGenerator {
             }
         }
         doc["dependencies"]["serde"] = dep("1", &["derive"]);
-        doc["dependencies"]["serde_json"] = dep("1", &[]);
+        if self.mode == RustBridgeMode::ExternalRest {
+            doc["dependencies"]["serde_json"] = dep("1", &[]);
+        }
         doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);
 
         std::fs::write(path, doc.to_string())
@@ -770,14 +775,13 @@ impl RustBridgeGenerator {
             )
             .graph()
             .clone();
-            let schema_graph_json = serde_json::to_string(&config_graph)?;
+            let config_graph = schema_graph::graph_clone(self.schema_graphs.intern(config_graph));
             config_encode_stmts.push(quote! {
                 if let Some(value) = #param_name {
                     let __config_value: crate::__golem_bridge_runtime::schema::SchemaValue = (|| -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
                         #value_encode
                     })().map_err(|__e| crate::__golem_bridge_runtime::ClientError::ConfigEncodingFailed { message: __e })?;
-                    let __config_graph: golem_rust::SchemaGraph = serde_json::from_str(#schema_graph_json)
-                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::ConfigEncodingFailed { message: format!("Failed to deserialize config schema: {__e}") })?;
+                    let __config_graph: golem_rust::SchemaGraph = #config_graph;
                     let __typed = golem_rust::TypedSchemaValue::new(__config_graph, __config_value);
                     #agent_config_values.push(golem_rust::golem_agentic::golem::agent::common::TypedAgentConfigValue {
                         path: vec![#(#path_segments),*],
@@ -876,6 +880,7 @@ impl RustBridgeGenerator {
         let languages = self.languages_module();
         let mimetypes = self.mimetypes_module();
         let runtime_prelude = RustRuntimeConfig::new(self.mode).generated_prelude();
+        let schema_graphs = self.schema_graphs.definitions();
 
         let tokens = quote! {
             #![allow(unused)]
@@ -883,6 +888,8 @@ impl RustBridgeGenerator {
             #![allow(clippy::all)]
 
             #runtime_prelude
+
+            #schema_graphs
 
             #[derive(Debug)]
             pub struct #client_struct_name {

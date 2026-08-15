@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::validation::{ToolValidationError, validate_tool};
-use super::wit::{decode_tool, encode_tool, wire};
+use super::wit::wire;
 use super::*;
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::TypeId;
@@ -284,8 +284,53 @@ fn kitchen_sink_tool() -> Tool {
 #[test]
 fn native_wire_round_trip_is_lossless() {
     let tool = kitchen_sink_tool();
-    let wire = encode_tool(&tool).expect("native -> wire should succeed");
-    let back = decode_tool(&wire).expect("wire -> native should succeed");
+    let wire = wire::Tool::try_from(&tool).expect("native -> wire should succeed");
+    let back = Tool::try_from(&wire).expect("wire -> native should succeed");
+    assert_eq!(tool, back);
+}
+
+#[test]
+fn protobuf_round_trip_is_lossless() {
+    let tool = kitchen_sink_tool();
+    let protobuf: golem_api_grpc::proto::golem::tool::Tool = tool.clone().into();
+    let back = Tool::try_from(protobuf).expect("protobuf -> native should succeed");
+    assert_eq!(tool, back);
+}
+
+#[test]
+fn protobuf_rejects_formatter_without_required_doc() {
+    let tool = kitchen_sink_tool();
+    let mut protobuf: golem_api_grpc::proto::golem::tool::Tool = tool.into();
+    protobuf.commands.as_mut().unwrap().nodes[0]
+        .body
+        .as_mut()
+        .unwrap()
+        .result
+        .as_mut()
+        .unwrap()
+        .formatters[0]
+        .doc = None;
+
+    assert!(Tool::try_from(protobuf).is_err());
+}
+
+#[test]
+fn binary_round_trip_is_lossless() {
+    let tool = kitchen_sink_tool();
+    let bytes =
+        crate::serialization::serialize(&tool).expect("binary serialization should succeed");
+    let back: Tool =
+        crate::serialization::deserialize(&bytes).expect("binary deserialization should succeed");
+    assert_eq!(tool, back);
+}
+
+#[test]
+fn openapi_json_round_trip_is_lossless() {
+    use poem_openapi::types::{ParseFromJSON, ToJSON};
+
+    let tool = kitchen_sink_tool();
+    let json = tool.to_json();
+    let back = Tool::parse_from_json(json).expect("OpenAPI JSON parsing should succeed");
     assert_eq!(tool, back);
 }
 
@@ -2407,12 +2452,12 @@ fn arb_tool() -> impl Strategy<Value = Tool> {
 // The `From`-based, context-free conversions round-trip directly. The
 // graph-folding / value-bearing conversions are exercised by embedding an
 // arbitrary value in a minimal `Tool` and round-tripping through the public
-// `encode_tool` / `decode_tool` boundary.
+// `TryFrom` boundary.
 
 /// Round-trip a tool through the wire form.
 fn rt(tool: &Tool) -> Tool {
-    let wire = encode_tool(tool).expect("native -> wire");
-    decode_tool(&wire).expect("wire -> native")
+    let wire = wire::Tool::try_from(tool).expect("native -> wire");
+    Tool::try_from(&wire).expect("wire -> native")
 }
 
 /// A single-root tool whose body is produced by `f`.

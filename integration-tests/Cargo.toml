@@ -87,6 +87,11 @@ name = "storage-billing"
 path = "tests/storage_billing.rs"
 harness = false
 
+[[test]]
+name = "memory-billing"
+path = "tests/memory_billing.rs"
+harness = false
+
 [[bin]]
 name = "benchmarks"
 path = "src/benchmarks/all.rs"

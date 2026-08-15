@@ -26,6 +26,7 @@ use crate::schema::schema_value::{
     PermissionCardValuePayload, QuotaTokenValuePayload, SchemaValue, SecretValuePayload,
     TextValuePayload, UnionValuePayload, VariantValuePayload,
 };
+use crate::schema::validation::validate_graph;
 use chrono::{TimeZone, Utc};
 use proptest::prelude::*;
 use serde_json::json;
@@ -336,6 +337,36 @@ fn union_ambiguous_match_is_reported() {
     let graph = SchemaGraph::anonymous(ty.clone());
     let json = json!({ "k": "v" });
     let err = from_json_value(&graph, &ty, &json).expect_err("should fail");
+    assert!(matches!(err, RenderError::UnionAmbiguous { .. }));
+}
+
+#[test]
+fn union_distinct_regexes_pass_validation_but_can_decode_as_ambiguous() {
+    let ty = SchemaType::union(UnionSpec {
+        branches: vec![
+            UnionBranch {
+                tag: "starts-with-a".to_string(),
+                body: SchemaType::string(),
+                discriminator: DiscriminatorRule::Regex {
+                    regex: "^a".to_string(),
+                },
+                metadata: Default::default(),
+            },
+            UnionBranch {
+                tag: "ends-with-a".to_string(),
+                body: SchemaType::string(),
+                discriminator: DiscriminatorRule::Regex {
+                    regex: "a$".to_string(),
+                },
+                metadata: Default::default(),
+            },
+        ],
+    });
+    let graph = SchemaGraph::anonymous(ty.clone());
+    validate_graph(&graph).expect("distinct regexes are Indeterminate at construction");
+
+    let err = from_json_value(&graph, &ty, &json!("a"))
+        .expect_err("runtime must reject a value matching both regexes");
     assert!(matches!(err, RenderError::UnionAmbiguous { .. }));
 }
 

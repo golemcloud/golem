@@ -36,6 +36,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::agent::RegisteredAgentTypeImplementer;
 use golem_common::model::agent_secret::AgentSecretId;
+use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{
     CurrentDeployment, CurrentDeploymentRevision, Deployment, DeploymentPlan, DeploymentRevision,
     DeploymentSummary, DeploymentVersion,
@@ -48,7 +49,12 @@ use golem_common::model::quota::{ResourceDefinitionCreation, ResourceDefinitionI
 use golem_common::model::security_scheme::{
     CustomProvider, Provider, SecuritySchemeId, SecuritySchemeName,
 };
+use golem_common::model::tool::{
+    CompiledToolBinding, RegisteredTool, ToolDeploymentState, ToolName, ToolProvisionConfig,
+    ToolSource,
+};
 use golem_common::schema::AgentTypeSchema;
+use golem_common::schema::tool::Tool;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
 use golem_service_base::model::component::Component;
@@ -448,6 +454,178 @@ pub struct DeploymentRegisteredAgentTypeScopedRecord {
     pub agent_type: Blob<AgentTypeSchema>,
 }
 
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentRegisteredToolRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub tool_name: String,
+    pub component_id: Uuid,
+    pub component_revision_id: i64,
+    pub component_name: String,
+    pub owner_account_id: Uuid,
+    pub owner_account_email: String,
+    pub tool_definition: Blob<Tool>,
+    pub tool_provision_config: Blob<ToolProvisionConfig>,
+    pub metadata_version: String,
+}
+
+impl DeploymentRegisteredToolRecord {
+    pub fn from_model(environment_id: EnvironmentId, registered_tool: RegisteredTool) -> Self {
+        let ToolSource::Component {
+            component_id,
+            component_revision,
+            component_name,
+        } = registered_tool.source;
+        Self {
+            environment_id: environment_id.0,
+            deployment_revision_id: registered_tool.deployment_revision.into(),
+            tool_name: registered_tool
+                .definition
+                .name()
+                .expect("registered tool definition has a validated name")
+                .to_string(),
+            component_id: component_id.0,
+            component_revision_id: component_revision.into(),
+            component_name: component_name.0,
+            owner_account_id: registered_tool.owner_account_id.0,
+            owner_account_email: registered_tool.owner_account_email.into_inner(),
+            tool_definition: Blob::new(registered_tool.definition),
+            tool_provision_config: Blob::new(registered_tool.provision),
+            metadata_version: registered_tool.metadata_version,
+        }
+    }
+}
+
+impl TryFrom<DeploymentRegisteredToolRecord> for RegisteredTool {
+    type Error = DeployRepoError;
+
+    fn try_from(value: DeploymentRegisteredToolRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            deployment_revision: value.deployment_revision_id.try_into()?,
+            definition: value.tool_definition.into_value(),
+            provision: value.tool_provision_config.into_value(),
+            source: ToolSource::Component {
+                component_id: value.component_id.into(),
+                component_revision: value.component_revision_id.try_into()?,
+                component_name: ComponentName(value.component_name),
+            },
+            owner_account_id: value.owner_account_id.into(),
+            owner_account_email: AccountEmail::new(value.owner_account_email),
+            metadata_version: value.metadata_version,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentAgentToolBindingRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub agent_type_name: String,
+    pub tool_name: String,
+    pub compiled_binding: Blob<CompiledToolBinding>,
+}
+
+impl DeploymentAgentToolBindingRecord {
+    pub fn from_model(environment_id: EnvironmentId, binding: CompiledToolBinding) -> Self {
+        Self {
+            environment_id: environment_id.0,
+            deployment_revision_id: binding.deployment_revision.into(),
+            agent_type_name: binding.agent_type_name.0.clone(),
+            tool_name: binding.tool_name.to_string(),
+            compiled_binding: Blob::new(binding),
+        }
+    }
+}
+
+pub struct ToolDeploymentStateRecord {
+    pub deployment_revision_id: i64,
+    pub registered_tools: Vec<DeploymentRegisteredToolRecord>,
+    pub agent_tool_bindings: Vec<DeploymentAgentToolBindingRecord>,
+}
+
+impl TryFrom<ToolDeploymentStateRecord> for ToolDeploymentState {
+    type Error = DeployRepoError;
+
+    fn try_from(value: ToolDeploymentStateRecord) -> Result<Self, Self::Error> {
+        let deployment_revision: DeploymentRevision = value.deployment_revision_id.try_into()?;
+        let registered_tools = value
+            .registered_tools
+            .into_iter()
+            .map(|record| {
+                let name = ToolName::try_from(record.tool_name.as_str())
+                    .map_err(|error| DeployRepoError::InternalError(anyhow!(error)))?;
+                let registered: RegisteredTool = record.try_into()?;
+                if registered.deployment_revision != deployment_revision {
+                    return Err(DeployRepoError::InternalError(anyhow!(
+                        "registered tool {name} belongs to deployment revision {}, expected {deployment_revision}",
+                        registered.deployment_revision
+                    )));
+                }
+                if registered.definition.name() != Some(name.as_str()) {
+                    return Err(DeployRepoError::InternalError(anyhow!(
+                        "registered tool row name {name} does not match its definition"
+                    )));
+                }
+                Ok((name, registered))
+            })
+            .collect::<Result<std::collections::BTreeMap<_, _>, DeployRepoError>>()?;
+        let mut agent_tool_bindings = std::collections::BTreeMap::new();
+        for record in value.agent_tool_bindings {
+            if record.deployment_revision_id != value.deployment_revision_id {
+                return Err(DeployRepoError::InternalError(anyhow!(
+                    "tool binding row belongs to deployment revision {}, expected {}",
+                    record.deployment_revision_id,
+                    value.deployment_revision_id
+                )));
+            }
+            let binding = record.compiled_binding.into_value();
+            if binding.deployment_revision != deployment_revision
+                || binding.agent_type_name.0 != record.agent_type_name
+                || binding.tool_name.as_str() != record.tool_name
+            {
+                return Err(DeployRepoError::InternalError(anyhow!(
+                    "compiled tool binding does not match its deployment, agent, or tool row identity"
+                )));
+            }
+            let registered = registered_tools.get(&binding.tool_name).ok_or_else(|| {
+                DeployRepoError::InternalError(anyhow!(
+                    "compiled binding references unregistered tool {}",
+                    binding.tool_name
+                ))
+            })?;
+            if binding.source != registered.source
+                || binding.version != registered.definition.version
+                || binding.metadata_version != registered.metadata_version
+                || binding.account_id != registered.owner_account_id
+                || binding.account_email != registered.owner_account_email
+            {
+                return Err(DeployRepoError::InternalError(anyhow!(
+                    "compiled binding for tool {} does not match the registered implementation",
+                    binding.tool_name
+                )));
+            }
+            if !binding
+                .secret_keys_revealable
+                .is_subset_of(&binding.secret_keys_readable)
+            {
+                return Err(DeployRepoError::InternalError(anyhow!(
+                    "compiled binding for tool {} has revealable secret keys outside its readable scope",
+                    binding.tool_name
+                )));
+            }
+            agent_tool_bindings
+                .entry(binding.agent_type_name.clone())
+                .or_insert_with(std::collections::BTreeMap::new)
+                .insert(binding.tool_name.clone(), binding);
+        }
+        Ok(Self {
+            deployment_revision,
+            registered_tools,
+            agent_tool_bindings,
+        })
+    }
+}
+
 impl DeploymentRegisteredAgentTypeScopedRecord {
     pub fn try_into_deployed(
         self,
@@ -514,6 +692,8 @@ pub struct DeploymentRevisionCreationRecord {
     pub compiled_routes: Vec<DeploymentCompiledRouteRecord>,
     pub compiled_mcp: Vec<DeploymentCompiledMcpRecord>,
     pub registered_agent_types: Vec<DeploymentRegisteredAgentTypeRecord>,
+    pub registered_tools: Vec<DeploymentRegisteredToolRecord>,
+    pub agent_tool_bindings: Vec<DeploymentAgentToolBindingRecord>,
 
     pub created_agent_secrets: Vec<AgentSecretCreationRecord>,
     pub updated_agent_secrets: Vec<AgentSecretRevisionRecord>,
@@ -537,6 +717,8 @@ impl DeploymentRevisionCreationRecord {
         compiled_routes: Vec<UnboundCompiledRoute>,
         compiled_mcp: Vec<CompiledMcp>,
         registered_agent_types: Vec<DeployedRegisteredAgentType>,
+        registered_tools: Vec<RegisteredTool>,
+        agent_tool_bindings: Vec<CompiledToolBinding>,
         created_agent_secrets: Vec<DeploymentAgentSecretCreation>,
         updated_agent_secrets: Vec<DeploymentAgentSecretUpdate>,
         replaced_agent_secrets: Vec<DeploymentAgentSecretReplacement>,
@@ -602,6 +784,16 @@ impl DeploymentRevisionCreationRecord {
                         deployment_revision,
                         r,
                     )
+                })
+                .collect(),
+            registered_tools: registered_tools
+                .into_iter()
+                .map(|tool| DeploymentRegisteredToolRecord::from_model(environment_id, tool))
+                .collect(),
+            agent_tool_bindings: agent_tool_bindings
+                .into_iter()
+                .map(|binding| {
+                    DeploymentAgentToolBindingRecord::from_model(environment_id, binding)
                 })
                 .collect(),
             created_agent_secrets: created_agent_secrets

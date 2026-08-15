@@ -339,6 +339,26 @@ fn string_pattern_rule_on_record_body_is_reported() {
 }
 
 #[test]
+fn string_pattern_rule_on_text_body_is_reported() {
+    let graph = SchemaGraph::anonymous(SchemaType::union(UnionSpec {
+        branches: vec![UnionBranch {
+            tag: "t".to_string(),
+            body: SchemaType::text(TextRestrictions::default()),
+            discriminator: DiscriminatorRule::Prefix {
+                prefix: "x".to_string(),
+            },
+            metadata: Default::default(),
+        }],
+    }));
+    let errors = validate_graph(&graph).expect_err("text has object-shaped canonical JSON");
+    assert!(
+        errors.contains(&SchemaError::UnionStringRuleOnNonStringBody {
+            tag: "t".to_string(),
+        })
+    );
+}
+
+#[test]
 fn field_equals_literal_on_non_string_field_is_reported() {
     let graph = SchemaGraph::anonymous(SchemaType::union(UnionSpec {
         branches: vec![UnionBranch {
@@ -363,6 +383,35 @@ fn field_equals_literal_on_non_string_field_is_reported() {
         errors.contains(&SchemaError::UnionFieldEqualsLiteralOnNonStringField {
             tag: "t".to_string(),
             field_name: "n".to_string(),
+        })
+    );
+}
+
+#[test]
+fn field_equals_literal_on_text_field_is_reported() {
+    let graph = SchemaGraph::anonymous(SchemaType::union(UnionSpec {
+        branches: vec![UnionBranch {
+            tag: "t".to_string(),
+            body: SchemaType::Record {
+                fields: vec![NamedFieldType {
+                    name: "value".to_string(),
+                    body: SchemaType::text(TextRestrictions::default()),
+                    metadata: Default::default(),
+                }],
+                metadata: Default::default(),
+            },
+            discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
+                field_name: "value".to_string(),
+                literal: Some("x".to_string()),
+            }),
+            metadata: Default::default(),
+        }],
+    }));
+    let errors = validate_graph(&graph).expect_err("text has object-shaped canonical JSON");
+    assert!(
+        errors.contains(&SchemaError::UnionFieldEqualsLiteralOnNonStringField {
+            tag: "t".to_string(),
+            field_name: "value".to_string(),
         })
     );
 }
@@ -622,15 +671,7 @@ fn union_discriminator_overlap_prefix_is_reported() {
     );
 }
 
-// Deferred: `discriminators_overlap` is intentionally conservative and only
-// detects same-kind nesting/empties (regex overlap is undecidable). Detecting
-// cross-kind overlaps such as prefix-vs-suffix is a separate union-ambiguity
-// completeness effort that also requires redesigning the well-formed property
-// generator (which deliberately relies on the conservative checker), so it is
-// out of scope for the tool dangling/duplicate-detection work and tracked
-// separately.
 #[test]
-#[ignore = "deferred: cross-kind discriminator overlap detection is a separate effort"]
 fn union_discriminator_overlap_prefix_suffix_is_reported() {
     let graph = SchemaGraph::anonymous(SchemaType::union(UnionSpec {
         branches: vec![
@@ -660,6 +701,63 @@ fn union_discriminator_overlap_prefix_suffix_is_reported() {
             .any(|e| matches!(e, SchemaError::UnionAmbiguousDiscriminators { .. })),
         "expected an ambiguous-discriminator error, got {errors:?}"
     );
+}
+
+#[test]
+fn union_discriminator_validation_rejects_only_reject_classifications() {
+    fn graph(left: DiscriminatorRule, right: DiscriminatorRule) -> SchemaGraph {
+        SchemaGraph::anonymous(SchemaType::union(UnionSpec {
+            branches: vec![
+                UnionBranch {
+                    tag: "left".to_string(),
+                    body: SchemaType::string(),
+                    discriminator: left,
+                    metadata: Default::default(),
+                },
+                UnionBranch {
+                    tag: "right".to_string(),
+                    body: SchemaType::string(),
+                    discriminator: right,
+                    metadata: Default::default(),
+                },
+            ],
+        }))
+    }
+
+    let reject = graph(
+        DiscriminatorRule::Prefix {
+            prefix: "a".to_string(),
+        },
+        DiscriminatorRule::Suffix {
+            suffix: "b".to_string(),
+        },
+    );
+    let errors = validate_graph(&reject).expect_err("Reject must fail validation");
+    assert!(
+        errors
+            .iter()
+            .any(|error| matches!(error, SchemaError::UnionAmbiguousDiscriminators { .. }))
+    );
+
+    let disjoint = graph(
+        DiscriminatorRule::Prefix {
+            prefix: "a".to_string(),
+        },
+        DiscriminatorRule::Prefix {
+            prefix: "b".to_string(),
+        },
+    );
+    validate_graph(&disjoint).expect("Disjoint must pass validation");
+
+    let indeterminate = graph(
+        DiscriminatorRule::Regex {
+            regex: "a.*".to_string(),
+        },
+        DiscriminatorRule::Prefix {
+            prefix: "a".to_string(),
+        },
+    );
+    validate_graph(&indeterminate).expect("Indeterminate must pass validation");
 }
 
 #[test]

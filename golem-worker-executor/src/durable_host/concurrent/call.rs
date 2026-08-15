@@ -277,6 +277,7 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
     oplog: Arc<dyn Oplog>,
     public_state: PublicDurableWorkerState<Ctx>,
     replay_state: crate::durable_host::replay_state::ReplayState,
+    linear_memory: crate::services::linear_memory::LinearMemoryTracker,
     execution_scope: BegunCallExecutionScope,
     retry: InFunctionRetryController,
     /// The registered atomic-region membership lease for a live persisted call initiated inside an
@@ -294,6 +295,13 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
     /// construction in `finish_access_start`. `Some` for live calls, `None` on replay.
     live_call_permit: Option<LiveCallPermit>,
     _phantom: PhantomData<(Pair, P)>,
+}
+
+impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<Pair, P, Ctx> {
+    async fn switch_to_live(&self) {
+        self.replay_state.switch_to_live().await;
+        self.linear_memory.switch_to_live();
+    }
 }
 
 /// Options that make the durable records of a concurrent accessor call claim-safe on replay.
@@ -805,6 +813,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             oplog: ctx.state.oplog.clone(),
             public_state: ctx.public_state.clone(),
             replay_state: ctx.state.replay_state.clone(),
+            linear_memory: ctx.linear_memory.clone(),
             execution_scope,
             retry,
             atomic_lease,
@@ -1137,7 +1146,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     .await
                     .is_none()
                 {
-                    prepared.replay_state.switch_to_live().await;
+                    prepared.switch_to_live().await;
                     return Err((
                         WorkerExecutorError::runtime(
                             "Non-idempotent remote write operation was not completed, cannot retry",
@@ -1177,7 +1186,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     OplogEntryLookupResult::NotFound {
                         violates_for_all: false,
                     } if prepared.retry.durable_execution_state().assume_idempotence => {
-                        prepared.replay_state.switch_to_live().await;
+                        prepared.switch_to_live().await;
                         let deleted_region = OplogRegion {
                             start: begin_index.next(),
                             end: prepared.replay_state.replay_target().next(),
@@ -1199,7 +1208,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         })
                     }
                     OplogEntryLookupResult::NotFound { .. } => {
-                        prepared.replay_state.switch_to_live().await;
+                        prepared.switch_to_live().await;
                         Err((
                             WorkerExecutorError::runtime(
                                 "Non-idempotent remote write operation was not completed, cannot retry",
@@ -3377,14 +3386,18 @@ where
     Ctx: WorkerCtx,
 {
     tracing::info!("Worker update to {} finished successfully", target_revision);
-    let public_state = store.with(|mut access| get_ctx(access.data_mut()).public_state.clone());
-    public_state
-        .worker()
-        .add_and_commit_oplog(OplogEntry::successful_update(
+    let (public_state, linear_memory) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        (ctx.public_state.clone(), ctx.linear_memory_tracker())
+    });
+    let worker = public_state.worker();
+    worker
+        .persist_successful_update(
+            &linear_memory,
             target_revision,
             component_size,
             active_plugins,
-        ))
+        )
         .await;
     Ok(())
 }
