@@ -1054,6 +1054,25 @@ fn ensure_card_permission<Ctx: WorkerCtx>(
     )
 }
 
+async fn current_authorization_surface<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+) -> Result<EffectiveSurface, WorkerExecutorError> {
+    let wallet = ctx.active_agent_wallet_cards_snapshot().await?;
+    let Some(agent_id) = ctx.state.agent_id.as_ref() else {
+        return Ok(EffectiveSurface::default());
+    };
+    let context = super::agent_monomorphization_context(
+        &ctx.state.component_metadata,
+        &ctx.owned_agent_id,
+        agent_id,
+    );
+    Ok(agent_effective_surface_from_wallet_and_scope(
+        &context,
+        wallet.iter(),
+        ctx.state.invocation_scope_card.as_ref(),
+    ))
+}
+
 fn ensure_card_permission_in_surface(
     surface: &EffectiveSurface,
     created_by_email: &AccountEmail,
@@ -2200,7 +2219,15 @@ impl<Ctx: WorkerCtx> permissions_inspect::Host for DurableWorkerCtx<Ctx> {
     {
         DurabilityHost::observe_function_call(self, "golem::permissions::inspect", "inspect-card");
         let result = async {
-            ensure_card_permission(self, CardVerb::Inspect, CardResourcePattern::Any)?;
+            let surface = current_authorization_surface(self)
+                .await
+                .map_err(worker_error_to_permission_error)?;
+            ensure_card_permission_in_surface(
+                &surface,
+                &self.state.created_by_email,
+                CardVerb::Inspect,
+                CardResourcePattern::Any,
+            )?;
             let card = resolve_permission_card_handle(self, &c).await?;
             card_view(&card)
         }
@@ -2223,7 +2250,15 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         DurabilityHost::observe_function_call(self, "golem::permissions::derive", "derive");
 
         async {
-            ensure_card_permission(self, CardVerb::Derive, CardResourcePattern::Any)?;
+            let surface = current_authorization_surface(self)
+                .await
+                .map_err(worker_error_to_permission_error)?;
+            ensure_card_permission_in_surface(
+                &surface,
+                &self.state.created_by_email,
+                CardVerb::Derive,
+                CardResourcePattern::Any,
+            )?;
             let parent = resolve_permission_card_handle(self, &parent)
                 .await?
                 .into_persistent("derive")?;
@@ -2265,7 +2300,15 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         );
 
         async {
-            ensure_card_permission(self, CardVerb::Derive, CardResourcePattern::Any)?;
+            let surface = current_authorization_surface(self)
+                .await
+                .map_err(worker_error_to_permission_error)?;
+            ensure_card_permission_in_surface(
+                &surface,
+                &self.state.created_by_email,
+                CardVerb::Derive,
+                CardResourcePattern::Any,
+            )?;
             let grants = parse_derived_grant_sets(
                 &lower_positive,
                 &lower_negative,
@@ -2304,7 +2347,15 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         DurabilityHost::observe_function_call(self, "golem::permissions::derive", "derive-scope");
 
         let result = async {
-            ensure_card_permission(self, CardVerb::Derive, CardResourcePattern::Any)?;
+            let surface = current_authorization_surface(self)
+                .await
+                .map_err(worker_error_to_permission_error)?;
+            ensure_card_permission_in_surface(
+                &surface,
+                &self.state.created_by_email,
+                CardVerb::Derive,
+                CardResourcePattern::Any,
+            )?;
             let invocation_key = self.state.get_current_idempotency_key().ok_or_else(|| {
                 permissions_types::PermissionError::NotPermitted(
                     "derive-scope requires an active invocation".to_string(),
@@ -2426,8 +2477,11 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                 Err(error) => return Ok(Err(error)),
             };
             let target_recipient = agent_recipient_pattern(&target.context);
+            let authorization_surface = current_authorization_surface(self)
+                .await
+                .map_err(worker_error_to_permission_error)?;
             if let Err(error) = ensure_install_permission_in_surface(
-                &self.state.agent_effective_surface,
+                &authorization_surface,
                 &self.state.created_by_email,
                 source_card.card_id(),
                 &target_recipient,
