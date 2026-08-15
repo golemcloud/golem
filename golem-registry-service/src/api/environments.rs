@@ -26,6 +26,7 @@ use golem_common::model::deployment::{
 };
 use golem_common::model::environment::*;
 use golem_common::model::poem::NoContentResponse;
+use golem_common::model::tool::{DeployedRegisteredTool, ToolName};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::AuthCtx;
@@ -601,5 +602,91 @@ impl EnvironmentsApi {
             .get_deployment_agent_type(environment_id, deployment_id, &agent_type_name, &auth)
             .await?;
         Ok(Json(agent_type))
+    }
+
+    /// List all registered tools in a deployment
+    #[oai(
+        path = "/envs/:environment_id/deployments/:deployment_id/tools",
+        method = "get",
+        operation_id = "list_deployment_registered_tools"
+    )]
+    async fn list_deployment_registered_tools(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        deployment_id: Path<DeploymentRevision>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Page<DeployedRegisteredTool>>> {
+        let record = recorded_http_api_request!(
+            "list_deployment_registered_tools",
+            environment_id = environment_id.0.to_string(),
+            deployment_id = deployment_id.0.to_string(),
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let response = self
+            .list_deployment_registered_tools_internal(environment_id.0, deployment_id.0, auth)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn list_deployment_registered_tools_internal(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_id: DeploymentRevision,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Page<DeployedRegisteredTool>>> {
+        let tools = self
+            .deployment_service
+            .list_deployment_registered_tools(environment_id, deployment_id, &auth)
+            .await?;
+        Ok(Json(Page { values: tools }))
+    }
+
+    /// Get a registered tool in a deployment
+    #[oai(
+        path = "/envs/:environment_id/deployments/:deployment_id/tools/:tool_name",
+        method = "get",
+        operation_id = "get_deployment_registered_tool"
+    )]
+    async fn get_deployment_registered_tool(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        deployment_id: Path<DeploymentRevision>,
+        tool_name: Path<ToolName>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<DeployedRegisteredTool>> {
+        let record = recorded_http_api_request!(
+            "get_deployment_registered_tool",
+            environment_id = environment_id.0.to_string(),
+            deployment_id = deployment_id.0.to_string(),
+            tool_name = tool_name.0.to_string(),
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let response = self
+            .get_deployment_registered_tool_internal(
+                environment_id.0,
+                deployment_id.0,
+                tool_name.0,
+                auth,
+            )
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn get_deployment_registered_tool_internal(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_id: DeploymentRevision,
+        tool_name: ToolName,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<DeployedRegisteredTool>> {
+        let tool = self
+            .deployment_service
+            .get_deployment_registered_tool(environment_id, deployment_id, &tool_name, &auth)
+            .await?;
+        Ok(Json(tool))
     }
 }

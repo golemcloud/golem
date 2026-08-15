@@ -31,11 +31,18 @@ use golem_common::model::card::{
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::{AgentTypeProvisionConfig, ComponentMetadata};
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::{
     EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentUpdate,
 };
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
+use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::plan::PlanId;
+use golem_common::model::tool::{
+    CompiledToolBinding, RegisteredTool, SecretKeyScope, TOOL_METADATA_WIT_VERSION,
+    ToolDeploymentMetadata, ToolName, ToolProvisionConfig, ToolSource,
+};
+use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
 use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
@@ -66,7 +73,9 @@ use golem_registry_service::repo::model::audit::{
 use golem_registry_service::repo::model::card::CardRecord;
 use golem_registry_service::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use golem_registry_service::repo::model::deployment::{
-    DeploymentRegisteredAgentTypeRecord, DeploymentRevisionCreationRecord,
+    DeploymentAgentToolBindingRecord, DeploymentComponentRevisionRecord,
+    DeploymentRegisteredAgentTypeRecord, DeploymentRegisteredToolRecord,
+    DeploymentRevisionCreationRecord,
 };
 use golem_registry_service::repo::model::environment::EnvironmentRepoError;
 use golem_registry_service::repo::model::hash::SqlBlake3Hash;
@@ -1334,13 +1343,35 @@ pub async fn test_component_stage(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         size: 10.into(),
-        metadata: Blob::new(ComponentMetadata::from_parts(
+        metadata: Blob::new(ComponentMetadata::from_parts_with_tools(
             KnownExports::default(),
             vec![],
             Some("test".to_string()),
             Some("1.0".to_string()),
             vec![],
             std::collections::BTreeMap::new(),
+            BTreeMap::from([(
+                ToolName::try_from("grep").unwrap(),
+                ToolDeploymentMetadata {
+                    definition: Tool {
+                        version: "1.0.0".to_string(),
+                        commands: CommandTree {
+                            nodes: vec![CommandNode {
+                                name: "grep".to_string(),
+                                aliases: Vec::new(),
+                                doc: Doc::default(),
+                                globals: Globals::default(),
+                                subcommands: Vec::new(),
+                                body: None,
+                            }],
+                        },
+                        schema: SchemaGraph::empty(),
+                    },
+                    provision: ToolProvisionConfig::default(),
+                    environment_binding: None,
+                    agent_bindings: BTreeMap::new(),
+                },
+            )]),
         )),
 
         object_store_key: "xys".to_string(),
@@ -2872,6 +2903,319 @@ fn make_test_agent_type(name: &str) -> AgentTypeSchema {
     }
 }
 
+fn make_test_tool(name: &str, version: &str) -> Tool {
+    Tool {
+        version: version.to_string(),
+        commands: CommandTree {
+            nodes: vec![CommandNode {
+                name: name.to_string(),
+                aliases: Vec::new(),
+                doc: Doc::default(),
+                globals: Globals::default(),
+                subcommands: Vec::new(),
+                body: None,
+            }],
+        },
+        schema: SchemaGraph::empty(),
+    }
+}
+
+pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let owner_account_id = owner.revision.account_id;
+    let owner_account_email = owner.revision.email.clone();
+    let app = deps.create_application(owner_account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let environment_id = env.revision.environment_id;
+    let component_name = format!("tool-component-{}", new_repo_uuid());
+    let initial_component_revision = ComponentRevisionRecord {
+        component_id: new_repo_uuid(),
+        revision_id: 0,
+        hash: SqlBlake3Hash::empty(),
+        audit: DeletableRevisionAuditFields::new(owner_account_id),
+        size: 0.into(),
+        metadata: Blob::new(ComponentMetadata::from_parts(
+            KnownExports::default(),
+            Vec::new(),
+            None,
+            None,
+            Vec::new(),
+            BTreeMap::new(),
+        )),
+        object_store_key: String::new(),
+        binary_hash: SqlBlake3Hash::empty(),
+    };
+    let component = deps
+        .component_repo
+        .create(
+            environment_id,
+            &component_name,
+            initial_component_revision.clone(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let component_id = component.revision.component_id;
+    let component_revision_id = component.revision.revision_id;
+    let agent_type_name = format!("Agent{}", new_repo_uuid().simple());
+
+    let deployment_creation = |deployment_revision_id: i64,
+                               component_revision_id: i64,
+                               version: &str,
+                               tools: Vec<Tool>| {
+        let deployment_revision = DeploymentRevision::try_from(deployment_revision_id).unwrap();
+        let source = ToolSource::Component {
+            component_id: ComponentId(component_id),
+            component_revision: ComponentRevision::try_from(component_revision_id).unwrap(),
+            component_name: golem_common::model::component::ComponentName(component_name.clone()),
+        };
+        let registered_tools = tools
+            .into_iter()
+            .map(|definition| {
+                DeploymentRegisteredToolRecord::from_model(
+                    EnvironmentId(environment_id),
+                    RegisteredTool {
+                        deployment_revision,
+                        definition,
+                        provision: ToolProvisionConfig::default(),
+                        source: source.clone(),
+                        owner_account_id: AccountId(owner_account_id),
+                        owner_account_email: golem_common::model::account::AccountEmail::new(
+                            owner_account_email.clone(),
+                        ),
+                        metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        let alpha_name = ToolName::try_from("alpha").unwrap();
+        let agent_tool_bindings = registered_tools
+            .iter()
+            .find(|tool| tool.tool_name == alpha_name.as_str())
+            .map(|tool| {
+                DeploymentAgentToolBindingRecord::from_model(
+                    EnvironmentId(environment_id),
+                    CompiledToolBinding {
+                        deployment_revision,
+                        agent_type_name: AgentTypeName(agent_type_name.clone()),
+                        tool_name: alpha_name,
+                        version: tool.tool_definition.value().version.clone(),
+                        metadata_version: tool.metadata_version.clone(),
+                        account_id: AccountId(owner_account_id),
+                        account_email: golem_common::model::account::AccountEmail::new(
+                            owner_account_email.clone(),
+                        ),
+                        parameters: NormalizedJsonValue::new(serde_json::json!({
+                            "revision": deployment_revision_id
+                        })),
+                        secret_keys_readable: SecretKeyScope::All,
+                        secret_keys_revealable: SecretKeyScope::All,
+                        source,
+                    },
+                )
+            })
+            .into_iter()
+            .collect();
+
+        DeploymentRevisionCreationRecord {
+            environment_id,
+            deployment_revision_id,
+            version: version.to_string(),
+            hash: SqlBlake3Hash::empty(),
+            components: vec![DeploymentComponentRevisionRecord {
+                environment_id,
+                deployment_revision_id,
+                component_id,
+                component_revision_id,
+            }],
+            http_api_deployments: Vec::new(),
+            mcp_deployments: Vec::new(),
+            compiled_routes: Vec::new(),
+            compiled_mcp: Vec::new(),
+            registered_agent_types: vec![DeploymentRegisteredAgentTypeRecord {
+                environment_id,
+                deployment_revision_id,
+                agent_type_name: agent_type_name.clone(),
+                component_id,
+                component_revision_id,
+                component_name: component_name.clone(),
+                owner_account_id,
+                owner_account_email: owner_account_email.clone(),
+                webhook_prefix_authority_and_path: None,
+                agent_type: Blob::new(make_test_agent_type(&agent_type_name)),
+                canonical_agent_type_name: agent_type_name.to_kebab_case(),
+            }],
+            registered_tools,
+            agent_tool_bindings,
+            created_agent_secrets: Vec::new(),
+            updated_agent_secrets: Vec::new(),
+            replaced_agent_secrets: Vec::new(),
+            created_resource_definitions: Vec::new(),
+            created_retry_policies: Vec::new(),
+            user_account_id: owner_account_id,
+        }
+    };
+
+    deps.full_deployment_repo
+        .deploy(
+            deployment_creation(
+                1,
+                component_revision_id,
+                "1.0.0",
+                vec![
+                    make_test_tool("zeta", "1.0.0"),
+                    make_test_tool("alpha", "1.0.0"),
+                ],
+            ),
+            false,
+        )
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    deps.full_deployment_repo
+        .deploy(
+            deployment_creation(
+                2,
+                component_revision_id,
+                "2.0.0",
+                vec![make_test_tool("alpha", "2.0.0")],
+            ),
+            false,
+        )
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+
+    let first_revision = deps
+        .full_deployment_repo
+        .list_deployment_registered_tools(environment_id, 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        first_revision
+            .iter()
+            .map(|tool| tool.tool_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["alpha", "zeta"]
+    );
+    let exact_alpha: RegisteredTool = deps
+        .full_deployment_repo
+        .get_deployment_registered_tool(environment_id, 1, "alpha")
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(exact_alpha.deployment_revision.get(), 1);
+    assert_eq!(exact_alpha.definition.version, "1.0.0");
+    assert_eq!(exact_alpha.metadata_version, TOOL_METADATA_WIT_VERSION);
+
+    let current: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_current_tool_deployment_state(environment_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(current.deployment_revision.get(), 2);
+    assert_eq!(
+        current.registered_tools[&ToolName::try_from("alpha").unwrap()]
+            .definition
+            .version,
+        "2.0.0"
+    );
+    assert_eq!(
+        current.agent_tool_bindings[&AgentTypeName(agent_type_name.clone())]
+            [&ToolName::try_from("alpha").unwrap()]
+            .metadata_version,
+        TOOL_METADATA_WIT_VERSION
+    );
+    assert_eq!(
+        current.agent_tool_bindings[&AgentTypeName(agent_type_name.clone())]
+            [&ToolName::try_from("alpha").unwrap()]
+            .parameters
+            .0,
+        serde_json::json!({ "revision": 2 })
+    );
+
+    let updated_component_revision_id = component_revision_id + 1;
+    deps.component_repo
+        .update(
+            ComponentRevisionRecord {
+                revision_id: updated_component_revision_id,
+                ..initial_component_revision
+            }
+            .with_updated_hash()
+            .unwrap(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    deps.full_deployment_repo
+        .deploy(
+            deployment_creation(
+                3,
+                updated_component_revision_id,
+                "3.0.0",
+                vec![make_test_tool("alpha", "3.0.0")],
+            ),
+            false,
+        )
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+
+    let latest_for_component: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_latest_tool_deployment_state_by_component_revision(
+            &environment_id,
+            &component_id,
+            component_revision_id,
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(latest_for_component.deployment_revision.get(), 2);
+    let latest_for_updated_component: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_latest_tool_deployment_state_by_component_revision(
+            &environment_id,
+            &component_id,
+            updated_component_revision_id,
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(latest_for_updated_component.deployment_revision.get(), 3);
+
+    deps.full_deployment_repo
+        .set_current_deployment(owner_account_id, environment_id, 1)
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let rolled_back: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_current_tool_deployment_state(environment_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(rolled_back.deployment_revision.get(), 1);
+    assert_eq!(
+        rolled_back.registered_tools[&ToolName::try_from("alpha").unwrap()]
+            .definition
+            .version,
+        "1.0.0"
+    );
+    assert_eq!(rolled_back.registered_tools.len(), 2);
+}
+
 struct ResolveTestEnv {
     owner_account_id: Uuid,
     app_name: String,
@@ -2987,6 +3331,8 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         compiled_routes: vec![],
         compiled_mcp: vec![],
         registered_agent_types: vec![agent_type_record],
+        registered_tools: vec![],
+        agent_tool_bindings: vec![],
         created_agent_secrets: vec![],
         updated_agent_secrets: vec![],
         replaced_agent_secrets: vec![],

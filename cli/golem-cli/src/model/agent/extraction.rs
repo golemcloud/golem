@@ -50,9 +50,9 @@ fn map_extraction_error(
 }
 
 /// Extracts the agent types and tools implemented by the given WASM component
-/// in a single instantiation, assuming it implements the `golem:agent/guest`
-/// interface. If it does not, it fails. Tools are optional: components without
-/// the `golem:tool/guest` interface yield an empty tool list.
+/// in a single instantiation. The component must implement at least one of the
+/// `golem:agent/guest` or `golem:tool/guest` interfaces; either discovered list
+/// may be empty.
 ///
 /// Returns the schema-native [`ExtractedComponentMetadata`] model (the
 /// discover wasm exports already produce schema-native wire types).

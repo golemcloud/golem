@@ -25,11 +25,11 @@
 //! [`wire::SchemaValueTree`](crate::schema::wit::wire::SchemaValueTree)s via
 //! [`encode_value`] / [`decode_value`].
 //!
-//! Conversions that need neither the shared graph nor any fallible value
-//! decoding are expressed as [`From`] impls (see the "infallible, context-free
-//! conversions" section); the conversions that fold embedded types into the
-//! shared graph (and so thread a [`GraphEncoder`] / [`GraphDecoder`]) or decode
-//! embedded values (which is fallible) stay as functions.
+//! Top-level fallible conversions are expressed as [`TryFrom`] impls, while
+//! conversions that need neither the shared graph nor fallible value decoding
+//! use [`From`] (see the "infallible, context-free conversions" section).
+//! Internal conversions that thread a shared [`GraphEncoder`] or
+//! [`GraphDecoder`] remain functions.
 
 use super::*;
 use crate::schema::graph::SchemaGraph;
@@ -374,18 +374,22 @@ fn encode_refs(rs: &[Ref]) -> Result<Vec<wire::Ref>, ToolWitError> {
 // native -> wire
 // ============================================================
 
-/// Encode a [`Tool`] into the flat `golem:tool/common@0.1.0` wire form. The
-/// tool's `defs` plus every type embedded in its command tree are folded into
-/// one shared [`wire::SchemaGraph`](crate::schema::wit::wire::SchemaGraph).
-pub fn encode_tool(tool: &Tool) -> Result<wire::Tool, ToolWitError> {
-    let mut enc = GraphEncoder::new(&tool.schema.defs)?;
-    let commands = encode_command_tree(&mut enc, &tool.commands)?;
-    let schema = enc.finish();
-    Ok(wire::Tool {
-        version: tool.version.clone(),
-        commands,
-        schema,
-    })
+impl TryFrom<&Tool> for wire::Tool {
+    type Error = ToolWitError;
+
+    /// Encode a [`Tool`] into the flat `golem:tool/common@0.1.0` wire form. The
+    /// tool's `defs` plus every type embedded in its command tree are folded
+    /// into one shared [`wire::SchemaGraph`](crate::schema::wit::wire::SchemaGraph).
+    fn try_from(tool: &Tool) -> Result<Self, Self::Error> {
+        let mut enc = GraphEncoder::new(&tool.schema.defs)?;
+        let commands = encode_command_tree(&mut enc, &tool.commands)?;
+        let schema = enc.finish();
+        Ok(Self {
+            version: tool.version.clone(),
+            commands,
+            schema,
+        })
+    }
 }
 
 fn encode_command_tree(
@@ -582,18 +586,22 @@ fn encode_error_case(
 // wire -> native
 // ============================================================
 
-/// Decode a `golem:tool/common@0.1.0` wire [`wire::Tool`] into the recursive
-/// [`Tool`] model.
-pub fn decode_tool(w: &wire::Tool) -> Result<Tool, ToolWitError> {
-    let dec = GraphDecoder::new(&w.schema)?;
-    let mut schema = SchemaGraph::empty();
-    schema.defs = dec.decode_defs()?;
-    let commands = decode_command_tree(&dec, &w.commands)?;
-    Ok(Tool {
-        version: w.version.clone(),
-        commands,
-        schema,
-    })
+impl TryFrom<&wire::Tool> for Tool {
+    type Error = ToolWitError;
+
+    /// Decode a `golem:tool/common@0.1.0` wire [`wire::Tool`] into the recursive
+    /// [`Tool`] model.
+    fn try_from(w: &wire::Tool) -> Result<Self, Self::Error> {
+        let dec = GraphDecoder::new(&w.schema)?;
+        let mut schema = SchemaGraph::empty();
+        schema.defs = dec.decode_defs()?;
+        let commands = decode_command_tree(&dec, &w.commands)?;
+        Ok(Self {
+            version: w.version.clone(),
+            commands,
+            schema,
+        })
+    }
 }
 
 fn decode_command_tree(

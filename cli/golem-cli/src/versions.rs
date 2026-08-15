@@ -23,7 +23,7 @@ pub mod sdk {
     #[macro_export]
     macro_rules! manifest_schema_version {
         () => {
-            "1.6.0-dev.7"
+            "1.6.0-dev.8"
         };
     }
 }

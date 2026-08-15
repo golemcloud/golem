@@ -109,6 +109,8 @@ pub struct Application {
     pub components: IndexMap<String, Component>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub agents: IndexMap<AgentTypeName, Agent>,
+    #[serde(default, skip_serializing_if = "ToolDeclarations::is_empty")]
+    pub tools: ToolDeclarations,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -134,6 +136,155 @@ pub struct Application {
 }
 
 pub type JsonObject = serde_json::Map<String, serde_json::Value>;
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(transparent)]
+pub struct ToolDeclarations(IndexMap<String, serde_json::Value>);
+
+impl ToolDeclarations {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn into_entries(self) -> impl Iterator<Item = (String, serde_json::Value)> {
+        self.0.into_iter()
+    }
+}
+
+impl<'de> Deserialize<'de> for ToolDeclarations {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        IndexMap::<String, serde_json::Value>::deserialize(deserializer).map(Self)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolDeclaration {
+    #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
+    pub templates: LenientTokenList,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<Vec<PluginInstallation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub presets: IndexMap<String, ToolPreset>,
+}
+
+impl ToolDeclaration {
+    pub fn tool_layer_properties(&self) -> ToolLayerProperties {
+        ToolLayerProperties {
+            config: self.config.clone(),
+            env_merge_mode: self.env_merge_mode,
+            env: self.env.clone(),
+            plugins_merge_mode: self.plugins_merge_mode,
+            plugins: self.plugins.clone(),
+            files_merge_mode: self.files_merge_mode,
+            files: self.files.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolPreset {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<Marker>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<Vec<PluginInstallation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<InitialComponentFile>>,
+}
+
+impl ToolPreset {
+    pub fn into_tool_layer_properties(self) -> ToolLayerProperties {
+        ToolLayerProperties {
+            config: self.config,
+            env_merge_mode: self.env_merge_mode,
+            env: self.env,
+            plugins_merge_mode: self.plugins_merge_mode,
+            plugins: self.plugins,
+            files_merge_mode: self.files_merge_mode,
+            files: self.files,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolLayerProperties {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<Vec<PluginInstallation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<InitialComponentFile>>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SecretKeyMergeMode {
+    #[default]
+    Intersect,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ManifestSecretKeyScope {
+    All(String),
+    Keys(Vec<String>),
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolBinding {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<IndexMap<String, serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_keys_readable_merge_mode: Option<SecretKeyMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_keys_readable: Option<ManifestSecretKeyScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_keys_revealable_merge_mode: Option<SecretKeyMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_keys_revealable: Option<ManifestSecretKeyScope>,
+}
 
 #[derive(Debug)]
 struct JsonSchemaValidationError {
@@ -338,6 +489,8 @@ impl ComponentTemplate {
                 plugins: self.plugins.clone(),
                 files_merge_mode: self.files_merge_mode,
                 files: self.files.clone(),
+                tools_merge_mode: None,
+                tools: None,
             },
         }
     }
@@ -403,6 +556,8 @@ impl Component {
                 plugins: self.plugins.clone(),
                 files_merge_mode: self.files_merge_mode,
                 files: self.files.clone(),
+                tools_merge_mode: None,
+                tools: None,
             },
         }
     }
@@ -464,6 +619,8 @@ impl ComponentPreset {
                 plugins: self.plugins,
                 files_merge_mode: self.files_merge_mode,
                 files: self.files,
+                tools_merge_mode: None,
+                tools: None,
             },
         }
     }
@@ -490,6 +647,10 @@ pub struct Agent {
     pub files_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<IndexMap<String, ToolBinding>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub presets: IndexMap<String, AgentPreset>,
 }
@@ -505,6 +666,8 @@ impl Agent {
             plugins: self.plugins.clone(),
             files_merge_mode: self.files_merge_mode,
             files: self.files.clone(),
+            tools_merge_mode: self.tools_merge_mode,
+            tools: self.tools.clone(),
         }
     }
 }
@@ -530,6 +693,10 @@ pub struct AgentPreset {
     pub files_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<IndexMap<String, ToolBinding>>,
 }
 
 impl AgentPreset {
@@ -543,6 +710,8 @@ impl AgentPreset {
             plugins: self.plugins,
             files_merge_mode: self.files_merge_mode,
             files: self.files,
+            tools_merge_mode: self.tools_merge_mode,
+            tools: self.tools,
         }
     }
 }
@@ -673,6 +842,10 @@ pub struct Environment {
     pub deployment: Option<DeploymentOptions>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub version: Option<AppVersionSourceOverride>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tools_merge_mode: Option<MapMergeMode>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tools: Option<IndexMap<String, ToolBinding>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -993,6 +1166,10 @@ pub struct AgentLayerProperties {
     pub files_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<IndexMap<String, ToolBinding>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1369,6 +1546,20 @@ mod test {
         string_regex("[a-z][a-z0-9-]{0,12}").unwrap().boxed()
     }
 
+    fn arb_tool_name() -> BoxedStrategy<String> {
+        (
+            string_regex("[a-z][a-z0-9]{0,6}").unwrap(),
+            prop::collection::vec(string_regex("[a-z0-9]{1,6}").unwrap(), 0..=2),
+        )
+            .prop_map(|(head, tail)| {
+                std::iter::once(head)
+                    .chain(tail)
+                    .collect::<Vec<_>>()
+                    .join("-")
+            })
+            .boxed()
+    }
+
     fn arb_semver() -> BoxedStrategy<String> {
         (0u8..=9, 0u8..=9, 0u8..=9)
             .prop_map(|(a, b, c)| format!("{a}.{b}.{c}"))
@@ -1422,6 +1613,147 @@ mod test {
     fn arb_string_index_map_model() -> BoxedStrategy<IndexMap<String, String>> {
         prop::collection::vec((arb_ident(), arb_ident()), 0..=3)
             .prop_map(IndexMap::from_iter)
+            .boxed()
+    }
+
+    fn arb_secret_key_scope_model() -> BoxedStrategy<ManifestSecretKeyScope> {
+        prop_oneof![
+            Just(ManifestSecretKeyScope::All("*".to_string())),
+            prop::collection::vec(arb_ident(), 0..=3).prop_map(ManifestSecretKeyScope::Keys),
+        ]
+        .boxed()
+    }
+
+    fn arb_tool_binding_model() -> BoxedStrategy<ToolBinding> {
+        (
+            arb_opt(arb_semver()),
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(
+                prop::collection::vec((arb_ident(), arb_json_value()), 0..=3)
+                    .prop_map(IndexMap::from_iter)
+                    .boxed(),
+            ),
+            arb_opt(
+                arb_ident()
+                    .prop_map(|name| format!("{name}@example.com"))
+                    .boxed(),
+            ),
+            arb_opt(Just(SecretKeyMergeMode::Intersect).boxed()),
+            arb_opt(arb_secret_key_scope_model()),
+            arb_opt(Just(SecretKeyMergeMode::Intersect).boxed()),
+            arb_opt(arb_secret_key_scope_model()),
+        )
+            .prop_map(
+                |(
+                    version,
+                    parameters_merge_mode,
+                    parameters,
+                    account,
+                    secret_keys_readable_merge_mode,
+                    secret_keys_readable,
+                    secret_keys_revealable_merge_mode,
+                    secret_keys_revealable,
+                )| ToolBinding {
+                    version,
+                    parameters_merge_mode,
+                    parameters,
+                    account,
+                    secret_keys_readable_merge_mode,
+                    secret_keys_readable,
+                    secret_keys_revealable_merge_mode,
+                    secret_keys_revealable,
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_tool_bindings_model() -> BoxedStrategy<IndexMap<String, ToolBinding>> {
+        prop::collection::vec((arb_tool_name(), arb_tool_binding_model()), 0..=3)
+            .prop_map(IndexMap::from_iter)
+            .boxed()
+    }
+
+    fn arb_tool_preset_model() -> BoxedStrategy<ToolPreset> {
+        (
+            any::<bool>(),
+            arb_opt(arb_json_value()),
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_string_index_map_model()),
+            arb_opt(arb_vec_merge_mode_model()),
+            arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
+            arb_opt(arb_vec_merge_mode_model()),
+            arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
+        )
+            .prop_map(
+                |(
+                    is_default,
+                    config,
+                    env_merge_mode,
+                    env,
+                    plugins_merge_mode,
+                    plugins,
+                    files_merge_mode,
+                    files,
+                )| ToolPreset {
+                    default: is_default.then_some(Marker),
+                    config,
+                    env_merge_mode,
+                    env,
+                    plugins_merge_mode,
+                    plugins,
+                    files_merge_mode,
+                    files,
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_tool_declaration_model() -> BoxedStrategy<ToolDeclaration> {
+        (
+            arb_token_list_model(),
+            arb_opt(arb_json_value()),
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_string_index_map_model()),
+            arb_opt(arb_vec_merge_mode_model()),
+            arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
+            arb_opt(arb_vec_merge_mode_model()),
+            arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
+            prop::collection::vec((arb_ident(), arb_tool_preset_model()), 0..=2)
+                .prop_map(IndexMap::from_iter),
+        )
+            .prop_map(
+                |(
+                    templates,
+                    config,
+                    env_merge_mode,
+                    env,
+                    plugins_merge_mode,
+                    plugins,
+                    files_merge_mode,
+                    files,
+                    presets,
+                )| ToolDeclaration {
+                    templates,
+                    config,
+                    env_merge_mode,
+                    env,
+                    plugins_merge_mode,
+                    plugins,
+                    files_merge_mode,
+                    files,
+                    presets,
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_tool_declarations_model() -> BoxedStrategy<ToolDeclarations> {
+        prop::collection::vec((arb_tool_name(), arb_tool_declaration_model()), 0..=3)
+            .prop_map(|entries| {
+                ToolDeclarations(IndexMap::from_iter(entries.into_iter().map(
+                    |(name, declaration)| (name, serde_json::to_value(declaration).unwrap()),
+                )))
+            })
             .boxed()
     }
 
@@ -1699,6 +2031,10 @@ mod test {
             arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
             arb_opt(arb_vec_merge_mode_model()),
             arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
+            (
+                arb_opt(arb_map_merge_mode_model()),
+                arb_opt(arb_tool_bindings_model()),
+            ),
         )
             .prop_map(
                 |(
@@ -1710,6 +2046,7 @@ mod test {
                     plugins,
                     files_merge_mode,
                     files,
+                    (tools_merge_mode, tools),
                 )| AgentPreset {
                     default: is_default.then_some(Marker),
                     config,
@@ -1720,6 +2057,8 @@ mod test {
                     plugins,
                     files_merge_mode,
                     files,
+                    tools_merge_mode,
+                    tools,
                 },
             )
             .boxed()
@@ -1735,6 +2074,10 @@ mod test {
             arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
             arb_opt(arb_vec_merge_mode_model()),
             arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
+            (
+                arb_opt(arb_map_merge_mode_model()),
+                arb_opt(arb_tool_bindings_model()),
+            ),
             prop::collection::vec((arb_ident(), arb_agent_preset_model()), 0..=2)
                 .prop_map(IndexMap::from_iter),
         )
@@ -1748,6 +2091,7 @@ mod test {
                     plugins,
                     files_merge_mode,
                     files,
+                    (tools_merge_mode, tools),
                     presets,
                 )| Agent {
                     templates,
@@ -1759,6 +2103,8 @@ mod test {
                     plugins,
                     files_merge_mode,
                     files,
+                    tools_merge_mode,
+                    tools,
                     presets,
                 },
             )
@@ -1903,9 +2249,22 @@ mod test {
             arb_opt(arb_cli_options_model()),
             arb_opt(arb_deployment_options_model()),
             arb_opt(arb_app_version_source_override_model()),
+            (
+                arb_opt(arb_map_merge_mode_model()),
+                arb_opt(arb_tool_bindings_model()),
+            ),
         )
             .prop_map(
-                |(is_default, account, server, component_presets, cli, deployment, version)| {
+                |(
+                    is_default,
+                    account,
+                    server,
+                    component_presets,
+                    cli,
+                    deployment,
+                    version,
+                    (tools_merge_mode, tools),
+                )| {
                     Environment {
                         default: is_default.then_some(Marker),
                         account,
@@ -1914,6 +2273,8 @@ mod test {
                         cli,
                         deployment,
                         version,
+                        tools_merge_mode,
+                        tools,
                     }
                 },
             )
@@ -2371,6 +2732,7 @@ mod test {
                 )
                 .prop_map(IndexMap::from_iter),
                 prop::collection::vec(arb_ident(), 0..=3),
+                arb_tool_declarations_model(),
             ),
             (
                 arb_opt(arb_http_api_model()),
@@ -2390,7 +2752,7 @@ mod test {
                     manifest_version,
                     app,
                     includes,
-                    (component_templates, components, agents, custom_commands, clean),
+                    (component_templates, components, agents, custom_commands, clean, tools),
                     (
                         http_api,
                         mcp,
@@ -2409,6 +2771,7 @@ mod test {
                     component_templates,
                     components,
                     agents,
+                    tools,
                     custom_commands,
                     clean,
                     http_api,
@@ -2439,6 +2802,76 @@ mod test {
         };
 
         assert!(JSON_SCHEMA_VALIDATOR.is_valid(&serde_json::to_value(&app).unwrap()));
+    }
+
+    #[test]
+    fn schema_and_serde_accept_slice_b_tool_manifest_fields() {
+        let source = indoc::indoc! { r#"
+            app: test-app
+            environments:
+              local:
+                server: local
+                toolsMergeMode: upsert
+                tools:
+                  grep:
+                    version: "1.0.0"
+                    parameters: { root: /workspace }
+                    secretKeysReadableMergeMode: intersect
+                    secretKeysReadable: [credentials.github]
+                    secretKeysRevealable: []
+            components:
+              app:main:
+                componentWasm: main.wasm
+            agents:
+              CoderAgent:
+                tools:
+                  grep:
+                    parametersMergeMode: replace
+                    parameters: { root: /workspace/src }
+                presets:
+                  debug:
+                    toolsMergeMode: remove
+                    tools:
+                      grep: {}
+            tools:
+              grep:
+                templates: rust
+                config: { logLevel: info }
+                env: { RUST_LOG: info }
+                presets:
+                  app-env:local:
+                    config: { logLevel: warn }
+                  debug:
+                    default: true
+                    files:
+                      - sourcePath: tool.txt
+                        targetPath: /tool.txt
+        "# };
+
+        let app = Application::from_yaml_str(source).unwrap();
+        let value = serde_yaml::from_str::<serde_json::Value>(source).unwrap();
+
+        assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
+        assert!(!app.tools.is_empty());
+    }
+
+    #[test]
+    fn schema_rejects_wildcard_inside_secret_scope_list() {
+        let value = serde_json::json!({
+            "app": "test-app",
+            "environments": {
+                "local": {
+                    "server": "local",
+                    "tools": {
+                        "grep": {
+                            "secretKeysReadable": ["*"]
+                        }
+                    }
+                }
+            }
+        });
+
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&value));
     }
 
     #[test]

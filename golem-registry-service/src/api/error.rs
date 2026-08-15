@@ -206,6 +206,30 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
         DeployValidationError::ResetOverrideRequiresCompatibilityCheckDisabled => {
             api::error_code::deployment_validation::RESET_OVERRIDE_REQUIRES_COMPATIBILITY_CHECK_DISABLED
         }
+        DeployValidationError::ToolUnsupportedGuestExport { .. } => {
+            api::error_code::deployment_validation::TOOL_UNSUPPORTED_GUEST_EXPORT
+        }
+        DeployValidationError::ToolDefinitionNameMismatch { .. } => {
+            api::error_code::deployment_validation::TOOL_DEFINITION_NAME_MISMATCH
+        }
+        DeployValidationError::InvalidTool { .. } => {
+            api::error_code::deployment_validation::INVALID_TOOL
+        }
+        DeployValidationError::DuplicateToolImplementation { .. } => {
+            api::error_code::deployment_validation::DUPLICATE_TOOL_IMPLEMENTATION
+        }
+        DeployValidationError::ToolBindingUnknownAgent { .. } => {
+            api::error_code::deployment_validation::TOOL_BINDING_UNKNOWN_AGENT
+        }
+        DeployValidationError::ToolBindingVersionMismatch { .. } => {
+            api::error_code::deployment_validation::TOOL_BINDING_VERSION_MISMATCH
+        }
+        DeployValidationError::ToolBindingAccountMismatch { .. } => {
+            api::error_code::deployment_validation::TOOL_BINDING_ACCOUNT_MISMATCH
+        }
+        DeployValidationError::ToolBindingParametersMustBeObject { .. } => {
+            api::error_code::deployment_validation::TOOL_BINDING_PARAMETERS_MUST_BE_OBJECT
+        }
     }
 }
 
@@ -594,6 +618,9 @@ impl From<ComponentError> for ApiError {
             ComponentError::DuplicateAgentTypeName(_) => {
                 Self::bad_request(api::error_code::DUPLICATE_AGENT_TYPE_NAME, error)
             }
+            ComponentError::DuplicateToolName(_) => {
+                Self::bad_request(api::error_code::DUPLICATE_TOOL_NAME, error)
+            }
             ComponentError::DeploymentRevisionNotFound(_) => {
                 Self::not_found(api::error_code::DEPLOYMENT_NOT_FOUND, error)
             }
@@ -608,6 +635,27 @@ impl From<ComponentError> for ApiError {
             }
             ComponentError::MissingAgentTypeProvisionConfig(_) => {
                 Self::bad_request(api::error_code::AGENT_TYPE_NOT_DECLARED, error)
+            }
+            ComponentError::MissingToolName
+            | ComponentError::InvalidToolName { .. }
+            | ComponentError::InvalidTool { .. }
+            | ComponentError::ToolDefinitionNameMismatch { .. } => {
+                Self::bad_request(api::error_code::INVALID_TOOL_METADATA, error)
+            }
+            ComponentError::ToolsRequireSupportedGuestExport { .. } => {
+                Self::bad_request(api::error_code::TOOL_GUEST_EXPORT_INVALID, error)
+            }
+            ComponentError::UndeclaredToolInDeploymentConfig(_) => {
+                Self::bad_request(api::error_code::TOOL_NOT_DECLARED, error)
+            }
+            ComponentError::MissingToolDeploymentConfig(_) => {
+                Self::bad_request(api::error_code::TOOL_DEPLOYMENT_CONFIG_MISSING, error)
+            }
+            ComponentError::ToolFileNotFoundInArchive { .. } => {
+                Self::bad_request(api::error_code::INITIAL_COMPONENT_FILE_NOT_FOUND, error)
+            }
+            ComponentError::ConflictingToolFileTarget { .. } => {
+                Self::bad_request(api::error_code::INVALID_COMPONENT_FILE_PATH, error)
             }
             ComponentError::NewAgentTypeMissingInitialPermissions(_) => Self::bad_request(
                 api::error_code::NEW_AGENT_TYPE_MISSING_INITIAL_PERMISSIONS,
@@ -863,6 +911,9 @@ impl From<DeploymentError> for ApiError {
             }
             DeploymentError::AgentTypeNotFound(_) => {
                 Self::not_found(api::error_code::AGENT_TYPE_NOT_FOUND, error)
+            }
+            DeploymentError::ToolNotFound(_) => {
+                Self::not_found(api::error_code::TOOL_NOT_FOUND, error)
             }
 
             DeploymentError::Unauthorized(inner) => inner.into(),

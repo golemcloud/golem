@@ -1,0 +1,244 @@
+syntax = "proto3";
+
+package golem.tool;
+
+import "golem/common/empty.proto";
+import "golem/schema/schema.proto";
+
+message Tool {
+  string version = 1;
+  CommandTree commands = 2;
+  golem.schema.SchemaGraph schema = 3;
+}
+
+message CommandTree {
+  repeated CommandNode nodes = 1;
+}
+
+message CommandNode {
+  string name = 1;
+  repeated string aliases = 2;
+  Doc doc = 3;
+  Globals globals = 4;
+  repeated int32 subcommands = 5;
+  optional CommandBody body = 6;
+}
+
+message Globals {
+  repeated OptionSpec options = 1;
+  repeated FlagSpec flags = 2;
+}
+
+message CommandBody {
+  Positionals positionals = 1;
+  repeated OptionSpec options = 2;
+  repeated FlagSpec flags = 3;
+  repeated Constraint constraints = 4;
+  optional StreamSpec stdin = 5;
+  optional StreamSpec stdout = 6;
+  optional ResultSpec result = 7;
+  repeated ErrorCase errors = 8;
+  optional CommandAnnotations annotations = 9;
+}
+
+message CommandAnnotations {
+  bool read_only = 1;
+  bool destructive = 2;
+  bool idempotent = 3;
+  bool open_world = 4;
+}
+
+message Positionals {
+  repeated Positional fixed = 1;
+  optional TailPositional tail = 2;
+}
+
+message Positional {
+  string name = 1;
+  Doc doc = 2;
+  optional string value_name = 3;
+  golem.schema.SchemaType type = 4;
+  optional golem.schema.SchemaValue default = 5;
+  bool required = 6;
+  bool accepts_stdio = 7;
+}
+
+message TailPositional {
+  string name = 1;
+  Doc doc = 2;
+  optional string value_name = 3;
+  golem.schema.SchemaType item_type = 4;
+  uint32 min = 5;
+  optional uint32 max = 6;
+  optional string separator = 7;
+  bool verbatim = 8;
+  bool accepts_stdio = 9;
+}
+
+message OptionSpec {
+  string long = 1;
+  optional uint32 short = 2;
+  repeated string aliases = 3;
+  Doc doc = 4;
+  optional string value_name = 5;
+  OptionShape shape = 6;
+  optional golem.schema.SchemaValue default = 7;
+  bool required = 8;
+  optional string env_var = 9;
+}
+
+message OptionShape {
+  oneof value {
+    golem.schema.SchemaType scalar = 1;
+    golem.schema.SchemaType optional_scalar = 2;
+    RepeatableListShape repeatable_list = 3;
+    RepeatableMapShape repeatable_map = 4;
+  }
+}
+
+message RepeatableListShape {
+  Repetition repetition = 1;
+  golem.schema.SchemaType item_type = 2;
+}
+
+message RepeatableMapShape {
+  Repetition repetition = 1;
+  golem.schema.SchemaType map_type = 2;
+  DuplicateKeyPolicy duplicate_key_policy = 3;
+}
+
+enum DuplicateKeyPolicy {
+  DUPLICATE_KEY_POLICY_UNSPECIFIED = 0;
+  DUPLICATE_KEY_POLICY_REJECT = 1;
+  DUPLICATE_KEY_POLICY_LAST_WINS = 2;
+}
+
+message Repetition {
+  oneof value {
+    golem.common.Empty repeated = 1;
+    uint32 delimited = 2;
+    uint32 either = 3;
+  }
+}
+
+message FlagSpec {
+  string long = 1;
+  optional uint32 short = 2;
+  repeated string aliases = 3;
+  Doc doc = 4;
+  FlagShape shape = 5;
+  optional string env_var = 6;
+}
+
+message FlagShape {
+  oneof value {
+    BoolFlagShape bool_flag = 1;
+    CountFlagShape count_flag = 2;
+  }
+}
+
+message BoolFlagShape {
+  bool default = 1;
+  bool negatable = 2;
+}
+
+message CountFlagShape {
+  optional uint32 max = 1;
+}
+
+message Ref {
+  oneof value {
+    string present = 1;
+    ValueIsRef value_is = 2;
+  }
+}
+
+message ValueIsRef {
+  string name = 1;
+  golem.schema.SchemaValue value = 2;
+}
+
+message Constraint {
+  oneof value {
+    Refs requires_all = 1;
+    Refs all_or_none = 2;
+    Refs requires_any = 3;
+    RefGroups mutex_groups = 4;
+    Implies implies = 5;
+    Forbids forbids = 6;
+  }
+}
+
+message Refs {
+  repeated Ref refs = 1;
+}
+
+message RefGroup {
+  repeated Ref refs = 1;
+}
+
+message RefGroups {
+  repeated RefGroup groups = 1;
+}
+
+message Implies {
+  Quantifier lhs_quant = 1;
+  repeated Ref lhs = 2;
+  Quantifier rhs_quant = 3;
+  repeated Ref rhs = 4;
+}
+
+message Forbids {
+  Quantifier lhs_quant = 1;
+  repeated Ref lhs = 2;
+  repeated Ref rhs = 3;
+}
+
+enum Quantifier {
+  QUANTIFIER_UNSPECIFIED = 0;
+  QUANTIFIER_ALL = 1;
+  QUANTIFIER_ANY = 2;
+}
+
+message StreamSpec {
+  Doc doc = 1;
+  repeated string mime = 2;
+  bool required = 3;
+}
+
+message ResultSpec {
+  golem.schema.SchemaType type = 1;
+  Doc doc = 2;
+  repeated Formatter formatters = 3;
+  string default_formatter = 4;
+}
+
+message Formatter {
+  string name = 1;
+  Doc doc = 2;
+}
+
+message ErrorCase {
+  string name = 1;
+  Doc doc = 2;
+  ErrorKind kind = 3;
+  uint32 exit_code = 4;
+  optional golem.schema.SchemaType payload = 5;
+}
+
+enum ErrorKind {
+  ERROR_KIND_UNSPECIFIED = 0;
+  ERROR_KIND_USAGE_ERROR = 1;
+  ERROR_KIND_RUNTIME_ERROR = 2;
+}
+
+message Doc {
+  string summary = 1;
+  string description = 2;
+  repeated Example examples = 3;
+}
+
+message Example {
+  string title = 1;
+  string body = 2;
+}
