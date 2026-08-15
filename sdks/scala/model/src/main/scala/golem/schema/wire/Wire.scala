@@ -96,8 +96,9 @@ object WitSchemaTypeBody {
 
   final case class UnionType(spec: WitUnionSpec) extends WitSchemaTypeBody
 
-  final case class SecretType(spec: WitSecretSpec)      extends WitSchemaTypeBody
-  final case class QuotaTokenType(spec: QuotaTokenSpec) extends WitSchemaTypeBody
+  final case class SecretType(spec: WitSecretSpec)              extends WitSchemaTypeBody
+  final case class QuotaTokenType(spec: QuotaTokenSpec)         extends WitSchemaTypeBody
+  final case class PermissionCardType(spec: PermissionCardSpec) extends WitSchemaTypeBody
 
   final case class FutureType(element: Option[Int]) extends WitSchemaTypeBody
   final case class StreamType(element: Option[Int]) extends WitSchemaTypeBody

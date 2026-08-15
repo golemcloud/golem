@@ -100,6 +100,7 @@ object SchemaModelSpec extends ZIOSpecDefault {
       ),
       NamedFieldType("secret", SchemaType(SecretType(SecretSpec(t.string, Some("api-key"))))),
       NamedFieldType("quotaToken", SchemaType(QuotaTokenType(QuotaTokenSpec(Some("tokens"))))),
+      NamedFieldType("permissionCard", SchemaType(PermissionCardType(PermissionCardSpec(polymorphic = true)))),
       NamedFieldType("future", SchemaType(FutureType(Some(t.s32)))),
       NamedFieldType("stream", SchemaType(StreamType(None)))
     )

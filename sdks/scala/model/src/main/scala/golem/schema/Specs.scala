@@ -133,6 +133,8 @@ final case class SecretSpec(inner: SchemaType, category: Option[String] = None)
 
 final case class QuotaTokenSpec(resourceName: Option[String] = None)
 
+final case class PermissionCardSpec(polymorphic: Boolean)
+
 /** Optional required literal value for a record-shaped union discriminator. */
 final case class FieldDiscriminator(fieldName: String, literal: Option[String] = None)
 

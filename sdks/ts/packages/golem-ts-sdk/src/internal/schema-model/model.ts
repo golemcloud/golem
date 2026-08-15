@@ -37,6 +37,7 @@ import type {
   QuantityValue,
   SecretSpec,
   QuotaTokenSpec,
+  PermissionCardSpec,
   DiscriminatorRule,
   Datetime,
   Uuid,
@@ -57,6 +58,7 @@ export type {
   QuantityValue,
   SecretSpec,
   QuotaTokenSpec,
+  PermissionCardSpec,
   DiscriminatorRule,
   Datetime,
   Uuid,
@@ -125,6 +127,7 @@ export type SchemaTypeBody =
   // Capability nodes
   | { tag: 'secret'; spec: Omit<SecretSpec, 'inner'>; inner: SchemaType }
   | { tag: 'quota-token'; spec: QuotaTokenSpec }
+  | { tag: 'permission-card'; spec: PermissionCardSpec }
   // WASI P3 stubs (parseable only; no semantics yet)
   | { tag: 'future'; element?: SchemaType }
   | { tag: 'stream'; element?: SchemaType };
@@ -314,6 +317,11 @@ function schemaTypesMatch(
         left.spec.resourceName ===
         (right as Extract<SchemaTypeBody, { tag: 'quota-token' }>).spec.resourceName
       );
+    case 'permission-card':
+      return (
+        left.spec.polymorphic ===
+        (right as Extract<SchemaTypeBody, { tag: 'permission-card' }>).spec.polymorphic
+      );
     case 'text':
       return optionalStringSetsEqual(
         left.restrictions.languages,
@@ -501,6 +509,8 @@ export const t = {
   secret: (inner: SchemaType, spec: Omit<SecretSpec, 'inner'> = {}): SchemaType =>
     schemaType({ tag: 'secret', spec, inner }),
   quotaToken: (spec: QuotaTokenSpec): SchemaType => schemaType({ tag: 'quota-token', spec }),
+  permissionCard: (spec: PermissionCardSpec): SchemaType =>
+    schemaType({ tag: 'permission-card', spec }),
 };
 
 /** Compact constructors for schema field/case helpers. */

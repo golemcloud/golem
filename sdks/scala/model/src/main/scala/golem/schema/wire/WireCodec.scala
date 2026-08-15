@@ -115,10 +115,11 @@ final class GraphEncoder(defs: ListMap[String, SchemaTypeDef]) {
             branches.map(br => WitUnionBranch(br.tag, encodeType(br.body), br.discriminator, br.metadata)).toVector
           )
         )
-      case SecretType(s)     => W.SecretType(WitSecretSpec(encodeType(s.inner), s.category))
-      case QuotaTokenType(s) => W.QuotaTokenType(s)
-      case FutureType(e)     => W.FutureType(e.map(encodeType))
-      case StreamType(e)     => W.StreamType(e.map(encodeType))
+      case SecretType(s)         => W.SecretType(WitSecretSpec(encodeType(s.inner), s.category))
+      case QuotaTokenType(s)     => W.QuotaTokenType(s)
+      case PermissionCardType(s) => W.PermissionCardType(s)
+      case FutureType(e)         => W.FutureType(e.map(encodeType))
+      case StreamType(e)         => W.StreamType(e.map(encodeType))
     }
   }
 
@@ -208,10 +209,11 @@ object SchemaWire {
           S.UnionType(
             spec.branches.map(br => UnionBranch(br.tag, fromType(br.body), br.discriminator, br.metadata)).toList
           )
-        case WitSchemaTypeBody.SecretType(sp)     => S.SecretType(SecretSpec(fromType(sp.inner), sp.category))
-        case WitSchemaTypeBody.QuotaTokenType(sp) => S.QuotaTokenType(sp)
-        case WitSchemaTypeBody.FutureType(e)      => S.FutureType(e.map(fromType))
-        case WitSchemaTypeBody.StreamType(e)      => S.StreamType(e.map(fromType))
+        case WitSchemaTypeBody.SecretType(sp)         => S.SecretType(SecretSpec(fromType(sp.inner), sp.category))
+        case WitSchemaTypeBody.QuotaTokenType(sp)     => S.QuotaTokenType(sp)
+        case WitSchemaTypeBody.PermissionCardType(sp) => S.PermissionCardType(sp)
+        case WitSchemaTypeBody.FutureType(e)          => S.FutureType(e.map(fromType))
+        case WitSchemaTypeBody.StreamType(e)          => S.StreamType(e.map(fromType))
       }
     }
 

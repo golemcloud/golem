@@ -140,6 +140,11 @@ describe('anonymous vs named placement', () => {
 });
 
 describe('empty and degenerate composites', () => {
+  it('permission-card schema types preserve polymorphism through the WIT carrier', () => {
+    roundtripGraph({ defs: new Map(), root: t.permissionCard({ polymorphic: true }) });
+    roundtripGraph({ defs: new Map(), root: t.permissionCard({ polymorphic: false }) });
+  });
+
   it('empty record / variant / enum / flags types round-trip', () => {
     roundtripGraph({ defs: new Map(), root: t.record([]) });
     roundtripGraph({ defs: new Map(), root: t.variant([]) });

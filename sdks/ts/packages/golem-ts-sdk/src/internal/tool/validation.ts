@@ -732,6 +732,8 @@ function schemaValueMatches(graph: SchemaGraph, type: SchemaType, value: SchemaV
     case 'secret':
     case 'quota-token':
       return value.tag === resolvedBody.tag;
+    case 'permission-card':
+      return false;
     case 'text': {
       if (value.tag !== 'text') return false;
       if (

@@ -256,6 +256,8 @@ export class GraphEncoder {
         return { tag: 'secret-type', val: { ...body.spec, inner: this.encodeType(body.inner) } };
       case 'quota-token':
         return { tag: 'quota-token-type', val: body.spec };
+      case 'permission-card':
+        return { tag: 'permission-card-type', val: body.spec };
       case 'future':
         return {
           tag: 'future-type',
@@ -428,6 +430,8 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
         };
       case 'quota-token-type':
         return { tag: 'quota-token', spec: body.val };
+      case 'permission-card-type':
+        return { tag: 'permission-card', spec: body.val };
       case 'future-type':
         return { tag: 'future', element: body.val !== undefined ? fromType(body.val) : undefined };
       case 'stream-type':
