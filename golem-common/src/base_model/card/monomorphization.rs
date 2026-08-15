@@ -146,9 +146,11 @@ pub fn card_matches_agent_recipient(
     context: &AgentPermissionMonomorphizationContext,
 ) -> bool {
     let holder = agent_recipient_pattern(context);
-    monomorphize_card_for_agent(card, context)
-        .lower_positive
+    let card = monomorphize_card_for_agent(card, context);
+    card.lower_positive
         .iter()
+        .chain(&card.upper_positive)
+        .chain(&card.upper_negative)
         .any(|grant| grant.recipient().subsumes(&holder))
 }
 

@@ -55,6 +55,7 @@ use golem_common::model::card::{
     EffectiveSurface, PermissionPattern, PermissionTarget, PolymorphicCard,
     PolymorphicPermissionPattern, RenderedPermissionFields, ScopeCard, StoredCard,
     WalletDerivationParent, agent_delegation_surface_from_wallet,
+    agent_effective_surface_from_wallet_and_scope, card_matches_agent_recipient,
     instantiate_polymorphic_card_for_agent, monomorphize_card_for_agent, parse_permission_fields,
     permission_class_metadata,
 };
@@ -2433,6 +2434,11 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
             ) {
                 return Ok(Err(error));
             }
+            if !card_matches_agent_recipient(&source_card, &target.context) {
+                return Ok(Err(permissions_types::PermissionError::NotPermitted(
+                    crate::worker::PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH.to_string(),
+                )));
+            }
 
             let invocation_key = self
                 .state
@@ -2863,6 +2869,27 @@ mod tests {
                 ..valid_filesystem_grant()
             },
         );
+        let matching_upper_positive = match matching.clone() {
+            StoredCard::Concrete(mut card) => {
+                card.upper_positive = std::mem::take(&mut card.lower_positive);
+                StoredCard::Concrete(card)
+            }
+            StoredCard::Polymorphic(_) => unreachable!(),
+        };
+        let matching_upper_negative = match matching.clone() {
+            StoredCard::Concrete(mut card) => {
+                card.upper_negative = std::mem::take(&mut card.lower_positive);
+                StoredCard::Concrete(card)
+            }
+            StoredCard::Polymorphic(_) => unreachable!(),
+        };
+        let mismatching_upper_only = match mismatching.clone() {
+            StoredCard::Concrete(mut card) => {
+                card.upper_positive = std::mem::take(&mut card.lower_positive);
+                StoredCard::Concrete(card)
+            }
+            StoredCard::Polymorphic(_) => unreachable!(),
+        };
         let matching_negative_only = StoredCard::Concrete(Card {
             card_id: CardId::new(),
             parent_ids: Vec::new(),
@@ -2901,8 +2928,20 @@ mod tests {
         });
 
         assert!(card_matches_agent_recipient(&matching, &context));
+        assert!(card_matches_agent_recipient(
+            &matching_upper_positive,
+            &context
+        ));
+        assert!(card_matches_agent_recipient(
+            &matching_upper_negative,
+            &context
+        ));
         assert!(card_matches_agent_recipient(&polymorphic, &context));
         assert!(!card_matches_agent_recipient(&mismatching, &context));
+        assert!(!card_matches_agent_recipient(
+            &mismatching_upper_only,
+            &context
+        ));
         assert!(!card_matches_agent_recipient(
             &matching_negative_only,
             &context
