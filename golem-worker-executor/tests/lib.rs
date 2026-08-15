@@ -91,7 +91,7 @@ tag_suite!(api, group1);
 tag_suite!(retry_lifecycle, group1);
 tag_suite!(blobstore, group1);
 tag_suite!(keyvalue, group1);
-tag_suite!(in_function_retry, group1);
+tag_suite!(in_function_retry, in_function_retry);
 tag_suite!(http, group1);
 tag_suite!(websocket, group1);
 tag_suite!(rdbms, group1);
@@ -122,7 +122,6 @@ sequential_suite!(key_value_storage);
 sequential_suite!(namespace_routed_key_value_storage);
 sequential_suite!(indexed_storage);
 sequential_suite!(oplog_blob_archive);
-sequential_suite!(in_function_retry);
 
 #[derive(Debug)]
 pub struct Tracing;

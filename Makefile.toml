@@ -572,6 +572,7 @@ description = "Runs worker executor tests only (group 1/3)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
 cargo-test-r run --package golem-worker-executor --test integration :tag:group1 -- --report-time --nocapture $WORKER_TEST_THREAD_OPTS $JUNIT_OPTS
+cargo-test-r run --package golem-worker-executor --test integration :tag:in_function_retry -- --report-time --nocapture $WORKER_TEST_THREAD_OPTS $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests-group2]
