@@ -22,6 +22,7 @@ use golem_common::model::agent::RegistryInvalidationEvent;
 use golem_common::model::card::CardId;
 use golem_service_base::clients::registry::{RegistryInvalidationHandler, RegistryService};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
@@ -31,6 +32,7 @@ pub(crate) struct WorkerExecutorRegistryInvalidationHandler<Ctx: WorkerCtx> {
     component_service: Arc<dyn ComponentService>,
     environment_state_service: Arc<dyn EnvironmentStateService>,
     agent_types_service: Arc<dyn AgentTypesService>,
+    shutdown_token: CancellationToken,
 }
 
 impl<Ctx: WorkerCtx> WorkerExecutorRegistryInvalidationHandler<Ctx> {
@@ -43,6 +45,7 @@ impl<Ctx: WorkerCtx> WorkerExecutorRegistryInvalidationHandler<Ctx> {
         agent_types_service: Arc<dyn AgentTypesService>,
         shutdown_token: CancellationToken,
     ) {
+        let handler_shutdown_token = shutdown_token.clone();
         registry_service
             .run_registry_invalidation_event_subscriber(
                 "worker-executor",
@@ -53,6 +56,7 @@ impl<Ctx: WorkerCtx> WorkerExecutorRegistryInvalidationHandler<Ctx> {
                     component_service,
                     environment_state_service,
                     agent_types_service,
+                    shutdown_token: handler_shutdown_token,
                 }),
             )
             .await;
@@ -67,20 +71,31 @@ impl<Ctx: WorkerCtx> WorkerExecutorRegistryInvalidationHandler<Ctx> {
     /// registry) and reuses the standard revocation propagation path for any
     /// card that is no longer live.
     async fn reevaluate_tracked_cards(&self) {
-        let card_ids = self.active_workers.tracked_card_ids().await;
-        if card_ids.is_empty() {
-            return;
-        }
-
-        let states = match self.card_service.check_cards(card_ids).await {
-            Ok(states) => states,
-            Err(err) => {
-                warn!(
-                    error = %err,
-                    "Failed re-validating tracked cards after cursor expiry; \
-                     running workers will re-check on their next replay"
-                );
+        let mut retry_delay = Duration::from_millis(100);
+        let states = loop {
+            let card_ids = self.active_workers.tracked_card_ids().await;
+            if card_ids.is_empty() {
                 return;
+            }
+
+            let check_result = tokio::select! {
+                _ = self.shutdown_token.cancelled() => return,
+                result = self.card_service.check_cards(card_ids) => result,
+            };
+            match check_result {
+                Ok(states) => break states,
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        retry_delay_ms = retry_delay.as_millis(),
+                        "Failed re-validating tracked cards after cursor expiry; retrying"
+                    );
+                    tokio::select! {
+                        _ = self.shutdown_token.cancelled() => return,
+                        _ = tokio::time::sleep(retry_delay) => {}
+                    }
+                    retry_delay = next_retry_delay(retry_delay);
+                }
             }
         };
 
@@ -98,6 +113,10 @@ impl<Ctx: WorkerCtx> WorkerExecutorRegistryInvalidationHandler<Ctx> {
             self.active_workers.notify_revoked_cards(&revoked).await;
         }
     }
+}
+
+fn next_retry_delay(current: Duration) -> Duration {
+    current.saturating_mul(2).min(Duration::from_secs(30))
 }
 
 #[async_trait::async_trait]
@@ -253,5 +272,21 @@ impl<Ctx: WorkerCtx> RegistryInvalidationHandler
                     .await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn cursor_recovery_backoff_caps_at_thirty_seconds() {
+        let mut delay = Duration::from_millis(100);
+        for _ in 0..20 {
+            delay = next_retry_delay(delay);
+        }
+        assert_eq!(delay, Duration::from_secs(30));
+        assert_eq!(next_retry_delay(delay), Duration::from_secs(30));
     }
 }

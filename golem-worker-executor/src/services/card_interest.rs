@@ -105,6 +105,26 @@ mod tests {
     }
 
     #[test]
+    async fn disjoint_revocations_are_routed_per_agent() {
+        let index = CardInterestIndex::new();
+        let first_agent = agent("agent-1");
+        let second_agent = agent("agent-2");
+        let first_card = CardId::new();
+        let second_card = CardId::new();
+
+        index
+            .set_card_interest(first_agent.clone(), &[first_card])
+            .await;
+        index
+            .set_card_interest(second_agent.clone(), &[second_card])
+            .await;
+
+        let affected = index.interested_agents(&[first_card, second_card]).await;
+        assert_eq!(affected.get(&first_agent), Some(&vec![first_card]));
+        assert_eq!(affected.get(&second_agent), Some(&vec![second_card]));
+    }
+
+    #[test]
     async fn unrelated_revoked_card_does_not_affect_agent() {
         let index = CardInterestIndex::new();
         let agent = agent("agent-1");
