@@ -126,6 +126,10 @@ enum LifecycleJob<Ctx: WorkerCtx> {
         worker: Arc<Worker<Ctx>>,
         meter: AgentMemoryMeter,
     },
+    FilesystemLimitExceeded {
+        worker: Arc<Worker<Ctx>>,
+        interrupt_kind: InterruptKind,
+    },
 }
 
 /// The state exclusively owned by the status task.
@@ -241,6 +245,14 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 .await;
                         }
                     }
+                    LifecycleJob::FilesystemLimitExceeded {
+                        worker,
+                        interrupt_kind,
+                    } => {
+                        worker
+                            .notify_filesystem_limit_interrupt_if_current(interrupt_kind)
+                            .await;
+                    }
                 }
             }
         });
@@ -315,6 +327,26 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         if self
             .lifecycle_jobs
             .send(LifecycleJob::MemoryLimitExceeded { worker, meter })
+            .is_err()
+        {
+            panic!(
+                "Worker state actor for {} terminated unexpectedly",
+                self.owned_agent_id
+            );
+        }
+    }
+
+    pub fn filesystem_limit_exceeded(
+        &self,
+        worker: Arc<Worker<Ctx>>,
+        interrupt_kind: InterruptKind,
+    ) {
+        if self
+            .lifecycle_jobs
+            .send(LifecycleJob::FilesystemLimitExceeded {
+                worker,
+                interrupt_kind,
+            })
             .is_err()
         {
             panic!(

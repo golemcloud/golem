@@ -1776,47 +1776,9 @@ impl Default for MemoryConfig {
     }
 }
 
-/// Configuration for the executor-wide worker storage semaphore.
-///
-/// The semaphore pool size is `total_worker_filesystem_storage_bytes`. Workers acquire
-/// permits proportional to their estimated storage usage; when the pool is
-/// exhausted, idle workers are evicted to free space. Use
-/// `total_worker_filesystem_storage_bytes` in tests to create a small,
-/// predictable pool.
-///
-/// # Permit release vs actual disk reclaim — configure with headroom
-///
-/// When a worker is evicted its storage semaphore permits are released at the
-/// moment `RunningWorker` drops, which is **slightly before** the worker's
-/// temp directory is deleted from disk. The directory is removed when the
-/// invocation task fully unwinds (dropping the wasmtime `Store` and its
-/// contained `TempDir`). In practice this gap is sub-millisecond, but it means
-/// the semaphore can briefly report available space that has not yet been
-/// reclaimed on disk.
-///
-/// This is the same race that exists for the memory semaphore
-/// (`MemoryConfig::total_memory`): memory permits are released when
-/// `RunningWorker` drops, before the wasmtime linear memory is actually freed.
-/// It has never caused problems in production because the semaphore is not
-/// configured to 100% of physical capacity.
-///
-/// **Recommended practice:** assuming the executor's temp directory has a
-/// dedicated volume (e.g. a pod-local tmpfs or block device mounted at `/tmp`),
-/// set `total_worker_filesystem_storage_bytes` to around 80–90% of that volume's
-/// capacity. The headroom absorbs the transient over-commitment window
-/// described above and any filesystem metadata overhead for the temp directory
-/// tree itself.
+/// Configuration for managed agent filesystems and their cleanup.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FilesystemStorageConfig {
-    /// Override the total storage pool size (bytes). When `None`, the default
-    /// of 10 GB is used. Set to a small value in tests to trigger eviction.
-    ///
-    /// Should be set to ~80–90% of the dedicated volume capacity, not 100% —
-    /// see the `FilesystemStorageConfig` doc comment for the rationale.
-    #[serde(alias = "total_worker_filesystem_storage_bytes_override")]
-    pub total_worker_filesystem_storage_bytes: Option<u64>,
-    #[serde(with = "humantime_serde")]
-    pub acquire_retry_delay: Duration,
     /// Retry policy for deleting and verifying runtime filesystem directories.
     /// `max_attempts` includes the initial deletion attempt.
     pub cleanup_retry: RetryConfig,
@@ -1834,28 +1796,44 @@ pub struct FilesystemStorageConfig {
     /// Dedicated XFS root managed through project quotas. Managed mode is
     /// fail-closed and cannot be combined with `deterministic_root_dir`.
     pub managed_xfs_root_dir: Option<PathBuf>,
+    /// Private policy for deriving an agent's filesystem-object hard limit
+    /// proportionally from its allocated-byte limit, with fixed bounds.
+    pub filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig,
 }
 
-impl FilesystemStorageConfig {
-    /// The total number of bytes available to the storage semaphore pool.
-    pub fn worker_filesystem_storage(&self) -> usize {
-        self.total_worker_filesystem_storage_bytes
-            .unwrap_or(10 * 1024 * 1024 * 1024) // 10 GB default
-            as usize
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FilesystemObjectLimitPolicyConfig {
+    /// Number of filesystem objects granted per GiB of allocated storage.
+    pub objects_per_gib: u64,
+    /// Object quota floor for small storage allocations.
+    pub minimum_objects: u64,
+    /// Object quota ceiling for large storage allocations.
+    pub maximum_objects: u64,
+}
+
+impl Default for FilesystemObjectLimitPolicyConfig {
+    fn default() -> Self {
+        Self {
+            objects_per_gib: 32_768,
+            minimum_objects: 8192,
+            maximum_objects: 131_072,
+        }
+    }
+}
+
+impl SafeDisplay for FilesystemObjectLimitPolicyConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "objects per GiB: {}", self.objects_per_gib);
+        let _ = writeln!(&mut result, "minimum objects: {}", self.minimum_objects);
+        let _ = writeln!(&mut result, "maximum objects: {}", self.maximum_objects);
+        result
     }
 }
 
 impl SafeDisplay for FilesystemStorageConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
-        if let Some(limit) = &self.total_worker_filesystem_storage_bytes {
-            let _ = writeln!(&mut result, "total worker storage bytes: {limit}");
-        }
-        let _ = writeln!(
-            &mut result,
-            "acquire retry delay: {:?}",
-            self.acquire_retry_delay
-        );
         let _ = writeln!(&mut result, "cleanup retry:");
         let _ = writeln!(
             &mut result,
@@ -1868,6 +1846,13 @@ impl SafeDisplay for FilesystemStorageConfig {
         if let Some(root) = &self.managed_xfs_root_dir {
             let _ = writeln!(&mut result, "managed XFS root dir: {}", root.display());
         }
+        let _ = writeln!(&mut result, "filesystem object limit policy:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.filesystem_object_limit_policy
+                .to_safe_string_indented()
+        );
         result
     }
 }
@@ -1875,8 +1860,6 @@ impl SafeDisplay for FilesystemStorageConfig {
 impl Default for FilesystemStorageConfig {
     fn default() -> Self {
         Self {
-            total_worker_filesystem_storage_bytes: None,
-            acquire_retry_delay: Duration::from_millis(500),
             cleanup_retry: RetryConfig {
                 max_attempts: 4,
                 min_delay: Duration::from_millis(25),
@@ -1886,6 +1869,7 @@ impl Default for FilesystemStorageConfig {
             },
             deterministic_root_dir: None,
             managed_xfs_root_dir: None,
+            filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig::default(),
         }
     }
 }

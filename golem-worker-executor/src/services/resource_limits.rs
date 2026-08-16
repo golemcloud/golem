@@ -17,8 +17,10 @@ use crate::metrics::resources::{
     record_memory_gb_seconds, record_resource_usage_batch_update_failure,
     record_storage_byte_seconds,
 };
+use crate::services::agent_filesystem::{
+    AgentFilesystemRuntime, AgentFilesystemStorageLimit, FilesystemStorageError,
+};
 use crate::services::agent_memory_meter::{AgentMemoryMeter, BYTE_NANOSECONDS_PER_GB_SECOND};
-use crate::services::agent_storage_meter::AgentStorageMeter;
 use crate::services::golem_config::ResourceLimitsConfig;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -32,7 +34,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::sync::OnceCell;
+use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::{Instrument, error, info_span};
@@ -47,7 +49,6 @@ pub struct AtomicResourceEntry {
     in_flight_delta: AtomicI64,
     durable_byte_seconds_delta: AtomicI64,
     ephemeral_byte_seconds_delta: AtomicI64,
-    storage_meters: Arc<scc::HashMap<OwnedAgentId, AgentStorageMeter>>,
     memory_gb_seconds_delta: AtomicI64,
     in_flight_memory_gb_seconds_delta: AtomicI64,
     durable_memory_gb_seconds_delta: AtomicI64,
@@ -63,6 +64,8 @@ pub struct AtomicResourceEntry {
     max_table_elements: AtomicUsize,
     // Current (cached) value of the account level per-worker disk space limit
     max_disk_space: AtomicU64,
+    filesystem_limit_update: AsyncMutex<()>,
+    agent_filesystems: scc::HashMap<OwnedAgentId, AgentFilesystemRuntime>,
     // Unix timestamp (seconds) of the last time fuel/memory were refreshed from
     // the server. Used by the background loop to detect idle accounts whose
     // cached limits have grown stale (e.g. after a plan change or monthly reset).
@@ -115,6 +118,8 @@ impl AtomicResourceEntry {
     /// Same 10^18 value — fits in i64 (TOML max), safe for SQLite REAL,
     /// consistent with other unlimited sentinels in this codebase.
     pub const UNLIMITED_OPLOG_WRITES_PER_SECOND: u64 = 1_000_000_000_000_000_000;
+    // XFS supports block sizes up to 64 KiB, so this remains exactly representable.
+    pub(crate) const EFFECTIVELY_UNLIMITED_DISK_SPACE: u64 = u64::MAX - u16::MAX as u64;
 
     pub fn new(
         fuel: u64,
@@ -179,7 +184,6 @@ impl AtomicResourceEntry {
             in_flight_delta: AtomicI64::new(0),
             durable_byte_seconds_delta: AtomicI64::new(0),
             ephemeral_byte_seconds_delta: AtomicI64::new(0),
-            storage_meters: Arc::new(scc::HashMap::new()),
             memory_gb_seconds_delta: AtomicI64::new(0),
             in_flight_memory_gb_seconds_delta: AtomicI64::new(0),
             durable_memory_gb_seconds_delta: AtomicI64::new(0),
@@ -192,6 +196,8 @@ impl AtomicResourceEntry {
             max_memory: AtomicUsize::new(max_memory),
             max_table_elements: AtomicUsize::new(max_table_elements),
             max_disk_space: AtomicU64::new(max_disk_space),
+            filesystem_limit_update: AsyncMutex::new(()),
+            agent_filesystems: scc::HashMap::new(),
             last_refresh_secs: AtomicI64::new(Utc::now().timestamp()),
             per_invocation_http_call_limit: AtomicU64::new(per_invocation_http_call_limit),
             per_invocation_rpc_call_limit: AtomicU64::new(per_invocation_rpc_call_limit),
@@ -301,28 +307,56 @@ impl AtomicResourceEntry {
         self.max_disk_space.load(Ordering::Acquire)
     }
 
-    pub(crate) fn register_storage_meter(
+    pub(crate) async fn register_agent_filesystem(
         &self,
         owned_agent_id: OwnedAgentId,
-        meter: AgentStorageMeter,
-    ) {
-        self.storage_meters.upsert_sync(owned_agent_id, meter);
+        runtime: AgentFilesystemRuntime,
+    ) -> Result<(), FilesystemStorageError> {
+        let _update = self.filesystem_limit_update.lock().await;
+        runtime
+            .set_allocated_byte_limit(AgentFilesystemStorageLimit {
+                allocated_bytes: self.max_disk_space_limit(),
+            })
+            .await?;
+        self.agent_filesystems.upsert_sync(owned_agent_id, runtime);
+        Ok(())
     }
 
-    pub(crate) fn unregister_storage_meter(
+    pub(crate) fn unregister_agent_filesystem(
         &self,
         owned_agent_id: &OwnedAgentId,
-        meter: &AgentStorageMeter,
+        runtime: &AgentFilesystemRuntime,
     ) {
-        self.storage_meters
-            .remove_if_sync(owned_agent_id, |registered| registered.is_same_meter(meter));
+        self.agent_filesystems
+            .remove_if_sync(owned_agent_id, |registered| {
+                registered.is_same_runtime(runtime)
+            });
     }
 
-    pub fn flush_storage_meters(&self, now: Instant) {
-        self.storage_meters.iter_sync(|_, meter| {
-            meter.flush(now);
+    #[doc(hidden)]
+    pub async fn apply_agent_filesystem_limit(
+        &self,
+        allocated_bytes: u64,
+    ) -> Result<(), (OwnedAgentId, FilesystemStorageError)> {
+        let _update = self.filesystem_limit_update.lock().await;
+        self.max_disk_space
+            .store(allocated_bytes, Ordering::Release);
+        let mut filesystems = Vec::new();
+        self.agent_filesystems.iter_sync(|owned_agent_id, runtime| {
+            filesystems.push((owned_agent_id.clone(), runtime.clone()));
             true
         });
+        let mut first_error = None;
+        for (owned_agent_id, runtime) in filesystems {
+            if let Err(error) = runtime
+                .set_allocated_byte_limit(AgentFilesystemStorageLimit { allocated_bytes })
+                .await
+                && first_error.is_none()
+            {
+                first_error = Some((owned_agent_id, error));
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
     pub fn record_storage_byte_seconds(&self, mode: AgentMode, amount: i64) {
@@ -376,7 +410,6 @@ impl AtomicResourceEntry {
             return None;
         }
 
-        self.flush_storage_meters(Instant::now());
         let fuel_delta = self.delta.swap(0, Ordering::AcqRel);
         let (
             memory_gb_seconds_delta,
@@ -880,9 +913,22 @@ impl ResourceLimitsGrpc {
                 updated_limits.max_table_elements_per_worker as usize,
                 Ordering::Release,
             );
-            entry
-                .max_disk_space
-                .store(updated_limits.max_disk_space_per_worker, Ordering::Release);
+            let filesystem_limit_updated = match entry
+                .apply_agent_filesystem_limit(updated_limits.max_disk_space_per_worker)
+                .await
+            {
+                Ok(()) => true,
+                Err((owned_agent_id, error)) => {
+                    error!(
+                        account_id = %account_id,
+                        agent_id = %owned_agent_id,
+                        limit = updated_limits.max_disk_space_per_worker,
+                        error = %error,
+                        "Failed to apply managed agent filesystem limit"
+                    );
+                    false
+                }
+            };
             entry.per_invocation_http_call_limit.store(
                 updated_limits.per_invocation_http_call_limit,
                 Ordering::Release,
@@ -906,9 +952,11 @@ impl ResourceLimitsGrpc {
             entry
                 .oplog_writes_per_second
                 .store(updated_limits.oplog_writes_per_second, Ordering::Release);
-            entry
-                .last_refresh_secs
-                .store(Utc::now().timestamp(), Ordering::Release);
+            if filesystem_limit_updated {
+                entry
+                    .last_refresh_secs
+                    .store(Utc::now().timestamp(), Ordering::Release);
+            }
         }
     }
 
@@ -980,7 +1028,7 @@ impl ResourceLimits for ResourceLimitsDisabled {
             u64::MAX,
             usize::MAX,
             usize::MAX,
-            u64::MAX,
+            AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE,
             AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
         )))
     }
@@ -1012,75 +1060,6 @@ mod tests {
     use uuid::Uuid;
 
     test_r::enable!();
-
-    #[test]
-    fn stale_storage_meter_unregister_preserves_reloaded_meter() {
-        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-        let owned_agent_id = OwnedAgentId::new(
-            EnvironmentId(Uuid::new_v4()),
-            &AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "storage-meter-race".to_string(),
-            },
-        );
-        let now = Instant::now();
-        let old = AgentStorageMeter::new(AgentMode::Durable, 1, entry.clone(), now);
-        let reloaded = AgentStorageMeter::new(AgentMode::Durable, 1, entry.clone(), now);
-
-        entry.register_storage_meter(owned_agent_id.clone(), old.clone());
-        entry.register_storage_meter(owned_agent_id.clone(), reloaded.clone());
-        entry.unregister_storage_meter(&owned_agent_id, &old);
-
-        let registered = entry.storage_meters.get_sync(&owned_agent_id).unwrap();
-        assert!(registered.get().is_same_meter(&reloaded));
-    }
-
-    #[test]
-    fn flush_storage_meters_integrates_inline() {
-        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-        let owned_agent_id = OwnedAgentId::new(
-            EnvironmentId(Uuid::new_v4()),
-            &AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "inline-storage-meter-flush".to_string(),
-            },
-        );
-        let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
-        entry.register_storage_meter(owned_agent_id, meter);
-
-        entry.flush_storage_meters(now + Duration::from_secs(3));
-
-        assert_eq!(entry.durable_byte_seconds_delta(), 30);
-    }
-
-    /// `send_batch` only integrates the meters on ticks that actually ship an update,
-    /// so a meter routinely goes several ticks without being flushed. Time spanned by
-    /// those skipped ticks must still be billed, exactly once.
-    #[test]
-    fn skipped_flushes_are_billed_once_when_the_next_flush_happens() {
-        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-        let owned_agent_id = OwnedAgentId::new(
-            EnvironmentId(Uuid::new_v4()),
-            &AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "deferred-storage-meter-flush".to_string(),
-            },
-        );
-        let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
-        entry.register_storage_meter(owned_agent_id, meter);
-
-        // A tick that ships integrates the first second.
-        entry.flush_storage_meters(now + Duration::from_secs(1));
-        assert_eq!(entry.durable_byte_seconds_delta(), 10);
-
-        // The next two ticks are skipped because the account is idle and its limits are
-        // still fresh. The following flush must bill both of those seconds, and neither
-        // re-bill the first nor drop anything.
-        entry.flush_storage_meters(now + Duration::from_secs(3));
-        assert_eq!(entry.durable_byte_seconds_delta(), 30);
-    }
 
     #[test]
     fn fresh_tick_flushes_memory_meter_before_activity_check() {

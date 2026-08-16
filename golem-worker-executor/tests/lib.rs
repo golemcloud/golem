@@ -52,7 +52,6 @@ pub mod retry_policies;
 pub mod revert;
 pub mod rpc;
 pub mod scalability;
-pub mod storage_quota;
 pub mod transactions;
 pub mod wasi;
 pub mod websocket;
@@ -112,7 +111,6 @@ tag_suite!(ignite_service, ignite_service);
 tag_suite!(rdbms_service, rdbms_service);
 tag_suite!(resource_limits, group1);
 tag_suite!(oplog_metrics, group1);
-tag_suite!(storage_quota, group1);
 
 sequential_suite!(key_value_storage);
 sequential_suite!(namespace_routed_key_value_storage);

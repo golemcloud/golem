@@ -14,7 +14,7 @@
 
 use super::{
     AgentFilesystemUsage, FilesystemCapacity, FilesystemStorageError,
-    create_materialization_parent, set_initial_file_permissions,
+    ResolvedAgentFilesystemLimits, create_materialization_parent, set_initial_file_permissions,
 };
 use golem_common::model::RetryConfig;
 use rustix::fs::{
@@ -47,6 +47,7 @@ const FS_DQ_RTBSOFT: u16 = 1 << 4;
 const FS_DQ_RTBHARD: u16 = 1 << 5;
 const PROJECT_LIMIT_FIELDS: u16 =
     FS_DQ_ISOFT | FS_DQ_IHARD | FS_DQ_BSOFT | FS_DQ_BHARD | FS_DQ_RTBSOFT | FS_DQ_RTBHARD;
+const PROJECT_DATA_LIMIT_FIELDS: u16 = FS_DQ_ISOFT | FS_DQ_IHARD | FS_DQ_BSOFT | FS_DQ_BHARD;
 
 #[derive(Default)]
 struct ProjectAllocator {
@@ -118,6 +119,7 @@ pub(super) struct XfsBackend {
     root: PathBuf,
     root_fd: File,
     allocator: Mutex<ProjectAllocator>,
+    filesystem_block_bytes: u64,
 }
 
 impl XfsBackend {
@@ -143,6 +145,17 @@ impl XfsBackend {
                 root,
             ));
         }
+        let filesystem_block_bytes = u64::try_from(filesystem.f_bsize).map_err(|_| {
+            FilesystemStorageError::verification("validate managed XFS filesystem block size", root)
+        })?;
+        if filesystem_block_bytes == 0
+            || !filesystem_block_bytes.is_multiple_of(XFS_BASIC_BLOCK_BYTES)
+        {
+            return Err(FilesystemStorageError::verification(
+                "validate managed XFS filesystem block size",
+                root,
+            ));
+        }
 
         let stable_root = PathBuf::from(format!("/proc/self/fd/{}", root_fd.as_raw_fd()));
         std::fs::metadata(&stable_root).map_err(|error| {
@@ -160,6 +173,7 @@ impl XfsBackend {
                 next: 1,
                 active: HashMap::new(),
             }),
+            filesystem_block_bytes,
         };
         backend.clear_root_project_assignment()?;
         backend.validate_project_quota_state()?;
@@ -395,6 +409,52 @@ impl XfsBackend {
         self.clear_project_limits(project_id)
     }
 
+    pub(super) fn install_project_limits(
+        &self,
+        project_id: NonZeroU32,
+        limits: ResolvedAgentFilesystemLimits,
+    ) -> std::io::Result<ResolvedAgentFilesystemLimits> {
+        if limits.allocated_bytes == 0
+            || !limits
+                .allocated_bytes
+                .is_multiple_of(self.filesystem_block_bytes)
+            || limits.filesystem_objects == 0
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agent filesystem limits are not exactly representable by managed XFS",
+            ));
+        }
+        let block_hard_limit = limits.allocated_bytes / XFS_BASIC_BLOCK_BYTES;
+        let mut quota = FsDiskQuota {
+            d_version: FS_DQUOT_VERSION,
+            d_flags: FS_PROJ_QUOTA,
+            d_fieldmask: PROJECT_DATA_LIMIT_FIELDS,
+            d_id: project_id.get(),
+            d_blk_hardlimit: block_hard_limit,
+            d_ino_hardlimit: limits.filesystem_objects,
+            ..FsDiskQuota::default()
+        };
+        self.set_project_quota_record(project_id, &mut quota)?;
+
+        let mut installed = FsDiskQuota::default();
+        self.get_project_quota(project_id.get(), &mut installed)?;
+        if installed.d_version != FS_DQUOT_VERSION
+            || installed.d_flags != FS_PROJ_QUOTA
+            || installed.d_id != project_id.get()
+            || installed.d_blk_hardlimit != block_hard_limit
+            || installed.d_blk_softlimit != 0
+            || installed.d_ino_hardlimit != limits.filesystem_objects
+            || installed.d_ino_softlimit != 0
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("XFS project {project_id} did not retain the complete quota limit pair"),
+            ));
+        }
+        Ok(limits)
+    }
+
     fn validate_project_quota_state(&self) -> Result<(), FilesystemStorageError> {
         let mut state = FsQuotaStatV {
             qs_version: FS_QSTATV_VERSION1,
@@ -582,7 +642,7 @@ impl XfsBackend {
             d_id: project_id.get(),
             ..FsDiskQuota::default()
         };
-        self.set_project_limits(project_id, &mut quota)?;
+        self.set_project_quota_record(project_id, &mut quota)?;
 
         let mut cleared = FsDiskQuota::default();
         if let Err(error) = self.get_project_quota(project_id.get(), &mut cleared) {
@@ -648,7 +708,7 @@ impl XfsBackend {
         }
     }
 
-    fn set_project_limits(
+    fn set_project_quota_record(
         &self,
         project_id: NonZeroU32,
         quota: &mut FsDiskQuota,

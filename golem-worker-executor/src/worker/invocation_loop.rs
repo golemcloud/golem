@@ -108,10 +108,10 @@ enum CreateInstanceResult<Ctx: WorkerCtx> {
     Created {
         instance: Instance,
         store: Mutex<Store<Ctx>>,
-        filesystem: AgentFilesystem,
+        filesystem: Box<AgentFilesystem>,
     },
-    /// Wasm executing during instantiation trapped with an [`InterruptKind`] (e.g. a fuel
-    /// suspension from the epoch deadline callback). The worker itself was created successfully.
+    /// Instance creation was interrupted by a recoverable condition, such as fuel or filesystem
+    /// quota exhaustion. The worker metadata remains valid and queued work must be preserved.
     Interrupted(InterruptKind),
     /// Instance creation failed; the worker was already stopped with the startup failure.
     Failed,
@@ -139,12 +139,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         let mut deferred_wakeups = VecDeque::new();
 
         'outer: loop {
+            self.release_terminal_interrupt().await;
             let (instance, store, filesystem) = match self.create_instance().await {
                 CreateInstanceResult::Created {
                     instance,
                     store,
                     filesystem,
-                } => (instance, store, filesystem),
+                } => (instance, store, *filesystem),
                 CreateInstanceResult::Interrupted(kind) => {
                     let pending_interrupt = take_pending_interrupt(&self.interrupt_signal).await;
                     let kind = pending_interrupt
@@ -353,8 +354,21 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             self.stop_closed(cleanup_error, None).await;
                                             break 'outer;
                                         }
-                                        RetryDecision::Delayed(_) | RetryDecision::TryStop(_) | RetryDecision::ReacquirePermits => {
-                                            unreachable!("interrupt decisions are only immediate or none")
+                                        RetryDecision::TryStop(timestamp) => {
+                                            let cleanup_error = Self::close_runtime(&mut runtime).await;
+                                            if timestamp < *self.parent.last_resume_request.lock().await {
+                                                if let Some(error) = cleanup_error {
+                                                    self.stop_cleanup_failed(error).await;
+                                                    break 'outer;
+                                                }
+                                                Self::defer_wakeup(&mut deferred_wakeups, command);
+                                                continue 'outer;
+                                            }
+                                            self.stop_closed(cleanup_error, None).await;
+                                            break 'outer;
+                                        }
+                                        RetryDecision::Delayed(_) | RetryDecision::ReacquirePermits => {
+                                            unreachable!("queued interrupts do not delay or reacquire permits")
                                         }
                                     }
                                 }
@@ -409,6 +423,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
             }
         }
+        self.release_terminal_interrupt().await;
+    }
+
+    async fn release_terminal_interrupt(&self) {
+        self.parent.filesystem_limit_interrupt.lock().await.take();
+        self.interrupt_signal.lock().await.release_terminal_claim();
     }
 
     async fn stop_unloaded(&self, startup_failure: Option<WorkerExecutorError>) {
@@ -501,14 +521,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     CreateInstanceResult::Created {
                         instance,
                         store,
-                        filesystem,
+                        filesystem: Box::new(filesystem),
                     }
                 }
-                // Wasm executing during instantiation was interrupted (e.g. suspended by the fuel
-                // check in the epoch deadline callback). The worker exists — its metadata and
-                // `Create` oplog entry are already persisted — so this is not a creation failure:
-                // creation waiters are released successfully and the caller parks or restarts the
-                // worker like any other interrupt.
+                // Instance creation was interrupted by a recoverable condition. The worker exists
+                // and its metadata and `Create` oplog entry are already persisted, so creation
+                // waiters are released successfully and the caller parks or restarts the worker.
                 Err(CreateWorkerInstanceError {
                     error: WorkerExecutorError::Interrupted { kind },
                     filesystem_cleanup_failed: false,

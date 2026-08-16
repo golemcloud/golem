@@ -806,7 +806,6 @@ pub async fn create_worker_executor_impl<
         .map(|path| path.to_path_buf());
     let file_loader = Arc::new(FileLoader::new(
         initial_files_service.clone(),
-        Some(active_workers.filesystem_storage_semaphore()),
         initial_file_cache_root.as_deref(),
     )?);
 

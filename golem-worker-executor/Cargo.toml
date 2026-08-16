@@ -11,9 +11,6 @@ license-file = "../LICENSE"
 
 autotests = false
 
-[features]
-managed-xfs-tests = []
-
 [lib]
 path = "src/lib.rs"
 harness = false

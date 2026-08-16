@@ -24,17 +24,26 @@ use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind,
 };
-use golem_common::model::{AgentStatus, IdempotencyKey, RetryConfig};
+use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex, RetryConfig};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::ResultValuePayload;
-use golem_test_framework::dsl::{TestDsl, drain_connection, stderr_events, stdout_events};
+use golem_test_framework::dsl::{
+    TestDsl, count_agent_invocation_pair_since, drain_connection, stderr_events, stdout_events,
+};
 use golem_test_framework::model::IFSEntry;
 use golem_worker_executor::metrics::storage::{
     STORAGE_BYTES_WRITTEN_TOTAL, STORAGE_TYPE_FILESYSTEM,
 };
+#[cfg(target_os = "linux")]
+use golem_worker_executor_test_utils::start_with_agent_storage_quota_on_managed_xfs;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start, start_with_overrides,
+};
+#[cfg(target_os = "linux")]
+use golem_worker_executor_test_utils::{
+    start_with_agent_storage_and_object_quota_on_managed_xfs,
+    start_with_mutable_agent_storage_quota_on_managed_xfs,
 };
 use http::{HeaderMap, StatusCode};
 use pretty_assertions::assert_eq;
@@ -78,6 +87,26 @@ fn sorted_config_entries(value: SchemaValue) -> SchemaValue {
     elements.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
 
     SchemaValue::List { elements }
+}
+
+fn schema_string_list(result: SchemaValue) -> Vec<String> {
+    let SchemaValue::List { elements } = result else {
+        panic!("expected list, got {result:?}")
+    };
+    elements
+        .into_iter()
+        .map(|element| match element {
+            SchemaValue::String(entry) => entry,
+            other => panic!("expected string, got {other:?}"),
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn managed_xfs_test_root() -> PathBuf {
+    std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
+        .map(PathBuf::from)
+        .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root")
 }
 
 #[test]
@@ -404,8 +433,9 @@ async fn initial_file_p3_parity(
     initial_file_p3_parity_with_backend(last_unique_id, deps, initial_file_system, None).await
 }
 
-#[cfg(all(target_os = "linux", feature = "managed-xfs-tests"))]
+#[cfg(target_os = "linux")]
 #[test]
+#[ignore = "requires the privileged managed XFS test runner"]
 #[tracing::instrument]
 async fn initial_file_p2_p3_parity_on_managed_xfs(
     last_unique_id: &LastUniqueId,
@@ -413,10 +443,339 @@ async fn initial_file_p2_p3_parity_on_managed_xfs(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let root = std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
-        .map(PathBuf::from)
-        .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
+    let root = managed_xfs_test_root();
     initial_file_p3_parity_with_backend(last_unique_id, deps, initial_file_system, Some(root)).await
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the privileged managed XFS test runner"]
+#[tracing::instrument]
+async fn p2_p3_quota_exhaustion_on_managed_xfs(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let root = managed_xfs_test_root();
+    let context = TestContext::new(last_unique_id);
+    let executor =
+        start_with_agent_storage_quota_on_managed_xfs(deps, &context, 1024 * 1024, root).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let p2_agent = agent_id!("P3FileSystem", "managed-quota-p2");
+
+    let result = executor
+        .invoke_and_await_agent(&component, &p2_agent, "run_p2_quota_surface", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    let SchemaValue::List { elements } = result else {
+        panic!("expected list, got {result:?}")
+    };
+    assert_eq!(
+        elements,
+        vec![
+            SchemaValue::String("p2_wrote_before_limit=true".to_string()),
+            SchemaValue::String("p2_growth_denied=true".to_string()),
+        ]
+    );
+
+    let p3_within_quota_agent = agent_id!("P3FileSystem", "managed-quota-p3-within-limit");
+    let p3_within_quota = executor
+        .invoke_and_await_agent(
+            &component,
+            &p3_within_quota_agent,
+            "run_p3_with_quota",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    assert_eq!(p3_within_quota, SchemaValue::Bool(true));
+
+    let p3_exhaustion_agent = agent_id!("P3FileSystem", "managed-quota-p3-exhaustion");
+    let p3_exhaustion = executor
+        .invoke_and_await_agent(
+            &component,
+            &p3_exhaustion_agent,
+            "exhaust_p3_quota",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected P3 exhaustion result"))?;
+    let p3_exhaustion = schema_string_list(p3_exhaustion);
+    assert_eq!(
+        p3_exhaustion.first().map(String::as_str),
+        Some("completion=err:ErrorCode::InsufficientSpace"),
+        "P3 growth must fail specifically because the project is out of space"
+    );
+    let unwritten_bytes = p3_exhaustion
+        .get(2)
+        .and_then(|value| value.strip_prefix("unwritten-bytes="))
+        .ok_or_else(|| anyhow!("P3 stream input result was not reported: {p3_exhaustion:?}"))?
+        .parse::<usize>()?;
+    assert_eq!(
+        p3_exhaustion.get(1).map(String::as_str),
+        Some("prefix-persisted=true"),
+        "P3 stream must acknowledge data persisted before quota denial"
+    );
+    assert!(
+        unwritten_bytes > 0,
+        "P3 quota failure must return the input suffix that was not persisted"
+    );
+
+    for (agent, method, expected) in [
+        (
+            agent_id!("P3FileSystem", "managed-quota-p2-matrix"),
+            "run_p2_quota_matrix",
+            vec![
+                "direct=true",
+                "positioned-stream=true",
+                "append=true",
+                "sparse-resize=true",
+                "overwrite=true",
+                "truncate=true",
+                "splice=true",
+                "hard-link=true",
+                "first-unlink=true",
+                "open-unlinked=true",
+                "rename-replace=true",
+                "grew=true",
+                "growth-denied=true",
+            ],
+        ),
+        (
+            agent_id!("P3FileSystem", "managed-quota-p3-matrix"),
+            "run_p3_quota_matrix",
+            vec![
+                "positioned-stream=true",
+                "append=true",
+                "sparse-resize=true",
+                "overwrite=true",
+                "truncate=true",
+                "hard-link=true",
+                "first-unlink=true",
+                "open-unlinked=true",
+                "rename-replace=true",
+                "growth-denied=true",
+            ],
+        ),
+    ] {
+        let result = executor
+            .invoke_and_await_agent(&component, &agent, method, data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value from {method}"))?;
+        assert_eq!(schema_string_list(result), expected);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the privileged managed XFS test runner"]
+#[tracing::instrument]
+async fn p2_p3_object_quota_on_managed_xfs(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let root = managed_xfs_test_root();
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_and_object_quota_on_managed_xfs(
+        deps,
+        &context,
+        16 * 1024 * 1024,
+        32,
+        root,
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let expected = vec![
+        "hard-link-same-inode=true",
+        "object-denied=true",
+        "directory-denied=true",
+        "symlink-denied=true",
+        "denied-while-open=true",
+    ];
+    for (agent, method, completion_method) in [
+        (
+            agent_id!("P3FileSystem", "managed-object-quota-p2"),
+            "run_p2_object_quota",
+            "complete_p2_object_quota_release",
+        ),
+        (
+            agent_id!("P3FileSystem", "managed-object-quota-p3"),
+            "run_p3_object_quota",
+            "complete_p3_object_quota_release",
+        ),
+    ] {
+        let result = executor
+            .invoke_and_await_agent(&component, &agent, method, data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value from {method}"))?;
+        assert_eq!(schema_string_list(result), expected);
+        let admitted_after_close = executor
+            .invoke_and_await_agent(&component, &agent, completion_method, data_value!())
+            .await?
+            .into_return_value();
+        assert_eq!(admitted_after_close, Some(SchemaValue::Bool(true)));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the privileged managed XFS test runner"]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn filesystem_downgrade_blocks_guest_until_limit_recovers(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let root = managed_xfs_test_root();
+    let context = TestContext::new(last_unique_id);
+    let (executor, quota) = start_with_mutable_agent_storage_quota_on_managed_xfs(
+        deps,
+        &context,
+        1024 * 1024,
+        root.clone(),
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .with_files(
+            "P3FileSystem",
+            &[
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/foo-copy.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
+                },
+            ],
+        )
+        .store()
+        .await?;
+    let agent = agent_id!("P3FileSystem", "managed-quota-downgrade");
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+    let initial_result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "confirm_invocation_started",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(
+        initial_result.into_return_value(),
+        Some(SchemaValue::String("executed".to_string()))
+    );
+    let runtime_path = root
+        .join(context.default_environment_id.to_string())
+        .join(component.id.to_string())
+        .join(worker_id.agent_name_encoded());
+    assert!(runtime_path.exists());
+
+    quota.set_limit(4096).await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
+        .await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while runtime_path.exists() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("over-limit runtime filesystem was not deleted");
+
+    let before_blocked_invocation = executor.oplog_max_index(&worker_id).await?;
+    let blocked_key = IdempotencyKey::fresh();
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &agent,
+            &blocked_key,
+            "confirm_invocation_started",
+            data_value!(),
+        )
+        .await?;
+    let blocked = tokio::time::timeout(
+        Duration::from_secs(1),
+        executor.invoke_and_await_agent_with_key(
+            &component,
+            &agent,
+            &blocked_key,
+            "confirm_invocation_started",
+            data_value!(),
+        ),
+    )
+    .await;
+    assert!(
+        !matches!(blocked, Ok(Ok(_))),
+        "pending invocation completed while reconstruction exceeded its installed quota"
+    );
+    let blocked_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        count_agent_invocation_pair_since(&blocked_oplog, before_blocked_invocation),
+        (0, 0),
+        "over-limit reconstruction must not start the pending guest invocation"
+    );
+
+    quota.set_limit(1024 * 1024).await?;
+    executor.resume(&worker_id, false).await?;
+    let recovered = tokio::time::timeout(
+        Duration::from_secs(20),
+        executor.invoke_and_await_agent_with_key(
+            &component,
+            &agent,
+            &blocked_key,
+            "confirm_invocation_started",
+            data_value!(),
+        ),
+    )
+    .await
+    .expect("pending invocation did not recover after raising the limit")?;
+    assert_eq!(
+        recovered.into_return_value(),
+        Some(SchemaValue::String("executed".to_string()))
+    );
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+    assert!(runtime_path.exists());
+    let recovered_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        count_agent_invocation_pair_since(&recovered_oplog, before_blocked_invocation),
+        (1, 1)
+    );
+    Ok(())
 }
 
 async fn initial_file_p3_parity_with_backend(

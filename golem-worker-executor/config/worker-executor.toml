@@ -63,14 +63,16 @@ cache_eviction_interval = "1m"
 nanos = 0
 secs = 300
 
-[filesystem_storage]
-acquire_retry_delay = "500ms"
-
 [filesystem_storage.cleanup_retry]
 max_attempts = 4
 max_delay = "250ms"
 min_delay = "25ms"
 multiplier = 4.0
+
+[filesystem_storage.filesystem_object_limit_policy]
+maximum_objects = 131072
+minimum_objects = 8192
+objects_per_gib = 32768
 
 [grpc]
 max_message_size = 33554432
@@ -446,14 +448,16 @@ without_time = false
 # nanos = 0
 # secs = 300
 # 
-# [filesystem_storage]
-# acquire_retry_delay = "500ms"
-# 
 # [filesystem_storage.cleanup_retry]
 # max_attempts = 4
 # max_delay = "250ms"
 # min_delay = "25ms"
 # multiplier = 4.0
+# 
+# [filesystem_storage.filesystem_object_limit_policy]
+# maximum_objects = 131072
+# minimum_objects = 8192
+# objects_per_gib = 32768
 # 
 # [grpc]
 # max_message_size = 33554432
@@ -802,14 +806,16 @@ without_time = false
 # nanos = 0
 # secs = 300
 # 
-# [filesystem_storage]
-# acquire_retry_delay = "500ms"
-# 
 # [filesystem_storage.cleanup_retry]
 # max_attempts = 4
 # max_delay = "250ms"
 # min_delay = "25ms"
 # multiplier = 4.0
+# 
+# [filesystem_storage.filesystem_object_limit_policy]
+# maximum_objects = 131072
+# minimum_objects = 8192
+# objects_per_gib = 32768
 # 
 # [grpc]
 # max_message_size = 33554432

@@ -28,9 +28,6 @@ use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tracing::debug;
 
-use crate::metrics::storage::record_filesystem_pool_released;
-use crate::services::active_workers::{FilesystemStoragePermit, FilesystemStorageSemaphore};
-
 // Opaque token for read-only files. This is used to ensure that the file is not deleted while it is in use.
 // Make sure to not drop this token until you are done with the file.
 #[derive(Debug, Clone)]
@@ -66,19 +63,11 @@ pub struct FileLoader {
     // We need to ensure that no one else is using the file while we are deleting it.
     // To do that, give every file a unique number.
     item_counter: AtomicU64,
-    /// Executor-wide storage semaphore. When `Some`, acquiring a new cache
-    /// entry (i.e. downloading the file for the first time) also acquires
-    /// semaphore permits proportional to the file size. The permit is embedded
-    /// in the cache entry and released automatically when the last
-    /// source lease holding that entry is dropped. Concurrent leases for the
-    /// same content do not acquire additional permits.
-    filesystem_storage_semaphore: Option<Arc<FilesystemStorageSemaphore>>,
 }
 
 impl FileLoader {
     pub fn new(
         initial_agent_files_service: Arc<InitialAgentFilesService>,
-        filesystem_storage_semaphore: Option<Arc<FilesystemStorageSemaphore>>,
         cache_parent: Option<&Path>,
     ) -> Result<Self, anyhow::Error> {
         let mut cache = tempfile::Builder::new();
@@ -93,7 +82,6 @@ impl FileLoader {
             cache: Mutex::new(HashMap::new()),
             cache_dir,
             item_counter: AtomicU64::new(0),
-            filesystem_storage_semaphore,
         })
     }
 
@@ -173,29 +161,6 @@ impl FileLoader {
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let path = self.cache_dir.path().join(counter.to_string());
 
-                // Acquire the executor-wide storage permit before touching the
-                // filesystem. This is a cache miss: we are about to write
-                // `file_size` new bytes to the shared cache directory. If the
-                // pool is exhausted we fail immediately; the worker will be
-                // retried once space is freed.
-                let filesystem_storage_permit = {
-                    if let Some(sem) = &self.filesystem_storage_semaphore {
-                        match sem.try_acquire(file_size).await {
-                            Some(permit) => Some(permit),
-                            None => {
-                                *prelocked_entry =
-                                    Err("Executor storage pool exhausted".to_string());
-                                self.cache.lock().await.remove(&key);
-                                return Err(anyhow!(
-                                    "Executor storage pool exhausted for initial component file"
-                                ));
-                            }
-                        }
-                    } else {
-                        None
-                    }
-                };
-
                 match self
                     .download_file_to_path_as_read_only(environment_id, &path, key, file_size)
                     .await
@@ -205,22 +170,10 @@ impl FileLoader {
                         *prelocked_entry = Ok(InitializedCacheEntry {
                             path: path.clone(),
                             size: file_size,
-                            filesystem_storage_permit_bytes: if filesystem_storage_permit.is_some()
-                            {
-                                // Round up to permit granularity (1 permit = 1 KB) so the
-                                // released byte count matches what was actually acquired.
-                                crate::services::active_workers::filesystem_storage_bytes_rounded_up(
-                                    file_size,
-                                )
-                            } else {
-                                0
-                            },
-                            filesystem_storage_permit,
                         });
                     }
                     Err(e) => {
                         // we failed to set the file to read-only, we need to fail the entry, remove it from the cache and return the error
-                        // filesystem_storage_permit is dropped here, returning permits to the semaphore
                         *prelocked_entry = Err(format!("Other thread failed to download: {e}"));
                         self.cache.lock().await.remove(&key);
 
@@ -317,28 +270,12 @@ type CacheEntry = Mutex<Result<InitializedCacheEntry, String>>;
 struct InitializedCacheEntry {
     path: PathBuf,
     size: u64,
-    /// Storage semaphore permit held for the lifetime of this cache entry.
-    /// Acquired on cache miss (first download); `None` when no semaphore is
-    /// configured. Only returned to the executor pool if the file is
-    /// successfully deleted
-    filesystem_storage_permit: Option<FilesystemStoragePermit>,
-    /// Byte count corresponding to `filesystem_storage_permit`, for metrics.
-    filesystem_storage_permit_bytes: u64,
 }
 
 impl InitializedCacheEntry {
     #[cfg(test)]
-    fn new_for_test(
-        path: PathBuf,
-        permit: Option<FilesystemStoragePermit>,
-        permit_bytes: u64,
-    ) -> Self {
-        Self {
-            path,
-            size: permit_bytes,
-            filesystem_storage_permit: permit,
-            filesystem_storage_permit_bytes: permit_bytes,
-        }
+    fn new_for_test(path: PathBuf) -> Self {
+        Self { path, size: 0 }
     }
 }
 
@@ -346,42 +283,24 @@ impl Drop for InitializedCacheEntry {
     fn drop(&mut self) {
         debug!("Removing file {}", self.path.display());
         std::fs::remove_file(&self.path).expect("Failed to remove cached component file — executor filesystem is in an inconsistent state");
-        // File deleted successfully — disk space is freed, return permits to the pool.
-        let permit = self.filesystem_storage_permit.take();
-        if permit.is_some() && self.filesystem_storage_permit_bytes > 0 {
-            record_filesystem_pool_released(self.filesystem_storage_permit_bytes);
-        }
-        drop(permit);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::active_workers::FilesystemStorageSemaphore;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::widen_infallible;
     use golem_service_base::replayable_stream::ReplayableStream as _;
     use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-    use std::time::Duration;
     use test_r::test;
 
     test_r::enable!();
 
-    /// Build a `FileLoader` + semaphore sharing a single in-memory blob store,
+    /// Build a `FileLoader` sharing a single in-memory blob store,
     /// and upload `content` so it can be fetched as a verified source.
-    ///
-    /// Returns `(loader, semaphore, content_hash, env_id)`.
-    async fn setup(
-        pool_bytes: usize,
-        content: &[u8],
-    ) -> (
-        FileLoader,
-        Arc<FilesystemStorageSemaphore>,
-        AgentFileContentHash,
-        EnvironmentId,
-    ) {
+    async fn setup(content: &[u8]) -> (FileLoader, AgentFileContentHash, EnvironmentId) {
         let blob = Arc::new(InMemoryBlobStorage::new());
 
         // One service instance for uploading, one for the loader — both share
@@ -389,11 +308,7 @@ mod tests {
         let upload_svc = Arc::new(InitialAgentFilesService::new(blob.clone()));
         let loader_svc = Arc::new(InitialAgentFilesService::new(blob));
 
-        let semaphore = Arc::new(FilesystemStorageSemaphore::new(
-            pool_bytes,
-            Duration::from_millis(1),
-        ));
-        let loader = FileLoader::new(loader_svc, Some(semaphore.clone()), None).unwrap();
+        let loader = FileLoader::new(loader_svc, None).unwrap();
 
         let env_id = EnvironmentId::new();
         let data: Vec<u8> = content.to_vec();
@@ -406,78 +321,28 @@ mod tests {
             .await
             .unwrap();
 
-        (loader, semaphore, hash, env_id)
+        (loader, hash, env_id)
     }
 
-    /// A single fresh source load acquires permits equal to
-    /// the file size (rounded up to KB).
     #[test]
-    async fn ro_first_load_acquires_semaphore_permits() {
-        let content = b"hello world"; // 11 bytes → rounds up to 1 KB = 1 permit
-        let pool_bytes = 4 * 1024;
-        let (loader, semaphore, hash, env_id) = setup(pool_bytes, content).await;
-
-        let _token = loader
-            .get_source(env_id, hash, content.len() as u64)
-            .await
-            .unwrap();
-
-        assert_eq!(semaphore.available_bytes(), 3 * 1024);
-    }
-
-    /// A second source lease for the same content hash must not consume
-    /// additional semaphore permits.
-    #[test]
-    async fn ro_second_load_of_same_file_does_not_consume_additional_permits() {
+    async fn source_leases_keep_the_verified_cache_entry_alive() {
         let content = b"hello world";
-        let pool_bytes = 4 * 1024;
-        let (loader, semaphore, hash, env_id) = setup(pool_bytes, content).await;
+        let (loader, hash, env_id) = setup(content).await;
 
-        let _t1 = loader
+        let source1 = loader
             .get_source(env_id, hash, content.len() as u64)
             .await
             .unwrap();
-
-        let permits_after_first = semaphore.available_bytes();
-
-        let _t2 = loader
+        let path = source1.path().to_path_buf();
+        let source2 = loader
             .get_source(env_id, hash, content.len() as u64)
             .await
             .unwrap();
-
-        assert_eq!(
-            semaphore.available_bytes(),
-            permits_after_first,
-            "second lease of cached source must not consume extra semaphore permits"
-        );
-    }
-
-    /// When all `FileUseToken`s for a cached entry are dropped, the semaphore
-    /// permits are returned to the pool.
-    #[test]
-    async fn ro_permits_released_when_all_tokens_dropped() {
-        let content = b"hello world";
-        let pool_bytes = 4 * 1024;
-        let (loader, semaphore, hash, env_id) = setup(pool_bytes, content).await;
-
-        let t1 = loader
-            .get_source(env_id, hash, content.len() as u64)
-            .await
-            .unwrap();
-        let t2 = loader
-            .get_source(env_id, hash, content.len() as u64)
-            .await
-            .unwrap();
-
-        let after_load = semaphore.available_bytes();
-        drop(t1);
-        assert_eq!(semaphore.available_bytes(), after_load, "t2 still alive");
-        drop(t2);
-        assert_eq!(
-            semaphore.available_bytes(),
-            pool_bytes as u64,
-            "all tokens dropped — full pool must be restored"
-        );
+        assert_eq!(source2.path(), path);
+        drop(source1);
+        assert!(path.exists());
+        drop(source2);
+        assert!(!path.exists());
     }
 
     /// When file deletion fails on drop (e.g. the file was already removed by
@@ -489,7 +354,7 @@ mod tests {
         let result = std::panic::catch_unwind(|| {
             let nonexistent =
                 std::path::PathBuf::from("/tmp/golem-test-nonexistent-file-12345.wasm");
-            let entry = InitializedCacheEntry::new_for_test(nonexistent, None, 0);
+            let entry = InitializedCacheEntry::new_for_test(nonexistent);
             drop(entry);
         });
         assert!(
@@ -498,35 +363,15 @@ mod tests {
         );
     }
 
-    /// When the semaphore pool is exhausted, source loading fails with an
-    /// error and the cache entry is cleaned up — a subsequent load of the same
-    /// hash (after the pool is freed) must succeed and download fresh.
     #[test]
-    async fn ro_load_fails_and_cleans_up_when_pool_exhausted() {
+    async fn source_load_rejects_incorrect_declared_size() {
         let content = b"hello world";
-        let pool_bytes = 0; // 0 bytes → 0 permits → all acquires fail immediately
-        let (loader, semaphore, hash, env_id) = setup(pool_bytes, content).await;
-
-        // Load must fail because the pool is empty.
-        let result = loader.get_source(env_id, hash, content.len() as u64).await;
-        assert!(result.is_err(), "expected failure when pool is exhausted");
-
-        // The failed load must have cleaned up the stale cache entry so the
-        // pool is still at 0 permits (no leak).
-        assert_eq!(semaphore.available_bytes(), 0);
-    }
-
-    #[test]
-    async fn source_load_rejects_incorrect_declared_size_and_releases_permits() {
-        let content = b"hello world";
-        let pool_bytes = 4 * 1024;
-        let (loader, semaphore, hash, env_id) = setup(pool_bytes, content).await;
+        let (loader, hash, env_id) = setup(content).await;
 
         let result = loader
             .get_source(env_id, hash, content.len() as u64 + 1)
             .await;
 
         assert!(result.is_err());
-        assert_eq!(semaphore.available_bytes(), pool_bytes as u64);
     }
 }
