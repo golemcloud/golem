@@ -1737,13 +1737,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         {
             let mut store_ctx = store.as_context_mut();
             let ctx = durable_worker_ctx::<Ctx, U>(store_ctx.data_mut());
-            if let Some(state) = ctx.state.open_p3_http_responses.remove(&res.rep()) {
-                if let Some(sink) = ctx.state.dropped_call_event_sender() {
-                    let _ = sink.send(DropEvent::FinishSpan {
-                        span_id: state.span.span_id,
-                        durable: false,
-                    });
-                }
+            if let Some(state) = ctx.state.open_p3_http_responses.remove(&res.rep())
+                && let Some(sink) = ctx.state.dropped_call_event_sender()
+            {
+                let _ = sink.send(DropEvent::FinishSpan {
+                    span_id: state.span.span_id,
+                    durable: false,
+                });
             }
         }
 

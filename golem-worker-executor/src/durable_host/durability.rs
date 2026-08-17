@@ -108,13 +108,14 @@ enum CustomBeginVerdict {
     Suppressed,
 }
 
+type CustomBeginCoordinator =
+    tokio::task::JoinHandle<Result<Option<OplogIndex>, WorkerExecutorError>>;
+
 pub struct CustomBeginLifecycle {
     start_result: Mutex<Option<Result<OplogIndex, String>>>,
     start_ready: Notify,
     verdict: std::sync::Mutex<Option<oneshot::Sender<CustomBeginVerdict>>>,
-    coordinator: std::sync::Mutex<
-        Option<tokio::task::JoinHandle<Result<Option<OplogIndex>, WorkerExecutorError>>>,
-    >,
+    coordinator: std::sync::Mutex<Option<CustomBeginCoordinator>>,
     initiation: std::sync::Mutex<Option<CustomChildInitiation>>,
     cleanup_sink: UnboundedSender<DropEvent>,
     settled: AtomicBool,
@@ -145,10 +146,7 @@ impl CustomBeginLifecycle {
         })
     }
 
-    fn set_coordinator(
-        &self,
-        coordinator: tokio::task::JoinHandle<Result<Option<OplogIndex>, WorkerExecutorError>>,
-    ) {
+    fn set_coordinator(&self, coordinator: CustomBeginCoordinator) {
         *self.coordinator.lock().unwrap() = Some(coordinator);
     }
 

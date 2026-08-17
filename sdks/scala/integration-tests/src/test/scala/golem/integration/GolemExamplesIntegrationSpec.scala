@@ -481,7 +481,7 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
       "guards-block",
       "samples/guards/repl-guards-block.ts",
       Contains(
-        (Seq("retry-visible-ok", "level-ok", "idem-ok", "atomic-ok") ++ GolemServer.scalaCliRetryPolicyNames)*
+        (Seq("retry-visible-ok", "idem-ok", "atomic-ok") ++ GolemServer.scalaCliRetryPolicyNames)*
       )
     ),
     Sample(

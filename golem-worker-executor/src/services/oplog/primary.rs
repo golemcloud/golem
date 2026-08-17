@@ -971,7 +971,7 @@ impl OplogReader {
             .await
         };
 
-        let entry = entries
+        entries
             .into_iter()
             .next()
             .unwrap_or_else(|| {
@@ -980,8 +980,7 @@ impl OplogReader {
                     self.key
                 )
             })
-            .1;
-        entry
+            .1
     }
 
     async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
