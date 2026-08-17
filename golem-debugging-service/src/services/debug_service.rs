@@ -957,8 +957,8 @@ fn authorize_debugging(
 mod tests {
     use super::*;
     use golem_common::base_model::component::ComponentRevision;
+    use golem_common::model::oplog::OplogIndex;
     use golem_common::model::oplog::{OplogEntry, OplogPayload, PayloadId, RawOplogPayload};
-    use golem_common::model::oplog::{OplogIndex, PersistenceLevel};
     use golem_common::model::regions::OplogRegion;
     use golem_common::model::{AgentInvocationResult, Timestamp};
     use golem_worker_executor::services::oplog::CommitLevel;
@@ -1189,8 +1189,6 @@ mod tests {
         ) -> Result<Vec<u8>, String> {
             unimplemented!()
         }
-
-        async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
     }
 
     struct TestOplog {
@@ -1301,7 +1299,5 @@ mod tests {
         ) -> Result<Vec<u8>, String> {
             unimplemented!()
         }
-
-        async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
     }
 }

@@ -14,9 +14,7 @@
 
 use crate::debug_session::{DebugSessionId, DebugSessions};
 use async_trait::async_trait;
-use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
-};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
 use golem_worker_executor::services::oplog::{
     CommitLevel, Oplog, OrderedOplogStart, PendingUpload,
 };
@@ -235,10 +233,6 @@ impl Oplog for DebugOplog {
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         self.inner.download_raw_payload(payload_id, md5_hash).await
-    }
-
-    async fn switch_persistence_level(&self, mode: PersistenceLevel) {
-        self.inner.switch_persistence_level(mode).await
     }
 
     fn inner(&self) -> Option<Arc<dyn Oplog>> {

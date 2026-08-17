@@ -1,18 +1,15 @@
 // Durable functions — wrap a non-deterministic side effect so its typed result
 // is persisted to the oplog on the live run and replayed (without re-running the
 // body) on recovery. Mirrors effect-golem's `Durability.wrap`/`wrapInfallible`
-// over the same `golem:durability@1.5.0` host interface. It is re-exported from
+// over the `golem:durability@1.6.0` host interface. It is re-exported from
 // the package root.
 
 import {
-  beginDurableFunction,
-  currentDurableExecutionState,
+  beginCustomDurableInvocation,
   type DurableFunctionType,
-  endDurableFunction,
+  LiveCustomDurableInvocation,
   observeFunctionCall,
-  persistDurableFunctionInvocation,
-  readPersistedDurableFunctionInvocation,
-} from 'golem:durability/durability@1.5.0';
+} from 'golem:durability/durability@1.6.0';
 
 import type { OplogIndex } from 'golem:api/oplog@1.5.0';
 
@@ -21,7 +18,6 @@ import type { SchemaCodec } from '../schema/codec';
 import { buildResultCodec } from '../schema/result';
 import { StandardSchemaV1 } from '../schema/standardSchema';
 import { typedSchemaValueFromWit, typedSchemaValueToWit } from '../internal/schema-model';
-import { withPersistenceLevel } from './guard';
 import { Result } from './result';
 
 /**
@@ -68,8 +64,6 @@ interface DurableFallibleSpec<Req, Ok, Err> extends DurableSpec<Req, Ok> {
   readonly error: StandardSchemaV1<Err>;
 }
 
-const PERSIST_NOTHING = { tag: 'persist-nothing' } as const;
-
 // Infallible — body returns the success value directly; a throw is an uncaught
 // defect (the worker is retried, the region left open).
 export function durable<Req, Ok>(
@@ -95,7 +89,7 @@ export function durable(
   request: unknown,
   body: () => unknown,
 ): unknown {
-  const functionName = `${spec.iface}::${spec.function}`;
+  const functionName = spec.iface ? `${spec.iface}::${spec.function}` : spec.function;
 
   const requestCodec = compileSchema(spec.requestSchema);
   const okCodec = compileSchema(spec.success);
@@ -106,18 +100,15 @@ export function durable(
     : okCodec;
 
   observeFunctionCall(spec.iface, spec.function);
-  const beginIndex = beginDurableFunction(spec.functionType);
-  const state = currentDurableExecutionState();
-  const live = state.isLive || state.persistenceLevel.tag === 'persist-nothing';
-
   const requestTsv = typedSchemaValueToWit({
     graph: requestCodec.graph,
     value: requestCodec.toValue(request),
   });
 
-  if (!live) {
+  const invocation = beginCustomDurableInvocation(functionName, requestTsv, spec.functionType);
+  if (invocation.tag === 'replayed') {
     // Replay: return the persisted response without running the body.
-    const persisted = readPersistedDurableFunctionInvocation();
+    const persisted = invocation.val;
     if (persisted.functionName !== functionName) {
       throw new Error(
         `durable replay mismatch: expected function '${functionName}', oplog has '${persisted.functionName}'`,
@@ -129,23 +120,48 @@ export function durable(
       );
     }
     const decoded = responseCodec.fromValue(typedSchemaValueFromWit(persisted.response).value);
-    endDurableFunction(spec.functionType, beginIndex, false);
     return decoded;
   }
 
-  // Live: run the body (with nested host I/O NOT re-recorded), persist the typed
-  // response, then close the region. A thrown/rejected body propagates with the
-  // region left open (no persist, no end) so recovery re-runs it.
+  // Live: run the body, persist the typed response, then finish the invocation.
+  // A thrown/rejected body drops the unfinished resource so recovery re-runs it.
+  const liveInvocation = invocation.val;
+  let consumed = false;
+  const dropUnfinished = () => {
+    if (consumed) return;
+    consumed = true;
+    const resource = liveInvocation as unknown as {
+      [Symbol.dispose]: () => void;
+    };
+    resource[Symbol.dispose]();
+  };
   const persistAndEnd = (result: unknown): unknown => {
-    const responseTsv = typedSchemaValueToWit({
-      graph: responseCodec.graph,
-      value: responseCodec.toValue(result),
-    });
-    persistDurableFunctionInvocation(functionName, requestTsv, responseTsv, spec.functionType);
-    endDurableFunction(spec.functionType, beginIndex, spec.forcedCommit ?? false);
+    let responseTsv;
+    try {
+      responseTsv = typedSchemaValueToWit({
+        graph: responseCodec.graph,
+        value: responseCodec.toValue(result),
+      });
+    } catch (error) {
+      dropUnfinished();
+      throw error;
+    }
+    consumed = true;
+    LiveCustomDurableInvocation.finish(liveInvocation, responseTsv, spec.forcedCommit ?? false);
     return result;
   };
 
-  const ran = withPersistenceLevel(PERSIST_NOTHING, body as () => unknown);
-  return ran instanceof Promise ? ran.then(persistAndEnd) : persistAndEnd(ran);
+  try {
+    const ran = body();
+    if (ran instanceof Promise) {
+      return ran.then(persistAndEnd, (error) => {
+        dropUnfinished();
+        throw error;
+      });
+    }
+    return persistAndEnd(ran);
+  } catch (error) {
+    dropUnfinished();
+    throw error;
+  }
 }

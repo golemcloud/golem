@@ -29,7 +29,6 @@ declare module 'golem:api/oplog@1.5.0' {
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
   export type ComponentRevision = golemApi150Host.ComponentRevision;
   export type OplogIndex = golemApi150Host.OplogIndex;
-  export type PersistenceLevel = golemApi150Host.PersistenceLevel;
   export type EnvironmentId = golemApi150Host.EnvironmentId;
   export type Uuid = golemApi150Host.Uuid;
   export type AgentId = golemApi150Host.AgentId;
@@ -185,6 +184,8 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     parentStartIndex?: OplogIndex;
     functionName: string;
+    invocationId?: Uuid;
+    observationalOwner?: OplogIndex;
     request?: TypedSchemaValue;
     durableFunctionType: WrappedFunctionType;
   };
@@ -467,10 +468,6 @@ declare module 'golem:api/oplog@1.5.0' {
     key: string;
     value: AttributeValue;
   };
-  export type ChangePersistenceLevelParameters = {
-    timestamp: Datetime;
-    persistenceLevel: PersistenceLevel;
-  };
   export type BeginRemoteTransactionParameters = {
     timestamp: Datetime;
     transactionId: string;
@@ -693,6 +690,8 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     parentStartIndex?: OplogIndex;
     functionName: string;
+    invocationId?: Uuid;
+    observationalOwner?: OplogIndex;
     request?: OplogPayload;
     durableFunctionType: WrappedFunctionType;
   };
@@ -998,11 +997,6 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'set-span-attribute'
     val: SetSpanAttributeParameters
   } |
-  /** Change the current persistence level */
-  {
-    tag: 'change-persistence-level'
-    val: ChangePersistenceLevelParameters
-  } |
   /** Begins a transaction operation */
   {
     tag: 'begin-remote-transaction'
@@ -1266,11 +1260,6 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'set-span-attribute'
     val: SetSpanAttributeParameters
-  } |
-  /** Change the current persistence level */
-  {
-    tag: 'change-persistence-level'
-    val: ChangePersistenceLevelParameters
   } |
   /** Begins a transaction operation */
   {

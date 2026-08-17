@@ -7,14 +7,6 @@ pub(all) struct EnvironmentId {
 } derive(Show, Eq)
 
 ///|
-/// Configurable persistence level for agents
-pub(all) enum PersistenceLevel {
-  PersistNothing
-  PersistRemoteSideEffects
-  Smart
-} derive(Show, Eq)
-
-///|
 /// Describes how to update an agent to a different component version
 pub(all) enum UpdateMode {
   AUTOMATIC
@@ -687,35 +679,6 @@ pub fn trap(reason : String) -> Unit {
   let ptr = mbt_ffi_str2ptr(reason)
   wasmImportTrap(ptr, reason.length())
   mbt_ffi_free(ptr)
-}
-
-///|
-/// Gets the agent's current persistence level.
-pub fn get_oplog_persistence_level() -> PersistenceLevel {
-  let result : Int = wasmImportGetOplogPersistenceLevel()
-
-  let lifted = match result {
-    0 => PersistenceLevel::PersistNothing
-    1 => PersistenceLevel::PersistRemoteSideEffects
-    2 => PersistenceLevel::Smart
-    _ => panic()
-  }
-  let ret = lifted
-  return ret
-}
-
-///|
-/// Sets the agent's current persistence level. This can increase the performance of execution in cases where durable
-/// execution is not required.
-pub fn set_oplog_persistence_level(
-  new_persistence_level : PersistenceLevel,
-) -> Unit {
-  let lowered = match new_persistence_level {
-    PersistNothing => 0
-    PersistRemoteSideEffects => 1
-    Smart => 2
-  }
-  wasmImportSetOplogPersistenceLevel(lowered)
 }
 
 ///|

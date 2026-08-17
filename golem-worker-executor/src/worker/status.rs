@@ -507,9 +507,6 @@ fn calculate_latest_worker_status(
             OplogEntry::SetSpanAttribute { .. } => {
                 current_status = AgentStatus::Running;
             }
-            OplogEntry::ChangePersistenceLevel { .. } => {
-                current_status = AgentStatus::Running;
-            }
             OplogEntry::BeginRemoteTransaction { .. } => {
                 current_status = AgentStatus::Running;
             }
@@ -2194,6 +2191,8 @@ mod test {
                     timestamp: Timestamp::now_utc(),
                     parent_start_index: None,
                     function_name: HostFunctionName::Custom(name.to_string()),
+                    invocation_id: None,
+                    observational_owner: None,
                     request: Some(OplogPayload::Inline(Box::new(i))),
                     durable_function_type: func_type,
                 },

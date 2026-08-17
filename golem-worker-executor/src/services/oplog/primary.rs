@@ -33,9 +33,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
-};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
 use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
 use golem_common::read_only_lock;
 use golem_common::retries::get_delay;
@@ -98,7 +96,7 @@ pub struct PrimaryOplogService {
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
     replicas: u8,
     max_operations_before_commit: u64,
-    max_operations_before_commit_in_persist_nothing: u64,
+    max_operations_before_commit_ephemeral: u64,
     max_payload_size: usize,
     retry_config: RetryConfig,
     oplogs: OpenOplogs,
@@ -109,7 +107,7 @@ impl PrimaryOplogService {
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         max_operations_before_commit: u64,
-        max_operations_before_commit_in_persist_nothing: u64,
+        max_operations_before_commit_ephemeral: u64,
         max_payload_size: usize,
         retry_config: RetryConfig,
     ) -> Self {
@@ -123,7 +121,7 @@ impl PrimaryOplogService {
             blob_storage,
             replicas,
             max_operations_before_commit,
-            max_operations_before_commit_in_persist_nothing,
+            max_operations_before_commit_ephemeral,
             max_payload_size,
             retry_config,
             oplogs: OpenOplogs::new("primary oplog"),
@@ -363,6 +361,10 @@ impl OplogService for PrimaryOplogService {
         record_oplog_call("open");
 
         let key = Self::oplog_key(&owned_agent_id.agent_id);
+        let max_operations_before_commit = match agent_mode {
+            AgentMode::Durable => self.max_operations_before_commit,
+            AgentMode::Ephemeral => self.max_operations_before_commit_ephemeral,
+        };
 
         self.oplogs
             .get_or_open(
@@ -371,8 +373,7 @@ impl OplogService for PrimaryOplogService {
                     self.indexed_storage.clone(),
                     self.blob_storage.clone(),
                     self.replicas,
-                    self.max_operations_before_commit,
-                    self.max_operations_before_commit_in_persist_nothing,
+                    max_operations_before_commit,
                     self.max_payload_size,
                     self.retry_config.clone(),
                     key,
@@ -562,7 +563,6 @@ struct CreateOplogConstructor {
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
     replicas: u8,
     max_operations_before_commit: u64,
-    max_operations_before_commit_in_persist_nothing: u64,
     max_payload_size: usize,
     retry_config: RetryConfig,
     key: String,
@@ -579,7 +579,6 @@ impl CreateOplogConstructor {
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         replicas: u8,
         max_operations_before_commit: u64,
-        max_operations_before_commit_in_persist_nothing: u64,
         max_payload_size: usize,
         retry_config: RetryConfig,
         key: String,
@@ -593,7 +592,6 @@ impl CreateOplogConstructor {
             blob_storage,
             replicas,
             max_operations_before_commit,
-            max_operations_before_commit_in_persist_nothing,
             max_payload_size,
             retry_config,
             key,
@@ -625,7 +623,6 @@ impl OplogConstructor for CreateOplogConstructor {
             self.blob_storage,
             self.replicas,
             self.max_operations_before_commit,
-            self.max_operations_before_commit_in_persist_nothing,
             self.max_payload_size,
             self.retry_config,
             self.key,
@@ -718,10 +715,6 @@ enum OplogJob {
     BlobContext {
         done: tokio::sync::oneshot::Sender<OplogBlobContext>,
     },
-    SwitchPersistenceLevel {
-        level: PersistenceLevel,
-        done: tokio::sync::oneshot::Sender<()>,
-    },
 }
 
 /// Snapshot of the state needed to upload/download oplog payload blobs outside the actor.
@@ -751,7 +744,6 @@ impl PrimaryOplog {
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         replicas: u8,
         max_operations_before_commit: u64,
-        max_operations_before_commit_in_persist_nothing: u64,
         max_payload_size: usize,
         retry_config: RetryConfig,
         key: String,
@@ -766,7 +758,6 @@ impl PrimaryOplog {
             blob_storage,
             replicas,
             max_operations_before_commit,
-            max_operations_before_commit_in_persist_nothing,
             max_payload_size,
             retry_config,
             key: key.clone(),
@@ -777,7 +768,6 @@ impl PrimaryOplog {
             agent_mode,
             account_id,
             last_added_non_hint_entry: None,
-            persistence_level: PersistenceLevel::Smart,
             pending_uploads: Vec::new(),
         };
 
@@ -895,11 +885,6 @@ impl PrimaryOplog {
                             max_payload_size: state.max_payload_size,
                         });
                     }
-                    OplogJob::SwitchPersistenceLevel { level, done } => {
-                        record_oplog_call("switch_persistence_level");
-                        state.switch_persistence_level(level);
-                        let _ = done.send(());
-                    }
                 }
             }
         });
@@ -986,7 +971,7 @@ impl OplogReader {
             .await
         };
 
-        entries
+        let entry = entries
             .into_iter()
             .next()
             .unwrap_or_else(|| {
@@ -995,7 +980,8 @@ impl OplogReader {
                     self.key
                 )
             })
-            .1
+            .1;
+        entry
     }
 
     async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
@@ -1035,10 +1021,7 @@ impl OplogReader {
             BTreeMap::new()
         };
 
-        if last_idx < self.last_committed_idx {
-            // The whole range is already committed, no further action needed
-            result
-        } else {
+        if last_idx >= self.last_committed_idx {
             // There can be some uncommitted entries in the buffer
             if !self.buffer.is_empty() {
                 let requested_start: u64 = oplog_index.into();
@@ -1059,9 +1042,9 @@ impl OplogReader {
                     }
                 }
             }
-
-            result
         }
+
+        result
     }
 
     async fn length(&self) -> u64 {
@@ -1091,7 +1074,6 @@ struct PrimaryOplogState {
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
     replicas: u8,
     max_operations_before_commit: u64,
-    max_operations_before_commit_in_persist_nothing: u64,
     max_payload_size: usize,
     retry_config: RetryConfig,
     key: String,
@@ -1102,7 +1084,6 @@ struct PrimaryOplogState {
     agent_mode: AgentMode,
     account_id: AccountId,
     last_added_non_hint_entry: Option<OplogIndex>,
-    persistence_level: PersistenceLevel,
     /// In-flight external payload uploads started by [`PrimaryOplogState::reserve_raw_payload`] but
     /// not yet known to be durable. The commit barrier in `append` waits on these before persisting
     /// any buffered entries, so no committed entry can reference a not-yet-written blob.
@@ -1291,28 +1272,14 @@ impl PrimaryOplogState {
     /// The commit itself always runs inside the actor, before the triggering job replies (see
     /// the note on [`OplogJob`]).
     fn over_commit_threshold(&self) -> bool {
-        let limit = match &self.persistence_level {
-            PersistenceLevel::PersistNothing => {
-                self.max_operations_before_commit_in_persist_nothing
-            }
-            PersistenceLevel::PersistRemoteSideEffects | PersistenceLevel::Smart => {
-                self.max_operations_before_commit
-            }
-        };
-        self.buffer.len() > limit as usize
+        self.buffer.len() > self.max_operations_before_commit as usize
     }
 
-    async fn commit(&mut self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn commit(&mut self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
         record_oplog_call("commit");
 
-        if level == CommitLevel::Always
-            || self.persistence_level != PersistenceLevel::PersistNothing
-        {
-            let entries = self.buffer.drain(..).collect::<Vec<OplogEntry>>();
-            self.append(entries).await
-        } else {
-            BTreeMap::new()
-        }
+        let entries = self.buffer.drain(..).collect::<Vec<OplogEntry>>();
+        self.append(entries).await
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
@@ -1360,10 +1327,6 @@ impl PrimaryOplogState {
             })
             .await;
         }
-    }
-
-    fn switch_persistence_level(&mut self, level: PersistenceLevel) {
-        self.persistence_level = level;
     }
 }
 
@@ -1507,10 +1470,5 @@ impl Oplog for PrimaryOplog {
             done,
         })
         .await
-    }
-
-    async fn switch_persistence_level(&self, mode: PersistenceLevel) {
-        self.run_job(|done| OplogJob::SwitchPersistenceLevel { level: mode, done })
-            .await
     }
 }

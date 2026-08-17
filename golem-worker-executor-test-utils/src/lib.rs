@@ -44,8 +44,8 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::{
     AgentError, HostResponse, HostResponseP3HttpClientConsumeBodyChunk, OplogEntry, OplogPayload,
-    PayloadId, PersistenceLevel, RawOplogPayload, TimestampedUpdateDescription,
-    host_functions::HostFunctionName, types::ObjectMetadata, types::SerializableP3HttpBodyChunk,
+    PayloadId, RawOplogPayload, TimestampedUpdateDescription, host_functions::HostFunctionName,
+    types::ObjectMetadata, types::SerializableP3HttpBodyChunk,
 };
 use golem_common::model::plan::PlanId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -2755,10 +2755,6 @@ impl Oplog for TestOplog {
                 .insert(ordered.index);
         }
         Ok(ordered)
-    }
-
-    async fn switch_persistence_level(&self, mode: PersistenceLevel) {
-        self.oplog.switch_persistence_level(mode).await;
     }
 
     async fn add_pair(

@@ -20,11 +20,11 @@ use crate::services::oplog::Oplog;
 use crate::workerctx::WorkerCtx;
 use anyhow::Context as _;
 use bytes::Bytes;
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::payload::types::{
     SerializableP3HttpClientSendResult, SerializableP3HttpRequestBodyFrame,
     SerializableResponseHeaders,
 };
-use golem_common::model::oplog::{OplogIndex, PersistenceLevel};
 use http::{HeaderMap, HeaderName, HeaderValue};
 use http_body_util::BodyExt as _;
 use http_body_util::Empty;
@@ -238,11 +238,7 @@ where
             Some(recorded_body) => {
                 let (oplog, recording_enabled) = accessor.with(|mut access| {
                     let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-                    (
-                        ctx.state.oplog.clone(),
-                        ctx.state.snapshotting_mode.is_none()
-                            && ctx.state.persistence_level != PersistenceLevel::PersistNothing,
-                    )
+                    (ctx.state.oplog.clone(), !ctx.state.snapshotting_mode)
                 });
                 if recording_enabled {
                     drain_replayed_request_body_completing_recording(

@@ -24,8 +24,6 @@ pub fn get_idempotence_mode() -> Bool
 
 pub fn get_oplog_index() -> UInt64
 
-pub fn get_oplog_persistence_level() -> PersistenceLevel
-
 pub fn get_promise(@types.PromiseId) -> GetPromiseResult
 
 pub fn get_self_metadata() -> AgentMetadata
@@ -51,8 +49,6 @@ pub fn self_card() -> Card?
 pub fn set_idempotence_mode(Bool) -> Unit
 
 pub fn set_oplog_index(UInt64) -> Unit
-
-pub fn set_oplog_persistence_level(PersistenceLevel) -> Unit
 
 pub fn trap(String) -> Unit
 
@@ -176,12 +172,6 @@ pub fn GetAgents::get_next(Self) -> Array[AgentMetadata]?
 pub(all) struct GetPromiseResult(Int) derive(Eq, Show)
 pub fn GetPromiseResult::drop(Self) -> Unit
 pub async fn GetPromiseResult::get(Self) -> FixedArray[Byte]
-
-pub(all) enum PersistenceLevel {
-  PersistNothing
-  PersistRemoteSideEffects
-  Smart
-} derive(Eq, Show)
 
 pub(all) enum RevertAgentTarget {
   RevertToOplogIndex(UInt64)

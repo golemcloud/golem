@@ -9,13 +9,12 @@ use golem_rust::wasip3::http::{client, types};
 use golem_rust::wasip3::{wit_future, wit_stream};
 use golem_rust::{
     AgentAnyFilter, AgentId, AgentMetadata, Card, CardId, Checkpoint, CheckpointResultExt,
-    ComponentId, ForkResult, FromSchema, GetAgents, IntoSchema, PersistenceLevel, PromiseId,
-    Schema, Transaction, UpdateMode, Uuid, agent_definition, agent_implementation, atomically,
-    atomically_async, derive_card, fallible_transaction, fork, generate_idempotency_key,
-    get_agent_metadata, get_oplog_index, get_promise, get_self_metadata, golem_operation,
-    infallible_transaction, install_card, oplog_commit, resolve_agent_id, resolve_agent_id_strict,
-    resolve_component_id, self_card, set_oplog_index, update_agent, use_idempotence_mode,
-    with_persistence_level, with_persistence_level_async,
+    ComponentId, ForkResult, FromSchema, GetAgents, IntoSchema, PromiseId, Schema, Transaction,
+    UpdateMode, Uuid, agent_definition, agent_implementation, atomically, atomically_async,
+    derive_card, fallible_transaction, fork, generate_idempotency_key, get_agent_metadata,
+    get_oplog_index, get_promise, get_self_metadata, golem_operation, infallible_transaction,
+    install_card, oplog_commit, resolve_agent_id, resolve_agent_id_strict, resolve_component_id,
+    self_card, set_oplog_index, update_agent, use_idempotence_mode,
 };
 use serde::{Deserialize, Serialize};
 use std::future::poll_fn;
@@ -56,8 +55,6 @@ pub trait GolemHostApi {
     fn atomic_region(&self);
     async fn atomic_region_async(&self);
     fn idempotence_flag(&self, enabled: bool);
-    fn persist_nothing(&self);
-    async fn persist_nothing_async(&self);
     async fn fallible_transaction_test(&self) -> u64;
     async fn infallible_transaction_test(&self) -> u64;
     fn fork_test(&self, input: String) -> String;
@@ -330,46 +327,6 @@ impl GolemHostApi for GolemHostApiImpl {
                 String::from_utf8(body).unwrap()
             );
         });
-    }
-
-    fn persist_nothing(&self) {
-        remote_side_effect("1");
-
-        with_persistence_level(PersistenceLevel::PersistNothing, || {
-            remote_side_effect("2");
-        });
-
-        remote_side_effect("3");
-
-        atomically(|| {
-            let decision = remote_call(1);
-            if decision {
-                panic!("crash 1");
-            }
-        });
-
-        remote_side_effect("4");
-    }
-
-    async fn persist_nothing_async(&self) {
-        remote_side_effect("1");
-
-        with_persistence_level_async(PersistenceLevel::PersistNothing, || async {
-            remote_side_effect("2");
-        })
-        .await;
-
-        remote_side_effect("3");
-
-        atomically_async(|| async {
-            let decision = remote_call(1);
-            if decision {
-                panic!("crash 1");
-            }
-        })
-        .await;
-
-        remote_side_effect("4");
     }
 
     async fn fallible_transaction_test(&self) -> u64 {

@@ -504,7 +504,7 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
     Sample(
       "observability-durability",
       "samples/observability/repl-durability.ts",
-      Contains("=== Durability Demo ===", "isLive", "persistenceLevel")
+      Contains("=== Durability Demo ===", "durable result")
     ),
 
     // --- Storage / Config ---
@@ -564,7 +564,7 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
     Sample(
       "host-api-explorer-durability",
       "samples/host-api-explorer/repl-explore-durability.ts",
-      Contains("isLive=", "persistenceLevel=")
+      Contains("DurabilityApi.durable()")
     ),
     Sample(
       "host-api-explorer-blobstore",

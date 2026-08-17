@@ -25,10 +25,14 @@ use golem_common::model::oplog::host_functions::{
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostResponseKVUnit,
-    HostResponseP3KeyvalueIncomingValueStream,
+    HostResponseP3KeyvalueIncomingValueStream, OplogIndex,
 };
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable};
+use crate::durable_host::concurrent::{
+    AccessClaimOptions, CallHandle, CallReplayOutcome, Cancellable,
+    resolve_current_observational_owner,
+};
+use crate::durable_host::durability::CustomInvocationContext;
 use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::wasi::keyvalue::types::{
@@ -126,6 +130,7 @@ impl<D> StreamProducer<D> for DeferredIncomingValueStreamProducer {
 struct IncomingValueConsumeTask<Ctx> {
     contents: Vec<u8>,
     result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Vec<u8>>>,
+    observational_owner: Option<OplogIndex>,
     /// The task's whole run is durable work with no guest-driven wait, so it
     /// stays active (no safe park point) from spawn to finish.
     _activity: TailActivity,
@@ -136,11 +141,13 @@ impl<Ctx> IncomingValueConsumeTask<Ctx> {
     fn new(
         contents: Vec<u8>,
         result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Vec<u8>>>,
+        observational_owner: Option<OplogIndex>,
         activity: TailActivity,
     ) -> Self {
         Self {
             contents,
             result_tx,
+            observational_owner,
             _activity: activity,
             _phantom: PhantomData,
         }
@@ -157,12 +164,18 @@ where
         accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
     ) -> wasmtime::Result<()> {
         let result = async {
-            let mut handle =
-                CallHandle::<P3KeyvalueTypesIncomingValueConsumeAsync, Cancellable>::start_access(
+            let mut handle = CallHandle::<
+                P3KeyvalueTypesIncomingValueConsumeAsync,
+                Cancellable,
+            >::start_access_with_options(
                     accessor,
                     accessor.getter(),
-                    HostRequestNoInput {},
                     DurableFunctionType::ReadRemote,
+                    AccessClaimOptions {
+                        observational_owner: self.observational_owner,
+                        ..Default::default()
+                    },
+                    async |_| Ok(HostRequestNoInput {}),
                 )
                 .await
                 .map_err(wasmtime::Error::from)?;
@@ -398,6 +411,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostIncomingValueWithStore<U>
         mut host: Access<U, Self>,
         self_: Resource<IncomingValue>,
     ) -> anyhow::Result<Result<StreamReader<u8>, Resource<Error>>> {
+        let custom_invocation_context = host
+            .as_context_mut()
+            .guest_task_context::<CustomInvocationContext>()?;
+        let observational_owner =
+            resolve_current_observational_owner(host.get(), custom_invocation_context.as_deref())?;
         let contents = {
             let ctx = host.get();
             let body = ctx
@@ -412,7 +430,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostIncomingValueWithStore<U>
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         let activity = host.get().tail_work_tracker().activity();
         host.spawn(IncomingValueConsumeTask::<Ctx>::new(
-            contents, result_tx, activity,
+            contents,
+            result_tx,
+            observational_owner,
+            activity,
         ));
         Ok(Ok(StreamReader::new(
             &mut host,

@@ -22,7 +22,7 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AtomicOplogIndex, DurableFunctionType, HostRequest, HostResponse, HostResponseGolemApiFork,
-    LogLevel, OplogEntry, OplogIndex, OplogPayload, PersistenceLevel,
+    LogLevel, OplogEntry, OplogIndex, OplogPayload,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
@@ -199,6 +199,15 @@ struct CursorState {
     /// such an entry it is auto-consumed like an awaited terminal instead of being handed to a
     /// positional reader; its resolver awaiter was registered at claim time.
     claimed_starts: HashSet<OplogIndex>,
+    /// Invocation IDs of custom durable roots already claimed during this replay. Custom
+    /// invocation IDs are single-use even if a malformed oplog contains more than one matching
+    /// `Start`.
+    claimed_custom_invocation_ids: HashSet<uuid::Uuid>,
+    /// Completed custom durable invocations replay as one logical subtree: once a root `Start`
+    /// is claimed, descendant `Start`s are replay-inert implementation details of that recorded
+    /// operation and are drained with their terminals while resolving the root. The map stores
+    /// every known member index for each root so nested descendants can be recognized by parent.
+    custom_subtrees: HashMap<OplogIndex, HashSet<OplogIndex>>,
 }
 
 #[allow(dead_code)]
