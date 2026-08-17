@@ -56,17 +56,32 @@ scenarios:
       recoverySecs: 300
 
     workload:
-      # Read-back is per agent, so this count is also how finely a duplicate can
-      # be localised: 50 agents means a duplicate points at one agent and the
-      # handful of suspect keys on it.
-      durableAgents: 50
-      ephemeralAgents: 20
-      scheduledAgents: 20
-      promiseAgents: 20
-      # Well under per-pod capacity on purpose. This scenario measures how the
-      # platform recovers from a restart, not how it behaves at saturation —
-      # those are different experiments and mixing them makes neither readable.
-      ratePerSec: 10
+      # Agent counts are pool sizes, not rates: each stream round-robins its
+      # operations across its pool. `ratePerSec` alone decides volume.
+      #
+      # For the two streams that are read back, the pool size is also the
+      # resolution of the duplicate detector — a duplicate localises to one
+      # agent out of N, so 200 durable agents means a finding points at one
+      # agent and the handful of suspect keys on it rather than a haystack.
+      durableAgents: 200
+      ephemeralAgents: 50
+      scheduledAgents: 50
+      promiseAgents: 50
+      # Split evenly across the four streams, so 25 ops/s each.
+      #
+      # Sized against what the same two-executor topology already absorbs in
+      # cloud-perf: latency-small drives 5000 concurrent workers and sleep holds
+      # 2000 resident. ~350 agents at 100 ops/s is comfortably below that, so
+      # this still measures recovery from a restart rather than behaviour at
+      # saturation — the two are different experiments and mixing them makes
+      # neither readable.
+      #
+      # It has to be this high to measure anything, though. Duplicate execution
+      # is only detectable for operations in flight when the shard-manager dies,
+      # so the fault window needs real work spanning it: ~6000 operations here
+      # versus ~600 at 10 ops/s. A run that reports "consistent" after barely
+      # touching the path would say almost nothing.
+      ratePerSec: 100
 
     retryPolicy:
       # Load-bearing for correctness, not just for load. One retry, transport

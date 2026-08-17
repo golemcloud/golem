@@ -80,7 +80,15 @@ const SCHEDULE_CONTEXT_SPANS: u32 = 0;
 /// Ceiling on operations in flight at once. The rate limiter sets the pace; this
 /// only stops a stalled platform from accumulating unbounded tasks during a
 /// fault, which would turn a fault window into an out-of-memory abort.
-const MAX_IN_FLIGHT: usize = 256;
+///
+/// It has to stay well above `ratePerSec`, because it doubles as a stall
+/// backstop: once the pool is exhausted the streams stop submitting, so a cap
+/// too close to the rate would silently clamp the workload the moment the
+/// platform slowed — and the fault window is exactly when that happens. At the
+/// suite's 100 ops/s this is ~10s of submissions, which absorbs a stall long
+/// enough to be interesting without letting a fully-stalled platform accumulate
+/// the ~12000 tasks a 120s attempt timeout would otherwise permit.
+const MAX_IN_FLIGHT: usize = 1024;
 
 /// Per-attempt timeout. Generous, because a shard-manager restart legitimately
 /// stalls in-flight work — but bounded, so an operation cannot outlive the
