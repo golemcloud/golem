@@ -374,9 +374,18 @@ impl ChaosSummary {
                     .observed
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "unreadable".to_string());
+                // `37..=37` is Rust's inclusive-range syntax, not something an
+                // operator should have to decode. When nothing was in doubt the
+                // bounds collapse, so say the single number instead of implying
+                // a spread that is not there.
+                let expected = if r.expected_min == r.expected_max {
+                    format!("exactly {}", r.expected_min)
+                } else {
+                    format!("{} to {}", r.expected_min, r.expected_max)
+                };
                 format!(
-                    "{} agent {}: {} (observed {observed}, expected {}..={})",
-                    r.stream, r.agent, r.verdict, r.expected_min, r.expected_max
+                    "{} agent {}: {} (observed {observed}, expected {expected})",
+                    r.stream, r.agent, r.verdict
                 )
             })
             .collect();
