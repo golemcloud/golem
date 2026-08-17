@@ -63,6 +63,15 @@ trait Counter {
     /// Performs `entries` cheap host calls under smart persistence. Used by
     /// oplog recovery benchmarks to grow replay history without CPU burn.
     fn oplog_heavy(&mut self, entries: u32) -> u32;
+
+    /// Reads the counter without touching it. Chaos scenarios compare this
+    /// against the number of increments they submitted, so the read itself must
+    /// not move the number it is measuring.
+    ///
+    /// Named `count` rather than `get` because the generated RPC client already
+    /// exposes `CounterClient::get(name)` as its constructor — an agent method
+    /// called `get` shadows it and breaks every client call site.
+    fn count(&self) -> u32;
 }
 
 struct CounterImpl {
@@ -119,6 +128,10 @@ impl Counter for CounterImpl {
             wstd::rand::get_random_bytes(&mut buf);
             self.count = self.count.wrapping_add(u32::from_le_bytes(buf));
         }
+        self.count
+    }
+
+    fn count(&self) -> u32 {
         self.count
     }
 }
@@ -191,25 +204,40 @@ impl EphemeralSingletonCounter for EphemeralSingletonCounterImpl {
     }
 }
 
-/// No-op target for schedule-density. The scheduled action under test is
+/// Near-no-op target for schedule-density. The scheduled action under test is
 /// dispatching this method, not its guest-side work.
 #[agent_definition]
 trait ScheduleCounter {
     fn new(id: String) -> Self;
-    fn poll(&self);
+
+    /// Counts the fire rather than doing nothing at all: chaos scenarios need
+    /// some durable trace that a scheduled action actually landed, and the
+    /// increment is far cheaper than anything the dispatch itself costs.
+    fn poll(&mut self);
+
+    /// How many times `poll` has fired. Read after recovery to compare against
+    /// the number of actions the driver scheduled.
+    fn polls(&self) -> u32;
 }
 
 struct ScheduleCounterImpl {
     _id: String,
+    polls: u32,
 }
 
 #[agent_implementation]
 impl ScheduleCounter for ScheduleCounterImpl {
     fn new(id: String) -> Self {
-        Self { _id: id }
+        Self { _id: id, polls: 0 }
     }
 
-    fn poll(&self) {}
+    fn poll(&mut self) {
+        self.polls += 1;
+    }
+
+    fn polls(&self) -> u32 {
+        self.polls
+    }
 }
 
 /// Schedules no-op polls on durable targets. Keeping scheduling separate from
@@ -249,7 +277,7 @@ impl ScheduleEmitter for ScheduleEmitterImpl {
         let _spans: Vec<_> = (0..context_spans)
             .map(|_| start_span("schedule-density"))
             .collect();
-        let target = ScheduleCounterClient::get(target_name);
+        let mut target = ScheduleCounterClient::get(target_name);
         target.schedule_poll(Datetime {
             seconds,
             nanoseconds,

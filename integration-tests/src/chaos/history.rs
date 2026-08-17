@@ -1,0 +1,443 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Operation history: what the driver asked the platform to do, and what came
+//! back (GOL-363).
+//!
+//! This is the raw material every other analysis reduces from, and the reason it
+//! is persisted rather than summarised in place: a later ticket adding real
+//! correctness oracles (shard overlap, exactly-once, recovered-state-matches)
+//! needs exactly this and nothing more, so it can be written as pure analysis
+//! over archived runs with no re-instrumentation and no second maintenance
+//! window.
+//!
+//! The one thing the history must get right is honesty about *doubt*. When an
+//! invocation fails at the transport level the platform may or may not have
+//! executed it, and a shard-manager kill produces precisely those. Recording
+//! them as "failed" would understate what the platform did; recording them as
+//! "done" would overstate it. They get their own outcome, and the read-back
+//! carries the doubt through as a range instead of a number.
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+/// Bumped when the on-disk shape changes incompatibly, so an archived history
+/// can be read years later by tooling that knows which shape it is looking at.
+pub const HISTORY_SCHEMA_VERSION: u32 = 1;
+
+/// Which workload stream an operation belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Stream {
+    /// Durable `Counter.increment` — the stream whose state survives a restart,
+    /// and therefore the only one that can be read back exactly.
+    Durable,
+    /// Ephemeral `EphemeralCounter.increment` — no durable state, so no
+    /// read-back is possible for it.
+    Ephemeral,
+    /// Scheduled `ScheduleEmitter.schedule_poll_at` → `ScheduleCounter.poll`.
+    Scheduled,
+    /// Promise create/complete/await.
+    Promise,
+}
+
+impl Stream {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Stream::Durable => "durable",
+            Stream::Ephemeral => "ephemeral",
+            Stream::Scheduled => "scheduled",
+            Stream::Promise => "promise",
+        }
+    }
+
+    /// Whether the stream keeps a durable count the driver can read back and
+    /// compare against what it submitted.
+    ///
+    /// Two streams do not, for different reasons, and both are named in the
+    /// summary rather than quietly omitted:
+    ///
+    /// - `Ephemeral` agents keep no state across invocations at all.
+    /// - `Promise` operations resolve a one-shot promise rather than advancing a
+    ///   counter, so there is no accumulated number to read. They are reported
+    ///   on created/completed counts and latency.
+    pub fn has_readback(self) -> bool {
+        matches!(self, Stream::Durable | Stream::Scheduled)
+    }
+
+    pub const ALL: [Stream; 4] = [
+        Stream::Durable,
+        Stream::Ephemeral,
+        Stream::Scheduled,
+        Stream::Promise,
+    ];
+}
+
+impl std::fmt::Display for Stream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Which phase of the scenario an operation was submitted in. Phase is assigned
+/// at submission, not completion: an operation submitted just before the kill
+/// and completed after it belongs to the fault phase, which is exactly the
+/// population an operator cares about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Phase {
+    Baseline,
+    Fault,
+    Recovery,
+}
+
+impl Phase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Phase::Baseline => "baseline",
+            Phase::Fault => "fault",
+            Phase::Recovery => "recovery",
+        }
+    }
+
+    pub const ALL: [Phase; 3] = [Phase::Baseline, Phase::Fault, Phase::Recovery];
+}
+
+impl std::fmt::Display for Phase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// How an operation ended, from the driver's point of view.
+///
+/// The three-way split is the whole point: `Indeterminate` is not a failure, it
+/// is an admission that the driver cannot tell, and the read-back turns that
+/// admission into the width of a range rather than a guess.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Outcome {
+    /// The invocation returned success, possibly after a same-key retry. The
+    /// platform definitely executed it — at least once.
+    Confirmed,
+    /// Every attempt failed at the transport level. The platform may or may not
+    /// have executed it; nobody can say which from the client side.
+    Indeterminate,
+    /// A definite, non-transport error came back. The platform rejected it and
+    /// did not execute it.
+    Rejected,
+}
+
+impl Outcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Outcome::Confirmed => "confirmed",
+            Outcome::Indeterminate => "indeterminate",
+            Outcome::Rejected => "rejected",
+        }
+    }
+}
+
+impl std::fmt::Display for Outcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// One submitted operation and everything the driver learned about it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationRecord {
+    /// Monotonic index within the run, so records can be ordered without
+    /// depending on wall-clock resolution.
+    pub op_id: u64,
+    pub stream: Stream,
+    pub phase: Phase,
+    /// The agent the operation targeted. Read-back is per agent, so this is
+    /// what localises a duplicate to a short list of suspect keys.
+    pub agent: String,
+    pub method: String,
+    /// The deterministic idempotency key. Deterministic so that a retry is
+    /// genuinely the *same* operation to the platform — a fresh key per attempt
+    /// would silently turn a duplicate-execution bug into a clean run.
+    pub idempotency_key: String,
+    pub submitted_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<DateTime<Utc>>,
+    /// Total attempts, including the first. `> 1` means the bounded same-key
+    /// retry fired, which makes this operation worth a closer look.
+    pub attempts: u32,
+    pub outcome: Outcome,
+    /// Wall-clock spent across all attempts, in milliseconds.
+    pub duration_ms: u64,
+    /// Value the agent returned, when it returned one. For `Counter.increment`
+    /// this is the post-increment count, which makes a retry that comes back
+    /// with a *higher* value direct proof of double execution for this one key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub returned_value: Option<u32>,
+    /// Value the first attempt returned, when it returned one and a later
+    /// attempt also did. Only populated for retried operations, because that is
+    /// the only case where comparing the two says anything.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_attempt_value: Option<u32>,
+    /// Last error seen, for the operator. Not parsed by anything.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl OperationRecord {
+    /// Whether the bounded same-key retry fired for this operation.
+    pub fn was_retried(&self) -> bool {
+        self.attempts > 1
+    }
+
+    /// Whether this operation is worth pasting into a trace query: either the
+    /// driver cannot tell what happened, or a retry means the platform saw the
+    /// same key twice.
+    pub fn is_suspect(&self) -> bool {
+        self.outcome == Outcome::Indeterminate || self.was_retried()
+    }
+
+    /// Direct per-key evidence of double execution: the first attempt and a
+    /// later same-key attempt both returned a counter value, and the later one
+    /// was higher. Idempotent handling returns the same value; a second
+    /// execution returns a larger one.
+    ///
+    /// This is the sharpest signal available, but it only exists when the first
+    /// attempt got a response at all. A killed shard-manager usually means it
+    /// did not, which is why the aggregate read-back still has to carry the
+    /// load.
+    pub fn shows_double_execution(&self) -> bool {
+        match (self.first_attempt_value, self.returned_value) {
+            (Some(first), Some(last)) => last > first,
+            _ => false,
+        }
+    }
+}
+
+/// The persisted history document.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryDocument {
+    pub schema_version: u32,
+    pub scenario_code: String,
+    /// True when the file was flushed by an abort rather than a completed run,
+    /// so a reader never mistakes a partial history for a short one.
+    pub partial: bool,
+    pub operations: Vec<OperationRecord>,
+}
+
+/// Append-only operation log, shared across the concurrent workload streams.
+///
+/// Cloneable and cheap to clone: every stream holds one and appends to the same
+/// underlying log.
+#[derive(Debug, Clone)]
+pub struct OperationHistory {
+    scenario_code: String,
+    inner: Arc<Mutex<Vec<OperationRecord>>>,
+    next_id: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl OperationHistory {
+    pub fn new(scenario_code: impl Into<String>) -> Self {
+        Self {
+            scenario_code: scenario_code.into(),
+            inner: Arc::new(Mutex::new(Vec::new())),
+            next_id: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
+
+    /// Reserves the next operation id. Called at submission so ids reflect
+    /// submission order even when completions interleave.
+    pub fn next_op_id(&self) -> u64 {
+        self.next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn record(&self, record: OperationRecord) {
+        self.inner.lock().unwrap().push(record);
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.lock().unwrap().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// A snapshot of every record so far, ordered by submission.
+    pub fn snapshot(&self) -> Vec<OperationRecord> {
+        let mut records = self.inner.lock().unwrap().clone();
+        records.sort_by_key(|r| r.op_id);
+        records
+    }
+
+    /// How many operations in `phase` ended `Confirmed`. Used to fill in the
+    /// baseline-ready signal without holding the lock across a write.
+    pub fn confirmed_in_phase(&self, phase: Phase) -> u64 {
+        self.inner
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.phase == phase && r.outcome == Outcome::Confirmed)
+            .count() as u64
+    }
+
+    pub fn document(&self, partial: bool) -> HistoryDocument {
+        HistoryDocument {
+            schema_version: HISTORY_SCHEMA_VERSION,
+            scenario_code: self.scenario_code.clone(),
+            partial,
+            operations: self.snapshot(),
+        }
+    }
+
+    /// Writes the history to `path`. Callable mid-run: an aborted scenario
+    /// flushes whatever it has, marked `partial`, so a cancelled maintenance
+    /// window still yields something to read.
+    pub fn save(&self, path: impl AsRef<Path>, partial: bool) -> anyhow::Result<()> {
+        let json = serde_json::to_string_pretty(&self.document(partial))?;
+        std::fs::write(path.as_ref(), json).map_err(|e| {
+            anyhow::anyhow!("writing operation history to {:?}: {e}", path.as_ref())
+        })?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    fn record(op_id: u64, phase: Phase, outcome: Outcome) -> OperationRecord {
+        OperationRecord {
+            op_id,
+            stream: Stream::Durable,
+            phase,
+            agent: "counter-0".to_string(),
+            method: "increment".to_string(),
+            idempotency_key: format!("chaos-s12-durable-counter-0-{op_id}"),
+            submitted_at: Utc::now(),
+            completed_at: Some(Utc::now()),
+            attempts: 1,
+            outcome,
+            duration_ms: 5,
+            returned_value: None,
+            first_attempt_value: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn snapshot_is_ordered_by_submission_not_completion() {
+        let history = OperationHistory::new("S12");
+        history.record(record(2, Phase::Fault, Outcome::Confirmed));
+        history.record(record(0, Phase::Baseline, Outcome::Confirmed));
+        history.record(record(1, Phase::Baseline, Outcome::Indeterminate));
+
+        let ids: Vec<_> = history.snapshot().iter().map(|r| r.op_id).collect();
+        assert_eq!(ids, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn confirmed_in_phase_counts_only_confirmed_operations_of_that_phase() {
+        let history = OperationHistory::new("S12");
+        history.record(record(0, Phase::Baseline, Outcome::Confirmed));
+        history.record(record(1, Phase::Baseline, Outcome::Indeterminate));
+        history.record(record(2, Phase::Baseline, Outcome::Rejected));
+        history.record(record(3, Phase::Fault, Outcome::Confirmed));
+
+        assert_eq!(history.confirmed_in_phase(Phase::Baseline), 1);
+        assert_eq!(history.confirmed_in_phase(Phase::Fault), 1);
+        assert_eq!(history.confirmed_in_phase(Phase::Recovery), 0);
+    }
+
+    #[test]
+    fn next_op_id_hands_out_distinct_increasing_ids() {
+        let history = OperationHistory::new("S12");
+        let ids: Vec<_> = (0..4).map(|_| history.next_op_id()).collect();
+        assert_eq!(ids, vec![0, 1, 2, 3]);
+    }
+
+    /// A retry returning a *higher* counter value than the first attempt is the
+    /// direct per-key proof of double execution.
+    #[test]
+    fn higher_value_on_retry_shows_double_execution() {
+        let mut r = record(0, Phase::Fault, Outcome::Confirmed);
+        r.attempts = 2;
+        r.first_attempt_value = Some(7);
+        r.returned_value = Some(8);
+        assert!(r.shows_double_execution());
+        assert!(r.is_suspect());
+    }
+
+    /// A retry returning the *same* value is proof idempotency deduplicated it.
+    #[test]
+    fn same_value_on_retry_does_not_show_double_execution() {
+        let mut r = record(0, Phase::Fault, Outcome::Confirmed);
+        r.attempts = 2;
+        r.first_attempt_value = Some(7);
+        r.returned_value = Some(7);
+        assert!(!r.shows_double_execution());
+        // Still worth a look: the platform did see the key twice.
+        assert!(r.is_suspect());
+    }
+
+    /// The common shard-manager-kill shape: the first attempt returned nothing
+    /// at all, so per-key evidence does not exist and the aggregate read-back
+    /// has to carry it.
+    #[test]
+    fn no_first_attempt_value_yields_no_per_key_evidence() {
+        let mut r = record(0, Phase::Fault, Outcome::Confirmed);
+        r.attempts = 2;
+        r.first_attempt_value = None;
+        r.returned_value = Some(8);
+        assert!(!r.shows_double_execution());
+        assert!(r.is_suspect());
+    }
+
+    /// Only the two streams that accumulate a durable count can be read back.
+    #[test]
+    fn readback_is_available_exactly_for_durable_and_scheduled() {
+        assert!(Stream::Durable.has_readback());
+        assert!(Stream::Scheduled.has_readback());
+        assert!(
+            !Stream::Ephemeral.has_readback(),
+            "ephemeral agents keep no state between invocations"
+        );
+        assert!(
+            !Stream::Promise.has_readback(),
+            "promises resolve once rather than accumulating a count"
+        );
+    }
+
+    #[test]
+    fn document_round_trips_through_json() {
+        let history = OperationHistory::new("S12");
+        history.record(record(0, Phase::Baseline, Outcome::Confirmed));
+        history.record(record(1, Phase::Fault, Outcome::Indeterminate));
+
+        let json = serde_json::to_string(&history.document(true)).unwrap();
+        let parsed: HistoryDocument = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.schema_version, HISTORY_SCHEMA_VERSION);
+        assert_eq!(parsed.scenario_code, "S12");
+        assert!(parsed.partial, "partial flag must survive the round trip");
+        assert_eq!(parsed.operations.len(), 2);
+        assert_eq!(parsed.operations[1].outcome, Outcome::Indeterminate);
+    }
+}

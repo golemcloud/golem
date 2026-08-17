@@ -21,10 +21,10 @@ use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkApi, BenchmarkConfig, BenchmarkResult, BenchmarkSuite, BenchmarkSuiteItem,
-    BenchmarkSuiteResult, DensityAction, DensityAgentModeArg, DensityPromiseRuntimeArg,
-    DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg, DensityScenarioArg,
-    DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg, DensitySectionArg,
-    DensitySharingArg, DensitySnapshottingArg, RunMetadata,
+    BenchmarkSuiteResult, ChaosAction, ChaosScenarioArg, DensityAction, DensityAgentModeArg,
+    DensityPromiseRuntimeArg, DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg,
+    DensityScenarioArg, DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg,
+    DensitySectionArg, DensitySharingArg, DensitySnapshottingArg, RunMetadata,
 };
 use golem_test_framework::config::benchmark::{TestMode, cloud_bench_run_id};
 use golem_test_framework::config::{
@@ -40,6 +40,7 @@ use integration_tests::benchmarks::density::{
 use integration_tests::benchmarks::{
     cleanup_account, cleanup_user_state, delete_workers, invoke_and_await_agent,
 };
+use integration_tests::chaos;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -325,6 +326,30 @@ async fn main() {
             )
             .await;
         }
+        BenchmarkConfig::Chaos {
+            action,
+            scenario,
+            suite,
+            prep_manifest,
+            signal_dir,
+            save_to_json,
+            save_history_to_json,
+            ..
+        } => {
+            run_chaos(
+                params.benchmark_config.mode(),
+                params.service_verbosity(),
+                params.otlp,
+                *action,
+                *scenario,
+                suite.clone(),
+                prep_manifest,
+                signal_dir.clone(),
+                save_to_json.clone(),
+                save_history_to_json.clone(),
+            )
+            .await;
+        }
     }
 
     if let Some(provider) = tracer_provider {
@@ -514,6 +539,94 @@ async fn cloud_preflight_warmup(mode: &TestMode, verbosity: Level, otlp: bool) {
     deps.kill_all().await;
 
     info!("Cloud pre-flight warmup complete.");
+}
+
+// ── Chaos subcommand handling ─────────────────────────────────────────────────
+
+/// Runs one chaos action: the one-time prep, or one scenario end to end.
+///
+/// The driver never injects the fault itself. `--signal-dir` is where the
+/// workflow tells it the fault is active and, later, cleared; see
+/// [`integration_tests::chaos::signal`] for the contract.
+#[allow(clippy::too_many_arguments)]
+async fn run_chaos(
+    mode: &TestMode,
+    verbosity: Level,
+    otlp: bool,
+    action: ChaosAction,
+    scenario: Option<ChaosScenarioArg>,
+    suite: Option<std::path::PathBuf>,
+    prep_manifest_path: &std::path::Path,
+    signal_dir: Option<std::path::PathBuf>,
+    save_to_json: Option<std::path::PathBuf>,
+    save_history_to_json: Option<std::path::PathBuf>,
+) {
+    if !matches!(mode, TestMode::Cloud { .. }) {
+        panic!("chaos scenarios require cloud mode");
+    }
+
+    let deps = BenchmarkTestDependencies::new(mode, verbosity, 0, false, otlp).await;
+
+    match action {
+        ChaosAction::Prep => {
+            let manifest = chaos::prep::run_prep(&deps)
+                .await
+                .expect("chaos-prep failed");
+            manifest
+                .save(prep_manifest_path)
+                .expect("failed to write chaos prep manifest");
+            info!("Chaos-prep manifest written to {prep_manifest_path:?}");
+        }
+        ChaosAction::Scenario => {
+            let scenario = scenario.expect("--scenario is required for --action scenario");
+            let suite_path = suite.expect("--suite is required for --action scenario");
+            let signal_dir = signal_dir.expect("--signal-dir is required for --action scenario");
+
+            let suite = chaos::ChaosSuite::load(&suite_path).expect("failed to load chaos suite");
+            let code = match scenario {
+                ChaosScenarioArg::S12 => chaos::ScenarioCode::S12,
+            };
+            let config = suite
+                .scenario(code)
+                .expect("scenario is missing or disabled in the suite")
+                .clone();
+
+            let manifest = chaos::prep::ChaosPrepManifest::load(prep_manifest_path)
+                .expect("failed to load chaos prep manifest");
+            let signals =
+                chaos::signal::FaultSignals::new(&signal_dir).expect("failed to open signal dir");
+            let outputs = chaos::scenarios::s12::OutputPaths {
+                result: save_to_json,
+                history: save_history_to_json,
+            };
+
+            let result = match code {
+                chaos::ScenarioCode::S12 => {
+                    chaos::scenarios::s12::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+            };
+
+            deps.kill_all().await;
+
+            let result = result.expect("chaos scenario failed to produce a result");
+            println!("{}", serde_json::to_string_pretty(&result).unwrap());
+
+            // The exit code is what the workflow branches on. Only the narrow
+            // set of unambiguous failures in `TerminationReason` gets here — a
+            // read-back finding is reported for an operator to judge, not
+            // turned into a red run.
+            if !result.completed {
+                eprintln!(
+                    "Chaos scenario {} did not complete: {:?}",
+                    result.scenario_code, result.termination_reason
+                );
+                std::process::exit(1);
+            }
+            return;
+        }
+    }
+
+    deps.kill_all().await;
 }
 
 // ── Density subcommand handling ───────────────────────────────────────────────

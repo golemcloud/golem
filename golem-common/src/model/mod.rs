@@ -472,6 +472,20 @@ impl RoutingTable {
     pub fn all(&self) -> HashSet<&Pod> {
         self.shard_assignments.values().collect()
     }
+
+    /// How many shards each pod currently owns.
+    ///
+    /// [`Self::all`] answers "which pods are in play", which is enough to route
+    /// but not enough to see a rebalance: after a shard-manager restart the pod
+    /// set can be unchanged while the distribution across it has moved, and that
+    /// movement is what chaos scenarios report to an operator.
+    pub fn shards_per_pod(&self) -> HashMap<&Pod, usize> {
+        let mut counts: HashMap<&Pod, usize> = HashMap::new();
+        for pod in self.shard_assignments.values() {
+            *counts.entry(pod).or_default() += 1;
+        }
+        counts
+    }
 }
 
 impl Display for RoutingTable {

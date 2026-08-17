@@ -1,0 +1,97 @@
+# Cloud chaos suite — the authoritative operational switchboard.
+#
+# This file, not the code, decides what a chaos run does. The workflow reads it
+# with yq, skips every entry whose `enabled` is false, and narrows further to the
+# subset named in its `scenarios` input. A scenario cannot be enabled here
+# without an implementation behind it, nor implemented without a switch here:
+# `suite_yaml_and_scenario_registry_are_in_sync` in
+# integration-tests/src/chaos/mod.rs fails the build if the two drift.
+#
+# Per-scenario invocation shape (the workflow fills in the cloud flags and the
+# signal directory):
+#
+#   benchmarks chaos \
+#     --action scenario \
+#     --scenario s12 \
+#     --suite golem-oss/integration-tests/chaos_suites/cloud-chaos.yaml \
+#     --prep-manifest prep-manifest.json \
+#     --signal-dir signal-dir \
+#     --save-to-json result-S12.json \
+#     --save-history-to-json history-S12.json \
+#     cloud --api-url ... --apps-base-domain ... --admin-account-token ...
+#
+# The driver never injects the fault itself: it announces baseline readiness into
+# the signal directory and waits to be told the fault is active. The `fault`
+# block below is what the *workflow* is expected to apply; the driver only
+# records it so the result says what the run was configured to provoke.
+
+name: cloud-chaos
+
+scenarios:
+  # S12 — the first complete end-to-end chaos path (GOL-363). Kills the
+  # shard-manager pod under a mixed durable/ephemeral/scheduled/promise workload
+  # and reports what the platform did about it.
+  - code: S12
+    name: shard-manager-pod-restart
+    enabled: true
+
+    fault:
+      kind: pod-kill
+      target: shard-manager
+      # `one` plus the namespace and opt-in label selectors in the PodChaos
+      # manifest are what bound the blast radius.
+      mode: one
+      durationSecs: 60
+
+    phases:
+      # Long enough for cold starts, component loading and route warm-up to
+      # settle, so recovery is measured against a warm steady state rather than
+      # against start-up.
+      baselineSecs: 300
+      # Covers the kill, the reschedule and the shard-manager coming back.
+      faultSecs: 120
+      # Time for in-flight and scheduled work to drain before read-back. Read-back
+      # compares durable state against submitted operations, so it must not run
+      # while operations are still landing.
+      recoverySecs: 300
+
+    workload:
+      # Agent counts are pool sizes, not rates: each stream round-robins its
+      # operations across its pool. `ratePerSec` alone decides volume.
+      #
+      # For the two streams that are read back, the pool size is also the
+      # resolution of the duplicate detector — a duplicate localises to one
+      # agent out of N, so 200 durable agents means a finding points at one
+      # agent and the handful of suspect keys on it rather than a haystack.
+      durableAgents: 200
+      ephemeralAgents: 50
+      scheduledAgents: 50
+      promiseAgents: 50
+      # Split evenly across the four streams, so 25 ops/s each.
+      #
+      # Sized against what the same two-executor topology already absorbs in
+      # cloud-perf: latency-small drives 5000 concurrent workers and sleep holds
+      # 2000 resident. ~350 agents at 100 ops/s is comfortably below that, so
+      # this still measures recovery from a restart rather than behaviour at
+      # saturation — the two are different experiments and mixing them makes
+      # neither readable.
+      #
+      # It has to be this high to measure anything, though. Duplicate execution
+      # is only detectable for operations in flight when the shard-manager dies,
+      # so the fault window needs real work spanning it: ~6000 operations here
+      # versus ~600 at 10 ops/s. A run that reports "consistent" after barely
+      # touching the path would say almost nothing.
+      ratePerSec: 100
+
+    retryPolicy:
+      # Load-bearing for correctness, not just for load. One retry, transport
+      # errors only, under the same idempotency key: that is what lets a retry
+      # expose duplicate execution. Retrying everything, or minting a fresh key
+      # per attempt, would make every run look clean.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    # Bounded so a signal that never arrives aborts with partial artifacts
+    # instead of holding the golem-dev maintenance window open.
+    signalTimeoutSecs: 1800
