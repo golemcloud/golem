@@ -48,6 +48,7 @@ pub mod regions;
 pub mod reports;
 pub mod retry_policy;
 pub mod security_scheme;
+pub mod tool;
 pub mod worker;
 pub mod worker_filter;
 

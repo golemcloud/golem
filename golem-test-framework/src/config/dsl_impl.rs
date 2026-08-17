@@ -34,7 +34,7 @@ use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, 
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::ParsedAgentId;
-use golem_common::model::agent::extraction::extract_agent_type_schemas;
+use golem_common::model::agent::extraction::extract_component_metadata;
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
@@ -43,7 +43,8 @@ use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::component::{
     AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
     ComponentCreation, ComponentDto, ComponentId, ComponentName, ComponentRevision,
-    ComponentUpdate,
+    ComponentUpdate, ToolDeploymentConfigCreation, ToolDeploymentConfigUpdate,
+    ToolProvisionConfigCreation, ToolProvisionConfigUpdate,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentVersion};
@@ -51,6 +52,8 @@ use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
+use golem_common::model::optional_field_update::OptionalFieldUpdate;
+use golem_common::model::tool::ToolName;
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, AgentUpdateMode, RevertWorkerTarget,
 };
@@ -70,6 +73,60 @@ use tokio_tungstenite::tungstenite::protocol::frame::Payload;
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
 use tracing::trace;
 use uuid::Uuid;
+
+fn default_tool_deployment_configs(
+    tools: &[golem_common::schema::tool::Tool],
+) -> anyhow::Result<BTreeMap<ToolName, ToolDeploymentConfigCreation>> {
+    tools
+        .iter()
+        .map(|tool| {
+            let name = tool
+                .name()
+                .ok_or_else(|| anyhow!("Discovered tool has no root command name"))?;
+            Ok((
+                ToolName::try_from(name).map_err(anyhow::Error::msg)?,
+                ToolDeploymentConfigCreation {
+                    provision: ToolProvisionConfigCreation {
+                        config: serde_json::json!({}).into(),
+                        env: BTreeMap::new(),
+                        plugin_installations: Vec::new(),
+                        files: BTreeMap::new(),
+                    },
+                    environment_binding: None,
+                    agent_bindings: BTreeMap::new(),
+                },
+            ))
+        })
+        .collect()
+}
+
+fn default_tool_deployment_config_updates(
+    tools: &[golem_common::schema::tool::Tool],
+) -> anyhow::Result<BTreeMap<ToolName, ToolDeploymentConfigUpdate>> {
+    tools
+        .iter()
+        .map(|tool| {
+            let name = tool
+                .name()
+                .ok_or_else(|| anyhow!("Discovered tool has no root command name"))?;
+            Ok((
+                ToolName::try_from(name).map_err(anyhow::Error::msg)?,
+                ToolDeploymentConfigUpdate {
+                    provision: Some(ToolProvisionConfigUpdate {
+                        config: None,
+                        env: None,
+                        plugin_updates: Vec::new(),
+                        files_to_add_or_update: BTreeMap::new(),
+                        files_to_remove: Vec::new(),
+                        file_permission_updates: BTreeMap::new(),
+                    }),
+                    environment_binding: OptionalFieldUpdate::NoChange,
+                    agent_bindings: None,
+                },
+            ))
+        })
+        .collect()
+}
 
 pub struct NameResolutionCache {
     app_names: Cache<ApplicationId, (), ApplicationName, String>,
@@ -227,7 +284,9 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
         let client = self.deps.registry_service().client(&self.token).await;
 
-        let agent_types = extract_agent_type_schemas(&source_path, false, true).await?;
+        let extracted_metadata = extract_component_metadata(&source_path, false, true).await?;
+        let agent_types = extracted_metadata.agent_types;
+        let tools = extracted_metadata.tools;
         for agent_type in &agent_types {
             agent_type_provision_configs
                 .entry(agent_type.type_name.clone())
@@ -255,6 +314,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     component_name,
                     agent_types,
                     agent_type_provision_configs,
+                    tool_deployment_configs: default_tool_deployment_configs(&tools)?,
+                    tools,
                 },
                 File::open(source_path).await?,
                 maybe_files_archive,
@@ -305,21 +366,20 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         let updated_wasm = if let Some(wasm_name) = wasm_name {
             let source_path: PathBuf = component_directory.join(format!("{wasm_name}.wasm"));
 
-            let agent_types = extract_agent_type_schemas(&source_path, false, true).await?;
+            let extracted_metadata = extract_component_metadata(&source_path, false, true).await?;
 
-            Some((File::open(source_path).await?, agent_types))
+            Some((File::open(source_path).await?, extracted_metadata))
         } else {
             None
         };
 
-        let agent_type_provision_config_updates = if let Some((_wasm, agent_types)) = &updated_wasm
-        {
+        let agent_type_provision_config_updates = if let Some((_wasm, metadata)) = &updated_wasm {
             let previous_component = client
                 .get_component_revision(&component_id.0, previous_revision.get())
                 .await?;
             let mut updates = agent_type_provision_config_updates.unwrap_or_default();
 
-            for agent_type in agent_types {
+            for agent_type in &metadata.agent_types {
                 if !previous_component
                     .metadata
                     .agent_type_provision_configs()
@@ -349,11 +409,20 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     current_revision: previous_revision,
                     agent_types: updated_wasm
                         .as_ref()
-                        .map(|(_wasm, agent_types)| agent_types.clone()),
+                        .map(|(_wasm, metadata)| metadata.agent_types.clone()),
                     agent_type_provision_config_updates,
+                    tools: updated_wasm
+                        .as_ref()
+                        .map(|(_wasm, metadata)| metadata.tools.clone()),
+                    tool_deployment_config_updates: updated_wasm
+                        .as_ref()
+                        .map(|(_wasm, metadata)| {
+                            default_tool_deployment_config_updates(&metadata.tools)
+                        })
+                        .transpose()?,
                     allow_incompatible_config: false,
                 },
-                updated_wasm.map(|(wasm, _agent_types)| wasm),
+                updated_wasm.map(|(wasm, _metadata)| wasm),
                 {
                     let (_tmp_dir, maybe_new_files_archive) = if !files_for_archive.is_empty() {
                         let (tmp_dir, new_files_archive) =

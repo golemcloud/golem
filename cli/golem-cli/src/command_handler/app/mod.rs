@@ -1047,7 +1047,7 @@ impl AppCommandHandler {
         let deployable_manifest_components = self
             .ctx
             .component_handler()
-            .deployable_manifest_components()
+            .deployable_manifest_components(&environment)
             .await?;
 
         let deployable_manifest_http_api_deployments = self

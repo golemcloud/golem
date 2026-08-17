@@ -16,6 +16,8 @@ use crate::bridge_gen::fixtures::{
     agent, def, field, local_config, method, multi_agent_wrapper_2_types, named_field, ref_to,
     single_agent_wrapper_types, variant_case,
 };
+use crate::bridge_gen::schema_graph_literals::canonical_carrier_shape;
+use crate::bridge_gen::schema_graph_test_fixture::exhaustive_schema_graph;
 use crate::bridge_gen::type_naming::test_type_naming;
 use camino::Utf8Path;
 use golem_cli::bridge_gen::BridgeGenerator;
@@ -32,9 +34,8 @@ use golem_cli::sdk_overrides::workspace_root;
 use golem_common::model::agent::{AgentConfigSource, AgentMode};
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::schema_type::{
-    BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NumericBound, NumericRestrictions,
-    PathDirection, PathKind, PathSpec, QuantitySpec, QuantityValue, QuotaTokenSpec, SecretSpec,
-    TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
+    BinaryRestrictions, DiscriminatorRule, NumericBound, NumericRestrictions, PathDirection,
+    PathKind, PathSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
 };
 use golem_common::schema::tool::{
     CommandBody, CommandIndex, CommandNode, CommandTree, Doc, ErrorCase, ErrorKind, Formatter,
@@ -902,156 +903,9 @@ fn ephemeral_guest_methods_keep_names_of_absent_lifecycle_helpers() {
 }
 
 #[test]
-fn schema_graph_literal_moon_checks_as_sdk_model() {
-    let graph = SchemaGraph {
-        defs: vec![def(
-            "original.Type-ID",
-            SchemaType::record(vec![named_field(
-                "next",
-                SchemaType::option(ref_to("original.Type-ID")),
-            )]),
-        )],
-        root: SchemaType::record(vec![
-            named_field(
-                "numeric",
-                SchemaType::S64 {
-                    restrictions: Some(NumericRestrictions {
-                        min: Some(NumericBound::Signed(-9)),
-                        max: Some(NumericBound::Signed(12)),
-                        unit: Some("ms".into()),
-                    }),
-                    metadata: MetadataEnvelope {
-                        doc: Some("root docs".into()),
-                        aliases: vec!["alias".into()],
-                        examples: vec!["42".into()],
-                        deprecated: Some("old".into()),
-                        role: Some(Role::Other("custom".into())),
-                    },
-                },
-            ),
-            named_field(
-                "text",
-                SchemaType::text(TextRestrictions {
-                    languages: Some(vec!["en".into()]),
-                    min_length: Some(1),
-                    max_length: Some(8),
-                    regex: Some("^[a-z]+$".into()),
-                }),
-            ),
-            named_field(
-                "binary",
-                SchemaType::binary(BinaryRestrictions {
-                    mime_types: Some(vec!["image/png".into()]),
-                    min_bytes: Some(1),
-                    max_bytes: Some(1024),
-                }),
-            ),
-            named_field(
-                "path",
-                SchemaType::path(PathSpec {
-                    direction: PathDirection::InOut,
-                    kind: PathKind::File,
-                    allowed_mime_types: Some(vec!["text/plain".into()]),
-                    allowed_extensions: Some(vec![".txt".into()]),
-                }),
-            ),
-            named_field(
-                "url",
-                SchemaType::url(UrlRestrictions {
-                    allowed_schemes: Some(vec!["https".into()]),
-                    allowed_hosts: Some(vec!["example.com".into()]),
-                }),
-            ),
-            named_field(
-                "quantity",
-                SchemaType::quantity(QuantitySpec {
-                    base_unit: "m".into(),
-                    allowed_suffixes: vec!["km".into()],
-                    min: Some(QuantityValue {
-                        mantissa: -2,
-                        scale: 1,
-                        unit: "m".into(),
-                    }),
-                    max: Some(QuantityValue {
-                        mantissa: 9,
-                        scale: 0,
-                        unit: "m".into(),
-                    }),
-                }),
-            ),
-            named_field(
-                "union",
-                SchemaType::union(UnionSpec {
-                    branches: vec![
-                        UnionBranch {
-                            tag: "prefix".into(),
-                            body: SchemaType::string(),
-                            discriminator: DiscriminatorRule::Prefix { prefix: "a".into() },
-                            metadata: MetadataEnvelope::default(),
-                        },
-                        UnionBranch {
-                            tag: "suffix".into(),
-                            body: SchemaType::string(),
-                            discriminator: DiscriminatorRule::Suffix { suffix: "z".into() },
-                            metadata: MetadataEnvelope::default(),
-                        },
-                        UnionBranch {
-                            tag: "contains".into(),
-                            body: SchemaType::string(),
-                            discriminator: DiscriminatorRule::Contains {
-                                substring: "x".into(),
-                            },
-                            metadata: MetadataEnvelope::default(),
-                        },
-                        UnionBranch {
-                            tag: "regex".into(),
-                            body: SchemaType::string(),
-                            discriminator: DiscriminatorRule::Regex { regex: "^r".into() },
-                            metadata: MetadataEnvelope::default(),
-                        },
-                        UnionBranch {
-                            tag: "equals".into(),
-                            body: SchemaType::record(vec![named_field(
-                                "kind",
-                                SchemaType::string(),
-                            )]),
-                            discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
-                                field_name: "kind".into(),
-                                literal: Some("value".into()),
-                            }),
-                            metadata: MetadataEnvelope::default(),
-                        },
-                        UnionBranch {
-                            tag: "absent".into(),
-                            body: SchemaType::record(vec![named_field(
-                                "other",
-                                SchemaType::string(),
-                            )]),
-                            discriminator: DiscriminatorRule::FieldAbsent {
-                                field_name: "kind".into(),
-                            },
-                            metadata: MetadataEnvelope::default(),
-                        },
-                    ],
-                }),
-            ),
-            named_field(
-                "secret",
-                SchemaType::secret(SecretSpec {
-                    inner: Box::new(SchemaType::string()),
-                    category: Some("api-key".into()),
-                }),
-            ),
-            named_field(
-                "quota",
-                SchemaType::quota_token(QuotaTokenSpec {
-                    resource_name: Some("cpu".into()),
-                }),
-            ),
-            named_field("future", SchemaType::future(Some(SchemaType::u32()))),
-            named_field("stream", SchemaType::stream(None)),
-        ]),
-    };
+fn schema_graph_literal_moon_executes_and_round_trips_through_wit() {
+    let graph = exhaustive_schema_graph();
+    let (node_count, root, defs) = canonical_carrier_shape();
     let dir = TempDir::new().unwrap();
     let sdk_path = workspace_root().unwrap().join("sdks/moonbit/golem_sdk");
     std::fs::create_dir(dir.path().join("client")).unwrap();
@@ -1081,18 +935,33 @@ fn schema_graph_literal_moon_checks_as_sdk_model() {
         ),
     )
     .unwrap();
+    let def_assertions = defs
+        .iter()
+        .map(|(id, body)| {
+            format!("  assert_true(wire.defs.any(def => def.id == {id:?} && def.body == {body}))")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(
+        dir.path().join("client/literal_test.mbt"),
+        format!(
+            "test \"emitted graph matches canonical WIT carrier shape and round-trips\" {{\n  let graph = emitted_graph()\n  let wire = @model.schema_graph_to_wit(graph)\n  assert_eq(wire.type_nodes.length(), {node_count})\n  assert_eq(wire.root, {root})\n  assert_eq(wire.defs.length(), {})\n{def_assertions}\n  assert_eq(@model.schema_graph_from_wit(wire), emitted_graph())\n}}\n",
+            defs.len()
+        ),
+    )
+    .unwrap();
 
     let output = std::process::Command::new("moon")
         .arg("-C")
         .arg(dir.path())
-        .arg("check")
+        .arg("test")
         .arg("--target")
         .arg("wasm")
         .output()
         .expect("failed to run moon; is it installed?");
     assert!(
         output.status.success(),
-        "schema graph literal moon check failed:\nstdout:\n{}\nstderr:\n{}",
+        "schema graph literal MoonBit test failed:\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

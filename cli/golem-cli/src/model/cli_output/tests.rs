@@ -708,6 +708,8 @@ fn component_get_and_list_structured_outputs_mask_secret_payloads() {
                 "component-env-secret",
                 "component-config-secret",
                 "component-plugin-secret",
+                "tool-env-secret",
+                "tool-config-secret",
             ],
         );
         assert!(value.to_string().contains("***"));
@@ -803,6 +805,7 @@ fn sample_agent_metadata_view() -> crate::model::agent::AgentMetadataView {
 
 fn sample_component_view() -> crate::model::component::ComponentView {
     let agent_type_name = golem_common::model::agent::AgentTypeName("agent".to_string());
+    let tool_name = golem_common::model::tool::ToolName::try_from("grep").unwrap();
     crate::model::component::ComponentView {
         component_name: golem_common::model::component::ComponentName("component".to_string()),
         component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
@@ -855,6 +858,38 @@ fn sample_component_view() -> crate::model::component::ComponentView {
                     created_at: fixed_datetime(),
                     expires_at: None,
                 },
+            },
+        )]),
+        tools: BTreeMap::from([(
+            tool_name,
+            golem_common::model::tool::ToolDeploymentMetadata {
+                definition: golem_common::schema::tool::Tool {
+                    version: "1.0.0".to_string(),
+                    commands: golem_common::schema::tool::CommandTree {
+                        nodes: vec![golem_common::schema::tool::CommandNode {
+                            name: "grep".to_string(),
+                            aliases: Vec::new(),
+                            doc: golem_common::schema::tool::Doc::default(),
+                            globals: golem_common::schema::tool::Globals::default(),
+                            subcommands: Vec::new(),
+                            body: None,
+                        }],
+                    },
+                    schema: golem_common::schema::SchemaGraph::empty(),
+                },
+                provision: golem_common::model::tool::ToolProvisionConfig {
+                    config: golem_common::model::json::NormalizedJsonValue::new(json!({
+                        "apiToken": "tool-config-secret"
+                    })),
+                    env: BTreeMap::from([(
+                        "TOOL_TOKEN".to_string(),
+                        "tool-env-secret".to_string(),
+                    )]),
+                    plugins: Vec::new(),
+                    files: Vec::new(),
+                },
+                environment_binding: None,
+                agent_bindings: BTreeMap::new(),
             },
         )]),
     }
@@ -977,6 +1012,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
                     "deploy-config-secret-old",
                 )),
             )]),
+            tool_deployment_configs: BTreeMap::new(),
         }),
     );
     new.components.insert(
@@ -990,6 +1026,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
                     "deploy-config-secret-new",
                 )),
             )]),
+            tool_deployment_configs: BTreeMap::new(),
         }),
     );
 
@@ -1143,6 +1180,56 @@ fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
                 .collect::<Vec<_>>()
         );
     }
+}
+
+#[test]
+fn cli_output_schema_rejects_invalid_tool_definition() {
+    let schema = load_command_output_schema();
+    let validator = jsonschema::options()
+        .build(&schema)
+        .expect("command output schema must be a valid JSON schema");
+    let mut output = to_structured_output_value(crate::model::component::ComponentGetView(
+        sample_component_view(),
+    ))
+    .expect("component.get should serialize");
+
+    *output
+        .pointer_mut("/tools/grep/definition")
+        .expect("component.get should contain the sample tool definition") = json!({});
+
+    assert!(
+        !validator.is_valid(&output),
+        "schema must reject an untyped tool definition"
+    );
+}
+
+// PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
+#[test]
+fn cli_output_schema_rejects_out_of_range_tool_command_index() {
+    let schema = load_command_output_schema();
+    let validator = jsonschema::options()
+        .build(&schema)
+        .expect("command output schema must be a valid JSON schema");
+    let mut output = to_structured_output_value(crate::model::component::ComponentGetView(
+        sample_component_view(),
+    ))
+    .expect("component.get should serialize");
+
+    *output
+        .pointer_mut("/tools/grep/definition/commands/nodes/0/subcommands")
+        .expect("component.get should contain the sample tool command") = json!([2147483648_u64]);
+
+    assert!(
+        serde_json::from_value::<golem_common::schema::tool::Tool>(
+            output["tools"]["grep"]["definition"].clone()
+        )
+        .is_err(),
+        "fixture must exceed the typed CommandIndex range"
+    );
+    assert!(
+        !validator.is_valid(&output),
+        "schema must reject a command index that cannot deserialize as i32"
+    );
 }
 
 #[test]
@@ -4234,6 +4321,7 @@ fn arb_component_view() -> BoxedStrategy<crate::model::component::ComponentView>
                     exports,
                     agent_types,
                     agent_type_provision_configs,
+                    tools: BTreeMap::new(),
                 }
             },
         )
@@ -4461,6 +4549,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                             },
                         ),
                     )]),
+                    tool_deployment_configs: BTreeMap::new(),
                 };
 
                 let new_component = golem_common::model::diff::Component {
@@ -4493,6 +4582,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                             },
                         ),
                     )]),
+                    tool_deployment_configs: BTreeMap::new(),
                 };
 
                 current.components.insert(

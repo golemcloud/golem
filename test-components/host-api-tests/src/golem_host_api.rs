@@ -1,5 +1,6 @@
 use crate::raw_http;
 use crate::raw_http::Method;
+use golem_rust::bindings::golem::tool::host as tool_host;
 use golem_rust::retry::{
     CountBoxConfig, NamedRetryPolicy, PolicyNode, PredicateNode, RetryPolicy, RetryPredicate,
     get_retry_policies, get_retry_policy_by_name, remove_retry_policy, set_retry_policy,
@@ -41,6 +42,8 @@ pub struct MidInvocationCardRevocationResult {
     pub release_observed: bool,
     pub derive_succeeded: bool,
 }
+
+type ToolSummary = (String, String, String, Vec<String>, u64, u64);
 
 #[agent_definition()]
 pub trait GolemHostApi {
@@ -87,16 +90,75 @@ pub trait GolemHostApi {
     fn set_simple_count_retry_policy(&self, name: String, priority: u32, max_retries: u32);
     fn remove_named_retry_policy(&self, name: String);
     fn has_retry_policy(&self, name: String) -> bool;
+
+    fn get_all_tools(&self) -> Vec<ToolSummary>;
+    fn get_tool(&self, name: String) -> Option<ToolSummary>;
+    fn record_all_tools(&mut self) -> Vec<ToolSummary>;
+    fn get_recorded_tools(&self) -> Vec<ToolSummary>;
 }
 
 pub struct GolemHostApiImpl {
     _name: String,
+    recorded_tools: Option<Vec<ToolSummary>>,
+}
+
+fn summarize_tool(tool: tool_host::RegisteredTool) -> ToolSummary {
+    let (name, summary, aliases) = tool
+        .definition
+        .commands
+        .nodes
+        .first()
+        .map(|node| {
+            (
+                node.name.clone(),
+                node.doc.summary.clone(),
+                node.aliases.clone(),
+            )
+        })
+        .unwrap_or_default();
+    let uuid = tool.implemented_by.uuid;
+    (
+        name,
+        tool.definition.version,
+        summary,
+        aliases,
+        uuid.high_bits,
+        uuid.low_bits,
+    )
+}
+
+#[agent_definition()]
+pub trait ToolDiscoveryOther {
+    fn new(name: String) -> Self;
+
+    fn get_all_tools(&self) -> Vec<ToolSummary>;
+}
+
+pub struct ToolDiscoveryOtherImpl {
+    _name: String,
+}
+
+#[agent_implementation]
+impl ToolDiscoveryOther for ToolDiscoveryOtherImpl {
+    fn new(name: String) -> Self {
+        Self { _name: name }
+    }
+
+    fn get_all_tools(&self) -> Vec<ToolSummary> {
+        tool_host::get_all_tools()
+            .into_iter()
+            .map(summarize_tool)
+            .collect()
+    }
 }
 
 #[agent_implementation]
 impl GolemHostApi for GolemHostApiImpl {
     fn new(name: String) -> Self {
-        Self { _name: name }
+        Self {
+            _name: name,
+            recorded_tools: None,
+        }
     }
 
     fn resolve_component(&self) -> ResolveComponentResult {
@@ -595,6 +657,29 @@ impl GolemHostApi for GolemHostApiImpl {
 
     fn has_retry_policy(&self, name: String) -> bool {
         get_retry_policy_by_name(&name).is_some()
+    }
+
+    fn get_all_tools(&self) -> Vec<ToolSummary> {
+        tool_host::get_all_tools()
+            .into_iter()
+            .map(summarize_tool)
+            .collect()
+    }
+
+    fn get_tool(&self, name: String) -> Option<ToolSummary> {
+        tool_host::get_tool(&name).map(summarize_tool)
+    }
+
+    fn record_all_tools(&mut self) -> Vec<ToolSummary> {
+        let tools = self.get_all_tools();
+        self.recorded_tools = Some(tools.clone());
+        tools
+    }
+
+    fn get_recorded_tools(&self) -> Vec<ToolSummary> {
+        self.recorded_tools
+            .clone()
+            .expect("record_all_tools must be called before get_recorded_tools")
     }
 }
 

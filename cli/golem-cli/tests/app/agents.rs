@@ -745,6 +745,9 @@ async fn test_rust_tool_guest_bridge_e2e() {
                   tools:
                     - tool-bridge:provider/echo
 
+            tools:
+              echo: {{}}
+
             bridge:
               rust:
                 internal:
@@ -868,15 +871,15 @@ async fn test_rust_tool_guest_bridge_e2e() {
         ])
         .await;
 
-    // The worker executor's `golem:tool/host` is not implemented yet:
+    // The worker executor's `golem:tool/host` invocation is not implemented yet:
     // `tool-rpc.new` traps (before `invoke-and-await` is ever reached), so the
     // invocation must fail with the stub error, proving the generated client
     // reaches the executor's tool host. Once the tool runtime lands, replace
     // this with:
     //     assert!(outputs.success_or_dump());
     //     assert!(outputs.stdout_contains("ok:echo:hello"));
-    let invocation_reached_tool_host_stub =
-        !outputs.success() && outputs.stderr_contains("golem:tool/host is not yet implemented");
+    let invocation_reached_tool_host_stub = !outputs.success()
+        && outputs.stderr_contains("golem:tool/host tool invocation is not yet implemented");
     if !invocation_reached_tool_host_stub {
         outputs.dump();
     }
@@ -884,6 +887,111 @@ async fn test_rust_tool_guest_bridge_e2e() {
         invocation_reached_tool_host_stub,
         "expected the tool invocation to fail with the executor's golem:tool/host stub error"
     );
+}
+
+/// Deploys a single component whose discovered metadata contains both an agent
+/// type and a tool definition. Runtime tool discovery and invocation are
+/// intentionally outside this test's scope.
+#[test]
+#[timeout("15 minutes")]
+async fn test_mixed_agent_and_tool_component_deployment_e2e() {
+    let mut ctx = TestContext::new();
+    let app_name = "mixed-agent-tool-deployment";
+
+    ctx.start_server().await;
+
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "mixed-agent-tool-deployment:provider",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! { r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: mixed-agent-tool-deployment
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              mixed-agent-tool-deployment:provider:
+                dir: .
+                templates: rust
+
+            agents:
+              MixedAgent: {{}}
+
+            tools:
+              echo: {{}}
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("src/counter_agent.rs"),
+        indoc! { r#"
+            use golem_rust::{
+                agent_definition, agent_implementation, tool_definition, tool_implementation,
+            };
+
+            #[agent_definition]
+            pub trait MixedAgent {
+                fn new(name: String) -> Self;
+                fn name(&self) -> String;
+            }
+
+            struct MixedAgentImpl {
+                name: String,
+            }
+
+            #[agent_implementation]
+            impl MixedAgent for MixedAgentImpl {
+                fn new(name: String) -> Self {
+                    Self { name }
+                }
+
+                fn name(&self) -> String {
+                    self.name.clone()
+                }
+            }
+
+            #[tool_definition(version = "1.0.0")]
+            pub trait Echo {
+                fn echo(&self, message: String) -> String;
+            }
+
+            struct EchoImpl;
+
+            #[tool_implementation]
+            impl Echo for EchoImpl {
+                fn echo(&self, message: String) -> String {
+                    format!("echo:{message}")
+                }
+            }
+        "# },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
 }
 
 /// End-to-end test for the Rust guest agent bridge: a provider component
@@ -1250,6 +1358,9 @@ async fn test_ts_tool_guest_bridge_e2e() {
                   tools:
                     - ts-tool-bridge:provider/echo
 
+            tools:
+              echo: {{}}
+
             bridge:
               ts:
                 internal:
@@ -1309,8 +1420,8 @@ async fn test_ts_tool_guest_bridge_e2e() {
             "\"hello\"",
         ])
         .await;
-    let reached_tool_host_stub =
-        !outputs.success() && outputs.stderr_contains("golem:tool/host is not yet implemented");
+    let reached_tool_host_stub = !outputs.success()
+        && outputs.stderr_contains("golem:tool/host tool invocation is not yet implemented");
     if !reached_tool_host_stub {
         outputs.dump();
     }
@@ -1528,6 +1639,9 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
                   tools:
                     - moonbit-tool-bridge:provider/echo
 
+            tools:
+              echo: {{}}
+
             bridge:
               moonbit:
                 internal:
@@ -1627,8 +1741,8 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
             "\"hello\"",
         ])
         .await;
-    let reached_tool_host_stub =
-        !outputs.success() && outputs.stderr_contains("golem:tool/host is not yet implemented");
+    let reached_tool_host_stub = !outputs.success()
+        && outputs.stderr_contains("golem:tool/host tool invocation is not yet implemented");
     if !reached_tool_host_stub {
         outputs.dump();
     }
