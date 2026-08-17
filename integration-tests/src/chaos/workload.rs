@@ -19,7 +19,7 @@
 //!
 //! | Stream | Operation | Read-back |
 //! | -- | -- | -- |
-//! | durable | `Counter.increment` | `Counter.get` |
+//! | durable | `Counter.increment` | `Counter.count` |
 //! | ephemeral | `EphemeralCounter.increment` | none — no state survives |
 //! | scheduled | `ScheduleEmitter.schedule_poll_at` → `ScheduleCounter.poll` | `ScheduleCounter.polls` |
 //! | promise | `PromiseAgent.get_promise` + `complete_promise` | none — one-shot |
@@ -580,12 +580,12 @@ pub async fn read_counter(ctx: &WorkloadContext, agent: &str) -> Result<u64, Str
     let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
     match ctx
         .user
-        .invoke_and_await_agent(&ctx.counters, &parsed, "get", data_value!())
+        .invoke_and_await_agent(&ctx.counters, &parsed, "count", data_value!())
         .await
     {
         Ok(value) => as_u32(value)
             .map(u64::from)
-            .ok_or_else(|| "get returned no value".to_string()),
+            .ok_or_else(|| "count returned no value".to_string()),
         Err(e) => Err(format!("{e:#}")),
     }
 }

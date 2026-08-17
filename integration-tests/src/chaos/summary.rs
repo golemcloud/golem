@@ -33,7 +33,7 @@
 //! ```text
 //! expectedMin = confirmed                  // every confirmed op took effect once
 //! expectedMax = confirmed + indeterminate  // every in-doubt op landed too
-//! observed    = Counter::get(agent)
+//! observed    = Counter::count(agent)
 //! ```
 //!
 //! - `observed > expectedMax` → **duplicate execution**: something ran twice

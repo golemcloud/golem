@@ -67,7 +67,11 @@ trait Counter {
     /// Reads the counter without touching it. Chaos scenarios compare this
     /// against the number of increments they submitted, so the read itself must
     /// not move the number it is measuring.
-    fn get(&self) -> u32;
+    ///
+    /// Named `count` rather than `get` because the generated RPC client already
+    /// exposes `CounterClient::get(name)` as its constructor — an agent method
+    /// called `get` shadows it and breaks every client call site.
+    fn count(&self) -> u32;
 }
 
 struct CounterImpl {
@@ -127,7 +131,7 @@ impl Counter for CounterImpl {
         self.count
     }
 
-    fn get(&self) -> u32 {
+    fn count(&self) -> u32 {
         self.count
     }
 }
@@ -273,7 +277,7 @@ impl ScheduleEmitter for ScheduleEmitterImpl {
         let _spans: Vec<_> = (0..context_spans)
             .map(|_| start_span("schedule-density"))
             .collect();
-        let target = ScheduleCounterClient::get(target_name);
+        let mut target = ScheduleCounterClient::get(target_name);
         target.schedule_poll(Datetime {
             seconds,
             nanoseconds,
