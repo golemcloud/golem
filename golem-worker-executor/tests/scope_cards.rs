@@ -24,10 +24,10 @@ use golem_common::{agent_id, data_value};
 use golem_schema::model::CardId as SchemaCardId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
-use golem_worker_executor::services::card::{CardService, CardState};
+use golem_worker_executor::services::card::{CardRevokeResult, CardService, CardState};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start_with_overrides,
+    WorkerExecutorTestDependencies, registry_test_card, start_with_overrides,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -54,7 +54,9 @@ fn scope_card_initial_permissions() -> Vec<PolymorphicPermissionPattern> {
 struct ScopeCardAuthority {
     revoked: AtomicBool,
     check_cards_count: AtomicUsize,
+    revoke_card_count: AtomicUsize,
     root_card: RwLock<Option<StoredCard>>,
+    additional_cards: RwLock<HashMap<CardId, StoredCard>>,
 }
 
 impl ScopeCardAuthority {
@@ -73,6 +75,21 @@ impl ScopeCardAuthority {
         self.root_card().map(|card| card.card_id())
     }
 
+    fn add_card(&self, card: StoredCard) {
+        self.additional_cards
+            .write()
+            .expect("additional-card lock poisoned")
+            .insert(card.card_id(), card);
+    }
+
+    fn card(&self, card_id: CardId) -> Option<StoredCard> {
+        self.additional_cards
+            .read()
+            .expect("additional-card lock poisoned")
+            .get(&card_id)
+            .cloned()
+    }
+
     fn revoke(&self) {
         self.revoked.store(true, Ordering::SeqCst);
     }
@@ -83,6 +100,10 @@ impl ScopeCardAuthority {
 
     fn check_cards_count(&self) -> usize {
         self.check_cards_count.load(Ordering::SeqCst)
+    }
+
+    fn revoke_card_count(&self) -> usize {
+        self.revoke_card_count.load(Ordering::SeqCst)
     }
 }
 
@@ -110,6 +131,22 @@ impl CardService for ScopeCardService {
         Ok(card)
     }
 
+    async fn revoke_card(&self, card_id: CardId) -> Result<CardRevokeResult, WorkerExecutorError> {
+        self.authority
+            .revoke_card_count
+            .fetch_add(1, Ordering::SeqCst);
+        Ok(CardRevokeResult::Revoked(vec![card_id]))
+    }
+
+    async fn live_ancestor_ids_including_self(
+        &self,
+        card: &StoredCard,
+    ) -> Result<Vec<CardId>, WorkerExecutorError> {
+        Ok(std::iter::once(card.card_id())
+            .chain(card.parent_ids().iter().copied())
+            .collect())
+    }
+
     async fn check_cards(
         &self,
         card_ids: Vec<CardId>,
@@ -131,6 +168,8 @@ impl CardService for ScopeCardService {
                     } else {
                         CardState::Live(Box::new(root_card.clone()))
                     }
+                } else if let Some(card) = self.authority.card(card_id) {
+                    CardState::Live(Box::new(card))
                 } else {
                     CardState::Unknown
                 };
@@ -553,6 +592,123 @@ async fn queued_wallet_revocation_updates_cached_authorization_at_boundary(
         &entry.entry,
         PublicOplogEntry::CardRevokedCascade(params)
             if params.revoked_card_ids.contains(&root_card_id)
+    )));
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn revoke_does_not_use_authority_revoked_before_its_boundary(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .push(parse_polymorphic_permission("card(*) @ * : revoke : *").unwrap());
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "stale-revoke-authority-caller");
+    let authority_card_id = configure_scope_card_root(&authority, &component, &caller)?;
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let target_card = registry_test_card();
+    let target_card_id = target_card.card_id();
+    authority.add_card(target_card.clone());
+    executor
+        .queue_card_install(&caller_worker, target_card)
+        .await?;
+    let release = executor
+        .invoke_and_await_agent(&component, &caller, "create_release_promise", data_value!())
+        .await?
+        .into_typed::<PromiseId>()?;
+    let key = IdempotencyKey::fresh();
+    let params = data_value!(SchemaCardId::from(target_card_id.0), release.clone());
+
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "revoke_card_after_promise_is_denied",
+            params.clone(),
+        )
+        .await?;
+    executor
+        .wait_for_status(
+            &caller_worker,
+            AgentStatus::Suspended,
+            Duration::from_secs(10),
+        )
+        .await?;
+
+    authority.reset_check_cards_count();
+    authority.revoke();
+    executor
+        .queue_uncommitted_card_revocation(&caller_worker, authority_card_id)
+        .await?;
+    executor.complete_promise(&release, vec![1]).await?;
+
+    assert!(
+        executor
+            .invoke_and_await_agent_with_key(
+                &component,
+                &caller,
+                &key,
+                "revoke_card_after_promise_is_denied",
+                params,
+            )
+            .await?
+            .into_typed::<bool>()?,
+        "revoked authority must not authorize revoking a separately possessed card"
+    );
+    assert_eq!(
+        authority.revoke_card_count(),
+        0,
+        "denied revoke must not reach the registry card service"
+    );
+    let check_cards_count = authority.check_cards_count();
+    assert!(
+        check_cards_count <= 1,
+        "only replay-to-live recovery may check card liveness; revoke authorization added a full-wallet check ({check_cards_count} checks observed)"
+    );
+
+    let target_is_still_installed = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "has_card",
+            data_value!(SchemaCardId::from(target_card_id.0)),
+        )
+        .await?
+        .into_typed::<bool>()?;
+    assert!(
+        target_is_still_installed,
+        "the denied target must remain installed"
+    );
+
+    let oplog = executor
+        .get_oplog(&caller_worker, OplogIndex::INITIAL)
+        .await?;
+    assert!(oplog.iter().any(|entry| matches!(
+        &entry.entry,
+        PublicOplogEntry::CardRevokedCascade(params)
+            if params.revoked_card_ids.contains(&authority_card_id)
     )));
     Ok(())
 }

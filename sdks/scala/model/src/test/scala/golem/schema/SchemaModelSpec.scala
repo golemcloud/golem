@@ -499,6 +499,76 @@ object SchemaModelSpec extends ZIOSpecDefault {
           assert(res)(isFailure(isSubtype[SchemaDecodeError](anything))) && assertTrue(!h.isPresent)
         }
       ),
+      suite("permission-card handle affine semantics")(
+        test("a nested permission-card handle round-trips preserving handle identity") {
+          import SchemaValue._
+          val handle = GuestPermissionCardHandle.fromRaw("card-1")
+          val value  = TupleValue(List(StringValue("card"), PermissionCardHandle(handle)))
+
+          val restored   = SchemaWire.schemaValueFromWit(SchemaWire.schemaValueToWit(value))
+          val sameHandle = restored match {
+            case TupleValue(List(_, PermissionCardHandle(decoded))) => decoded eq handle
+            case _                                                  => false
+          }
+          assertTrue(restored == value, sameHandle, handle.isPresent)
+        },
+        test("encoding aliases is rejected atomically and consumed cards stay rejected") {
+          import SchemaValue._
+          val handle  = GuestPermissionCardHandle.fromRaw("card-1")
+          val aliased = TupleValue(List(PermissionCardHandle(handle), PermissionCardHandle(handle)))
+
+          val aliasResult  = Try(SchemaWire.schemaValueToWit(aliased))
+          val stillPresent = handle.isPresent
+          handle.take()
+          val consumedResult = Try(SchemaWire.schemaValueToWit(PermissionCardHandle(handle)))
+
+          assert(aliasResult)(isFailure(isSubtype[SchemaEncodeError](anything))) &&
+          assert(consumedResult)(isFailure(isSubtype[SchemaEncodeError](anything))) &&
+          assertTrue(stillPresent)
+        },
+        test("a later decode failure drains an already-reached permission card") {
+          val handle = GuestPermissionCardHandle.fromRaw("card-1")
+          val bad    = WitSchemaValueTree(
+            Vector(
+              WitSchemaValueNode.TupleValue(Vector(1, 2)),
+              WitSchemaValueNode.PermissionCardHandle(handle),
+              WitSchemaValueNode.ListValue(Vector(99))
+            ),
+            0
+          )
+
+          val result = Try(SchemaWire.schemaValueFromWit(bad))
+          assert(result)(isFailure(isSubtype[SchemaDecodeError](anything))) && assertTrue(!handle.isPresent)
+        },
+        test("two holders for the same raw permission card are rejected and drained") {
+          val raw    = new Object
+          val first  = GuestPermissionCardHandle.fromRaw(raw)
+          val second = GuestPermissionCardHandle.fromRaw(raw)
+          val bad    = WitSchemaValueTree(
+            Vector(
+              WitSchemaValueNode.TupleValue(Vector(1, 2)),
+              WitSchemaValueNode.PermissionCardHandle(first),
+              WitSchemaValueNode.PermissionCardHandle(second)
+            ),
+            0
+          )
+
+          val result = Try(SchemaWire.schemaValueFromWit(bad))
+          assert(result)(isFailure(isSubtype[SchemaDecodeError](anything))) &&
+          assertTrue(!first.isPresent, !second.isPresent)
+        },
+        test("the explicit schema adapter preserves polymorphism and the opaque handle") {
+          val handle = GuestPermissionCardHandle.fromRaw("card-1")
+          val codec  = GuestPermissionCardHandle.intoSchema(PermissionCardSpec(polymorphic = true))
+
+          val encoded = codec.toValue(handle)
+          val decoded = GuestPermissionCardHandle.fromSchema.fromValue(encoded)
+          assertTrue(
+            codec.graph.root.body == SchemaTypeBody.PermissionCardType(PermissionCardSpec(polymorphic = true)),
+            decoded == Right(handle)
+          )
+        }
+      ),
       suite("GraphEncoder multi-root (agent carrier use case)")(
         test("encodes several roots into one shared pool with a placeholder finish root") {
           val g1 = SchemaBuilder.graphOf(b => t.list(b.register("ns.p", () => t.record(List(t.field("x", t.s32))))))

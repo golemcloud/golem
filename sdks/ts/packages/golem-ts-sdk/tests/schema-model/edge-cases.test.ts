@@ -24,6 +24,7 @@ import type {
 import {
   GuestSecretHandle,
   GuestQuotaTokenHandle,
+  GuestPermissionCardHandle,
   SchemaBuilder,
   SchemaEncodeError,
   classifyDiscriminatorPair,
@@ -47,6 +48,7 @@ import {
 // capability key directly to stand in for that SDK-internal caller.
 import { SECRET_INTERNAL } from '../../src/internal/schema-model/secretInternal';
 import { QUOTA_INTERNAL } from '../../src/internal/schema-model/quotaInternal';
+import { PERMISSION_CARD_INTERNAL } from '../../src/internal/schema-model/permissionCardInternal';
 
 function roundtripValue(value: SchemaValue): void {
   expect(schemaValueFromWit(schemaValueToWit(value))).toEqual(value);
@@ -311,6 +313,67 @@ describe('rich semantic and capability values', () => {
       expect(decoded.handle.isPresent()).toBe(true);
       expect(decoded.handle.take()).toBe(raw);
     }
+  });
+
+  it('permission-card handles transfer once through nested schema values', () => {
+    const raw = { id: 'opaque-permission-card' } as never;
+    const handle = GuestPermissionCardHandle.fromRaw(PERMISSION_CARD_INTERNAL, raw);
+
+    const wit = schemaValueToWit(v.tuple([v.string('card'), v.permissionCard(handle)]));
+    expect(wit.valueNodes).toContainEqual({ tag: 'permission-card-handle', val: raw });
+    expect(handle.isPresent()).toBe(false);
+
+    const decoded = schemaValueFromWit(wit);
+    expect(decoded.tag).toBe('tuple');
+    if (decoded.tag === 'tuple') {
+      const card = decoded.elements[1];
+      expect(card.tag).toBe('permission-card');
+      if (card.tag === 'permission-card') {
+        expect(card.handle.take()).toBe(raw);
+      }
+    }
+  });
+
+  it('permission-card encoding rejects aliases atomically and consumed handles', () => {
+    const handle = GuestPermissionCardHandle.fromRaw(PERMISSION_CARD_INTERNAL, {} as never);
+    const aliased = v.tuple([v.permissionCard(handle), v.permissionCard(handle)]);
+
+    expect(() => schemaValueToWit(aliased)).toThrow(/more than once/);
+    expect(handle.isPresent()).toBe(true);
+
+    schemaValueToWit(v.permissionCard(handle));
+    expect(() => schemaValueToWit(v.permissionCard(handle))).toThrow(/already transferred/);
+  });
+
+  it('rejected WIT trees drain owned permission-card handles', () => {
+    const raw = { id: 'opaque-permission-card' } as never;
+    const wit: WitSchemaValueTree = {
+      valueNodes: [
+        { tag: 'tuple-value', val: [1, 2] },
+        { tag: 'permission-card-handle', val: raw },
+        { tag: 'list-value', val: [99] },
+      ],
+      root: 0,
+    };
+
+    expect(() => schemaValueFromWit(wit)).toThrow(/out of range/);
+    expect((wit.valueNodes[1] as { val: unknown }).val).toBeUndefined();
+  });
+
+  it('rejects duplicate raw permission-card resources and drains both nodes', () => {
+    const raw = { id: 'opaque-permission-card' } as never;
+    const wit: WitSchemaValueTree = {
+      valueNodes: [
+        { tag: 'tuple-value', val: [1, 2] },
+        { tag: 'permission-card-handle', val: raw },
+        { tag: 'permission-card-handle', val: raw },
+      ],
+      root: 0,
+    };
+
+    expect(() => schemaValueFromWit(wit)).toThrow(/more than once/);
+    expect((wit.valueNodes[1] as { val: unknown }).val).toBeUndefined();
+    expect((wit.valueNodes[2] as { val: unknown }).val).toBeUndefined();
   });
 
   it('encoding an already-transferred quota-token handle is rejected', () => {

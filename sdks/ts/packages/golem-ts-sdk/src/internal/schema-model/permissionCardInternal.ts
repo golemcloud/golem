@@ -12,15 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Recursive schema/value model and its WIT codecs (mirror of
-// `golem:core/types@2.0.0`). This is the single in-memory source of truth for
-// the TypeScript SDK's schema-native surfaces.
+// Capability key gating the privileged operations that move or re-wrap an
+// owned `permission-card` resource. This module is intentionally not exported
+// from the package entry point or the schema-model barrel.
+export const PERMISSION_CARD_INTERNAL: unique symbol = Symbol(
+  'golem:permission-card internal capability',
+);
 
-export * from './errors';
-export * from './secretHandle';
-export * from './quotaTokenHandle';
-export * from './permissionCardHandle';
-export * from './model';
-export * from './builder';
-export * from './wit';
-export * from './validation';
+/** The type of the {@link PERMISSION_CARD_INTERNAL} capability key. */
+export type PermissionCardInternal = typeof PERMISSION_CARD_INTERNAL;

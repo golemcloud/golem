@@ -171,6 +171,12 @@ pub trait ScopeCardAgent {
 
     fn revoke_card_by_id(&self, card_id: CardId) -> u32;
 
+    async fn revoke_card_after_promise_is_denied(
+        &self,
+        card_id: CardId,
+        release: PromiseId,
+    ) -> bool;
+
     fn has_card(&self, card_id: CardId) -> bool;
 }
 
@@ -443,6 +449,19 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
             .find(|card| card_has_id(card, &card_id))
             .expect("card to revoke is not installed");
         revoke::revoke_card(card).expect("card revocation failed")
+    }
+
+    async fn revoke_card_after_promise_is_denied(
+        &self,
+        card_id: CardId,
+        release: PromiseId,
+    ) -> bool {
+        let card = wallet::self_wallet()
+            .into_iter()
+            .find(|card| card_has_id(card, &card_id))
+            .expect("card to revoke is not installed");
+        await_promise(&release).await;
+        revoke::revoke_card(card).is_err()
     }
 
     fn has_card(&self, card_id: CardId) -> bool {

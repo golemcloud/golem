@@ -200,11 +200,12 @@ object ValueValidation {
         else
           for (ext <- fileExt(x); allowed <- s.allowedExtensions if !allowed.contains(ext))
             e += PathExtensionNotAllowed(path(p), ext)
-      case (UrlType(r), UrlValue(u))                => checkUrl(r, u, p, e)
-      case (QuantityType(s), QuantityValueNode(q))  => checkQuantity(s, q, p, e)
-      case (SecretType(_), SecretValue(_))          => ()
-      case (QuotaTokenType(_), QuotaTokenHandle(_)) => ()
-      case (RecordType(fs), RecordValue(vs))        =>
+      case (UrlType(r), UrlValue(u))                        => checkUrl(r, u, p, e)
+      case (QuantityType(s), QuantityValueNode(q))          => checkQuantity(s, q, p, e)
+      case (SecretType(_), SecretValue(_))                  => ()
+      case (QuotaTokenType(_), QuotaTokenHandle(_))         => ()
+      case (PermissionCardType(_), PermissionCardHandle(_)) => ()
+      case (RecordType(fs), RecordValue(vs))                =>
         if (fs.length != vs.length) e += RecordArityMismatch(path(p), fs.length, vs.length)
         else fs.zip(vs).foreach { case (f, x) => check(g, f.body, x, p :+ ValuePathSegment.Field(f.name), e) }
       case (VariantType(cs), VariantValue(i, pay)) =>

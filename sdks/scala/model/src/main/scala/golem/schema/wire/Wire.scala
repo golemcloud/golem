@@ -168,6 +168,9 @@ object WitSchemaValueNode {
    * unchanged; the take-once transfer happens at the JS host boundary.
    */
   final case class QuotaTokenHandle(handle: GuestQuotaTokenHandle) extends WitSchemaValueNode
+
+  /** Flat carrier for an owned `permission-card` resource. */
+  final case class PermissionCardHandle(handle: GuestPermissionCardHandle) extends WitSchemaValueNode
 }
 
 final case class WitTypedSchemaValue(graph: WitSchemaGraph, value: WitSchemaValueTree)
