@@ -2439,6 +2439,8 @@ pub async fn start_with_agent_storage_quota_on_managed_xfs(
         }),
         Some(Arc::new(move |config| {
             config.filesystem_storage.managed_xfs_root_dir = Some(managed_xfs_root.clone());
+            config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
+            config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
         })),
         "Timeout waiting for managed agent-storage-quota server to start",
     )

@@ -34,7 +34,11 @@ for ((run = 1; run <= runs; run++)); do
   echo "Managed XFS Lima run ${run}/${runs}"
   limactl shell "${instance}" -- \
     sudo GOLEM_REPO_ROOT="${repo_root}" \
-    CARGO_TARGET_DIR="${guest_home}/.cache/golem-managed-xfs-target" \
-    CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}" \
+    GOLEM_MANAGED_XFS_TARGET_DIR="${guest_home}/.cache/golem-managed-xfs-target" \
+    GOLEM_MANAGED_XFS_CLI_TARGET_DIR="${guest_home}/.cache/golem-managed-xfs-cli-target" \
+    GOLEM_MANAGED_XFS_CLEAN="${GOLEM_MANAGED_XFS_CLEAN:-0}" \
+    GOLEM_MANAGED_XFS_MIN_FREE_GIB="${GOLEM_MANAGED_XFS_MIN_FREE_GIB:-15}" \
+    GOLEM_MANAGED_XFS_VALIDATE_CACHE_ONLY="${GOLEM_MANAGED_XFS_VALIDATE_CACHE_ONLY:-0}" \
+    CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" \
     "${repo_root}/integration-tests/scripts/managed-filesystem/run-loopback-xfs.sh" "$@"
 done

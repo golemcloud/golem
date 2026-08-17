@@ -88,12 +88,108 @@ pub(crate) async fn exhaust_p3_quota() -> Vec<String> {
     let (mut stream, data) = wit_stream::new();
     let result = file.write_via_stream(data, 0);
     let prefix_unwritten = stream.write_all(vec![0x5a; 4096]).await;
-    let unwritten = stream.write_all(vec![0x5a; 2 * 1024 * 1024]).await;
+    let unwritten = stream.write_all(vec![0x6c; 2 * 1024 * 1024]).await;
     drop(stream);
     vec![
         format!("completion={}", p3_result(result.await)),
         format!("prefix-persisted={}", prefix_unwritten.is_empty()),
         format!("unwritten-bytes={}", unwritten.len()),
+    ]
+}
+
+pub(crate) fn exhaust_p2_quota() -> Vec<String> {
+    let (root, _) = p2_preopens::get_directories()
+        .into_iter()
+        .next()
+        .expect("no P2 preopened directory");
+    let file = root
+        .open_at(
+            p2_types::PathFlags::empty(),
+            "quota-p2-exhaustion.bin",
+            p2_types::OpenFlags::CREATE | p2_types::OpenFlags::TRUNCATE,
+            p2_types::DescriptorFlags::WRITE,
+        )
+        .expect("P2 quota file creation failed");
+    let output = file
+        .write_via_stream(0)
+        .expect("P2 quota output stream creation failed");
+    let prefix_persisted = output.blocking_write_and_flush(&vec![0x4a; 4096]).is_ok();
+    let completion = match output.blocking_write_and_flush(&vec![0x6b; 2 * 1024 * 1024]) {
+        Ok(()) => "ok".to_string(),
+        Err(error) => format!("err:{error:?}"),
+    };
+    vec![
+        format!("completion={completion}"),
+        format!("prefix-persisted={prefix_persisted}"),
+    ]
+}
+
+pub(crate) fn inspect_p2_exhaustion() -> Vec<String> {
+    let (root, _) = p2_preopens::get_directories()
+        .into_iter()
+        .next()
+        .expect("no P2 preopened directory");
+    let file = root
+        .open_at(
+            p2_types::PathFlags::empty(),
+            "quota-p2-exhaustion.bin",
+            p2_types::OpenFlags::empty(),
+            p2_types::DescriptorFlags::READ,
+        )
+        .expect("open P2 quota exhaustion file");
+    let size = file.stat().expect("stat P2 quota exhaustion file").size;
+    let (bytes, _) = file.read(size, 0).expect("read P2 quota exhaustion file");
+    vec![
+        format!("size={size}"),
+        format!(
+            "prefix-complete={}",
+            bytes.len() >= 4096 && bytes[..4096].iter().all(|byte| *byte == 0x4a)
+        ),
+        format!(
+            "suffix-bytes={}",
+            bytes[bytes.len().min(4096)..]
+                .iter()
+                .filter(|byte| **byte == 0x6b)
+                .count()
+        ),
+    ]
+}
+
+pub(crate) async fn inspect_p3_exhaustion() -> Vec<String> {
+    let (root, _) = p3_preopens::get_directories()
+        .into_iter()
+        .next()
+        .expect("no P3 preopened directory");
+    let file = root
+        .open_at(
+            p3_types::PathFlags::empty(),
+            "quota-p3-exhaustion.bin".to_string(),
+            p3_types::OpenFlags::empty(),
+            p3_types::DescriptorFlags::READ,
+        )
+        .await
+        .expect("open P3 quota exhaustion file");
+    let size = file
+        .stat()
+        .await
+        .expect("stat P3 quota exhaustion file")
+        .size;
+    let (reader, result) = file.read_via_stream(0);
+    let bytes = reader.collect().await;
+    result.await.expect("read P3 quota exhaustion file");
+    vec![
+        format!("size={size}"),
+        format!(
+            "prefix-complete={}",
+            bytes.len() >= 4096 && bytes[..4096].iter().all(|byte| *byte == 0x5a)
+        ),
+        format!(
+            "suffix-bytes={}",
+            bytes[bytes.len().min(4096)..]
+                .iter()
+                .filter(|byte| **byte == 0x6c)
+                .count()
+        ),
     ]
 }
 

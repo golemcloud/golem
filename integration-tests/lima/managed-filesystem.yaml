@@ -18,7 +18,7 @@ provision:
       set -eux -o pipefail
       export DEBIAN_FRONTEND=noninteractive
       apt-get update
-      apt-get install -y build-essential clang cmake curl git libssl-dev pkg-config protobuf-compiler redis-server util-linux xfsprogs
+      apt-get install -y build-essential clang cmake curl git libssl-dev pkg-config protobuf-compiler python3 redis-server util-linux xfsprogs
   - mode: user
     script: |
       #!/bin/bash

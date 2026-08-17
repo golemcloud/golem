@@ -266,6 +266,57 @@ pub(super) struct PendingMemoryGrowth {
     job_queued: AtomicBool,
 }
 
+#[derive(Default)]
+struct StartupAttemptTracker {
+    state: StdMutex<StartupAttemptState>,
+}
+
+#[derive(Default)]
+struct StartupAttemptState {
+    pending: Option<Uuid>,
+    failure: Option<WorkerExecutorError>,
+}
+
+impl StartupAttemptTracker {
+    fn begin(&self, existing: Option<Uuid>) -> Uuid {
+        let mut state = self.state.lock().unwrap();
+        let attempt = existing.or(state.pending).unwrap_or_else(Uuid::new_v4);
+        state.pending = Some(attempt);
+        state.failure = None;
+        attempt
+    }
+
+    fn pending(&self) -> Option<Uuid> {
+        self.state.lock().unwrap().pending
+    }
+
+    fn current(&self) -> Result<Option<Uuid>, WorkerExecutorError> {
+        let state = self.state.lock().unwrap();
+        match (state.pending, state.failure.as_ref()) {
+            (Some(attempt), _) => Ok(Some(attempt)),
+            (None, Some(error)) => Err(error.clone()),
+            (None, None) => Ok(None),
+        }
+    }
+
+    fn complete(&self, attempt: Uuid, result: &Result<(), WorkerExecutorError>) -> bool {
+        let mut state = self.state.lock().unwrap();
+        if state.pending != Some(attempt) {
+            return false;
+        }
+        state.failure = result.as_ref().err().cloned();
+        state.pending = None;
+        true
+    }
+
+    fn complete_success_if_active(&self, attempt: Uuid, active_attempt: Option<Uuid>) -> bool {
+        if active_attempt != Some(attempt) {
+            return false;
+        }
+        self.complete(attempt, &Ok(()))
+    }
+}
+
 /// Represents worker that may be running or suspended.
 ///
 /// It is responsible for receiving incoming worker invocations in a non-blocking way,
@@ -323,6 +374,7 @@ pub struct Worker<Ctx: WorkerCtx> {
 
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
     instance: Arc<Mutex<WorkerInstance>>,
+    startup_attempt: StartupAttemptTracker,
     linear_memory_grant: StdMutex<Option<Arc<StdMutex<MemoryGrant>>>>,
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
     /// until the worker stops so permit reacquisition cannot lose it between `RunningWorker`s.
@@ -742,6 +794,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 EphemeralInvocationState::Available
             }),
             instance,
+            startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
             interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
             execution_status,
@@ -814,14 +867,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self.snapshot_policy
     }
 
-    pub async fn start_if_needed(this: Arc<Worker<Ctx>>) -> Result<bool, WorkerExecutorError> {
-        Self::start_if_needed_internal(this, 0).await
+    pub async fn start_if_needed(
+        this: Arc<Worker<Ctx>>,
+    ) -> Result<Option<Uuid>, WorkerExecutorError> {
+        Self::start_if_needed_internal(this, 0, None).await
     }
 
     async fn start_if_needed_internal(
         this: Arc<Worker<Ctx>>,
         oom_retry_count: u32,
-    ) -> Result<bool, WorkerExecutorError> {
+        existing_start_attempt: Option<Uuid>,
+    ) -> Result<Option<Uuid>, WorkerExecutorError> {
         {
             *this.last_resume_request.lock().await = Timestamp::now_utc();
         }
@@ -835,17 +891,36 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Err(err.clone())
             }
             WorkerInstance::Unloaded { .. } => {
-                this.mark_as_loading();
+                let start_attempt =
+                    existing_start_attempt.or_else(|| this.startup_attempt.pending());
+                let memory_requirement = match this.memory_requirement().await {
+                    Ok(memory_requirement) => memory_requirement,
+                    Err(error) => {
+                        *instance_guard = WorkerInstance::Unloaded {
+                            startup_failure: Some(error.clone()),
+                        };
+                        this.fail_pending_invocations(error.clone()).await;
+                        drop(instance_guard);
+                        if let Some(start_attempt) = start_attempt {
+                            this.complete_startup(start_attempt, Err(error.clone()));
+                        }
+                        return Err(error);
+                    }
+                };
+                let start_attempt = this.startup_attempt.begin(start_attempt);
+                this.mark_as_loading(start_attempt);
                 crate::metrics::workers::inc_worker_waiting_for_memory();
                 *instance_guard = WorkerInstance::WaitingForPermit(WaitingWorker::new(
                     this.clone(),
-                    this.memory_requirement().await?,
+                    memory_requirement,
                     oom_retry_count,
+                    start_attempt,
                 ));
-                Ok(true)
+                Ok(Some(start_attempt))
             }
             WorkerInstance::CleanupFailed(error) => Err(error.clone()),
-            WorkerInstance::WaitingForPermit(_) | WorkerInstance::Running(_) => Ok(false),
+            WorkerInstance::WaitingForPermit(waiting) => Ok(Some(waiting.start_attempt)),
+            WorkerInstance::Running(_) => this.startup_attempt.current(),
             WorkerInstance::Deleting => Err(WorkerExecutorError::invalid_request(
                 "Worker is being deleted",
             )),
@@ -944,12 +1019,72 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         )
     }
 
-    fn mark_as_loading(&self) {
+    fn mark_as_loading(&self, start_attempt: Uuid) {
+        self.startup_attempt.begin(Some(start_attempt));
         let mut execution_status = self.execution_status.write().unwrap();
         *execution_status = ExecutionStatus::Loading {
             agent_mode: execution_status.agent_mode(),
             timestamp: Timestamp::now_utc(),
         };
+    }
+
+    fn publish_startup_result(&self, start_attempt: Uuid, result: Result<(), WorkerExecutorError>) {
+        if !self.startup_attempt.complete(start_attempt, &result) {
+            return;
+        }
+        self.publish_completed_startup_result(start_attempt, result);
+    }
+
+    fn publish_completed_startup_result(
+        &self,
+        start_attempt: Uuid,
+        result: Result<(), WorkerExecutorError>,
+    ) {
+        self.events().publish(Event::WorkerLoaded {
+            agent_id: self.agent_id(),
+            start_attempt,
+            result,
+        });
+    }
+
+    pub(crate) fn complete_startup(
+        &self,
+        start_attempt: Uuid,
+        result: Result<(), WorkerExecutorError>,
+    ) {
+        self.publish_startup_result(start_attempt, result);
+    }
+
+    pub(crate) async fn complete_startup_success(&self, start_attempt: Uuid) -> bool {
+        let instance_guard = self.instance.lock().await;
+        let active_attempt = match &*instance_guard {
+            WorkerInstance::Running(running) => Some(running.start_attempt),
+            _ => None,
+        };
+        let is_active = active_attempt == Some(start_attempt);
+        let result = if is_active {
+            Ok(())
+        } else {
+            Err(WorkerExecutorError::unknown(
+                "Worker stopped before startup completed",
+            ))
+        };
+        let completed = match &result {
+            Ok(()) => self
+                .startup_attempt
+                .complete_success_if_active(start_attempt, active_attempt),
+            Err(_) => self.startup_attempt.complete(start_attempt, &result),
+        };
+        drop(instance_guard);
+
+        if completed {
+            self.publish_completed_startup_result(start_attempt, result);
+        }
+        is_active
+    }
+
+    pub(crate) fn pending_startup_attempt(&self) -> Option<Uuid> {
+        self.startup_attempt.pending()
     }
 
     pub fn get_initial_worker_metadata(&self) -> AgentMetadata {
@@ -2857,7 +2992,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         fail_pending_invocations: Option<WorkerExecutorError>,
         final_state: FinalWorkerState,
     ) {
+        let startup_error = fail_pending_invocations.clone().unwrap_or_else(|| {
+            WorkerExecutorError::unknown("Worker stopped before startup completed")
+        });
         let mut instance_guard = self.instance.lock().await;
+        let startup_attempt = self.startup_attempt.pending();
 
         let stop_result = self
             .stop_internal_locked(
@@ -2872,6 +3011,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         drop(instance_guard);
 
         self.handle_stop_result(stop_result).await;
+        if !called_from_invocation_loop && let Some(startup_attempt) = startup_attempt {
+            self.complete_startup(startup_attempt, Err(startup_error));
+        }
     }
 
     async fn stop_internal_locked(
@@ -3196,7 +3338,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         called_from_invocation_loop: bool,
         delay: Option<Duration>,
         oom_retry_count: u32,
-    ) -> Result<bool, WorkerExecutorError> {
+        start_attempt: Option<Uuid>,
+    ) -> Result<Option<Uuid>, WorkerExecutorError> {
         this.stop_internal(
             called_from_invocation_loop,
             None,
@@ -3208,7 +3351,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if let Some(delay) = delay {
             tokio::time::sleep(delay).await;
         }
-        Self::start_if_needed_internal(this, oom_retry_count).await
+        Self::start_if_needed_internal(this, oom_retry_count, start_attempt).await
     }
 
     async fn get_or_create_worker_metadata<
@@ -3533,6 +3676,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     component_charge,
                     concurrent_agent_permit,
                     oom_retry_count,
+                    start_attempt,
                     worker_trace,
                 )
                 .await;
@@ -3724,10 +3868,9 @@ impl WaitingWorker {
         parent: Arc<Worker<Ctx>>,
         memory_requirement: u64,
         oom_retry_count: u32,
+        start_attempt: Uuid,
     ) -> Self {
         let worker_trace = parent.trace(TraceOrigin::capture_current());
-
-        let start_attempt = Uuid::new_v4();
 
         let handle = tokio::task::spawn(async move {
             let agent_id = parent.owned_agent_id.agent_id();
@@ -3955,6 +4098,7 @@ struct RunningWorker {
     /// `ResumeReplay` is signalled directly through the command channel rather
     /// than the internal queue, so eviction must treat it as pending work.
     resume_replay_pending: Arc<AtomicBool>,
+    start_attempt: Uuid,
 }
 
 pub(crate) struct CreateWorkerInstanceError {
@@ -4095,6 +4239,7 @@ impl RunningWorker {
         component_charge: WorkerComponentCharge,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
+        start_attempt: Uuid,
         worker_trace: WorkerTrace,
     ) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
@@ -4123,6 +4268,7 @@ impl RunningWorker {
                 oom_retry_count,
                 concurrent_agent_permit,
                 resume_replay_pending_clone,
+                start_attempt,
                 worker_trace,
             )
             .await;
@@ -4136,6 +4282,7 @@ impl RunningWorker {
             waiting_for_command,
             interrupt_signal,
             resume_replay_pending,
+            start_attempt,
         }
     }
 
@@ -4495,6 +4642,7 @@ impl RunningWorker {
         oom_retry_count: u32,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         resume_replay_pending: Arc<AtomicBool>,
+        start_attempt: Uuid,
         worker_trace: WorkerTrace,
     ) {
         let mut invocation_loop = InvocationLoop {
@@ -4507,6 +4655,7 @@ impl RunningWorker {
             oom_retry_count,
             concurrent_agent_permit: Some(concurrent_agent_permit),
             resume_replay_pending,
+            start_attempt,
             worker_trace,
         };
         invocation_loop.run().await;
@@ -4797,6 +4946,99 @@ mod tests {
                 startup_failure: Some(_)
             }
         ));
+    }
+
+    #[test]
+    fn concurrent_startup_callers_share_one_attempt() {
+        let tracker = Arc::new(StartupAttemptTracker::default());
+        let barrier = Arc::new(std::sync::Barrier::new(16));
+        let handles = (0..16)
+            .map(|_| {
+                let tracker = tracker.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    tracker.begin(None)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let attempts = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+        assert!(attempts.iter().all(|attempt| *attempt == attempts[0]));
+        assert_eq!(tracker.pending(), Some(attempts[0]));
+    }
+
+    #[test]
+    fn oom_retry_preserves_startup_attempt() {
+        let tracker = StartupAttemptTracker::default();
+        let initial = tracker.begin(None);
+
+        let retry = tracker.begin(Some(initial));
+
+        assert_eq!(retry, initial);
+        assert_eq!(tracker.current().unwrap(), Some(initial));
+        assert!(!tracker.complete(Uuid::new_v4(), &Ok(())));
+        assert_eq!(tracker.pending(), Some(initial));
+        assert!(tracker.complete(initial, &Ok(())));
+        assert_eq!(tracker.current().unwrap(), None);
+    }
+
+    #[test]
+    fn startup_success_requires_matching_active_attempt() {
+        let tracker = StartupAttemptTracker::default();
+        let attempt = tracker.begin(None);
+
+        assert!(!tracker.complete_success_if_active(attempt, None));
+        assert_eq!(tracker.pending(), Some(attempt));
+        assert!(!tracker.complete_success_if_active(attempt, Some(Uuid::new_v4())));
+        assert_eq!(tracker.pending(), Some(attempt));
+        assert!(tracker.complete_success_if_active(attempt, Some(attempt)));
+        assert_eq!(tracker.current().unwrap(), None);
+    }
+
+    #[test]
+    fn stop_wins_atomic_startup_completion() {
+        let tracker = Arc::new(StartupAttemptTracker::default());
+        let attempt = tracker.begin(None);
+        let active_attempt = Arc::new(StdMutex::new(Some(attempt)));
+        let (stop_holds_instance, wait_for_stop) = std::sync::mpsc::channel();
+        let (allow_stop_to_finish, finish_stop) = std::sync::mpsc::channel();
+
+        let stop = {
+            let active_attempt = active_attempt.clone();
+            std::thread::spawn(move || {
+                let mut active_attempt = active_attempt.lock().unwrap();
+                *active_attempt = None;
+                stop_holds_instance.send(()).unwrap();
+                finish_stop.recv().unwrap();
+            })
+        };
+
+        wait_for_stop.recv().unwrap();
+        let (completion_started, wait_for_completion) = std::sync::mpsc::channel();
+        let completion = {
+            let tracker = tracker.clone();
+            let active_attempt = active_attempt.clone();
+            std::thread::spawn(move || {
+                completion_started.send(()).unwrap();
+                let active_attempt = *active_attempt.lock().unwrap();
+                assert!(!tracker.complete_success_if_active(attempt, active_attempt));
+                let error = WorkerExecutorError::unknown("Worker stopped before startup completed");
+                assert!(tracker.complete(attempt, &Err(error.clone())));
+                tracker.current()
+            })
+        };
+
+        wait_for_completion.recv().unwrap();
+        allow_stop_to_finish.send(()).unwrap();
+        stop.join().unwrap();
+        let error = WorkerExecutorError::unknown("Worker stopped before startup completed");
+        assert!(
+            matches!(completion.join().unwrap(), Err(actual) if actual.to_string() == error.to_string())
+        );
     }
 
     #[test]

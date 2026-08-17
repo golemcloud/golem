@@ -10,9 +10,24 @@ pub trait P3FileSystem {
     /// against a read-only and a read-write initial file, and reports `name=value` entries
     /// so the host-side test can assert P2/P3 parity.
     async fn run(&self) -> Vec<String>;
+    /// Reads the mutable initial file left by `run` through both WASI versions
+    /// without modifying it.
+    async fn inspect_run(&self) -> Vec<String>;
     /// Runs read-write filesystem operations through both WASI versions against
     /// a file created by the agent.
     async fn run_writable(&self) -> Vec<String>;
+    /// Reads the file produced by `run_writable` through both WASI versions
+    /// without modifying it.
+    async fn inspect_writable(&self) -> Vec<String>;
+    /// Applies filesystem mutation histories whose final bytes and topology are
+    /// inspected after reconstruction.
+    async fn run_reconstruction_matrix(&self) -> Vec<String>;
+    /// Inspects the final bytes and topology produced by `run_reconstruction_matrix`.
+    async fn inspect_reconstruction_matrix(&self) -> Vec<String>;
+    /// Replaces a file used to verify reconstruction to an exact oplog position.
+    async fn write_replay_target(&self, value: String);
+    /// Reads a file without changing it.
+    async fn inspect_path(&self, path: String) -> Vec<String>;
     /// Writes blocks through a P2 direct descriptor until the project quota
     /// denies further growth.
     async fn run_p2_quota_surface(&self) -> Vec<String>;
@@ -20,6 +35,12 @@ pub trait P3FileSystem {
     async fn run_p3_with_quota(&self) -> bool;
     /// Attempts to stream more data through P3 than the project limit permits.
     async fn exhaust_p3_quota(&self) -> Vec<String>;
+    /// Attempts a P2 write larger than the available filesystem capacity.
+    async fn exhaust_p2_quota(&self) -> Vec<String>;
+    /// Inspects the successfully persisted prefix of the failed P2 write.
+    async fn inspect_p2_exhaustion(&self) -> Vec<String>;
+    /// Inspects the successfully persisted prefix of the failed P3 quota write.
+    async fn inspect_p3_exhaustion(&self) -> Vec<String>;
     /// Exercises the storage-affecting P2 filesystem operations under a project quota.
     async fn run_p2_quota_matrix(&self) -> Vec<String>;
     /// Exercises the storage-affecting P3 filesystem operations under a project quota.
@@ -50,8 +71,32 @@ impl P3FileSystem for P3FileSystemImpl {
         parity::run().await
     }
 
+    async fn inspect_run(&self) -> Vec<String> {
+        parity::inspect_run().await
+    }
+
     async fn run_writable(&self) -> Vec<String> {
         parity::run_writable().await
+    }
+
+    async fn inspect_writable(&self) -> Vec<String> {
+        parity::inspect_writable().await
+    }
+
+    async fn run_reconstruction_matrix(&self) -> Vec<String> {
+        parity::run_reconstruction_matrix().await
+    }
+
+    async fn inspect_reconstruction_matrix(&self) -> Vec<String> {
+        parity::inspect_reconstruction_matrix().await
+    }
+
+    async fn write_replay_target(&self, value: String) {
+        parity::write_replay_target(&value)
+    }
+
+    async fn inspect_path(&self, path: String) -> Vec<String> {
+        parity::inspect_file(&path).await
     }
 
     async fn run_p2_quota_surface(&self) -> Vec<String> {
@@ -64,6 +109,18 @@ impl P3FileSystem for P3FileSystemImpl {
 
     async fn exhaust_p3_quota(&self) -> Vec<String> {
         quota::exhaust_p3_quota().await
+    }
+
+    async fn exhaust_p2_quota(&self) -> Vec<String> {
+        quota::exhaust_p2_quota()
+    }
+
+    async fn inspect_p2_exhaustion(&self) -> Vec<String> {
+        quota::inspect_p2_exhaustion()
+    }
+
+    async fn inspect_p3_exhaustion(&self) -> Vec<String> {
+        quota::inspect_p3_exhaustion().await
     }
 
     async fn run_p2_quota_matrix(&self) -> Vec<String> {

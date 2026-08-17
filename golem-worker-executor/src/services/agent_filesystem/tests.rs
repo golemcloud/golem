@@ -981,6 +981,26 @@ async fn close_waits_for_an_existing_effect_before_deleting() {
 }
 
 #[test]
+async fn reconstruction_settlement_waits_for_existing_effects() {
+    let filesystems = AgentFilesystems::new(&FilesystemStorageConfig::default()).unwrap();
+    let filesystem = filesystems.create_owned_empty(&agent_id()).await.unwrap();
+    let effect = filesystem.runtime().begin_effect().await.unwrap();
+    {
+        let settle = filesystem.settle_reconstruction();
+        tokio::pin!(settle);
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut settle)
+                .await
+                .is_err()
+        );
+        drop(effect);
+        settle.await.unwrap();
+    }
+    filesystem.close_and_delete().await.unwrap();
+}
+
+#[test]
 async fn dropped_owner_defers_cleanup_and_retains_lifecycle_until_effects_finish() {
     let root = tempfile::tempdir().unwrap();
     let settings = FilesystemStorageConfig {

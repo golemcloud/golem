@@ -167,6 +167,17 @@ impl AgentFilesystem {
             }
         }
     }
+
+    pub(crate) async fn settle_reconstruction(&self) -> Result<(), FilesystemStorageError> {
+        let _effect = self.runtime.begin_update_effect().await.map_err(|error| {
+            FilesystemStorageError::io(
+                "settle reconstructed agent filesystem",
+                &self.path,
+                std::io::Error::other(error),
+            )
+        })?;
+        Ok(())
+    }
 }
 
 impl AgentFilesystemRuntime {

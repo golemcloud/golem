@@ -14,11 +14,10 @@
 
 use crate::model::{ReadFileResult, TrapType};
 use crate::services::agent_filesystem::AgentFilesystem;
-use crate::services::events::Event;
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
-use crate::services::{HasEvents, HasOplog, HasWorker};
+use crate::services::{HasOplog, HasShardService, HasWorker};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
@@ -60,6 +59,7 @@ use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use tracing::{Instrument, Level, debug, error, span, warn};
+use uuid::Uuid;
 use wasmtime::Store;
 use wasmtime::component::Instance;
 
@@ -99,6 +99,7 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     /// `ResumeReplay` is not represented in the internal queue, so we track it
     /// explicitly to avoid evicting a worker that is blocked waking up for it.
     pub resume_replay_pending: Arc<AtomicBool>,
+    pub start_attempt: Uuid,
     /// What this worker's phase spans link back to, and the fields they carry.
     pub worker_trace: WorkerTrace,
 }
@@ -115,6 +116,17 @@ enum CreateInstanceResult<Ctx: WorkerCtx> {
     Interrupted(InterruptKind),
     /// Instance creation failed; the worker was already stopped with the startup failure.
     Failed,
+}
+
+async fn settle_reconstructed_filesystem(
+    filesystem: &AgentFilesystem,
+) -> Result<(), WorkerExecutorError> {
+    filesystem
+        .settle_reconstruction()
+        .await
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+    debug!("Agent filesystem reconstruction settled");
+    Ok(())
 }
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
@@ -140,6 +152,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
         'outer: loop {
             self.release_terminal_interrupt().await;
+            if let Err(error) = self.parent.shard_service().check_worker(&agent_id) {
+                debug!(%agent_id, "Worker generation not started because its shard is not assigned");
+                self.parent.complete_startup(self.start_attempt, Err(error));
+                self.stop_unloaded(None).await;
+                break;
+            }
             let (instance, store, filesystem) = match self.create_instance().await {
                 CreateInstanceResult::Created {
                     instance,
@@ -170,6 +188,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 );
                                 continue;
                             } else {
+                                self.parent.complete_startup(
+                                    self.start_attempt,
+                                    Err(WorkerExecutorError::Interrupted { kind }),
+                                );
                                 self.stop_unloaded(None).await;
                                 break;
                             }
@@ -178,6 +200,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             self.parent
                                 .add_and_commit_oplog(OplogEntry::interrupted())
                                 .await;
+                            self.parent.complete_startup(
+                                self.start_attempt,
+                                Err(WorkerExecutorError::Interrupted { kind }),
+                            );
                             self.stop_unloaded(None).await;
                             break;
                         }
@@ -189,11 +215,17 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
             };
 
-            let (mut final_decision, recovery_failure) =
-                match self.recover_instance_state(&instance, &store).await {
-                    Ok(decision) => (decision, None),
-                    Err(error) => (Some(RetryDecision::None), Some(error)),
-                };
+            let (mut final_decision, recovery_failure) = match self
+                .recover_instance_state(&instance, &store, &filesystem)
+                .await
+            {
+                Ok(decision) => (decision, None),
+                Err(error) => {
+                    self.parent
+                        .complete_startup(self.start_attempt, Err(error.clone()));
+                    (Some(RetryDecision::None), Some(error))
+                }
+            };
             let mut final_interrupt = None;
             let mut cleanup_ephemeral_worker = false;
 
@@ -209,6 +241,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     final_interrupt = Some(kind);
                 }
                 final_decision = Some(decision);
+            }
+
+            if final_decision.is_none()
+                && !self
+                    .parent
+                    .complete_startup_success(self.start_attempt)
+                    .await
+            {
+                final_decision = Some(RetryDecision::None);
             }
 
             if final_decision.is_none() {
@@ -227,6 +268,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     interrupt_signal: self.interrupt_signal.clone(),
                     instance: &instance,
                     store: &store,
+                    filesystem: &filesystem,
                     linear_memory,
                     invocations_since_snapshot: 0,
                     idle_snapshot_task: None,
@@ -412,13 +454,18 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         ?delay,
                         "Invocation queue loop dropping memory permits and triggering restart"
                     );
-                    let _ = Worker::restart_on_oom(
+                    let pending_startup_attempt = self.parent.pending_startup_attempt();
+                    if let Err(error) = Worker::restart_on_oom(
                         self.parent.clone(),
                         true,
                         delay,
                         self.oom_retry_count + 1,
+                        pending_startup_attempt,
                     )
-                    .await;
+                    .await
+                    {
+                        warn!("Failed to restart worker after releasing memory permits: {error}");
+                    }
                     break;
                 }
             }
@@ -432,6 +479,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 
     async fn stop_unloaded(&self, startup_failure: Option<WorkerExecutorError>) {
+        self.parent.complete_startup(
+            self.start_attempt,
+            Err(startup_failure.clone().unwrap_or_else(|| {
+                WorkerExecutorError::unknown("Worker stopped before startup completed")
+            })),
+        );
         let pending_failure = startup_failure.clone();
         self.parent
             .stop_internal(
@@ -443,6 +496,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 
     async fn stop_cleanup_failed(&self, error: WorkerExecutorError) {
+        self.parent
+            .complete_startup(self.start_attempt, Err(error.clone()));
         let pending_failure = error.clone();
         self.parent
             .stop_internal(
@@ -513,29 +568,19 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         async {
             debug!("Creating the worker instance");
             match RunningWorker::create_instance(self.parent.clone()).await {
-                Ok((instance, store, filesystem)) => {
-                    self.parent.events().publish(Event::WorkerLoaded {
-                        agent_id: self.owned_agent_id.agent_id(),
-                        result: Ok(()),
-                    });
-                    CreateInstanceResult::Created {
-                        instance,
-                        store,
-                        filesystem: Box::new(filesystem),
-                    }
-                }
+                Ok((instance, store, filesystem)) => CreateInstanceResult::Created {
+                    instance,
+                    store,
+                    filesystem: Box::new(filesystem),
+                },
                 // Instance creation was interrupted by a recoverable condition. The worker exists
-                // and its metadata and `Create` oplog entry are already persisted, so creation
-                // waiters are released successfully and the caller parks or restarts the worker.
+                // and its metadata and `Create` oplog entry are already persisted, so the caller
+                // parks or restarts the worker without exposing an unprepared runtime.
                 Err(CreateWorkerInstanceError {
                     error: WorkerExecutorError::Interrupted { kind },
                     filesystem_cleanup_failed: false,
                 }) => {
                     debug!("Worker instantiation interrupted: {kind:?}");
-                    self.parent.events().publish(Event::WorkerLoaded {
-                        agent_id: self.owned_agent_id.agent_id(),
-                        result: Ok(()),
-                    });
                     CreateInstanceResult::Interrupted(kind)
                 }
                 Err(CreateWorkerInstanceError {
@@ -543,10 +588,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     filesystem_cleanup_failed,
                 }) => {
                     warn!("Failed to start the worker: {err}");
-                    self.parent.events().publish(Event::WorkerLoaded {
-                        agent_id: self.owned_agent_id.agent_id(),
-                        result: Err(err.clone()),
-                    });
+                    self.parent
+                        .complete_startup(self.start_attempt, Err(err.clone()));
                     let final_state = if filesystem_cleanup_failed {
                         FinalWorkerState::CleanupFailed(err.clone())
                     } else {
@@ -572,6 +615,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         &self,
         instance: &Instance,
         store: &Mutex<Store<Ctx>>,
+        filesystem: &AgentFilesystem,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         async {
             debug!("Preparing the worker instance");
@@ -592,6 +636,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
             match prepare_result {
                 Ok(decision) => {
+                    if decision.is_none() {
+                        settle_reconstructed_filesystem(filesystem).await?;
+                    }
                     debug!("Recovery decision from prepare_instance: {decision:?}");
                     Ok(decision)
                 }
@@ -644,6 +691,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     interrupt_signal: Arc<Mutex<WorkerInterruptState>>,
     instance: &'a Instance,
     store: &'a Mutex<Store<Ctx>>,
+    filesystem: &'a AgentFilesystem,
     linear_memory: LinearMemoryTracker,
     invocations_since_snapshot: u64,
     idle_snapshot_task: Option<JoinHandle<()>>,
@@ -1055,7 +1103,13 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         async {
             let mut store = self.store.lock().await;
 
-            let resume_replay_result = Ctx::resume_replay(&mut *store, self.instance, true).await;
+            let resume_replay_result =
+                match Ctx::resume_replay(&mut *store, self.instance, true).await {
+                    Ok(None) => settle_reconstructed_filesystem(self.filesystem)
+                        .await
+                        .map(|()| None),
+                    other => other,
+                };
 
             match resume_replay_result {
                 Ok(None) => CommandOutcome::Continue,
