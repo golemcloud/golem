@@ -165,6 +165,65 @@ pub enum BenchmarkConfig {
         #[command(subcommand)]
         mode: TestMode,
     },
+    /// Cloud chaos scenarios (GOL-363). One scenario per invocation, driven by
+    /// the workflow the same way density cells are.
+    ///
+    /// The driver deliberately knows nothing about Kubernetes or Chaos Mesh: the
+    /// workflow injects the fault and tells the driver about it by dropping JSON
+    /// files into `--signal-dir` (see `integration_tests::chaos::signal`).
+    Chaos {
+        /// Action to perform: `prep` (one-time setup) or `scenario` (run one
+        /// scenario end to end).
+        #[arg(long, value_enum)]
+        action: ChaosAction,
+
+        /// Scenario code to run (required for `--action scenario`).
+        #[arg(long, value_enum)]
+        scenario: Option<ChaosScenarioArg>,
+
+        /// Path to the chaos suite YAML holding the scenario's configuration.
+        /// Required for `--action scenario`; the entry whose `code` matches
+        /// `--scenario` supplies the fault, phase and workload settings.
+        #[arg(long)]
+        suite: Option<PathBuf>,
+
+        /// Path to the prep manifest. Written by `--action prep`, read by
+        /// `--action scenario`.
+        #[arg(long)]
+        prep_manifest: PathBuf,
+
+        /// Directory the driver and the workflow exchange fault signals through.
+        /// Required for `--action scenario`.
+        #[arg(long)]
+        signal_dir: Option<PathBuf>,
+
+        /// Save the scenario result to a JSON file. Also written on abort, with
+        /// whatever the run got through.
+        #[arg(long)]
+        save_to_json: Option<PathBuf>,
+
+        /// Save the operation history to a JSON file.
+        #[arg(long)]
+        save_history_to_json: Option<PathBuf>,
+
+        #[command(subcommand)]
+        mode: TestMode,
+    },
+}
+
+/// Chaos subcommand action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ChaosAction {
+    Prep,
+    Scenario,
+}
+
+/// Chaos scenario selector for the CLI. Codes match the scenario catalog in the
+/// Cloud Chaos Tests v1 project and the `code` fields in the suite YAML.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ChaosScenarioArg {
+    /// Shard-manager pod restart under mixed workload.
+    S12,
 }
 
 /// Density subcommand action.
@@ -253,14 +312,17 @@ impl BenchmarkConfig {
         match self {
             BenchmarkConfig::Benchmark { mode, .. }
             | BenchmarkConfig::Suite { mode, .. }
-            | BenchmarkConfig::Density { mode, .. } => mode,
+            | BenchmarkConfig::Density { mode, .. }
+            | BenchmarkConfig::Chaos { mode, .. } => mode,
         }
     }
 
     pub fn iterations(&self) -> usize {
         match self {
             BenchmarkConfig::Benchmark { iterations, .. } => *iterations,
-            BenchmarkConfig::Suite { .. } | BenchmarkConfig::Density { .. } => 0,
+            BenchmarkConfig::Suite { .. }
+            | BenchmarkConfig::Density { .. }
+            | BenchmarkConfig::Chaos { .. } => 0,
         }
     }
 }

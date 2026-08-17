@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod benchmarks;
-pub mod chaos;
+//! Chaos scenario implementations.
+//!
+//! One module per scenario code. Each one owns its phase choreography but shares
+//! the workload, history, summary and signal machinery, so adding a scenario is
+//! a new file rather than a new harness.
 
-#[cfg(test)]
-test_r::enable!();
+pub mod s12;
