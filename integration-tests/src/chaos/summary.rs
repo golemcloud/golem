@@ -368,9 +368,15 @@ impl ChaosSummary {
             .iter()
             .filter(|r| r.verdict.needs_attention())
             .map(|r| {
+                // Read by an operator in a job log, so an unread agent says
+                // "unreadable" rather than leaking `Option` debug formatting.
+                let observed = r
+                    .observed
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unreadable".to_string());
                 format!(
-                    "{} agent {}: {} (observed {:?}, expected {}..={})",
-                    r.stream, r.agent, r.verdict, r.observed, r.expected_min, r.expected_max
+                    "{} agent {}: {} (observed {observed}, expected {}..={})",
+                    r.stream, r.agent, r.verdict, r.expected_min, r.expected_max
                 )
             })
             .collect();
@@ -669,6 +675,19 @@ mod tests {
         assert_eq!(
             summary.streams_without_readback,
             vec![Stream::Ephemeral, Stream::Promise]
+        );
+    }
+
+    /// These strings are read by an operator in a job log, so they must not
+    /// leak Rust `Option` formatting.
+    #[test]
+    fn attention_lines_render_observed_values_for_humans() {
+        let summary = ChaosSummary::build(&[], vec![readback_for(10, 0, 12)], Vec::new(), None);
+        let line = &summary.attention[0];
+        assert!(line.contains("observed 12"), "got {line}");
+        assert!(
+            !line.contains("Some("),
+            "Option debug formatting leaked: {line}"
         );
     }
 
