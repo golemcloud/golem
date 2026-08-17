@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: AgentStream cannot be used as an agent constructor parameter
+ --> tests/ui/fail/agent_stream_alias_constructor.rs:6:1
+  |
+6 | #[agent_definition]
+  | ^^^^^^^^^^^^^^^^^^^ evaluation of `AliasedStreamConstructorAgent::__register_agent_type::_` failed here

@@ -125,6 +125,17 @@ interface types {
     /// and reveal it only through capability-gated host interfaces.
     resource secret;
 
+    /// An affine wrapper around a native Component Model stream of schema
+    /// values. The indirection lets a stream occur anywhere in a recursive
+    /// `schema-value-tree` while preserving the native stream endpoint.
+    resource schema-value-stream {
+        /// Wraps any native schema-value reader for placement in a value tree.
+        wrap: static async func(reader: stream<schema-value-tree>) -> own<schema-value-stream>;
+
+        /// Consumes a schema-value-stream wrapper and returns its native reader.
+        unwrap: static async func(value: own<schema-value-stream>) -> stream<schema-value-tree>;
+    }
+
     // ============================================================
     // Schema graph (self-contained type carrier)
     // ============================================================
@@ -524,8 +535,7 @@ interface types {
         // Capability nodes
         secret-value(own<secret>),
         quota-token-handle(own<quota-token>),
-
-        // WASI P3 stubs (parseable only in the schema; no constructible values).
+        stream-value(own<schema-value-stream>),
     }
 
     record variant-value-payload {
@@ -584,4 +594,5 @@ interface types {
         graph: schema-graph,
         value: schema-value-tree,
     }
+
 }

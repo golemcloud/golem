@@ -512,6 +512,10 @@ fn get_agent_type_with_remote_client(
                 if !has_agent_config_attr(pat_type) {
                     let ty = &pat_type.ty;
                     constructor_parameters_with_schema.push(quote! {
+                        assert!(
+                            !<#ty as golem_rust::agentic::Schema>::contains_stream(),
+                            "AgentStream cannot be used in an agent constructor parameter"
+                        );
                         let schema: golem_rust::agentic::StructuredSchema = <#ty as golem_rust::agentic::Schema>::get_type();
                         match schema {
                             golem_rust::agentic::StructuredSchema::Default(schema) => {

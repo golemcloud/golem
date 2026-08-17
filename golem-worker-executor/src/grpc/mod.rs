@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod invocation;
+mod invocation_session;
 
 use crate::grpc::invocation::{CanStartWorker, from_proto_invocation_context};
 use crate::model::event::InternalWorkerEvent;
@@ -27,17 +28,15 @@ use crate::services::worker_activator::{
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService,
-    HasPromiseService, HasRunningWorkerEnumerationService, HasSchedulerService,
-    HasShardManagerService, HasShardService, HasWorkerEnumerationService, HasWorkerService,
-    UsesAllDeps,
+    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
+    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
-use chrono::{DateTime, Utc};
 use futures::Stream;
 use futures::StreamExt;
 use golem_api_grpc::proto::golem;
-use golem_api_grpc::proto::golem::worker::{Cursor, UpdateMode};
+use golem_api_grpc::proto::golem::worker::{Cursor, InvocationFrame, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, ActivatePluginResponse, CancelInvocationRequest,
@@ -46,10 +45,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetAgentWalletRequest, GetAgentWalletResponse, GetAgentWalletSuccess, GetFileContentsRequest,
     GetFileContentsResponse, GetFileSystemNodeRequest, GetFileSystemNodeResponse, GetOplogRequest,
     GetOplogResponse, GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse,
-    GetWorkersMetadataRequest, GetWorkersMetadataResponse, InvokeAgentRequest, InvokeAgentResponse,
-    ProcessOplogEntriesRequest, ProcessOplogEntriesResponse, RevertWorkerRequest,
-    RevertWorkerResponse, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest,
-    UpdateWorkerResponse, process_oplog_entries_response,
+    GetWorkersMetadataRequest, GetWorkersMetadataResponse, ProcessOplogEntriesRequest,
+    ProcessOplogEntriesResponse, RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest,
+    SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse, process_oplog_entries_response,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
@@ -64,11 +62,9 @@ use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, TypedAgentConfigEntry};
 use golem_common::model::{
-    AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput,
-    AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, InvocationStatus,
-    OwnedAgentId, PendingUpdateKind, ScanCursor, ScheduledAction, ShardId, Timestamp,
+    AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata,
+    AgentStatus, IdempotencyKey, OwnedAgentId, PendingUpdateKind, ScanCursor, ShardId, Timestamp,
 };
-use golem_common::schema::SchemaValue;
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
 use golem_service_base::grpc::{
@@ -82,7 +78,6 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio;
 use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
@@ -117,14 +112,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
 type ResponseResult<T> = Result<Response<T>, Status>;
 type ResponseStream = WorkerEventStream;
-
-fn decode_invocation_freshness_disposition(value: i32) -> InvocationFreshnessDisposition {
-    if value == golem::workerexecutor::v1::InvocationFreshnessDisposition::KnownFresh as i32 {
-        InvocationFreshnessDisposition::KnownFresh
-    } else {
-        InvocationFreshnessDisposition::MayExist
-    }
-}
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -1889,252 +1876,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
-    async fn invoke_agent_internal(
-        &self,
-        request: InvokeAgentRequest,
-    ) -> Result<(Option<AgentInvocationOutput>, Option<i32>), WorkerExecutorError> {
-        Self::validate_auth_ctx(&request.auth_ctx)?;
-
-        let freshness_disposition =
-            decode_invocation_freshness_disposition(request.freshness_disposition);
-
-        let idempotency_key: Option<IdempotencyKey> =
-            request.idempotency_key.clone().map(|k| k.into());
-
-        if freshness_disposition == InvocationFreshnessDisposition::KnownFresh
-            && idempotency_key.is_none()
-        {
-            return Err(WorkerExecutorError::invalid_request(
-                "KnownFresh requires an idempotency key",
-            ));
-        }
-
-        let mode = request.mode();
-
-        let ik = idempotency_key.unwrap_or(IdempotencyKey::fresh());
-        let final_agent_id: AgentId = request
-            .agent_id
-            .clone()
-            .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?
-            .try_into()
-            .map_err(WorkerExecutorError::invalid_request)?;
-
-        if matches!(
-            mode,
-            golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup
-        ) {
-            if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
-                return Err(WorkerExecutorError::invalid_request(
-                    "KnownFresh cannot be used for an invocation lookup",
-                ));
-            }
-            let inv_status = match self.get_or_create_pending_for_lookup(&request).await? {
-                Some(worker) => match worker.lookup_invocation_result(&ik).await {
-                    crate::model::LookupResult::Complete(Ok(_)) => InvocationStatus::Complete,
-                    crate::model::LookupResult::Complete(Err(err)) => return Err(err),
-                    crate::model::LookupResult::Pending => InvocationStatus::Pending,
-                    crate::model::LookupResult::New | crate::model::LookupResult::Interrupted => {
-                        InvocationStatus::Unknown
-                    }
-                },
-                None => InvocationStatus::Unknown,
-            };
-            return Ok((
-                Some(AgentInvocationOutput {
-                    result: AgentInvocationResult::AgentInitialization,
-                    consumed_fuel: None,
-                    invocation_status: Some(inv_status),
-                    component_revision: None,
-                    agent_id: Some(final_agent_id),
-                    idempotency_key: Some(ik),
-                    oplog_index: None,
-                    agent_fingerprint: None,
-                }),
-                None,
-            ));
-        }
-
-        let method_name =
-            request
-                .method_name
-                .clone()
-                .ok_or(WorkerExecutorError::invalid_request(
-                    "method_name is required for non-lookup invocations",
-                ))?;
-
-        let method_parameters: SchemaValue = request
-            .method_parameters
-            .clone()
-            .ok_or(WorkerExecutorError::invalid_request(
-                "method_parameters is required for non-lookup invocations",
-            ))?
-            .try_into()
-            .map_err(|e| {
-                WorkerExecutorError::invalid_request(format!(
-                    "failed converting method_parameters: {e}"
-                ))
-            })?;
-
-        let schedule_at: Option<DateTime<Utc>> = request
-            .schedule_at
-            .and_then(|ts| DateTime::from_timestamp(ts.seconds, ts.nanos as u32));
-
-        let account_id: AccountId = request
-            .component_owner_account_id
-            .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?
-            .try_into()
-            .map_err(|e| {
-                WorkerExecutorError::invalid_request(format!("Invalid account id: {e}"))
-            })?;
-
-        let owned_agent_id =
-            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
-
-        Worker::<Ctx>::validate_invocation_freshness(
-            self,
-            &owned_agent_id,
-            &ik,
-            freshness_disposition,
-        )
-        .await?;
-
-        let principal: Principal = request
-            .principal
-            .clone()
-            .map(|p| p.try_into())
-            .transpose()
-            .map_err(|e: String| {
-                WorkerExecutorError::invalid_request(format!("failed converting principal: {e}"))
-            })?
-            .unwrap_or_else(Principal::anonymous);
-
-        let invocation_context = self
-            .limit_invocation_context_stack_depth(from_proto_invocation_context(&request.context));
-        let worker_creation_principal = principal.clone();
-
-        let invocation = AgentInvocation::AgentMethod {
-            idempotency_key: ik.clone(),
-            method_name,
-            input: method_parameters,
-            invocation_context,
-            principal,
-        };
-
-        match mode {
-            golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await => {
-                // Use the `pending` variant so we do NOT start the wasmtime instance
-                // up front. `Worker::invoke_and_await` checks the read-only cache first;
-                // on a cache hit (`ResultOrSubscription::Finished`) it returns without
-                // loading the agent. The Pending path starts the instance lazily so
-                // queued invocations still get processed.
-                let worker = self
-                    .get_or_create_pending_with_freshness(&request, freshness_disposition)
-                    .await?;
-                let mut invocation_output = worker.invoke_and_await(invocation).await?;
-                invocation_output.agent_id = Some(final_agent_id);
-                invocation_output.idempotency_key = Some(ik);
-                Ok((Some(invocation_output), None))
-            }
-            golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule => {
-                match schedule_at {
-                    Some(scheduled_time) => {
-                        let component = self
-                            .component_service()
-                            .get_metadata(owned_agent_id.component_id(), None)
-                            .await?;
-                        let parsed_agent_id = ParsedAgentId::parse(
-                            &owned_agent_id.agent_id.agent_id,
-                            &component.metadata,
-                        )
-                        .map_err(WorkerExecutorError::invalid_request)?;
-                        let agent_mode = component
-                            .metadata
-                            .find_agent_type_by_name_ref(&parsed_agent_id.agent_type)
-                            .map(|agent_type| agent_type.mode)
-                            .ok_or_else(|| {
-                                WorkerExecutorError::invalid_request(
-                                    "Scheduled invocation target is not a registered agent type",
-                                )
-                            })?;
-                        let action = if agent_mode == AgentMode::Ephemeral {
-                            ScheduledAction::InvokeEphemeral {
-                                account_id,
-                                owned_agent_id,
-                                invocation: Box::new(invocation),
-                                component_revision: component.revision,
-                                env: request.env().unwrap_or_default(),
-                                config: request.config()?,
-                                parent: request.parent(),
-                                creation_principal: Box::new(worker_creation_principal),
-                            }
-                        } else {
-                            let worker = self
-                                .get_or_create_pending_with_freshness(
-                                    &request,
-                                    freshness_disposition,
-                                )
-                                .await?;
-                            let target_worker_fingerprint =
-                                worker.get_initial_worker_metadata().fingerprint;
-                            ScheduledAction::Invoke {
-                                account_id,
-                                owned_agent_id,
-                                invocation: Box::new(invocation),
-                                target_worker_fingerprint,
-                            }
-                        };
-                        self.scheduler_service()
-                            .schedule(scheduled_time, action)
-                            .await;
-                        Ok((
-                            Some(AgentInvocationOutput {
-                                result: AgentInvocationResult::AgentInitialization,
-                                consumed_fuel: None,
-                                invocation_status: None,
-                                component_revision: None,
-                                agent_id: Some(final_agent_id),
-                                idempotency_key: Some(ik),
-                                oplog_index: None,
-                                agent_fingerprint: None,
-                            }),
-                            None,
-                        ))
-                    }
-                    None => {
-                        let worker = self
-                            .get_or_create_pending_with_freshness(&request, freshness_disposition)
-                            .await?;
-                        match worker.clone().invoke(invocation).await? {
-                            crate::worker::ResultOrSubscription::Finished(Err(err)) => {
-                                return Err(err);
-                            }
-                            crate::worker::ResultOrSubscription::Finished(Ok(_)) => {}
-                            crate::worker::ResultOrSubscription::Pending(_) => {
-                                Worker::start_if_needed(worker).await?;
-                            }
-                        }
-                        Ok((
-                            Some(AgentInvocationOutput {
-                                result: AgentInvocationResult::AgentInitialization,
-                                consumed_fuel: None,
-                                invocation_status: None,
-                                component_revision: None,
-                                agent_id: Some(final_agent_id),
-                                idempotency_key: Some(ik),
-                                oplog_index: None,
-                                agent_fingerprint: None,
-                            }),
-                            None,
-                        ))
-                    }
-                }
-            }
-            golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup => {
-                unreachable!("Lookup mode handled above")
-            }
-        }
-    }
-
     async fn process_oplog_entries_internal(
         &self,
         request: ProcessOplogEntriesRequest,
@@ -2284,7 +2025,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             agent_id: Some(metadata.agent_id.into()),
             environment_id: Some(metadata.environment_id.into()),
             env: HashMap::from_iter(metadata.env.iter().cloned()),
-            config: metadata.config.into_iter().map(Into::into).collect(),
+            config: metadata
+                .config
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, String>>()
+                .map_err(|error| {
+                    WorkerExecutorError::unknown(format!(
+                        "failed converting agent configuration: {error}"
+                    ))
+                })?,
             created_by: Some(metadata.created_by.into()),
             component_revision: latest_status.component_revision.into(),
             status: Into::<golem::worker::AgentStatus>::into(latest_status.status).into(),
@@ -3167,85 +2917,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
-    async fn invoke_agent(
-        &self,
-        request: Request<InvokeAgentRequest>,
-    ) -> Result<Response<InvokeAgentResponse>, Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "invoke_agent",
-            agent_id = proto_agent_id_string(&request.agent_id),
-            method_name = request.method_name.clone(),
-            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
-        );
+    type InvokeAgentSessionStream = invocation_session::InvocationSessionStream;
 
-        match self
-            .invoke_agent_internal(request)
-            .instrument(record.span.clone())
-            .await
-        {
-            Ok((result, _status)) => {
-                let (
-                    result_value,
-                    fuel_consumed,
-                    component_revision,
-                    invocation_status,
-                    oplog_index,
-                    agent_fingerprint,
-                    agent_id,
-                    idempotency_key,
-                ) = match result {
-                    Some(output) => {
-                        let value = match &output.result {
-                            AgentInvocationResult::AgentMethod { output } => {
-                                Some(output.clone().into())
-                            }
-                            _ => None,
-                        };
-                        let proto_status = output.invocation_status.map(|s| {
-                            golem_api_grpc::proto::golem::worker::InvocationStatus::from(s) as i32
-                        });
-                        (
-                            value,
-                            output.consumed_fuel,
-                            output.component_revision.map(|r| r.get()),
-                            proto_status,
-                            output.oplog_index.map(u64::from),
-                            output.agent_fingerprint.map(|fp| fp.0.into()),
-                            output.agent_id.map(Into::into),
-                            output.idempotency_key.map(Into::into),
-                        )
-                    }
-                    None => (None, None, None, None, None, None, None, None),
-                };
-                record.succeed(Ok(Response::new(InvokeAgentResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::invoke_agent_response::Result::Success(
-                            golem::workerexecutor::v1::InvokeAgentSuccess {
-                                result: result_value,
-                                fuel_consumed,
-                                component_revision,
-                                status: invocation_status,
-                                oplog_index,
-                                agent_fingerprint,
-                                agent_id,
-                                idempotency_key,
-                            },
-                        ),
-                    ),
-                })))
-            }
-            Err(mut err) => record.fail(
-                Ok(Response::new(InvokeAgentResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::invoke_agent_response::Result::Failure(
-                            err.clone().into(),
-                        ),
-                    ),
-                })),
-                &mut err,
-            ),
-        }
+    async fn invoke_agent_session(
+        &self,
+        request: Request<tonic::Streaming<InvocationFrame>>,
+    ) -> ResponseResult<Self::InvokeAgentSessionStream> {
+        invocation_session::invoke_agent_session(self, request).await
     }
 
     async fn process_oplog_entries(
@@ -3355,34 +3033,4 @@ fn extract_owned_agent_id<T>(
         .map_err(WorkerExecutorError::invalid_request)?;
 
     Ok(OwnedAgentId::new(environment_id, &agent_id))
-}
-
-#[cfg(test)]
-mod freshness_tests {
-    use super::decode_invocation_freshness_disposition;
-    use golem_common::model::agent::InvocationFreshnessDisposition;
-    use test_r::test;
-
-    #[test]
-    fn invocation_freshness_defaults_unknown_values_to_may_exist() {
-        assert_eq!(
-            decode_invocation_freshness_disposition(0),
-            InvocationFreshnessDisposition::MayExist
-        );
-        assert_eq!(
-            decode_invocation_freshness_disposition(i32::MAX),
-            InvocationFreshnessDisposition::MayExist
-        );
-    }
-
-    #[test]
-    fn invocation_freshness_decodes_known_fresh_explicitly() {
-        assert_eq!(
-            decode_invocation_freshness_disposition(
-                golem_api_grpc::proto::golem::workerexecutor::v1::InvocationFreshnessDisposition::KnownFresh
-                    as i32
-            ),
-            InvocationFreshnessDisposition::KnownFresh
-        );
-    }
 }

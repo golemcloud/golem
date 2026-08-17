@@ -106,7 +106,9 @@ impl CallAgentHandler {
         };
 
         let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
-            method_params_value.into();
+            method_params_value.try_into().map_err(|error| {
+                anyhow!("method parameters cannot cross the worker boundary: {error}")
+            })?;
 
         let invocation_context = Some(golem_api_grpc::proto::golem::worker::InvocationContext {
             parent: None,
@@ -133,7 +135,6 @@ impl CallAgentHandler {
                 Vec::new(),
                 AuthCtx::System,
                 proto_principal,
-                Some(resolved_route.route.environment_id),
             )
             .await?;
 

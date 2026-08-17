@@ -94,6 +94,19 @@ pub fn Secret::drop(self : Secret) -> Unit {
 }
 
 ///|
+/// An affine wrapper around a native Component Model stream of schema
+/// values. The indirection lets a stream occur anywhere in a recursive
+/// `schema-value-tree` while preserving the native stream endpoint.
+pub(all) struct SchemaValueStream(Int) derive(Show, Eq)
+
+///|
+/// Drops a resource handle.
+pub fn SchemaValueStream::drop(self : SchemaValueStream) -> Unit {
+  let SchemaValueStream(resource) = self
+  wasmImportResourceDropSchemaValueStream(resource)
+}
+
+///|
 /// A named type definition inside a `schema-graph`.
 ///
 /// The def itself does not carry metadata; metadata lives on the
@@ -511,6 +524,7 @@ pub(all) enum SchemaValueNode {
   UnionValue(UnionValuePayload)
   SecretValue(Secret)
   QuotaTokenHandle(QuotaToken)
+  StreamValue(SchemaValueStream)
 } derive(Show, Eq)
 
 ///|
@@ -589,4 +603,78 @@ pub fn uuid_to_string(uuid : Uuid) -> String {
   let ret = result
   mbt_ffi_free(return_area)
   return ret
+}
+
+///|
+/// Wraps any native schema-value reader for placement in a value tree.
+pub async fn SchemaValueStream::wrap(
+  reader : @async-core.Stream[SchemaValueTree],
+) -> SchemaValueStream {
+  let lower_arg = wasmGolemCoreTypes200StaticSchemaValueStreamWrapStream0StreamLower(
+    reader,
+  )
+  let result_ptr = mbt_ffi_malloc(4 * 1)
+  defer mbt_ffi_free(result_ptr)
+
+  let subtask_code = wasmImportStaticSchemaValueStreamWrap(
+    lower_arg, result_ptr,
+  )
+  @async-core.suspend_for_subtask(
+    subtask_code,
+    fn(before_started) {
+      if before_started {
+        let result = wasmGolemCoreTypes200StaticSchemaValueStreamWrapStream0StreamLift(
+          lower_arg,
+        )
+        result.drop_sync()
+      } else {
+        wasmGolemCoreTypes200StaticSchemaValueStreamWrapStream0StreamCommit(
+          lower_arg,
+        )
+      }
+    },
+    fn() {
+      SchemaValueStream::SchemaValueStream(mbt_ffi_load32(result_ptr + 0)).drop()
+    },
+  )
+
+  SchemaValueStream::SchemaValueStream(mbt_ffi_load32(result_ptr + 0))
+}
+
+///|
+/// Consumes a schema-value-stream wrapper and returns its native reader.
+pub async fn SchemaValueStream::unwrap(
+  value : SchemaValueStream,
+) -> @async-core.Stream[SchemaValueTree] {
+  let SchemaValueStream(handle) = value
+
+  let lower_arg = handle
+  let result_ptr = mbt_ffi_malloc(4 * 1)
+  defer mbt_ffi_free(result_ptr)
+
+  let subtask_code = wasmImportStaticSchemaValueStreamUnwrap(
+    lower_arg, result_ptr,
+  )
+  @async-core.suspend_for_subtask(
+    subtask_code,
+    fn(before_started) {
+      if before_started {
+        SchemaValueStream::SchemaValueStream(lower_arg).drop()
+      } else {
+        ()
+      }
+    },
+    fn() {
+      let result = wasmGolemCoreTypes200StaticSchemaValueStreamUnwrapStream0StreamLift(
+        mbt_ffi_load32(result_ptr + 0),
+      )
+      result.drop_sync()
+    },
+  )
+
+  let result = wasmGolemCoreTypes200StaticSchemaValueStreamUnwrapStream0StreamLift(
+    mbt_ffi_load32(result_ptr + 0),
+  )
+
+  result
 }

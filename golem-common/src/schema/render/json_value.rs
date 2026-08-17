@@ -1095,6 +1095,7 @@ fn value_name(value: &SchemaValue) -> &'static str {
         SchemaValue::Union(_) => "union",
         SchemaValue::Secret(_) => "secret",
         SchemaValue::QuotaToken(_) => "quota-token",
+        SchemaValue::Stream(_) => "stream",
     }
 }
 

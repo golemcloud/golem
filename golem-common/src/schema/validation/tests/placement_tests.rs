@@ -157,10 +157,50 @@ fn plain_primitives_allowed_in_every_scope() {
         SchemaScope::Constructor,
         SchemaScope::Persisted,
         SchemaScope::Boundary,
+        SchemaScope::AgentMethodInput,
+        SchemaScope::AgentMethodOutput,
         SchemaScope::Docs,
         SchemaScope::Custom,
     ] {
         assert!(validate_placement(&graph, scope).is_ok());
+    }
+}
+
+#[test]
+fn streams_are_allowed_only_on_agent_method_boundaries() {
+    let graph = SchemaGraph::anonymous(SchemaType::stream(Some(SchemaType::string())));
+    for scope in [
+        SchemaScope::Constructor,
+        SchemaScope::Persisted,
+        SchemaScope::Boundary,
+        SchemaScope::Docs,
+        SchemaScope::Custom,
+    ] {
+        let errors = validate_placement(&graph, scope).expect_err("stream must be rejected");
+        assert!(errors.contains(&PlacementError::StreamNotAllowed { scope }));
+    }
+    for scope in [
+        SchemaScope::AgentMethodInput,
+        SchemaScope::AgentMethodOutput,
+    ] {
+        validate_placement(&graph, scope).expect("stream must be accepted");
+    }
+}
+
+#[test]
+fn futures_are_rejected_in_every_scope() {
+    let graph = SchemaGraph::anonymous(SchemaType::future(Some(SchemaType::string())));
+    for scope in [
+        SchemaScope::Constructor,
+        SchemaScope::Persisted,
+        SchemaScope::Boundary,
+        SchemaScope::AgentMethodInput,
+        SchemaScope::AgentMethodOutput,
+        SchemaScope::Docs,
+        SchemaScope::Custom,
+    ] {
+        let errors = validate_placement(&graph, scope).expect_err("future must be rejected");
+        assert!(errors.contains(&PlacementError::FutureNotAllowed { scope }));
     }
 }
 
@@ -174,7 +214,7 @@ mod agent {
     use crate::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
     use crate::schema::agent::{
         AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema, AgentTypeSchema,
-        InputSchema, NamedField, OutputSchema,
+        AutoInjectedKind, InputSchema, NamedField, OutputSchema,
     };
     use crate::schema::schema_type::SecretSpec;
     use crate::schema::validation::placement::{
@@ -207,6 +247,27 @@ mod agent {
     fn empty_agent_passes_placement() {
         let agent = empty_agent("a");
         validate_agent_type_placement(&agent).expect("empty agent should pass");
+    }
+
+    #[test]
+    fn auto_injected_method_stream_fails_agent_placement_validation() {
+        let mut agent = empty_agent("a");
+        agent.methods.push(AgentMethodSchema {
+            name: "invalid".into(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![NamedField::auto_injected(
+                "principal",
+                AutoInjectedKind::Principal,
+                SchemaType::stream(Some(SchemaType::string())),
+            )]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        });
+
+        validate_agent_type_placement(&agent)
+            .expect_err("method input streams must be in caller-supplied fields");
     }
 
     #[test]

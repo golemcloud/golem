@@ -24,15 +24,15 @@
 //!   (typed values, `Custom` oplog payloads, REST/RPC envelopes).
 //! - [`validate_agent_type_placement`] walks an [`AgentTypeSchema`]: the
 //!   constructor input fields are validated against
-//!   [`SchemaScope::Constructor`], method inputs and outputs against
-//!   [`SchemaScope::Boundary`], the agent's named defs against
-//!   [`SchemaScope::Boundary`], and each dependency recursively against
-//!   its own graph. The sentinel `graph.root` on agent carriers is not
-//!   walked.
+//!   [`SchemaScope::Constructor`], method inputs and outputs against their
+//!   stream-capable method scopes, and each dependency recursively against its
+//!   own graph. Named definitions are validated at each use site because the
+//!   same definition may be legal in a method and illegal in a constructor.
+//!   The sentinel `graph.root` on agent carriers is not walked.
 
 use crate::schema::agent::{
-    AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema, AgentTypeSchema, InputSchema,
-    OutputSchema,
+    AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema, AgentTypeSchema, FieldSource,
+    InputSchema, OutputSchema,
 };
 use crate::schema::graph::SchemaGraph;
 use crate::schema::host_managed::HostManagedKind;
@@ -51,6 +51,10 @@ pub enum SchemaScope {
     Persisted,
     /// REST / RPC boundary payloads.
     Boundary,
+    /// Agent method inputs, whose recursive value trees may contain streams.
+    AgentMethodInput,
+    /// Agent method outputs, whose recursive value trees may contain streams.
+    AgentMethodOutput,
     /// Public docs / schema rendering.
     Docs,
     /// User-provided `Custom` durable payloads.
@@ -69,6 +73,11 @@ pub enum PlacementError {
     /// A field / definition annotated with [`Role::Multimodal`] whose body
     /// is `list<variant<…>>` appeared in [`SchemaScope::Constructor`].
     MultimodalListNotAllowedInConstructor,
+    /// A [`SchemaType::Stream`] node appeared outside a stream-capable method.
+    StreamNotAllowed { scope: SchemaScope },
+    /// A [`SchemaType::Future`] node appeared in a schema boundary. Future
+    /// values are not part of the agent ABI.
+    FutureNotAllowed { scope: SchemaScope },
 }
 
 impl Display for PlacementError {
@@ -84,6 +93,12 @@ impl Display for PlacementError {
                 f,
                 "a multimodal `list<variant<…>>` is not allowed in constructor scope"
             ),
+            PlacementError::StreamNotAllowed { scope } => {
+                write!(f, "stream values are not allowed in scope {scope:?}")
+            }
+            PlacementError::FutureNotAllowed { scope } => {
+                write!(f, "future values are not allowed in scope {scope:?}")
+            }
         }
     }
 }
@@ -144,6 +159,21 @@ fn walk_type<'a>(
     errors: &mut Vec<PlacementError>,
     visited: &mut Vec<&'a TypeId>,
 ) {
+    match ty {
+        SchemaType::Stream { .. }
+            if !matches!(
+                scope,
+                SchemaScope::AgentMethodInput | SchemaScope::AgentMethodOutput
+            ) =>
+        {
+            errors.push(PlacementError::StreamNotAllowed { scope });
+        }
+        SchemaType::Future { .. } => {
+            errors.push(PlacementError::FutureNotAllowed { scope });
+        }
+        _ => {}
+    }
+
     // Constructor-scope check: a list<variant<…>> tagged anywhere on its
     // metadata-carrying nodes (enclosing field/def metadata, list node
     // metadata, inner element Ref metadata, or inner variant metadata) with
@@ -376,14 +406,14 @@ fn resolve_ref_chain<'a>(
 ///
 /// Walks:
 /// - the constructor input fields against [`SchemaScope::Constructor`]
-/// - each method's input and output bodies against [`SchemaScope::Boundary`]
-/// - every named def in [`AgentTypeSchema::schema`] against
-///   [`SchemaScope::Boundary`]
+/// - each method's input and output bodies against the corresponding
+///   stream-capable method scope
+/// - config value types against the scalar-only [`SchemaScope::Boundary`]
 /// - each dependency, recursively, against its own
 ///   [`AgentDependencySchema::schema`]
 ///
-/// The sentinel `graph.root` carried by agent-layer [`SchemaGraph`]s is
-/// **not** walked (see §4.22).
+/// Named definitions are resolved and checked at each use site. The sentinel
+/// `graph.root` carried by agent-layer [`SchemaGraph`]s is **not** walked.
 ///
 /// This is a **placement-only** validator. Structural well-formedness
 /// (dangling refs, duplicate ids, …) is the responsibility of
@@ -396,7 +426,18 @@ pub fn validate_agent_type_placement(ty: &AgentTypeSchema) -> Result<(), Vec<Pla
     for method in &ty.methods {
         walk_agent_method(&ty.schema, method, &mut errors);
     }
-    walk_agent_graph_defs(&ty.schema, &mut errors);
+    for config in &ty.config {
+        let metadata = config.value_type.metadata().clone();
+        let mut visited = Vec::new();
+        walk_type(
+            &ty.schema,
+            &config.value_type,
+            &metadata,
+            SchemaScope::Boundary,
+            &mut errors,
+            &mut visited,
+        );
+    }
 
     for dep in &ty.dependencies {
         walk_agent_dependency(dep, &mut errors);
@@ -432,7 +473,6 @@ fn walk_agent_dependency(dep: &AgentDependencySchema, errors: &mut Vec<Placement
     for method in &dep.methods {
         walk_agent_method(&dep.schema, method, errors);
     }
-    walk_agent_graph_defs(&dep.schema, errors);
 }
 
 fn walk_agent_constructor(
@@ -448,8 +488,31 @@ fn walk_agent_method(
     method: &AgentMethodSchema,
     errors: &mut Vec<PlacementError>,
 ) {
-    walk_input_schema(graph, &method.input_schema, SchemaScope::Boundary, errors);
-    walk_output_schema(graph, &method.output_schema, SchemaScope::Boundary, errors);
+    match &method.input_schema {
+        InputSchema::Parameters(fields) => {
+            for field in fields {
+                let scope = match field.source {
+                    FieldSource::UserSupplied => SchemaScope::AgentMethodInput,
+                    FieldSource::AutoInjected(_) => SchemaScope::Boundary,
+                };
+                let mut visited = Vec::new();
+                walk_type(
+                    graph,
+                    &field.schema,
+                    &field.metadata,
+                    scope,
+                    errors,
+                    &mut visited,
+                );
+            }
+        }
+    }
+    walk_output_schema(
+        graph,
+        &method.output_schema,
+        SchemaScope::AgentMethodOutput,
+        errors,
+    );
 }
 
 fn walk_input_schema(
@@ -481,28 +544,5 @@ fn walk_output_schema(
             let mut visited: Vec<&TypeId> = Vec::new();
             walk_type(graph, ty, &enclosing, scope, errors, &mut visited);
         }
-    }
-}
-
-/// Walk every def in `graph.defs` at [`SchemaScope::Boundary`].
-///
-/// Defs are validated at Boundary because shared defs may legitimately be
-/// used by method inputs/outputs, where Constructor-only restrictions
-/// (e.g. `Secret`) do not apply. Constructor-specific restrictions are
-/// still enforced at constructor use sites: when a constructor parameter
-/// is a [`SchemaType::Ref`], the constructor walk resolves the ref and
-/// re-checks the resolved body under [`SchemaScope::Constructor`].
-fn walk_agent_graph_defs(graph: &SchemaGraph, errors: &mut Vec<PlacementError>) {
-    for def in &graph.defs {
-        let body_metadata = def.body.metadata().clone();
-        let mut visited: Vec<&TypeId> = Vec::new();
-        walk_type(
-            graph,
-            &def.body,
-            &body_metadata,
-            SchemaScope::Boundary,
-            errors,
-            &mut visited,
-        );
     }
 }

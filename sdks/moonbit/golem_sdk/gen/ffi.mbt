@@ -54,18 +54,14 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
 
 ///|
 #doc(hidden)
-pub fn wasmExportAsyncInitialize(
-  event_raw : Int,
-  waitable : Int,
-  code : Int,
-) -> Int {
-  @guest0.wasmExportAsyncInitialize(event_raw, waitable, code)
+pub fn wasmExportInvokeGolemAgentGuest(p0 : Int) -> Int {
+  @guest0.wasmExportInvokeGolemAgentGuest(p0)
 }
 
 ///|
 #doc(hidden)
-pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
-  @guest.wasmExportInvokeGolemToolGuest(p0)
+pub fn wasmExportLoad(p0 : Int, p1 : Int, p2 : Int, p3 : Int) -> Int {
+  @load-snapshot.wasmExportLoad(p0, p1, p2, p3)
 }
 
 ///|
@@ -76,30 +72,18 @@ pub fn wasmExportSave() -> Int {
 
 ///|
 #doc(hidden)
-pub fn wasmExportAsyncInvokeGolemToolGuest(
+pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
+  @guest.wasmExportInvokeGolemToolGuest(p0)
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportAsyncInitialize(
   event_raw : Int,
   waitable : Int,
   code : Int,
 ) -> Int {
-  @guest.wasmExportAsyncInvokeGolemToolGuest(event_raw, waitable, code)
-}
-
-///|
-#doc(hidden)
-pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
-  @guest.wasmExportGetToolPostReturn(p0)
-}
-
-///|
-#doc(hidden)
-pub fn wasmExportDiscoverTools() -> Int {
-  @guest.wasmExportDiscoverTools()
-}
-
-///|
-#doc(hidden)
-pub fn wasmExportGetTool(p0 : Int, p1 : Int) -> Int {
-  @guest.wasmExportGetTool(p0, p1)
+  @guest0.wasmExportAsyncInitialize(event_raw, waitable, code)
 }
 
 ///|
@@ -114,8 +98,8 @@ pub fn wasmExportAsyncInvokeGolemAgentGuest(
 
 ///|
 #doc(hidden)
-pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
-  @guest0.wasmExportDiscoverAgentTypesPostReturn(p0)
+pub fn wasmExportAsyncLoad(event_raw : Int, waitable : Int, code : Int) -> Int {
+  @load-snapshot.wasmExportAsyncLoad(event_raw, waitable, code)
 }
 
 ///|
@@ -126,20 +110,18 @@ pub fn wasmExportAsyncSave(event_raw : Int, waitable : Int, code : Int) -> Int {
 
 ///|
 #doc(hidden)
-pub fn wasmExportAsyncLoad(event_raw : Int, waitable : Int, code : Int) -> Int {
-  @load-snapshot.wasmExportAsyncLoad(event_raw, waitable, code)
+pub fn wasmExportAsyncInvokeGolemToolGuest(
+  event_raw : Int,
+  waitable : Int,
+  code : Int,
+) -> Int {
+  @guest.wasmExportAsyncInvokeGolemToolGuest(event_raw, waitable, code)
 }
 
 ///|
 #doc(hidden)
-pub fn wasmExportGetDefinition() -> Int {
-  @guest0.wasmExportGetDefinition()
-}
-
-///|
-#doc(hidden)
-pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
-  @guest.wasmExportDiscoverToolsPostReturn(p0)
+pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
+  @guest0.wasmExportDiscoverAgentTypesPostReturn(p0)
 }
 
 ///|
@@ -150,8 +132,14 @@ pub fn wasmExportGetDefinitionPostReturn(p0 : Int) -> Unit {
 
 ///|
 #doc(hidden)
-pub fn wasmExportInvokeGolemAgentGuest(p0 : Int) -> Int {
-  @guest0.wasmExportInvokeGolemAgentGuest(p0)
+pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
+  @guest.wasmExportDiscoverToolsPostReturn(p0)
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
+  @guest.wasmExportGetToolPostReturn(p0)
 }
 
 ///|
@@ -162,6 +150,18 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
 
 ///|
 #doc(hidden)
-pub fn wasmExportLoad(p0 : Int, p1 : Int, p2 : Int, p3 : Int) -> Int {
-  @load-snapshot.wasmExportLoad(p0, p1, p2, p3)
+pub fn wasmExportGetDefinition() -> Int {
+  @guest0.wasmExportGetDefinition()
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportDiscoverTools() -> Int {
+  @guest.wasmExportDiscoverTools()
+}
+
+///|
+#doc(hidden)
+pub fn wasmExportGetTool(p0 : Int, p1 : Int) -> Int {
+  @guest.wasmExportGetTool(p0, p1)
 }

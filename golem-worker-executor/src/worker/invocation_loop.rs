@@ -19,7 +19,8 @@ use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
-    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
+    InvocationMode, InvokeResult, invoke_live_streaming_rpc, invoke_observed_and_traced,
+    lower_invocation,
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
@@ -594,7 +595,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                             break self.interrupt(interrupt).await;
                         }
 
-                        let message = self.active.write().await.pop_front();
+                        let message = self.pop_ready_internal_invocation().await;
 
                         let result = if let Some(message) = message {
                             self.internal_invocation(message).await
@@ -664,6 +665,21 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             Some(command) => Some(command),
             None => self.next_wakeup().await,
         }
+    }
+
+    async fn pop_ready_internal_invocation(&self) -> Option<QueuedWorkerInvocation> {
+        let live_invocation_is_next = matches!(
+            self.active.read().await.front(),
+            Some(QueuedWorkerInvocation::LiveStreamingInvocation { .. })
+        );
+        if live_invocation_is_next {
+            let status = self.parent.get_non_detached_last_known_status().await;
+            if !status.pending_updates.is_empty() || !status.pending_invocations.is_empty() {
+                return None;
+            }
+        }
+
+        self.active.write().await.pop_front()
     }
 
     /// Checks — before publishing `waiting_for_command = true`, which makes the
@@ -1040,8 +1056,64 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 let _ = sender.send(Ok(()));
                 CommandOutcome::Continue
             }
+            QueuedWorkerInvocation::LiveStreamingInvocation {
+                invocation,
+                sender,
+                cancellation,
+            } => {
+                self.invoke_live_streaming(invocation, sender, cancellation)
+                    .await
+            }
             QueuedWorkerInvocation::SaveSnapshot => self.save_snapshot().await,
         }
+    }
+
+    async fn invoke_live_streaming(
+        &mut self,
+        invocation: AgentInvocation,
+        sender: oneshot::Sender<Result<golem_common::schema::SchemaValue, WorkerExecutorError>>,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> CommandOutcome {
+        if cancellation.is_cancelled() {
+            let _ = sender.send(Err(WorkerExecutorError::runtime(
+                "live streaming invocation was cancelled before execution",
+            )));
+            return CommandOutcome::Continue;
+        }
+        let idempotency_key = invocation
+            .idempotency_key()
+            .cloned()
+            .unwrap_or_else(IdempotencyKey::fresh);
+        let mut invocation_context = invocation.invocation_context();
+        let result = async {
+            self.store
+                .data_mut()
+                .set_current_idempotency_key(idempotency_key.clone())
+                .await;
+            Self::extend_invocation_context(
+                &mut invocation_context,
+                &idempotency_key,
+                &invocation,
+                &self.owned_agent_id.agent_id(),
+                &self.parent.parsed_agent_id,
+            );
+            self.store
+                .data_mut()
+                .set_current_invocation_context(invocation_context)
+                .await?;
+            let lowered = lower_invocation(
+                invocation,
+                &self.store.data().component_metadata().metadata,
+                self.parent.parsed_agent_id.as_ref(),
+            )?;
+            invoke_live_streaming_rpc(lowered, self.store, self.instance, sender, cancellation)
+                .await
+        }
+        .await;
+        if let Err(error) = result {
+            tracing::warn!("live streaming invocation failed: {error}");
+        }
+        live_streaming_invocation_outcome(self.parent.agent_mode())
     }
 
     /// Process an external queued worker invocation - this is either an exported function invocation
@@ -1768,6 +1840,16 @@ fn failed_agent_invocation_outcome(
     }
 }
 
+fn live_streaming_invocation_outcome(agent_mode: AgentMode) -> CommandOutcome {
+    if agent_mode == AgentMode::Ephemeral {
+        CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
+    } else {
+        // Live streams are not replayable yet. Recreate the Store from the last durable boundary
+        // before any later command can observe unjournaled guest-memory changes.
+        CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+    }
+}
+
 fn should_cleanup_terminal_ephemeral_invocation(
     agent_mode: AgentMode,
     is_agent_component: bool,
@@ -1826,8 +1908,8 @@ fn snapshot_action_at(
 mod tests {
     use super::{
         CommandOutcome, PeriodicSnapshotAction, failed_agent_invocation_outcome,
-        periodic_snapshot_failure_outcome, snapshot_action_at, snapshot_baseline_timestamp,
-        successful_agent_invocation_outcome,
+        live_streaming_invocation_outcome, periodic_snapshot_failure_outcome, snapshot_action_at,
+        snapshot_baseline_timestamp, successful_agent_invocation_outcome,
     };
     use crate::worker::RetryDecision;
     use crate::worker::invocation::InvokeResult;
@@ -1955,6 +2037,22 @@ mod tests {
         assert_eq!(
             failed_agent_invocation_outcome(AgentMode::Durable, RetryDecision::None),
             CommandOutcome::BreakInnerLoop(RetryDecision::None)
+        );
+    }
+
+    #[test]
+    fn durable_live_streaming_invocation_always_reconstructs_the_store() {
+        assert_eq!(
+            live_streaming_invocation_outcome(AgentMode::Durable),
+            CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+        );
+    }
+
+    #[test]
+    fn ephemeral_live_streaming_invocation_archives_its_ephemeral_oplog() {
+        assert_eq!(
+            live_streaming_invocation_outcome(AgentMode::Ephemeral),
+            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
         );
     }
 }

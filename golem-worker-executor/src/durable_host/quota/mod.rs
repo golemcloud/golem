@@ -33,12 +33,14 @@ use golem_common::model::quota::ReserveResult;
 use golem_common::model::quota::ResourceName;
 use golem_common::model::{ScheduledAction, Timestamp};
 use golem_schema::schema::schema_value::QuotaTokenValuePayload;
-use golem_schema::schema::wit::wire::HostQuotaToken;
+use golem_schema::schema::wit::wire::HostQuotaTokenWithStore;
 use golem_schema::schema::wit::{QuotaTokenHandleRep, QuotaTokenResolver};
 use golem_service_base::error::worker_executor::GolemSpecificWasmTrap;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use tracing::debug;
-use wasmtime::component::Resource;
+use wasmtime::component::{Accessor, Resource};
+
+use crate::durable_host::schema_value_stream::CoreTypesHost;
 
 /// Borrow the [`QuotaTokenEntry`] stored inside a `quota-token` resource handle.
 ///
@@ -446,11 +448,19 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 /// opaque [`QuotaTokenHandleRep`] by golem-schema. The only operation the core
 /// interface declares for it is `drop`, which releases the underlying lease
 /// state back to the executor pool.
-impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
-    async fn drop(&mut self, rep: Resource<QuotaTokenHandleRep>) -> anyhow::Result<()> {
-        DurabilityHost::observe_function_call(self, "golem::core::quota-token", "drop");
-        self.table().delete(rep)?;
-        Ok(())
+impl<T: Send + 'static, Ctx: WorkerCtx> HostQuotaTokenWithStore<T> for CoreTypesHost<Ctx> {
+    fn drop(
+        accessor: &Accessor<T, Self>,
+        rep: Resource<QuotaTokenHandleRep>,
+    ) -> impl Future<Output = anyhow::Result<()>> + Send {
+        async move {
+            accessor.with(|mut access| {
+                let ctx = access.get();
+                DurabilityHost::observe_function_call(ctx, "golem::core::quota-token", "drop");
+                ctx.table().delete(rep)?;
+                Ok(())
+            })
+        }
     }
 }
 

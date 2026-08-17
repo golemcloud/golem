@@ -717,17 +717,21 @@ mod protobuf {
         }
     }
 
-    impl From<ComponentMetadata> for golem_api_grpc::proto::golem::component::ComponentMetadata {
-        fn from(value: ComponentMetadata) -> Self {
-            value.data.as_ref().clone().into()
+    impl TryFrom<ComponentMetadata> for golem_api_grpc::proto::golem::component::ComponentMetadata {
+        type Error = String;
+
+        fn try_from(value: ComponentMetadata) -> Result<Self, Self::Error> {
+            value.data.as_ref().clone().try_into()
         }
     }
 
-    impl From<ComponentMetadataInnerData>
+    impl TryFrom<ComponentMetadataInnerData>
         for golem_api_grpc::proto::golem::component::ComponentMetadata
     {
-        fn from(value: ComponentMetadataInnerData) -> Self {
-            Self {
+        type Error = String;
+
+        fn try_from(value: ComponentMetadataInnerData) -> Result<Self, Self::Error> {
+            Ok(Self {
                 known_exports: Some(value.known_exports.into()),
                 producers: value
                     .producers
@@ -745,16 +749,9 @@ mod protobuf {
                 agent_type_provision_configs: value
                     .agent_type_provision_configs
                     .into_iter()
-                    .map(|(k, v)| {
-                        (
-                            k.0,
-                            golem_api_grpc::proto::golem::component::AgentTypeProvisionConfig::from(
-                                v,
-                            ),
-                        )
-                    })
-                    .collect(),
-            }
+                    .map(|(k, v)| v.try_into().map(|config| (k.0, config)))
+                    .collect::<Result<_, _>>()?,
+            })
         }
     }
 
@@ -798,21 +795,23 @@ mod protobuf {
         }
     }
 
-    impl From<AgentTypeProvisionConfig>
+    impl TryFrom<AgentTypeProvisionConfig>
         for golem_api_grpc::proto::golem::component::AgentTypeProvisionConfig
     {
-        fn from(config: AgentTypeProvisionConfig) -> Self {
+        type Error = String;
+
+        fn try_from(config: AgentTypeProvisionConfig) -> Result<Self, Self::Error> {
             use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
 
-            Self {
+            Ok(Self {
                 initial_permissions: crate::serialization::serialize(&config.initial_permissions)
                     .expect("failed to serialize agent initial permission card"),
                 env: config.env.into_iter().collect(),
                 config: config
                     .config
                     .into_iter()
-                    .map(golem_api_grpc::proto::golem::worker::TypedAgentConfigEntry::from)
-                    .collect(),
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
                 plugins: config
                     .plugins
                     .into_iter()
@@ -827,7 +826,7 @@ mod protobuf {
                         golem_api_grpc::proto::golem::component::InitialAgentFile::from(f)
                     })
                     .collect(),
-            }
+            })
         }
     }
 }
@@ -958,7 +957,8 @@ mod tests {
             )]),
         );
 
-        let proto: golem_api_grpc::proto::golem::component::ComponentMetadata = metadata.into();
+        let proto: golem_api_grpc::proto::golem::component::ComponentMetadata =
+            metadata.try_into().unwrap();
         let decoded = ComponentMetadata::try_from(proto).unwrap();
 
         assert_eq!(
@@ -982,7 +982,8 @@ mod tests {
             BTreeMap::new(),
         );
 
-        let proto: golem_api_grpc::proto::golem::component::ComponentMetadata = metadata.into();
+        let proto: golem_api_grpc::proto::golem::component::ComponentMetadata =
+            metadata.try_into().unwrap();
         let decoded = ComponentMetadata::try_from(proto).unwrap();
 
         assert!(decoded.memories()[0].shared);

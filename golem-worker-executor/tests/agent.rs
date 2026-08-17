@@ -14,7 +14,7 @@
 
 use crate::Tracing;
 
-use golem_api_grpc::proto::golem::workerexecutor;
+use golem_api_grpc::proto::golem::worker::InvocationStart;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::worker::AgentConfigEntryDto;
@@ -388,12 +388,14 @@ async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
         AgentId::from_agent_id(component.id, &final_agent_id).map_err(anyhow::Error::msg)?;
 
     executor
-        .client
-        .clone()
-        .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
+        .invoke_agent_session(InvocationStart {
             agent_id: Some(worker_id.into()),
             method_name: Some("changeAndGet".to_string()),
-            method_parameters: Some(SchemaValue::Tuple { elements: vec![] }.into()),
+            input: Some(
+                SchemaValue::Tuple { elements: vec![] }
+                    .try_into()
+                    .map_err(anyhow::Error::msg)?,
+            ),
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
             schedule_at: None,
             idempotency_key: Some(idempotency_key.into()),
@@ -402,8 +404,9 @@ async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
             auth_ctx: Some(executor.auth_ctx().into()),
             context: None,
             principal: None,
-            freshness_disposition: workerexecutor::v1::InvocationFreshnessDisposition::MayExist
-                as i32,
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
             config: Vec::new(),
         })
         .await?;
@@ -438,12 +441,10 @@ async fn ephemeral_invocation_lookup_does_not_create_unknown_agent(
         AgentId::from_agent_id(component.id, &final_agent_id).map_err(anyhow::Error::msg)?;
 
     let response = executor
-        .client
-        .clone()
-        .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
+        .invoke_agent_session(InvocationStart {
             agent_id: Some(worker_id.clone().into()),
             method_name: None,
-            method_parameters: None,
+            input: None,
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
             schedule_at: None,
             idempotency_key: Some(idempotency_key.into()),
@@ -452,19 +453,14 @@ async fn ephemeral_invocation_lookup_does_not_create_unknown_agent(
             auth_ctx: Some(executor.auth_ctx().into()),
             context: None,
             principal: None,
-            freshness_disposition: workerexecutor::v1::InvocationFreshnessDisposition::MayExist
-                as i32,
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
             config: Vec::new(),
         })
-        .await?
-        .into_inner();
-
-    let success = match response.result {
-        Some(workerexecutor::v1::invoke_agent_response::Result::Success(success)) => success,
-        other => anyhow::bail!("unexpected lookup response: {other:?}"),
-    };
+        .await?;
     assert_eq!(
-        success.status,
+        response.status,
         Some(
             golem_api_grpc::proto::golem::worker::InvocationStatus::from(InvocationStatus::Unknown,)
                 as i32
@@ -502,12 +498,14 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
         AgentId::from_agent_id(component.id, &final_agent_id).map_err(anyhow::Error::msg)?;
 
     executor
-        .client
-        .clone()
-        .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
+        .invoke_agent_session(InvocationStart {
             agent_id: Some(worker_id.clone().into()),
             method_name: Some("changeAndGet".to_string()),
-            method_parameters: Some(SchemaValue::Tuple { elements: vec![] }.into()),
+            input: Some(
+                SchemaValue::Tuple { elements: vec![] }
+                    .try_into()
+                    .map_err(anyhow::Error::msg)?,
+            ),
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
             schedule_at: Some(prost_types::Timestamp {
                 seconds: chrono::Utc::now().timestamp() + 3,
@@ -519,8 +517,9 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
             auth_ctx: Some(executor.auth_ctx().into()),
             context: None,
             principal: None,
-            freshness_disposition: workerexecutor::v1::InvocationFreshnessDisposition::MayExist
-                as i32,
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
             config: Vec::new(),
         })
         .await?;

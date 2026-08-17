@@ -78,6 +78,7 @@ export type {
   MethodsRecord,
 } from './defineAgent';
 export { Secret } from './secret';
+export { AgentStream } from './schema/agentStream';
 export { method } from './method';
 export type { InputRecord, MethodSpec } from './method';
 export type { StandardSchemaV1 } from './schema/standardSchema';
@@ -233,7 +234,6 @@ async function invokeAgent(
   if (!resolvedAgent) {
     throw createCustomError(`Failed to invoke method ${methodName}: agent is not initialized`);
   }
-
   const result = await resolvedAgent.invoke(methodName, input, principal);
 
   if (result.tag === 'ok') {

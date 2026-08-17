@@ -14,7 +14,11 @@
 
 use super::error::WorkerTraceErrorKind;
 use super::{bad_request_error, validate_protobuf_agent_id};
-use crate::service::worker::{WorkerService, WorkerServiceError};
+use crate::service::worker::{
+    InvocationRequestStream, InvocationResponseStream, WorkerService, WorkerServiceError,
+};
+use futures::{Stream, StreamExt, stream};
+use golem_api_grpc::InvocationResponseState;
 use golem_api_grpc::proto::golem::common::Empty;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
@@ -27,6 +31,13 @@ use golem_api_grpc::proto::golem::worker::v1::{
     complete_promise_response, fork_worker_response, invoke_agent_response,
     launch_new_worker_response, process_oplog_entries_response, resume_worker_response,
     revert_worker_response, update_worker_response,
+};
+use golem_api_grpc::proto::golem::worker::{
+    InvocationFrame, InvocationProtocolFailure, InvocationSessionFinished, invocation_cancel,
+    invocation_frame, invocation_protocol_failure, invocation_session_finished,
+};
+use golem_api_grpc::{
+    expect_invocation_start, invocation_cancel_frame, validate_invocation_request_tail,
 };
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -41,6 +52,119 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
 
+fn service_failure_stream(
+    kind: invocation_protocol_failure::Kind,
+    details: String,
+) -> InvocationResponseStream {
+    Box::pin(stream::once(async move {
+        Ok(protocol_failure_frame(kind, details))
+    }))
+}
+
+fn protocol_failure_frame(
+    kind: invocation_protocol_failure::Kind,
+    details: String,
+) -> InvocationFrame {
+    InvocationFrame {
+        frame: Some(invocation_frame::Frame::Finished(
+            InvocationSessionFinished {
+                outcome: Some(invocation_session_finished::Outcome::ProtocolFailure(
+                    InvocationProtocolFailure {
+                        kind: kind as i32,
+                        details,
+                    },
+                )),
+            },
+        )),
+    }
+}
+
+fn validated_response_stream<S>(inbound: S) -> InvocationResponseStream
+where
+    S: Stream<Item = Result<InvocationFrame, Status>> + Send + Unpin + 'static,
+{
+    Box::pin(stream::unfold(
+        Some((inbound, InvocationResponseState::default())),
+        |state| async move {
+            let (mut inbound, mut response_state) = state?;
+            match inbound.next().await {
+                Some(Ok(frame)) => match response_state.validate(&frame) {
+                    Ok(()) if response_state.is_complete() => match inbound.next().await {
+                        None => Some((Ok(frame), None)),
+                        Some(Ok(frame_after_terminal)) => {
+                            let details =
+                                response_state.validate(&frame_after_terminal).unwrap_err();
+                            Some((
+                                Ok(protocol_failure_frame(
+                                    invocation_protocol_failure::Kind::Protocol,
+                                    details,
+                                )),
+                                None,
+                            ))
+                        }
+                        Some(Err(error)) => Some((
+                            Ok(protocol_failure_frame(
+                                invocation_protocol_failure::Kind::Transport,
+                                error.to_string(),
+                            )),
+                            None,
+                        )),
+                    },
+                    Ok(()) => Some((Ok(frame), Some((inbound, response_state)))),
+                    Err(details) => Some((
+                        Ok(protocol_failure_frame(
+                            invocation_protocol_failure::Kind::Protocol,
+                            details,
+                        )),
+                        None,
+                    )),
+                },
+                Some(Err(error)) => Some((
+                    Ok(protocol_failure_frame(
+                        invocation_protocol_failure::Kind::Transport,
+                        error.to_string(),
+                    )),
+                    None,
+                )),
+                None if response_state.is_complete() => None,
+                None => Some((
+                    Ok(protocol_failure_frame(
+                        invocation_protocol_failure::Kind::Transport,
+                        "invocation response transport closed before completion".to_string(),
+                    )),
+                    None,
+                )),
+            }
+        },
+    ))
+}
+
+fn validated_request_tail<S>(inbound: S) -> InvocationRequestStream
+where
+    S: Stream<Item = Result<InvocationFrame, Status>> + Send + Unpin + 'static,
+{
+    Box::pin(stream::unfold(Some(inbound), |state| async move {
+        let mut inbound = state?;
+        match inbound.next().await {
+            Some(Ok(frame)) => match validate_invocation_request_tail(frame) {
+                Ok(frame) => Some((frame, Some(inbound))),
+                Err(details) => Some((
+                    invocation_cancel_frame(invocation_cancel::Kind::Protocol, Some(details)),
+                    None,
+                )),
+            },
+            Some(Err(error)) => Some((
+                invocation_cancel_frame(
+                    invocation_cancel::Kind::Transport,
+                    Some(error.to_string()),
+                ),
+                None,
+            )),
+            None => None,
+        }
+    }))
+}
+
 /// The only way to turn a wire-level freshness disposition into the internal
 /// [`InvocationFreshnessDisposition`]. Decoding and trust-sanitization are
 /// deliberately fused into a single function so that no gRPC entry point can
@@ -53,8 +177,7 @@ fn sanitize_invocation_freshness_disposition(
     trusted_internal_caller: bool,
 ) -> InvocationFreshnessDisposition {
     let decoded = if wire_value
-        == golem_api_grpc::proto::golem::worker::v1::InvocationFreshnessDisposition::KnownFresh
-            as i32
+        == golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh as i32
     {
         InvocationFreshnessDisposition::KnownFresh
     } else {
@@ -269,6 +392,100 @@ impl GrpcWorkerService for WorkerGrpcApi {
         Ok(Response::new(InvokeAgentResponse {
             result: Some(response),
         }))
+    }
+
+    type InvokeAgentSessionStream = InvocationResponseStream;
+
+    async fn invoke_agent_session(
+        &self,
+        request: Request<tonic::Streaming<InvocationFrame>>,
+    ) -> Result<Response<Self::InvokeAgentSessionStream>, Status> {
+        let mut inbound = request.into_inner();
+        let mut start = match inbound.message().await {
+            Ok(Some(frame)) => match expect_invocation_start(frame) {
+                Ok(start) => start,
+                Err(error) => {
+                    return Ok(Response::new(service_failure_stream(
+                        invocation_protocol_failure::Kind::Protocol,
+                        error,
+                    )));
+                }
+            },
+            Ok(None) => {
+                return Ok(Response::new(service_failure_stream(
+                    invocation_protocol_failure::Kind::Protocol,
+                    "invocation request ended before start".to_string(),
+                )));
+            }
+            Err(error) => {
+                return Ok(Response::new(service_failure_stream(
+                    invocation_protocol_failure::Kind::Transport,
+                    error.to_string(),
+                )));
+            }
+        };
+        let auth = match start.auth_ctx.clone() {
+            Some(auth) => match auth.try_into() {
+                Ok(auth) => auth,
+                Err(error) => {
+                    return Ok(Response::new(service_failure_stream(
+                        invocation_protocol_failure::Kind::Protocol,
+                        format!("failed converting auth_ctx: {error}"),
+                    )));
+                }
+            },
+            None => {
+                return Ok(Response::new(service_failure_stream(
+                    invocation_protocol_failure::Kind::Protocol,
+                    "auth_ctx not found".to_string(),
+                )));
+            }
+        };
+        let trusted_internal_caller = matches!(&auth, AuthCtx::System | AuthCtx::Agent(_));
+        start.freshness_disposition = match sanitize_invocation_freshness_disposition(
+            start.freshness_disposition,
+            trusted_internal_caller,
+        ) {
+            InvocationFreshnessDisposition::MayExist => {
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32
+            }
+            InvocationFreshnessDisposition::KnownFresh => {
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh
+                    as i32
+            }
+        };
+        let tail = validated_request_tail(inbound);
+        match self
+            .worker_service
+            .invoke_agent_session(start, tail, trusted_internal_caller, auth)
+            .await
+        {
+            Ok(response) => Ok(Response::new(validated_response_stream(response))),
+            Err(error) => {
+                let kind = match &error {
+                    WorkerServiceError::AuthError(_) | WorkerServiceError::LimitError(_) => {
+                        invocation_protocol_failure::Kind::Denied
+                    }
+                    WorkerServiceError::ComponentNotFound(_)
+                    | WorkerServiceError::AgentNotFound(_)
+                    | WorkerServiceError::AccountIdNotFound(_) => {
+                        invocation_protocol_failure::Kind::NotFound
+                    }
+                    WorkerServiceError::TypeChecker(_) => {
+                        invocation_protocol_failure::Kind::Protocol
+                    }
+                    WorkerServiceError::InternalCallError(_) => {
+                        invocation_protocol_failure::Kind::Transport
+                    }
+                    _ => invocation_protocol_failure::Kind::RemoteInternal,
+                };
+                Ok(Response::new(service_failure_stream(
+                    kind,
+                    error.to_string(),
+                )))
+            }
+        }
     }
 
     async fn cancel_invocation(
@@ -522,12 +739,6 @@ impl WorkerGrpcApi {
             .principal
             .unwrap_or_else(|| golem_common::model::agent::Principal::anonymous().into());
 
-        let environment_id = request
-            .environment_id
-            .map(|id| id.try_into())
-            .transpose()
-            .map_err(|e| bad_request_error(format!("invalid environment_id: {e}")))?;
-
         let output = self
             .worker_service
             .invoke_agent(
@@ -543,13 +754,16 @@ impl WorkerGrpcApi {
                 config,
                 auth,
                 principal,
-                environment_id,
             )
             .await?;
 
         let result_value = match &output.result {
             golem_common::model::AgentInvocationResult::AgentMethod { output } => {
-                Some(output.clone().into())
+                Some(output.clone().try_into().map_err(|error| {
+                    WorkerServiceError::Internal(format!(
+                        "agent output cannot cross the gRPC boundary: {error}"
+                    ))
+                })?)
             }
             _ => None,
         };
@@ -685,5 +899,134 @@ mod freshness_tests {
             sanitize_invocation_freshness_disposition(KNOWN_FRESH_WIRE, false),
             InvocationFreshnessDisposition::MayExist
         );
+    }
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::{validated_request_tail, validated_response_stream};
+    use futures::{StreamExt, stream};
+    use golem_api_grpc::proto::golem::common::Empty;
+    use golem_api_grpc::proto::golem::worker::invocation_session_finished::Outcome;
+    use golem_api_grpc::proto::golem::worker::{
+        InvocationFrame, InvocationResult, InvocationSessionFinished, InvocationStart,
+        invocation_cancel, invocation_frame, invocation_protocol_failure,
+    };
+    use test_r::test;
+    use tonic::Status;
+
+    fn successful_completion() -> invocation_frame::Frame {
+        invocation_frame::Frame::Finished(InvocationSessionFinished {
+            outcome: Some(Outcome::Success(Empty {})),
+        })
+    }
+
+    #[test]
+    async fn request_transport_error_becomes_typed_cancellation() {
+        let inbound = stream::iter([Err(Status::unavailable("request transport failed"))]);
+        let mut tail = validated_request_tail(inbound);
+
+        let frame = tail.next().await.unwrap().frame.unwrap();
+        let invocation_frame::Frame::Cancel(cancel) = frame else {
+            panic!("expected cancellation frame");
+        };
+        assert_eq!(
+            invocation_cancel::Kind::try_from(cancel.kind).unwrap(),
+            invocation_cancel::Kind::Transport
+        );
+        assert!(cancel.details.unwrap().contains("request transport failed"));
+        assert!(tail.next().await.is_none());
+    }
+
+    #[test]
+    async fn malformed_request_tail_becomes_protocol_cancellation() {
+        let inbound = stream::iter([Ok::<_, Status>(InvocationFrame {
+            frame: Some(invocation_frame::Frame::Start(InvocationStart::default())),
+        })]);
+        let mut tail = validated_request_tail(inbound);
+
+        let frame = tail.next().await.unwrap().frame.unwrap();
+        let invocation_frame::Frame::Cancel(cancel) = frame else {
+            panic!("expected cancellation frame");
+        };
+        assert_eq!(
+            invocation_cancel::Kind::try_from(cancel.kind).unwrap(),
+            invocation_cancel::Kind::Protocol
+        );
+        assert!(cancel.details.unwrap().contains("first frame"));
+        assert!(tail.next().await.is_none());
+    }
+
+    #[test]
+    async fn response_transport_error_becomes_typed_failure() {
+        let inbound = stream::iter([Err(Status::unavailable("response transport failed"))]);
+        let mut response = validated_response_stream(inbound);
+
+        let frame = response.next().await.unwrap().unwrap().frame.unwrap();
+        assert!(matches!(
+            frame,
+            invocation_frame::Frame::Finished(InvocationSessionFinished {
+                outcome: Some(Outcome::ProtocolFailure(failure)),
+            }) if failure.kind == invocation_protocol_failure::Kind::Transport as i32
+                && failure.details.contains("response transport failed")
+        ));
+        assert!(response.next().await.is_none());
+    }
+
+    #[test]
+    async fn valid_response_preserves_terminal_outcome() {
+        let inbound = stream::iter([
+            Ok::<_, Status>(InvocationFrame {
+                frame: Some(invocation_frame::Frame::Result(InvocationResult::default())),
+            }),
+            Ok(InvocationFrame {
+                frame: Some(successful_completion()),
+            }),
+        ]);
+        let mut response = validated_response_stream(inbound);
+
+        assert!(matches!(
+            response.next().await.unwrap().unwrap().frame,
+            Some(invocation_frame::Frame::Result(_))
+        ));
+        assert!(matches!(
+            response.next().await.unwrap().unwrap().frame,
+            Some(invocation_frame::Frame::Finished(
+                InvocationSessionFinished {
+                    outcome: Some(Outcome::Success(_)),
+                }
+            ))
+        ));
+        assert!(response.next().await.is_none());
+    }
+
+    #[test]
+    async fn repeated_response_terminal_becomes_protocol_failure() {
+        let inbound = stream::iter([
+            Ok::<_, Status>(InvocationFrame {
+                frame: Some(invocation_frame::Frame::Result(InvocationResult::default())),
+            }),
+            Ok(InvocationFrame {
+                frame: Some(successful_completion()),
+            }),
+            Ok(InvocationFrame {
+                frame: Some(successful_completion()),
+            }),
+        ]);
+        let mut response = validated_response_stream(inbound);
+
+        assert!(matches!(
+            response.next().await.unwrap().unwrap().frame,
+            Some(invocation_frame::Frame::Result(_))
+        ));
+        let frame = response.next().await.unwrap().unwrap().frame.unwrap();
+        assert!(matches!(
+            frame,
+            invocation_frame::Frame::Finished(InvocationSessionFinished {
+                outcome: Some(Outcome::ProtocolFailure(failure)),
+            }) if failure.kind == invocation_protocol_failure::Kind::Protocol as i32
+                && failure.details.contains("after completion")
+        ));
+        assert!(response.next().await.is_none());
     }
 }

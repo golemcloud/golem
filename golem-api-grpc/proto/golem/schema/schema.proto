@@ -330,7 +330,15 @@ message SchemaValue {
     // Capability nodes
     SecretValue secret_value = 70;
     QuotaTokenValue quota_token_value = 71;
+
+    // Live invocation only. The ID is scoped to one live value session and
+    // must be resolved by that session rather than by generic protobuf decoding.
+    SchemaValueStreamReference stream_reference = 80;
   }
+}
+
+message SchemaValueStreamReference {
+  uint64 stream_id = 1;
 }
 
 message RecordValue {

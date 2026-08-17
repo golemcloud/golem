@@ -24,8 +24,10 @@ import golem.schema.wire.SchemaWire
 import golem.{UByte, UInt, ULong, UShort, Uuid}
 
 import scala.collection.immutable.ListMap
+import scala.concurrent.Future
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
 /**
  * The `golem:agent/host@2.0.0` RPC-boundary codec: encodes the parameter-list
@@ -257,6 +259,9 @@ private[golem] object SchemaRpcCodec {
   def decodeValue(tree: JsSchemaValueTree): SchemaValue =
     SchemaWire.schemaValueFromWit(SchemaWireInterop.valueTreeFromJs(tree))
 
+  def encodeValueAsync(value: SchemaValue): Future[JsSchemaValueTree] =
+    SchemaWireInterop.valueTreeToJsAsync(SchemaWire.schemaValueToWit(value))
+
   def encodeUByte(v: UByte): SchemaValue = {
     val x = v.value
     if (x < 0 || x > 255)
@@ -435,6 +440,9 @@ private[golem] object SchemaRpcCodec {
   /** Encode the parameter-list value of `In` into a `schema-value-tree`. */
   def encodeArgs[In](input: In)(implicit into: IntoSchema[In]): JsSchemaValueTree =
     SchemaPayload.encode(input)
+
+  def encodeArgsAsync[In](input: In)(implicit into: IntoSchema[In]): Future[JsSchemaValueTree] =
+    SchemaPayload.encodeAsync(input)
 
   /** Decode a parameter-list `schema-value-tree` back into `In`. */
   def decodeArgs[In](tree: JsSchemaValueTree)(implicit from: FromSchema[In]): Either[String, In] =

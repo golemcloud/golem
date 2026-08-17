@@ -16,6 +16,7 @@ use super::golem_config::WorkerServiceGrpcConfig;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use desert_rust::BinaryCodec;
+use futures::Stream;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
     AgentError, CancelInvocationRequest, CancelInvocationResponse, CompletePromiseRequest,
@@ -27,7 +28,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     invoke_agent_response, launch_new_worker_response, process_oplog_entries_response,
     resume_worker_response, revert_worker_response, update_worker_response,
 };
-use golem_api_grpc::proto::golem::worker::{CompleteParameters, UpdateMode};
+use golem_api_grpc::proto::golem::worker::{CompleteParameters, InvocationFrame, UpdateMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
 use golem_common::model::component::ComponentRevision;
@@ -46,11 +47,37 @@ use golem_service_base::model::auth::AuthCtx;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tracing::debug;
+
+pub type InvocationRequestStream = Pin<Box<dyn Stream<Item = InvocationFrame> + Send + 'static>>;
+pub type InvocationResponseStream =
+    Pin<Box<dyn Stream<Item = Result<InvocationFrame, Status>> + Send + 'static>>;
+
+fn invoke_agent_session_once<'a>(
+    client: &'a mut WorkerServiceClient<OtelGrpcService<Channel>>,
+    request: Option<InvocationRequestStream>,
+) -> Pin<
+    Box<
+        dyn Future<Output = Result<tonic::Response<tonic::Streaming<InvocationFrame>>, Status>>
+            + Send
+            + 'a,
+    >,
+> {
+    match request {
+        Some(request) => Box::pin(client.invoke_agent_session(request)),
+        None => Box::pin(std::future::ready(Err(Status::aborted(
+            "invocation session request was already consumed",
+        )))),
+    }
+}
 
 #[async_trait]
 pub trait WorkerProxy: Send + Sync {
@@ -82,6 +109,17 @@ pub trait WorkerProxy: Send + Sync {
         environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
     ) -> Result<AgentInvocationOutput, WorkerProxyError>;
+
+    async fn invoke_agent_session(
+        &self,
+        _request: InvocationRequestStream,
+    ) -> Result<InvocationResponseStream, WorkerProxyError> {
+        Err(WorkerProxyError::InternalError(
+            WorkerExecutorError::invalid_request(
+                "invocation sessions are not supported by this worker proxy",
+            ),
+        ))
+    }
 
     async fn update(
         &self,
@@ -346,7 +384,11 @@ impl WorkerProxy for RemoteWorkerProxy {
         });
 
         let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
-            method_parameters.into();
+            method_parameters.try_into().map_err(|error| {
+                WorkerProxyError::BadRequest(vec![format!(
+                    "method parameters cannot cross the remote worker boundary: {error}"
+                )])
+            })?;
         let first_dispatch = AtomicBool::new(true);
 
         let response: InvokeAgentResponse = self
@@ -456,6 +498,24 @@ impl WorkerProxy for RemoteWorkerProxy {
                 WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
             )),
         }
+    }
+
+    async fn invoke_agent_session(
+        &self,
+        request: InvocationRequestStream,
+    ) -> Result<InvocationResponseStream, WorkerProxyError> {
+        let request = Arc::new(std::sync::Mutex::new(Some(request)));
+        let response = self
+            .worker_service_client
+            .call_without_retry("invoke_agent_session", move |client| {
+                let request = request
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .take();
+                invoke_agent_session_once(client, request)
+            })
+            .await?;
+        Ok(Box::pin(response.into_inner()))
     }
 
     async fn update(
@@ -774,6 +834,9 @@ mod tests {
 
     #[tonic::async_trait]
     impl WorkerService for FlakyWorkerService {
+        type InvokeAgentSessionStream =
+            Pin<Box<dyn Stream<Item = Result<InvocationFrame, Status>> + Send + 'static>>;
+
         unimplemented_rpc!(
             launch_new_worker,
             LaunchNewWorkerRequest,
@@ -798,6 +861,13 @@ mod tests {
             ProcessOplogEntriesRequest,
             ProcessOplogEntriesResponse
         );
+
+        async fn invoke_agent_session(
+            &self,
+            _request: Request<tonic::Streaming<InvocationFrame>>,
+        ) -> Result<Response<Self::InvokeAgentSessionStream>, Status> {
+            Err(Status::unimplemented("invoke_agent_session"))
+        }
 
         async fn invoke_agent(
             &self,

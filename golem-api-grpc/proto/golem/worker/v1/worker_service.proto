@@ -18,6 +18,7 @@ import "golem/worker/filesystem.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation.proto";
 import "golem/worker/invocation_context.proto";
+import "golem/worker/invocation_session.proto";
 import "golem/worker/log_event.proto";
 import "golem/worker/oplog_cursor.proto";
 import "golem/worker/public_oplog.proto";
@@ -37,6 +38,7 @@ service WorkerService {
   rpc RevertWorker(RevertWorkerRequest) returns (RevertWorkerResponse);
   rpc CompletePromise (CompletePromiseRequest) returns (CompletePromiseResponse);
   rpc InvokeAgent (InvokeAgentRequest) returns (InvokeAgentResponse);
+  rpc InvokeAgentSession (stream golem.worker.InvocationFrame) returns (stream golem.worker.InvocationFrame);
   rpc CancelInvocation (CancelInvocationRequest) returns (CancelInvocationResponse);
   rpc ProcessOplogEntries (ProcessOplogEntriesRequest) returns (ProcessOplogEntriesResponse);
 }

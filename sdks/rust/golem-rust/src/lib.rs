@@ -44,6 +44,12 @@ pub fn encode_schema_value(
     schema::wit::encode_value(value)
 }
 
+pub async fn encode_schema_value_async(
+    value: &SchemaValue,
+) -> Result<schema::wit::wire::SchemaValueTree, schema::wit::EncodeError> {
+    schema::wit::encode_value_async(value).await
+}
+
 pub fn decode_schema_value(
     value: schema::wit::wire::SchemaValueTree,
 ) -> Result<SchemaValue, schema::wit::DecodeError> {

@@ -322,7 +322,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
     async fn get_oplog_index(&mut self) -> anyhow::Result<golem_api_1_x::oplog::OplogIndex> {
         self.observe_function_call("golem::api", "get_oplog_index");
-        if self.state.snapshotting_mode.is_some() {
+        if self.state.is_unpersisted_execution() {
             Ok(self.state.current_oplog_index().await.into())
         } else if self.state.is_live() {
             // Use the index returned by `add` — a concurrently running host task (a durable
@@ -362,7 +362,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         oplog_idx: golem_api_1_x::oplog::OplogIndex,
     ) -> anyhow::Result<()> {
         self.observe_function_call("golem::api", "set_oplog_index");
-        if self.state.snapshotting_mode.is_some() {
+        if self.state.is_unpersisted_execution() {
             return Ok(());
         }
         if self.state.is_live() {
@@ -445,7 +445,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn mark_begin_operation(&mut self) -> anyhow::Result<golem_api_1_x::host::OplogIndex> {
         self.observe_function_call("golem::api", "mark_begin_operation");
 
-        if self.state.snapshotting_mode.is_some() {
+        if self.state.is_unpersisted_execution() {
             Ok(self.state.current_oplog_index().await.into())
         } else if self.state.is_live() {
             let next_idempotency_key_oplog_index = self
@@ -532,7 +532,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         begin: golem_api_1_x::oplog::OplogIndex,
     ) -> anyhow::Result<()> {
         self.observe_function_call("golem::api", "mark_end_operation");
-        if self.state.snapshotting_mode.is_some() {
+        if self.state.is_unpersisted_execution() {
             return Ok(());
         }
         let begin_index = OplogIndex::from_u64(begin);
@@ -606,7 +606,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::api", "set_oplog_persistence_level");
 
         let new_persistence_level = new_persistence_level.into();
-        if self.state.snapshotting_mode.is_some() {
+        if self.state.is_unpersisted_execution() {
             return Ok(());
         }
 
@@ -631,24 +631,20 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 // eventual `End` outside the zone would reference a `Start` replay never sees.
                 // Such a scope must be closed before the zone is.
                 //
-                // During snapshotting no oplog entries are written, so no boundary is created and
-                // the guard is skipped.
-                if self.state.snapshotting_mode.is_none() {
-                    drain_queued_dropped_call_events(self)
-                        .await
-                        .map_err(anyhow::Error::from)?;
-                    if self.state.has_in_flight_live_host_calls() {
-                        return Err(anyhow!(
-                            "Cannot change oplog persistence level: durable host calls are still in flight"
-                        ));
-                    }
-                    if self.state.persistence_level == PersistenceLevel::PersistNothing
-                        && self.state.has_open_scope_in_persist_nothing_zone()
-                    {
-                        return Err(anyhow!(
-                            "Cannot change oplog persistence level: a durable scope (batched remote write or transaction) opened inside the PersistNothing zone is still open"
-                        ));
-                    }
+                drain_queued_dropped_call_events(self)
+                    .await
+                    .map_err(anyhow::Error::from)?;
+                if self.state.has_in_flight_live_host_calls() {
+                    return Err(anyhow!(
+                        "Cannot change oplog persistence level: durable host calls are still in flight"
+                    ));
+                }
+                if self.state.persistence_level == PersistenceLevel::PersistNothing
+                    && self.state.has_open_scope_in_persist_nothing_zone()
+                {
+                    return Err(anyhow!(
+                        "Cannot change oplog persistence level: a durable scope (batched remote write or transaction) opened inside the PersistNothing zone is still open"
+                    ));
                 }
                 self.public_state
                     .worker()
@@ -1255,10 +1251,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .state
                 .opens_durable_scope(&DurableFunctionType::WriteRemote)
                 .then_some(oplog_index_cut_off);
-            self.public_state
-                .worker()
-                .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+            if !self.is_unpersisted_execution() {
+                self.public_state
+                    .worker()
+                    .commit_oplog_and_update_state(CommitLevel::Always)
+                    .await;
+            }
 
             let created_by = self.created_by();
             let fork_result = loop {

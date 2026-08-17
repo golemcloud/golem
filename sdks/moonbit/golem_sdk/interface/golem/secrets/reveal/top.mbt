@@ -2683,6 +2683,12 @@ pub fn reveal(
             @types.SchemaValueNode::QuotaTokenHandle(
               @types.QuotaToken::QuotaToken(mbt_ffi_load32(iter_base + 8)),
             )
+          33 =>
+            @types.SchemaValueNode::StreamValue(
+              @types.SchemaValueStream::SchemaValueStream(
+                mbt_ffi_load32(iter_base + 8),
+              ),
+            )
           _ => panic()
         }
 

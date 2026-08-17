@@ -91,7 +91,9 @@ pub async fn invoke_tool(
     })?;
 
     let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
-        method_parameters.into();
+        method_parameters.try_into().map_err(|error| {
+            ErrorData::internal_error(format!("Failed to encode method parameters: {error}"), None)
+        })?;
 
     let principal = Principal::anonymous();
     let proto_principal: golem_api_grpc::proto::golem::component::Principal = principal.into();
@@ -117,7 +119,6 @@ pub async fn invoke_tool(
             Vec::new(),
             auth_ctx,
             proto_principal,
-            None,
         )
         .await
         .map_err(|e| {

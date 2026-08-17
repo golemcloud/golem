@@ -1,4 +1,141 @@
 ///|
+fn run_async_test_noraise(block : async () -> Unit noraise) -> Unit = "%async.run"
+
+///|
+fn run_async_test(block : async () -> Unit) -> Unit {
+  let failure : Array[String?] = [None]
+  run_async_test_noraise(() => {
+    try block() catch {
+      error => failure[0] = Some(repr(error))
+    } noraise {
+      _ => ()
+    }
+  })
+  match failure[0] {
+    Some(message) => abort(message)
+    None => ()
+  }
+}
+
+///|
+fn test_resource_drops() -> @model.SchemaValueResourceDrops {
+  {
+    drop_secret: fn(_) {  },
+    drop_quota_token: fn(_) {  },
+    drop_stream: fn(_) {  },
+    drop_native_stream: fn(_) {  },
+  }
+}
+
+///|
+fn decode_canonical_input_for_test(
+  def : ToolDef,
+  command_index : Int,
+  input : @types.TypedSchemaValue,
+  context : String,
+) -> Array[CanonicalInputValue] raise @toolCommon.ToolError {
+  decode_canonical_input_with_resource_drops(
+    def,
+    command_index,
+    input,
+    context,
+    test_resource_drops(),
+  )
+}
+
+///|
+fn decode_invocation_input_for_test(
+  input : @types.TypedSchemaValue,
+  arity : Int,
+  context : String,
+) -> Array[@model.SchemaValue] raise @toolCommon.ToolError {
+  decode_invocation_input_with_resource_drops(
+    input,
+    arity,
+    context,
+    test_resource_drops(),
+  )
+}
+
+///|
+fn[T : @schema.IntoSchema + @schema.FromSchema] decode_canonical_field_for_test(
+  fields : Array[CanonicalInputValue],
+  name : String,
+  context : String,
+) -> T raise @toolCommon.ToolError {
+  decode_canonical_field_with_resource_drops(
+    fields,
+    name,
+    context,
+    test_resource_drops(),
+  )
+}
+
+///|
+fn[T : @schema.FromSchema] decode_param_for_test(
+  fields : Array[@model.SchemaValue],
+  index : Int,
+  context : String,
+) -> T raise @toolCommon.ToolError {
+  decode_param_with_resource_drops(
+    fields,
+    index,
+    context,
+    test_resource_drops(),
+  )
+}
+
+///|
+async fn invoke_registered_subtool_for_test(
+  tool_name : String,
+  command_path : Array[String],
+  fields : Array[CanonicalInputValue],
+  stdin : @async-core.Stream[Byte]?,
+  principal : @agentCommon.Principal,
+) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+  invoke_registered_subtool_with_resource_drops(
+    tool_name,
+    command_path,
+    fields,
+    stdin,
+    principal,
+    test_resource_drops(),
+  )
+}
+
+///|
+test "rejected tool envelopes drop reached stream resources" {
+  let dropped = [0]
+  let input : @types.TypedSchemaValue = {
+    graph: @model.schema_graph_to_wit({
+      defs: [],
+      root: @model.schema_type(@model.SchemaTypeBody::Record([])),
+    }),
+    value: {
+      value_nodes: [
+        @types.StreamValue(@types.SchemaValueStream::SchemaValueStream(91)),
+      ],
+      root: 0,
+    },
+  }
+  let result = try? decode_invocation_input_with_resource_drops(
+    input,
+    0,
+    "tool cleanup",
+    {
+      drop_secret: fn(_) {  },
+      drop_quota_token: fn(_) {  },
+      drop_stream: fn(_) { dropped[0] += 1 },
+      drop_native_stream: fn(_) {  },
+    },
+  )
+  guard result is Err(@toolCommon.ToolError::InvalidInput(_)) else {
+    fail("expected the schema/value mismatch to be rejected")
+  }
+  assert_eq(dropped[0], 1)
+}
+
+///|
 fn doc(summary : String) -> @toolCommon.Doc {
   { summary, description: "details for " + summary, examples: [] }
 }
@@ -95,401 +232,428 @@ fn[T] unwrap_tool_result(result : Result[T, ToolBuildError]) -> T {
 
 ///|
 test "subtree-only tool cannot be invoked as a top-level tool" {
-  let def = canonical_test_def()
-  register_subtool_def_invoker(def, fn(_, _, _, _) {
-    Ok(invocation_result_empty())
-  })
-  assert_true(
-    get_registered_tool("root")
-    is Err(@toolCommon.ToolError::InvalidToolName("root")),
-  )
-  let input = @model.typed_schema_value_to_wit(
-    @schema.try_into_typed_schema_value(()),
-  )
-  assert_true(
-    invoke_registered_tool(
-      "root",
-      [],
-      input,
-      None,
-      @agentCommon.Principal::Anonymous,
+  run_async_test(() => {
+    let def = canonical_test_def()
+    register_subtool_def_invoker(def, fn(_, _, _, _) {
+      Ok(invocation_result_empty())
+    })
+    assert_true(
+      get_registered_tool("root")
+      is Err(@toolCommon.ToolError::InvalidToolName("root")),
     )
-    is Err(@toolCommon.ToolError::InvalidToolName("root")),
-  )
+    let input = @model.typed_schema_value_to_wit(
+      @schema.try_into_typed_schema_value(()),
+    )
+    assert_true(
+      invoke_registered_tool(
+        "root",
+        [],
+        input,
+        None,
+        @agentCommon.Principal::Anonymous,
+      )
+      is Err(@toolCommon.ToolError::InvalidToolName("root")),
+    )
+  })
 }
 
 ///|
 test "grafted subtree forwards a global captured only by short name" {
-  let flag = fn(long : String) -> @toolCommon.FlagSpec {
-    {
-      long,
-      short: Some('v'),
-      aliases: [],
-      doc: doc(long),
-      shape: @toolCommon.FlagShape::BoolFlag({
-        default: false,
-        negatable: false,
-      }),
-      env_var: None,
-    }
-  }
-  let child : ToolDef = {
-    version: "1",
-    commands: [
+  run_async_test(() => {
+    let flag = fn(long : String) -> @toolCommon.FlagSpec {
       {
-        name: "short-forward-child",
+        long,
+        short: Some('v'),
         aliases: [],
-        doc: doc("short forward child"),
-        globals: { options: [], flags: [flag("child-verbose")] },
-        subcommands: [],
-        body: Some({
-          positionals: { fixed: [], tail: None },
-          options: [],
-          flags: [],
-          constraints: [],
-          stdin: None,
-          stdout: None,
-          result: None,
-          errors: [],
-          annotations: None,
+        doc: doc(long),
+        shape: @toolCommon.FlagShape::BoolFlag({
+          default: false,
+          negatable: false,
         }),
-      },
-    ],
-  }
-  let parent_base : ToolDef = {
-    version: "1",
-    commands: [
-      {
-        name: "short-forward-parent",
-        aliases: [],
-        doc: doc("short forward parent"),
-        globals: { options: [], flags: [] },
-        subcommands: [],
-        body: None,
-      },
-    ],
-  }
-  let parent = parent_base.graft_subtree(
-    child,
-    "short-forward-child",
-    { options: [], flags: [flag("parent-verbose")] },
-    None,
-    None,
-    None,
-  )
-  let parent_index = parent.command_index_by_path(["short-forward-child"])
-  guard parent_index is Some(parent_index) else {
-    fail("expected grafted child command")
-  }
-  let parent_fields = parent.canonical_input_fields(parent_index)
-  inspect(parent_fields.map(field => field.name), content="[parent-verbose]")
-  assert_true(parent_fields[0].aliases.contains("v"))
-  register_subtool_def_invoker(child, fn(command_path, input, _, _) {
-    guard command_path.length() == 0 else {
-      return Err(@toolCommon.ToolError::InvalidCommandPath(command_path))
+        env_var: None,
+      }
     }
-    let decoded = decode_canonical_input(child, 0, input, "short child") catch {
-      error => return Err(error)
+    let child : ToolDef = {
+      version: "1",
+      commands: [
+        {
+          name: "short-forward-child",
+          aliases: [],
+          doc: doc("short forward child"),
+          globals: { options: [], flags: [flag("child-verbose")] },
+          subcommands: [],
+          body: Some({
+            positionals: { fixed: [], tail: None },
+            options: [],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: None,
+            errors: [],
+            annotations: None,
+          }),
+        },
+      ],
     }
-    let verbose : Bool = decode_canonical_field(
-      decoded, "child-verbose", "short child",
-    ) catch {
-      error => return Err(error)
+    let parent_base : ToolDef = {
+      version: "1",
+      commands: [
+        {
+          name: "short-forward-parent",
+          aliases: [],
+          doc: doc("short forward parent"),
+          globals: { options: [], flags: [] },
+          subcommands: [],
+          body: None,
+        },
+      ],
     }
-    if verbose {
-      Ok(invocation_result_empty())
-    } else {
-      Err(@toolCommon.ToolError::InvalidInput("short flag was not forwarded"))
-    }
-  })
-  register_tool_def_invoker(parent, fn(command_path, input, stdin, principal) {
-    let index = match parent.command_index_by_path(command_path) {
-      Some(index) => index
-      None =>
-        return Err(@toolCommon.ToolError::InvalidCommandPath(command_path))
-    }
-    let decoded = decode_canonical_input(parent, index, input, "short parent") catch {
-      error => return Err(error)
-    }
-    invoke_registered_subtool(
+    let parent = parent_base.graft_subtree(
+      child,
       "short-forward-child",
-      command_path[1:].to_array(),
-      decoded,
+      { options: [], flags: [flag("parent-verbose")] },
+      None,
+      None,
+      None,
+    )
+    let parent_index = parent.command_index_by_path(["short-forward-child"])
+    guard parent_index is Some(parent_index) else {
+      fail("expected grafted child command")
+    }
+    let parent_fields = parent.canonical_input_fields(parent_index)
+    inspect(parent_fields.map(field => field.name), content="[parent-verbose]")
+    assert_true(parent_fields[0].aliases.contains("v"))
+    register_subtool_def_invoker(child, fn(command_path, input, _, _) {
+      guard command_path.length() == 0 else {
+        return Err(@toolCommon.ToolError::InvalidCommandPath(command_path))
+      }
+      let decoded = decode_canonical_input_for_test(
+        child, 0, input, "short child",
+      ) catch {
+        error => return Err(error)
+      }
+      let verbose : Bool = decode_canonical_field_for_test(
+        decoded, "child-verbose", "short child",
+      ) catch {
+        error => return Err(error)
+      }
+      if verbose {
+        Ok(invocation_result_empty())
+      } else {
+        Err(@toolCommon.ToolError::InvalidInput("short flag was not forwarded"))
+      }
+    })
+    register_tool_def_invoker(parent, fn(
+      command_path,
+      input,
       stdin,
       principal,
+    ) {
+      let index = match parent.command_index_by_path(command_path) {
+        Some(index) => index
+        None =>
+          return Err(@toolCommon.ToolError::InvalidCommandPath(command_path))
+      }
+      let decoded = decode_canonical_input_for_test(
+        parent, index, input, "short parent",
+      ) catch {
+        error => return Err(error)
+      }
+      invoke_registered_subtool_for_test(
+        "short-forward-child",
+        command_path[1:].to_array(),
+        decoded,
+        stdin,
+        principal,
+      )
+    })
+    let model = parent.canonical_input_model(parent_index)
+    let input = build_canonical_input(model, [
+      ("parent-verbose", @model.SchemaValue::Bool(true)),
+    ])
+    let wire = @model.typed_schema_value_to_wit(input)
+    assert_true(
+      invoke_registered_tool(
+        "short-forward-parent",
+        ["short-forward-child"],
+        wire,
+        None,
+        @agentCommon.Principal::Anonymous,
+      )
+      is Ok(_),
     )
   })
-  let model = parent.canonical_input_model(parent_index)
-  let input = build_canonical_input(model, [
-    ("parent-verbose", @model.SchemaValue::Bool(true)),
-  ])
-  let wire = @model.typed_schema_value_to_wit(input)
-  assert_true(
-    invoke_registered_tool(
-      "short-forward-parent",
-      ["short-forward-child"],
-      wire,
-      None,
-      @agentCommon.Principal::Anonymous,
-    )
-    is Ok(_),
-  )
 }
 
 ///|
 test "deprojected child global does not consume a descendant local input" {
-  let string = string_graph()
-  let option = fn(long : String, short : Char?) -> OptionSpecDef {
-    {
-      long,
-      short,
-      aliases: [],
-      doc: doc(long),
-      value_name: None,
-      shape: OptionShapeDef::Scalar(string),
-      default: None,
-      required: true,
-      env_var: None,
+  run_async_test(() => {
+    let string = string_graph()
+    let option = fn(long : String, short : Char?) -> OptionSpecDef {
+      {
+        long,
+        short,
+        aliases: [],
+        doc: doc(long),
+        value_name: None,
+        shape: OptionShapeDef::Scalar(string),
+        default: None,
+        required: true,
+        env_var: None,
+      }
     }
-  }
-  let child_raw : ToolDef = {
-    version: "1",
-    commands: [
-      {
-        name: "deproject-child",
-        aliases: [],
-        doc: doc("deproject child"),
-        globals: { options: [option("format", Some('f'))], flags: [] },
-        subcommands: [1],
-        body: Some({
-          positionals: { fixed: [], tail: None },
-          options: [],
-          flags: [],
-          constraints: [],
-          stdin: None,
-          stdout: None,
-          result: None,
-          errors: [],
-          annotations: None,
-        }),
-      },
-      {
-        name: "run",
-        aliases: [],
-        doc: doc("run"),
-        globals: { options: [], flags: [] },
-        subcommands: [],
-        body: Some({
-          positionals: { fixed: [], tail: None },
-          options: [option("format", None)],
-          flags: [],
-          constraints: [],
-          stdin: None,
-          stdout: None,
-          result: None,
-          errors: [],
-          annotations: None,
-        }),
-      },
-    ],
-  }
-  let child = child_raw.normalize_inherited_globals()
-  let parent_base : ToolDef = {
-    version: "1",
-    commands: [
-      {
-        name: "deproject-parent",
-        aliases: [],
-        doc: doc("deproject parent"),
-        globals: { options: [], flags: [] },
-        subcommands: [],
-        body: None,
-      },
-    ],
-  }
-  let parent = parent_base
-    .graft_subtree(
-      child_raw,
-      "deproject-child",
-      { options: [option("count", Some('f'))], flags: [] },
-      None,
-      None,
-      None,
+    let child_raw : ToolDef = {
+      version: "1",
+      commands: [
+        {
+          name: "deproject-child",
+          aliases: [],
+          doc: doc("deproject child"),
+          globals: { options: [option("format", Some('f'))], flags: [] },
+          subcommands: [1],
+          body: Some({
+            positionals: { fixed: [], tail: None },
+            options: [],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: None,
+            errors: [],
+            annotations: None,
+          }),
+        },
+        {
+          name: "run",
+          aliases: [],
+          doc: doc("run"),
+          globals: { options: [], flags: [] },
+          subcommands: [],
+          body: Some({
+            positionals: { fixed: [], tail: None },
+            options: [option("format", None)],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: None,
+            errors: [],
+            annotations: None,
+          }),
+        },
+      ],
+    }
+    let child = child_raw.normalize_inherited_globals()
+    let parent_base : ToolDef = {
+      version: "1",
+      commands: [
+        {
+          name: "deproject-parent",
+          aliases: [],
+          doc: doc("deproject parent"),
+          globals: { options: [], flags: [] },
+          subcommands: [],
+          body: None,
+        },
+      ],
+    }
+    let parent = parent_base
+      .graft_subtree(
+        child_raw,
+        "deproject-child",
+        { options: [option("count", Some('f'))], flags: [] },
+        None,
+        None,
+        None,
+      )
+      .normalize_inherited_globals()
+    let parent_index = parent.command_index_by_path(["deproject-child", "run"])
+    guard parent_index is Some(parent_index) else {
+      fail("expected grafted descendant command")
+    }
+    inspect(
+      parent.canonical_input_fields(parent_index).map(field => field.name),
+      content="[count, format]",
     )
-    .normalize_inherited_globals()
-  let parent_index = parent.command_index_by_path(["deproject-child", "run"])
-  guard parent_index is Some(parent_index) else {
-    fail("expected grafted descendant command")
-  }
-  inspect(
-    parent.canonical_input_fields(parent_index).map(field => field.name),
-    content="[count, format]",
-  )
-  register_subtool_def_invoker(child, fn(command_path, input, _, _) {
-    let index = match child.command_index_by_path(command_path) {
-      Some(index) => index
-      None =>
-        return Err(@toolCommon.ToolError::InvalidCommandPath(command_path))
-    }
-    let decoded = decode_canonical_input(child, index, input, "deproject child") catch {
-      error => return Err(error)
-    }
-    let format : String = decode_canonical_field(
-      decoded, "format", "deproject child",
-    ) catch {
-      error => return Err(error)
-    }
-    if format == "local" {
-      Ok(invocation_result_empty())
-    } else {
-      Err(@toolCommon.ToolError::InvalidInput("descendant input was shadowed"))
-    }
+    register_subtool_def_invoker(child, fn(command_path, input, _, _) {
+      let index = match child.command_index_by_path(command_path) {
+        Some(index) => index
+        None =>
+          return Err(@toolCommon.ToolError::InvalidCommandPath(command_path))
+      }
+      let decoded = decode_canonical_input_for_test(
+        child, index, input, "deproject child",
+      ) catch {
+        error => return Err(error)
+      }
+      let format : String = decode_canonical_field_for_test(
+        decoded, "format", "deproject child",
+      ) catch {
+        error => return Err(error)
+      }
+      if format == "local" {
+        Ok(invocation_result_empty())
+      } else {
+        Err(
+          @toolCommon.ToolError::InvalidInput("descendant input was shadowed"),
+        )
+      }
+    })
+    let model = parent.canonical_input_model(parent_index)
+    let input = build_canonical_input(model, [
+      ("count", @model.SchemaValue::String("inherited")),
+      ("format", @model.SchemaValue::String("local")),
+    ])
+    let wire = @model.typed_schema_value_to_wit(input)
+    let fields = decode_canonical_input_for_test(
+      parent, parent_index, wire, "deproject parent",
+    )
+    assert_true(
+      invoke_registered_subtool_for_test(
+        "deproject-child",
+        ["run"],
+        fields,
+        None,
+        @agentCommon.Principal::Anonymous,
+      )
+      is Ok(_),
+    )
   })
-  let model = parent.canonical_input_model(parent_index)
-  let input = build_canonical_input(model, [
-    ("count", @model.SchemaValue::String("inherited")),
-    ("format", @model.SchemaValue::String("local")),
-  ])
-  let wire = @model.typed_schema_value_to_wit(input)
-  let fields = decode_canonical_input(
-    parent, parent_index, wire, "deproject parent",
-  )
-  assert_true(
-    invoke_registered_subtool(
-      "deproject-child",
+}
+
+///|
+test "bug finder forwarding prefers surviving descendant over ancestor alias" {
+  run_async_test(() => {
+    let string = string_graph()
+    let option = fn(long : String, aliases : Array[String]) -> OptionSpecDef {
+      {
+        long,
+        short: None,
+        aliases,
+        doc: doc(long),
+        value_name: None,
+        shape: OptionShapeDef::Scalar(string),
+        default: None,
+        required: true,
+        env_var: None,
+      }
+    }
+    let child_raw : ToolDef = {
+      version: "1",
+      commands: [
+        {
+          name: "ranked-forward-child",
+          aliases: [],
+          doc: doc("ranked forward child"),
+          globals: { options: [option("format", ["leaf"])], flags: [] },
+          subcommands: [1],
+          body: None,
+        },
+        {
+          name: "run",
+          aliases: [],
+          doc: doc("run"),
+          globals: { options: [], flags: [] },
+          subcommands: [],
+          body: Some({
+            positionals: { fixed: [], tail: None },
+            options: [option("leaf", [])],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: None,
+            errors: [],
+            annotations: None,
+          }),
+        },
+      ],
+    }
+    let child = child_raw.normalize_inherited_globals()
+    inspect(
+      child.canonical_input_fields(1).map(field => field.name),
+      content="[format]",
+    )
+    let parent_base : ToolDef = {
+      version: "1",
+      commands: [
+        {
+          name: "ranked-forward-parent",
+          aliases: [],
+          doc: doc("ranked forward parent"),
+          globals: { options: [], flags: [] },
+          subcommands: [],
+          body: None,
+        },
+      ],
+    }
+    let parent = parent_base
+      .graft_subtree(
+        child_raw,
+        "ranked-forward-child",
+        { options: [option("parent-value", ["format"])], flags: [] },
+        None,
+        None,
+        None,
+      )
+      .normalize_inherited_globals()
+    let parent_index = parent.command_index_by_path([
+      "ranked-forward-child", "run",
+    ])
+    guard parent_index is Some(parent_index) else {
+      fail("expected grafted descendant command")
+    }
+    inspect(
+      parent.canonical_input_fields(parent_index).map(field => field.name),
+      content="[parent-value, leaf]",
+    )
+    register_subtool_def_invoker(child, fn(command_path, input, _, _) {
+      let index = match child.command_index_by_path(command_path) {
+        Some(index) => index
+        None =>
+          return Err(@toolCommon.ToolError::InvalidCommandPath(command_path))
+      }
+      let decoded = decode_canonical_input_for_test(
+        child, index, input, "ranked child",
+      ) catch {
+        error => return Err(error)
+      }
+      let leaf : String = decode_canonical_field_for_test(
+        decoded, "format", "ranked child",
+      ) catch {
+        error => return Err(error)
+      }
+      if leaf == "local" {
+        Ok(invocation_result_empty())
+      } else {
+        Err(
+          @toolCommon.ToolError::InvalidInput("ancestor alias won forwarding"),
+        )
+      }
+    })
+    let model = parent.canonical_input_model(parent_index)
+    let input = build_canonical_input(model, [
+      ("parent-value", @model.SchemaValue::String("ancestor")),
+      ("leaf", @model.SchemaValue::String("local")),
+    ])
+    let fields = decode_canonical_input_for_test(
+      parent,
+      parent_index,
+      @model.typed_schema_value_to_wit(input),
+      "ranked parent",
+    )
+    let result = invoke_registered_subtool_for_test(
+      "ranked-forward-child",
       ["run"],
       fields,
       None,
       @agentCommon.Principal::Anonymous,
     )
-    is Ok(_),
-  )
-}
-
-///|
-test "bug finder forwarding prefers surviving descendant over ancestor alias" {
-  let string = string_graph()
-  let option = fn(long : String, aliases : Array[String]) -> OptionSpecDef {
-    {
-      long,
-      short: None,
-      aliases,
-      doc: doc(long),
-      value_name: None,
-      shape: OptionShapeDef::Scalar(string),
-      default: None,
-      required: true,
-      env_var: None,
-    }
-  }
-  let child_raw : ToolDef = {
-    version: "1",
-    commands: [
-      {
-        name: "ranked-forward-child",
-        aliases: [],
-        doc: doc("ranked forward child"),
-        globals: { options: [option("format", ["leaf"])], flags: [] },
-        subcommands: [1],
-        body: None,
-      },
-      {
-        name: "run",
-        aliases: [],
-        doc: doc("run"),
-        globals: { options: [], flags: [] },
-        subcommands: [],
-        body: Some({
-          positionals: { fixed: [], tail: None },
-          options: [option("leaf", [])],
-          flags: [],
-          constraints: [],
-          stdin: None,
-          stdout: None,
-          result: None,
-          errors: [],
-          annotations: None,
-        }),
-      },
-    ],
-  }
-  let child = child_raw.normalize_inherited_globals()
-  inspect(
-    child.canonical_input_fields(1).map(field => field.name),
-    content="[format]",
-  )
-  let parent_base : ToolDef = {
-    version: "1",
-    commands: [
-      {
-        name: "ranked-forward-parent",
-        aliases: [],
-        doc: doc("ranked forward parent"),
-        globals: { options: [], flags: [] },
-        subcommands: [],
-        body: None,
-      },
-    ],
-  }
-  let parent = parent_base
-    .graft_subtree(
-      child_raw,
-      "ranked-forward-child",
-      { options: [option("parent-value", ["format"])], flags: [] },
-      None,
-      None,
-      None,
-    )
-    .normalize_inherited_globals()
-  let parent_index = parent.command_index_by_path([
-    "ranked-forward-child", "run",
-  ])
-  guard parent_index is Some(parent_index) else {
-    fail("expected grafted descendant command")
-  }
-  inspect(
-    parent.canonical_input_fields(parent_index).map(field => field.name),
-    content="[parent-value, leaf]",
-  )
-  register_subtool_def_invoker(child, fn(command_path, input, _, _) {
-    let index = match child.command_index_by_path(command_path) {
-      Some(index) => index
-      None =>
-        return Err(@toolCommon.ToolError::InvalidCommandPath(command_path))
-    }
-    let decoded = decode_canonical_input(child, index, input, "ranked child") catch {
-      error => return Err(error)
-    }
-    let leaf : String = decode_canonical_field(
-      decoded, "format", "ranked child",
-    ) catch {
-      error => return Err(error)
-    }
-    if leaf == "local" {
-      Ok(invocation_result_empty())
-    } else {
-      Err(@toolCommon.ToolError::InvalidInput("ancestor alias won forwarding"))
+    guard result is Ok(_) else {
+      fail("surviving descendant was not forwarded")
     }
   })
-  let model = parent.canonical_input_model(parent_index)
-  let input = build_canonical_input(model, [
-    ("parent-value", @model.SchemaValue::String("ancestor")),
-    ("leaf", @model.SchemaValue::String("local")),
-  ])
-  let fields = decode_canonical_input(
-    parent,
-    parent_index,
-    @model.typed_schema_value_to_wit(input),
-    "ranked parent",
-  )
-  let result = invoke_registered_subtool(
-    "ranked-forward-child",
-    ["run"],
-    fields,
-    None,
-    @agentCommon.Principal::Anonymous,
-  )
-  guard result is Ok(_) else { fail("surviving descendant was not forwarded") }
 }
 
 ///|
@@ -547,13 +711,13 @@ test "reverse-alias deprojection retains the surviving canonical value" {
   let input = build_canonical_input(def.canonical_input_model(1), [
     ("format", @model.SchemaValue::String("7")),
   ])
-  let decoded = decode_canonical_input(
+  let decoded = decode_canonical_input_for_test(
     def,
     1,
     @model.typed_schema_value_to_wit(input),
     "reverse alias",
   )
-  let format : String = decode_canonical_field(
+  let format : String = decode_canonical_field_for_test(
     decoded, "format", "reverse alias",
   ) catch {
     _ => fail("surviving canonical field was not decoded")
@@ -615,7 +779,7 @@ test "decode invocation input rejects graph root that is not a record" {
   let graph = string_graph()
   let typed = encode_invocation_input(graph, [@model.SchemaValue::String("x")])
   let wire = @model.typed_schema_value_to_wit(typed)
-  try decode_invocation_input(wire, 1, "tool command") catch {
+  try decode_invocation_input_for_test(wire, 1, "tool command") catch {
     @toolCommon.ToolError::InvalidInput(_) => ()
     _ => abort("expected invalid input")
   } noraise {
@@ -639,14 +803,46 @@ test "decode invocation input rejects value that does not match typed schema fie
   }
   let wire = @model.typed_schema_value_to_wit(typed)
   try {
-    let fields = decode_invocation_input(wire, 1, "tool command")
-    let _decoded : Int = decode_param(fields, 0, "tool command")
+    let fields = decode_invocation_input_for_test(wire, 1, "tool command")
+    let _decoded : Int = decode_param_for_test(fields, 0, "tool command")
   } catch {
     @toolCommon.ToolError::InvalidInput(_) => ()
     _ => abort("expected invalid input")
   } noraise {
     _ => abort("expected invalid input")
   }
+}
+
+///|
+test "decode invocation input accepts a stream value" {
+  let graph : @model.SchemaGraph = {
+    defs: [],
+    root: @model.schema_type(
+      @model.SchemaTypeBody::Record([
+        @model.field(
+          "stream",
+          @model.schema_type(@model.SchemaTypeBody::Stream(None)),
+        ),
+      ]),
+    ),
+  }
+  let handle = @model.GuestSchemaValueStreamHandle::from_wrapped(
+    @types.SchemaValueStream::SchemaValueStream(92),
+  )
+  let typed : @model.TypedSchemaValue = {
+    graph,
+    value: @model.SchemaValue::Record([@model.SchemaValue::Stream(handle)]),
+  }
+  let decoded = decode_invocation_input_for_test(
+    @model.typed_schema_value_to_wit(typed),
+    1,
+    "stream tool command",
+  )
+  guard decoded[0] is @model.SchemaValue::Stream(decoded_handle) else {
+    fail("expected a decoded stream value")
+  }
+  assert_true(decoded_handle.is_present())
+  @model.SchemaValue::Record(decoded).release_resources(test_resource_drops())
 }
 
 ///|
@@ -689,7 +885,7 @@ test "decode invocation input rejects union value whose discriminator does not m
     ]),
   }
   let wire = @model.typed_schema_value_to_wit(typed)
-  try decode_invocation_input(wire, 1, "tool command") catch {
+  try decode_invocation_input_for_test(wire, 1, "tool command") catch {
     @toolCommon.ToolError::InvalidInput(_) => ()
     _ => abort("expected invalid input")
   } noraise {
@@ -1004,8 +1200,8 @@ test "canonical model builds and decodes the expected named record" {
   }
   inspect(values[0], content="String(new)")
   let wire = @model.typed_schema_value_to_wit(input)
-  let decoded = decode_canonical_input(def, 1, wire, "leaf")
-  let force : Bool = decode_canonical_field(decoded, "f", "leaf")
+  let decoded = decode_canonical_input_for_test(def, 1, wire, "leaf")
+  let force : Bool = decode_canonical_field_for_test(decoded, "f", "leaf")
   assert_true(force)
 }
 
@@ -1024,7 +1220,7 @@ test "canonical input rejects missing fields and mismatching wire schema" {
     value: @model.SchemaValue::String("not a record"),
   }
   let wire = @model.typed_schema_value_to_wit(mismatching)
-  try decode_canonical_input(def, 1, wire, "leaf") catch {
+  try decode_canonical_input_for_test(def, 1, wire, "leaf") catch {
     @toolCommon.ToolError::InvalidInput(_) => ()
     _ => fail("expected invalid canonical input")
   } noraise {
@@ -1209,8 +1405,8 @@ test "text-refined string canonical input round-trips through typed values" {
     ("value", @schema.to_value_as("aaa")),
   ])
   let wire = @model.typed_schema_value_to_wit(input)
-  let decoded = decode_canonical_input(def, 0, wire, "echo")
-  let value : String = decode_canonical_field(decoded, "value", "echo")
+  let decoded = decode_canonical_input_for_test(def, 0, wire, "echo")
+  let value : String = decode_canonical_field_for_test(decoded, "value", "echo")
   inspect(value, content="aaa")
 }
 

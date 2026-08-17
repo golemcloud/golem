@@ -17,7 +17,7 @@ use crate::base_model::agent::{AgentConfigSource, AgentMode, AgentTypeName, Snap
 use crate::schema::agent::{
     AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema,
     AgentTypeSchema, AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema,
-    ParsedAgentId, json_input_schema_value_to_typed_schema_value,
+    ParsedAgentId, contains_stream_in_graph, json_input_schema_value_to_typed_schema_value,
     typed_schema_value_with_projected_defs,
 };
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
@@ -652,7 +652,7 @@ fn projected_helper_drops_all_defs_for_ref_free_root() {
     assert!(typed.graph().defs.is_empty());
 }
 
-// --- AgentTypeSchema::validate: rejection of P3 stub types (future/stream) ---
+// --- AgentTypeSchema::validate: stream placement and shared definitions ---
 
 fn method(name: &str, input: Vec<NamedField>, output: OutputSchema) -> AgentMethodSchema {
     AgentMethodSchema {
@@ -680,22 +680,54 @@ fn validate_accepts_agent_type_without_p3_stubs() {
 }
 
 #[test]
-fn validate_rejects_stream_in_method_output() {
+fn validate_accepts_streams_in_method_input_and_output() {
     let agent = AgentTypeSchema {
         methods: vec![method(
-            "download",
-            vec![],
+            "transform",
+            vec![NamedField::user_supplied(
+                "input",
+                SchemaType::stream(Some(SchemaType::string())),
+            )],
             OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::u8())))),
         )],
         ..sample_agent_type()
     };
-    let err = agent
-        .validate()
-        .expect_err("stream output must be rejected");
-    assert!(
-        err.contains("unsupported type 'stream'") && err.contains("method 'download' output"),
-        "unexpected error: {err}"
+    agent.validate().expect("method streams must be accepted");
+}
+
+#[test]
+fn stream_classification_ignores_definitions_unreachable_from_the_method() {
+    let graph = registry(vec![
+        proj_def("Plain", SchemaType::string()),
+        proj_def(
+            "UnrelatedStream",
+            SchemaType::stream(Some(SchemaType::u8())),
+        ),
+    ]);
+    let method = method(
+        "plain",
+        vec![NamedField::user_supplied(
+            "input",
+            SchemaType::ref_to(TypeId::new("Plain")),
+        )],
+        OutputSchema::Single(Box::new(SchemaType::u64())),
     );
+
+    assert!(
+        method
+            .input_schema
+            .fields()
+            .iter()
+            .all(|field| !contains_stream_in_graph(&graph, &field.schema))
+    );
+    assert!(
+        !contains_stream_in_graph(&graph, method.output_schema.schema().unwrap()),
+        "the unrelated stream definition must not classify the method as streaming"
+    );
+    assert!(contains_stream_in_graph(
+        &graph,
+        &SchemaType::ref_to(TypeId::new("UnrelatedStream"))
+    ));
 }
 
 #[test]
@@ -715,8 +747,50 @@ fn validate_rejects_future_in_method_parameter() {
         .validate()
         .expect_err("future parameter must be rejected");
     assert!(
-        err.contains("unsupported type 'future'")
-            && err.contains("method 'wait-for' parameter 'signal'"),
+        err.contains("future values are not allowed in scope AgentMethodInput"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn validate_rejects_future_in_unreferenced_shared_definition() {
+    let agent = AgentTypeSchema {
+        schema: registry(vec![proj_def(
+            "UnusedFuture",
+            SchemaType::future(Some(SchemaType::string())),
+        )]),
+        ..sample_agent_type()
+    };
+    let err = agent
+        .validate()
+        .expect_err("future must be rejected even in an unreferenced definition");
+    assert!(
+        err.contains(
+            "shared type definition 'UnusedFuture' contains the unsupported type 'future'"
+        ),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn validate_rejects_stream_in_auto_injected_method_parameter() {
+    let agent = AgentTypeSchema {
+        methods: vec![method(
+            "invalid",
+            vec![NamedField::auto_injected(
+                "principal",
+                AutoInjectedKind::Principal,
+                SchemaType::stream(Some(SchemaType::string())),
+            )],
+            OutputSchema::Unit,
+        )],
+        ..sample_agent_type()
+    };
+    let err = agent
+        .validate()
+        .expect_err("auto-injected streams must be rejected");
+    assert!(
+        err.contains("stream values are not allowed in scope Boundary"),
         "unexpected error: {err}"
     );
 }
@@ -740,29 +814,43 @@ fn validate_rejects_stream_nested_in_constructor_parameter() {
         .validate()
         .expect_err("nested stream in constructor must be rejected");
     assert!(
-        err.contains("unsupported type 'stream'")
-            && err.contains("constructor parameter 'sources'"),
+        err.contains("stream values are not allowed in scope Constructor"),
         "unexpected error: {err}"
     );
 }
 
 #[test]
-fn validate_rejects_stream_in_shared_type_definition() {
+fn validate_accepts_stream_in_shared_type_definition_used_by_method() {
     let agent = AgentTypeSchema {
         schema: registry(vec![proj_def(
             "Chunks",
             SchemaType::stream(Some(SchemaType::u8())),
         )]),
+        methods: vec![method(
+            "download",
+            vec![],
+            OutputSchema::Single(Box::new(SchemaType::ref_to(TypeId::new("Chunks")))),
+        )],
         ..sample_agent_type()
     };
-    let err = agent
+    agent
         .validate()
-        .expect_err("stream in a shared type definition must be rejected");
-    assert!(
-        err.contains("unsupported type 'stream'")
-            && err.contains("shared type definition 'Chunks'"),
-        "unexpected error: {err}"
-    );
+        .expect("method may reference a shared stream definition");
+}
+
+#[test]
+fn validate_rejects_stream_in_unreferenced_shared_definition() {
+    let agent = AgentTypeSchema {
+        schema: registry(vec![proj_def(
+            "UnusedStream",
+            SchemaType::stream(Some(SchemaType::string())),
+        )]),
+        ..sample_agent_type()
+    };
+
+    agent
+        .validate()
+        .expect_err("streams are allowed only at explicit agent method input/output positions");
 }
 
 #[test]
@@ -779,13 +867,13 @@ fn validate_rejects_future_in_config_value_type() {
         .validate()
         .expect_err("future config value type must be rejected");
     assert!(
-        err.contains("unsupported type 'future'") && err.contains("config value at path 'a.b'"),
+        err.contains("future values are not allowed in scope Boundary"),
         "unexpected error: {err}"
     );
 }
 
 #[test]
-fn validate_rejects_stream_in_dependency_method_parameter() {
+fn validate_accepts_stream_in_dependency_method_parameter() {
     let agent = AgentTypeSchema {
         dependencies: vec![AgentDependencySchema {
             type_name: "helper".to_string(),
@@ -808,12 +896,7 @@ fn validate_rejects_stream_in_dependency_method_parameter() {
         }],
         ..sample_agent_type()
     };
-    let err = agent
+    agent
         .validate()
-        .expect_err("stream in a dependency method must be rejected");
-    assert!(
-        err.contains("unsupported type 'stream'")
-            && err.contains("dependency 'helper' method 'feed' parameter 'data'"),
-        "unexpected error: {err}"
-    );
+        .expect("dependency method streams must be accepted");
 }

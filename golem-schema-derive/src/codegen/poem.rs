@@ -58,6 +58,7 @@ struct SerdeFieldAttrs {
 #[derive(Default)]
 struct SerdeVariantAttrs {
     rename: Option<String>,
+    skip: bool,
 }
 
 pub fn expand_poem_schema(input: &DeriveInput) -> syn::Result<TokenStream> {
@@ -220,6 +221,9 @@ fn expand_adjacent_enum(
     let mut variant_blocks = Vec::new();
     for variant in &data.variants {
         let vattrs = parse_serde_variant_attrs(&variant.attrs)?;
+        if vattrs.skip {
+            continue;
+        }
         let case = resolve_variant_name(&variant.ident, &vattrs, serde.rename_all);
         let case_lit = LitStr::new(&case, variant.ident.span());
 
@@ -972,6 +976,7 @@ fn parse_serde_variant_attrs(attrs: &[Attribute]) -> syn::Result<SerdeVariantAtt
                     }
                     out.rename = Some(meta.value()?.parse::<LitStr>()?.value());
                 }
+                "skip" => out.skip = true,
                 other => {
                     return Err(meta.error(format!(
                         "PoemSchema does not support `#[serde({other})]` on a variant"

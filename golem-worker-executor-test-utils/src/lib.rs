@@ -2155,7 +2155,10 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
             &mut linker,
             <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
-        golem_schema::schema::wit::wire::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+        golem_schema::schema::wit::wire::add_to_linker::<
+            _,
+            golem_worker_executor::durable_host::CoreTypesHost<Context>,
+        >(
             &mut linker,
             <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;

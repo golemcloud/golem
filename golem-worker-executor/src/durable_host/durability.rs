@@ -369,7 +369,7 @@ pub enum AsyncRetryDecision {
 pub struct DurableExecutionState {
     pub is_live: bool,
     pub persistence_level: PersistenceLevel,
-    pub snapshotting_mode: Option<PersistenceLevel>,
+    pub is_unpersisted_execution: bool,
     /// Whether the executor assumes idempotence for remote writes.
     pub assume_idempotence: bool,
     /// Maximum delay for in-function retries. Delays exceeding this fall back to trap+replay.
@@ -1083,6 +1083,9 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
         let response_typed = response_typed.map_err(|e| {
             anyhow::anyhow!("Failed to decode durable function response schema value: {e}")
         })?;
+        if self.is_unpersisted_execution() {
+            return Ok(());
+        }
         DurabilityHost::persist_durable_function_invocation(
             self,
             HostFunctionName::Custom(function_name),
@@ -1126,10 +1129,11 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
     }
 
     fn durable_execution_state(&self) -> DurableExecutionState {
+        let is_unpersisted_execution = self.is_unpersisted_execution();
         DurableExecutionState {
-            is_live: self.state.is_live() || self.state.snapshotting_mode.is_some(),
+            is_live: self.state.is_live() || is_unpersisted_execution,
             persistence_level: self.state.persistence_level,
-            snapshotting_mode: self.state.snapshotting_mode,
+            is_unpersisted_execution,
             assume_idempotence: self.state.assume_idempotence,
             max_in_function_retry_delay: self.state.config.max_in_function_retry_delay,
         }
@@ -1151,7 +1155,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
     ) {
-        if self.state.snapshotting_mode.is_some() {
+        if self.is_unpersisted_execution() {
             return;
         }
 
@@ -1213,7 +1217,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         forced_commit: bool,
     ) -> Result<(), WorkerExecutorError> {
         self.end_function(function_type, begin_index).await?;
-        if self.state.snapshotting_mode.is_none()
+        if !self.is_unpersisted_execution()
             && (function_type == &DurableFunctionType::WriteRemote
                 || matches!(function_type, DurableFunctionType::WriteRemoteBatched(_))
                 || matches!(
@@ -1363,6 +1367,10 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             let status = self.execution_status.read().unwrap();
             status.create_await_interrupt_signal()
         };
+        let live_stream_cancellation = self
+            .live_stream_tracker
+            .as_ref()
+            .map(|tracker| tracker.cancellation_token());
         if self
             .state
             .invocation_deadline_exceeded
@@ -1371,6 +1379,9 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 .state
                 .tail_work_deadline_exceeded
                 .load(std::sync::atomic::Ordering::Acquire)
+            || live_stream_cancellation
+                .as_ref()
+                .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
         {
             let status = self.execution_status.read().unwrap();
             if matches!(&*status, ExecutionStatus::Interrupting { .. }) {
@@ -1380,7 +1391,18 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 Timestamp::now_utc(),
             )));
         }
-        interrupt_signal
+        match live_stream_cancellation {
+            Some(cancellation) => Box::pin(async move {
+                tokio::select! {
+                    biased;
+                    interrupt = interrupt_signal => interrupt,
+                    () = cancellation.cancelled() => {
+                        InterruptKind::Interrupt(Timestamp::now_utc())
+                    }
+                }
+            }),
+            None => interrupt_signal,
+        }
     }
 
     fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap> {
@@ -1644,6 +1666,8 @@ pub struct TaskRetryContext<Ctx: WorkerCtx> {
     pub current_retry_policy_state: Option<RetryPolicyState>,
     /// Properties describing the error context (verb, URI, status code, etc.) for predicate evaluation.
     pub retry_properties: RetryProperties,
+    /// Whether retry bookkeeping belongs to an unpersisted execution and must not be recorded.
+    pub is_unpersisted_execution: bool,
     /// Reference to the worker that owns this task.
     pub worker: Arc<crate::worker::Worker<Ctx>>,
 }
@@ -1685,7 +1709,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         DurableExecutionState {
             is_live: true,
             persistence_level: PersistenceLevel::Smart,
-            snapshotting_mode: None,
+            is_unpersisted_execution: false,
             assume_idempotence: true,
             max_in_function_retry_delay: self.max_in_function_retry_delay,
         }
@@ -1697,6 +1721,11 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
     ) {
+        if self.is_unpersisted_execution {
+            self.current_retry_policy_state = retry_policy_state;
+            return;
+        }
+
         use golem_common::model::oplog::AgentError;
         let entry = OplogEntry::error(
             AgentError::TransientError("in-function retry".to_string()),
@@ -1839,7 +1868,7 @@ mod tests {
             DurableExecutionState {
                 is_live: true,
                 persistence_level: PersistenceLevel::Smart,
-                snapshotting_mode: None,
+                is_unpersisted_execution: false,
                 assume_idempotence: self.assume_idempotence,
                 max_in_function_retry_delay: self.max_in_function_retry_delay,
             }

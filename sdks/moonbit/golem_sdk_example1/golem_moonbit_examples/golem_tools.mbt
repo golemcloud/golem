@@ -748,7 +748,7 @@ fn __golem_tool_def_CanonicalGrep() -> @tool.ToolDef {
 }
 
 ///|
-fn __golem_tool_invoke_CanonicalGrep(
+async fn __golem_tool_invoke_CanonicalGrep(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
@@ -759,7 +759,9 @@ fn __golem_tool_invoke_CanonicalGrep(
     match __golem_def.command_index_by_path(__golem_command_path) {
       Some(__golem_index) => __golem_index
       None => {
-        return Err(
+        return @tool.reject_wire_invocation(
+          __golem_input,
+          __golem_stdin,
           @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
         )
       }
@@ -772,7 +774,9 @@ fn __golem_tool_invoke_CanonicalGrep(
       "tool canonical-grep invocation",
     )
   } catch{
-    __golem_error => return Err(__golem_error)
+    __golem_error => {
+      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
+    }
   }
   match __golem_index {
     0 => {
@@ -783,7 +787,13 @@ fn __golem_tool_invoke_CanonicalGrep(
           "tool canonical-grep command canonical-grep",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let color :CanonicalGrepColorMode = try {
         @tool.decode_canonical_field(
@@ -792,7 +802,13 @@ fn __golem_tool_invoke_CanonicalGrep(
           "tool canonical-grep command canonical-grep",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let pattern :String = try {
         @tool.decode_canonical_field(
@@ -801,7 +817,13 @@ fn __golem_tool_invoke_CanonicalGrep(
           "tool canonical-grep command canonical-grep",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let extra_patterns :Array[String] = try {
         @tool.decode_canonical_field(
@@ -810,7 +832,13 @@ fn __golem_tool_invoke_CanonicalGrep(
           "tool canonical-grep command canonical-grep",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let max_count :UInt? = try {
         @tool.decode_canonical_field(
@@ -819,7 +847,13 @@ fn __golem_tool_invoke_CanonicalGrep(
           "tool canonical-grep command canonical-grep",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let files :Array[@schema.Path] = try {
         @tool.decode_canonical_field(
@@ -828,12 +862,20 @@ fn __golem_tool_invoke_CanonicalGrep(
           "tool canonical-grep command canonical-grep",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let stdin = match __golem_stdin {
         Some(__golem_stream) => __golem_stream
         None => {
-          return Err(
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
             @toolCommon.ToolError::InvalidInput(
               "required stdin stream is missing",
             ),
@@ -864,6 +906,7 @@ fn __golem_tool_invoke_CanonicalGrep(
           )
         }
         Err(error) => {
+          __golem_stdout.drop_sync()
           let payload = match CanonicalGrepError::to_error_payload_value(error) {
             Ok(payload) => payload
             Err(encode_error) => {
@@ -875,23 +918,24 @@ fn __golem_tool_invoke_CanonicalGrep(
             }
           }
           let payload = try {
-            @model.typed_schema_value_to_wit(payload)
+            @tool.encode_error_payload(payload)
           } catch{
-            encode_error => {
-              return Err(
-                @toolCommon.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error.to_string(
-
-                  ),
-                ),
-              )
-            }
+            encode_error => return Err(encode_error)
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
       }
     }
     1 => {
+      if __golem_stdin is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdin stream",
+          ),
+        )
+      }
       let case_sensitive :Bool = try {
         @tool.decode_canonical_field(
           __golem_decoded,
@@ -899,7 +943,13 @@ fn __golem_tool_invoke_CanonicalGrep(
           "tool canonical-grep command replace",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let color :CanonicalGrepColorMode = try {
         @tool.decode_canonical_field(
@@ -908,7 +958,13 @@ fn __golem_tool_invoke_CanonicalGrep(
           "tool canonical-grep command replace",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let pattern :String = try {
         @tool.decode_canonical_field(
@@ -917,7 +973,13 @@ fn __golem_tool_invoke_CanonicalGrep(
           "tool canonical-grep command replace",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let replacement :String = try {
         @tool.decode_canonical_field(
@@ -926,7 +988,13 @@ fn __golem_tool_invoke_CanonicalGrep(
           "tool canonical-grep command replace",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let files :Array[@schema.Path] = try {
         @tool.decode_canonical_field(
@@ -935,7 +1003,13 @@ fn __golem_tool_invoke_CanonicalGrep(
           "tool canonical-grep command replace",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       match CanonicalGrep::replace(
         case_sensitive,
@@ -965,23 +1039,21 @@ fn __golem_tool_invoke_CanonicalGrep(
             }
           }
           let payload = try {
-            @model.typed_schema_value_to_wit(payload)
+            @tool.encode_error_payload(payload)
           } catch{
-            encode_error => {
-              return Err(
-                @toolCommon.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error.to_string(
-
-                  ),
-                ),
-              )
-            }
+            encode_error => return Err(encode_error)
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
       }
     }
-    _ => Err(@toolCommon.ToolError::InvalidCommandPath(__golem_command_path))
+    _ => {
+      @tool.reject_decoded_invocation(
+        __golem_decoded,
+        __golem_stdin,
+        @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
+      )
+    }
   }
 }
 
@@ -1616,7 +1688,7 @@ fn __golem_tool_def_CanonicalGit() -> @tool.ToolDef {
 }
 
 ///|
-fn __golem_tool_invoke_CanonicalGit(
+async fn __golem_tool_invoke_CanonicalGit(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
@@ -1627,7 +1699,9 @@ fn __golem_tool_invoke_CanonicalGit(
     match __golem_def.command_index_by_path(__golem_command_path) {
       Some(__golem_index) => __golem_index
       None => {
-        return Err(
+        return @tool.reject_wire_invocation(
+          __golem_input,
+          __golem_stdin,
           @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
         )
       }
@@ -1640,7 +1714,9 @@ fn __golem_tool_invoke_CanonicalGit(
       "tool canonical-git invocation",
     )
   } catch{
-    __golem_error => return Err(__golem_error)
+    __golem_error => {
+      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
+    }
   }
   if __golem_command_path.length() > 0 && ["remote", "rmt"].contains(
     __golem_command_path[0],
@@ -1666,6 +1742,15 @@ fn __golem_tool_invoke_CanonicalGit(
   }
   match __golem_index {
     1 => {
+      if __golem_stdin is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdin stream",
+          ),
+        )
+      }
       let verbose :UInt = try {
         @tool.decode_canonical_field(
           __golem_decoded,
@@ -1673,7 +1758,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command commit",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let git_dir :@schema.Path = try {
         @tool.decode_canonical_field(
@@ -1682,7 +1773,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command commit",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let paginate :Bool = try {
         @tool.decode_canonical_field(
@@ -1691,7 +1788,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command commit",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let config :Map[String, String] = try {
         @tool.decode_canonical_field(
@@ -1700,7 +1803,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command commit",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let message :String = try {
         @tool.decode_canonical_field(
@@ -1709,7 +1818,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command commit",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let author :String? = try {
         @tool.decode_canonical_field(
@@ -1718,7 +1833,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command commit",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let amend :Bool = try {
         @tool.decode_canonical_field(
@@ -1727,7 +1848,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command commit",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let signoff :Bool = try {
         @tool.decode_canonical_field(
@@ -1736,7 +1863,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command commit",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let reset_author :Bool = try {
         @tool.decode_canonical_field(
@@ -1745,7 +1878,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command commit",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let output :CanonicalGitOutputMode = try {
         @tool.decode_canonical_field(
@@ -1754,7 +1893,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command commit",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       match CanonicalGit::commit(
         verbose,
@@ -1790,23 +1935,24 @@ fn __golem_tool_invoke_CanonicalGit(
               }
             }
           let payload = try {
-            @model.typed_schema_value_to_wit(payload)
+            @tool.encode_error_payload(payload)
           } catch{
-            encode_error => {
-              return Err(
-                @toolCommon.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error.to_string(
-
-                  ),
-                ),
-              )
-            }
+            encode_error => return Err(encode_error)
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
       }
     }
     2 => {
+      if __golem_stdin is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdin stream",
+          ),
+        )
+      }
       let max_count :Int64? = try {
         @tool.decode_canonical_field(
           __golem_decoded,
@@ -1814,7 +1960,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command log",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let since :@types.Datetime? = try {
         @tool.decode_canonical_field(
@@ -1823,7 +1975,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command log",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let until :@types.Datetime? = try {
         @tool.decode_canonical_field(
@@ -1832,7 +1990,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command log",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let author :Array[String] = try {
         @tool.decode_canonical_field(
@@ -1841,7 +2005,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command log",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let grep :Array[String] = try {
         @tool.decode_canonical_field(
@@ -1850,7 +2020,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command log",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let all_match :Bool = try {
         @tool.decode_canonical_field(
@@ -1859,7 +2035,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command log",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let invert_grep :Bool = try {
         @tool.decode_canonical_field(
@@ -1868,7 +2050,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command log",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let oneline :Bool = try {
         @tool.decode_canonical_field(
@@ -1877,7 +2065,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command log",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let graph :Bool = try {
         @tool.decode_canonical_field(
@@ -1886,7 +2080,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command log",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let paths :Array[@schema.Path] = try {
         @tool.decode_canonical_field(
@@ -1895,7 +2095,13 @@ fn __golem_tool_invoke_CanonicalGit(
           "tool canonical-git command log",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       match CanonicalGit::log(
         max_count,
@@ -1930,23 +2136,21 @@ fn __golem_tool_invoke_CanonicalGit(
             }
           }
           let payload = try {
-            @model.typed_schema_value_to_wit(payload)
+            @tool.encode_error_payload(payload)
           } catch{
-            encode_error => {
-              return Err(
-                @toolCommon.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error.to_string(
-
-                  ),
-                ),
-              )
-            }
+            encode_error => return Err(encode_error)
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
       }
     }
-    _ => Err(@toolCommon.ToolError::InvalidCommandPath(__golem_command_path))
+    _ => {
+      @tool.reject_decoded_invocation(
+        __golem_decoded,
+        __golem_stdin,
+        @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
+      )
+    }
   }
 }
 
@@ -2271,7 +2475,7 @@ fn __golem_tool_def_CanonicalRemote() -> @tool.ToolDef {
 }
 
 ///|
-fn __golem_tool_invoke_CanonicalRemote(
+async fn __golem_tool_invoke_CanonicalRemote(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
@@ -2282,7 +2486,9 @@ fn __golem_tool_invoke_CanonicalRemote(
     match __golem_def.command_index_by_path(__golem_command_path) {
       Some(__golem_index) => __golem_index
       None => {
-        return Err(
+        return @tool.reject_wire_invocation(
+          __golem_input,
+          __golem_stdin,
           @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
         )
       }
@@ -2295,10 +2501,21 @@ fn __golem_tool_invoke_CanonicalRemote(
       "tool remote invocation",
     )
   } catch{
-    __golem_error => return Err(__golem_error)
+    __golem_error => {
+      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
+    }
   }
   match __golem_index {
     1 => {
+      if __golem_stdin is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdin stream",
+          ),
+        )
+      }
       let verbose :UInt = try {
         @tool.decode_canonical_field(
           __golem_decoded,
@@ -2306,7 +2523,13 @@ fn __golem_tool_invoke_CanonicalRemote(
           "tool remote command add",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let name :String = try {
         @tool.decode_canonical_field(
@@ -2315,7 +2538,13 @@ fn __golem_tool_invoke_CanonicalRemote(
           "tool remote command add",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let url :@schema.Url = try {
         @tool.decode_canonical_field(
@@ -2324,7 +2553,13 @@ fn __golem_tool_invoke_CanonicalRemote(
           "tool remote command add",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let track :Array[String] = try {
         @tool.decode_canonical_field(
@@ -2333,7 +2568,13 @@ fn __golem_tool_invoke_CanonicalRemote(
           "tool remote command add",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let master :String? = try {
         @tool.decode_canonical_field(
@@ -2342,7 +2583,13 @@ fn __golem_tool_invoke_CanonicalRemote(
           "tool remote command add",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let tags :Bool = try {
         @tool.decode_canonical_field(
@@ -2351,7 +2598,13 @@ fn __golem_tool_invoke_CanonicalRemote(
           "tool remote command add",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let fetch :Bool = try {
         @tool.decode_canonical_field(
@@ -2360,7 +2613,13 @@ fn __golem_tool_invoke_CanonicalRemote(
           "tool remote command add",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       match CanonicalRemote::add(verbose, name, url, track, master, tags, fetch) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
@@ -2377,23 +2636,24 @@ fn __golem_tool_invoke_CanonicalRemote(
               }
             }
           let payload = try {
-            @model.typed_schema_value_to_wit(payload)
+            @tool.encode_error_payload(payload)
           } catch{
-            encode_error => {
-              return Err(
-                @toolCommon.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error.to_string(
-
-                  ),
-                ),
-              )
-            }
+            encode_error => return Err(encode_error)
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
       }
     }
     2 => {
+      if __golem_stdin is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdin stream",
+          ),
+        )
+      }
       let name :String = try {
         @tool.decode_canonical_field(
           __golem_decoded,
@@ -2401,7 +2661,13 @@ fn __golem_tool_invoke_CanonicalRemote(
           "tool remote command remove",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       match CanonicalRemote::remove(name) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
@@ -2418,23 +2684,24 @@ fn __golem_tool_invoke_CanonicalRemote(
               }
             }
           let payload = try {
-            @model.typed_schema_value_to_wit(payload)
+            @tool.encode_error_payload(payload)
           } catch{
-            encode_error => {
-              return Err(
-                @toolCommon.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error.to_string(
-
-                  ),
-                ),
-              )
-            }
+            encode_error => return Err(encode_error)
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
       }
     }
     3 => {
+      if __golem_stdin is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdin stream",
+          ),
+        )
+      }
       let name :String = try {
         @tool.decode_canonical_field(
           __golem_decoded,
@@ -2442,7 +2709,13 @@ fn __golem_tool_invoke_CanonicalRemote(
           "tool remote command set-url",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let newurl :@schema.Url = try {
         @tool.decode_canonical_field(
@@ -2451,7 +2724,13 @@ fn __golem_tool_invoke_CanonicalRemote(
           "tool remote command set-url",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let oldurl :@schema.Url? = try {
         @tool.decode_canonical_field(
@@ -2460,7 +2739,13 @@ fn __golem_tool_invoke_CanonicalRemote(
           "tool remote command set-url",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let push :Bool = try {
         @tool.decode_canonical_field(
@@ -2469,7 +2754,13 @@ fn __golem_tool_invoke_CanonicalRemote(
           "tool remote command set-url",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let add :Bool = try {
         @tool.decode_canonical_field(
@@ -2478,7 +2769,13 @@ fn __golem_tool_invoke_CanonicalRemote(
           "tool remote command set-url",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let delete :Bool = try {
         @tool.decode_canonical_field(
@@ -2487,7 +2784,13 @@ fn __golem_tool_invoke_CanonicalRemote(
           "tool remote command set-url",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       match CanonicalRemote::set_url(name, newurl, oldurl, push, add, delete) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
@@ -2504,23 +2807,21 @@ fn __golem_tool_invoke_CanonicalRemote(
               }
             }
           let payload = try {
-            @model.typed_schema_value_to_wit(payload)
+            @tool.encode_error_payload(payload)
           } catch{
-            encode_error => {
-              return Err(
-                @toolCommon.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error.to_string(
-
-                  ),
-                ),
-              )
-            }
+            encode_error => return Err(encode_error)
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
       }
     }
-    _ => Err(@toolCommon.ToolError::InvalidCommandPath(__golem_command_path))
+    _ => {
+      @tool.reject_decoded_invocation(
+        __golem_decoded,
+        __golem_stdin,
+        @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
+      )
+    }
   }
 }
 
@@ -2740,7 +3041,7 @@ fn __golem_tool_def_CanonicalStash() -> @tool.ToolDef {
 }
 
 ///|
-fn __golem_tool_invoke_CanonicalStash(
+async fn __golem_tool_invoke_CanonicalStash(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
@@ -2751,7 +3052,9 @@ fn __golem_tool_invoke_CanonicalStash(
     match __golem_def.command_index_by_path(__golem_command_path) {
       Some(__golem_index) => __golem_index
       None => {
-        return Err(
+        return @tool.reject_wire_invocation(
+          __golem_input,
+          __golem_stdin,
           @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
         )
       }
@@ -2764,10 +3067,21 @@ fn __golem_tool_invoke_CanonicalStash(
       "tool stash invocation",
     )
   } catch{
-    __golem_error => return Err(__golem_error)
+    __golem_error => {
+      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
+    }
   }
   match __golem_index {
     0 => {
+      if __golem_stdin is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdin stream",
+          ),
+        )
+      }
       let verbose :UInt = try {
         @tool.decode_canonical_field(
           __golem_decoded,
@@ -2775,7 +3089,13 @@ fn __golem_tool_invoke_CanonicalStash(
           "tool stash command stash",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let message :String = try {
         @tool.decode_canonical_field(
@@ -2784,7 +3104,13 @@ fn __golem_tool_invoke_CanonicalStash(
           "tool stash command stash",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let keep_index :Bool = try {
         @tool.decode_canonical_field(
@@ -2793,7 +3119,13 @@ fn __golem_tool_invoke_CanonicalStash(
           "tool stash command stash",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       match CanonicalStash::stash(verbose, message, keep_index) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
@@ -2809,23 +3141,24 @@ fn __golem_tool_invoke_CanonicalStash(
             }
           }
           let payload = try {
-            @model.typed_schema_value_to_wit(payload)
+            @tool.encode_error_payload(payload)
           } catch{
-            encode_error => {
-              return Err(
-                @toolCommon.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error.to_string(
-
-                  ),
-                ),
-              )
-            }
+            encode_error => return Err(encode_error)
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
       }
     }
     1 => {
+      if __golem_stdin is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdin stream",
+          ),
+        )
+      }
       let name :String? = try {
         @tool.decode_canonical_field(
           __golem_decoded,
@@ -2833,7 +3166,13 @@ fn __golem_tool_invoke_CanonicalStash(
           "tool stash command pop",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let index :UInt? = try {
         @tool.decode_canonical_field(
@@ -2842,7 +3181,13 @@ fn __golem_tool_invoke_CanonicalStash(
           "tool stash command pop",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       match CanonicalStash::pop(name, index) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
@@ -2858,23 +3203,24 @@ fn __golem_tool_invoke_CanonicalStash(
             }
           }
           let payload = try {
-            @model.typed_schema_value_to_wit(payload)
+            @tool.encode_error_payload(payload)
           } catch{
-            encode_error => {
-              return Err(
-                @toolCommon.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error.to_string(
-
-                  ),
-                ),
-              )
-            }
+            encode_error => return Err(encode_error)
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
       }
     }
     2 => {
+      if __golem_stdin is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdin stream",
+          ),
+        )
+      }
       let name :String? = try {
         @tool.decode_canonical_field(
           __golem_decoded,
@@ -2882,7 +3228,13 @@ fn __golem_tool_invoke_CanonicalStash(
           "tool stash command apply",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       let index :UInt? = try {
         @tool.decode_canonical_field(
@@ -2891,7 +3243,13 @@ fn __golem_tool_invoke_CanonicalStash(
           "tool stash command apply",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       match CanonicalStash::apply(name, index) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
@@ -2907,23 +3265,21 @@ fn __golem_tool_invoke_CanonicalStash(
             }
           }
           let payload = try {
-            @model.typed_schema_value_to_wit(payload)
+            @tool.encode_error_payload(payload)
           } catch{
-            encode_error => {
-              return Err(
-                @toolCommon.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error.to_string(
-
-                  ),
-                ),
-              )
-            }
+            encode_error => return Err(encode_error)
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
       }
     }
-    _ => Err(@toolCommon.ToolError::InvalidCommandPath(__golem_command_path))
+    _ => {
+      @tool.reject_decoded_invocation(
+        __golem_decoded,
+        __golem_stdin,
+        @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
+      )
+    }
   }
 }
 
@@ -3002,7 +3358,7 @@ fn __golem_tool_def_CanonicalBigBound() -> @tool.ToolDef {
 }
 
 ///|
-fn __golem_tool_invoke_CanonicalBigBound(
+async fn __golem_tool_invoke_CanonicalBigBound(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
@@ -3013,7 +3369,9 @@ fn __golem_tool_invoke_CanonicalBigBound(
     match __golem_def.command_index_by_path(__golem_command_path) {
       Some(__golem_index) => __golem_index
       None => {
-        return Err(
+        return @tool.reject_wire_invocation(
+          __golem_input,
+          __golem_stdin,
           @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
         )
       }
@@ -3026,10 +3384,21 @@ fn __golem_tool_invoke_CanonicalBigBound(
       "tool canonical-big-bound invocation",
     )
   } catch{
-    __golem_error => return Err(__golem_error)
+    __golem_error => {
+      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
+    }
   }
   match __golem_index {
     0 => {
+      if __golem_stdin is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdin stream",
+          ),
+        )
+      }
       let count :UInt64? = try {
         @tool.decode_canonical_field(
           __golem_decoded,
@@ -3037,7 +3406,13 @@ fn __golem_tool_invoke_CanonicalBigBound(
           "tool canonical-big-bound command canonical-big-bound",
         )
       } catch{
-        __golem_error => return Err(__golem_error)
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
       }
       match CanonicalBigBound::canonical_big_bound(count) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
@@ -3053,23 +3428,21 @@ fn __golem_tool_invoke_CanonicalBigBound(
             }
           }
           let payload = try {
-            @model.typed_schema_value_to_wit(payload)
+            @tool.encode_error_payload(payload)
           } catch{
-            encode_error => {
-              return Err(
-                @toolCommon.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error.to_string(
-
-                  ),
-                ),
-              )
-            }
+            encode_error => return Err(encode_error)
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
       }
     }
-    _ => Err(@toolCommon.ToolError::InvalidCommandPath(__golem_command_path))
+    _ => {
+      @tool.reject_decoded_invocation(
+        __golem_decoded,
+        __golem_stdin,
+        @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
+      )
+    }
   }
 }
 

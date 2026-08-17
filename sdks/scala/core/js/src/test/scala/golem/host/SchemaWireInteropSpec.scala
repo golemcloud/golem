@@ -21,10 +21,12 @@ import golem.schema.wire._
 import golem.schema.wire.WitSchemaTypeBody._
 import golem.schema.wire.WitSchemaValueNode._
 import golem.host.js.schema.{JsSchemaTypeBody, JsSchemaValueNode, JsSchemaValueTree}
+import zio.ZIO
 import zio.test._
 
 import scala.scalajs.js
 import scala.scalajs.js.typedarray.Uint8Array
+import scala.concurrent.Future
 
 /**
  * Exhaustive `Wit* -> Js* -> Wit*` round-trip for the v2
@@ -358,6 +360,40 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
         )
         val result = scala.util.Try(SchemaWireInterop.valueTreeToJs(tree))
         assertTrue(result.isFailure, handle.isPresent)
+      },
+      test("schema value stream: async host wrap and unwrap preserve demand-driven items") {
+        ZIO.fromFuture { implicit ec =>
+          var item   = Option(SchemaValue.StringValue("first"))
+          val source = AgentStream.fromPull { () =>
+            val result = item
+            item = None
+            Future.successful(result)
+          }
+          val tree = WitSchemaValueTree(
+            Vector(StreamValue(GuestSchemaValueStreamHandle.native(source))),
+            0
+          )
+
+          for {
+            encoded <- SchemaWireInterop.valueTreeToJsAsync(tree)
+            decoded  = SchemaWireInterop.valueTreeFromJs(encoded)
+            result  <- decoded.valueNodes(0) match {
+                        case StreamValue(handle) =>
+                          handle.take() match {
+                            case Some(GuestSchemaValueStream.Wrapped(_, unwrap)) =>
+                              unwrap().flatMap { stream =>
+                                for {
+                                  first <- stream.pull()
+                                  end   <- stream.pull()
+                                } yield assertTrue(first.contains(SchemaValue.StringValue("first")), end.isEmpty)
+                              }
+                            case other =>
+                              Future.successful(assertTrue(false).label(s"expected wrapped stream, got $other"))
+                          }
+                        case other => Future.successful(assertTrue(false).label(s"expected StreamValue, got $other"))
+                      }
+          } yield result
+        }
       },
       // The round-trip tests above only prove encode/decode self-consistency. These
       // smoke tests assert the *raw* emitted JS shape against the wasm-rquickjs d.ts

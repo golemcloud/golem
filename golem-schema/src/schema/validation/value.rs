@@ -557,6 +557,7 @@ fn shape_name(value: &SchemaValue) -> &'static str {
         SchemaValue::Union(_) => "union",
         SchemaValue::Secret(_) => "secret",
         SchemaValue::QuotaToken(_) => "quota-token",
+        SchemaValue::Stream(_) => "stream",
     }
 }
 
@@ -813,6 +814,7 @@ fn check<'a>(
             #[cfg(all(feature = "guest", not(feature = "host")))]
             let _ = (spec, payload);
         }
+        (SchemaType::Stream { .. }, SchemaValue::Stream(_)) => {}
 
         (SchemaType::Record { fields, .. }, SchemaValue::Record { fields: vs }) => {
             if fields.len() != vs.len() {

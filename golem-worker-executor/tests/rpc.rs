@@ -13,18 +13,27 @@
 // limitations under the License.
 
 use crate::Tracing;
+use golem_api_grpc::proto::golem::worker::{
+    InvocationFrame, InvocationStart, invocation_frame, invocation_result,
+    invocation_session_finished,
+};
+use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{AgentStatus, IdempotencyKey, PromiseId};
+use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, PromiseId};
 use golem_common::schema::schema_value::ResultValuePayload;
-use golem_common::schema::{FromSchema, SchemaValue};
+use golem_common::schema::{FromSchema, SchemaValue, TypedSchemaValue};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, start,
 };
 use pretty_assertions::assert_eq;
 use std::time::Duration;
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use tracing::Instrument;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -42,6 +51,242 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
+
+async fn invoke_agent_session(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    agent_id: &ParsedAgentId,
+    method_name: &str,
+    params: TypedSchemaValue,
+) -> anyhow::Result<Result<SchemaValue, String>> {
+    let worker_agent_id = AgentId::from_agent_id(component.id, agent_id)
+        .map_err(|error| anyhow::anyhow!("invalid agent id: {error}"))?;
+    let (_, input) = params.into_parts();
+    let input = input.try_into().map_err(anyhow::Error::msg)?;
+    let (frames, receiver) = mpsc::channel(8);
+    frames
+        .send(InvocationFrame {
+            frame: Some(invocation_frame::Frame::Start(InvocationStart {
+                agent_id: Some(worker_agent_id.into()),
+                method_name: Some(method_name.to_string()),
+                input: Some(input),
+                idempotency_key: Some(IdempotencyKey::fresh().into()),
+                context: None,
+                auth_ctx: Some(executor.auth_ctx().into()),
+                principal: None,
+                environment_id: Some(component.environment_id.into()),
+                config: Vec::new(),
+                component_owner_account_id: Some(component.account_id.into()),
+                mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+                schedule_at: None,
+                freshness_disposition:
+                    golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                        as i32,
+            })),
+        })
+        .await?;
+    let mut inbound = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    let mut result = None;
+    while let Some(frame) = inbound.message().await? {
+        match frame.frame {
+            Some(invocation_frame::Frame::Result(value)) => {
+                if result.is_some() {
+                    anyhow::bail!("invocation session returned more than one result");
+                }
+                result = match value.result {
+                    Some(invocation_result::Result::MethodResult(value)) => {
+                        Some(value.try_into().map_err(anyhow::Error::msg)?)
+                    }
+                    Some(invocation_result::Result::NoResult(_)) | None => {
+                        anyhow::bail!("invocation session returned no method result")
+                    }
+                };
+            }
+            Some(invocation_frame::Frame::Finished(finished)) => match finished.outcome {
+                Some(invocation_session_finished::Outcome::Success(_)) => {
+                    return result.map(Ok).ok_or_else(|| {
+                        anyhow::anyhow!("invocation session ended without a result")
+                    });
+                }
+                Some(invocation_session_finished::Outcome::Failure(failure)) => {
+                    return Ok(Err(format!("{failure:?}")));
+                }
+                Some(invocation_session_finished::Outcome::ProtocolFailure(failure)) => {
+                    return Ok(Err(failure.details));
+                }
+                None => anyhow::bail!("invocation session completion has no outcome"),
+            },
+            Some(other) => {
+                anyhow::bail!("unexpected outer invocation session frame: {other:?}")
+            }
+            None => anyhow::bail!("empty outer invocation session frame"),
+        }
+    }
+    anyhow::bail!("invocation session response ended before completion")
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn generated_rust_client_streaming_rpc_e2e(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let caller_agent_id = agent_id!("StreamingRpcCaller", "generated_streaming_rpc_e2e");
+    let caller = executor
+        .start_agent(&component.id, caller_agent_id.clone())
+        .await?;
+
+    let result = invoke_agent_session(
+        &executor,
+        &component,
+        &caller_agent_id,
+        "run",
+        data_value!(),
+    )
+    .await?
+    .map_err(anyhow::Error::msg)?;
+    let SchemaValue::Record { fields } = result else {
+        panic!("expected streaming RPC report record");
+    };
+    assert_eq!(fields.len(), 10);
+    assert_eq!(
+        fields[0],
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::U32(1),
+                SchemaValue::U32(2),
+                SchemaValue::U32(3)
+            ]
+        }
+    );
+    assert_eq!(
+        fields[1],
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::U32(4),
+                SchemaValue::U32(5),
+                SchemaValue::U32(6)
+            ]
+        }
+    );
+    assert_eq!(
+        fields[2],
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::U32(70),
+                SchemaValue::U32(80),
+                SchemaValue::U32(90)
+            ]
+        }
+    );
+    assert_eq!(
+        fields[3],
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::String("left".to_string()),
+                SchemaValue::String("right".to_string())
+            ]
+        }
+    );
+    assert_eq!(
+        fields[4],
+        SchemaValue::List {
+            elements: vec![SchemaValue::U32(10), SchemaValue::U32(11)]
+        }
+    );
+    assert_eq!(
+        fields[5],
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::String("first".to_string()),
+                SchemaValue::String("second".to_string())
+            ]
+        }
+    );
+    assert_eq!(
+        fields[6],
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::List {
+                    elements: vec![SchemaValue::U32(1), SchemaValue::U32(2)]
+                },
+                SchemaValue::List {
+                    elements: vec![
+                        SchemaValue::U32(3),
+                        SchemaValue::U32(4),
+                        SchemaValue::U32(5)
+                    ]
+                }
+            ]
+        }
+    );
+    assert_eq!(
+        fields[7],
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::String("a".to_string()),
+                SchemaValue::String("b".to_string())
+            ]
+        }
+    );
+    assert_eq!(
+        fields[8],
+        SchemaValue::List {
+            elements: (0..64).map(SchemaValue::U32).collect()
+        }
+    );
+    assert_eq!(fields[9], SchemaValue::U64(42));
+
+    let producer_error = invoke_agent_session(
+        &executor,
+        &component,
+        &caller_agent_id,
+        "call_producer_error",
+        data_value!(),
+    )
+    .await?
+    .expect_err("producer stream error must fail the invocation session");
+    assert!(
+        producer_error.contains("value-node index out of range: 0"),
+        "unexpected producer error: {producer_error}"
+    );
+
+    let first = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller_agent_id,
+            "call_stream_free",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()?;
+    let second = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller_agent_id,
+            "call_stream_free",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!((first, second), (1, 2));
+    executor.check_oplog_is_queryable(&caller).await?;
+    Ok(())
+}
 
 #[test]
 #[tracing::instrument]

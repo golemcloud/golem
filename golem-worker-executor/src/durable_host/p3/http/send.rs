@@ -478,7 +478,7 @@ where
                     && store.with(|mut access| {
                         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
                         ctx.state.is_live()
-                            && ctx.state.snapshotting_mode.is_none()
+                            && !ctx.is_unpersisted_execution()
                             && ctx.state.persistence_level
                                 != golem_common::model::oplog::PersistenceLevel::PersistNothing
                     })
@@ -902,7 +902,7 @@ where
         (
             ctx.wasi_http.connection_pool.clone(),
             ctx.state.oplog.clone(),
-            ctx.state.snapshotting_mode.is_none()
+            !ctx.is_unpersisted_execution()
                 && ctx.state.persistence_level
                     != golem_common::model::oplog::PersistenceLevel::PersistNothing,
         )
@@ -1057,6 +1057,9 @@ where
         max_in_function_retry_delay,
         current_retry_policy_state,
         retry_properties,
+        is_unpersisted_execution: store.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).is_unpersisted_execution()
+        }),
         worker,
     }
 }

@@ -572,26 +572,43 @@ where
         return Ok(());
     }
 
-    if let Some(worker) = accessor
+    if let Some((worker, capacity_bytes, is_unpersisted_execution)) = accessor
         .with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut())
                 .prepare_filesystem_storage_reservation(bytes)
         })
         .map_err(wasmtime::Error::from_anyhow)?
     {
-        if let Err(error) = worker.acquire_filesystem_storage_space(bytes).await {
-            accessor.with(|mut access| {
-                durable_worker_ctx::<Ctx, U>(access.data_mut())
-                    .rollback_filesystem_storage_reservation(bytes);
-            });
-            return Err(wasmtime::Error::from_anyhow(error));
+        let unpersisted_permit = match if is_unpersisted_execution {
+            worker
+                .acquire_unpersisted_filesystem_storage_space(capacity_bytes)
+                .await
+        } else {
+            worker
+                .acquire_filesystem_storage_space(capacity_bytes)
+                .await
+                .map(|()| None)
+        } {
+            Ok(permit) => permit,
+            Err(error) => {
+                accessor.with(|mut access| {
+                    durable_worker_ctx::<Ctx, U>(access.data_mut())
+                        .rollback_filesystem_storage_reservation(bytes);
+                });
+                return Err(wasmtime::Error::from_anyhow(error));
+            }
+        };
+        if !is_unpersisted_execution {
+            worker
+                .add_to_oplog(OplogEntry::filesystem_storage_usage_update(bytes as i64))
+                .await;
         }
-        worker
-            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(bytes as i64))
-            .await;
         accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut())
-                .finish_filesystem_storage_reservation(bytes);
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).finish_filesystem_storage_reservation(
+                bytes,
+                is_unpersisted_execution,
+                unpersisted_permit,
+            );
         });
     }
 
@@ -610,16 +627,21 @@ where
         return Ok(());
     }
 
-    if let Some((worker, bytes)) = accessor.with(|mut access| {
-        durable_worker_ctx::<Ctx, U>(access.data_mut()).prepare_filesystem_storage_release(bytes)
+    if let Some((worker, bytes, is_unpersisted_execution)) = accessor.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        let is_unpersisted_execution = ctx.is_unpersisted_execution();
+        ctx.prepare_filesystem_storage_release(bytes)
+            .map(|(worker, bytes)| (worker, bytes, is_unpersisted_execution))
     }) {
-        worker
-            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(-(bytes as i64)))
-            .await;
-        worker.release_filesystem_storage_space(bytes).await;
+        if !is_unpersisted_execution {
+            worker
+                .add_to_oplog(OplogEntry::filesystem_storage_usage_update(-(bytes as i64)))
+                .await;
+            worker.release_filesystem_storage_space(bytes).await;
+        }
         accessor.with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut())
-                .finish_filesystem_storage_release(bytes);
+                .finish_filesystem_storage_release(bytes, is_unpersisted_execution);
         });
     }
 

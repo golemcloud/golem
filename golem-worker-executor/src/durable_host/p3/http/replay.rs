@@ -240,7 +240,7 @@ where
                     let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
                     (
                         ctx.state.oplog.clone(),
-                        ctx.state.snapshotting_mode.is_none()
+                        !ctx.is_unpersisted_execution()
                             && ctx.state.persistence_level != PersistenceLevel::PersistNothing,
                     )
                 });

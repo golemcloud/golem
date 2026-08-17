@@ -65,8 +65,8 @@ pub(crate) fn is_http_request_idempotent(
 pub(crate) enum HttpRetryDisallowedReason {
     /// Worker is in replay mode (not live).
     NotLive,
-    /// Worker is in snapshotting mode.
-    Snapshotting,
+    /// Worker is executing host operations without persistence.
+    UnpersistedExecution,
     /// Persistence level is PersistNothing — no oplog data to reconstruct from.
     PersistNothing,
     /// Worker is inside a user-defined atomic region; a failure must escalate
@@ -87,8 +87,8 @@ pub(crate) fn http_worker_state_allows_retry(
     if !exec_state.is_live {
         return Err(HttpRetryDisallowedReason::NotLive);
     }
-    if exec_state.snapshotting_mode.is_some() {
-        return Err(HttpRetryDisallowedReason::Snapshotting);
+    if exec_state.is_unpersisted_execution {
+        return Err(HttpRetryDisallowedReason::UnpersistedExecution);
     }
     if exec_state.persistence_level == PersistenceLevel::PersistNothing {
         return Err(HttpRetryDisallowedReason::PersistNothing);
@@ -302,7 +302,7 @@ mod tests {
         DurableExecutionState {
             is_live: true,
             persistence_level: PersistenceLevel::Smart,
-            snapshotting_mode: None,
+            is_unpersisted_execution: false,
             assume_idempotence: false,
             max_in_function_retry_delay: std::time::Duration::from_secs(1),
         }
@@ -327,12 +327,12 @@ mod tests {
         assert_eq!(
             http_worker_state_allows_retry(
                 &DurableExecutionState {
-                    snapshotting_mode: Some(PersistenceLevel::Smart),
+                    is_unpersisted_execution: true,
                     ..live_exec_state()
                 },
                 false
             ),
-            Err(HttpRetryDisallowedReason::Snapshotting)
+            Err(HttpRetryDisallowedReason::UnpersistedExecution)
         );
         assert_eq!(
             http_worker_state_allows_retry(

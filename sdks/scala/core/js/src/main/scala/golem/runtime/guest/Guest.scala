@@ -120,7 +120,11 @@ object Guest {
       }
     }
 
-  private def invokeAgent(methodName: String, input: js.Dynamic, principal: js.Dynamic): js.Promise[js.Any] =
+  private def invokeAgent(
+    methodName: String,
+    input: js.Dynamic,
+    principal: js.Dynamic
+  ): js.Promise[js.Any] =
     if (js.isUndefined(resolved)) {
       js.Promise.reject(invalidAgentId("Agent is not initialized")).asInstanceOf[js.Promise[js.Any]]
     } else {
@@ -139,16 +143,13 @@ object Guest {
               case other        => js.JavaScriptException(other)
             })
         }
-      // The host expects `option<schema-value-tree>`: `Some(tree)` -> the tree,
-      // `None` (unit output) -> `js.undefined`. We bridge the Scala `Option`
-      // result to that union here, at the export boundary.
       val resultPromise: js.Promise[js.Any] =
         FutureInterop.toPromise(
           FutureInterop
             .fromPromise(r.defn.invokeAny(r.instance, mn, input.asInstanceOf[JsSchemaValueTree], scalaPrincipal))
             .map {
               case Some(tree) => tree.asInstanceOf[js.Any]
-              case None       => js.undefined.asInstanceOf[js.Any]
+              case None       => js.undefined
             }
         )
       resultPromise.`catch`[js.Any](onRejected)

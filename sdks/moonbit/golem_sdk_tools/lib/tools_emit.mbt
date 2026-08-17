@@ -1687,6 +1687,16 @@ fn output_stream_source(command : ToolCommandInfo) -> String? {
 }
 
 ///|
+fn input_stream_source(command : ToolCommandInfo) -> String? {
+  for pair in command.params {
+    if pair.1 == Hidden(InputStream) || pair.1 == LabelledHidden(InputStream) {
+      return Some(pair.0)
+    }
+  }
+  None
+}
+
+///|
 fn emit_invocation_value(command : ToolCommandInfo, value : String) -> String {
   match output_stream_source(command) {
     Some(_) =>
@@ -1712,11 +1722,17 @@ fn emit_empty_invocation(command : ToolCommandInfo) -> String {
 ///|
 fn emit_custom_error(command : ToolCommandInfo, error_value : String) -> String {
   let error_type = command.error_type.map(emit_type).unwrap()
-  "{\nlet payload = match " +
+  "{\n" +
+  (if output_stream_source(command) is Some(_) {
+    "__golem_stdout.drop_sync()\n"
+  } else {
+    ""
+  }) +
+  "let payload = match " +
   error_type +
   "::to_error_payload_value(" +
   error_value +
-  ") { Ok(payload) => payload\nErr(encode_error) => return Err(@toolCommon.ToolError::InvalidResult(\"failed serializing custom tool error: \" + encode_error)) }\nlet payload = @model.typed_schema_value_to_wit(payload) catch { encode_error => return Err(@toolCommon.ToolError::InvalidResult(\"failed serializing custom tool error: \" + encode_error.to_string())) }\nErr(@toolCommon.ToolError::CustomError(payload))\n}"
+  ") { Ok(payload) => payload\nErr(encode_error) => return Err(@toolCommon.ToolError::InvalidResult(\"failed serializing custom tool error: \" + encode_error)) }\nlet payload = @tool.encode_error_payload(payload) catch { encode_error => return Err(encode_error) }\nErr(@toolCommon.ToolError::CustomError(payload))\n}"
 }
 
 ///|
@@ -1805,13 +1821,13 @@ fn emit_invoker(
   let name = "__golem_tool_invoke_" + tool.source_name
   let context = "tool " + tool.name + " invocation"
   buf.write_string(
-    "///|\nfn " +
+    "///|\nasync fn " +
     name +
     "(__golem_command_path : Array[String], __golem_input : @types.TypedSchemaValue, __golem_stdin : @asyncCore.Stream[Byte]?, __golem_principal : @tool.Principal) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {\n  let __golem_def = " +
     descriptor_name(tool) +
-    "()\n  let __golem_index = match __golem_def.command_index_by_path(__golem_command_path) {\n    Some(__golem_index) => __golem_index\n    None => return Err(@toolCommon.ToolError::InvalidCommandPath(__golem_command_path))\n  }\n  let __golem_decoded = @tool.decode_canonical_input(__golem_def, __golem_index, __golem_input, \"" +
+    "()\n  let __golem_index = match __golem_def.command_index_by_path(__golem_command_path) {\n    Some(__golem_index) => __golem_index\n    None => return @tool.reject_wire_invocation(__golem_input, __golem_stdin, @toolCommon.ToolError::InvalidCommandPath(__golem_command_path))\n  }\n  let __golem_decoded = @tool.decode_canonical_input(__golem_def, __golem_index, __golem_input, \"" +
     escape_string_lit(context) +
-    "\") catch { __golem_error => return Err(__golem_error) }\n",
+    "\") catch { __golem_error => return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error) }\n",
   )
   for command in tool.commands {
     if command.subtree is Some(target) {
@@ -1851,6 +1867,11 @@ fn emit_invoker(
     }
     let command_context = "tool " + tool.name + " command " + command.name
     buf.write_string("    " + pair.0.to_string() + " => {\n")
+    if input_stream_source(command) is None {
+      buf.write_string(
+        "      if __golem_stdin is Some(_) {\n        return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @toolCommon.ToolError::InvalidInput(\"command does not accept a stdin stream\"))\n      }\n",
+      )
+    }
     let call_args : Array[String] = []
     for arg in args {
       match arg.placement {
@@ -1859,18 +1880,11 @@ fn emit_invoker(
           buf.write_string(
             "      let " +
             arg.source +
-            " = match __golem_stdin {\n        Some(__golem_stream) => __golem_stream\n        None => return Err(@toolCommon.ToolError::InvalidInput(\"required stdin stream is missing\"))\n      }\n",
+            " = match __golem_stdin {\n        Some(__golem_stream) => __golem_stream\n        None => return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @toolCommon.ToolError::InvalidInput(\"required stdin stream is missing\"))\n      }\n",
           )
           call_args.push(arg.source)
         }
-        Hidden(OutputStream) => {
-          buf.write_string(
-            "      let (__golem_stdout, " +
-            arg.source +
-            ") = @tool.new_stdout()\n",
-          )
-          call_args.push(arg.source)
-        }
+        Hidden(OutputStream) => call_args.push(arg.source)
         _ => {
           buf.write_string(
             "      let " +
@@ -1881,11 +1895,18 @@ fn emit_invoker(
             escape_string_lit(inherited_canonical_name(arg, inherited)) +
             "\", \"" +
             escape_string_lit(command_context) +
-            "\") catch { __golem_error => return Err(__golem_error) }\n",
+            "\") catch { __golem_error => return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, __golem_error) }\n",
           )
           call_args.push(arg.source)
         }
       }
+    }
+    match output_stream_source(command) {
+      Some(source) =>
+        buf.write_string(
+          "      let (__golem_stdout, " + source + ") = @tool.new_stdout()\n",
+        )
+      None => ()
     }
     let invocation = tool.source_name +
       "::" +
@@ -1904,7 +1925,7 @@ fn emit_invoker(
     )
   }
   buf.write_string(
-    "    _ => Err(@toolCommon.ToolError::InvalidCommandPath(__golem_command_path))\n  }\n}\n\n",
+    "    _ => @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @toolCommon.ToolError::InvalidCommandPath(__golem_command_path))\n  }\n}\n\n",
   )
 }
 

@@ -324,8 +324,13 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                         .config
                         .clone()
                         .into_iter()
-                        .map(Into::into)
-                        .collect(),
+                        .map(TryInto::try_into)
+                        .collect::<Result<_, String>>()
+                        .map_err(|error| {
+                            WorkerExecutorError::unknown(format!(
+                                "failed converting agent configuration: {error}"
+                            ))
+                        })?,
                     created_by: Some(worker_metadata.created_by.into()),
                     component_revision: latest_status.component_revision.into(),
                     status: Into::<golem_api_grpc::proto::golem::worker::AgentStatus>::into(

@@ -498,6 +498,24 @@ object SchemaModelSpec extends ZIOSpecDefault {
           assert(res)(isFailure(isSubtype[SchemaDecodeError](anything))) && assertTrue(!h.isPresent)
         }
       ),
+      suite("schema value stream affine semantics")(
+        test("decoding rejects distinct wrappers for the same owned stream resource") {
+          val raw    = new Object
+          val first  = GuestSchemaValueStreamHandle.wrapped(raw, () => throw new AssertionError("must not unwrap"))
+          val second = GuestSchemaValueStreamHandle.wrapped(raw, () => throw new AssertionError("must not unwrap"))
+          val bad    = WitSchemaValueTree(
+            Vector(
+              WitSchemaValueNode.TupleValue(Vector(1, 2)),
+              WitSchemaValueNode.StreamValue(first),
+              WitSchemaValueNode.StreamValue(second)
+            ),
+            0
+          )
+          val res = Try(SchemaWire.schemaValueFromWit(bad))
+          assert(res)(isFailure(isSubtype[SchemaDecodeError](anything))) &&
+          assertTrue(!first.isPresent, !second.isPresent)
+        }
+      ),
       suite("GraphEncoder multi-root (agent carrier use case)")(
         test("encodes several roots into one shared pool with a placeholder finish root") {
           val g1 = SchemaBuilder.graphOf(b => t.list(b.register("ns.p", () => t.record(List(t.field("x", t.s32))))))

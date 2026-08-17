@@ -28,17 +28,23 @@ pub struct EnvironmentState {
     pub retry_policies: Vec<NamedRetryPolicy>,
 }
 
-impl From<EnvironmentState> for golem_api_grpc::proto::golem::registry::EnvironmentState {
-    fn from(value: EnvironmentState) -> Self {
-        Self {
+impl TryFrom<EnvironmentState> for golem_api_grpc::proto::golem::registry::EnvironmentState {
+    type Error = String;
+
+    fn try_from(value: EnvironmentState) -> Result<Self, Self::Error> {
+        Ok(Self {
             agent_deployment_details: value
                 .agent_deployment_details
                 .into_values()
                 .map(Into::into)
                 .collect(),
-            agent_secrets: value.agent_secrets.into_values().map(Into::into).collect(),
+            agent_secrets: value
+                .agent_secrets
+                .into_values()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
             retry_policies: value.retry_policies.into_iter().map(Into::into).collect(),
-        }
+        })
     }
 }
 

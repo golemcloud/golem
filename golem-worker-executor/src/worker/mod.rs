@@ -2179,11 +2179,38 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    /// Acquire storage semaphore permits for a write operation.
-    /// Called from `DurableWorkerCtx::acquire_filesystem_space` in live mode only.
+    /// Acquire temporary storage semaphore permits for an unpersisted execution.
+    /// Called from the durable host in live mode only.
     /// Returns `NodeOutOfFilesystemStorage` if the executor pool is exhausted.
     ///
     /// Should only be called from the invocation loop.
+    pub async fn acquire_unpersisted_filesystem_storage_space(
+        &self,
+        new_bytes: u64,
+    ) -> anyhow::Result<Option<FilesystemStoragePermit>> {
+        if new_bytes == 0 {
+            return Ok(None);
+        }
+        match &*self.instance.lock().await {
+            WorkerInstance::Running(_) => {
+                if let Some(permit) = self
+                    .active_workers()
+                    .try_acquire_filesystem_storage(new_bytes)
+                    .await
+                {
+                    self.desired_extra_filesystem_storage
+                        .store(0, Ordering::Relaxed);
+                    Ok(Some(permit))
+                } else {
+                    self.desired_extra_filesystem_storage
+                        .store(new_bytes, Ordering::Relaxed);
+                    Err(anyhow!(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage))
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
     pub async fn acquire_filesystem_storage_space(&self, new_bytes: u64) -> anyhow::Result<()> {
         match &mut *self.instance.lock().await {
             WorkerInstance::Running(running) => {
@@ -2593,6 +2620,48 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // `resolve_pending_readiness_awaiters_on_stop`), so this wait cannot hang on a worker
         // that suspends mid-invocation.
         receiver.await.unwrap()
+    }
+
+    /// Runs an awaited agent invocation through the dedicated live-streaming
+    /// path. Unlike normal invocations, this path is intentionally not added to
+    /// the durable queue and never serializes its result into the oplog.
+    pub async fn invoke_live_streaming(
+        self: Arc<Self>,
+        invocation: AgentInvocation,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<golem_common::schema::SchemaValue, WorkerExecutorError> {
+        let mut cancel_on_drop = CancelLiveInvocationOnDrop(Some(cancellation.clone()));
+        let instance_guard = self.lock_non_stopping_worker().await;
+        if instance_guard.is_deleting() {
+            return Err(WorkerExecutorError::invalid_request(
+                "Cannot invoke a deleting worker",
+            ));
+        }
+        if let Some(err) = instance_guard.startup_failure() {
+            return Err(err.clone());
+        }
+
+        let (sender, receiver) = oneshot::channel();
+        self.queue
+            .write()
+            .await
+            .push_back(QueuedWorkerInvocation::LiveStreamingInvocation {
+                invocation,
+                sender,
+                cancellation,
+            });
+        if let WorkerInstance::Running(running) = &*instance_guard {
+            running.sender.send(WorkerCommand::WorkAvailable).unwrap();
+        }
+        drop(instance_guard);
+        Worker::start_if_needed(self).await?;
+        let result = receiver.await.map_err(|_| {
+            WorkerExecutorError::runtime(
+                "live streaming invocation ended before publishing a result",
+            )
+        })?;
+        cancel_on_drop.0 = None;
+        result
     }
 
     /// Appends an oplog entry without forcing a durable commit. Callers that
@@ -3157,6 +3226,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     let _ = sender.send(Err(error.clone()));
                 }
                 QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
+                    let _ = sender.send(Err(error.clone()));
+                }
+                QueuedWorkerInvocation::LiveStreamingInvocation { sender, .. } => {
                     let _ = sender.send(Err(error.clone()));
                 }
                 QueuedWorkerInvocation::SaveSnapshot => {}
@@ -5192,7 +5264,22 @@ pub enum QueuedWorkerInvocation {
     AwaitReadyToProcessCommands {
         sender: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
+    LiveStreamingInvocation {
+        invocation: AgentInvocation,
+        sender: oneshot::Sender<Result<golem_common::schema::SchemaValue, WorkerExecutorError>>,
+        cancellation: tokio_util::sync::CancellationToken,
+    },
     SaveSnapshot,
+}
+
+struct CancelLiveInvocationOnDrop(Option<tokio_util::sync::CancellationToken>);
+
+impl Drop for CancelLiveInvocationOnDrop {
+    fn drop(&mut self) {
+        if let Some(cancellation) = self.0.take() {
+            cancellation.cancel();
+        }
+    }
 }
 
 #[allow(clippy::large_enum_variant)]

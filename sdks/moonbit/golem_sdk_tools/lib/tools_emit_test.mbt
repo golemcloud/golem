@@ -176,6 +176,43 @@ test "tool generated internals use runtime facades instead of consumer aliases" 
 }
 
 ///|
+test "async tool commands use async ownership-aware invokers" {
+  let source =
+    #|#derive.tool
+    #|struct AsyncTool {}
+    #|pub async fn AsyncTool::run(value : String) -> String { value }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("async.mbt", source)])),
+  )
+  assert_true(generated.contains("async fn __golem_tool_invoke_AsyncTool"))
+  assert_true(generated.contains("AsyncTool::run(value)"))
+  assert_true(generated.contains("@tool.reject_wire_invocation"))
+  assert_true(generated.contains("@tool.reject_undecoded_invocation"))
+  assert_true(generated.contains("@tool.reject_decoded_invocation"))
+}
+
+///|
+test "generated invokers create stdout only after fallible input decoding" {
+  let source =
+    #|#derive.tool
+    #|struct StreamAfterInput {}
+    #|pub fn StreamAfterInput::run(
+    #|  output : @asyncCore.Sink[Byte],
+    #|  value : String,
+    #|) -> String {
+    #|  ignore(output)
+    #|  value
+    #|}
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(
+      @lib.parse_tools([("stdout-after-input.mbt", source)]),
+    ),
+  )
+  let before_stdout = generated.split("@tool.new_stdout()").collect()[0]
+  assert_true(before_stdout.contains("@tool.decode_canonical_field"))
+}
+
+///|
 test "reexported tool Principal is injected as invocation context" {
   let source =
     #|#derive.tool

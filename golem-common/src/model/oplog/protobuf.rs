@@ -71,14 +71,16 @@ use golem_api_grpc::proto::golem::worker::{
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
 
-impl From<PublicTypedAgentConfigEntry>
+impl TryFrom<PublicTypedAgentConfigEntry>
     for golem_api_grpc::proto::golem::worker::PublicTypedAgentConfigEntry
 {
-    fn from(value: PublicTypedAgentConfigEntry) -> Self {
-        Self {
+    type Error = String;
+
+    fn try_from(value: PublicTypedAgentConfigEntry) -> Result<Self, Self::Error> {
+        Ok(Self {
             path: value.path,
-            value: Some(value.value.into()),
-        }
+            value: Some(value.value.try_into()?),
+        })
     }
 }
 
@@ -1063,8 +1065,8 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         config: create
                             .local_agent_config
                             .into_iter()
-                            .map(Into::into)
-                            .collect(),
+                            .map(TryInto::try_into)
+                            .collect::<Result<_, _>>()?,
                         created_by: Some(create.created_by.into()),
                         environment_id: Some(create.environment_id.into()),
                         parent: create.parent.map(Into::into),
@@ -1087,7 +1089,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             timestamp: Some(start.timestamp.into()),
                             parent_start_index: start.parent_start_index.map(|id| id.as_u64()),
                             function_name: start.function_name.clone(),
-                            request: start.request.map(Into::into),
+                            request: start.request.map(TryInto::try_into).transpose()?,
                             durable_function_type: Some(start.durable_function_type.into()),
                         },
                     )),
@@ -1098,7 +1100,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     golem_api_grpc::proto::golem::worker::EndParameters {
                         timestamp: Some(end.timestamp.into()),
                         start_index: end.start_index.as_u64(),
-                        response: end.response.map(Into::into),
+                        response: end.response.map(TryInto::try_into).transpose()?,
                         forced_commit: end.forced_commit,
                     },
                 )),
@@ -1109,7 +1111,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::CancelledParameters {
                             timestamp: Some(cancelled.timestamp.into()),
                             start_index: cancelled.start_index.as_u64(),
-                            partial: cancelled.partial.map(Into::into),
+                            partial: cancelled.partial.map(TryInto::try_into).transpose()?,
                         },
                     )),
                 }
@@ -1632,7 +1634,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             timestamp: Some(params.timestamp.into()),
                             parent_start_index: params.parent_start_index.as_u64(),
                             kind: host_stream_kind_to_proto(params.kind) as i32,
-                            payload: Some(params.payload.into()),
+                            payload: Some(params.payload.try_into()?),
                         },
                     )),
                 }
@@ -1883,7 +1885,7 @@ impl TryFrom<PublicAgentInvocation>
                 Invocation::AgentInitialization(
                     golem_api_grpc::proto::golem::worker::PublicAgentInitializationInvocation {
                         idempotency_key: Some(init.idempotency_key.into()),
-                        constructor_parameters: Some(init.constructor_parameters.into()),
+                        constructor_parameters: Some(init.constructor_parameters.try_into()?),
                         trace_id: init.trace_id.to_string(),
                         trace_states: init.trace_states,
                         invocation_context,
@@ -1896,7 +1898,7 @@ impl TryFrom<PublicAgentInvocation>
                     golem_api_grpc::proto::golem::worker::PublicAgentMethodInvocation {
                         idempotency_key: Some(method.idempotency_key.into()),
                         method_name: method.method_name,
-                        function_input: Some(method.function_input.into()),
+                        function_input: Some(method.function_input.try_into()?),
                         trace_id: method.trace_id.to_string(),
                         trace_states: method.trace_states,
                         invocation_context,
@@ -2091,10 +2093,10 @@ impl TryFrom<PublicAgentInvocationResult>
         use golem_api_grpc::proto::golem::worker::public_agent_invocation_result::Result as ProtoResult;
         let result = match value {
             PublicAgentInvocationResult::AgentInitialization(output) => {
-                ProtoResult::AgentInitializationOutput(output.output.into())
+                ProtoResult::AgentInitializationOutput(output.output.try_into()?)
             }
             PublicAgentInvocationResult::AgentMethod(output) => {
-                ProtoResult::AgentMethodOutput(output.output.into())
+                ProtoResult::AgentMethodOutput(output.output.try_into()?)
             }
             PublicAgentInvocationResult::ManualUpdate(_) => {
                 ProtoResult::ManualUpdate(golem_api_grpc::proto::golem::common::Empty {})

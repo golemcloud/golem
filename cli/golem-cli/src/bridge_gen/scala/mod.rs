@@ -897,14 +897,19 @@ impl ScalaBridgeGenerator {
         writer.line(format!("def apply({param_decls}): {FUTURE}[{ret_ty}] = {{"));
         writer.indent();
         writer.line(format!(
-            "val parameters = {GUEST_CODEC}.encodeValue(methodParameters({invoke_args}))"
+            "{GUEST_CODEC}.encodeValueAsync(methodParameters({invoke_args})).flatMap {{ parameters =>"
         ));
         writer.line(format!(
-            "resolved.asyncInvokeAndAwait({method_name_lit}, parameters).map {{ __result =>"
+            "resolved.asyncInvokeAndAwait({method_name_lit}, parameters).flatMap {{ __result =>"
         ));
         writer.indent();
+        writer.line(format!(
+            "{GUEST_CODEC}.decodeResultAsync(__result).map {{ __value =>"
+        ));
         writer.line(decode_block.clone());
+        writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
         writer.dedent();
+        writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
         writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
         writer.dedent();
         writer.line("}");
@@ -915,17 +920,14 @@ impl ScalaBridgeGenerator {
         ));
         writer.indent();
         writer.line(format!(
-            "val parameters = {GUEST_CODEC}.encodeValue(methodParameters({invoke_args}))"
+            "var __underlying = _root_.scala.Option.empty[_root_.golem.runtime.rpc.CancellationToken]\nvar __cancelled = false\nval __token = _root_.golem.runtime.rpc.CancellationToken.fromFunction(() => {{ __cancelled = true; __underlying.foreach(_.cancel()) }})\nval __future = {GUEST_CODEC}.encodeValueAsync(methodParameters({invoke_args})).flatMap {{ parameters =>"
         ));
         writer.line(format!(
-            "val (__future, __token) = resolved.cancelableAsyncInvokeAndAwait({method_name_lit}, parameters)"
+            "val (__rawFuture, __rawToken) = resolved.cancelableAsyncInvokeAndAwait({method_name_lit}, parameters)\n__underlying = _root_.scala.Some(__rawToken)\nif (__cancelled) __rawToken.cancel()\n__rawFuture.flatMap {{ __result => {GUEST_CODEC}.decodeResultAsync(__result).map {{ __value =>"
         ));
-        writer.line("(__future.map { __result =>");
-        writer.indent();
         writer.line(decode_block.clone());
-        writer.dedent();
         writer.line(
-            "}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue), __token)",
+            "}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue) }(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue) }(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)\n(__future, __token)",
         );
         writer.dedent();
         writer.line("}");
@@ -1232,7 +1234,7 @@ impl ScalaBridgeGenerator {
             let name = self.multimodal_name(&cases)?;
             let ret_ty = self.multimodal_list_type(&name);
             let block = format!(
-                "val __tree = __result.getOrElse(throw {GUEST_CLIENT_ERROR}(\"Missing result value for an await invocation\"))\nval __value = {GUEST_CODEC}.decodeValue(__tree)\n{}.{CODECS_OBJECT}.decode{name}List(__value)",
+                "{}.{CODECS_OBJECT}.decode{name}List(__value)",
                 self.client_pkg()
             );
             return Ok((ret_ty, block));
@@ -1242,9 +1244,7 @@ impl ScalaBridgeGenerator {
             OutputSchema::Single(ty) => {
                 let ret_ty = self.type_reference(ty)?;
                 let decode = self.rewrite_guest_runtime_refs(self.decode_expr("__value", ty, 0)?);
-                let block = format!(
-                    "val __tree = __result.getOrElse(throw {GUEST_CLIENT_ERROR}(\"Missing result value for an await invocation\"))\nval __value = {GUEST_CODEC}.decodeValue(__tree)\n{decode}"
-                );
+                let block = decode;
                 Ok((ret_ty, block))
             }
         }
@@ -3482,6 +3482,7 @@ mod tests {
         .unwrap();
         assert!(client_source.contains("_root_.golem.schema.SchemaValue.StringValue(message)"));
         assert!(client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.encodeValue"));
+        assert!(client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.encodeValueAsync"));
         assert!(client_source.contains("_root_.golem.runtime.rpc.RemoteAgentClient.resolve"));
         assert!(client_source.contains("resolved.asyncInvokeAndAwait"));
         assert!(client_source.contains("def cancelable("));
@@ -3489,7 +3490,9 @@ mod tests {
         assert!(client_source.contains("def scheduleCancelableAt("));
         assert!(client_source.contains("resolved.scheduleCancelableInvocation"));
         assert!(client_source.contains("_root_.golem.runtime.rpc.CancellationToken"));
-        assert!(client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.decodeValue"));
+        assert!(
+            client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.decodeResultAsync")
+        );
         assert!(!client_source.contains("golem.bridge.runtime"));
         assert!(!client_source.contains("Bridge.createAgent"));
     }

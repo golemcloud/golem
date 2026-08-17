@@ -84,6 +84,25 @@ object AgentClientRuntime {
       case OutputMetadata.Single(_) => SchemaRpcCodec.decodeSingleResult[Out](result)(outputCodec.from.get)
     }
 
+  private def encodeInputAsync[In](
+    inputCodec: golem.runtime.InputRecordCodec[In],
+    input: In
+  ): Future[JsSchemaValueTree] =
+    SchemaRpcCodec.encodeArgsAsync(input)(inputCodec)
+
+  private def decodeOutputAsync[Out](outputCodec: OutputCodec[Out], result: Option[JsSchemaValueTree]): Future[Out] =
+    outputCodec.metadata match {
+      case OutputMetadata.Unit      => Future.successful(().asInstanceOf[Out])
+      case OutputMetadata.Single(_) =>
+        Future.fromTry(
+          scala.util.Try(
+            SchemaRpcCodec
+              .decodeSingleResult[Out](result)(outputCodec.from.get)
+              .fold(err => throw js.JavaScriptException(err), identity)
+          )
+        )
+    }
+
   private def resolveRemote(
     agentTypeName: String,
     payload: JsSchemaValueTree,
@@ -132,31 +151,29 @@ object AgentClientRuntime {
       runScheduledCancelable(method, datetime, input)
 
     def awaitWithMetadata[In, Out](method: AgentMethod[Trait, In, Out], input: In): Future[InvocationResult[Out]] = {
-      val result = for {
-        params <- encodeInput(method.inputCodec, input)
-        raw    <- client.rpc.invokeAndAwaitWithMetadata(method.functionName, params)
-        value  <- decodeOutput(method.outputCodec, raw.value)
-      } yield InvocationResult(raw.metadata, value)
-      FutureInterop.fromEither(result)
+      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      encodeInputAsync(method.inputCodec, input).flatMap { params =>
+        FutureInterop.fromEither(client.rpc.asyncInvokeAndAwaitWithMetadata(method.functionName, params)).flatMap { raw =>
+          raw.result.flatMap(decodeOutputAsync(method.outputCodec, _)).map(InvocationResult(raw.metadata, _))
+        }
+      }
     }
 
     def cancelableAwaitWithMetadata[In, Out](
       method: AgentMethod[Trait, In, Out],
       input: In
-    ): Either[String, CancelableAsyncInvocation[Out]] =
-      for {
-        params <- encodeInput(method.inputCodec, input)
-        raw    <- client.rpc.asyncInvokeAndAwaitWithMetadata(method.functionName, params)
-      } yield CancelableAsyncInvocation(
-        raw.metadata,
-        raw.result.map(value =>
-          decodeOutput(method.outputCodec, value).fold(
-            err => throw js.JavaScriptException(err),
-            identity
+    ): Future[CancelableAsyncInvocation[Out]] = {
+      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      encodeInputAsync(method.inputCodec, input).flatMap { params =>
+        FutureInterop.fromEither(client.rpc.asyncInvokeAndAwaitWithMetadata(method.functionName, params)).map { raw =>
+          CancelableAsyncInvocation(
+            raw.metadata,
+            raw.result.flatMap(decodeOutputAsync(method.outputCodec, _)),
+            raw.cancellationToken
           )
-        )(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue),
-        raw.cancellationToken
-      )
+        }
+      }
+    }
 
     def triggerWithMetadata[In](method: AgentMethod[Trait, In, _], input: In): Future[InvocationReceipt] =
       FutureInterop.fromEither(for {
@@ -185,35 +202,31 @@ object AgentClientRuntime {
       } yield receipt)
 
     private def runAwaitable[In, Out](method: AgentMethod[Trait, In, Out], input: In): Future[Out] = {
-      // The default await path uses the synchronous host `invoke-and-await`
-      // import (fully wrapped in `Either`), matching the documented "always
-      // invoke via invoke-and-await" intent. The async `future-invoke-result`
-      // path is reserved for `cancelableAwait`, where cancellation is needed.
-      val result: Either[String, Out] = for {
-        params <- encodeInput(method.inputCodec, input)
-        raw    <- client.rpc.invokeAndAwait(method.functionName, params)
-        value  <- decodeOutput(method.outputCodec, raw)
-      } yield value
-      FutureInterop.fromEither(result)
+      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      encodeInputAsync(method.inputCodec, input)
+        .flatMap(params => client.rpc.asyncInvokeAndAwait(method.functionName, params))
+        .flatMap(decodeOutputAsync(method.outputCodec, _))
     }
 
     private def runCancelableAwaitable[In, Out](
       method: AgentMethod[Trait, In, Out],
       input: In
-    ): (Future[Out], CancellationToken) =
-      encodeInput(method.inputCodec, input) match {
-        case Left(err) =>
-          (FutureInterop.failed(err), CancellationToken.fromFunction(() => ()))
-        case Right(params) =>
-          val (rawFuture, token) = client.rpc.cancelableAsyncInvokeAndAwait(method.functionName, params)
-          val mappedFuture       = rawFuture.map { raw =>
-            decodeOutput(method.outputCodec, raw) match {
-              case Left(err)    => throw scala.scalajs.js.JavaScriptException(err)
-              case Right(value) => value
-            }
-          }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
-          (mappedFuture, token)
+    ): (Future[Out], CancellationToken) = {
+      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      var underlying  = Option.empty[CancellationToken]
+      var cancelled   = false
+      val token       = CancellationToken.fromFunction { () =>
+        cancelled = true
+        underlying.foreach(_.cancel())
       }
+      val result = encodeInputAsync(method.inputCodec, input).flatMap { params =>
+        val (rawFuture, rawToken) = client.rpc.cancelableAsyncInvokeAndAwait(method.functionName, params)
+        underlying = Some(rawToken)
+        if (cancelled) rawToken.cancel()
+        rawFuture.flatMap(decodeOutputAsync(method.outputCodec, _))
+      }
+      (result, token)
+    }
 
     private def runFireAndForget[In, Out0](method: AgentMethod[Trait, In, Out0], input: In): Future[Unit] = {
       val result: Either[String, Unit] = for {

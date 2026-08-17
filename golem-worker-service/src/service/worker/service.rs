@@ -13,7 +13,10 @@
 // limitations under the License.
 
 use super::WorkerResult;
-use super::{ConnectWorkerStream, WorkerClient, WorkerServiceError};
+use super::{
+    ConnectWorkerStream, InvocationRequestStream, InvocationResponseStream, WorkerClient,
+    WorkerServiceError,
+};
 use crate::api::agents::{
     AgentInvocationMode, AgentInvocationRequest, AgentInvocationResult, CreateAgentRequest,
     CreateAgentResponse,
@@ -23,8 +26,10 @@ use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::component::ComponentService;
 use crate::service::limit::LimitService;
 use bytes::Bytes;
-use futures::Stream;
-use golem_api_grpc::proto::golem::worker::InvocationContext;
+use futures::{Stream, StreamExt, stream};
+use golem_api_grpc::proto::golem::worker::{
+    InvocationContext, InvocationFrame, InvocationStart, invocation_frame,
+};
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
@@ -934,13 +939,12 @@ impl WorkerService {
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
-        known_environment_id: Option<EnvironmentId>,
     ) -> WorkerResult<AgentInvocationOutput> {
         let component = self
             .component_service
             .get_current_by_id(agent_id.component_id)
             .await?;
-        let environment_id = known_environment_id.unwrap_or(component.environment_id);
+        let environment_id = component.environment_id;
         let account_id = component.account_id;
         self.dispatch_agent_invocation(
             &component,
@@ -974,6 +978,83 @@ impl WorkerService {
             },
         )
         .await
+    }
+
+    pub async fn invoke_agent_session(
+        &self,
+        mut start: InvocationStart,
+        tail: InvocationRequestStream,
+        allow_derived_ephemeral_phantom: bool,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<InvocationResponseStream> {
+        let agent_id: AgentId = start
+            .agent_id
+            .clone()
+            .ok_or_else(|| WorkerServiceError::TypeChecker("agent_id not found".to_string()))?
+            .try_into()
+            .map_err(WorkerServiceError::TypeChecker)?;
+        let component = self
+            .component_service
+            .get_current_by_id(agent_id.component_id)
+            .await?;
+        let observation_only =
+            start.mode() == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup;
+        let freshness_disposition = if start.freshness_disposition()
+            == golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh
+        {
+            InvocationFreshnessDisposition::KnownFresh
+        } else {
+            InvocationFreshnessDisposition::MayExist
+        };
+        let (agent_id, idempotency_key, mut freshness_disposition) =
+            normalize_agent_invocation_identity(
+                &component,
+                &agent_id,
+                start.idempotency_key.clone().map(Into::into),
+                allow_derived_ephemeral_phantom,
+                observation_only,
+                freshness_disposition,
+            )?;
+        if observation_only {
+            freshness_disposition = InvocationFreshnessDisposition::MayExist;
+        }
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            &agent_id,
+            agent_verb_for_invocation_mode(start.mode),
+            start
+                .method_name
+                .as_ref()
+                .map(|method_name| {
+                    AgentResourcePattern::Method(AgentMethodName(method_name.clone()))
+                })
+                .unwrap_or(AgentResourcePattern::Any),
+        )?;
+
+        start.agent_id = Some(agent_id.clone().into());
+        start.idempotency_key = Some(idempotency_key.into());
+        start.environment_id = Some(component.environment_id.into());
+        start.component_owner_account_id = Some(component.account_id.into());
+        start.freshness_disposition = match freshness_disposition {
+            InvocationFreshnessDisposition::MayExist => {
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32
+            }
+            InvocationFreshnessDisposition::KnownFresh => {
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh
+                    as i32
+            }
+        };
+        let request = stream::once(async move {
+            InvocationFrame {
+                frame: Some(invocation_frame::Frame::Start(start)),
+            }
+        })
+        .chain(tail);
+        self.worker_client
+            .invoke_agent_session(&agent_id, Box::pin(request))
+            .await
     }
 
     /// Shared invocation-dispatch core: normalizes the invocation identity,
@@ -1210,7 +1291,11 @@ impl WorkerService {
         .1;
 
         let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
-            method_parameters.into();
+            method_parameters.try_into().map_err(|error| {
+                WorkerServiceError::TypeChecker(format!(
+                    "Agent method parameters cannot cross the worker boundary: {error}"
+                ))
+            })?;
 
         let proto_mode = match request.mode {
             AgentInvocationMode::Await => {
@@ -1843,6 +1928,7 @@ mod tests {
     struct RecordingWorkerClient {
         created_agent_ids: Mutex<Vec<AgentId>>,
         invocations: Mutex<Vec<(AgentId, IdempotencyKey, InvocationFreshnessDisposition)>>,
+        invocation_environments: Mutex<Vec<EnvironmentId>>,
         invocation_output: AgentInvocationOutput,
     }
 
@@ -1851,6 +1937,7 @@ mod tests {
             Self {
                 created_agent_ids: Mutex::new(Vec::new()),
                 invocations: Mutex::new(Vec::new()),
+                invocation_environments: Mutex::new(Vec::new()),
                 invocation_output,
             }
         }
@@ -1865,6 +1952,10 @@ mod tests {
 
         fn invocations(&self) -> Vec<(AgentId, IdempotencyKey, InvocationFreshnessDisposition)> {
             self.invocations.lock().unwrap().clone()
+        }
+
+        fn invocation_environment(&self) -> EnvironmentId {
+            self.invocation_environments.lock().unwrap()[0]
         }
     }
 
@@ -2089,7 +2180,7 @@ mod tests {
             _: Option<InvocationContext>,
             freshness_disposition: InvocationFreshnessDisposition,
             _: Vec<AgentConfigEntryDto>,
-            _: EnvironmentId,
+            environment_id: EnvironmentId,
             _: AccountId,
             _: AuthCtx,
             _: golem_api_grpc::proto::golem::component::Principal,
@@ -2099,6 +2190,10 @@ mod tests {
                 idempotency_key.expect("worker service should supply an idempotency key"),
                 freshness_disposition,
             ));
+            self.invocation_environments
+                .lock()
+                .unwrap()
+                .push(environment_id);
             Ok(self.invocation_output.clone())
         }
 
@@ -2125,6 +2220,7 @@ mod tests {
         agent_type_name: AgentTypeName,
         component_id: ComponentId,
         component_revision: ComponentRevision,
+        environment_id: EnvironmentId,
     }
 
     impl RestHarness {
@@ -2188,6 +2284,7 @@ mod tests {
                 agent_type_name,
                 component_id,
                 component_revision,
+                environment_id,
             }
         }
 
@@ -2356,6 +2453,10 @@ mod tests {
             Some(harness.component_revision)
         );
         assert_eq!(response.agent_id, harness.worker_client.invoked_agent_id());
+        assert_eq!(
+            harness.worker_client.invocation_environment(),
+            harness.environment_id
+        );
         assert!(phantom_id(&response.agent_id).is_some());
         let invocations = harness.worker_client.invocations();
         assert_eq!(invocations.len(), 1);
@@ -2475,7 +2576,6 @@ mod tests {
                 Vec::new(),
                 AuthCtx::system(),
                 Principal::anonymous().into(),
-                None,
             )
             .await
             .unwrap();

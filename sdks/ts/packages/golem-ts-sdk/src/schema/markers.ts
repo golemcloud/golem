@@ -60,6 +60,7 @@ import { buildResultCodec } from './result';
 import { StandardSchemaV1 } from './standardSchema';
 import { Result } from '../host/result';
 import { Principal, sdkPrincipalToHost, sdkPrincipalFromHost } from '../principal';
+import { AgentStream, agentStreamFromHandle, agentStreamToHandle } from './agentStream';
 import type {
   Principal as HostPrincipal,
   OidcPrincipal as HostOidcPrincipal,
@@ -97,7 +98,8 @@ export type MarkerKind =
   | 'secret'
   | 'result'
   | 'typed-array'
-  | 'principal';
+  | 'principal'
+  | 'stream';
 
 /** Pure phantom key carrying a marker's {@link MarkerKind} at the type level. */
 declare const MARKER_KIND: unique symbol;
@@ -724,6 +726,31 @@ function quotaTokenMarker(): MarkerSchema<RawQuotaToken> {
 }
 
 // ============================================================
+// Capability node: stream
+// ============================================================
+
+function streamMarker<Output>(
+  inner: StandardSchemaV1<Output>,
+): MarkerSchema<AgentStream<Output>, 'stream'> {
+  const validate: Validator<AgentStream<Output>> = (value) =>
+    value instanceof AgentStream ? ok(value) : fail('Expected an AgentStream');
+  const descriptor: MarkerDescriptor = (recurse) => {
+    const itemCodec = recurse(inner);
+    return {
+      graph: { defs: itemCodec.graph.defs, root: t.stream(itemCodec.graph.root) },
+      toValue: (value) => v.stream(agentStreamToHandle(value as AgentStream<Output>, itemCodec)),
+      fromValue: (value) => {
+        if (value.tag !== 'stream') {
+          throw new TypeError(`Expected a stream schema value, got '${value.tag}'`);
+        }
+        return agentStreamFromHandle<Output>(value.handle, itemCodec);
+      },
+    };
+  };
+  return marker<AgentStream<Output>, 'stream'>(validate, descriptor);
+}
+
+// ============================================================
 // Rich nodes: unstructured text / binary
 // ============================================================
 
@@ -1127,7 +1154,8 @@ function principalMarker(): MarkerSchema<Principal, 'principal'> {
  * its own: numeric pins, `char`, `datetime`, `duration`, `url`, `bytes`, plus
  * the capability / rich nodes (`secret`, `quota-token`, `multimodal`,
  * `unstructured*`). Each returns a {@link MarkerSchema} usable anywhere a
- * Standard Schema is accepted (method params/returns, `id` fields).
+ * Standard Schema is accepted; `stream` is restricted to agent method inputs
+ * and outputs by the agent schema validator.
  */
 export const s = {
   // Numeric pins (f64 is the default `number`, so it is intentionally absent).
@@ -1174,6 +1202,7 @@ export const s = {
   // Capability wrappers / nodes.
   secret: <Output>(inner: StandardSchemaV1<Output>) => secretMarker(inner),
   quotaToken: () => quotaTokenMarker(),
+  stream: <Output>(inner: StandardSchemaV1<Output>) => streamMarker(inner),
 
   // Principal carried as a data value (WIT `principal` variant).
   principal: () => principalMarker(),
