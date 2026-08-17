@@ -608,6 +608,58 @@ impl TestWorkerExecutor {
         Ok(oplog_index)
     }
 
+    pub async fn queue_card_revocation(
+        &self,
+        agent_id: &AgentId,
+        card_id: CardId,
+    ) -> anyhow::Result<()> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
+        worker.queue_card_revocation(card_id).await;
+        Ok(())
+    }
+
+    pub async fn queue_uncommitted_card_revocation(
+        &self,
+        agent_id: &AgentId,
+        card_id: CardId,
+    ) -> anyhow::Result<OplogIndex> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
+        Ok(worker
+            .add_to_oplog(OplogEntry::card_event_queued(
+                golem_common::base_model::oplog::QueuedCardEvent::revoke(card_id),
+            ))
+            .await)
+    }
+
+    pub async fn queue_card_install(
+        &self,
+        agent_id: &AgentId,
+        card: StoredCard,
+    ) -> anyhow::Result<()> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
+        worker
+            .add_and_commit_oplog(OplogEntry::card_event_queued(
+                golem_common::base_model::oplog::QueuedCardEvent::install(card),
+            ))
+            .await;
+        Ok(())
+    }
+
     pub async fn store_component_with_id(
         &self,
         name: &str,

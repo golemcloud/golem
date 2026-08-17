@@ -18,7 +18,7 @@ use golem_common::model::card::{
     CardId, CardManagedByRuntimeDerived, PolymorphicPermissionPattern, StoredCard,
     parse_polymorphic_permission,
 };
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicQueuedCardEvent};
 use golem_common::model::{AgentStatus, IdempotencyKey, PromiseId};
 use golem_common::{agent_id, data_value};
 use golem_schema::model::CardId as SchemaCardId;
@@ -30,7 +30,7 @@ use golem_worker_executor_test_utils::{
     WorkerExecutorTestDependencies, start_with_overrides,
 };
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
@@ -53,6 +53,7 @@ fn scope_card_initial_permissions() -> Vec<PolymorphicPermissionPattern> {
 #[derive(Default)]
 struct ScopeCardAuthority {
     revoked: AtomicBool,
+    check_cards_count: AtomicUsize,
     root_card: RwLock<Option<StoredCard>>,
 }
 
@@ -74,6 +75,14 @@ impl ScopeCardAuthority {
 
     fn revoke(&self) {
         self.revoked.store(true, Ordering::SeqCst);
+    }
+
+    fn reset_check_cards_count(&self) {
+        self.check_cards_count.store(0, Ordering::SeqCst);
+    }
+
+    fn check_cards_count(&self) -> usize {
+        self.check_cards_count.load(Ordering::SeqCst)
     }
 }
 
@@ -105,6 +114,9 @@ impl CardService for ScopeCardService {
         &self,
         card_ids: Vec<CardId>,
     ) -> Result<HashMap<CardId, CardState>, WorkerExecutorError> {
+        self.authority
+            .check_cards_count
+            .fetch_add(1, Ordering::SeqCst);
         let root_card = self.authority.root_card().ok_or_else(|| {
             WorkerExecutorError::runtime("scope-card test root was not configured")
         })?;
@@ -472,5 +484,392 @@ async fn scope_card_delivery_and_cleanup_survive_crash_replay(
     assert_scope_absent(&executor, &component, &target, scope_card_id).await?;
     executor.check_oplog_is_queryable(&caller_worker).await?;
     executor.check_oplog_is_queryable(&target_worker).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn queued_wallet_revocation_updates_cached_authorization_at_boundary(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "wallet-revocation-caller");
+    let root_card_id = configure_scope_card_root(&authority, &component, &caller)?;
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+
+    assert!(
+        !executor
+            .invoke_and_await_agent(
+                &component,
+                &caller,
+                "derive_from_wallet_is_denied",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<bool>()?,
+        "the cached surface must initially authorize wallet derivation"
+    );
+
+    authority.revoke();
+    executor
+        .queue_uncommitted_card_revocation(&caller_worker, root_card_id)
+        .await?;
+
+    let error = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "derive_from_wallet_is_denied",
+            data_value!(),
+        )
+        .await
+        .expect_err("the queued revocation must deny wallet derivation");
+    assert!(
+        error.to_string().contains("card:derive is not permitted"),
+        "unexpected authorization error: {error:#}"
+    );
+
+    let oplog = executor
+        .get_oplog(&caller_worker, OplogIndex::INITIAL)
+        .await?;
+    assert!(oplog.iter().any(|entry| matches!(
+        &entry.entry,
+        PublicOplogEntry::CardRevokedCascade(params)
+            if params.revoked_card_ids.contains(&root_card_id)
+    )));
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn queued_wallet_revocation_precedes_the_next_accessor_start(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "accessor-revocation-caller");
+    let root_card_id = configure_scope_card_root(&authority, &component, &caller)?;
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let release = executor
+        .invoke_and_await_agent(&component, &caller, "create_release_promise", data_value!())
+        .await?
+        .into_typed::<PromiseId>()?;
+    executor.complete_promise(&release, vec![1]).await?;
+
+    authority.revoke();
+    executor
+        .queue_uncommitted_card_revocation(&caller_worker, root_card_id)
+        .await?;
+    assert!(
+        executor
+            .invoke_and_await_agent(&component, &caller, "await_release", data_value!(release))
+            .await?
+            .into_typed::<bool>()?
+    );
+
+    let oplog = executor
+        .get_oplog(&caller_worker, OplogIndex::INITIAL)
+        .await?;
+    let queued_index = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::CardEventQueued(params)
+                if matches!(
+                    &params.event,
+                    PublicQueuedCardEvent::Revoke(event) if event.card_id == root_card_id
+                ) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("the revocation must have a durable arrival record");
+    let cascade_index = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::CardRevokedCascade(params)
+                if params.revoked_card_ids.contains(&root_card_id) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("the accessor boundary must apply the queued revocation");
+    let next_start_index = oplog
+        .iter()
+        .find_map(|entry| {
+            (entry.oplog_index > queued_index && matches!(&entry.entry, PublicOplogEntry::Start(_)))
+                .then_some(entry.oplog_index)
+        })
+        .expect("the promise await must append a durable start");
+    assert!(
+        queued_index < cascade_index && cascade_index < next_start_index,
+        "expected queued revocation {queued_index} < cascade {cascade_index} < accessor start {next_start_index}"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn accessor_boundary_preserves_install_before_revoke_order(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "accessor-install-revoke-order");
+    configure_scope_card_root(&authority, &component, &caller)?;
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let release = executor
+        .invoke_and_await_agent(&component, &caller, "create_release_promise", data_value!())
+        .await?
+        .into_typed::<PromiseId>()?;
+    executor.complete_promise(&release, vec![1]).await?;
+
+    let root_card = authority.root_card().expect("root card must be configured");
+    let root_card_id = root_card.card_id();
+    executor
+        .queue_card_install(&caller_worker, root_card)
+        .await?;
+    executor
+        .queue_card_revocation(&caller_worker, root_card_id)
+        .await?;
+
+    assert!(
+        executor
+            .invoke_and_await_agent(&component, &caller, "await_release", data_value!(release))
+            .await?
+            .into_typed::<bool>()?
+    );
+
+    let wallet_card_count = executor
+        .invoke_and_await_agent(&component, &caller, "wallet_card_count", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(
+        wallet_card_count, 0,
+        "an install followed by a revoke must leave the card revoked"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn replayed_wallet_authorization_uses_pinned_cards_until_live_transition(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "wallet-replay-caller");
+    configure_scope_card_root(&authority, &component, &caller)?;
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let release = executor
+        .invoke_and_await_agent(&component, &caller, "create_release_promise", data_value!())
+        .await?
+        .into_typed::<PromiseId>()?;
+    let key = IdempotencyKey::fresh();
+    let params = data_value!(release.clone());
+
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "derive_before_promise",
+            params.clone(),
+        )
+        .await?;
+    executor
+        .wait_for_status(
+            &caller_worker,
+            AgentStatus::Suspended,
+            Duration::from_secs(10),
+        )
+        .await?;
+    drop(executor);
+
+    authority.revoke();
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    authority.reset_check_cards_count();
+    executor.complete_promise(&release, vec![1]).await?;
+    let _derived_card_id = executor
+        .invoke_and_await_agent_with_key(&component, &caller, &key, "derive_before_promise", params)
+        .await?
+        .into_typed::<SchemaCardId>()?;
+
+    assert_eq!(
+        authority.check_cards_count(),
+        1,
+        "replay must not query registry liveness; only the replay-to-live transition may do so"
+    );
+    let error = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "derive_from_wallet_is_denied",
+            data_value!(),
+        )
+        .await
+        .expect_err("the revoked card must stop authorizing new live invocations");
+    assert!(
+        error.to_string().contains("card:derive is not permitted"),
+        "unexpected authorization error: {error:#}"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn repeated_authorization_does_not_revalidate_wallet_or_scope_roots(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "authorization-cost-caller");
+    let target_name = "authorization-cost-target";
+    let target = agent_id!("ScopeCardAgent", target_name);
+    configure_scope_card_root(&authority, &component, &caller)?;
+    executor.start_agent(&component.id, caller.clone()).await?;
+    executor.start_agent(&component.id, target).await?;
+
+    authority.reset_check_cards_count();
+    let wallet_card_count = executor
+        .invoke_and_await_agent(&component, &caller, "wallet_card_count", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(wallet_card_count, 1);
+    let introspection_checks = authority.check_cards_count();
+    assert!(introspection_checks > 0);
+
+    authority.reset_check_cards_count();
+    assert!(
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &caller,
+                "authorize_repeatedly",
+                data_value!(5u32),
+            )
+            .await?
+            .into_typed::<bool>()?
+    );
+    assert_eq!(
+        authority.check_cards_count(),
+        introspection_checks,
+        "repeated inspect and derive authorization must add no full-wallet liveness checks"
+    );
+
+    authority.reset_check_cards_count();
+    assert!(
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &caller,
+                "invoke_and_await_repeated_scope_inspection",
+                data_value!(target_name, 0u32),
+            )
+            .await?
+            .into_typed::<bool>()?
+    );
+    let scope_admission_checks = authority.check_cards_count();
+    assert!(scope_admission_checks > 0);
+
+    authority.reset_check_cards_count();
+    assert!(
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &caller,
+                "invoke_and_await_repeated_scope_inspection",
+                data_value!(target_name, 5u32),
+            )
+            .await?
+            .into_typed::<bool>()?
+    );
+    assert_eq!(
+        authority.check_cards_count(),
+        scope_admission_checks,
+        "repeated scoped authorization must add no root-card liveness checks after admission"
+    );
     Ok(())
 }

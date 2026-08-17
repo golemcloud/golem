@@ -39,7 +39,7 @@ use crate::preview2::golem::permissions::types as permissions_types;
 use crate::preview2::golem::permissions::wallet as permissions_wallet;
 use crate::services::HasWorker;
 use crate::services::card::{CardRevokeResult, CardState};
-use crate::services::oplog::{CommitLevel, OplogOps};
+use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -54,8 +54,7 @@ use golem_common::model::card::{
     CardResourcePattern, CardVerb, ClassPermissionTarget, DelegationCard, DelegationSurface,
     EffectiveSurface, PermissionPattern, PermissionTarget, PolymorphicCard,
     PolymorphicPermissionPattern, RenderedPermissionFields, ScopeCard, StoredCard,
-    WalletDerivationParent, agent_delegation_surface_from_wallet,
-    agent_effective_surface_from_wallet_and_scope, card_matches_agent_recipient,
+    WalletDerivationParent, agent_delegation_surface_from_wallet, card_matches_agent_recipient,
     instantiate_polymorphic_card_for_agent, monomorphize_card_for_agent, parse_permission_fields,
     permission_class_metadata,
 };
@@ -761,13 +760,10 @@ fn persistent_scope_parent_from_wallet(
 
 async fn resolve_scope_derivation_parents<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
+    wallet: &[StoredCard],
     handles: &[Resource<PermissionCardHandleRep>],
     invocation_key: &IdempotencyKey,
 ) -> Result<Vec<ScopeDerivationParent>, permissions_types::PermissionError> {
-    let wallet = ctx
-        .active_agent_wallet_cards_snapshot()
-        .await
-        .map_err(worker_error_to_permission_error)?;
     let Some(agent_id) = ctx.state.agent_id.as_ref() else {
         return Err(permissions_types::PermissionError::NotPermitted(
             "derive-scope is only available to an agent".to_string(),
@@ -795,7 +791,7 @@ async fn resolve_scope_derivation_parents<Ctx: WorkerCtx>(
 
         let resolved = resolve_permission_card(ctx, handle).await?;
         parents.push(persistent_scope_parent_from_wallet(
-            &wallet, &resolved, &context,
+            wallet, &resolved, &context,
         )?);
     }
 
@@ -1052,25 +1048,6 @@ fn ensure_card_permission<Ctx: WorkerCtx>(
         verb,
         resource,
     )
-}
-
-async fn current_authorization_surface<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-) -> Result<EffectiveSurface, WorkerExecutorError> {
-    let wallet = ctx.active_agent_wallet_cards_snapshot().await?;
-    let Some(agent_id) = ctx.state.agent_id.as_ref() else {
-        return Ok(EffectiveSurface::default());
-    };
-    let context = super::agent_monomorphization_context(
-        &ctx.state.component_metadata,
-        &ctx.owned_agent_id,
-        agent_id,
-    );
-    Ok(agent_effective_surface_from_wallet_and_scope(
-        &context,
-        wallet.iter(),
-        ctx.state.invocation_scope_card.as_ref(),
-    ))
 }
 
 fn ensure_card_permission_in_surface(
@@ -1598,31 +1575,15 @@ async fn complete_source_card_transfer<Ctx: WorkerCtx>(
         agent_id: target_agent_id.clone(),
     });
 
-    if !started {
-        if remove_source_membership
-            && super::remove_wallet_card(
-                &mut ctx.state.agent_wallet_cards,
-                &mut ctx.state.wallet_generation,
-                source_card_id,
-            )?
-        {
-            ctx.rederive_agent_effective_surface_from_wallet();
-            ctx.refresh_card_interest().await;
-        }
-
-        ctx.public_state
-            .worker()
-            .add_and_commit_oplog(OplogEntry::card_transfer_started(
-                transfer_id,
-                source_card_id,
-                Some(CardHolder::Agent(AgentCardHolder {
-                    agent_id: ctx.owned_agent_id.agent_id.clone(),
-                })),
-                target_holder.clone(),
-                Some(ctx.state.wallet_generation),
-            ))
-            .await;
-    }
+    ensure_source_card_transfer_started(
+        ctx,
+        transfer_id,
+        source_card_id,
+        &target_holder,
+        started,
+        remove_source_membership,
+    )
+    .await?;
 
     ctx.worker_proxy()
         .deliver_card_transfer(
@@ -1646,6 +1607,45 @@ async fn complete_source_card_transfer<Ctx: WorkerCtx>(
             source_card_id,
             installed_card.card_id(),
             target_holder,
+        ))
+        .await;
+
+    Ok(())
+}
+
+async fn ensure_source_card_transfer_started<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    transfer_id: Uuid,
+    source_card_id: CardId,
+    target_holder: &CardHolder,
+    started: bool,
+    remove_source_membership: bool,
+) -> Result<(), WorkerExecutorError> {
+    if started {
+        return Ok(());
+    }
+
+    if remove_source_membership
+        && super::remove_wallet_card(
+            &mut ctx.state.agent_wallet_cards,
+            &mut ctx.state.wallet_generation,
+            source_card_id,
+        )?
+    {
+        ctx.rederive_agent_effective_surface_from_wallet();
+        ctx.refresh_card_interest().await;
+    }
+
+    ctx.public_state
+        .worker()
+        .add_and_commit_oplog(OplogEntry::card_transfer_started(
+            transfer_id,
+            source_card_id,
+            Some(CardHolder::Agent(AgentCardHolder {
+                agent_id: ctx.owned_agent_id.agent_id.clone(),
+            })),
+            target_holder.clone(),
+            Some(ctx.state.wallet_generation),
         ))
         .await;
 
@@ -1734,14 +1734,15 @@ struct PendingSourceTransferProgress {
     confirmed: bool,
 }
 
-async fn pending_source_transfer_progress<Ctx: WorkerCtx>(
-    ctx: &DurableWorkerCtx<Ctx>,
+async fn pending_source_transfer_progress(
+    oplog: &dyn Oplog,
+    source_agent_id: &AgentId,
     pending: &PendingCardEventRef,
     transfer: &QueuedCardEventTransfer,
     installed_card: &StoredCard,
     target_agent_id: &AgentId,
 ) -> Result<PendingSourceTransferProgress, WorkerExecutorError> {
-    let current_index = ctx.state.oplog.current_oplog_index().await;
+    let current_index = oplog.current_oplog_index().await;
     if current_index < pending.oplog_index {
         return Err(transfer_progress_mismatch(format!(
             "pending transfer index {} is beyond current oplog index {current_index}",
@@ -1750,7 +1751,7 @@ async fn pending_source_transfer_progress<Ctx: WorkerCtx>(
     }
 
     let source_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: ctx.owned_agent_id.agent_id.clone(),
+        agent_id: source_agent_id.clone(),
     });
     let target_holder = CardHolder::Agent(AgentCardHolder {
         agent_id: target_agent_id.clone(),
@@ -1762,7 +1763,7 @@ async fn pending_source_transfer_progress<Ctx: WorkerCtx>(
     while next_index <= current_index {
         let remaining = current_index.as_u64() - next_index.as_u64() + 1;
         let count = remaining.min(1024);
-        let entries = ctx.state.oplog.read_many(next_index, count).await;
+        let entries = oplog.read_many(next_index, count).await;
 
         for entry in entries.values() {
             match entry {
@@ -1854,11 +1855,43 @@ fn pending_transfer_target_agent_id(
     }
 }
 
-async fn retry_pending_source_card_transfer<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
+#[derive(Clone)]
+pub(super) struct PendingSourceCardTransferRetry {
+    pub(super) transfer_id: Uuid,
+    pub(super) source_card_id: CardId,
+    pub(super) installed_card: StoredCard,
+    pub(super) target_agent_id: AgentId,
+    pub(super) started: bool,
+    pub(super) remove_source_membership: bool,
+    pending: PendingCardEventRef,
+    transfer: QueuedCardEventTransfer,
+}
+
+impl PendingSourceCardTransferRetry {
+    pub(super) async fn is_confirmed(
+        &self,
+        oplog: &dyn Oplog,
+        source_agent_id: &AgentId,
+    ) -> Result<bool, WorkerExecutorError> {
+        Ok(pending_source_transfer_progress(
+            oplog,
+            source_agent_id,
+            &self.pending,
+            &self.transfer,
+            &self.installed_card,
+            &self.target_agent_id,
+        )
+        .await?
+        .confirmed)
+    }
+}
+
+pub(super) async fn prepare_pending_source_card_transfer_retry(
+    oplog: &dyn Oplog,
+    source_agent_id: &AgentId,
     pending: &PendingCardEventRef,
     transfer: &QueuedCardEventTransfer,
-) -> Result<(), WorkerExecutorError> {
+) -> Result<Option<PendingSourceCardTransferRetry>, WorkerExecutorError> {
     let installed_card = transfer.card.as_ref().ok_or_else(|| {
         transfer_progress_mismatch(format!(
             "pending transfer {} is missing its installed card payload",
@@ -1867,11 +1900,17 @@ async fn retry_pending_source_card_transfer<Ctx: WorkerCtx>(
     })?;
     let target_agent_id =
         pending_transfer_target_agent_id(transfer.transfer_id, &transfer.target_holder)?;
-    let progress =
-        pending_source_transfer_progress(ctx, pending, transfer, installed_card, target_agent_id)
-            .await?;
+    let progress = pending_source_transfer_progress(
+        oplog,
+        source_agent_id,
+        pending,
+        transfer,
+        installed_card,
+        target_agent_id,
+    )
+    .await?;
     if progress.confirmed {
-        return Ok(());
+        return Ok(None);
     }
 
     let remove_source_membership = if transfer.card_id == installed_card.card_id() {
@@ -1898,40 +1937,101 @@ async fn retry_pending_source_card_transfer<Ctx: WorkerCtx>(
         false
     };
 
-    complete_source_card_transfer(
-        ctx,
-        transfer.transfer_id,
-        transfer.card_id,
-        installed_card,
-        target_agent_id,
-        progress.started,
+    Ok(Some(PendingSourceCardTransferRetry {
+        transfer_id: transfer.transfer_id,
+        source_card_id: transfer.card_id,
+        installed_card: installed_card.clone(),
+        target_agent_id: target_agent_id.clone(),
+        started: progress.started,
         remove_source_membership,
-    )
-    .await
+        pending: pending.clone(),
+        transfer: transfer.clone(),
+    }))
 }
 
-pub(super) async fn retry_pending_source_card_transfers<Ctx: WorkerCtx>(
+pub(super) async fn prepare_pending_source_card_transfers<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-) -> Result<(), WorkerExecutorError> {
+) -> Result<Vec<PendingSourceCardTransferRetry>, WorkerExecutorError> {
     if !ctx.state.is_live() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let pending_events = ctx.pending_card_events_at_boundary().await?;
-    let mut first_error = None;
+    let mut retries = Vec::new();
     for pending in pending_events {
-        if let QueuedCardEvent::TransferStarted(transfer) = &pending.event
-            && let Err(error) = retry_pending_source_card_transfer(ctx, &pending, transfer).await
-            && first_error.is_none()
-        {
-            first_error = Some(error);
+        if let QueuedCardEvent::TransferStarted(transfer) = &pending.event {
+            let Some(mut retry) = prepare_pending_source_card_transfer_retry(
+                ctx.state.oplog.as_ref(),
+                &ctx.owned_agent_id.agent_id,
+                &pending,
+                transfer,
+            )
+            .await?
+            else {
+                continue;
+            };
+            let target_holder = CardHolder::Agent(AgentCardHolder {
+                agent_id: retry.target_agent_id.clone(),
+            });
+            ensure_source_card_transfer_started(
+                ctx,
+                retry.transfer_id,
+                retry.source_card_id,
+                &target_holder,
+                retry.started,
+                retry.remove_source_membership,
+            )
+            .await?;
+            retry.started = true;
+            retries.push(retry);
         }
     }
 
-    match first_error {
-        Some(error) => Err(error),
-        None => Ok(()),
+    Ok(retries)
+}
+
+pub(super) async fn complete_pending_source_card_transfers<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    retries: Vec<PendingSourceCardTransferRetry>,
+) -> Result<(), WorkerExecutorError> {
+    for retry in retries {
+        ctx.worker_proxy()
+            .deliver_card_transfer(
+                &retry.target_agent_id,
+                ctx.owned_agent_id.environment_id,
+                retry.transfer_id,
+                retry.source_card_id,
+                &retry.installed_card,
+            )
+            .await
+            .map_err(|error| {
+                WorkerExecutorError::runtime(format!(
+                    "permission-card transfer delivery failed: {error}"
+                ))
+            })?;
+
+        let boundary_lock = ctx.state.card_event_boundary_lock.clone();
+        let _boundary_guard = boundary_lock.lock().await;
+        if retry
+            .is_confirmed(ctx.state.oplog.as_ref(), &ctx.owned_agent_id.agent_id)
+            .await?
+        {
+            continue;
+        }
+        ctx.public_state
+            .worker()
+            .add_and_commit_oplog(OplogEntry::card_transfer_confirmed(
+                retry.transfer_id,
+                retry.source_card_id,
+                retry.installed_card.card_id(),
+                CardHolder::Agent(AgentCardHolder {
+                    agent_id: retry.target_agent_id,
+                }),
+            ))
+            .await;
     }
+
+    Ok(())
 }
 
 fn ensure_revoke_authority(
@@ -1975,7 +2075,7 @@ async fn permission_card_revoke_response<Ctx: WorkerCtx>(
             card.card_id()
         )));
     }
-    let active_wallet = ctx.active_agent_wallet_cards_snapshot().await?;
+    let active_wallet = ctx.agent_wallet_cards_snapshot();
     let ancestor_ids = ctx
         .state
         .card_service
@@ -2219,15 +2319,10 @@ impl<Ctx: WorkerCtx> permissions_inspect::Host for DurableWorkerCtx<Ctx> {
     {
         DurabilityHost::observe_function_call(self, "golem::permissions::inspect", "inspect-card");
         let result = async {
-            let surface = current_authorization_surface(self)
+            self.synchronize_agent_wallet_at_boundary()
                 .await
                 .map_err(worker_error_to_permission_error)?;
-            ensure_card_permission_in_surface(
-                &surface,
-                &self.state.created_by_email,
-                CardVerb::Inspect,
-                CardResourcePattern::Any,
-            )?;
+            ensure_card_permission(self, CardVerb::Inspect, CardResourcePattern::Any)?;
             let card = resolve_permission_card_handle(self, &c).await?;
             card_view(&card)
         }
@@ -2250,15 +2345,10 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         DurabilityHost::observe_function_call(self, "golem::permissions::derive", "derive");
 
         async {
-            let surface = current_authorization_surface(self)
+            self.synchronize_agent_wallet_at_boundary()
                 .await
                 .map_err(worker_error_to_permission_error)?;
-            ensure_card_permission_in_surface(
-                &surface,
-                &self.state.created_by_email,
-                CardVerb::Derive,
-                CardResourcePattern::Any,
-            )?;
+            ensure_card_permission(self, CardVerb::Derive, CardResourcePattern::Any)?;
             let parent = resolve_permission_card_handle(self, &parent)
                 .await?
                 .into_persistent("derive")?;
@@ -2300,22 +2390,17 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         );
 
         async {
-            let surface = current_authorization_surface(self)
+            self.synchronize_agent_wallet_at_boundary()
                 .await
                 .map_err(worker_error_to_permission_error)?;
-            ensure_card_permission_in_surface(
-                &surface,
-                &self.state.created_by_email,
-                CardVerb::Derive,
-                CardResourcePattern::Any,
-            )?;
+            ensure_card_permission(self, CardVerb::Derive, CardResourcePattern::Any)?;
             let grants = parse_derived_grant_sets(
                 &lower_positive,
                 &lower_negative,
                 &upper_positive,
                 &upper_negative,
             )?;
-            let wallet = self.active_agent_wallet_cards_snapshot().await?;
+            let wallet = self.agent_wallet_cards_snapshot();
             let Some(agent_id) = self.state.agent_id.as_ref() else {
                 return Ok(Err(permissions_types::PermissionError::NotPermitted(
                     "derive-from-wallet is only available to an agent".to_string(),
@@ -2347,21 +2432,18 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         DurabilityHost::observe_function_call(self, "golem::permissions::derive", "derive-scope");
 
         let result = async {
-            let surface = current_authorization_surface(self)
+            self.synchronize_agent_wallet_at_boundary()
                 .await
                 .map_err(worker_error_to_permission_error)?;
-            ensure_card_permission_in_surface(
-                &surface,
-                &self.state.created_by_email,
-                CardVerb::Derive,
-                CardResourcePattern::Any,
-            )?;
+            ensure_card_permission(self, CardVerb::Derive, CardResourcePattern::Any)?;
+            let wallet = self.agent_wallet_cards_snapshot();
             let invocation_key = self.state.get_current_idempotency_key().ok_or_else(|| {
                 permissions_types::PermissionError::NotPermitted(
                     "derive-scope requires an active invocation".to_string(),
                 )
             })?;
-            let parents = resolve_scope_derivation_parents(self, &parents, &invocation_key).await?;
+            let parents =
+                resolve_scope_derivation_parents(self, &wallet, &parents, &invocation_key).await?;
             let grants = parse_derived_grant_sets(
                 &lower_positive,
                 &lower_negative,
@@ -2461,6 +2543,9 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<(), permissions_types::PermissionError>> {
         DurabilityHost::observe_function_call(self, "golem::permissions::wallet", "install-card");
         let result: anyhow::Result<Result<(), permissions_types::PermissionError>> = async {
+            self.synchronize_agent_wallet_at_boundary()
+                .await
+                .map_err(worker_error_to_permission_error)?;
             let target = match require_agent_install_target(target) {
                 Ok(target) => target,
                 Err(error) => return Ok(Err(error)),
@@ -2477,11 +2562,8 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                 Err(error) => return Ok(Err(error)),
             };
             let target_recipient = agent_recipient_pattern(&target.context);
-            let authorization_surface = current_authorization_surface(self)
-                .await
-                .map_err(worker_error_to_permission_error)?;
             if let Err(error) = ensure_install_permission_in_surface(
-                &authorization_surface,
+                &self.state.agent_effective_surface,
                 &self.state.created_by_email,
                 source_card.card_id(),
                 &target_recipient,

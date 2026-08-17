@@ -1249,6 +1249,127 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
 
 #[test]
 #[tracing::instrument]
+#[timeout("4m")]
+async fn pending_self_card_transfer_recovery_does_not_deadlock(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::base_model::oplog::{PublicQueuedCardEvent, QueuedCardEvent};
+    use golem_common::model::card::{AgentCardHolder, CardHolder};
+    use golem_common::model::oplog::{OplogEntry, PublicOplogEntry};
+
+    let recorded_transfers = Arc::new(Mutex::new(Vec::new()));
+    let local_delivery = Arc::new(Mutex::new(None));
+    let overrides = TestExecutorOverrides {
+        wrap_worker_proxy: Some(Arc::new({
+            let recorded_transfers = recorded_transfers.clone();
+            let local_delivery = local_delivery.clone();
+            move |inner| {
+                Arc::new(RecordingWorkerProxy {
+                    inner,
+                    transfers: recorded_transfers.clone(),
+                    forward_transfers: true,
+                    lost_response_transfer_ids: Arc::new(Mutex::new(HashSet::new())),
+                    local_delivery: Some(local_delivery.clone()),
+                })
+            }
+        })),
+        ..Default::default()
+    };
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    connect_local_card_transfer_delivery(&local_delivery, &executor);
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let source_agent_id = executor
+        .start_agent(
+            &component.id,
+            agent_id!(
+                "Counter",
+                format!("pending-self-transfer-{}", uuid::Uuid::new_v4())
+            ),
+        )
+        .await?;
+    let _ = get_agent_wallet_cards(&executor, &source_agent_id).await?;
+
+    let transfer_id = uuid::Uuid::new_v4();
+    let card = registry_test_card();
+    let self_holder = CardHolder::Agent(AgentCardHolder {
+        agent_id: source_agent_id.clone(),
+    });
+    executor
+        .commit_oplog_entry_bypassing_worker_status(
+            &source_agent_id,
+            OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
+                transfer_id,
+                card.card_id(),
+                card.clone(),
+                self_holder,
+            )),
+        )
+        .await?;
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    connect_local_card_transfer_delivery(&local_delivery, &executor);
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        get_agent_wallet_cards(&executor, &source_agent_id),
+    )
+    .await
+    .map_err(|_| anyhow!("pending self-transfer recovery deadlocked"))??;
+
+    assert_eq!(recorded_transfers.lock().unwrap().len(), 1);
+    let entries = executor
+        .get_oplog(&source_agent_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardEventQueued(params)
+                    if matches!(
+                        &params.event,
+                        PublicQueuedCardEvent::TransferReceived(receipt)
+                            if receipt.transfer_id == transfer_id
+                    )
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardTransferred(transfer)
+                    if transfer.transfer_id == transfer_id
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CardTransferConfirmed(transfer)
+                    if transfer.transfer_id == transfer_id
+            ))
+            .count(),
+        1
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 #[timeout("8m")]
 async fn lost_card_transfer_response_converges_after_source_and_target_restart(
     last_unique_id: &LastUniqueId,

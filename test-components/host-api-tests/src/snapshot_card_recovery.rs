@@ -118,6 +118,12 @@ pub trait ScopeCardAgent {
         release: PromiseId,
     ) -> (bool, bool, CardId);
 
+    async fn invoke_and_await_repeated_scope_inspection(
+        &self,
+        target: String,
+        repetitions: u32,
+    ) -> bool;
+
     fn invoke_scope_is_denied(&self, target: String) -> bool;
 
     fn persistent_scope_is_denied(&self, target: String) -> bool;
@@ -129,6 +135,8 @@ pub trait ScopeCardAgent {
     fn inspect_scope(&self, scope_card_id: CardId, root_card_id: CardId) -> (bool, bool, bool);
 
     fn create_release_promise(&self) -> PromiseId;
+
+    async fn await_release(&self, release: PromiseId) -> bool;
 
     async fn inspect_scope_after_promise(
         &self,
@@ -150,6 +158,16 @@ pub trait ScopeCardAgent {
         target_agent_id: String,
         release: PromiseId,
     ) -> CardId;
+
+    async fn derive_before_promise(&self, release: PromiseId) -> CardId;
+
+    fn derive_from_wallet_is_denied(&self) -> bool;
+
+    fn wallet_card_count(&self) -> u32;
+
+    fn authorize_repeatedly(&self, repetitions: u32) -> bool;
+
+    fn inspect_repeatedly(&self, repetitions: u32) -> bool;
 
     fn revoke_card_by_id(&self, card_id: CardId) -> u32;
 
@@ -254,6 +272,28 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         (before, after, scope_card_id)
     }
 
+    async fn invoke_and_await_repeated_scope_inspection(
+        &self,
+        target: String,
+        repetitions: u32,
+    ) -> bool {
+        let scope_card = derive_scope_card();
+        let invocation = scope_card_rpc(target)
+            .invoke_and_await(
+                "inspect_repeatedly",
+                encode_parameters(vec![repetitions.to_value()]),
+                Some(&scope_card),
+            )
+            .expect("repeated scope-card inspection failed");
+        let value = decode_schema_value(
+            invocation
+                .result
+                .expect("repeated scope-card inspection result is missing"),
+        )
+        .expect("failed to decode repeated scope-card inspection");
+        bool::from_value(&value).expect("invalid repeated scope-card inspection result")
+    }
+
     fn invoke_scope_is_denied(&self, target: String) -> bool {
         let scope_card = derive_scope_card();
         matches!(
@@ -312,6 +352,11 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         create_promise()
     }
 
+    async fn await_release(&self, release: PromiseId) -> bool {
+        await_promise(&release).await;
+        true
+    }
+
     async fn inspect_scope_after_promise(
         &self,
         scope_card_id: CardId,
@@ -353,6 +398,43 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         wallet::install_card(card, &agent_holder(component_id, target_agent_id))
             .expect("failed to install replayed card");
         id
+    }
+
+    async fn derive_before_promise(&self, release: PromiseId) -> CardId {
+        let card = derive_persistent_card_from_wallet();
+        let id = card_id(&card);
+        await_promise(&release).await;
+        id
+    }
+
+    fn derive_from_wallet_is_denied(&self) -> bool {
+        let grant = types::PatternGrant {
+            class: "card".to_string(),
+            owner: "*".to_string(),
+            recipient: "*".to_string(),
+            verb: "inspect".to_string(),
+            resource_id: "*".to_string(),
+        };
+        derive::derive_from_wallet(&[grant], &[], &[], &[], None).is_err()
+    }
+
+    fn wallet_card_count(&self) -> u32 {
+        wallet::self_wallet().len() as u32
+    }
+
+    fn authorize_repeatedly(&self, repetitions: u32) -> bool {
+        let parent = parent_card();
+        let grant = retained_inspect_grant(&parent);
+        (0..repetitions).all(|_| {
+            inspect::inspect_card(&parent).is_ok()
+                && derive::derive_from_wallet(std::slice::from_ref(&grant), &[], &[], &[], None)
+                    .is_ok()
+        })
+    }
+
+    fn inspect_repeatedly(&self, repetitions: u32) -> bool {
+        let parent = parent_card();
+        (0..repetitions).all(|_| inspect::inspect_card(&parent).is_ok())
     }
 
     fn revoke_card_by_id(&self, card_id: CardId) -> u32 {

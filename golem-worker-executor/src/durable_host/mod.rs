@@ -845,6 +845,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .expect("worker must remain alive while creating its context");
         let retained_memory_grant = worker.linear_memory_grant();
         let canonical_startup_bytes = worker.startup_linear_memory_bytes();
+        let card_event_boundary_lock = worker.card_event_boundary_lock();
         let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
         let linear_memory = LinearMemoryTracker::new(
             canonical_startup_bytes,
@@ -903,6 +904,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             per_invocation_http_call_limit,
             per_invocation_rpc_call_limit,
             resource_limits.clone(),
+            card_event_boundary_lock,
         )
         .await?;
         if state.is_live() {
@@ -1111,7 +1113,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) async fn active_agent_wallet_cards_snapshot(
         &mut self,
     ) -> Result<Vec<StoredCard>, WorkerExecutorError> {
-        self.process_pending_replay_events().await?;
+        let _boundary_guard = self.lock_synchronized_card_event_boundary().await?;
+        if self.state.is_replay() {
+            return Ok(self.agent_wallet_cards_snapshot());
+        }
+
         self.public_state.worker().reattach_worker_status().await;
         self.check_post_replay_wallet_liveness().await?;
         self.drain_card_events_at_boundary().await?;
@@ -1145,6 +1151,54 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .into_iter()
             .filter(|card| matches!(card_states.get(&card.card_id()), Some(CardState::Live(_))))
             .collect())
+    }
+
+    /// Synchronizes the invocation-pinned wallet at the authorization linearization point.
+    /// Replay applies only recorded events; live execution also drains queued registry events.
+    pub(crate) async fn synchronize_agent_wallet_at_boundary(
+        &mut self,
+    ) -> Result<(), WorkerExecutorError> {
+        let _boundary_guard = self.lock_synchronized_card_event_boundary().await?;
+        Ok(())
+    }
+
+    async fn lock_synchronized_card_event_boundary(
+        &mut self,
+    ) -> Result<tokio::sync::OwnedMutexGuard<()>, WorkerExecutorError> {
+        loop {
+            let boundary_guard = self
+                .state
+                .card_event_boundary_lock
+                .clone()
+                .lock_owned()
+                .await;
+            self.process_pending_replay_events_locked().await?;
+            self.drain_card_events_at_boundary().await?;
+            let retries = if self.has_pending_source_card_transfers_at_boundary() {
+                permissions::prepare_pending_source_card_transfers(self).await?
+            } else {
+                Vec::new()
+            };
+            if retries.is_empty() {
+                return Ok(boundary_guard);
+            }
+            // Delivery acquires the target worker's boundary lock. Release the source lock to
+            // avoid self-transfer and opposite-direction transfer deadlocks, then loop so no
+            // caller can cross this boundary until the source confirmation is visible.
+            drop(boundary_guard);
+            permissions::complete_pending_source_card_transfers(self, retries).await?;
+        }
+    }
+
+    fn has_pending_source_card_transfers_at_boundary(&self) -> bool {
+        self.state
+            .card_event_boundary_scan
+            .as_ref()
+            .is_some_and(|scan| {
+                scan.pending
+                    .iter()
+                    .any(|pending| matches!(&pending.event, QueuedCardEvent::TransferStarted(_)))
+            })
     }
 
     fn rederive_agent_effective_surface_from_wallet(&mut self) {
@@ -1184,7 +1238,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await;
     }
 
-    async fn install_invocation_scope_card(&mut self, scope_card: Option<ScopeCard>) {
+    async fn install_invocation_scope_card(
+        &mut self,
+        scope_card: Option<ScopeCard>,
+        root_cards: Vec<StoredCard>,
+    ) {
         let (_, handles) = clear_invocation_scope_state(
             &mut self.state.invocation_scope_card,
             &mut self.state.invocation_scope_handles,
@@ -1195,6 +1253,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .delete(Resource::<PermissionCardHandleRep>::new_own(rep));
         }
         self.state.invocation_scope_card = scope_card;
+        self.state.invocation_scope_root_cards = root_cards
+            .into_iter()
+            .map(|card| (card.card_id(), card))
+            .collect();
         self.rederive_agent_effective_surface_from_wallet();
         self.refresh_card_interest().await;
     }
@@ -1210,6 +1272,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .delete(Resource::<PermissionCardHandleRep>::new_own(rep));
         }
         if scope_changed {
+            self.state.invocation_scope_root_cards.clear();
             self.rederive_agent_effective_surface_from_wallet();
         }
         self.refresh_card_interest().await;
@@ -1225,6 +1288,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let _ = self
                 .table()
                 .delete(Resource::<PermissionCardHandleRep>::new_own(rep));
+        }
+        if scope_changed {
+            self.state.invocation_scope_root_cards.clear();
         }
         scope_changed
     }
@@ -1285,34 +1351,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         self.remove_expired_cards().await?;
-        self.revalidate_invocation_scope_roots().await?;
+        self.remove_expired_invocation_scope_roots().await?;
         Ok(())
     }
 
-    async fn revalidate_invocation_scope_roots(&mut self) -> Result<(), WorkerExecutorError> {
-        let Some(scope_card) = self.state.invocation_scope_card.as_ref() else {
-            return Ok(());
-        };
-        let root_card_ids = scope_card.root_card_ids.clone();
-        let states = self
-            .state
-            .card_service
-            .check_cards(root_card_ids.clone())
-            .await?;
-        let mut revoked_root_ids = Vec::new();
-        for card_id in root_card_ids {
-            match states.get(&card_id) {
-                Some(CardState::Live(card)) if card.card_id() == card_id => {}
-                Some(CardState::Revoked) => revoked_root_ids.push(card_id),
-                Some(CardState::Live(_)) | Some(CardState::Unknown) | None => {
-                    return Err(WorkerExecutorError::runtime(format!(
-                        "scope-card root {card_id} could not be re-validated at the durable boundary"
-                    )));
-                }
-            }
-        }
-        if !revoked_root_ids.is_empty() {
-            self.apply_card_revoked_cascade(&revoked_root_ids, true)
+    async fn remove_expired_invocation_scope_roots(&mut self) -> Result<(), WorkerExecutorError> {
+        let expired_root_ids =
+            expired_wallet_card_ids_at(&self.state.invocation_scope_root_cards, Utc::now());
+        if !expired_root_ids.is_empty() {
+            self.apply_card_revoked_cascade(&expired_root_ids, true)
                 .await?;
         }
         Ok(())
@@ -3613,6 +3660,24 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
+        loop {
+            let boundary_guard = self
+                .state
+                .card_event_boundary_lock
+                .clone()
+                .lock_owned()
+                .await;
+            self.process_pending_replay_events_locked().await?;
+            let retries = permissions::prepare_pending_source_card_transfers(self).await?;
+            if retries.is_empty() {
+                return Ok(());
+            }
+            drop(boundary_guard);
+            permissions::complete_pending_source_card_transfers(self, retries).await?;
+        }
+    }
+
+    async fn process_pending_replay_events_locked(&mut self) -> Result<(), WorkerExecutorError> {
         let replay_events = self.state.replay_state.take_new_replay_events();
         if !replay_events.is_empty() {
             debug!("Applying pending side effects accumulated during replay");
@@ -3825,7 +3890,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     }
 
                     self.check_post_replay_wallet_liveness().await?;
-                    permissions::retry_pending_source_card_transfers(self).await?;
                 }
             }
         }
@@ -3834,28 +3898,31 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     async fn check_post_replay_wallet_liveness(&mut self) -> Result<(), WorkerExecutorError> {
-        let wallet_card_ids = self
-            .state
-            .agent_wallet_cards
-            .keys()
-            .copied()
-            .collect::<Vec<_>>();
+        let interested_card_ids = self.interested_card_ids();
         self.refresh_card_interest().await;
 
-        if wallet_card_ids.is_empty() {
+        if interested_card_ids.is_empty() {
             return Ok(());
         }
 
-        let card_states = self.state.card_service.check_cards(wallet_card_ids).await?;
+        let card_states = self
+            .state
+            .card_service
+            .check_cards(interested_card_ids)
+            .await?;
+        self.state.invocation_scope_root_cards = live_scope_root_cards_from_states(
+            self.state.invocation_scope_card.as_ref(),
+            &card_states,
+        )?;
 
-        for (card_id, state) in card_states {
-            if state == CardState::Revoked {
-                self.public_state
-                    .worker()
-                    .queue_card_revocation(card_id)
-                    .await;
-            }
-        }
+        let revoked_card_ids = card_states
+            .into_iter()
+            .filter_map(|(card_id, state)| (state == CardState::Revoked).then_some(card_id))
+            .collect::<Vec<_>>();
+        self.public_state
+            .worker()
+            .queue_card_revocations_locked(&revoked_card_ids)
+            .await;
 
         Ok(())
     }
@@ -3916,19 +3983,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let initial_card =
                 agent_initial_card_from_component_metadata(&new_metadata, &agent_id)?;
             let initial_wallet_cards = BTreeMap::from([(initial_card.card_id(), initial_card)]);
-            let context =
-                agent_monomorphization_context(&new_metadata, &self.owned_agent_id, &agent_id);
-            let agent_effective_surface =
-                golem_common::model::card::agent_effective_surface_from_wallet(
-                    &context,
-                    initial_wallet_cards.values(),
-                );
-
-            Some((
-                updated_agent_config,
-                agent_effective_surface,
-                initial_wallet_cards,
-            ))
+            Some((updated_agent_config, initial_wallet_cards))
         } else {
             None
         };
@@ -3951,9 +4006,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             *read_only_paths = compute_read_only_paths(&current_files);
         }
 
-        if let Some((updated_agent_config, agent_effective_surface, initial_wallet_cards)) =
-            updated_agent_state
-        {
+        self.state.component_metadata = new_metadata;
+
+        if let Some((updated_agent_config, initial_wallet_cards)) = updated_agent_state {
             self.state.agent_config = updated_agent_config;
             self.state.cached_agent_config_retry_policies = None;
             replace_wallet_cards(
@@ -3961,10 +4016,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 &mut self.state.wallet_generation,
                 initial_wallet_cards,
             )?;
-            self.state.agent_effective_surface = agent_effective_surface;
+            self.rederive_agent_effective_surface_from_wallet();
         };
-
-        self.state.component_metadata = new_metadata;
 
         Ok(())
     }
@@ -4111,14 +4164,17 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 AgentInvocation::AgentMethod { scope_card, .. } => scope_card.clone(),
                 _ => None,
             };
-            if let Some(scope_card) = &scope_card {
+            let scope_root_cards = if let Some(scope_card) = &scope_card {
                 crate::services::card::validate_scope_card(
                     self.state.card_service.as_ref(),
                     scope_card,
                 )
-                .await?;
-            }
-            self.install_invocation_scope_card(scope_card.clone()).await;
+                .await?
+            } else {
+                Vec::new()
+            };
+            self.install_invocation_scope_card(scope_card.clone(), scope_root_cards)
+                .await;
 
             match &mut invocation {
                 AgentInvocation::AgentInitialization {
@@ -4879,7 +4935,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
                         let mut store_context = store.as_context_mut();
                         let durable_ctx = store_context.data_mut().durable_ctx_mut();
-                        durable_ctx.install_invocation_scope_card(scope_card).await;
+                        durable_ctx
+                            .install_invocation_scope_card(scope_card, Vec::new())
+                            .await;
                         if let Err(error) = durable_ctx.process_pending_replay_events().await {
                             durable_ctx.clear_invocation_scope_card().await;
                             break Err(error);
@@ -5295,6 +5353,31 @@ fn remove_invocation_scope_for_revoked_roots(
         scope_handles.remove(rep);
     }
     (affected, handles)
+}
+
+fn live_scope_root_cards_from_states(
+    scope_card: Option<&ScopeCard>,
+    card_states: &HashMap<CardId, CardState>,
+) -> Result<BTreeMap<CardId, StoredCard>, WorkerExecutorError> {
+    let Some(scope_card) = scope_card else {
+        return Ok(BTreeMap::new());
+    };
+
+    let mut root_cards = BTreeMap::new();
+    for card_id in &scope_card.root_card_ids {
+        match card_states.get(card_id) {
+            Some(CardState::Live(card)) if card.card_id() == *card_id => {
+                root_cards.insert(*card_id, card.as_ref().clone());
+            }
+            Some(CardState::Revoked) => {}
+            Some(CardState::Live(_)) | Some(CardState::Unknown) | None => {
+                return Err(WorkerExecutorError::runtime(format!(
+                    "scope-card root {card_id} could not be re-validated after replay"
+                )));
+            }
+        }
+    }
+    Ok(root_cards)
 }
 
 fn transfer_started_removes_source_membership(
@@ -8120,10 +8203,12 @@ struct PrivateDurableWorkerState {
     agent_effective_surface: golem_common::model::card::EffectiveSurface,
     agent_wallet_cards: BTreeMap<CardId, StoredCard>,
     invocation_scope_card: Option<ScopeCard>,
+    invocation_scope_root_cards: BTreeMap<CardId, StoredCard>,
     invocation_scope_handles: HashMap<u32, Vec<CardId>>,
     wallet_id_hash: [u8; 32],
     wallet_generation: u64,
     card_event_boundary_scan: Option<CardEventBoundaryScan>,
+    card_event_boundary_lock: Arc<tokio::sync::Mutex<()>>,
 
     /// Running total of storage bytes acquired from the executor semaphore pool
     /// by this worker since it last started. Incremented on every successful
@@ -8359,6 +8444,7 @@ impl PrivateDurableWorkerState {
         per_invocation_http_call_limit: u64,
         per_invocation_rpc_call_limit: u64,
         resource_limit_entry: Arc<AtomicResourceEntry>,
+        card_event_boundary_lock: Arc<tokio::sync::Mutex<()>>,
     ) -> Result<Self, WorkerExecutorError> {
         let deleted_regions = if let Some(snapshot_idx) = last_snapshot_index {
             let mut regions = deleted_regions;
@@ -8478,10 +8564,12 @@ impl PrivateDurableWorkerState {
             agent_effective_surface,
             agent_wallet_cards,
             invocation_scope_card: None,
+            invocation_scope_root_cards: BTreeMap::new(),
             invocation_scope_handles: HashMap::new(),
             wallet_id_hash,
             wallet_generation,
             card_event_boundary_scan: None,
+            card_event_boundary_lock,
             current_filesystem_storage_usage,
             replay_state,
             invocation_context,

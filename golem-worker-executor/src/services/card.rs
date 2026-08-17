@@ -100,7 +100,7 @@ pub enum CardRevokeResult {
 pub async fn validate_scope_card(
     card_service: &dyn CardService,
     scope_card: &ScopeCard,
-) -> Result<(), WorkerExecutorError> {
+) -> Result<Vec<StoredCard>, WorkerExecutorError> {
     if scope_card.scope_card_id.0.is_nil() {
         return Err(WorkerExecutorError::permission_denied(
             "not-permitted: scope-card ID must not be nil",
@@ -124,9 +124,12 @@ pub async fn validate_scope_card(
     let states = card_service
         .check_cards(scope_card.root_card_ids.clone())
         .await?;
+    let mut root_cards = Vec::with_capacity(scope_card.root_card_ids.len());
     for card_id in &scope_card.root_card_ids {
         match states.get(card_id) {
-            Some(CardState::Live(card)) if card.card_id() == *card_id => {}
+            Some(CardState::Live(card)) if card.card_id() == *card_id => {
+                root_cards.push(card.as_ref().clone());
+            }
             Some(CardState::Live(_)) => {
                 return Err(WorkerExecutorError::permission_denied(format!(
                     "not-permitted: scope-card root {card_id} does not match the registry payload"
@@ -145,7 +148,7 @@ pub async fn validate_scope_card(
         }
     }
 
-    Ok(())
+    Ok(root_cards)
 }
 
 pub struct NoopCardService;

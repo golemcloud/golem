@@ -332,6 +332,8 @@ pub struct Worker<Ctx: WorkerCtx> {
     /// concurrency invariants.
     state_actor: state_actor::WorkerStateActor<Ctx>,
     card_interest_index: Arc<CardInterestIndex>,
+    /// Serializes permission-card event appends with the durable boundaries that consume them.
+    card_event_boundary_lock: Arc<Mutex<()>>,
 
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
     instance: Arc<Mutex<WorkerInstance>>,
@@ -766,6 +768,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_known_status: current_status,
             metrics_status,
             card_interest_index,
+            card_event_boundary_lock: Arc::new(Mutex::new(())),
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
             snapshot_policy,
             state_actor,
@@ -2656,6 +2659,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn queue_card_revocations(&self, card_ids: &[CardId]) -> Vec<OplogIndex> {
+        let boundary_lock = self.card_event_boundary_lock.clone();
+        let _boundary_guard = boundary_lock.lock().await;
+        self.queue_card_revocations_locked(card_ids).await
+    }
+
+    pub(crate) async fn queue_card_revocations_locked(
+        &self,
+        card_ids: &[CardId],
+    ) -> Vec<OplogIndex> {
         let status = self.get_last_known_status().await;
         let pending_revocations = status
             .pending_card_events
@@ -2833,19 +2845,27 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
 
-        self.add_and_commit_oplog_internal(
-            &instance_guard,
-            OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
-                transfer_id,
-                source_card_id,
-                card,
-            )),
-            None,
-        )
-        .await;
+        {
+            let boundary_lock = self.card_event_boundary_lock.clone();
+            let _boundary_guard = boundary_lock.lock().await;
+            self.add_and_commit_oplog_internal(
+                &instance_guard,
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
+                    transfer_id,
+                    source_card_id,
+                    card,
+                )),
+                None,
+            )
+            .await;
+        }
 
         drop(instance_guard);
         Ok(())
+    }
+
+    pub(crate) fn card_event_boundary_lock(&self) -> Arc<Mutex<()>> {
+        self.card_event_boundary_lock.clone()
     }
 
     async fn add_and_commit_oplog_internal(

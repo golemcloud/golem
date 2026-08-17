@@ -1199,8 +1199,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             });
         }
 
-        self.process_pending_replay_events().await?;
-        self.drain_card_events_at_boundary().await?;
+        self.synchronize_agent_wallet_at_boundary().await?;
 
         let oplog_index = self.begin_function(function_type).await?;
         Ok(oplog_index)
