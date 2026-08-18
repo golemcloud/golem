@@ -81,6 +81,8 @@ use crate::chaos::{ScenarioCode, ScenarioConfig};
 use chrono::Utc;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDsl;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -97,6 +99,17 @@ const SETTLE_BEFORE_READBACK: Duration = Duration::from_secs(30);
 /// an unchanged table and prove nothing about the fault.
 const DURING_FAULT_SAMPLE_FRACTION: f64 = 0.6;
 const DURING_FAULT_SAMPLE_CAP: Duration = Duration::from_secs(120);
+
+/// How often the assignment is sampled in the background, for the whole run.
+///
+/// The three phase-boundary samples carry the narrative, but they cannot answer
+/// the question the verdict rests on. A real run had a second executor hold 460
+/// shards for its entire baseline and drop to zero nine seconds before the fault
+/// landed; every labelled sample fell on one side of that transition or the
+/// other, and the artifact showed a cluster that had never changed. A continuous
+/// series makes a transition visible whichever side of it the phase boundaries
+/// happen to land on.
+const ASSIGNMENT_SAMPLE_INTERVAL: Duration = Duration::from_secs(20);
 
 /// Runs S1 end to end.
 pub async fn run(
@@ -149,6 +162,36 @@ pub async fn run(
     let mut fault_target_observed = None;
     let mut inconclusive: Option<String> = None;
 
+    // Sample the assignment continuously for the whole run, alongside the
+    // labelled phase-boundary samples. See ASSIGNMENT_SAMPLE_INTERVAL.
+    let timeline = Arc::new(std::sync::Mutex::new(Vec::<OwnershipSample>::new()));
+    let sampler_stop = Arc::new(AtomicBool::new(false));
+    let sampler = {
+        let timeline = timeline.clone();
+        let stop = sampler_stop.clone();
+        let deps = deps.clone();
+        tokio::spawn(async move {
+            let mut seq = 0u32;
+            while !stop.load(Ordering::Relaxed) {
+                tokio::time::sleep(ASSIGNMENT_SAMPLE_INTERVAL).await;
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                let routing = deps.shard_manager().get_routing_table().await.ok();
+                let sample = OwnershipSample::from_routing(
+                    &format!("t{seq:03}"),
+                    routing.as_ref(),
+                    None,
+                    false,
+                );
+                seq += 1;
+                if let Ok(mut timeline) = timeline.lock() {
+                    timeline.push(sample);
+                }
+            }
+        })
+    };
+
     macro_rules! finish {
         ($reason:expr, $records:expr, $readback:expr, $exactly_once:expr) => {{
             let mut summary = ChaosSummary::build(
@@ -157,7 +200,17 @@ pub async fn run(
                 routing_snapshots.clone(),
                 fault_injected_at,
             )
-            .with_ownership(ownership.clone());
+            .with_ownership({
+                // Labelled samples first, then the continuous series in time
+                // order. The verdict reads the labelled ones by name, so the
+                // extra rows cannot shift what it looks at.
+                let mut all = ownership.clone();
+                if let Ok(timeline) = timeline.lock() {
+                    all.extend(timeline.iter().cloned());
+                }
+                all.sort_by_key(|s| s.taken_at);
+                all
+            });
             if let Some(detail) = inconclusive.clone() {
                 summary.attention.push(detail);
             }
@@ -370,6 +423,8 @@ pub async fn run(
     info!("S1: recovery phase, running for a further {remaining:?}");
     tokio::time::sleep(remaining).await;
 
+    sampler_stop.store(true, Ordering::Relaxed);
+    sampler.abort();
     handle.stop().await;
     if let Some(window) = phases.recovery.as_mut() {
         window.end(Utc::now());
@@ -411,8 +466,17 @@ pub async fn run(
     // cluster stayed consistent. Not a failure — the platform did nothing wrong
     // — but the operator has to be told the run is inconclusive, so it goes in
     // front of them rather than only into the artifact.
-    if let (Some(first), Some(during)) = (ownership.first(), ownership.get(1))
-        && during.assignment_matches(first)
+    let labelled = |at: &str| ownership.iter().find(|s| s.at == at).cloned();
+    if let (Some(first), Some(during)) = (labelled("before-fault"), labelled("during-fault"))
+        && during.assignment_matches(&first)
+        // A transition anywhere in the continuous series means the cluster did
+        // change, even if both labelled samples happened to fall on the same
+        // side of it. Only claim the fault moved nothing when nothing moved at
+        // any point.
+        && timeline
+            .lock()
+            .map(|t| t.iter().all(|s| s.assignment_matches(&first)))
+            .unwrap_or(false)
     {
         inconclusive = Some(format!(
             "the fault moved no shards: assignment was identical before and during it \
