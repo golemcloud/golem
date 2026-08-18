@@ -2274,11 +2274,9 @@ async fn revoke_and_persist_card<Ctx: WorkerCtx>(
     .await?;
     let response = if handle.is_live() {
         let Some(authority) = captured_authority else {
-            return Err(handle
-                .trap(WorkerExecutorError::runtime(
-                    "live permission-card revoke has no captured authority",
-                ))
-                .into());
+            return Err(handle.trap(WorkerExecutorError::runtime(
+                "live permission-card revoke has no captured authority",
+            )));
         };
         complete_permission_card_revoke(handle, ctx, card_handle, card_id, authority).await?
     } else {
