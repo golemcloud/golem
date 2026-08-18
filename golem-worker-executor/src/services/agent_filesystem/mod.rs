@@ -28,21 +28,52 @@ use std::num::NonZeroU32;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, OnceLock, Weak};
 use std::time::Instant;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
+#[allow(
+    dead_code,
+    reason = "mutation classification is exposed for filesystem host adapters"
+)]
+mod failure;
 mod initial_files;
 mod mutation;
+mod postcondition;
 mod quota;
 
 #[cfg(target_os = "linux")]
 mod xfs;
 
+#[allow(
+    unused_imports,
+    reason = "mutation classification is exposed for filesystem host adapters"
+)]
+pub(crate) use failure::{
+    AgentFilesystemInvalidationCallback, AgentFilesystemRetryCallback, MutationDecision,
+    MutationEffect, MutationFailure, MutationOperation, native_write_failure_effect,
+    proven_write_progress_effect,
+};
 pub(crate) use mutation::{
     AgentFilesystemEffectAdmission, AgentFilesystemEffectLease, AgentFilesystemUpdateEffectLease,
-    CoordinatedFileOutputStream,
+    ClassifiedFileOutputStream, FilesystemStreamMode, NativeMutationGuestError, NativeOpenOptions,
+    NativeOpenResult, classified_filesystem_stream_error_code, create_directory, hard_link, open,
+    remove_directory, rename, resize_file, run_blocking_filesystem_mutation, set_descriptor_times,
+    set_path_times, symlink, sync_descriptor, unlink_file, validate_descriptor_times,
+    validate_directory_mutation, validate_open, validate_resize, validate_two_directory_mutation,
+};
+#[allow(
+    unused_imports,
+    reason = "shared probe vocabulary is consumed across host adapters and tests"
+)]
+pub(crate) use postcondition::{
+    MutationPostcondition, ObjectIdentity, PathObjectType, PathState, RequestedTime, SymlinkState,
+    TimesState, create_directory_postcondition, descriptor_state, descriptor_times,
+    link_postcondition, open_postcondition, path_state, path_state_with_follow, path_times,
+    remove_postcondition, rename_postcondition, resize_postcondition, same_object,
+    same_optional_object, state_postcondition, symlink_postcondition, symlink_state,
+    times_postcondition,
 };
 use quota::FilesystemLimitExceededCallback;
 pub(crate) use quota::{
@@ -118,6 +149,27 @@ impl FilesystemStorageError {
             )
         })
     }
+
+    fn is_terminal_failure(&self) -> bool {
+        self.source.as_ref().is_some_and(|source| {
+            matches!(
+                source.kind(),
+                std::io::ErrorKind::InvalidData
+                    | std::io::ErrorKind::PermissionDenied
+                    | std::io::ErrorKind::ReadOnlyFilesystem
+            ) || is_terminal_storage_errno(source)
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn is_terminal_storage_errno(error: &std::io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(errno) if matches!(errno, libc::EIO | libc::ESTALE | libc::ENODEV))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn is_terminal_storage_errno(_error: &std::io::Error) -> bool {
+    false
 }
 
 impl Display for FilesystemStorageError {
@@ -778,6 +830,20 @@ struct AgentFilesystemRuntimeInner {
     filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig,
     applied_limits: std::sync::RwLock<Option<ResolvedAgentFilesystemLimits>>,
     limit_exceeded: std::sync::Mutex<Option<FilesystemLimitExceededCallback>>,
+    #[allow(
+        dead_code,
+        reason = "runtime invalidation is exposed for filesystem host adapters"
+    )]
+    invalidation_notified: AtomicBool,
+    #[allow(
+        dead_code,
+        reason = "runtime invalidation is exposed for filesystem host adapters"
+    )]
+    invalidated: std::sync::Mutex<Option<failure::AgentFilesystemInvalidationCallback>>,
+    retry_permitted: std::sync::Mutex<Option<failure::AgentFilesystemRetryCallback>>,
+    #[cfg(test)]
+    failure_observations:
+        std::sync::RwLock<Option<(Option<AgentFilesystemUsage>, FilesystemCapacity)>>,
 }
 
 enum AgentFilesystemMaterializer {
@@ -809,15 +875,59 @@ impl AgentFilesystemRuntime {
                 filesystem_object_limit_policy,
                 applied_limits: std::sync::RwLock::new(None),
                 limit_exceeded: std::sync::Mutex::new(None),
+                invalidation_notified: AtomicBool::new(false),
+                invalidated: std::sync::Mutex::new(None),
+                retry_permitted: std::sync::Mutex::new(None),
+                #[cfg(test)]
+                failure_observations: std::sync::RwLock::new(None),
             }),
         }
     }
 
     #[cfg(test)]
     pub(crate) fn new_for_test() -> Self {
-        Self::new(
+        Self::new_for_test_with_observations(
+            None,
+            None,
+            FilesystemCapacity {
+                total_bytes: 1,
+                available_bytes: 1,
+                total_filesystem_objects: 1,
+                available_filesystem_objects: 1,
+            },
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test_with_observations(
+        usage: Option<AgentFilesystemUsage>,
+        limits: Option<ResolvedAgentFilesystemLimits>,
+        capacity: FilesystemCapacity,
+    ) -> Self {
+        let runtime = Self::new(
             AgentFilesystemMaterializer::Unmanaged {
                 root: PathBuf::from("<test>"),
+            },
+            FilesystemObjectLimitPolicyConfig::default(),
+        );
+        *runtime
+            .inner
+            .applied_limits
+            .write()
+            .expect("agent filesystem applied-limit lock poisoned") = limits;
+        *runtime
+            .inner
+            .failure_observations
+            .write()
+            .expect("agent filesystem test observation lock poisoned") = Some((usage, capacity));
+        runtime
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test_with_failed_observations() -> Self {
+        Self::new(
+            AgentFilesystemMaterializer::Unmanaged {
+                root: PathBuf::from("<missing-test-filesystem>"),
             },
             FilesystemObjectLimitPolicyConfig::default(),
         )

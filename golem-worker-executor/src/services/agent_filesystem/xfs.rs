@@ -14,11 +14,13 @@
 
 use super::{
     AgentFilesystemUsage, FilesystemCapacity, FilesystemStorageError,
-    ResolvedAgentFilesystemLimits, create_materialization_parent, set_initial_file_permissions,
+    ResolvedAgentFilesystemLimits, create_materialization_parent, quota::capacity_from_values,
+    set_initial_file_permissions,
 };
 use golem_common::model::RetryConfig;
 use rustix::fs::{
-    FlockOperation, Mode, OFlags, flock, fstatfs, fstatvfs, ioctl_ficlone, mkdirat, openat,
+    FlockOperation, Mode, OFlags, StatVfsMountFlags, flock, fstatfs, fstatvfs, ioctl_ficlone,
+    mkdirat, openat,
 };
 use rustix::ioctl::{Getter, Setter, ioctl};
 use std::collections::HashMap;
@@ -192,12 +194,18 @@ impl XfsBackend {
     )]
     pub(super) fn capacity(&self) -> std::io::Result<FilesystemCapacity> {
         let capacity = fstatvfs(&self.root_fd).map_err(errno_to_io)?;
+        if capacity.f_flag.contains(StatVfsMountFlags::RDONLY) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::ReadOnlyFilesystem,
+                "managed XFS mount is read-only",
+            ));
+        }
         capacity_from_values(
             capacity.f_blocks,
             capacity.f_bavail,
             capacity.f_frsize,
             capacity.f_files,
-            capacity.f_favail,
+            capacity.f_ffree,
         )
     }
 
@@ -343,16 +351,7 @@ impl XfsBackend {
         project_id: NonZeroU32,
     ) -> std::io::Result<()> {
         set_project(file, project_id)?;
-        let assigned = get_fsxattr(file)?;
-        if assigned.fsx_projid != project_id.get()
-            || assigned.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT == 0
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "XFS project identity or inheritance did not persist",
-            ));
-        }
-        Ok(())
+        validate_project_attributes(get_fsxattr(file)?, project_id)
     }
 
     pub(super) fn materialize_initial_file(
@@ -389,6 +388,41 @@ impl XfsBackend {
     )]
     pub(super) fn usage(&self, project_id: NonZeroU32) -> std::io::Result<AgentFilesystemUsage> {
         self.project_usage(project_id.get())
+    }
+
+    pub(super) fn usage_and_limits(
+        &self,
+        runtime_root: &Path,
+        project_id: NonZeroU32,
+        policy_version: u32,
+    ) -> std::io::Result<(AgentFilesystemUsage, Option<ResolvedAgentFilesystemLimits>)> {
+        self.observe_project_quota_state()?;
+        let runtime_root = File::open(runtime_root)?;
+        validate_project_attributes(get_fsxattr(&runtime_root)?, project_id)?;
+        let quota = self.project_quota(project_id.get())?;
+        let usage = usage_from_quota_counts(quota.d_bcount, quota.d_rtbcount, quota.d_icount)?;
+        let limits = match (quota.d_blk_hardlimit, quota.d_ino_hardlimit) {
+            (0, 0) => None,
+            (0, _) | (_, 0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "XFS project retained only one member of the quota limit pair",
+                ));
+            }
+            (block_hard_limit, filesystem_objects) => Some(ResolvedAgentFilesystemLimits {
+                allocated_bytes: block_hard_limit
+                    .checked_mul(XFS_BASIC_BLOCK_BYTES)
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "XFS project byte limit exceeds u64",
+                        )
+                    })?,
+                filesystem_objects,
+                filesystem_object_limit_policy_version: policy_version,
+            }),
+        };
+        Ok((usage, limits))
     }
 
     pub(super) fn finish_project_cleanup(&self, project_id: NonZeroU32) -> std::io::Result<()> {
@@ -456,26 +490,13 @@ impl XfsBackend {
     }
 
     fn validate_project_quota_state(&self) -> Result<(), FilesystemStorageError> {
-        let mut state = FsQuotaStatV {
-            qs_version: FS_QSTATV_VERSION1,
-            ..FsQuotaStatV::default()
-        };
-        self.get_quota_state(&mut state).map_err(|error| {
+        self.observe_project_quota_state().map_err(|error| {
             FilesystemStorageError::io(
-                "validate managed XFS project quota state",
+                "validate managed XFS project quota accounting and enforcement",
                 &self.root,
                 error,
             )
         })?;
-        if state.qs_version != FS_QSTATV_VERSION1
-            || state.qs_flags & (FS_QUOTA_PDQ_ACCT | FS_QUOTA_PDQ_ENFD)
-                != FS_QUOTA_PDQ_ACCT | FS_QUOTA_PDQ_ENFD
-        {
-            return Err(FilesystemStorageError::verification(
-                "validate managed XFS project quota accounting and enforcement",
-                &self.root,
-            ));
-        }
 
         // Querying project zero proves that the executor has quota-query
         // privileges without assigning a reusable project identity.
@@ -487,6 +508,15 @@ impl XfsBackend {
             )
         })?;
         Ok(())
+    }
+
+    fn observe_project_quota_state(&self) -> std::io::Result<()> {
+        let mut state = FsQuotaStatV {
+            qs_version: FS_QSTATV_VERSION1,
+            ..FsQuotaStatV::default()
+        };
+        self.get_quota_state(&mut state)?;
+        validate_project_quota_state_record(&state)
     }
 
     fn clear_root_project_assignment(&self) -> Result<(), FilesystemStorageError> {
@@ -615,10 +645,18 @@ impl XfsBackend {
     }
 
     fn project_usage(&self, project_id: u32) -> std::io::Result<AgentFilesystemUsage> {
+        let quota = self.project_quota(project_id)?;
+        usage_from_quota_counts(quota.d_bcount, quota.d_rtbcount, quota.d_icount)
+    }
+
+    fn project_quota(&self, project_id: u32) -> std::io::Result<FsDiskQuota> {
         let mut quota = FsDiskQuota::default();
         if let Err(error) = self.get_project_quota(project_id, &mut quota) {
             if matches!(error.raw_os_error(), Some(libc::ENOENT) | Some(libc::ESRCH)) {
-                return usage_from_quota_counts(0, 0, 0);
+                quota.d_version = FS_DQUOT_VERSION;
+                quota.d_flags = FS_PROJ_QUOTA;
+                quota.d_id = project_id;
+                return Ok(quota);
             }
             return Err(error);
         }
@@ -631,7 +669,7 @@ impl XfsBackend {
                 "XFS returned an invalid project quota record",
             ));
         }
-        usage_from_quota_counts(quota.d_bcount, quota.d_rtbcount, quota.d_icount)
+        Ok(quota)
     }
 
     fn clear_project_limits(&self, project_id: NonZeroU32) -> std::io::Result<()> {
@@ -775,6 +813,36 @@ fn get_fsxattr(file: &File) -> std::io::Result<linux_raw_sys::general::fsxattr> 
     .map_err(errno_to_io)
 }
 
+fn validate_project_attributes(
+    attributes: linux_raw_sys::general::fsxattr,
+    project_id: NonZeroU32,
+) -> std::io::Result<()> {
+    if attributes.fsx_projid != project_id.get()
+        || attributes.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT == 0
+    {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "XFS project identity or inheritance did not persist",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_project_quota_state_record(state: &FsQuotaStatV) -> std::io::Result<()> {
+    if state.qs_version != FS_QSTATV_VERSION1
+        || state.qs_flags & (FS_QUOTA_PDQ_ACCT | FS_QUOTA_PDQ_ENFD)
+            != FS_QUOTA_PDQ_ACCT | FS_QUOTA_PDQ_ENFD
+    {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "managed XFS project quota accounting or enforcement is disabled",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn set_project(file: &File, project_id: NonZeroU32) -> std::io::Result<()> {
     let mut attributes = get_fsxattr(file)?;
     attributes.fsx_projid = project_id.get();
@@ -811,37 +879,6 @@ fn open_or_create_directory(parent: &File, name: &str) -> std::io::Result<File> 
     )
     .map_err(errno_to_io)?;
     Ok(File::from(directory))
-}
-
-#[allow(
-    dead_code,
-    reason = "authoritative capacity conversion is part of the backend interface"
-)]
-fn capacity_from_values(
-    blocks: u64,
-    available_blocks: u64,
-    fragment_size: u64,
-    filesystem_objects: u64,
-    available_filesystem_objects: u64,
-) -> std::io::Result<FilesystemCapacity> {
-    let total_bytes = blocks.checked_mul(fragment_size).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "XFS total capacity exceeds u64",
-        )
-    })?;
-    let available_bytes = available_blocks.checked_mul(fragment_size).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "XFS available capacity exceeds u64",
-        )
-    })?;
-    Ok(FilesystemCapacity {
-        total_bytes,
-        available_bytes,
-        total_filesystem_objects: filesystem_objects,
-        available_filesystem_objects,
-    })
 }
 
 fn usage_from_quota_counts(
@@ -914,5 +951,65 @@ mod tests {
         assert_eq!(std::mem::align_of::<FsDiskQuota>(), 8);
         assert_eq!(std::mem::size_of::<FsQuotaStatV>(), 160);
         assert_eq!(std::mem::align_of::<FsQuotaStatV>(), 8);
+    }
+
+    #[test]
+    fn project_quota_state_requires_accounting_and_enforcement() {
+        let healthy = FsQuotaStatV {
+            qs_version: FS_QSTATV_VERSION1,
+            qs_flags: FS_QUOTA_PDQ_ACCT | FS_QUOTA_PDQ_ENFD,
+            ..FsQuotaStatV::default()
+        };
+        assert!(validate_project_quota_state_record(&healthy).is_ok());
+
+        for flags in [0, FS_QUOTA_PDQ_ACCT, FS_QUOTA_PDQ_ENFD] {
+            let unhealthy = FsQuotaStatV {
+                qs_version: FS_QSTATV_VERSION1,
+                qs_flags: flags,
+                ..FsQuotaStatV::default()
+            };
+            assert_eq!(
+                validate_project_quota_state_record(&unhealthy)
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::InvalidData
+            );
+        }
+    }
+
+    #[test]
+    fn project_attributes_require_expected_identity_and_inheritance() {
+        let project_id = NonZeroU32::new(17).unwrap();
+        let healthy = linux_raw_sys::general::fsxattr {
+            fsx_xflags: linux_raw_sys::general::FS_XFLAG_PROJINHERIT,
+            fsx_extsize: 0,
+            fsx_nextents: 0,
+            fsx_projid: project_id.get(),
+            fsx_cowextsize: 0,
+            fsx_pad: [0; 8],
+        };
+        assert!(validate_project_attributes(healthy, project_id).is_ok());
+
+        let wrong_project = linux_raw_sys::general::fsxattr {
+            fsx_projid: project_id.get() + 1,
+            ..healthy
+        };
+        assert_eq!(
+            validate_project_attributes(wrong_project, project_id)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::InvalidData
+        );
+
+        let no_inheritance = linux_raw_sys::general::fsxattr {
+            fsx_xflags: 0,
+            ..healthy
+        };
+        assert_eq!(
+            validate_project_attributes(no_inheritance, project_id)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::InvalidData
+        );
     }
 }

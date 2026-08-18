@@ -548,13 +548,13 @@ async fn p2_p3_quota_exhaustion_on_managed_xfs(
             .ok_or_else(|| anyhow!("expected P2 exhaustion result"))?,
     );
     assert_eq!(
+        p2_exhaustion.first().map(String::as_str),
+        Some("completion=err:quota"),
+        "P2 growth must fail specifically because the project quota is exhausted"
+    );
+    assert_eq!(
         p2_exhaustion.get(1).map(String::as_str),
         Some("prefix-persisted=true")
-    );
-    assert_ne!(
-        p2_exhaustion.first().map(String::as_str),
-        Some("completion=ok"),
-        "P2 growth unexpectedly fit within the project quota"
     );
     let persisted_p2_prefix = schema_string_list(
         executor
@@ -568,9 +568,15 @@ async fn p2_p3_quota_exhaustion_on_managed_xfs(
             .into_return_value()
             .ok_or_else(|| anyhow!("expected persisted P2 failure prefix"))?,
     );
+    let p2_size = persisted_p2_prefix
+        .first()
+        .and_then(|size| size.strip_prefix("size="))
+        .and_then(|size| size.parse::<u64>().ok())
+        .expect("P2 exhaustion inspection must report a numeric size");
+    assert!((4096..=1024 * 1024).contains(&p2_size));
     assert_eq!(
-        persisted_p2_prefix.as_slice(),
-        ["size=4096", "prefix-complete=true", "suffix-bytes=0"]
+        &persisted_p2_prefix[1..],
+        ["prefix-complete=true", "suffix-bytes=0"]
     );
     executor.simulated_crash(&p2_exhaustion_worker).await?;
     let reconstructed_p2_prefix = executor
@@ -605,8 +611,8 @@ async fn p2_p3_quota_exhaustion_on_managed_xfs(
     let p3_exhaustion = schema_string_list(p3_exhaustion);
     assert_eq!(
         p3_exhaustion.first().map(String::as_str),
-        Some("completion=err:ErrorCode::InsufficientSpace"),
-        "P3 growth must fail specifically because the project is out of space"
+        Some("completion=err:quota"),
+        "P3 growth must fail specifically because the project quota is exhausted"
     );
     let unwritten_bytes = p3_exhaustion
         .get(2)
@@ -1068,6 +1074,17 @@ async fn initial_file_p3_parity_with_backend(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
+
+    let abandoned_completion = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "abandon_p3_write_completion",
+            data_value!(),
+        )
+        .await?
+        .into_return_value();
+    assert_eq!(abandoned_completion, Some(SchemaValue::Bool(true)));
 
     let expected = vec![
         "ro_flags_p2_write=false".to_string(),

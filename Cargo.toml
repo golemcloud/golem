@@ -76,6 +76,7 @@ bitflags = "2.6.0"
 blake3 = { version = "1.8.2", features = ["rayon"] }
 bytes = "1.10.1"
 camino = "1.1.10"
+cap-fs-ext = "3.4.5" # keep in sync with wasmtime
 cap-std = "3.4.5" # keep in sync with wasmtime
 cap-time-ext = "3.4.5"
 cargo_metadata = "0.21.0"

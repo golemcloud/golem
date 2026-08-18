@@ -690,6 +690,28 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         resource_limits
             .register_memory_meter(owned_agent_id.clone(), linear_memory.meter().clone());
 
+        filesystem_runtime.set_retry_callback(Some({
+            let worker = Arc::downgrade(&worker);
+            let invocation_deadline_exceeded = state.invocation_deadline_exceeded.clone();
+            let tail_work_deadline_exceeded = state.tail_work_deadline_exceeded.clone();
+            Arc::new(move || {
+                let worker = worker.clone();
+                let invocation_deadline_exceeded = invocation_deadline_exceeded.clone();
+                let tail_work_deadline_exceeded = tail_work_deadline_exceeded.clone();
+                Box::pin(async move {
+                    if invocation_deadline_exceeded.load(Ordering::Acquire)
+                        || tail_work_deadline_exceeded.load(Ordering::Acquire)
+                    {
+                        return false;
+                    }
+                    let Some(worker) = worker.upgrade() else {
+                        return false;
+                    };
+                    worker.filesystem_retry_permitted().await
+                })
+            })
+        }));
+
         Ok(DurableWorkerCtx {
             table: Arc::new(Mutex::new(table)),
             wasi: Arc::new(Mutex::new(wasi)),

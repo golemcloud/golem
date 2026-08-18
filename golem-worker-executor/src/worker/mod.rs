@@ -2297,6 +2297,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    async fn request_filesystem_invalidation(self: &Arc<Self>) {
+        self.state_actor.filesystem_invalidated(self.clone()).await;
+    }
+
+    pub(crate) async fn filesystem_retry_permitted(&self) -> bool {
+        !self.interrupt_signal.lock().await.has_interrupt()
+    }
+
     pub(crate) fn linear_memory_grant(&self) -> Arc<StdMutex<MemoryGrant>> {
         self.linear_memory_grant
             .lock()
@@ -4481,6 +4489,17 @@ impl RunningWorker {
                 }
             })?;
 
+        filesystem.runtime().set_invalidation_callback(Some({
+            let worker = Arc::downgrade(&parent);
+            Arc::new(move || {
+                let worker = worker.clone();
+                Box::pin(async move {
+                    if let Some(worker) = worker.upgrade() {
+                        worker.request_filesystem_invalidation().await;
+                    }
+                })
+            })
+        }));
         let context = match Ctx::create(
             worker_metadata.created_by,
             OwnedAgentId::new(worker_metadata.environment_id, &worker_metadata.agent_id),

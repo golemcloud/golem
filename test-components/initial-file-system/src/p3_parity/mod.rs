@@ -55,6 +55,9 @@ pub trait P3FileSystem {
     async fn complete_p3_object_quota_release(&self) -> bool;
     /// Confirms that the guest invocation started without producing side effects.
     async fn confirm_invocation_started(&self) -> String;
+    /// Verifies that abandoning only a P3 write completion future does not cancel
+    /// the write still driven by its input stream.
+    async fn abandon_p3_write_completion(&self) -> bool;
 }
 
 struct P3FileSystemImpl {
@@ -149,5 +152,9 @@ impl P3FileSystem for P3FileSystemImpl {
 
     async fn confirm_invocation_started(&self) -> String {
         "executed".to_string()
+    }
+
+    async fn abandon_p3_write_completion(&self) -> bool {
+        parity::abandon_p3_write_completion().await
     }
 }

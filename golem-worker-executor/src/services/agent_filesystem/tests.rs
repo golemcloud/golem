@@ -1,6 +1,4 @@
 use super::*;
-use async_trait::async_trait;
-use bytes::Bytes;
 use golem_common::model::component::{AgentFilePath, AgentFilePermissions, ComponentId};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, OwnedAgentId};
@@ -8,49 +6,8 @@ use golem_common::widen_infallible;
 use golem_service_base::replayable_stream::ReplayableStream as _;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use test_r::test;
-use wasmtime_wasi::StreamResult;
-use wasmtime_wasi::p2::{OutputStream, Pollable};
-
-struct DelayedOutputStream {
-    ready: Arc<tokio::sync::Semaphore>,
-    cancelled: Arc<AtomicBool>,
-}
-
-#[async_trait]
-impl OutputStream for DelayedOutputStream {
-    fn write(&mut self, _bytes: Bytes) -> StreamResult<()> {
-        Ok(())
-    }
-
-    fn flush(&mut self) -> StreamResult<()> {
-        Ok(())
-    }
-
-    fn check_write(&mut self) -> StreamResult<usize> {
-        Ok(1024)
-    }
-
-    async fn cancel(&mut self) {
-        self.cancelled.store(true, Ordering::Release);
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
-
-#[async_trait]
-impl Pollable for DelayedOutputStream {
-    async fn ready(&mut self) {
-        self.ready
-            .acquire()
-            .await
-            .expect("test readiness semaphore closed")
-            .forget();
-    }
-}
 
 fn agent_id() -> OwnedAgentId {
     OwnedAgentId::new(
@@ -98,6 +55,463 @@ fn initial_file(
         permissions,
         size,
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn mutation_failure_preserves_guest_results_and_effect_evidence() {
+    let runtime = AgentFilesystemRuntime::new_for_test();
+
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::Guest("not-found"),
+                MutationEffect::ProvenNoEffect,
+            )
+            .await,
+        MutationDecision::PreserveGuest("not-found")
+    );
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::<&str>::Io(std::io::Error::from_raw_os_error(libc::EBUSY)),
+                MutationEffect::KnownCompletedPrefix { bytes: 7 },
+            )
+            .await,
+        MutationDecision::BoundedRetry
+    );
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::<&str>::Io(std::io::Error::other("unclassified")),
+                MutationEffect::ProvenNoEffect,
+            )
+            .await,
+        MutationDecision::BoundedRetry
+    );
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::<&str>::Io(std::io::Error::from_raw_os_error(libc::EINTR)),
+                MutationEffect::ProvenNoEffect,
+            )
+            .await,
+        MutationDecision::BoundedRetry
+    );
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::<&str>::Io(std::io::Error::from_raw_os_error(libc::EAGAIN)),
+                MutationEffect::DesiredPostconditionSatisfied,
+            )
+            .await,
+        MutationDecision::Success
+    );
+
+    let unknown_guest_runtime = AgentFilesystemRuntime::new_for_test();
+    assert_eq!(
+        unknown_guest_runtime
+            .classify_mutation_failure(MutationFailure::Guest("access"), MutationEffect::Unknown)
+            .await,
+        MutationDecision::Invalidate
+    );
+    assert!(unknown_guest_runtime.begin_effect().await.is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_write_errors_only_claim_no_effect_for_explicitly_safe_causes() {
+    assert_eq!(
+        native_write_failure_effect(&std::io::Error::from_raw_os_error(libc::EAGAIN), 0),
+        MutationEffect::ProvenNoEffect
+    );
+    assert_eq!(
+        native_write_failure_effect(&std::io::Error::from_raw_os_error(libc::EBUSY), 7),
+        MutationEffect::KnownCompletedPrefix { bytes: 7 }
+    );
+    assert_eq!(
+        native_write_failure_effect(&std::io::Error::from_raw_os_error(libc::ENOSPC), 0),
+        MutationEffect::ProvenNoEffect
+    );
+    assert_eq!(
+        native_write_failure_effect(&std::io::Error::from_raw_os_error(libc::EINTR), 0),
+        MutationEffect::Unknown
+    );
+    assert_eq!(
+        native_write_failure_effect(&std::io::Error::from(std::io::ErrorKind::TimedOut), 3),
+        MutationEffect::Unknown
+    );
+    assert_eq!(
+        native_write_failure_effect(&std::io::Error::other("unclassified"), 0),
+        MutationEffect::Unknown
+    );
+}
+
+#[test]
+async fn unexplained_raw_permission_failure_invalidates_runtime() {
+    let runtime = AgentFilesystemRuntime::new_for_test();
+
+    assert_eq!(
+        runtime
+            .classify_mutation_failure::<()>(
+                MutationFailure::Io(std::io::Error::from(std::io::ErrorKind::PermissionDenied,)),
+                MutationEffect::ProvenNoEffect,
+            )
+            .await,
+        MutationDecision::Invalidate
+    );
+    assert!(runtime.begin_effect().await.is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn stale_or_disappeared_backing_device_invalidates_runtime() {
+    for errno in [libc::ESTALE, libc::ENODEV] {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        assert_eq!(
+            runtime
+                .classify_mutation_failure(
+                    MutationFailure::<()>::Io(std::io::Error::from_raw_os_error(errno)),
+                    MutationEffect::ProvenNoEffect,
+                )
+                .await,
+            MutationDecision::Invalidate
+        );
+        assert!(runtime.begin_effect().await.is_err());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn wrapped_terminal_probe_errors_are_terminal() {
+    for errno in [libc::EIO, libc::ESTALE, libc::ENODEV] {
+        let error = FilesystemStorageError::io(
+            "probe runtime filesystem",
+            Path::new("<test>"),
+            std::io::Error::from_raw_os_error(errno),
+        );
+        assert!(error.is_terminal_failure());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn changed_or_missing_live_xfs_limits_are_terminal() {
+    let installed = ResolvedAgentFilesystemLimits {
+        allocated_bytes: 1024 * 1024,
+        filesystem_objects: 8192,
+        filesystem_object_limit_policy_version: FILESYSTEM_OBJECT_LIMIT_POLICY_VERSION,
+    };
+    for observed in [
+        None,
+        Some(ResolvedAgentFilesystemLimits {
+            allocated_bytes: 2 * 1024 * 1024,
+            ..installed
+        }),
+    ] {
+        let error = quota::validate_observed_limits(
+            Path::new("<test-managed-xfs>"),
+            Some(installed),
+            observed,
+        )
+        .unwrap_err();
+        assert!(error.is_terminal_failure());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn terminal_cause_invalidates_even_when_postcondition_is_satisfied() {
+    let runtime = AgentFilesystemRuntime::new_for_test();
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::<()>::Io(std::io::Error::from_raw_os_error(libc::EIO)),
+                MutationEffect::DesiredPostconditionSatisfied,
+            )
+            .await,
+        MutationDecision::Invalidate
+    );
+    assert!(runtime.begin_effect().await.is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn byte_mutation_ignores_exhausted_physical_inode_dimension() {
+    let runtime = AgentFilesystemRuntime::new_for_test_with_observations(
+        None,
+        None,
+        FilesystemCapacity {
+            total_bytes: 100,
+            available_bytes: 50,
+            total_filesystem_objects: 100,
+            available_filesystem_objects: 0,
+        },
+    );
+    assert_eq!(
+        runtime
+            .classify_mutation_failure_for(
+                MutationOperation::Write,
+                MutationFailure::<()>::Io(std::io::Error::from_raw_os_error(libc::EDQUOT)),
+                MutationEffect::ProvenNoEffect,
+            )
+            .await,
+        MutationDecision::Quota
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn storage_exhaustion_uses_fresh_quota_and_capacity_observations() {
+    let exhausted = FilesystemCapacity {
+        total_bytes: 100,
+        available_bytes: 0,
+        total_filesystem_objects: 100,
+        available_filesystem_objects: 0,
+    };
+    let runtime = AgentFilesystemRuntime::new_for_test_with_observations(
+        Some(AgentFilesystemUsage {
+            allocated_bytes: 50,
+            filesystem_objects: 10,
+        }),
+        Some(ResolvedAgentFilesystemLimits {
+            allocated_bytes: 50,
+            filesystem_objects: 10,
+            filesystem_object_limit_policy_version: FILESYSTEM_OBJECT_LIMIT_POLICY_VERSION,
+        }),
+        exhausted,
+    );
+
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::<()>::Io(std::io::Error::from_raw_os_error(libc::ENOSPC)),
+                MutationEffect::ProvenNoEffect,
+            )
+            .await,
+        MutationDecision::Quota
+    );
+
+    let unmanaged = AgentFilesystemRuntime::new_for_test_with_observations(None, None, exhausted);
+    assert_eq!(
+        unmanaged
+            .classify_mutation_failure(
+                MutationFailure::<()>::Io(std::io::Error::from_raw_os_error(libc::EDQUOT)),
+                MutationEffect::ProvenNoEffect,
+            )
+            .await,
+        MutationDecision::InsufficientSpace
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn unexplained_storage_exhaustion_preserves_errno_mapping() {
+    let healthy = FilesystemCapacity {
+        total_bytes: 100,
+        available_bytes: 50,
+        total_filesystem_objects: 100,
+        available_filesystem_objects: 50,
+    };
+    let runtime = AgentFilesystemRuntime::new_for_test_with_observations(None, None, healthy);
+
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::<()>::Io(std::io::Error::from_raw_os_error(libc::EDQUOT)),
+                MutationEffect::ProvenNoEffect,
+            )
+            .await,
+        MutationDecision::Quota
+    );
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::<()>::Io(std::io::Error::from_raw_os_error(libc::ENOSPC)),
+                MutationEffect::ProvenNoEffect,
+            )
+            .await,
+        MutationDecision::InsufficientSpace
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn quota_classification_uses_the_operation_relevant_limit() {
+    let capacity = FilesystemCapacity {
+        total_bytes: 100,
+        available_bytes: 50,
+        total_filesystem_objects: 100,
+        available_filesystem_objects: 50,
+    };
+    let runtime = AgentFilesystemRuntime::new_for_test_with_observations(
+        Some(AgentFilesystemUsage {
+            allocated_bytes: 50,
+            filesystem_objects: 10,
+        }),
+        Some(ResolvedAgentFilesystemLimits {
+            allocated_bytes: 100,
+            filesystem_objects: 10,
+            filesystem_object_limit_policy_version: FILESYSTEM_OBJECT_LIMIT_POLICY_VERSION,
+        }),
+        capacity,
+    );
+
+    assert_eq!(
+        runtime
+            .classify_mutation_failure_for(
+                MutationOperation::Write,
+                MutationFailure::<()>::Io(std::io::Error::from_raw_os_error(libc::ENOSPC)),
+                MutationEffect::ProvenNoEffect,
+            )
+            .await,
+        MutationDecision::InsufficientSpace
+    );
+    assert_eq!(
+        runtime
+            .classify_mutation_failure_for(
+                MutationOperation::Create,
+                MutationFailure::<()>::Io(std::io::Error::from_raw_os_error(libc::ENOSPC)),
+                MutationEffect::ProvenNoEffect,
+            )
+            .await,
+        MutationDecision::Quota
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn storage_probe_failure_preserves_errno_when_effect_is_known() {
+    let runtime = AgentFilesystemRuntime::new_for_test_with_failed_observations();
+
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::<()>::Io(std::io::Error::from_raw_os_error(libc::ENOSPC)),
+                MutationEffect::ProvenNoEffect,
+            )
+            .await,
+        MutationDecision::InsufficientSpace
+    );
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::<()>::Io(std::io::Error::from_raw_os_error(libc::EDQUOT)),
+                MutationEffect::KnownCompletedPrefix { bytes: 3 },
+            )
+            .await,
+        MutationDecision::Quota
+    );
+    assert!(runtime.begin_effect().await.is_ok());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn invalidating_mutation_failure_seals_runtime_and_notifies_once() {
+    let runtime = AgentFilesystemRuntime::new_for_test();
+    let notifications = Arc::new(AtomicUsize::new(0));
+    runtime.set_invalidation_callback(Some({
+        let notifications = Arc::clone(&notifications);
+        Arc::new(move || {
+            let notifications = Arc::clone(&notifications);
+            Box::pin(async move {
+                notifications.fetch_add(1, Ordering::AcqRel);
+            })
+        })
+    }));
+
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::<()>::Io(std::io::Error::from_raw_os_error(libc::EINTR)),
+                MutationEffect::Unknown,
+            )
+            .await,
+        MutationDecision::Invalidate
+    );
+    assert!(runtime.begin_effect().await.is_err());
+    assert_eq!(notifications.load(Ordering::Acquire), 1);
+
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::<()>::Io(std::io::Error::from_raw_os_error(libc::EIO)),
+                MutationEffect::DesiredPostconditionSatisfied,
+            )
+            .await,
+        MutationDecision::Invalidate
+    );
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::<()>::Infrastructure(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "backend policy rejected access",
+                )),
+                MutationEffect::ProvenNoEffect,
+            )
+            .await,
+        MutationDecision::Invalidate
+    );
+    assert_eq!(notifications.load(Ordering::Acquire), 1);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn pending_worker_interrupt_suppresses_mutation_retry() {
+    let runtime = AgentFilesystemRuntime::new_for_test();
+    runtime.set_retry_callback(Some(Arc::new(|| Box::pin(async { false }))));
+
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::TransientGuest("busy"),
+                MutationEffect::ProvenNoEffect,
+            )
+            .await,
+        MutationDecision::PreserveGuest("busy")
+    );
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::<()>::Io(std::io::Error::from_raw_os_error(libc::EAGAIN)),
+                MutationEffect::ProvenNoEffect,
+            )
+            .await,
+        MutationDecision::PreserveRaw
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn failed_health_probe_suppresses_transient_retry() {
+    let runtime = AgentFilesystemRuntime::new_for_test_with_failed_observations();
+
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::<()>::Io(std::io::Error::from_raw_os_error(libc::EAGAIN)),
+                MutationEffect::ProvenNoEffect,
+            )
+            .await,
+        MutationDecision::PreserveRaw
+    );
+    assert!(runtime.begin_effect().await.is_ok());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn unmanaged_runtime_observes_fresh_physical_capacity() {
+    let filesystems = AgentFilesystems::new(&FilesystemStorageConfig::default()).unwrap();
+    let filesystem = filesystems.create_owned_empty(&agent_id()).await.unwrap();
+
+    let capacity = filesystem.runtime().capacity().await.unwrap();
+
+    assert!(capacity.total_bytes > 0);
+    assert!(capacity.available_bytes <= capacity.total_bytes);
+    assert!(capacity.total_filesystem_objects > 0);
+    assert!(capacity.available_filesystem_objects <= capacity.total_filesystem_objects);
+    filesystem.close_and_delete().await.unwrap();
 }
 
 #[test]
@@ -965,6 +1379,20 @@ async fn seal_rejects_new_effects_without_waiting_for_existing_effects() {
 }
 
 #[test]
+async fn seal_rejects_admitted_effects_waiting_for_operation_lock() {
+    let runtime = AgentFilesystemRuntime::new_for_test();
+    let update = runtime.begin_update_effect().await.unwrap();
+    let admitted = runtime.admit_effect().unwrap();
+    let waiting = tokio::spawn(async move { admitted.begin().await });
+    tokio::task::yield_now().await;
+    assert!(!waiting.is_finished());
+
+    runtime.seal();
+    drop(update);
+    assert!(waiting.await.unwrap().is_err());
+}
+
+#[test]
 async fn close_waits_for_an_existing_effect_before_deleting() {
     let filesystems = AgentFilesystems::new(&FilesystemStorageConfig::default()).unwrap();
     let filesystem = filesystems.create_owned_empty(&agent_id()).await.unwrap();
@@ -1062,33 +1490,6 @@ async fn deterministic_creation_is_exclusive_for_the_full_owner_lifetime() {
 }
 
 #[test]
-async fn append_effect_ends_at_native_completion_without_waiting_for_guest_polling() {
-    let runtime = AgentFilesystemRuntime::new_for_test();
-    let ready = Arc::new(tokio::sync::Semaphore::new(0));
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let mut stream = CoordinatedFileOutputStream::new(Box::new(DelayedOutputStream {
-        ready: Arc::clone(&ready),
-        cancelled,
-    }));
-    stream.prepare_effect(runtime.begin_append_effect().await.unwrap());
-    stream.write(Bytes::from_static(b"first")).unwrap();
-
-    assert!(stream.is_active());
-    assert!(stream.write(Bytes::from_static(b"second")).is_err());
-    let next_effect = tokio::spawn({
-        let runtime = runtime.clone();
-        async move { runtime.begin_append_effect().await }
-    });
-    tokio::task::yield_now().await;
-    assert!(!next_effect.is_finished());
-
-    ready.add_permits(1);
-    let next_effect = next_effect.await.unwrap().unwrap();
-    assert!(!stream.is_active());
-    drop(next_effect);
-}
-
-#[test]
 async fn positioned_effect_does_not_wait_for_active_append() {
     let runtime = AgentFilesystemRuntime::new_for_test();
     let append = runtime.begin_append_effect().await.unwrap();
@@ -1097,52 +1498,4 @@ async fn positioned_effect_does_not_wait_for_active_append() {
 
     drop(positioned);
     drop(append);
-}
-
-#[test]
-async fn cancelling_p2_stream_forwards_cancellation_and_releases_the_effect() {
-    let runtime = AgentFilesystemRuntime::new_for_test();
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let mut stream = CoordinatedFileOutputStream::new(Box::new(DelayedOutputStream {
-        ready: Arc::new(tokio::sync::Semaphore::new(0)),
-        cancelled: Arc::clone(&cancelled),
-    }));
-    stream.prepare_effect(runtime.begin_append_effect().await.unwrap());
-    stream.write(Bytes::from_static(b"write")).unwrap();
-
-    let next_append = tokio::spawn({
-        let runtime = runtime.clone();
-        async move { runtime.begin_append_effect().await }
-    });
-    tokio::task::yield_now().await;
-    assert!(!next_append.is_finished());
-
-    stream.cancel().await;
-
-    assert!(cancelled.load(Ordering::Acquire));
-    assert!(!stream.is_active());
-    assert!(next_append.await.unwrap().is_ok());
-}
-
-#[test]
-async fn dropping_p2_stream_requests_cancellation() {
-    let runtime = AgentFilesystemRuntime::new_for_test();
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let mut stream = CoordinatedFileOutputStream::new(Box::new(DelayedOutputStream {
-        ready: Arc::new(tokio::sync::Semaphore::new(0)),
-        cancelled: Arc::clone(&cancelled),
-    }));
-    stream.prepare_effect(runtime.begin_append_effect().await.unwrap());
-    stream.write(Bytes::from_static(b"write")).unwrap();
-
-    drop(stream);
-
-    tokio::time::timeout(std::time::Duration::from_secs(1), async {
-        while !cancelled.load(Ordering::Acquire) {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("stream drop did not request cancellation");
-    assert!(runtime.begin_append_effect().await.is_ok());
 }

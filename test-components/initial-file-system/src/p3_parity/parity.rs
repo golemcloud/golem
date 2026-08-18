@@ -470,6 +470,36 @@ pub(crate) async fn inspect_writable() -> Vec<String> {
     inspect_file("managed-parity.txt").await
 }
 
+pub(crate) async fn abandon_p3_write_completion() -> bool {
+    let (root, _) = p3_preopens::get_directories()
+        .into_iter()
+        .next()
+        .expect("no P3 preopened directory");
+    let file = root
+        .open_at(
+            p3_types::PathFlags::empty(),
+            "abandoned-completion.bin".to_string(),
+            p3_types::OpenFlags::CREATE | p3_types::OpenFlags::TRUNCATE,
+            p3_types::DescriptorFlags::READ | p3_types::DescriptorFlags::WRITE,
+        )
+        .await
+        .expect("create abandoned-completion file");
+    let (mut writer, data) = wit_stream::new();
+    let completion = file.write_via_stream(data, 0);
+    drop(completion);
+    let expected = b"input-stream-still-drives-write".to_vec();
+    assert!(writer.write_all(expected.clone()).await.is_empty());
+    drop(writer);
+    file.sync_data()
+        .await
+        .expect("synchronize abandoned-completion write");
+
+    let (reader, completion) = file.read_via_stream(0);
+    let actual = reader.collect().await;
+    completion.await.expect("read abandoned-completion file");
+    actual == expected
+}
+
 async fn write_p3(file: &p3_types::Descriptor, bytes: &[u8], offset: u64) {
     let (mut writer, data) = wit_stream::new();
     let result = file.write_via_stream(data, offset);

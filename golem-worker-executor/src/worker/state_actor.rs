@@ -130,6 +130,10 @@ enum LifecycleJob<Ctx: WorkerCtx> {
         worker: Arc<Worker<Ctx>>,
         interrupt_kind: InterruptKind,
     },
+    FilesystemInvalidated {
+        worker: Arc<Worker<Ctx>>,
+        done: oneshot::Sender<()>,
+    },
 }
 
 /// The state exclusively owned by the status task.
@@ -253,6 +257,10 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                             .notify_filesystem_limit_interrupt_if_current(interrupt_kind)
                             .await;
                     }
+                    LifecycleJob::FilesystemInvalidated { worker, done } => {
+                        worker.set_interrupting(InterruptKind::Restart).await;
+                        let _ = done.send(());
+                    }
                 }
             }
         });
@@ -354,6 +362,23 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                 self.owned_agent_id
             );
         }
+    }
+
+    pub async fn filesystem_invalidated(&self, worker: Arc<Worker<Ctx>>) {
+        let (done, done_rx) = oneshot::channel();
+        if self
+            .lifecycle_jobs
+            .send(LifecycleJob::FilesystemInvalidated { worker, done })
+            .is_err()
+        {
+            panic!(
+                "Worker state actor for {} terminated unexpectedly",
+                self.owned_agent_id
+            );
+        }
+        done_rx
+            .await
+            .expect("Worker state actor terminated while invalidating filesystem");
     }
 
     pub fn queue_ordered_oplog_entry(

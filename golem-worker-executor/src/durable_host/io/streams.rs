@@ -1538,7 +1538,7 @@ fn filesystem_stream_effect_is_active<Ctx: WorkerCtx>(
     let output = ctx.table().get(&stream)?;
     Ok(output
         .as_any()
-        .downcast_ref::<crate::services::agent_filesystem::CoordinatedFileOutputStream>()
+        .downcast_ref::<crate::services::agent_filesystem::ClassifiedFileOutputStream>()
         .is_some_and(|stream| stream.is_active()))
 }
 
@@ -1573,7 +1573,7 @@ fn prepare_filesystem_stream_effect<Ctx: WorkerCtx>(
     let output = ctx.table().get(&stream)?;
     let stream = output
         .as_any()
-        .downcast_ref::<crate::services::agent_filesystem::CoordinatedFileOutputStream>()
+        .downcast_ref::<crate::services::agent_filesystem::ClassifiedFileOutputStream>()
         .ok_or_else(|| {
             StreamError::Trap(wasmtime::Error::msg(
                 "filesystem output stream is not coordinated",
@@ -1591,7 +1591,7 @@ fn clear_unused_filesystem_stream_effect<Ctx: WorkerCtx>(
     let output = ctx.table().get(&stream)?;
     if let Some(stream) = output
         .as_any()
-        .downcast_ref::<crate::services::agent_filesystem::CoordinatedFileOutputStream>(
+        .downcast_ref::<crate::services::agent_filesystem::ClassifiedFileOutputStream>(
     ) {
         stream.clear_unused_effect();
     }

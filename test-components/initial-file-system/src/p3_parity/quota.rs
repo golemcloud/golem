@@ -2,13 +2,33 @@ use golem_rust::wasip3::filesystem::preopens as p3_preopens;
 use golem_rust::wasip3::filesystem::types as p3_types;
 use wasi::filesystem::preopens as p2_preopens;
 use wasi::filesystem::types as p2_types;
+use wasi::io::streams::StreamError as P2StreamError;
 use wasip3::wit_stream;
 
 fn p3_result(result: Result<(), p3_types::ErrorCode>) -> String {
     match result {
         Ok(()) => "ok".to_string(),
         Err(p3_types::ErrorCode::NotPermitted) => "err:not-permitted".to_string(),
+        Err(p3_types::ErrorCode::Quota) => "err:quota".to_string(),
+        Err(p3_types::ErrorCode::InsufficientSpace) => "err:insufficient-space".to_string(),
         Err(error) => format!("err:{error:?}"),
+    }
+}
+
+fn p2_stream_result(result: Result<(), P2StreamError>) -> String {
+    match result {
+        Ok(()) => "ok".to_string(),
+        Err(P2StreamError::Closed) => "err:closed".to_string(),
+        Err(P2StreamError::LastOperationFailed(error)) => {
+            match p2_types::filesystem_error_code(&error) {
+                Some(p2_types::ErrorCode::Quota) => "err:quota".to_string(),
+                Some(p2_types::ErrorCode::InsufficientSpace) => {
+                    "err:insufficient-space".to_string()
+                }
+                Some(error) => format!("err:{error:?}"),
+                None => "err:unclassified".to_string(),
+            }
+        }
     }
 }
 
@@ -31,7 +51,7 @@ pub(crate) async fn run_p2_quota_surface() -> Vec<String> {
     for index in 0..512 {
         match file.write(&block, index * block.len() as u64) {
             Ok(written) if written == block.len() as u64 => written_blocks += 1,
-            Ok(_) | Err(p2_types::ErrorCode::InsufficientSpace) => {
+            Ok(_) | Err(p2_types::ErrorCode::Quota) => {
                 growth_denied = true;
                 break;
             }
@@ -87,12 +107,20 @@ pub(crate) async fn exhaust_p3_quota() -> Vec<String> {
         .expect("P3 quota file creation failed");
     let (mut stream, data) = wit_stream::new();
     let result = file.write_via_stream(data, 0);
-    let prefix_unwritten = stream.write_all(vec![0x5a; 4096]).await;
-    let unwritten = stream.write_all(vec![0x6c; 2 * 1024 * 1024]).await;
+    let mut written_blocks = 0;
+    let mut unwritten = Vec::new();
+    for _ in 0..512 {
+        unwritten = stream.write_all(vec![0x5a; 4096]).await;
+        if unwritten.is_empty() {
+            written_blocks += 1;
+        } else {
+            break;
+        }
+    }
     drop(stream);
     vec![
         format!("completion={}", p3_result(result.await)),
-        format!("prefix-persisted={}", prefix_unwritten.is_empty()),
+        format!("prefix-persisted={}", written_blocks > 0),
         format!("unwritten-bytes={}", unwritten.len()),
     ]
 }
@@ -113,14 +141,19 @@ pub(crate) fn exhaust_p2_quota() -> Vec<String> {
     let output = file
         .write_via_stream(0)
         .expect("P2 quota output stream creation failed");
-    let prefix_persisted = output.blocking_write_and_flush(&vec![0x4a; 4096]).is_ok();
-    let completion = match output.blocking_write_and_flush(&vec![0x6b; 2 * 1024 * 1024]) {
-        Ok(()) => "ok".to_string(),
-        Err(error) => format!("err:{error:?}"),
+    let mut written_blocks = 0;
+    let completion = loop {
+        let result = output.blocking_write_and_flush(&vec![0x4a; 4096]);
+        if result.is_ok() {
+            written_blocks += 1;
+            assert!(written_blocks < 512, "P2 project quota was not enforced");
+        } else {
+            break p2_stream_result(result);
+        }
     };
     vec![
         format!("completion={completion}"),
-        format!("prefix-persisted={prefix_persisted}"),
+        format!("prefix-persisted={}", written_blocks > 0),
     ]
 }
 
@@ -302,13 +335,16 @@ pub(crate) async fn run_p2_quota_matrix() -> Vec<String> {
     let mut growth_denied = false;
     for index in 0..512 {
         match growth.write(&block, index * block.len() as u64) {
-            Ok(written) if written == block.len() as u64 => grew = true,
+            Ok(written) if written == block.len() as u64 => {
+                grew = true;
+                growth.sync_data().expect("settle P2 matrix quota usage");
+            }
             Ok(written) => {
                 grew |= written > 0;
                 growth_denied = true;
                 break;
             }
-            Err(p2_types::ErrorCode::InsufficientSpace) => {
+            Err(p2_types::ErrorCode::Quota) => {
                 growth_denied = true;
                 break;
             }
@@ -452,12 +488,22 @@ pub(crate) async fn run_p3_quota_matrix() -> Vec<String> {
         .expect("create P3 growth file");
     let (mut growth_tx, growth_data) = wit_stream::new();
     let growth_result = growth.write_via_stream(growth_data, 0);
-    let _unwritten = growth_tx.write_all(vec![0x3b; 2 * 1024 * 1024]).await;
+    let mut grew = false;
+    let mut unwritten = Vec::new();
+    for _ in 0..512 {
+        unwritten = growth_tx.write_all(block.clone()).await;
+        if unwritten.is_empty() {
+            grew = true;
+        } else {
+            break;
+        }
+    }
     drop(growth_tx);
     let growth_denied = matches!(
         growth_result.await,
-        Err(p3_types::ErrorCode::InsufficientSpace)
-    );
+        Err(p3_types::ErrorCode::Quota)
+    ) && grew
+        && !unwritten.is_empty();
     vec![
         format!("positioned-stream={positioned}"),
         format!("append={appended}"),
@@ -505,18 +551,18 @@ pub(crate) async fn run_p2_object_quota() -> Vec<String> {
                 created += 1;
                 drop(file);
             }
-            Err(p2_types::ErrorCode::InsufficientSpace) => break,
+            Err(p2_types::ErrorCode::Quota) => break,
             Err(error) => panic!("unexpected P2 object creation error: {error:?}"),
         }
     }
     let object_denied = created < 64;
     let directory_denied = matches!(
         root.create_directory_at("p2-object-directory"),
-        Err(p2_types::ErrorCode::InsufficientSpace)
+        Err(p2_types::ErrorCode::Quota)
     );
     let symlink_denied = matches!(
         root.symlink_at("p2-object-0", "p2-object-symlink"),
-        Err(p2_types::ErrorCode::InsufficientSpace)
+        Err(p2_types::ErrorCode::Quota)
     );
     root.unlink_file_at("p2-held").expect("unlink P2 held name");
     root.unlink_file_at("p2-held-link")
@@ -528,7 +574,7 @@ pub(crate) async fn run_p2_object_quota() -> Vec<String> {
             p2_types::OpenFlags::CREATE,
             p2_types::DescriptorFlags::READ,
         ),
-        Err(p2_types::ErrorCode::InsufficientSpace)
+        Err(p2_types::ErrorCode::Quota)
     );
     drop(held);
     vec![
@@ -592,7 +638,7 @@ pub(crate) async fn run_p3_object_quota() -> Vec<String> {
                 created += 1;
                 drop(file);
             }
-            Err(p3_types::ErrorCode::InsufficientSpace) => break,
+            Err(p3_types::ErrorCode::Quota) => break,
             Err(error) => panic!("unexpected P3 object creation error: {error:?}"),
         }
     }
@@ -600,12 +646,12 @@ pub(crate) async fn run_p3_object_quota() -> Vec<String> {
     let directory_denied = matches!(
         root.create_directory_at("p3-object-directory".to_string())
             .await,
-        Err(p3_types::ErrorCode::InsufficientSpace)
+        Err(p3_types::ErrorCode::Quota)
     );
     let symlink_denied = matches!(
         root.symlink_at("p3-object-0".to_string(), "p3-object-symlink".to_string())
             .await,
-        Err(p3_types::ErrorCode::InsufficientSpace)
+        Err(p3_types::ErrorCode::Quota)
     );
     root.unlink_file_at("p3-held".to_string())
         .await
@@ -621,7 +667,7 @@ pub(crate) async fn run_p3_object_quota() -> Vec<String> {
             p3_types::DescriptorFlags::READ,
         )
         .await,
-        Err(p3_types::ErrorCode::InsufficientSpace)
+        Err(p3_types::ErrorCode::Quota)
     );
     drop(held);
     vec![
