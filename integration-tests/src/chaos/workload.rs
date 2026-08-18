@@ -33,17 +33,19 @@
 //! benchmark helper does — would turn every duplicate execution into a clean
 //! run, because the platform would be right to execute both.
 //!
-//! **Honest failure classification.** [`is_definite_rejection`] only lets an
-//! operation be called
-//! `Rejected` when the platform returned a definite, non-retryable status.
-//! Anything else that failed is `Indeterminate`: from the client side, a dropped
-//! connection is indistinguishable from a request that arrived and executed. A
-//! shard-manager kill produces exactly these, and recording them as failures
-//! would understate what the platform did while recording them as successes
-//! would overstate it.
+//! **Honest failure classification.** [`crate::chaos::errors`] decides what a
+//! failed attempt actually proves, and only a definite, non-retryable status
+//! lets an operation be called `Rejected`. Anything else that failed is
+//! `Indeterminate`: from the client side, a dropped connection is
+//! indistinguishable from a request that arrived and executed. A pod kill
+//! produces exactly these, and recording them as failures would understate what
+//! the platform did while recording them as successes would overstate it.
 
 use crate::chaos::RetryPolicy;
-use crate::chaos::history::{OperationHistory, OperationRecord, Outcome, Phase, Stream};
+use crate::chaos::errors::{self, ErrorClass};
+use crate::chaos::history::{
+    AttemptRecord, OperationHistory, OperationRecord, Outcome, Phase, Stream,
+};
 use chrono::Utc;
 use golem_common::base_model::agent::{DataValue, ParsedAgentId};
 use golem_common::model::IdempotencyKey;
@@ -166,47 +168,23 @@ impl WorkloadContext {
     }
 }
 
-/// Whether an error means the platform definitely refused the request, as
-/// opposed to the driver simply not knowing.
-///
-/// Only a definite, non-retryable HTTP status counts as a rejection. Everything
-/// else — connection reset, timeout, no status at all — leaves genuine doubt
-/// about whether the request arrived and executed, and is reported as such.
-pub fn is_definite_rejection(error: &anyhow::Error) -> bool {
-    for cause in error.chain() {
-        if let Some(reqwest_error) = cause.downcast_ref::<reqwest::Error>() {
-            return match reqwest_error.status() {
-                // A status means the server answered, so it saw the request and
-                // decided. 5xx/408/429 are transient and leave doubt; the rest
-                // are definite refusals.
-                Some(status) => {
-                    !(status.is_server_error()
-                        || status == reqwest::StatusCode::REQUEST_TIMEOUT
-                        || status == reqwest::StatusCode::TOO_MANY_REQUESTS)
-                }
-                // No status: the exchange never completed. Nobody can say
-                // whether the server executed it.
-                None => false,
-            };
-        }
-    }
-    // An error the driver cannot interpret is treated as doubt rather than as a
-    // refusal. Widening the band costs a little precision; narrowing it wrongly
-    // would manufacture a duplicate-execution finding out of a timeout.
-    false
-}
-
 /// Outcome and value of a single invocation attempt.
 struct AttemptResult {
     value: Option<u32>,
     error: Option<anyhow::Error>,
-    definite_rejection: bool,
+    /// Absent when the attempt succeeded.
+    class: Option<ErrorClass>,
 }
 
 /// Runs one operation with the configured bounded, same-key retry, and records
 /// it in the history.
+///
+/// Shared with the pinned in-flight stream in [`crate::chaos::pinned`]: the
+/// retry rule and the failure classification are the load-bearing parts of
+/// every chaos scenario, and a second copy of them would be a second place for
+/// them to drift.
 #[allow(clippy::too_many_arguments)]
-async fn run_operation<F, Fut>(
+pub(crate) async fn run_operation<F, Fut>(
     ctx: &WorkloadContext,
     stream: Stream,
     agent: String,
@@ -225,22 +203,25 @@ async fn run_operation<F, Fut>(
 
     let mut attempts = 0u32;
     let mut first_attempt_value = None;
+    let mut attempt_log: Vec<AttemptRecord> = Vec::new();
     let mut last: AttemptResult;
 
     loop {
         attempts += 1;
+        let attempt_started_at = Utc::now();
+        let attempt_started = Instant::now();
         last = match tokio::time::timeout(ATTEMPT_TIMEOUT, invoke(idempotency_key.clone())).await {
             Ok(Ok(value)) => AttemptResult {
                 value,
                 error: None,
-                definite_rejection: false,
+                class: None,
             },
             Ok(Err(error)) => {
-                let definite_rejection = is_definite_rejection(&error);
+                let class = errors::classify(&error);
                 AttemptResult {
                     value: None,
                     error: Some(error),
-                    definite_rejection,
+                    class: Some(class),
                 }
             }
             Err(_) => AttemptResult {
@@ -250,14 +231,30 @@ async fn run_operation<F, Fut>(
                 )),
                 // A timeout is the archetypal case of not knowing: the request
                 // may well be executing right now.
-                definite_rejection: false,
+                class: Some(ErrorClass::Transport),
             },
         };
 
         let succeeded = last.error.is_none();
+        attempt_log.push(AttemptRecord {
+            attempt: attempts,
+            started_at: attempt_started_at,
+            duration_ms: attempt_started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+            returned_value: last.value,
+            succeeded,
+            error_class: last.class,
+            error: last.error.as_ref().map(|e| format!("{e:#}")),
+        });
+
+        // Only transport failures are retried, and only under the original key.
+        // See `crate::chaos::errors` for why the other three classes are not:
+        // the retry is there to *expose* duplicate execution, not to paper over
+        // a failing platform.
         let may_retry = attempts <= ctx.retry.max_retries
             && !succeeded
-            && (!ctx.retry.transport_only || !last.definite_rejection);
+            && last.class.is_some_and(|class| {
+                !ctx.retry.transport_only || class.is_retryable_transport_failure()
+            });
 
         if succeeded || !may_retry {
             break;
@@ -269,23 +266,26 @@ async fn run_operation<F, Fut>(
             first_attempt_value = last.value;
         }
         debug!(
-            "Chaos {stream} op {key} attempt {attempts} failed, retrying with the same key in {:?}",
+            "Chaos {stream} op {key} attempt {attempts} failed ({}), retrying with the same key in {:?}",
+            last.class.map(|c| c.as_str()).unwrap_or("unclassified"),
             ctx.retry.delay()
         );
         tokio::time::sleep(ctx.retry.delay()).await;
     }
 
-    let outcome = if last.error.is_none() {
-        Outcome::Confirmed
-    } else if last.definite_rejection {
-        Outcome::Rejected
-    } else {
-        Outcome::Indeterminate
+    let outcome = match last.class {
+        None => Outcome::Confirmed,
+        // A definite refusal is the only failure that proves nothing executed.
+        // Everything else — transport, platform, application — leaves doubt the
+        // read-back carries through as the width of a range.
+        Some(class) if class.is_definite_rejection() => Outcome::Rejected,
+        Some(_) => Outcome::Indeterminate,
     };
 
     if outcome == Outcome::Indeterminate {
         warn!(
-            "Chaos {stream} op {key} ended indeterminate after {attempts} attempt(s): {}",
+            "Chaos {stream} op {key} ended indeterminate ({}) after {attempts} attempt(s): {}",
+            last.class.map(|c| c.as_str()).unwrap_or("unclassified"),
             last.error
                 .as_ref()
                 .map(|e| e.to_string())
@@ -308,11 +308,20 @@ async fn run_operation<F, Fut>(
         returned_value: last.value,
         first_attempt_value,
         error: last.error.as_ref().map(|e| format!("{e:#}")),
+        error_class: last.class,
+        attempt_log,
     });
 }
 
 /// Extracts a `u32` return value, if the agent returned one. Absent values are
 /// not an error: several workload methods return nothing.
+///
+/// Public under a fuller name for [`crate::chaos::pinned`], which reads the same
+/// counter values back from its own invocations.
+pub fn as_u32_value(value: DataValue) -> Option<u32> {
+    as_u32(value)
+}
+
 fn as_u32(value: DataValue) -> Option<u32> {
     u32::from_value(value.into_return_value()?).ok()
 }
@@ -434,6 +443,13 @@ pub fn start(ctx: WorkloadContext, config: &crate::chaos::WorkloadConfig) -> Wor
 /// Submits one operation of `stream` against agent `index`.
 async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32, seq: u64) {
     match stream {
+        // Driven by `crate::chaos::pinned`, not by the rate-based streams: it
+        // has no rate and its agents are chosen by shard ownership rather than
+        // by index. `start` never puts it in the active list, so reaching here
+        // means a caller wired it up by hand.
+        Stream::PinnedHttp => {
+            warn!("Chaos mixed workload cannot drive the pinned stream; see chaos::pinned");
+        }
         Stream::Durable => {
             let agent = ctx.agent_name(Stream::Durable, index);
             let key = ctx.idempotency_key(&agent, seq);
@@ -662,39 +678,42 @@ mod tests {
         );
     }
 
-    // ── Failure classification ──────────────────────────────────────────────
-    // The three-way split is what keeps the read-back honest, so the boundary
-    // between "definitely refused" and "cannot tell" gets direct tests.
+    // ── The retry rule ──────────────────────────────────────────────────────
+    // Which failures are classified how lives in `crate::chaos::errors` and is
+    // tested there. What this covers is the rule built on top of it: at most
+    // one retry, and only for the one class that might be transient.
 
     #[test]
-    fn an_uninterpretable_error_leaves_doubt_rather_than_claiming_refusal() {
-        let error = anyhow::anyhow!("connection reset by peer");
-        assert!(
-            !is_definite_rejection(&error),
-            "an error the driver cannot read must widen the band, not narrow it"
-        );
-    }
-
-    #[test]
-    fn a_wrapped_uninterpretable_error_still_leaves_doubt() {
-        let error = anyhow::anyhow!("broken pipe").context("invoking increment");
-        assert!(!is_definite_rejection(&error));
-    }
-
-    /// The retry rule the policy encodes: retry only what might be transient,
-    /// and only under the same key.
-    #[test]
-    fn retry_policy_permits_one_retry_for_non_definite_failures() {
+    fn retry_policy_permits_one_retry_and_only_for_transport_failures() {
         let policy = RetryPolicy::default();
         assert_eq!(policy.max_retries, 1);
         assert!(policy.transport_only);
 
-        // attempts=1 (the first) may retry once; attempts=2 may not.
-        let may_retry = |attempts: u32, definite: bool| {
-            attempts <= policy.max_retries && (!policy.transport_only || !definite)
+        // Mirrors the predicate in `run_operation`. attempts=1 is the first
+        // attempt, which may retry once; attempts=2 has spent the budget.
+        let may_retry = |attempts: u32, class: ErrorClass| {
+            attempts <= policy.max_retries
+                && (!policy.transport_only || class.is_retryable_transport_failure())
         };
-        assert!(may_retry(1, false), "first transport failure retries");
-        assert!(!may_retry(2, false), "the retry budget is one");
-        assert!(!may_retry(1, true), "a definite refusal is not retried");
+        assert!(
+            may_retry(1, ErrorClass::Transport),
+            "the first transport failure retries under the same key"
+        );
+        assert!(
+            !may_retry(2, ErrorClass::Transport),
+            "the retry budget is one"
+        );
+        assert!(
+            !may_retry(1, ErrorClass::Response),
+            "a definite refusal is not retried"
+        );
+        assert!(
+            !may_retry(1, ErrorClass::Platform),
+            "a transient server-side status is not a transport failure"
+        );
+        assert!(
+            !may_retry(1, ErrorClass::Application),
+            "an agent that ran and failed is not retried under the same key"
+        );
     }
 }

@@ -95,3 +95,58 @@ scenarios:
     # Bounded so a signal that never arrives aborts with partial artifacts
     # instead of holding the golem-dev maintenance window open.
     signalTimeoutSecs: 1800
+
+  # S8 — executor pod kill with HTTP invocations in flight (GOL-366). Unlike
+  # S12, the driver chooses *which* pod dies: it pins a set of agents to one
+  # executor by shard ownership, verifies the ownership still holds immediately
+  # before injection, and names that pod in `baseline-ready.json`. The workflow
+  # resolves the address to a pod and aims the PodChaos at it by name.
+  - code: S8
+    name: http-in-flight-executor-crash
+    enabled: true
+
+    fault:
+      kind: pod-kill
+      target: worker-executor
+      # Still `one` pod, but not an arbitrary one: the workflow narrows the
+      # selector to the pod the driver named. `one` remains as the belt-and-
+      # braces bound in case that narrowing ever matches more than expected.
+      mode: one
+      durationSecs: 60
+
+    phases:
+      # Shorter than S12's: there is no rate to warm up to, only residency of a
+      # fixed set of agents, and the workload holds a constant 50 operations in
+      # flight from the first second.
+      baselineSecs: 180
+      faultSecs: 120
+      # Long enough for shard reassignment plus several whole operations, so
+      # every key gets a chance to reach a result before the account is taken.
+      recoverySecs: 300
+
+    pinned:
+      # 50 agents, so 50 operations in flight at every instant. Agent count and
+      # concurrency are the same number here by construction: each agent holds
+      # exactly one operation at a time, which is what makes "how many were in
+      # flight when the pod died" a known constant rather than a sample.
+      agents: 50
+      # Each operation sleeps this long server-side before incrementing. It has
+      # to comfortably exceed the workflow's inject-and-verify path — signal
+      # poll (5s) + `kubectl apply` + waiting for `AllInjected` — or the kill
+      # would land between operations and the scenario would measure nothing.
+      operationMillis: 30000
+      # Ownership is a hash, so a given executor owns roughly its share of any
+      # candidate pool. Scanning 8x the needed count leaves room for an uneven
+      # split on a two-executor topology without an unbounded search.
+      candidatePoolMultiplier: 8
+
+    retryPolicy:
+      # Identical to S12's and load-bearing for the same reason, but here it
+      # feeds an exact per-key check rather than aggregate arithmetic: the one
+      # permitted retry goes out under the original key, so a second execution
+      # shows up as two distinct successful counter values on one key.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800

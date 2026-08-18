@@ -53,6 +53,35 @@ pub const FAULT_RECOVERED_FILE: &str = "fault-recovered.json";
 /// this is about keeping the abort responsive, not about latency.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
+/// Where the driver determined the fault has to land, for scenarios that need a
+/// *specific* pod rather than any pod of a deployment (GOL-366).
+///
+/// Chaos Mesh's `mode: one` picks a pod at random, which is the right thing when
+/// the experiment is "lose a shard-manager" and the wrong thing when it is "lose
+/// the executor that is currently running these fifty invocations". Only the
+/// driver can know the second: it holds the routing table and can compute which
+/// executor owns which agent. So it names the target and the workflow aims at
+/// it.
+///
+/// The driver still knows nothing about Kubernetes. It reports the endpoint the
+/// *routing table* uses — an `ip:port` — and resolving that to a pod name is the
+/// workflow's job, the same way turning phase windows into Grafana links is.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FaultTarget {
+    /// The executor endpoint as the shard-manager names it, e.g.
+    /// `10.0.14.207:9000`.
+    pub pod_address: String,
+    /// The address's host part, split out because that is what a Kubernetes
+    /// `status.podIP` field selector matches — and a workflow doing the split
+    /// in shell would be one more place to get it wrong.
+    pub pod_ip: String,
+    /// The agents this pod was verified to own, in the order the scenario will
+    /// drive them. Recorded so the artifact can be read back later and the
+    /// claim re-checked rather than taken on trust.
+    pub owned_agents: Vec<String>,
+}
+
 /// Written by the driver: the baseline workload has run long enough to be at
 /// steady state, so injecting now measures recovery rather than warm-up.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +92,10 @@ pub struct BaselineReady {
     /// Operations the baseline phase completed. Purely informational — it lets
     /// the workflow log something meaningful before it injects.
     pub baseline_operations: u64,
+    /// Present only for scenarios that pin the fault to one pod. Absent means
+    /// "any pod of the configured target will do", which is what S12 wants.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fault_target: Option<FaultTarget>,
 }
 
 /// Written by the workflow: the fault is applied **and confirmed active**. The
@@ -298,6 +331,52 @@ mod tests {
         );
     }
 
+    /// The workflow aims a pinned fault using exactly these fields, so they have
+    /// to survive the round trip through the signal file under the names the
+    /// workflow's `jq` expressions use.
+    #[test]
+    async fn a_pinned_fault_target_round_trips_under_its_json_names() {
+        let dir = temp_signal_dir("fault-target");
+        let signals = FaultSignals::new(&dir).unwrap();
+        signals
+            .write_baseline_ready(&BaselineReady {
+                scenario_code: "S8".to_string(),
+                ready_at: Utc::now(),
+                baseline_operations: 50,
+                fault_target: Some(FaultTarget {
+                    pod_address: "10.0.14.207:9000".to_string(),
+                    pod_ip: "10.0.14.207".to_string(),
+                    owned_agents: vec!["chaos-s8-pinned-http-0000".to_string()],
+                }),
+            })
+            .unwrap();
+
+        let raw = std::fs::read_to_string(dir.join(BASELINE_READY_FILE)).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(json["faultTarget"]["podIp"], "10.0.14.207");
+        assert_eq!(json["faultTarget"]["podAddress"], "10.0.14.207:9000");
+    }
+
+    /// S12 does not pin its fault, and its signal must stay free of the field
+    /// rather than carrying a null the workflow has to special-case.
+    #[test]
+    async fn an_unpinned_baseline_ready_omits_the_fault_target_entirely() {
+        let dir = temp_signal_dir("no-fault-target");
+        let signals = FaultSignals::new(&dir).unwrap();
+        signals
+            .write_baseline_ready(&BaselineReady {
+                scenario_code: "S12".to_string(),
+                ready_at: Utc::now(),
+                baseline_operations: 7,
+                fault_target: None,
+            })
+            .unwrap();
+
+        let raw = std::fs::read_to_string(dir.join(BASELINE_READY_FILE)).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert!(json.get("faultTarget").is_none());
+    }
+
     /// Garbage in the signal file is reported as such, not silently retried
     /// until the timeout — the operator needs to see the real cause.
     #[test]
@@ -326,6 +405,7 @@ mod tests {
             scenario_code: "S12".to_string(),
             ready_at: Utc::now(),
             baseline_operations: 1234,
+            fault_target: None,
         };
         signals.write_baseline_ready(&ready).unwrap();
 

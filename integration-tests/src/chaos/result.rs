@@ -24,8 +24,9 @@
 //! deployment, and a driver that hard-coded them would be wrong the moment the
 //! same scenario ran anywhere else.
 
+use crate::chaos::pinned::PinnedSelection;
 use crate::chaos::summary::{ChaosSummary, TerminationReason};
-use crate::chaos::{FaultConfig, RetryPolicy, WorkloadConfig};
+use crate::chaos::{FaultConfig, PinnedConfig, RetryPolicy, WorkloadConfig};
 use chrono::{DateTime, Utc};
 use golem_test_framework::benchmark::RunMetadata;
 use serde::{Deserialize, Serialize};
@@ -33,7 +34,7 @@ use std::path::Path;
 
 /// Bumped when the on-disk shape changes incompatibly. Archived results outlive
 /// the tooling that reads them, so the shape has to say which shape it is.
-pub const RESULT_SCHEMA_VERSION: u32 = 1;
+pub const RESULT_SCHEMA_VERSION: u32 = 2;
 
 /// A phase's wall-clock extent. These are the numbers the workflow pins Grafana
 /// time ranges to, so they are recorded in UTC with no ambiguity.
@@ -109,9 +110,26 @@ pub struct ChaosResult {
     /// Echo of what the workflow said it injected, for the record.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fault_id: Option<String>,
+    /// What the workflow reported it actually aimed at. For an unpinned
+    /// scenario this is the deployment name; for a pinned one it is the pod the
+    /// workflow resolved and killed — which is what an investigation needs to
+    /// find that executor's own logs and traces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fault_target_observed: Option<String>,
     /// What the run was configured to provoke.
     pub fault: FaultConfig,
-    pub workload: WorkloadConfig,
+    /// The mixed workload the run was configured with. Absent for scenarios
+    /// that drive a pinned population instead — schema v2 made these two
+    /// mutually exclusive rather than making one of them lie.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workload: Option<WorkloadConfig>,
+    /// The pinned workload the run was configured with, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<PinnedConfig>,
+    /// Which executor the fault was aimed at and which agents it was verified
+    /// to own. Present only for scenarios that pin the target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_selection: Option<PinnedSelection>,
     pub retry_policy: RetryPolicy,
     pub scope: RunScope,
     pub summary: ChaosSummary,
@@ -161,19 +179,22 @@ mod tests {
             fault_injected_at: None,
             fault_recovered_at: None,
             fault_id: None,
+            fault_target_observed: None,
             fault: FaultConfig {
                 kind: "pod-kill".to_string(),
                 target: "shard-manager".to_string(),
                 mode: "one".to_string(),
                 duration_secs: 60,
             },
-            workload: WorkloadConfig {
+            workload: Some(WorkloadConfig {
                 durable_agents: 50,
                 ephemeral_agents: 20,
                 scheduled_agents: 20,
                 promise_agents: 20,
                 rate_per_sec: 10,
-            },
+            }),
+            pinned: None,
+            pinned_selection: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "env-1".to_string(),
@@ -290,6 +311,8 @@ mod sample_artifact {
                 returned_value: None,
                 first_attempt_value: None,
                 error: None,
+                error_class: None,
+                attempt_log: Vec::new(),
             });
         }
 
@@ -357,19 +380,22 @@ mod sample_artifact {
             fault_injected_at: Some(at(300)),
             fault_recovered_at: Some(at(420)),
             fault_id: Some("chaos-s12-12345".to_string()),
+            fault_target_observed: Some("shard-manager".to_string()),
             fault: FaultConfig {
                 kind: "pod-kill".to_string(),
                 target: "shard-manager".to_string(),
                 mode: "one".to_string(),
                 duration_secs: 60,
             },
-            workload: WorkloadConfig {
+            workload: Some(WorkloadConfig {
                 durable_agents: 50,
                 ephemeral_agents: 20,
                 scheduled_agents: 20,
                 promise_agents: 20,
                 rate_per_sec: 10,
-            },
+            }),
+            pinned: None,
+            pinned_selection: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "0192f000-0000-7000-8000-000000000001".to_string(),

@@ -29,6 +29,7 @@
 //! "done" would overstate it. They get their own outcome, and the read-back
 //! carries the doubt through as a range instead of a number.
 
+use crate::chaos::errors::ErrorClass;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -36,7 +37,7 @@ use std::sync::{Arc, Mutex};
 
 /// Bumped when the on-disk shape changes incompatibly, so an archived history
 /// can be read years later by tooling that knows which shape it is looking at.
-pub const HISTORY_SCHEMA_VERSION: u32 = 1;
+pub const HISTORY_SCHEMA_VERSION: u32 = 2;
 
 /// Which workload stream an operation belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -52,6 +53,12 @@ pub enum Stream {
     Scheduled,
     /// Promise create/complete/await.
     Promise,
+    /// Pinned HTTP `invoke_and_await` operations held in flight across a fault
+    /// (GOL-366). Distinct from `Durable` even though both land on `Counter`
+    /// agents: these are deliberately long-running and deliberately aimed at
+    /// one known executor, so mixing them into the durable population would
+    /// blur two different experiments.
+    PinnedHttp,
 }
 
 impl Stream {
@@ -61,6 +68,7 @@ impl Stream {
             Stream::Ephemeral => "ephemeral",
             Stream::Scheduled => "scheduled",
             Stream::Promise => "promise",
+            Stream::PinnedHttp => "pinned-http",
         }
     }
 
@@ -75,14 +83,18 @@ impl Stream {
     ///   counter, so there is no accumulated number to read. They are reported
     ///   on created/completed counts and latency.
     pub fn has_readback(self) -> bool {
-        matches!(self, Stream::Durable | Stream::Scheduled)
+        matches!(
+            self,
+            Stream::Durable | Stream::Scheduled | Stream::PinnedHttp
+        )
     }
 
-    pub const ALL: [Stream; 4] = [
+    pub const ALL: [Stream; 5] = [
         Stream::Durable,
         Stream::Ephemeral,
         Stream::Scheduled,
         Stream::Promise,
+        Stream::PinnedHttp,
     ];
 }
 
@@ -157,6 +169,35 @@ impl std::fmt::Display for Outcome {
     }
 }
 
+/// One attempt at one operation.
+///
+/// The per-attempt log exists because the aggregate fields cannot answer the
+/// exactly-once question on their own: "this key has more than one distinct
+/// successful completion" is a statement about *attempts*, and an operation
+/// that succeeded on its retry after the first attempt also succeeded is
+/// exactly the shape a duplicate takes. Keeping every attempt also means an
+/// archived history can be re-analysed later without re-running anything.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttemptRecord {
+    /// 1-based, so `attempt: 2` reads as "the retry".
+    pub attempt: u32,
+    pub started_at: DateTime<Utc>,
+    pub duration_ms: u64,
+    /// Value the agent returned, when this attempt succeeded and the method
+    /// returns one. `Some` here *is* the record of a successful completion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub returned_value: Option<u32>,
+    /// Whether this attempt succeeded. Distinct from `returned_value` being
+    /// set: several workload methods succeed while returning nothing.
+    pub succeeded: bool,
+    /// How the failure was classified. Absent when the attempt succeeded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_class: Option<ErrorClass>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// One submitted operation and everything the driver learned about it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -196,6 +237,15 @@ pub struct OperationRecord {
     /// Last error seen, for the operator. Not parsed by anything.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// How the *final* attempt failed. Absent when the operation succeeded.
+    /// This is what [`Outcome`] is derived from, kept alongside it so a reader
+    /// can see why an operation landed in the band of doubt rather than in the
+    /// rejected pile.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_class: Option<ErrorClass>,
+    /// Every attempt, in order. See [`AttemptRecord`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempt_log: Vec<AttemptRecord>,
 }
 
 impl OperationRecord {
@@ -225,6 +275,32 @@ impl OperationRecord {
             (Some(first), Some(last)) => last > first,
             _ => false,
         }
+    }
+
+    /// The distinct values this key's successful attempts returned, sorted.
+    ///
+    /// A correctly deduplicated key has at most one: the platform stores the
+    /// result of the single execution and replays it to every later attempt
+    /// under the same key. Two entries mean the key executed twice.
+    ///
+    /// Attempts that succeeded without returning a value contribute nothing —
+    /// they are indistinguishable from one another, so counting them would
+    /// invent evidence that is not there.
+    pub fn distinct_successful_values(&self) -> Vec<u32> {
+        let mut values: Vec<u32> = self
+            .attempt_log
+            .iter()
+            .filter(|a| a.succeeded)
+            .filter_map(|a| a.returned_value)
+            .collect();
+        values.sort_unstable();
+        values.dedup();
+        values
+    }
+
+    /// Whether any attempt at this key succeeded at all.
+    pub fn had_successful_attempt(&self) -> bool {
+        self.outcome == Outcome::Confirmed || self.attempt_log.iter().any(|a| a.succeeded)
     }
 }
 
@@ -338,6 +414,8 @@ mod tests {
             duration_ms: 5,
             returned_value: None,
             first_attempt_value: None,
+            error_class: None,
+            attempt_log: Vec::new(),
             error: None,
         }
     }

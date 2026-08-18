@@ -32,7 +32,9 @@
 //!    engine here — see [`summary`] for what is measured and the narrow set of
 //!    conditions that fail a run outright.
 
+pub mod errors;
 pub mod history;
+pub mod pinned;
 pub mod prep;
 pub mod result;
 pub mod scenarios;
@@ -49,6 +51,8 @@ use std::time::Duration;
 /// the result artifact and the tickets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ScenarioCode {
+    /// Executor pod kill with pinned HTTP invocations in flight.
+    S8,
     /// Shard-manager pod restart under mixed workload.
     S12,
 }
@@ -56,6 +60,7 @@ pub enum ScenarioCode {
 impl ScenarioCode {
     pub fn as_str(self) -> &'static str {
         match self {
+            ScenarioCode::S8 => "S8",
             ScenarioCode::S12 => "S12",
         }
     }
@@ -63,7 +68,7 @@ impl ScenarioCode {
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 1] = [ScenarioCode::S12];
+    pub const ALL: [ScenarioCode; 2] = [ScenarioCode::S8, ScenarioCode::S12];
 
     pub fn parse(s: &str) -> Option<Self> {
         ScenarioCode::ALL
@@ -180,6 +185,42 @@ impl RetryPolicy {
     }
 }
 
+/// Shape of a *pinned* workload: a fixed set of agents, all owned by one known
+/// executor, each holding one long-running `invoke_and_await` in flight at a
+/// time (GOL-366).
+///
+/// This is a different experiment from [`WorkloadConfig`], not a variation on
+/// it. The mixed workload asks "what happens to a stream of short operations
+/// when the platform is disturbed"; this one asks "what happens to *these
+/// specific* operations, which were provably running on the pod that died".
+/// Answering the second needs the agents chosen by shard ownership rather than
+/// by index, and needs each operation to still be in flight when the fault
+/// lands — hence a duration rather than a rate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PinnedConfig {
+    /// How many agents to pin, which is also the concurrency: each agent holds
+    /// exactly one operation in flight, so this is the number of in-flight
+    /// operations at every instant of the run.
+    pub agents: u32,
+    /// Server-side duration of one operation. Long enough that the workflow can
+    /// detect the readiness signal, apply the fault and see it become
+    /// `AllInjected` while operations submitted beforehand are still running —
+    /// otherwise the kill lands between operations and the scenario measures
+    /// nothing.
+    pub operation_millis: u32,
+    /// How many candidate agent names to hash per pinned agent when looking for
+    /// a single executor that owns enough of them. Ownership is a hash, so the
+    /// candidates for any one pod are a fraction of the pool; the default
+    /// leaves room for an uneven split without an unbounded search.
+    #[serde(default = "default_candidate_pool_multiplier")]
+    pub candidate_pool_multiplier: u32,
+}
+
+fn default_candidate_pool_multiplier() -> u32 {
+    8
+}
+
 /// One scenario's entry in the suite YAML.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -192,7 +233,12 @@ pub struct ScenarioConfig {
     pub enabled: bool,
     pub fault: FaultConfig,
     pub phases: PhaseConfig,
-    pub workload: WorkloadConfig,
+    /// The continuous mixed workload. Absent for scenarios that do not run one.
+    #[serde(default)]
+    pub workload: Option<WorkloadConfig>,
+    /// The pinned in-flight workload. Absent for scenarios that do not run one.
+    #[serde(default)]
+    pub pinned: Option<PinnedConfig>,
     #[serde(default)]
     pub retry_policy: RetryPolicy,
     /// How long the driver waits for each workflow signal before aborting.
@@ -214,6 +260,28 @@ impl ScenarioConfig {
     pub fn scenario_code(&self) -> anyhow::Result<ScenarioCode> {
         ScenarioCode::parse(&self.code)
             .ok_or_else(|| anyhow::anyhow!("unknown chaos scenario code {:?}", self.code))
+    }
+
+    /// The mixed workload block, which the scenarios that run one require.
+    /// A missing block is a YAML mistake rather than an empty workload, so it
+    /// fails loudly instead of running a scenario against nothing.
+    pub fn require_workload(&self) -> anyhow::Result<&WorkloadConfig> {
+        self.workload.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "chaos scenario {} needs a `workload` block in the suite YAML",
+                self.code
+            )
+        })
+    }
+
+    /// The pinned workload block. See [`Self::require_workload`].
+    pub fn require_pinned(&self) -> anyhow::Result<&PinnedConfig> {
+        self.pinned.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "chaos scenario {} needs a `pinned` block in the suite YAML",
+                self.code
+            )
+        })
     }
 }
 
@@ -315,13 +383,14 @@ mod tests {
                     fault_secs: 1,
                     recovery_secs: 1,
                 },
-                workload: WorkloadConfig {
+                workload: Some(WorkloadConfig {
                     durable_agents: 1,
                     ephemeral_agents: 1,
                     scheduled_agents: 1,
                     promise_agents: 1,
                     rate_per_sec: 1,
-                },
+                }),
+                pinned: None,
                 retry_policy: RetryPolicy::default(),
                 signal_timeout_secs: 1,
             }],
@@ -342,6 +411,24 @@ mod tests {
     fn scenario_codes_parse_case_insensitively() {
         assert_eq!(ScenarioCode::parse("s12"), Some(ScenarioCode::S12));
         assert_eq!(ScenarioCode::parse("S12"), Some(ScenarioCode::S12));
+        assert_eq!(ScenarioCode::parse("s8"), Some(ScenarioCode::S8));
         assert_eq!(ScenarioCode::parse("S99"), None);
+    }
+
+    /// A scenario whose YAML entry is missing the workload block it needs must
+    /// say so rather than quietly running against nothing.
+    #[test]
+    fn a_scenario_missing_its_workload_block_fails_loudly() {
+        let suite = ChaosSuite::load(suite_path()).unwrap();
+        for entry in &suite.scenarios {
+            match entry.scenario_code().unwrap() {
+                ScenarioCode::S12 => {
+                    entry.require_workload().unwrap();
+                }
+                ScenarioCode::S8 => {
+                    entry.require_pinned().unwrap();
+                }
+            }
+        }
     }
 }

@@ -222,6 +222,8 @@ pub enum ChaosAction {
 /// Cloud Chaos Tests v1 project and the `code` fields in the suite YAML.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum ChaosScenarioArg {
+    /// Executor pod kill with pinned HTTP invocations in flight.
+    S8,
     /// Shard-manager pod restart under mixed workload.
     S12,
 }

@@ -49,6 +49,7 @@
 //! queries. One global counter would have produced a haystack instead.
 
 use crate::chaos::history::{Outcome, Phase, Stream};
+use crate::chaos::pinned::KeyProbe;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -278,6 +279,173 @@ pub struct RoutingSnapshot {
     pub unavailable_reason: Option<String>,
 }
 
+/// Which of the two exactly-once guarantees a key broke.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExactlyOnceViolation {
+    /// The platform accepted the operation, but after recovery the key has no
+    /// final result: asked again under its own idempotency key, the platform
+    /// could not produce one.
+    MissingFinalResult,
+    /// The key has more than one distinct successful completion value. Since
+    /// `Counter.sleep_and_increment` returns its post-increment count, two
+    /// different values under one key is direct proof the work ran twice.
+    MultipleDistinctCompletions,
+}
+
+impl ExactlyOnceViolation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExactlyOnceViolation::MissingFinalResult => "missing-final-result",
+            ExactlyOnceViolation::MultipleDistinctCompletions => "multiple-distinct-completions",
+        }
+    }
+}
+
+impl std::fmt::Display for ExactlyOnceViolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// One key that broke a guarantee, with enough detail to go straight to a trace
+/// query for it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExactlyOnceFinding {
+    pub violation: ExactlyOnceViolation,
+    pub idempotency_key: String,
+    pub agent: String,
+    /// Plain-language statement of what was observed, so a job-log reader does
+    /// not have to reconstruct it from the numbers.
+    pub detail: String,
+}
+
+/// The exactly-once account for a pinned run (GOL-366).
+///
+/// Unlike the read-back verdicts, the findings here are **assertions**, not
+/// observations for an operator to weigh. That difference is earned: the pinned
+/// population is bounded and every key was probed individually under its own
+/// idempotency key, so there is no aggregate arithmetic and no band of doubt to
+/// interpret. A finding is a fact about one key.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExactlyOnceReport {
+    /// Keys the probe pass covered.
+    pub keys_checked: u64,
+    /// Keys that had no probe result at all — a probe task that died rather
+    /// than one that failed, which is the only way a key escapes the account.
+    /// Counted rather than ignored: a verdict computed over a silently smaller
+    /// population is a weaker claim than it appears to be.
+    pub keys_unprobed: u64,
+    /// Keys that had a final result after recovery.
+    pub keys_with_final_result: u64,
+    /// Keys the driver never got a result for, but which the platform produced
+    /// one for when asked again. Not a defect — this is recovery working — but
+    /// worth surfacing, because it is the population the fault actually
+    /// disturbed.
+    pub keys_recovered_by_probe: u64,
+    /// Keys the driver was definitely refused, which are excluded from the
+    /// missing-result check: nothing was accepted, so nothing is owed.
+    pub keys_rejected: u64,
+    /// Net counter movement across the probe pass, per agent. A probe of a key
+    /// that already ran replays a stored result and moves nothing; this is
+    /// therefore how many keys had never run at all, and it bounds how much of
+    /// the pass was fresh execution rather than replay.
+    pub probe_executed_per_agent: BTreeMap<String, i64>,
+    /// Total of the above. Zero means every probed key already had a result
+    /// stored, which is the strongest form of the guarantee holding.
+    pub probe_executed_total: i64,
+    pub findings: Vec<ExactlyOnceFinding>,
+}
+
+impl ExactlyOnceReport {
+    /// Builds the account from the pinned records, the probe results, and the
+    /// counter read-backs taken either side of the probe pass.
+    pub fn build(
+        records: &[OperationRecord],
+        probes: &[KeyProbe],
+        before_probe: &BTreeMap<String, u64>,
+        after_probe: &BTreeMap<String, u64>,
+    ) -> Self {
+        let by_key: BTreeMap<&str, &KeyProbe> = probes
+            .iter()
+            .map(|p| (p.idempotency_key.as_str(), p))
+            .collect();
+
+        let mut report = ExactlyOnceReport::default();
+        for record in records.iter().filter(|r| r.stream == Stream::PinnedHttp) {
+            let Some(probe) = by_key.get(record.idempotency_key.as_str()) else {
+                report.keys_unprobed += 1;
+                continue;
+            };
+            report.keys_checked += 1;
+
+            if record.outcome == Outcome::Rejected {
+                // Refused outright, so the platform owes nothing for this key.
+                // Probing it anyway is still useful — it is how the refusal is
+                // confirmed to have left no trace — but it cannot fail the run.
+                report.keys_rejected += 1;
+                continue;
+            }
+
+            match probe.final_value {
+                None => {
+                    report.findings.push(ExactlyOnceFinding {
+                        violation: ExactlyOnceViolation::MissingFinalResult,
+                        idempotency_key: record.idempotency_key.clone(),
+                        agent: record.agent.clone(),
+                        detail: format!(
+                            "accepted as {} but has no final result after recovery: {}",
+                            record.outcome,
+                            probe.error.as_deref().unwrap_or("probe returned no value")
+                        ),
+                    });
+                }
+                Some(final_value) => {
+                    report.keys_with_final_result += 1;
+                    if !record.had_successful_attempt() {
+                        report.keys_recovered_by_probe += 1;
+                    }
+
+                    let mut values = record.distinct_successful_values();
+                    if !values.contains(&final_value) {
+                        values.push(final_value);
+                    }
+                    if values.len() > 1 {
+                        values.sort_unstable();
+                        report.findings.push(ExactlyOnceFinding {
+                            violation: ExactlyOnceViolation::MultipleDistinctCompletions,
+                            idempotency_key: record.idempotency_key.clone(),
+                            agent: record.agent.clone(),
+                            detail: format!(
+                                "one key, {} distinct successful counter values {values:?} — the work ran more than once",
+                                values.len()
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
+        for (agent, after) in after_probe {
+            let before = before_probe.get(agent).copied().unwrap_or(0);
+            let delta = *after as i64 - before as i64;
+            if delta != 0 {
+                report.probe_executed_per_agent.insert(agent.clone(), delta);
+            }
+            report.probe_executed_total += delta;
+        }
+
+        report
+    }
+
+    /// The two conditions that fail a pinned scenario outright.
+    pub fn has_violations(&self) -> bool {
+        !self.findings.is_empty()
+    }
+}
+
 /// Everything the driver reports for a scenario.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -292,6 +460,11 @@ pub struct ChaosSummary {
     /// or simply had nothing to report.
     pub streams_without_readback: Vec<Stream>,
     pub routing_snapshots: Vec<RoutingSnapshot>,
+    /// The exactly-once account, for scenarios that run a pinned population.
+    /// Absent for scenarios that do not, rather than an empty report that would
+    /// read as "checked, nothing found".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exactly_once: Option<ExactlyOnceReport>,
     /// The read-back verdicts that need a human, hoisted for scanning.
     pub attention: Vec<String>,
 }
@@ -400,8 +573,23 @@ impl ChaosSummary {
                 .filter(|s| !s.has_readback())
                 .collect(),
             routing_snapshots,
+            exactly_once: None,
             attention,
         }
+    }
+
+    /// Attaches the exactly-once account and hoists its findings into
+    /// [`Self::attention`], so a reader scanning the top of a report sees them
+    /// next to the read-back verdicts rather than further down.
+    pub fn with_exactly_once(mut self, report: ExactlyOnceReport) -> Self {
+        for finding in &report.findings {
+            self.attention.push(format!(
+                "{}: key {} on agent {} — {}",
+                finding.violation, finding.idempotency_key, finding.agent, finding.detail
+            ));
+        }
+        self.exactly_once = Some(report);
+        self
     }
 }
 
@@ -424,6 +612,14 @@ pub enum TerminationReason {
     PlatformUnreachable { detail: String },
     /// The run was cancelled; artifacts are whatever had accumulated.
     Aborted { detail: String },
+    /// A pinned scenario's exactly-once account found at least one key that
+    /// broke a guarantee. Unlike the read-back verdicts this *is* asserted —
+    /// see [`ExactlyOnceReport`] for why the pinned population earns that.
+    ExactlyOnceViolated { findings: u64, first: String },
+    /// The fault could not be aimed at a verified target. Better to spend the
+    /// maintenance window fixing that than to kill an unrelated pod and report
+    /// on it as though it were the right one.
+    FaultTargetUnverified { detail: String },
 }
 
 impl TerminationReason {
@@ -482,6 +678,8 @@ mod tests {
             returned_value: None,
             first_attempt_value: None,
             error: None,
+            error_class: None,
+            attempt_log: Vec::new(),
         }
     }
 

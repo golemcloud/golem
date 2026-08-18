@@ -584,6 +584,7 @@ async fn run_chaos(
 
             let suite = chaos::ChaosSuite::load(&suite_path).expect("failed to load chaos suite");
             let code = match scenario {
+                ChaosScenarioArg::S8 => chaos::ScenarioCode::S8,
                 ChaosScenarioArg::S12 => chaos::ScenarioCode::S12,
             };
             let config = suite
@@ -595,12 +596,15 @@ async fn run_chaos(
                 .expect("failed to load chaos prep manifest");
             let signals =
                 chaos::signal::FaultSignals::new(&signal_dir).expect("failed to open signal dir");
-            let outputs = chaos::scenarios::s12::OutputPaths {
+            let outputs = chaos::scenarios::OutputPaths {
                 result: save_to_json,
                 history: save_history_to_json,
             };
 
             let result = match code {
+                chaos::ScenarioCode::S8 => {
+                    chaos::scenarios::s8::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
                 chaos::ScenarioCode::S12 => {
                     chaos::scenarios::s12::run(&config, &manifest, &deps, &signals, &outputs).await
                 }

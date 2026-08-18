@@ -72,6 +72,18 @@ trait Counter {
     /// exposes `CounterClient::get(name)` as its constructor — an agent method
     /// called `get` shadows it and breaks every client call site.
     fn count(&self) -> u32;
+
+    /// Waits `millis`, then increments, returning the post-increment count.
+    ///
+    /// The in-flight chaos scenarios need an operation that is still running
+    /// when a pod is killed. Sleeping rather than spinning is the point:
+    /// `busy_for` would pin a core per concurrent operation, which turns a
+    /// crash-recovery experiment into a saturation experiment.
+    ///
+    /// The increment lands *after* the wait, so the state change falls inside
+    /// the fault window rather than before it — that is the mutation whose
+    /// exactly-once behaviour is under test.
+    fn sleep_and_increment(&mut self, millis: u32) -> u32;
 }
 
 struct CounterImpl {
@@ -132,6 +144,12 @@ impl Counter for CounterImpl {
     }
 
     fn count(&self) -> u32 {
+        self.count
+    }
+
+    fn sleep_and_increment(&mut self, millis: u32) -> u32 {
+        std::thread::sleep(std::time::Duration::from_millis(millis as u64));
+        self.count += 1;
         self.count
     }
 }
