@@ -178,6 +178,94 @@ pub async fn snapshot_routing(deps: &BenchmarkTestDependencies, at: &str) -> Rou
     }
 }
 
+/// Which durable value an agent is read back on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadKind {
+    /// `Counter.count`.
+    Counter,
+    /// `ScheduleCounter.polls`.
+    Polls,
+    /// `QuotaCounter.count`, paired with `QuotaCounter.refused`.
+    QuotaCounter,
+}
+
+/// How many agents are read back at once.
+///
+/// Sequential read-back does not survive contact with a fault. Every read is
+/// bounded by `READ_TIMEOUT`, so a scenario with 300 agents and a handful of
+/// unresponsive ones spends hours walking them one at a time — long after the
+/// maintenance window it was given. Reads do not mutate, so running them
+/// concurrently changes nothing about the numbers.
+const READ_CONCURRENCY: usize = 16;
+
+/// How often to report progress through a read-back pass.
+const READ_PROGRESS_EVERY: usize = 100;
+
+/// Reads a set of agents back concurrently, in bounded batches.
+///
+/// Returns one entry per agent that had records, in the order given. An agent
+/// that could not be read carries its reason rather than being dropped — see
+/// [`AgentReadback`].
+pub async fn read_back_agents(
+    ctx: &crate::chaos::workload::WorkloadContext,
+    records: &[OperationRecord],
+    agents: Vec<(crate::chaos::history::Stream, String, ReadKind)>,
+) -> Vec<AgentReadback> {
+    use crate::chaos::workload;
+
+    let total = agents.len();
+    let mut out = Vec::with_capacity(total);
+    let mut next_report = READ_PROGRESS_EVERY;
+
+    for chunk in agents.chunks(READ_CONCURRENCY) {
+        let mut batch = tokio::task::JoinSet::new();
+        for (stream, agent, kind) in chunk.iter().cloned() {
+            let ctx = ctx.clone();
+            batch.spawn(async move {
+                let observed = match kind {
+                    ReadKind::Counter => workload::read_counter(&ctx, &agent).await,
+                    ReadKind::Polls => workload::read_polls(&ctx, &agent).await,
+                    ReadKind::QuotaCounter => workload::read_quota_counter(&ctx, &agent).await,
+                };
+                // Only the quota stream has a second number, and it is the one
+                // that says what losing a lease actually cost.
+                let refused = match kind {
+                    ReadKind::QuotaCounter => workload::read_refused(&ctx, &agent).await.ok(),
+                    _ => None,
+                };
+                (stream, agent, observed, refused)
+            });
+        }
+
+        let mut batch_results = Vec::new();
+        while let Some(joined) = batch.join_next().await {
+            match joined {
+                Ok(result) => batch_results.push(result),
+                Err(e) => warn!("Chaos: a read-back task panicked: {e}"),
+            }
+        }
+        // Restore the caller's order, which the JoinSet does not preserve.
+        batch_results.sort_by(|a, b| a.1.cmp(&b.1));
+
+        for (stream, agent, observed, refused) in batch_results {
+            let scoped = records
+                .iter()
+                .filter(|r| r.stream == stream && r.agent == agent);
+            if let Some(mut entry) = readback_for(stream, &agent, scoped, observed) {
+                entry.refused_reservations = refused;
+                out.push(entry);
+            }
+        }
+
+        if out.len() >= next_report {
+            info!("Chaos: read back {} of {total} agents", out.len());
+            next_report += READ_PROGRESS_EVERY;
+        }
+    }
+
+    out
+}
+
 /// Read-back for one agent, given the records aimed at it and the value its
 /// durable state reported.
 pub fn readback_for<'a>(

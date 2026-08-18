@@ -71,8 +71,8 @@ use crate::chaos::prep::ChaosPrepManifest;
 use crate::chaos::probe;
 use crate::chaos::result::{ChaosResult, PhaseWindow, Phases, RunScope};
 use crate::chaos::scenarios::{
-    OutputPaths, ScenarioOutcome, build_result, readback_for, signal_termination, snapshot_routing,
-    write_outputs,
+    OutputPaths, ReadKind, ScenarioOutcome, build_result, read_back_agents, signal_termination,
+    snapshot_routing, write_outputs,
 };
 use crate::chaos::signal::{BaselineReady, FaultSignals, ScaleEvent};
 use crate::chaos::summary::{AgentReadback, ChaosSummary, ExactlyOnceReport, TerminationReason};
@@ -619,60 +619,44 @@ async fn read_counters(
     values
 }
 
-/// Read-back for the streams that keep a durable count, exactly as S12 does it:
-/// the completion and idempotency evidence has to keep running alongside the
-/// ownership oracle, not instead of it.
+/// Read-back for every stream that keeps a durable count.
+///
+/// Concurrent and individually bounded: a fault can leave an agent that never
+/// answers — a quota lease lost mid-run parks the agent's next reservation with
+/// no timeout on the platform side — and walking 300 agents sequentially behind
+/// a 30s ceiling would outlast the maintenance window several times over.
 async fn read_back(
     ctx: &WorkloadContext,
     records: &[OperationRecord],
     config: &crate::chaos::WorkloadConfig,
 ) -> Vec<AgentReadback> {
-    let mut readback = Vec::new();
-
+    let mut agents = Vec::new();
     for index in 0..config.durable_agents {
-        let agent = ctx.agent_name(Stream::Durable, index);
-        let scoped = records
-            .iter()
-            .filter(|r| r.stream == Stream::Durable && r.agent == agent);
-        if scoped.clone().next().is_none() {
-            continue;
-        }
-        let observed = workload::read_counter(ctx, &agent).await;
-        readback.extend(readback_for(Stream::Durable, &agent, scoped, observed));
+        agents.push((
+            Stream::Durable,
+            ctx.agent_name(Stream::Durable, index),
+            ReadKind::Counter,
+        ));
     }
-
-    // The quota stream is read back on two numbers, not one: what got through
-    // and what the platform refused. A refusal is the observable cost of a
-    // lease the executor could no longer renew, and it is invisible in the
-    // counter alone.
+    // The quota stream is read on two numbers, not one: what committed and what
+    // the platform refused. A refusal is the observable cost of a lease the
+    // executor could no longer renew, and it is invisible in the counter alone.
     for index in 0..config.quota_agents {
-        let agent = ctx.agent_name(Stream::Quota, index);
-        let scoped = records
-            .iter()
-            .filter(|r| r.stream == Stream::Quota && r.agent == agent);
-        if scoped.clone().next().is_none() {
-            continue;
-        }
-        let observed = workload::read_quota_counter(ctx, &agent).await;
-        if let Some(mut entry) = readback_for(Stream::Quota, &agent, scoped, observed) {
-            entry.refused_reservations = workload::read_refused(ctx, &agent).await.ok();
-            readback.push(entry);
-        }
+        agents.push((
+            Stream::Quota,
+            ctx.agent_name(Stream::Quota, index),
+            ReadKind::QuotaCounter,
+        ));
     }
-
     for index in 0..config.scheduled_agents {
-        let target = ctx.schedule_target_name(index);
-        let scoped = records
-            .iter()
-            .filter(|r| r.stream == Stream::Scheduled && r.agent == target);
-        if scoped.clone().next().is_none() {
-            continue;
-        }
-        let observed = workload::read_polls(ctx, &target).await;
-        readback.extend(readback_for(Stream::Scheduled, &target, scoped, observed));
+        agents.push((
+            Stream::Scheduled,
+            ctx.schedule_target_name(index),
+            ReadKind::Polls,
+        ));
     }
 
-    readback
+    read_back_agents(ctx, records, agents).await
 }
 
 #[cfg(test)]
@@ -831,6 +815,42 @@ mod tests {
         let before = OwnershipSample::from_routing("before-fault", None, None, false);
         let during = OwnershipSample::from_routing("during-fault", None, None, false);
         assert!(!during.assignment_matches(&before));
+    }
+
+    /// A probe that timed out means the driver could not ask, which says
+    /// nothing about whether the platform holds the result.
+    ///
+    /// This is the exact shape a wedged quota agent produces: the platform
+    /// parks the reservation with no timeout, the driver's own ceiling fires,
+    /// and the key must land as inconclusive. Reporting it as lost work would
+    /// turn a platform hang into a false correctness finding — and it is the
+    /// finding an operator is most likely to act on.
+    #[test]
+    fn a_probe_that_timed_out_is_inconclusive_not_lost_work() {
+        let r = record(5, "chaos-s1-durable-0005", Outcome::Indeterminate, None);
+        let timed_out = KeyProbe {
+            idempotency_key: r.idempotency_key.clone(),
+            agent: r.agent.clone(),
+            final_value: None,
+            error: Some("probe timed out after 30s".to_string()),
+            // What `errors::classify` yields for a timeout: unreadable, so the
+            // band of doubt widens rather than a refusal being invented.
+            error_class: Some(ErrorClass::Transport),
+        };
+
+        let report = ExactlyOnceReport::build(
+            std::slice::from_ref(&r),
+            &[timed_out],
+            Stream::Durable,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        assert!(
+            !report.has_violations(),
+            "a driver-side timeout must not fail the run: {:?}",
+            report.findings
+        );
+        assert_eq!(report.keys_inconclusive, 1);
     }
 
     /// Routing-table observations are context, never the verdict — the table

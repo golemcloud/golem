@@ -98,6 +98,18 @@ const MAX_IN_FLIGHT: usize = 1024;
 /// scenario that submitted it.
 const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Ceiling on a single read-back invocation.
+///
+/// Read-back walks every agent the run touched, and an agent that never answers
+/// would otherwise stall the whole scenario — which is not hypothetical: a
+/// quota lease lost during a fault leaves the agent's next reservation parked
+/// with no timeout on the platform side, so `invoke_and_await` against it never
+/// returns. One wedged agent must cost one entry, not the run.
+///
+/// Generous, because read-back happens on a cluster that has just been through
+/// a fault and a slow answer is still an answer.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Payload written when completing a promise.
 const PROMISE_PAYLOAD: &[u8] = b"chaos";
 
@@ -637,18 +649,39 @@ async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32, seq: u64)
 }
 
 /// Reads back a durable counter agent's value.
-pub async fn read_counter(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
-    let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
-    match ctx
-        .user
-        .invoke_and_await_agent(&ctx.counters, &parsed, "count", data_value!())
-        .await
-    {
-        Ok(value) => as_u32(value)
-            .map(u64::from)
-            .ok_or_else(|| "count returned no value".to_string()),
-        Err(e) => Err(format!("{e:#}")),
+/// Runs a read-back invocation under [`READ_TIMEOUT`].
+///
+/// A timeout is reported as an unreadable agent rather than propagated: the
+/// read-back already models "could not be read" as a verdict of its own, and an
+/// agent that will not answer is exactly that.
+async fn read_with_timeout<F>(what: &str, agent: &str, read: F) -> Result<u64, String>
+where
+    F: std::future::Future<Output = Result<u64, String>>,
+{
+    match tokio::time::timeout(READ_TIMEOUT, read).await {
+        Ok(result) => result,
+        Err(_) => {
+            warn!("Chaos: reading {what} on {agent} timed out after {READ_TIMEOUT:?}");
+            Err(format!("{what} timed out after {READ_TIMEOUT:?}"))
+        }
     }
+}
+
+pub async fn read_counter(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
+    read_with_timeout("count", agent, async {
+        let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+        match ctx
+            .user
+            .invoke_and_await_agent(&ctx.counters, &parsed, "count", data_value!())
+            .await
+        {
+            Ok(value) => as_u32(value)
+                .map(u64::from)
+                .ok_or_else(|| "count returned no value".to_string()),
+            Err(e) => Err(format!("{e:#}")),
+        }
+    })
+    .await
 }
 
 /// Reads back how many reservations a quota agent was refused.
@@ -658,47 +691,56 @@ pub async fn read_counter(ctx: &WorkloadContext, agent: &str) -> Result<u64, Str
 /// refusal during the fault is the observable cost of a lease the executor
 /// could no longer renew.
 pub async fn read_refused(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
-    let parsed: ParsedAgentId = agent_id!(QUOTA_COUNTER_AGENT, agent.to_string());
-    match ctx
-        .user
-        .invoke_and_await_agent(&ctx.counters, &parsed, "refused", data_value!())
-        .await
-    {
-        Ok(value) => as_u32(value)
-            .map(u64::from)
-            .ok_or_else(|| "refused returned no value".to_string()),
-        Err(e) => Err(format!("{e:#}")),
-    }
+    read_with_timeout("refused", agent, async {
+        let parsed: ParsedAgentId = agent_id!(QUOTA_COUNTER_AGENT, agent.to_string());
+        match ctx
+            .user
+            .invoke_and_await_agent(&ctx.counters, &parsed, "refused", data_value!())
+            .await
+        {
+            Ok(value) => as_u32(value)
+                .map(u64::from)
+                .ok_or_else(|| "refused returned no value".to_string()),
+            Err(e) => Err(format!("{e:#}")),
+        }
+    })
+    .await
 }
 
 /// Reads back a quota agent's committed count.
 pub async fn read_quota_counter(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
-    let parsed: ParsedAgentId = agent_id!(QUOTA_COUNTER_AGENT, agent.to_string());
-    match ctx
-        .user
-        .invoke_and_await_agent(&ctx.counters, &parsed, "count", data_value!())
-        .await
-    {
-        Ok(value) => as_u32(value)
-            .map(u64::from)
-            .ok_or_else(|| "count returned no value".to_string()),
-        Err(e) => Err(format!("{e:#}")),
-    }
+    read_with_timeout("count", agent, async {
+        let parsed: ParsedAgentId = agent_id!(QUOTA_COUNTER_AGENT, agent.to_string());
+        match ctx
+            .user
+            .invoke_and_await_agent(&ctx.counters, &parsed, "count", data_value!())
+            .await
+        {
+            Ok(value) => as_u32(value)
+                .map(u64::from)
+                .ok_or_else(|| "count returned no value".to_string()),
+            Err(e) => Err(format!("{e:#}")),
+        }
+    })
+    .await
 }
 
 /// Reads back how many scheduled polls actually fired on a target agent.
 pub async fn read_polls(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
-    let parsed: ParsedAgentId = agent_id!(SCHEDULE_COUNTER_AGENT, agent.to_string());
-    match ctx
-        .user
-        .invoke_and_await_agent(&ctx.counters, &parsed, "polls", data_value!())
-        .await
-    {
-        Ok(value) => as_u32(value)
-            .map(u64::from)
-            .ok_or_else(|| "polls returned no value".to_string()),
-        Err(e) => Err(format!("{e:#}")),
-    }
+    read_with_timeout("polls", agent, async {
+        let parsed: ParsedAgentId = agent_id!(SCHEDULE_COUNTER_AGENT, agent.to_string());
+        match ctx
+            .user
+            .invoke_and_await_agent(&ctx.counters, &parsed, "polls", data_value!())
+            .await
+        {
+            Ok(value) => as_u32(value)
+                .map(u64::from)
+                .ok_or_else(|| "polls returned no value".to_string()),
+            Err(e) => Err(format!("{e:#}")),
+        }
+    })
+    .await
 }
 
 #[cfg(test)]

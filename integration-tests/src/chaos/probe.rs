@@ -41,6 +41,7 @@ use golem_common::base_model::agent::ParsedAgentId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use tokio::task::JoinSet;
 use tracing::{info, warn};
 
@@ -62,6 +63,26 @@ const PROBE_MILLIS: u32 = 0;
 /// through a fault, and hammering it would be a second experiment nobody asked
 /// for.
 const PROBE_CONCURRENCY: usize = 32;
+
+/// Ceiling on a single probe invocation.
+///
+/// A probe replays a stored result, which is fast — but it runs against agents
+/// a fault has just been through, and one of them refusing to answer must cost
+/// one key rather than the run. A quota lease lost mid-fault parks the agent's
+/// next reservation with no timeout on the platform side, so an unbounded probe
+/// against it never returns.
+///
+/// A timed-out probe is *inconclusive*, never a missing result: the driver could
+/// not ask, which says nothing about whether the platform holds the answer.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How often to report progress through a probe pass.
+///
+/// A pass covers tens of thousands of keys and logs nothing between its opening
+/// line and its verdict, which makes "slow" and "wedged" look identical from a
+/// job log. They are not the same and the difference is worth a line every few
+/// hundred keys.
+const PROBE_PROGRESS_EVERY: usize = 2_000;
 
 /// What the platform said when a key was asked about again after recovery.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,7 +122,9 @@ pub async fn probe_keys(
         keys.len()
     );
 
-    let mut probes = Vec::with_capacity(keys.len());
+    let total = keys.len();
+    let mut probes = Vec::with_capacity(total);
+    let mut next_report = PROBE_PROGRESS_EVERY;
     for chunk in keys.chunks(PROBE_CONCURRENCY) {
         let mut batch = JoinSet::new();
         for (key, agent) in chunk {
@@ -115,6 +138,10 @@ pub async fn probe_keys(
                 Ok(probe) => probes.push(probe),
                 Err(e) => warn!("Chaos: a probe task panicked: {e}"),
             }
+        }
+        if probes.len() >= next_report {
+            info!("Chaos: probed {} of {total} {stream} keys", probes.len());
+            next_report += PROBE_PROGRESS_EVERY;
         }
     }
 
@@ -137,16 +164,20 @@ async fn probe_one(ctx: &WorkloadContext, agent: &str, key: &str) -> KeyProbe {
     let mut attempts = 0u32;
     loop {
         attempts += 1;
-        let outcome = ctx
-            .user
-            .invoke_and_await_agent_with_key(
-                &ctx.counters,
-                &parsed,
-                &idempotency_key,
-                PROBE_METHOD,
-                data_value!(PROBE_MILLIS),
-            )
-            .await;
+        let invoke = ctx.user.invoke_and_await_agent_with_key(
+            &ctx.counters,
+            &parsed,
+            &idempotency_key,
+            PROBE_METHOD,
+            data_value!(PROBE_MILLIS),
+        );
+        let outcome = match tokio::time::timeout(PROBE_TIMEOUT, invoke).await {
+            Ok(outcome) => outcome,
+            // Treated exactly as a transport failure: retried once under the
+            // same key, then left inconclusive. An agent that will not answer
+            // tells the driver nothing about what the platform holds.
+            Err(_) => Err(anyhow::anyhow!("probe timed out after {PROBE_TIMEOUT:?}")),
+        };
 
         match outcome {
             Ok(value) => {
