@@ -74,7 +74,7 @@ use crate::chaos::scenarios::{
     OutputPaths, ScenarioOutcome, build_result, readback_for, signal_termination, snapshot_routing,
     write_outputs,
 };
-use crate::chaos::signal::{BaselineReady, FaultSignals};
+use crate::chaos::signal::{BaselineReady, ExecutorsScaled, FaultSignals};
 use crate::chaos::summary::{AgentReadback, ChaosSummary, ExactlyOnceReport, TerminationReason};
 use crate::chaos::workload::{self, PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig};
@@ -161,6 +161,7 @@ pub async fn run(
     let mut fault_id = None;
     let mut fault_target_observed = None;
     let mut inconclusive: Option<String> = None;
+    let mut attention_extra: Vec<String> = Vec::new();
 
     // Sample the assignment continuously for the whole run, alongside the
     // labelled phase-boundary samples. See ASSIGNMENT_SAMPLE_INTERVAL.
@@ -214,6 +215,7 @@ pub async fn run(
             if let Some(detail) = inconclusive.clone() {
                 summary.attention.push(detail);
             }
+            summary.attention.extend(attention_extra.clone());
             if let Some(report) = $exactly_once {
                 summary = summary.with_exactly_once(report);
             }
@@ -366,6 +368,11 @@ pub async fn run(
     // health checks, so sampling immediately would show an unchanged table for
     // a reason that says nothing about the fault — and "unchanged" is exactly
     // the reading this sample exists to support.
+    // The workflow scales the executor deployment partway through the fault
+    // window, if the scenario asked it to. Picked up here rather than awaited:
+    // it is context for the samples, not a gate.
+    let mut executors_scaled: Option<ExecutorsScaled> = None;
+
     let observe_after = config
         .phases
         .fault()
@@ -373,6 +380,16 @@ pub async fn run(
         .min(DURING_FAULT_SAMPLE_CAP);
     info!("S1: sampling assignment {observe_after:?} into the fault window");
     tokio::time::sleep(observe_after).await;
+    // Read here as well as after the heal: the scale may land before or after
+    // this point in the fault window, and logging it when it happens is what
+    // makes the assignment samples readable afterwards.
+    if let Some(scaled) = signals.read_executors_scaled() {
+        executors_scaled = Some(scaled.clone());
+        info!(
+            "S1: workflow scaled executors {} -> {} at {}",
+            scaled.from_replicas, scaled.to_replicas, scaled.scaled_at
+        );
+    }
     ownership.push(sample_ownership(deps, "during-fault", ownership.last(), false).await);
 
     let recovered = match signals.await_fault_recovered(config.signal_timeout()).await {
@@ -402,6 +419,8 @@ pub async fn run(
         ownership_config.settle()
     );
     tokio::time::sleep(ownership_config.settle()).await;
+
+    executors_scaled = executors_scaled.or_else(|| signals.read_executors_scaled());
 
     let settled = sample_ownership(deps, "after-settle", ownership.last(), true).await;
     info!(
@@ -483,6 +502,40 @@ pub async fn run(
              ({} executor(s) holding shards). This run did not exercise recovery.",
             first.executors_with_shards()
         ));
+    }
+
+    // Did a pod added during the partition end up with a fair share once the
+    // partition healed? Reported, not asserted: "fair" is a judgement about a
+    // rebalancer, and the driver is not in a position to make it.
+    if let Some(scaled) = &executors_scaled
+        && let Some(settled) = ownership.iter().find(|s| s.settled)
+        && let Some(total) = settled.number_of_shards
+    {
+        let executors = settled.executors_with_shards();
+        let balanced = total / scaled.to_replicas.max(1) as usize;
+        let smallest = settled
+            .shards_per_executor
+            .values()
+            .min()
+            .copied()
+            .unwrap_or(0);
+        info!(
+            "S1: after settling, {executors} executors hold shards; smallest holds {smallest}, \
+             a balanced split across {} would be {balanced}",
+            scaled.to_replicas
+        );
+        if executors < scaled.to_replicas as usize {
+            attention_extra.push(format!(
+                "executors were scaled to {} during the fault, but only {executors} hold shards \
+                 after settling — a pod added while a peer was unreachable did not get a share",
+                scaled.to_replicas
+            ));
+        } else if smallest * 2 < balanced {
+            attention_extra.push(format!(
+                "after settling the least-loaded executor holds {smallest} shards against a \
+                 balanced {balanced}: the cluster took the new pod but has not rebalanced onto it"
+            ));
+        }
     }
 
     // A key that executed twice is the observable consequence of two executors
@@ -581,6 +634,25 @@ async fn read_back(
         }
         let observed = workload::read_counter(ctx, &agent).await;
         readback.extend(readback_for(Stream::Durable, &agent, scoped, observed));
+    }
+
+    // The quota stream is read back on two numbers, not one: what got through
+    // and what the platform refused. A refusal is the observable cost of a
+    // lease the executor could no longer renew, and it is invisible in the
+    // counter alone.
+    for index in 0..config.quota_agents {
+        let agent = ctx.agent_name(Stream::Quota, index);
+        let scoped = records
+            .iter()
+            .filter(|r| r.stream == Stream::Quota && r.agent == agent);
+        if scoped.clone().next().is_none() {
+            continue;
+        }
+        let observed = workload::read_quota_counter(ctx, &agent).await;
+        if let Some(mut entry) = readback_for(Stream::Quota, &agent, scoped, observed) {
+            entry.refused_reservations = workload::read_refused(ctx, &agent).await.ok();
+            readback.push(entry);
+        }
     }
 
     for index in 0..config.scheduled_agents {

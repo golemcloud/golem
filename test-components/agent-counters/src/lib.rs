@@ -3,7 +3,13 @@ mod snapshot_test;
 
 use golem_rust::bindings::golem::agent::host::Datetime;
 use golem_rust::bindings::golem::api::context::start_span;
+use golem_rust::quota::QuotaToken;
 use golem_rust::{agent_definition, agent_implementation, generate_idempotency_key};
+
+/// Resource name the chaos suite's quota stream reserves against. Must match the
+/// resource the chaos prep creates on the environment — see
+/// `integration_tests::chaos::prep`.
+const CHAOS_QUOTA_RESOURCE: &str = "chaos-quota";
 
 /// Page size used when touching retained memory so the OS backs it with real
 /// resident pages rather than leaving it as untouched (non-resident) reservation.
@@ -150,6 +156,81 @@ impl Counter for CounterImpl {
     fn sleep_and_increment(&mut self, millis: u32) -> u32 {
         std::thread::sleep(std::time::Duration::from_millis(millis as u64));
         self.count += 1;
+        self.count
+    }
+}
+
+/// Counter that holds a quota token for its whole lifetime (GOL-364).
+///
+/// The point is the *lease*, not the counting. Acquiring a `QuotaToken` makes
+/// the executor take a quota lease from the shard-manager and keep renewing it
+/// — on golem-dev, every 10s against a 60s lease. Holding the token in agent
+/// state keeps that lease live, which is what puts continuous traffic on the
+/// executor→shard-manager link.
+///
+/// That link is otherwise idle during a chaos run: `invoke_and_await` goes
+/// client → worker-service → executor and never touches the shard-manager, and
+/// the shard-manager's health check asks the Kubernetes API rather than the
+/// executor. A partition between the two is invisible to everything else, which
+/// is exactly why S1's first three runs measured nothing.
+#[agent_definition]
+trait QuotaCounter {
+    fn new(id: String) -> Self;
+
+    /// Reserves and commits one unit against the held token, then increments.
+    ///
+    /// Returns the post-increment count, like `Counter.increment`, so the same
+    /// read-back and exactly-once machinery applies unchanged. A reservation
+    /// the platform refuses is reported rather than panicking: under a
+    /// partition, refusal is a legitimate outcome and the scenario needs to
+    /// record it, not die of it.
+    fn reserve_and_increment(&mut self) -> u32;
+
+    /// How many reservations were refused. Read back after the run to see what
+    /// losing the lease actually cost.
+    fn refused(&self) -> u32;
+
+    fn count(&self) -> u32;
+}
+
+struct QuotaCounterImpl {
+    _id: String,
+    count: u32,
+    refused: u32,
+    /// Held for the agent's lifetime — dropping it would release the lease and
+    /// stop the renewal traffic this agent exists to generate.
+    token: QuotaToken,
+}
+
+#[agent_implementation]
+impl QuotaCounter for QuotaCounterImpl {
+    fn new(id: String) -> Self {
+        Self {
+            _id: id,
+            count: 0,
+            refused: 0,
+            token: QuotaToken::new(CHAOS_QUOTA_RESOURCE, 1),
+        }
+    }
+
+    fn reserve_and_increment(&mut self) -> u32 {
+        match self.token.reserve(1) {
+            Ok(reservation) => {
+                reservation.commit(1);
+                self.count += 1;
+            }
+            Err(_) => {
+                self.refused += 1;
+            }
+        }
+        self.count
+    }
+
+    fn refused(&self) -> u32 {
+        self.refused
+    }
+
+    fn count(&self) -> u32 {
         self.count
     }
 }

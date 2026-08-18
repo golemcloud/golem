@@ -45,6 +45,9 @@ use tracing::{info, warn};
 pub const BASELINE_READY_FILE: &str = "baseline-ready.json";
 /// File name the workflow writes once the fault is applied and verified active.
 pub const FAULT_INJECTED_FILE: &str = "fault-injected.json";
+/// File name the workflow writes once it has scaled the executor deployment
+/// mid-run. Optional: a scenario that never asks for it simply never sees it.
+pub const EXECUTORS_SCALED_FILE: &str = "executors-scaled.json";
 /// File name the workflow writes once the fault is removed and the target is
 /// healthy again.
 pub const FAULT_RECOVERED_FILE: &str = "fault-recovered.json";
@@ -114,6 +117,24 @@ pub struct FaultInjected {
     pub injected_at: DateTime<Utc>,
 }
 
+/// Written by the workflow: it has changed the executor count mid-run.
+///
+/// Adding an executor while a peer is unreachable is the second half of S1: it
+/// forces the shard-manager down the revoke path it cannot complete for the
+/// partitioned pod. The driver cannot scale a Deployment — that is Kubernetes,
+/// and the driver knows nothing about it — so the workflow does it and says
+/// when, which is all the driver needs to label its assignment samples either
+/// side of the change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutorsScaled {
+    pub scaled_at: DateTime<Utc>,
+    /// Replica count before and after, so the artifact records what was asked
+    /// for rather than only what the routing table happened to show.
+    pub from_replicas: u32,
+    pub to_replicas: u32,
+}
+
 /// Written by the workflow: the fault is gone and the target has rolled back to
 /// healthy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,6 +196,27 @@ impl FaultSignals {
         timeout: Duration,
     ) -> Result<FaultInjected, SignalError> {
         self.await_file(FAULT_INJECTED_FILE, timeout).await
+    }
+
+    /// Reads the scale-change signal if the workflow has written one yet.
+    ///
+    /// Polled rather than awaited: the scale-up happens partway through the
+    /// fault window and the driver has other things to do meanwhile. A scenario
+    /// that does not ask the workflow to scale simply never sees the file, and
+    /// that is not an error.
+    pub fn read_executors_scaled(&self) -> Option<ExecutorsScaled> {
+        let path = self.dir.join(EXECUTORS_SCALED_FILE);
+        let raw = std::fs::read_to_string(&path).ok()?;
+        if raw.trim().is_empty() {
+            return None;
+        }
+        match serde_json::from_str(&raw) {
+            Ok(signal) => Some(signal),
+            Err(e) => {
+                warn!("Chaos signal {path:?} is not valid JSON: {e}");
+                None
+            }
+        }
     }
 
     /// Blocks until the workflow reports the fault cleared, or `timeout` elapses.
@@ -375,6 +417,64 @@ mod tests {
         let raw = std::fs::read_to_string(dir.join(BASELINE_READY_FILE)).unwrap();
         let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert!(json.get("faultTarget").is_none());
+    }
+
+    /// The scale signal is optional: a scenario that never asks for one must
+    /// not treat its absence as a problem.
+    #[test]
+    async fn an_absent_scale_signal_reads_as_none() {
+        let dir = temp_signal_dir("no-scale");
+        let signals = FaultSignals::new(&dir).unwrap();
+        assert!(signals.read_executors_scaled().is_none());
+    }
+
+    #[test]
+    async fn a_scale_signal_round_trips_under_its_json_names() {
+        let dir = temp_signal_dir("scale");
+        let signals = FaultSignals::new(&dir).unwrap();
+        std::fs::write(
+            dir.join(EXECUTORS_SCALED_FILE),
+            serde_json::json!({
+                "scaledAt": "2026-08-18T07:02:00Z",
+                "fromReplicas": 2,
+                "toReplicas": 3
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let signal = signals.read_executors_scaled().expect("written above");
+        assert_eq!(signal.from_replicas, 2);
+        assert_eq!(signal.to_replicas, 3);
+    }
+
+    /// The workflow writes this with Python's `datetime.isoformat()`, which
+    /// emits `+00:00` rather than `Z`. Parsing has to accept what is actually
+    /// written, not what the other signals happen to use.
+    #[test]
+    async fn the_scale_signal_parses_the_offset_format_the_workflow_emits() {
+        let dir = temp_signal_dir("scale-offset");
+        let signals = FaultSignals::new(&dir).unwrap();
+        std::fs::write(
+            dir.join(EXECUTORS_SCALED_FILE),
+            r#"{"scaledAt":"2026-08-18T08:55:34.474738+00:00","fromReplicas":2,"toReplicas":3}"#,
+        )
+        .unwrap();
+
+        let signal = signals
+            .read_executors_scaled()
+            .expect("the workflow's own output must parse");
+        assert_eq!(signal.to_replicas, 3);
+    }
+
+    /// A half-written or corrupt scale signal must not take the run down: it is
+    /// context for the samples, not something the verdict rests on.
+    #[test]
+    async fn a_malformed_scale_signal_reads_as_none_rather_than_failing() {
+        let dir = temp_signal_dir("scale-bad");
+        let signals = FaultSignals::new(&dir).unwrap();
+        std::fs::write(dir.join(EXECUTORS_SCALED_FILE), "{not json").unwrap();
+        assert!(signals.read_executors_scaled().is_none());
     }
 
     /// Garbage in the signal file is reported as such, not silently retried

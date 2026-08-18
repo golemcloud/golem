@@ -68,6 +68,7 @@ const EPHEMERAL_COUNTER_AGENT: &str = "EphemeralCounter";
 const SCHEDULE_EMITTER_AGENT: &str = "ScheduleEmitter";
 const SCHEDULE_COUNTER_AGENT: &str = "ScheduleCounter";
 const PROMISE_AGENT: &str = "PromiseAgent";
+const QUOTA_COUNTER_AGENT: &str = "QuotaCounter";
 
 /// How far ahead scheduled polls are registered. Long enough that registration
 /// and firing are distinct events (so a fault can land between them), short
@@ -371,6 +372,7 @@ pub fn start(ctx: WorkloadContext, config: &crate::chaos::WorkloadConfig) -> Wor
         (Stream::Ephemeral, config.ephemeral_agents),
         (Stream::Scheduled, config.scheduled_agents),
         (Stream::Promise, config.promise_agents),
+        (Stream::Quota, config.quota_agents),
     ]
     .into_iter()
     .filter(|(_, agents)| *agents > 0)
@@ -552,6 +554,41 @@ async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32, seq: u64)
             )
             .await;
         }
+        Stream::Quota => {
+            // Reserving against a held token is the point: the executor keeps
+            // the underlying lease renewed with the shard-manager, so this is
+            // the one stream a shard-manager partition can actually disturb.
+            let agent = ctx.agent_name(Stream::Quota, index);
+            let key = ctx.idempotency_key(&agent, seq);
+            let parsed: ParsedAgentId = agent_id!(QUOTA_COUNTER_AGENT, agent.clone());
+            let ctx2 = ctx.clone();
+            let parsed2 = parsed.clone();
+            run_operation(
+                ctx,
+                Stream::Quota,
+                agent.clone(),
+                "reserve_and_increment",
+                key,
+                |k| {
+                    let ctx = ctx2.clone();
+                    let parsed = parsed2.clone();
+                    async move {
+                        let value = ctx
+                            .user
+                            .invoke_and_await_agent_with_key(
+                                &ctx.counters,
+                                &parsed,
+                                &k,
+                                "reserve_and_increment",
+                                data_value!(),
+                            )
+                            .await?;
+                        Ok(as_u32(value))
+                    }
+                },
+            )
+            .await;
+        }
         Stream::Promise => {
             let agent = ctx.agent_name(Stream::Promise, index);
             let key = ctx.idempotency_key(&agent, seq);
@@ -602,6 +639,41 @@ async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32, seq: u64)
 /// Reads back a durable counter agent's value.
 pub async fn read_counter(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
     let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+    match ctx
+        .user
+        .invoke_and_await_agent(&ctx.counters, &parsed, "count", data_value!())
+        .await
+    {
+        Ok(value) => as_u32(value)
+            .map(u64::from)
+            .ok_or_else(|| "count returned no value".to_string()),
+        Err(e) => Err(format!("{e:#}")),
+    }
+}
+
+/// Reads back how many reservations a quota agent was refused.
+///
+/// The counterpart to [`read_counter`] for the quota stream: the counter says
+/// how much work got through, this says how much the platform turned away. A
+/// refusal during the fault is the observable cost of a lease the executor
+/// could no longer renew.
+pub async fn read_refused(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
+    let parsed: ParsedAgentId = agent_id!(QUOTA_COUNTER_AGENT, agent.to_string());
+    match ctx
+        .user
+        .invoke_and_await_agent(&ctx.counters, &parsed, "refused", data_value!())
+        .await
+    {
+        Ok(value) => as_u32(value)
+            .map(u64::from)
+            .ok_or_else(|| "refused returned no value".to_string()),
+        Err(e) => Err(format!("{e:#}")),
+    }
+}
+
+/// Reads back a quota agent's committed count.
+pub async fn read_quota_counter(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
+    let parsed: ParsedAgentId = agent_id!(QUOTA_COUNTER_AGENT, agent.to_string());
     match ctx
         .user
         .invoke_and_await_agent(&ctx.counters, &parsed, "count", data_value!())

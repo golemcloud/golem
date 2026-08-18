@@ -199,6 +199,10 @@ pub struct WorkloadConfig {
     pub ephemeral_agents: u32,
     pub scheduled_agents: u32,
     pub promise_agents: u32,
+    /// Agents holding a quota lease. Zero for scenarios that do not need
+    /// shard-manager↔executor traffic; see [`history::Stream::Quota`].
+    #[serde(default)]
+    pub quota_agents: u32,
     /// Combined submission rate across all streams, in operations per second.
     /// The project caps this at 25% of measured per-pod capacity so the run
     /// measures fault recovery rather than saturation.
@@ -285,6 +289,22 @@ fn default_candidate_pool_multiplier() -> u32 {
     8
 }
 
+/// Asks the workflow to change the executor count partway through the fault.
+///
+/// The driver cannot scale a Deployment and does not try — this block is read
+/// by the *workflow*, which performs the scale and writes
+/// `executors-scaled.json`. It lives in the suite YAML so the operational
+/// switchboard stays the single place a run's shape is decided.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScaleDuringFaultConfig {
+    /// How far into the fault window to scale, as a fraction of it. Late enough
+    /// that the partition is established, early enough that the rest of the
+    /// window is spent with the new pod present.
+    pub after_fraction: f64,
+    pub to_replicas: u32,
+}
+
 /// Settings for the shard-ownership oracle (GOL-364).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -328,6 +348,10 @@ pub struct ScenarioConfig {
     /// executor assignments.
     #[serde(default)]
     pub ownership: Option<OwnershipConfig>,
+    /// Asks the workflow to scale executors mid-fault. Absent for scenarios
+    /// that do not.
+    #[serde(default)]
+    pub scale_during_fault: Option<ScaleDuringFaultConfig>,
     #[serde(default)]
     pub retry_policy: RetryPolicy,
     /// How long the driver waits for each workflow signal before aborting.
@@ -488,10 +512,12 @@ mod tests {
                     ephemeral_agents: 1,
                     scheduled_agents: 1,
                     promise_agents: 1,
+                    quota_agents: 1,
                     rate_per_sec: 1,
                 }),
                 pinned: None,
                 ownership: None,
+                scale_during_fault: None,
                 retry_policy: RetryPolicy::default(),
                 signal_timeout_secs: 1,
             }],

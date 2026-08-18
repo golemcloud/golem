@@ -53,6 +53,14 @@ pub enum Stream {
     Scheduled,
     /// Promise create/complete/await.
     Promise,
+    /// `QuotaCounter.reserve_and_increment` — agents holding a quota lease
+    /// (GOL-364).
+    ///
+    /// The only stream whose traffic crosses the shard-manager↔executor link:
+    /// holding a token keeps the executor renewing its lease against the
+    /// shard-manager every few seconds. Every other stream goes client →
+    /// worker-service → executor and never touches it.
+    Quota,
     /// Pinned HTTP `invoke_and_await` operations held in flight across a fault
     /// (GOL-366). Distinct from `Durable` even though both land on `Counter`
     /// agents: these are deliberately long-running and deliberately aimed at
@@ -68,6 +76,7 @@ impl Stream {
             Stream::Ephemeral => "ephemeral",
             Stream::Scheduled => "scheduled",
             Stream::Promise => "promise",
+            Stream::Quota => "quota",
             Stream::PinnedHttp => "pinned-http",
         }
     }
@@ -85,15 +94,16 @@ impl Stream {
     pub fn has_readback(self) -> bool {
         matches!(
             self,
-            Stream::Durable | Stream::Scheduled | Stream::PinnedHttp
+            Stream::Durable | Stream::Scheduled | Stream::PinnedHttp | Stream::Quota
         )
     }
 
-    pub const ALL: [Stream; 5] = [
+    pub const ALL: [Stream; 6] = [
         Stream::Durable,
         Stream::Ephemeral,
         Stream::Scheduled,
         Stream::Promise,
+        Stream::Quota,
         Stream::PinnedHttp,
     ];
 }

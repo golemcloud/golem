@@ -188,6 +188,18 @@ scenarios:
       # scheduled work to drain before read-back.
       recoverySecs: 420
 
+    # Second half of the experiment: add an executor while a peer is
+    # unreachable, so the shard-manager has to revoke shards from a pod it
+    # cannot reach before it can hand them to the new one. The workflow performs
+    # the scale and signals the driver; the driver only labels its samples
+    # around it.
+    scaleDuringFault:
+      # Fraction of the fault window to wait before scaling, so the partition is
+      # established first and the new pod arrives into a cluster that is already
+      # cut.
+      afterFraction: 0.3
+      toReplicas: 3
+
     ownership:
       # The load-bearing number of this scenario. After the partition heals the
       # cluster rebalances, and during a rebalance transient disagreement is
@@ -197,15 +209,21 @@ scenarios:
       settleSecs: 120
 
     workload:
-      # The same mixed workload S12 runs. S1 is about ownership, but the
-      # completion and read-back evidence has to keep running alongside the
-      # oracle rather than instead of it: an overlap finding is much easier to
-      # believe when the operations on the affected agents are archived next to
-      # it.
+      # The mixed workload S12 runs, plus the stream that makes this scenario
+      # mean anything.
+      #
+      # `quotaAgents` is the load-bearing one. Every other stream goes client →
+      # worker-service → executor and never touches the shard-manager, so a
+      # shard-manager partition is invisible to it — the first three S1 runs
+      # measured exactly zero degradation for that reason. A quota agent holds a
+      # token for its lifetime, which keeps the executor renewing a lease
+      # against the shard-manager every 10s against a 60s expiry, and that is
+      # the traffic the partition cuts.
       durableAgents: 200
       ephemeralAgents: 50
       scheduledAgents: 50
       promiseAgents: 50
+      quotaAgents: 50
       ratePerSec: 100
 
     retryPolicy:

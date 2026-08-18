@@ -126,6 +126,14 @@ pub struct AgentReadback {
     /// kill produces a handful, not thousands.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub suspect_keys: Vec<String>,
+    /// Reservations the platform refused, for the quota stream only.
+    ///
+    /// Read from the agent rather than inferred: a refused reservation still
+    /// returns successfully to the caller, so it is invisible in the operation
+    /// outcomes. Non-zero during a partition is the cost of a lease the
+    /// executor could no longer renew.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused_reservations: Option<u64>,
     /// Keys where a retry came back with a *higher* counter value than the
     /// first attempt. That is direct per-key proof of double execution and needs
     /// no read-back arithmetic at all.
@@ -187,6 +195,7 @@ impl AgentReadback {
             read_error,
             suspect_keys,
             proven_double_execution_keys,
+            refused_reservations: None,
         }
     }
 }
